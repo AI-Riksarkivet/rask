@@ -4,8 +4,8 @@ There are two: the compaction plan/commit pair and credential vending. One build
 a credential control applied to one of them is not a control. Both doors are read alike: a 401 raises
 `MaintenanceUnauthenticated`, a 403 `MaintenanceDenied`, and a 404 naming no table or namespace
 `TableNotGoverned`, so a header this builder gets wrong stops the unit rather than being signed around.
-Any other failure of the vend door to answer degrades to the ambient credential, with an `info` log and
-`compaction.credential.tier` tier=ambient.
+A vend door's 5xx stops the unit too (`VendUndecided`). Any other failure of the vend door to answer
+degrades to the ambient credential, with an `info` log and `compaction.credential.tier` tier=ambient.
 
 THE THIRD HALF. A privileged subject needs its token SEEDED as well as demanded and presented:
 `openbao.yaml` derives what to mint from its own list and `services.yaml` derives what to demand from

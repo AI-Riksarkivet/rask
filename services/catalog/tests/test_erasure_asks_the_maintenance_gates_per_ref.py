@@ -240,7 +240,7 @@ def test_the_door_reads_the_store_the_table_lives_in_with_the_requests_options(t
     sink = pa.BufferOutputStream()
     with pa.ipc.new_stream(sink, _rows("alice").schema) as writer:
         writer.write_table(_rows("alice"))
-    create_table(ns, {}, ["subjects"], read_arrow_body(sink.getvalue().to_pybytes(), max_bytes=_BODY_LIMIT), mode="create")
+    create_table(ns, {}, ["subjects"], read_arrow_body(sink.getvalue().to_pybytes(), max_bytes=_BODY_LIMIT), mode="create", registry=None)
     so = {"aws_region": "eu-north-1"}
     seen: dict[str, Any] = {}
     listed: list[dict[str, str]] = []
@@ -250,9 +250,9 @@ def test_the_door_reads_the_store_the_table_lives_in_with_the_requests_options(t
         seen.update(kwargs)
         return ErasureReport(table="subjects", predicate=_PREDICATE)
 
-    def _listing(location: str, storage_options: dict[str, str]) -> BaseRefs:
+    def _listing(location: str, storage_options: dict[str, str], *, configured: list[str], record_of: Any) -> BaseRefs:
         listed.append(storage_options)
-        return siblings(location, storage_options)
+        return siblings(location, storage_options, configured=configured, record_of=record_of)
 
     monkeypatch.setattr(door, "erase", _record)
     monkeypatch.setattr(base_refs, "sibling_base_refs", _listing)

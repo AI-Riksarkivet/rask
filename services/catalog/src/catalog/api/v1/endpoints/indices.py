@@ -21,6 +21,7 @@ measure, and emitting one would put a phantom index event on the graph at every 
 from __future__ import annotations
 
 import logging
+from functools import partial
 from typing import Annotated
 
 from fastapi import APIRouter, Header, Query, Request
@@ -47,6 +48,7 @@ from catalog.api.security import CurrentToken
 from catalog.core.config import Settings
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.core.lineage_emit import CREATE_INDEX, DROP_INDEX
+from catalog.core.namespace import judged_native_version
 from catalog.services import dataplane, native
 from service_kit import dapr_publish
 from service_kit.lakehouse.work_items import SCALAR_INDEX, VECTOR_INDEX, IndexWorkItem
@@ -82,6 +84,8 @@ async def create_index(
     segments = parse_identifier(id, settings.delimiter)
     body.id = reconcile_body_id(segments, body.id)
     dataplane.refuse_a_branch_this_door_cannot_honour(body.branch, door="create_table_index")
+    # An index build reads every row of the column, queued or not ([[LH-279]]).
+    await run_in_threadpool(partial(judged_native_version, ns, so, segments, version=None))
     if (queued := await _queue_build(request, ns, settings, segments, body, kind=VECTOR_INDEX)) is not None:
         return CreateTableIndexResponse(transaction_id=queued)
     response: CreateTableIndexResponse = await run_in_threadpool(native.call, ns, "create_table_index", body)
@@ -115,6 +119,7 @@ async def create_scalar_index(
     segments = parse_identifier(id, settings.delimiter)
     body.id = reconcile_body_id(segments, body.id)
     dataplane.refuse_a_branch_this_door_cannot_honour(body.branch, door="create_table_scalar_index")
+    await run_in_threadpool(partial(judged_native_version, ns, so, segments, version=None))
     if (queued := await _queue_build(request, ns, settings, segments, body, kind=SCALAR_INDEX)) is not None:
         return CreateTableScalarIndexResponse(transaction_id=queued)
     response: CreateTableScalarIndexResponse = await run_in_threadpool(native.call, ns, "create_table_scalar_index", body)

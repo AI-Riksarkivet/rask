@@ -63,6 +63,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from contextlib import suppress
+from functools import partial
 from typing import Any
 
 import lance
@@ -78,6 +79,7 @@ from service_kit.control_events import ControlAction, ControlObjectType
 from service_kit.governed import fga
 from service_kit.lakehouse import trash, warehouse_records
 from service_kit.lakehouse.base_refs import BaseRefs
+from service_kit.lakehouse.base_registry import BaseRegistry, UnreadableBaseRecordError, forget_base_record
 from service_kit.lakehouse.objectfs import StorageOptions, fs_and_base
 
 
@@ -92,7 +94,7 @@ ACTOR = "service:maintenance"
 #: path crosses one of these is refused outright. The check covers EVERY segment, not just the last: a
 #: location of ``s3://bkt/_trash/x`` names a file inside the trash registry, and refusing only when the
 #: FINAL segment matches would delete it.
-CONTROL_PREFIXES = frozenset({MANIFEST_DIR, "_trash", "_projects", "_warehouses", "_policies", "_protection"})
+CONTROL_PREFIXES = frozenset({MANIFEST_DIR, "_trash", "_projects", "_warehouses", "_policies", "_protection", "_bases"})
 
 _STILL_REGISTERED = "still registered — recovered or re-registered since the drop, so these bytes are LIVE"
 _MANIFEST_UNREADABLE = "the object manifest could not be read, so liveness cannot be re-checked — refusing to delete blind"
@@ -573,7 +575,7 @@ async def _delete_bytes_or_refuse(
     storage_options: StorageOptions,
     protected: BaseRefs | None,
 ) -> tuple[int, int] | None:
-    """Delete the bytes this record names, or record a refusal and answer ``None``.
+    """Delete the bytes this record names and the table's base record with them, or record a refusal and answer ``None``.
 
     THREE ARMS RATHER THAN ONE, because they say different things to an operator and only one of them
     means the record itself is wrong: ``NotADatasetRootError`` means this record points at something
@@ -590,18 +592,31 @@ async def _delete_bytes_or_refuse(
     if not location or kind == "namespace":
         return (0, 0)
     try:
-        return await run_in_threadpool(_delete_guarded, location, storage_options, protected)
+        reclaimed = await run_in_threadpool(_delete_guarded, location, storage_options, protected)
     except NotADatasetRootError as exc:
         await _refuse(out, kind=kind, obj_id=obj_id, reason=str(exc), control_root=control_root, storage_options=storage_options)
         log.warning("trash_purge_refused_not_a_dataset", extra={"kind": kind, "id": obj_id, "location": location})
+        return None
     except ProtectedBaseError as exc:
         await _refuse(out, kind=kind, obj_id=obj_id, reason=str(exc), control_root=control_root, storage_options=storage_options)
         log.warning("trash_purge_refused_protected_base", extra={"kind": kind, "id": obj_id, "location": location})
+        return None
     except OSError as exc:
         reason = f"deleting {location!r} failed ({type(exc).__name__}: {exc}) — the record survives and the next tick retries"
         await _refuse(out, kind=kind, obj_id=obj_id, reason=reason, control_root=control_root, storage_options=storage_options)
         log.error("trash_purge_delete_failed", extra={"kind": kind, "id": obj_id, "location": location, "error": str(exc)})
-    return None
+        return None
+    # [[LH-279]] The base record goes with the bytes, before the trash record is cleared: left behind, it would
+    # sanction its bases for the next table registered at this location, and this is the last step that still
+    # knows the location. Both deletes are idempotent, so a failure here is finished by the next tick.
+    try:
+        await run_in_threadpool(forget_base_record, BaseRegistry(control_root=control_root, storage_options=storage_options), location)
+    except Exception as exc:  # noqa: BLE001 — the bytes ARE gone; say so, and keep the trash record for the retry
+        reason = f"deleting {location!r} left its base record ({type(exc).__name__}: {exc}) — the trash record survives and the next tick retries"
+        await _refuse(out, kind=kind, obj_id=obj_id, reason=reason, control_root=control_root, storage_options=storage_options)
+        log.error("trash_purge_base_record_not_forgotten", extra={"kind": kind, "id": obj_id, "location": location, "error": str(exc)})
+        return None
+    return reclaimed
 
 
 async def _recovered_since_the_snapshot(
@@ -817,7 +832,13 @@ async def purge_expired_trash(
     # data files through it — the SOURCE carries no feature flag and no `base_paths` of its own
     # (measured), so only the referring side holds the evidence and only a whole-estate pass finds it.
     # Computed once per tick and shared by every record, exactly like `live_ids` above.
-    protected = await run_in_threadpool(_estate_base_refs, roots, storage_options, max_depth=settings.discovery_max_depth) if due else BaseRefs()
+    try:
+        protected = await run_in_threadpool(partial(_estate_base_refs, roots, storage_options, settings=settings)) if due else BaseRefs()
+    except UnreadableBaseRecordError as exc:
+        # A protective record read as absent would free a recorded clone source's bytes ([[LH-279]]).
+        out.reason = f"a table's base record could not be read ({exc}) — refusing to purge on a partial map"
+        log.error("trash_purge_blocked", extra={"reason": out.reason})
+        return out
     for record in due:
         await _purge_one(
             record,
@@ -871,8 +892,11 @@ def _record_metrics(out: TrashPurgeReport) -> None:
     )
 
 
-def _estate_base_refs(roots: set[str], storage_options: StorageOptions, *, max_depth: int) -> BaseRefs:
-    """Foreign ``base_paths`` across every maintained root — the #128d pre-pass for the purge.
+def _estate_base_refs(roots: set[str], storage_options: StorageOptions, *, settings: MaintenanceSettings) -> BaseRefs:
+    """Sanctioned foreign ``base_paths`` across every maintained root — the #128d pre-pass for the purge.
+
+    Judged as the sweep judges them ([[LH-279]]): a base nothing sanctions protects nothing, so a planted
+    base cannot keep a trashed victim's bytes alive, and a recorded one keeps protecting.
 
     Discovery is per-root and best-effort: a root that will not list contributes nothing rather than
     aborting the tick, and `protected_roots` separately records datasets that would not open. Both
@@ -880,6 +904,7 @@ def _estate_base_refs(roots: set[str], storage_options: StorageOptions, *, max_d
     caller reading this should know the set is a floor, not a proof of completeness.
     """
     from maintenance.services.optimize import discover_datasets
+    from maintenance.services.sweep import base_record_reader
     from service_kit.lakehouse.base_refs import protected_roots
 
     uris: list[str] = []
@@ -893,10 +918,16 @@ def _estate_base_refs(roots: set[str], storage_options: StorageOptions, *, max_d
             # widened what may be DELETED and left what PROTECTS it where it was. A referring clone
             # below the shorter bound is never discovered, `is_protected` answers None for its source,
             # and the purge deletes bytes a live dataset resolves through, silently.
-            uris.extend(discover_datasets(fs, bucket, max_depth=max_depth).uris)
+            uris.extend(discover_datasets(fs, bucket, max_depth=settings.discovery_max_depth).uris)
         except Exception as exc:  # noqa: BLE001 — an unlistable root must not abort the purge
             log.warning("trash_purge_base_ref_discovery_failed", extra={"root": root, "error": str(exc)})
-    return protected_roots(uris, storage_options, session=shared_lance_session())
+    return protected_roots(
+        uris,
+        storage_options,
+        configured=settings.external_blob_base_list,
+        record_of=base_record_reader(settings, dict(storage_options)),
+        session=shared_lance_session(),
+    )
 
 
 def _delete_guarded(location: str, storage_options: StorageOptions, protected: BaseRefs | None) -> tuple[int, int]:

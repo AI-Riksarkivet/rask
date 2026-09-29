@@ -52,7 +52,7 @@ def _rows(n: int, start: int = 0) -> pa.Table:
 def namespace(tmp_path: Path) -> LanceNamespace:
     """Main at two versions, the branch at several — so a preview can tell the refs apart."""
     ns = lance_namespace.connect("dir", {"root": str(tmp_path / "data")})
-    create_table(ns, {}, TABLE_ID, _rows(1), mode="create")
+    create_table(ns, {}, TABLE_ID, _rows(1), mode="create", registry=None)
     open_dataset(ns, {}, TABLE_ID).insert(_rows(1, start=1))
     open_dataset(ns, {}, TABLE_ID).create_branch(BRANCH, None)
     branch = open_dataset(ns, {}, TABLE_ID, branch=BRANCH)

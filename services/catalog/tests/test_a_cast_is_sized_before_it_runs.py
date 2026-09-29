@@ -80,7 +80,7 @@ def test_the_coerced_body_is_held_to_the_cap_where_the_estimate_leaves_off(tmp_p
     encode to 1,080. At a cap between the two only the encoded body's own check refuses, and without it the
     branch arm, which reads the coerced body again, would refuse what main accepts."""
     ns = connect("dir", {"root": str(tmp_path)})
-    create_table(ns, {}, ["w"], pa.table({"id": pa.array([0], pa.int64())}), mode="create")
+    create_table(ns, {}, ["w"], pa.table({"id": pa.array([0], pa.int64())}), mode="create", registry=None)
     rows = pa.table({"id": pa.array(range(100), pa.int32())})
     body, estimate = encode_arrow_stream(rows), bytes_after_cast(rows.column("id"), pa.int64())
     encoded = len(encode_arrow_stream(rows.cast(pa.schema([("id", pa.int64())]))))

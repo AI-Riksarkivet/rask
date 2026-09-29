@@ -1905,3 +1905,7 @@ set and the Secret's `service-token-*` entries drift.
 {{- end -}}
 {{- join "," (compact $buckets | uniq) -}}
 {{- end -}}
+
+{{- define "lance.externalBlobBases" -}}
+{{ .Values.vending.externalBlobBases | default (printf "s3://%s/models/" .Values.minio.bucket) }}
+{{- end }}

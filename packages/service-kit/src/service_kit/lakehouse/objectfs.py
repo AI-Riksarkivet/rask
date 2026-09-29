@@ -256,14 +256,15 @@ def is_lance_dataset_root(uri: str, storage_options: StorageOptions) -> bool:
 def same_store_uri(reference_uri: str, stated_path: str) -> str:
     """``stated_path``, as a MANIFEST states it, respelled in ``reference_uri``'s store.
 
-    A Lance manifest records a base path as "interpretable by the object store", which on S3 is the
-    schemeless ``/bucket/ns/t.lance`` while the caller holds ``s3://bucket/ns/t.lance`` — the two
-    spellings :func:`service_kit.lakehouse.base_refs.normalise` exists to reconcile for COMPARISON.
-    A probe cannot use that one: it has to hand a filesystem something it can actually resolve.
-
-    Handing the schemeless form straight to a resolver reads it as a LOCAL absolute path, which does
-    not exist, which a dataset-root probe answers False to — a wrong PERMIT, and the one direction the
-    compaction gate must never take. Hence a respelling rather than a strip.
+    A Lance manifest stores a base path VERBATIM in the spelling it was created with: a branch, clone,
+    multi-base or configured base on an S3 dataset all carry their ``s3://`` scheme (measured pylance
+    12.0.0 over moto, lh279 r3 b_store), so the base a real dataset declares already names its store and
+    same-scheme is returned unchanged. The respelling exists for a base stated WITHOUT a scheme — no
+    catalog door writes one, so it is defensive: handed straight to a resolver a scheme-less path reads
+    as a LOCAL absolute path (measured, same run), which does not exist, which a dataset-root probe
+    answers False to — a wrong PERMIT, and the one direction the compaction gate must never take. So a
+    scheme-less base is respelled into the reference dataset's store (fail-closed: probe where a real
+    root could be) rather than stripped.
 
     RAISES when the two spellings cannot be reconciled (a base stated in a different scheme than the
     dataset's own store). Unknown has to reach the gate AS unknown; a best guess here is the same

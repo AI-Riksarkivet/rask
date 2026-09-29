@@ -78,7 +78,7 @@ def registry_root(tmp_path: Path) -> str:
 @pytest.fixture
 def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace, a runtime-only type
     namespace = connect("dir", {"root": str(tmp_path / "data")})
-    create_table(namespace, {}, TABLE, _table(), mode="create")
+    create_table(namespace, {}, TABLE, _table(), mode="create", registry=None)
     # TWO MORE VERSIONS, so `version/delete` has one it may actually remove: version 1 carries the
     # `release` tag `_seed_refs` makes and the current version is never deletable, which leaves version
     # 2. Written straight to the dataset because the create door DECLARES a table and a second declare
@@ -103,6 +103,7 @@ def app(ns, registry_root: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[Fas
         storage_options=lambda: {},
         fga_enabled=False,
         registry_root=registry_root,
+        external_blob_base_list=[],
     )
     application.dependency_overrides[SettingsDep.__metadata__[0].dependency] = lambda: settings
     application.dependency_overrides[NamespaceDep.__metadata__[0].dependency] = lambda: ns

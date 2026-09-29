@@ -1056,6 +1056,9 @@ vending:
   # the #92 allowlist for #115 registry pointers — plain-path artifacts in the lake's own bucket, no SSRF
   # surface). Overriding REPLACES that default — include the models base yourself or the train registry's
   # external pointers get rejected.
+  # One value, rendered as LANCE_EXTERNAL_BLOB_BASES into every reader of it: the catalog's vend and read
+  # doors, ingest, maintenance (planner and worker) and lineage. A base inside it needs no base-record
+  # entry ([[LH-279]]), so a reader without it would treat each table's blob base as unrecorded.
   externalBlobBases: ""
 
 # --- Catalog request limits -----------------------------------------------------------------------
@@ -1804,8 +1807,9 @@ maintenance:
   # which then builds the same index concurrently. Raise it for a large estate — an over-long window
   # only delays the redelivery of a genuinely lost unit, while an under-long one duplicates work.
   indexAckWait: 3600s
-  # The catalog's control root (project/warehouse/trash registries). Empty => the primary bucket, which
-  # is what the catalog itself defaults to; set both together if the catalog's root is moved.
+  # The catalog's control root (project/warehouse/trash registries and the `_bases/` base records).
+  # Empty => the primary bucket, which is what the catalog itself defaults to; set both together if the
+  # catalog's root is moved. Lineage reads the base records from here too (LINEAGE_CONTROL_ROOT).
   controlRoot: ""
   # …and "both" needs a second key to exist. `MAINTENANCE_POLICY_ROOT` was rendered NOWHERE until
   # 2026-08-16, so an operator following the line above moved the trash/warehouse/project reads and

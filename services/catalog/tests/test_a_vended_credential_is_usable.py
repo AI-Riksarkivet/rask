@@ -39,7 +39,7 @@ from lance_namespace import DescribeTableResponse
 from catalog.api.dependencies import get_namespace, get_settings
 from catalog.api.v1.endpoints import tables
 from catalog.core.config import Settings
-from catalog.core.vending import StsVendor
+from catalog.core.vending import StsVendor, VendFacts
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 
@@ -121,7 +121,7 @@ def describe_client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
         role_arn="arn:aws:iam::000000000000:role/vend", region="us-east-1", endpoint="https://s3.example.com", assume_role=_fake_credentials
     )
     # The manifest read is the catalog's own root-credential open, not the vend, and needs a live store.
-    monkeypatch.setattr(tables, "dataset_facts", lambda location, storage_options: (1, (), ()))
+    monkeypatch.setattr(tables, "dataset_facts", lambda location, storage_options: VendFacts(read_version=1))
     # The catalog's OWN connection is plaintext and root-keyed, so the production `get_storage_options`
     # answers `allow_http=true` and the root pair: a door that merged it into the vend, either way round,
     # would hand a reader the root secret or hand the https store a plaintext permit.

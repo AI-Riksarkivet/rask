@@ -412,7 +412,10 @@ def test_undrop_converges_when_a_record_was_left_on_a_live_table(moto_client_rec
 def test_register_undo_deregisters_and_never_deletes_the_bytes(moto_client: TestClient) -> None:
     """REGISTER attaches bytes that already existed and are not ours to destroy, so its undo is
     `deregister`, never `drop`. This is the test that would catch someone "simplifying" the four
-    undo callbacks into one shared drop: the retry must converge AND the data must survive."""
+    undo callbacks into one shared drop: the retry must converge AND the data must survive.
+
+    The bytes are a DETACHED table's: two registrations may not share one location ([[LH-279]]'s
+    location-exclusivity), so the source is deregistered first, which keeps its bytes where they are."""
     rows = pa.table({"id": pa.array([1, 2, 3], pa.int64())})
     assert moto_client.post("/v1/namespace/f3r/create", json={}).status_code == 200
     assert _create(moto_client, "f3r$src", rows).status_code == 200
@@ -420,6 +423,7 @@ def test_register_undo_deregisters_and_never_deletes_the_bytes(moto_client: Test
     assert described.status_code == 200, described.text
     location = str(described.json()["location"])
     relative = location.rstrip("/").rsplit("/", 1)[-1]
+    assert moto_client.post("/v1/table/f3r$src/deregister", json={}).status_code == 200
 
     with pytest.MonkeyPatch.context() as mp:
         _failing_seed_ctx(mp)
@@ -427,10 +431,10 @@ def test_register_undo_deregisters_and_never_deletes_the_bytes(moto_client: Test
     assert failed.status_code == 503, failed.text
     # The catalog object this request made is gone…
     assert moto_client.post("/v1/table/f3r$copy/describe", json={}).status_code == 404
-    # …but the underlying data was NOT deleted — the source still reads its three rows.
-    assert int(moto_client.post("/v1/table/f3r$src/count_rows", json={}).text) == 3
-    # …and the retry converges.
+    # …and the retry converges…
     assert moto_client.post("/v1/table/f3r$copy/register", json={"location": relative}).status_code == 200
+    # …onto bytes the undo did NOT delete: the three rows are still there.
+    assert int(moto_client.post("/v1/table/f3r$copy/count_rows", json={}).text) == 3
 
 
 # --------------------------------------------------------------------------- #
@@ -506,7 +510,7 @@ def test_describe_honours_a_version_pin_sent_in_the_spec_body(moto_client: TestC
     [
         ("arrow-create", lambda c: c.post("/v1/table/ghostns$t9/create", content=_ipc(pa.table({"id": [1]})), headers=ARROW)),
         ("declare", lambda c: c.post("/v1/table/ghostns$t9/declare", json={"schema": {"fields": []}})),
-        ("register", lambda c: c.post("/v1/table/ghostns$t9/register", json={"location": "s3://lance-catalog/nope.lance"})),
+        ("register", lambda c: c.post("/v1/table/ghostns$t9/register", json={"location": "nope.lance"})),
     ],
 )
 def test_no_create_door_admits_a_table_whose_NAMESPACE_does_not_exist(moto_client: TestClient, door: str, post: Any) -> None:

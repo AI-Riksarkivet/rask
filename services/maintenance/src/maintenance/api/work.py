@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 import time
 from datetime import UTC, datetime
+from functools import partial
 from typing import Annotated, Any
 
 from dapr.ext.fastapi import DaprApp
@@ -24,12 +25,13 @@ from pydantic import ValidationError
 from maintenance.api.dependencies import LineageEmitterDep, SettingsDep
 from maintenance.core.config import MaintenanceSettings
 from maintenance.core.lineage_emit import MaintenanceEmitter
+from maintenance.services import sweep
 from maintenance.services.rewrite_slot import container_memory_limit, passes_committed, retire_this_worker, should_retire, should_retire_for_memory
 from maintenance.services.sweep import DatasetWorkItem, emit_sweep_lineage, execute_unit, memory_readings
-from maintenance.services.work_queue import SUCCESS, ack_for
+from maintenance.services.work_queue import RETRY, SUCCESS, ack_for
 from service_kit.draining import retry_when_draining
 from service_kit.governed.dapr_auth import require_dapr_token
-from service_kit.lakehouse import base_refs
+from service_kit.lakehouse import base_refs, base_registry
 
 
 log = logging.getLogger(__name__)
@@ -74,8 +76,22 @@ async def handle_unit(event: dict[str, Any], settings: MaintenanceSettings, emit
     # own outcome makes the distribution — and the max, which is the one that matters — readable with a
     # grep, on any estate, with no trace store at all.
     started = time.perf_counter()
-    fresh = await run_in_threadpool(base_refs.sibling_base_refs, item.uri, options)
-    item = item.model_copy(update={"protected_by": item.protected_by or fresh.is_protected(item.uri)})
+    try:
+        fresh = await run_in_threadpool(
+            partial(
+                base_refs.sibling_base_refs,
+                item.uri,
+                options,
+                configured=settings.external_blob_base_list,
+                record_of=sweep.base_record_reader(settings, options),
+            )
+        )
+    except base_registry.UnreadableBaseRecordError as exc:
+        # A protective record read as absent could free a recorded clone source's bytes ([[LH-279]]). NACKed:
+        # the unit is sound and the record may read on redelivery.
+        log.warning("maintenance_unit_base_record_unreadable", extra={"uri": item.uri, "error": str(exc)[:300]})
+        return {"status": RETRY}
+    item = sweep.with_fresh_protection(item, fresh)
     result = await run_in_threadpool(execute_unit, item, settings=settings, options=options, now=datetime.now(UTC))
     await emit_sweep_lineage(emitter, [result], delimiter=settings.delimiter)
     status = ack_for(result)

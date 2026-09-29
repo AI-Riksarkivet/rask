@@ -17,7 +17,7 @@ from catalog.services import dataplane
 
 
 def _patch_ds(monkeypatch: pytest.MonkeyPatch, schema: pa.Schema) -> None:
-    monkeypatch.setattr(dataplane, "open_dataset", lambda *_a, **_k: SimpleNamespace(schema=schema))
+    monkeypatch.setattr(dataplane, "open_dataset_unchecked", lambda *_a, **_k: SimpleNamespace(schema=schema))
 
 
 def test_reads_and_decodes_user_properties(monkeypatch: pytest.MonkeyPatch) -> None:

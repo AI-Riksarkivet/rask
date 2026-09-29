@@ -600,7 +600,7 @@ def _namespace(root: Path) -> LanceNamespace:
     sink = pa.BufferOutputStream()
     with pa.ipc.new_stream(sink, _rows("bob").schema) as writer:
         writer.write_table(_rows("bob"))
-    create_table(ns, {}, _TABLE_ID, read_arrow_body(sink.getvalue().to_pybytes(), max_bytes=_BODY_LIMIT), mode="create")
+    create_table(ns, {}, _TABLE_ID, read_arrow_body(sink.getvalue().to_pybytes(), max_bytes=_BODY_LIMIT), mode="create", registry=None)
     open_dataset(ns, {}, _TABLE_ID).insert(_rows(_SUBJECT))
     open_dataset(ns, {}, _TABLE_ID).tags.create("snap", 2)
     open_dataset(ns, {}, _TABLE_ID).create_branch("work", 2)

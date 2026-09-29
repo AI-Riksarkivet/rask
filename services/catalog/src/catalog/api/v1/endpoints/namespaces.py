@@ -21,6 +21,7 @@ from lance_namespace import (
     DropNamespaceRequest,
     DropNamespaceResponse,
     DropTableRequest,
+    DropTableResponse,
     InvalidInputError,
     LanceNamespace,
     ListNamespacesRequest,
@@ -57,7 +58,7 @@ from catalog.services import native, warehouses
 from service_kit.control_emit import emit_control
 from service_kit.governed import fga
 from service_kit.governed.oidc import IDToken
-from service_kit.lakehouse import maintenance_policies, protection, trash
+from service_kit.lakehouse import base_registry, maintenance_policies, protection, trash
 
 
 log = logging.getLogger(__name__)
@@ -476,7 +477,7 @@ async def _trash_subtree(ns: LanceNamespace, settings: Settings, token: IDToken 
         await run_in_threadpool(warehouses.unbind_namespace, settings.registry_root, so, segments[0])
 
 
-async def _destroy_subtree(ns: LanceNamespace, segments: list[str], descendants: list[tuple[str, list[str]]]) -> None:
+async def _destroy_subtree(ns: LanceNamespace, segments: list[str], descendants: list[tuple[str, list[str]]], *, registry: base_registry.BaseRegistry) -> None:
     """Destroy the subtree BOTTOM-UP, ourselves (#117).
 
     `drop_namespace(behavior=Cascade)` is not implemented by the `dir` backend the chart runs — it
@@ -494,6 +495,9 @@ async def _destroy_subtree(ns: LanceNamespace, segments: list[str], descendants:
     retry, which is strictly better than the all-or-nothing native call it replaces (that one simply
     refused). An already-absent child is tolerated — drift, not an error, exactly as the warehouse
     cascade treats a binding that outlived its namespace.
+
+    Each destroyed table's base record goes with its bytes ([[LH-279]]), off the location its drop answers:
+    left behind, it would sanction its bases for the next table registered there.
     """
     tables = [child for resource, child in descendants if resource == "table"]
     child_namespaces = sorted((child for resource, child in descendants if resource == "namespace"), key=len, reverse=True)
@@ -504,7 +508,9 @@ async def _destroy_subtree(ns: LanceNamespace, segments: list[str], descendants:
     # Concurrency buys latency on a path nobody is waiting on and costs both of those.
     for child in tables:
         with suppress(TableNotFoundError):
-            await run_in_threadpool(native.call, ns, "drop_table", DropTableRequest(id=child))
+            dropped: DropTableResponse = await run_in_threadpool(native.call, ns, "drop_table", DropTableRequest(id=child))
+            if dropped.location:
+                await run_in_threadpool(base_registry.forget_base_record, registry, dropped.location)
     for child in [*child_namespaces, segments]:
         with suppress(NamespaceNotFoundError):
             await run_in_threadpool(native.call, ns, "drop_namespace", DropNamespaceRequest(id=child))
@@ -620,7 +626,8 @@ async def drop_namespace(
         response = DropNamespaceResponse()
     elif cascade:
         # The dir backend cannot cascade (#117) — we enumerate and destroy bottom-up ourselves.
-        await _destroy_subtree(ns, segments, descendants)
+        registry = base_registry.BaseRegistry(control_root=settings.registry_root, storage_options=settings.storage_options())
+        await _destroy_subtree(ns, segments, descendants, registry=registry)
         response = DropNamespaceResponse()
     else:
         try:

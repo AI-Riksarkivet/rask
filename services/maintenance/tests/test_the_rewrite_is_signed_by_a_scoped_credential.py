@@ -104,7 +104,6 @@ def test_an_unvendable_dataset_is_still_maintained(door: list[dict[str, Any]], u
     "answer",
     [
         _Response(200, {"mode": "server_mediated"}),
-        _Response(503, {}),
         _Response(200, {"mode": "direct", "credentials": {}}),
         httpx.Response(404, json={"code": 0, "detail": "Not Found"}),
         httpx.Response(404, text="not found"),
@@ -113,10 +112,10 @@ def test_an_unvendable_dataset_is_still_maintained(door: list[dict[str, Any]], u
 def test_a_door_that_could_not_ANSWER_degrades_rather_than_failing_the_run(monkeypatch: pytest.MonkeyPatch, answer: _Response | httpx.Response) -> None:
     """Shapes of "no credential is on offer", and none of them is a refusal.
 
-    `server_mediated` is a supported posture, a 503 is an outage, and a `direct` answer carrying no
-    options offered nothing. A 404 that names no absent table or namespace (code 0 is a path no door
-    serves) is the door missing, not an answer about the id. Reclaiming disk through any of these is why
-    the ambient fallback exists.
+    `server_mediated` is a supported posture, and a `direct` answer carrying no options offered nothing.
+    A 404 that names no absent table or namespace (code 0 is a path no door serves) is the door missing,
+    not an answer about the id. Reclaiming disk through any of these is why the ambient fallback exists.
+    A 5xx is not among them: the door was asked and could not decide, which stops the unit ([[LH-279]]).
     """
     monkeypatch.setattr(credentials.httpx, "post", lambda url, **kwargs: answer)
     assert credentials.write_options_for("s3://acme-bucket/4c49d010_acme-bronze$events", _settings(), fallback=_AMBIENT) == _AMBIENT

@@ -20,9 +20,11 @@ from lance_namespace import (
     TableVersionNotFoundError,
     connect,
 )
+from pydantic import BaseModel, Field
 
+from catalog.core.base_judge import require_sanctioned_bases
 from catalog.core.config import Settings, shared_lance_session
-from service_kit.lakehouse.features import flags_from_open_error, manifest_feature_flags, mixes_data_file_versions
+from service_kit.lakehouse.features import BasePathRef, flags_from_open_error, manifest_base_path_refs, manifest_feature_flags, mixes_data_file_versions
 from service_kit.lancekit.absence import reads_as_absent
 
 
@@ -117,7 +119,80 @@ def open_dataset(
     branch: str | None = None,
     base_store_params: dict[str, dict[str, str]] | None = None,
 ) -> lance.LanceDataset:
-    """Open the table's Lance dataset — on ``branch`` when the request names one, otherwise on main.
+    """Open the table's Lance dataset on the ref the request names, refusing one declaring a base nothing sanctioned.
+
+    THE CHECKED OPEN ([[LH-279]]): the handle's own ``base_paths`` — the ref actually opened, after the
+    version pin and the branch checkout, read in memory at no request — are judged by
+    :func:`catalog.core.base_judge.require_sanctioned_bases`, which raises ``InvalidTableStateError``
+    (code 19) for a base that is not the table's own, not configured and not recorded. A branch is judged
+    as well as main: a base planted on ``tree/<b>`` is invisible from main (lh279 m7).
+
+    Every door that reads or writes a table's ROWS opens through here. A door that reads or changes only
+    its version and ref metadata — the repairs an operator needs on exactly such a table — opens through
+    :func:`open_dataset_unchecked`.
+
+    Raises:
+        InvalidTableStateError: The opened ref declares a base the catalog did not sanction.
+    """
+    location = _table_location(ns, table_id)
+    dataset = _open_ref(location, storage_options, table_id, version=version, branch=branch, base_store_params=base_store_params)
+    require_sanctioned_bases(location, manifest_base_path_refs(dataset), judge=None)
+    return dataset
+
+
+def open_dataset_unchecked(
+    ns: LanceNamespace,
+    storage_options: dict[str, str],
+    table_id: list[str],
+    *,
+    version: int | None = None,
+    branch: str | None = None,
+) -> lance.LanceDataset:
+    """:func:`open_dataset` WITHOUT the base judge — for a door that reads no row through the handle.
+
+    Describing a version, listing versions, tags and branches, restoring and deleting them are how an
+    operator sees and repairs a table whose manifest declares a base nobody sanctioned; refusing them
+    would leave no way out but a drop. None of them reads a data file, so none of them reads through the
+    base, and a door that does read rows must not call this.
+    """
+    return _open_ref(_table_location(ns, table_id), storage_options, table_id, version=version, branch=branch, base_store_params=None)
+
+
+def judged_native_version(ns: LanceNamespace, storage_options: dict[str, str], table_id: list[str], *, version: int | None) -> int:
+    """The version a NATIVE data op must be pinned to, after judging that version's bases ([[LH-279]]).
+
+    ``DirectoryNamespace`` opens the dataset inside its own Rust call for ``query_table``,
+    ``count_table_rows`` and the plan ops, so no Python handle exists to judge (lh279 m2 read the victim
+    through each). This opens the ref the request names on the shared session — the version the request
+    pinned, else the latest — judges it, and returns its number: the door then pins the native request
+    to exactly the version judged, so a commit landing between the two cannot be served unjudged. The
+    shared session also carries the manifest the native open reads next (lh279 m2: query 5 -> 4
+    requests), so the pre-open costs about what it saves.
+
+    Raises:
+        InvalidTableStateError: That version declares a base the catalog did not sanction.
+    """
+    return int(open_dataset(ns, storage_options, table_id, version=version).version)
+
+
+def _table_location(ns: LanceNamespace, table_id: list[str]) -> str:
+    resp = ns.describe_table(DescribeTableRequest(id=list(table_id), with_table_uri=True))
+    location = getattr(resp, "table_uri", None) or getattr(resp, "location", None)
+    if not location:
+        raise TableNotFoundError(f"Table not found: {table_id}")
+    return str(location)
+
+
+def _open_ref(
+    location: str,
+    storage_options: dict[str, str],
+    table_id: list[str],
+    *,
+    version: int | None,
+    branch: str | None,
+    base_store_params: dict[str, dict[str, str]] | None,
+) -> lance.LanceDataset:
+    """Open ``location`` on the ref named — on ``branch`` when one is, otherwise on main.
 
     A named branch is a whole parallel dataset under ``tree/{branch}/`` with its own version history, and
     ``lance.dataset(uri)`` opens ONLY main — so a request carrying ``branch`` used to be answered by a write
@@ -139,10 +214,6 @@ def open_dataset(
     byte-identical to passing nothing: pylance falls back to the top-level options for any base with no
     entry.
     """
-    resp = ns.describe_table(DescribeTableRequest(id=list(table_id), with_table_uri=True))
-    location = getattr(resp, "table_uri", None) or getattr(resp, "location", None)
-    if not location:
-        raise TableNotFoundError(f"Table not found: {table_id}")
     if branch is None:
         try:
             return lance.dataset(
@@ -185,24 +256,34 @@ def open_dataset(
         raise error from exc
 
 
-def mixes_file_versions_at(location: str, storage_options: dict[str, str]) -> bool | None:
-    """Whether the dataset at ``location`` carries reader flag 256 (mixed data file versions).
+class RegisteredDataset(BaseModel):
+    """What the register door judges on a dataset it attached, read from ONE open."""
 
-    ``None`` when no dataset is there. A pylance that refuses the open over flag 256 answers ``True``,
-    because 11 and older cannot open such a table and 12 opens it; either way the fact is the same. Any
-    other failed open raises unchanged, so a caller that has to fail closed can.
+    #: Reader flag 256 (mixed data file versions) is set.
+    mixed: bool
+    #: Every base the manifest declares. Empty when the open itself was refused over flag 256, which
+    #: the door refuses before it looks at a base.
+    bases: list[BasePathRef] = Field(default_factory=list)
+
+
+def registered_dataset_facts(location: str, storage_options: dict[str, str]) -> RegisteredDataset | None:
+    """The flags and declared bases of the dataset at ``location``; ``None`` when no dataset is there.
+
+    A pylance that refuses the open over flag 256 answers ``mixed=True``, because 11 and older cannot
+    open such a table and 12 opens it; either way the fact is the same. Any other failed open raises
+    unchanged, so a caller that has to fail closed can.
     """
     try:
         dataset = lance.dataset(location, storage_options=storage_options, session=shared_lance_session())
     except (ValueError, OSError) as exc:
         refused = flags_from_open_error(exc)
         if refused is not None and mixes_data_file_versions(refused):
-            return True
+            return RegisteredDataset(mixed=True)
         if refused is None and reads_as_absent(exc):
             return None
         raise
     reader, _writer = manifest_feature_flags(dataset)
-    return mixes_data_file_versions(reader)
+    return RegisteredDataset(mixed=mixes_data_file_versions(reader), bases=manifest_base_path_refs(dataset))
 
 
 def warn_if_mixed_file_versions(location: str, storage_options: dict[str, str], *, table: str) -> None:
@@ -212,9 +293,9 @@ def warn_if_mixed_file_versions(location: str, storage_options: dict[str, str], 
     the trash with its bytes intact. The public register door refuses the same dataset instead.
     """
     try:
-        mixed = mixes_file_versions_at(location, storage_options)
+        facts = registered_dataset_facts(location, storage_options)
     except Exception as exc:  # noqa: BLE001 — a restore is never failed over a flag read
         log.warning("restored_table_flags_unreadable", extra={"table": table, "location": location, "error": str(exc)[:300]})
         return
-    if mixed:
+    if facts is not None and facts.mixed:
         log.warning("restored_mixed_file_versions", extra={"table": table, "location": location})

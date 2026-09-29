@@ -136,13 +136,17 @@ class MaintenanceDenied(RuntimeError):
     ask", and every caller answers it by doing the work in-pod instead; if a denial inherited from it,
     each of those `except` clauses would keep falling back and the refusal would be invisible.
 
-    THE TWO CONDITIONS ARE DIFFERENT QUESTIONS AND ONLY ONE PERMITS A FALLBACK:
+    THE CONDITIONS ARE DIFFERENT QUESTIONS AND ONLY ONE PERMITS A FALLBACK:
 
-        503 / timeout / unparseable   we could not ASK   -> degrade. Reclaiming disk through a brief
+        timeout / unparseable         we could not ASK   -> degrade. Reclaiming disk through a brief
                                                             catalog outage is why the fallback exists.
         401 / 403                     the answer is NO   -> refuse. Doing the work anyway with the
                                                             deployment's ambient key is an
                                                             authorization bypass, not a degradation.
+        a vend door's 5xx             it could not DECIDE -> stop and retry (:class:`VendUndecided`). The
+                                                            catalog answers 503 when a base record it must
+                                                            judge cannot be read ([[LH-279]]), so standing in
+                                                            for that answer is the same bypass.
 
     The refusal covers the whole dataset for the tick, from either door: an index optimize or a cleanup
     after it would be signed by the same ambient key.
@@ -180,6 +184,18 @@ class GovernedElsewhere(MaintenanceDenied):
     door answered 200 and the table it names is healthy, so this is maintenance's own refusal of the DATASET,
     never counted under the table's id. A `MaintenanceDenied` for the one property the two share: no fallback,
     because the credential is scoped to the other location and the ambient key would be the bypass.
+    """
+
+
+class VendUndecided(RuntimeError):
+    """The vend door answered 5xx: it was asked and could not decide whether to issue this credential.
+
+    Neither a credential nor a refusal, so neither a rewrite nor a park: the unit stops as a failure and is
+    redelivered (``ack_for``), and the serial sweep retries it next tick. NOT a ``MaintenanceDenied`` — nothing
+    was denied, and a parked table would wait for a grant nobody needs to make. And never the ambient key: the
+    catalog's own fail-closed answers are 5xx — ``ServiceUnavailableError`` when a table's base record cannot
+    be read, so its declared bases were not judged ([[LH-279]]) — and signing the rewrite anyway is the
+    bypass of exactly the refusal the door would have given.
     """
 
 

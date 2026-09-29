@@ -53,7 +53,7 @@ def _rows(start: int) -> pa.Table:
 @pytest.fixture
 def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace is runtime-only
     namespace = connect("dir", {"root": str(tmp_path / "data")})
-    create_table(namespace, {}, TABLE_ID, _rows(1), mode="create")
+    create_table(namespace, {}, TABLE_ID, _rows(1), mode="create", registry=None)
     open_dataset(namespace, {}, TABLE_ID).create_branch(BRANCH, None)
     return namespace
 

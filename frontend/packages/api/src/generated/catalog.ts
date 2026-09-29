@@ -3104,9 +3104,10 @@ export interface paths {
         put?: never;
         /**
          * Register Table
-         * @description Register an existing table location at ``id`` via ``register_table``, refuse it when the dataset
-         *     there carries reader flag 256, then seed the caller's FGA ownership and emit a REGISTER_TABLE marker
-         *     (who attached it + where).
+         * @description Register an existing table location at ``id`` via ``register_table``, refuse it when the location
+         *     overlaps the control root, a configured base or another table, when the dataset there carries reader
+         *     flag 256, or when it declares a base nothing sanctions; record the bases it is admitted with, then
+         *     seed the caller's FGA ownership and emit a REGISTER_TABLE marker (who attached it + where).
          */
         post: operations["register_table_v1_table__id__register_post"];
         delete?: never;

@@ -61,6 +61,10 @@ def _settings() -> SimpleNamespace:
         vending_mode="sts",
         vend_sanctioned_bases=[],
         storage_options=lambda: {},
+        # The base judge's two inputs ([[LH-279]]). These tables declare no base outside their own root,
+        # so the record is never read and the control root is never reached.
+        registry_root="/nonexistent/control",
+        external_blob_base_list=[],
     )
 
 

@@ -33,7 +33,7 @@ import lance
 import pyarrow as pa
 import pytest
 
-from catalog.core.vending import CLASSIFICATION_KEY, classified_columns, dataset_facts
+from catalog.core.vending import CLASSIFICATION_KEY, VendFacts, classified_columns, dataset_facts
 
 
 #: pylance's `alter_columns` is declared `*alterations: Iterable[AlterColumn]` and its implementation
@@ -56,13 +56,12 @@ def _dataset(tmp_path: Path, *, classify: str | None = None) -> str:
 
 def test_an_unclassified_table_reports_no_classified_columns(tmp_path: Path) -> None:
     """The control. Without it every assertion below passes on a reader that finds nothing, ever."""
-    _version, _bases, classified = dataset_facts(_dataset(tmp_path), {})
-    assert classified == ()
+    assert dataset_facts(_dataset(tmp_path), {}).classified == ()
 
 
 def test_a_classified_column_is_reported_off_the_same_manifest_read(tmp_path: Path) -> None:
     """`dataset_facts` is the vend's ONE root-cred open; the classification rides it rather than a second."""
-    _version, _bases, classified = dataset_facts(_dataset(tmp_path, classify="ssn"), {})
+    classified = dataset_facts(_dataset(tmp_path, classify="ssn"), {}).classified
     assert classified == ("ssn",), "the vend door cannot refuse what the manifest read never reported"
 
 
@@ -84,4 +83,4 @@ def test_the_classification_survives_a_rename(tmp_path: Path) -> None:
 def test_the_reader_never_raises_on_a_table_it_cannot_open(tmp_path: Path, classify: str | None) -> None:
     """A vend must not 500 because a schema read failed — an unreadable table reports nothing classified."""
     _dataset(tmp_path, classify=classify)
-    assert dataset_facts(str(tmp_path / "absent.lance"), {}) == (0, (), ())
+    assert dataset_facts(str(tmp_path / "absent.lance"), {}) == VendFacts()

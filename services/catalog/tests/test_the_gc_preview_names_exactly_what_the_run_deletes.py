@@ -61,7 +61,7 @@ def _rows(start: int) -> pa.Table:
 def namespace(tmp_path: Path) -> LanceNamespace:
     """Main at v1..v6 and ``work`` at v2..v6, with one tag and one child branch pinning each ref."""
     ns = lance_namespace.connect("dir", {"root": str(tmp_path / "data")})
-    create_table(ns, {}, TABLE_ID, _rows(0), mode="create")
+    create_table(ns, {}, TABLE_ID, _rows(0), mode="create", registry=None)
     open_dataset(ns, {}, TABLE_ID).insert(_rows(1))
     open_dataset(ns, {}, TABLE_ID).create_branch(BRANCH, 2)
     for i in range(2, 6):

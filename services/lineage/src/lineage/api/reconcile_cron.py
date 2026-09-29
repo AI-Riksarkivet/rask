@@ -14,6 +14,7 @@ import json
 import logging
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
+from functools import partial
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Request
@@ -24,7 +25,7 @@ from pydantic import BaseModel, Field
 from lineage.api.dependencies import PublisherDep, RepositoryDep, SettingsDep
 from lineage.api.fga_deps import enforce_bus_authz
 from lineage.core.config import LineageSettings, declared_columns_map, storage_options
-from lineage.core.metrics import record_provenance_gaps
+from lineage.core.metrics import record_base_drift, record_provenance_gaps
 from lineage.core.reconcile import (
     BACKFILLABLE_STATES,
     read_dangling_blob_columns,
@@ -32,6 +33,7 @@ from lineage.core.reconcile import (
     read_storage_schema,
     read_storage_version,
     read_storage_versions,
+    read_unrecorded_bases,
     read_version_operations,
     reconcile_all,
 )
@@ -40,7 +42,7 @@ from lineage.schemas import ReconcileState, ReconcileStatus
 from lineage.services.staged import UnparseableEventError, parse_staged, republish_staged
 from service_kit.governed import fga
 from service_kit.governed.dapr_auth import require_dapr_token
-from service_kit.lakehouse import outbox, outbox_metrics
+from service_kit.lakehouse import base_registry, outbox, outbox_metrics
 
 
 log = logging.getLogger(__name__)
@@ -72,6 +74,8 @@ class SweepReport(BaseModel):
     stale: list[str] = Field(default_factory=list)
     contract_violations: dict[str, list[str]] = Field(default_factory=dict)
     provenance_holes: dict[str, list[int]] = Field(default_factory=dict)
+    #: [[LH-279]] Datasets whose current manifest declares bases nothing sanctions, with those bases.
+    base_drift: dict[str, list[str]] = Field(default_factory=dict)
     #: Governed tables the graph holds NO dataset node for — the commit->stage gap on a FIRST write,
     #: which every other axis here is structurally blind to because they all start from the graph.
     #: Measured on the deployed estate 2026-09-19: 1,424 governed tables against 1,297 graph datasets,
@@ -165,6 +169,7 @@ def summarize_sweep(statuses: list[ReconcileStatus], *, governed: set[str] | Non
         stale=[s.dataset for s in statuses if s.stale],
         contract_violations={s.dataset: s.missing_declared_columns for s in statuses if s.missing_declared_columns},
         provenance_holes={s.dataset: s.versions_without_lineage for s in statuses if s.versions_without_lineage},
+        base_drift={s.dataset: s.unrecorded_bases for s in statuses if s.unrecorded_bases},
     )
 
 
@@ -183,6 +188,7 @@ def record_sweep(report: SweepReport) -> None:
         unknown_to_graph=len(report.unknown_to_graph) if report.unknown_to_graph is not None else None,
         versions_below_tip=sum(len(v) for v in report.provenance_holes.values()),
     )
+    record_base_drift(len(report.base_drift))
 
 
 def log_sweep(report: SweepReport) -> None:
@@ -214,6 +220,9 @@ def log_sweep(report: SweepReport) -> None:
       ``author='reconcile'`` and no inputs, so the version's ACTOR and DERIVATION are gone for good even
       though the fact of the write is restored. A hole that keeps reappearing on the same dataset names a
       producer that is not emitting, which is a defect upstream and invisible in the backfilled count.
+    * ``base_drift`` — a dataset's current manifest declares a base nothing sanctions ([[LH-279]]): a
+      writer planted it, and the catalog refuses every read and vend through the table until an operator
+      restores it to a version before the base or drops it. Not auto-fixed: only a person can say which.
     """
     if report.storage_loss:
         log.warning("lineage_reconcile_storage_loss", extra={"datasets": report.storage_loss, "count": len(report.storage_loss)})
@@ -243,6 +252,8 @@ def log_sweep(report: SweepReport) -> None:
         log.warning("lineage_reconcile_stale", extra={"datasets": report.stale, "count": len(report.stale)})
     if report.contract_violations:
         log.warning("lineage_reconcile_contract_violation", extra={"datasets": report.contract_violations, "count": len(report.contract_violations)})
+    if report.base_drift:
+        log.warning("lineage_reconcile_base_drift", extra={"datasets": report.base_drift, "count": len(report.base_drift)})
     if report.unknown_to_graph:
         # ITS OWN BODY, like every sibling. This is the only class naming a table the sweep has no node
         # for, so it is the only one an operator cannot chase from the graph — the name here is the
@@ -273,6 +284,7 @@ def log_sweep(report: SweepReport) -> None:
             "stale": len(report.stale),
             "contract_violations": len(report.contract_violations),
             "provenance_holes": sum(len(v) for v in report.provenance_holes.values()),
+            "base_drift": len(report.base_drift),
             "unknown_to_graph": len(report.unknown_to_graph) if report.unknown_to_graph is not None else None,
             "outbox_drained": report.outbox_drained,
             "outbox_stranded": report.outbox_stranded,
@@ -359,6 +371,18 @@ async def _sweep(
         # DESIGN, so classifying is what keeps the finding worth reading; one transaction read per hole,
         # and a healthy dataset has none.
         read_operations=lambda uri, versions: run_in_threadpool(read_version_operations, uri, opts, versions),
+        # BASE DRIFT ([[LH-279]]): the bases each readable dataset declares now that the catalog never
+        # sanctioned, judged against its record on the catalog's control root. A state compare, because
+        # retention reclaims the `UpdateBases` version while the tip still declares the base.
+        read_unrecorded_bases=lambda uri: run_in_threadpool(
+            partial(
+                read_unrecorded_bases,
+                uri,
+                opts,
+                registry=base_registry.BaseRegistry(control_root=settings.resolved_control_root, storage_options=opts),
+                configured=settings.external_blob_base_list,
+            )
+        ),
         freshness_budget_hours=settings.freshness_budget_hours,
         # Declared-columns patrol (Batch 23): re-check the gate's column_declared assertion
         # estate-wide — only declared datasets pay the schema read.

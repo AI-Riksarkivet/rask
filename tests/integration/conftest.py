@@ -12,9 +12,11 @@ from collections.abc import Iterator
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import lance
+import pyarrow as pa
 import pytest
 from fastapi.testclient import TestClient
-from lance_namespace import LanceNamespace
+from lance_namespace import DescribeTableResponse, LanceNamespace
 
 
 @pytest.fixture
@@ -82,6 +84,13 @@ def client(fake_ns: MagicMock, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) 
 
     app.dependency_overrides[get_namespace] = lambda: fake_ns
     app.dependency_overrides[get_storage_options] = lambda: {}
+    # THE DOUBLE DESCRIBES A REAL LOCATION, as the backend it stands in for does. A data door judges the
+    # table's declared bases on the dataset it describes before handing the op to the backend
+    # ([[LH-279]]), so a location that opens nothing would answer 404 where the backend is under test.
+    # One empty-based table serves every id; a test that describes something else still overrides it.
+    described = tmp_path / "described.lance"
+    lance.write_dataset(pa.table({"id": pa.array([0], pa.int64())}), str(described), data_storage_version="2.2", enable_stable_row_ids=True)
+    fake_ns.describe_table.return_value = DescribeTableResponse(location=str(described), table_uri=str(described))
     with TestClient(app) as test_client:
         yield test_client
     app.dependency_overrides.clear()

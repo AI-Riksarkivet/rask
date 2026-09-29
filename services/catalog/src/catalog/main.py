@@ -23,6 +23,7 @@ from catalog.api.dapr import register_control_dapr
 from catalog.api.load_shed import WriteConcurrencyLimitMiddleware
 from catalog.api.maintenance_mode import maintenance_middleware
 from catalog.api.v1.router import api_router
+from catalog.core import base_judge
 from catalog.core.config import Settings, get_settings
 from catalog.core.control_buffer import ControlEventBuffer
 from catalog.core.lineage_emit import make_emitter
@@ -167,6 +168,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # empty, so an unlisted foreign base stays refused.
         sanctioned_bases=settings.vend_sanctioned_bases,
     )
+    # [[LH-279]] WHAT EVERY TABLE READ JUDGES A DECLARED BASE AGAINST: the control root the create and
+    # register doors write each table's base record to, and the configured external blob bases. Installed
+    # AFTER the secret splice so the record reads sign with the store's credential, and cleared at
+    # shutdown so nothing in this process outlives the app that configured it.
+    base_judge.install(base_judge.BaseJudge.from_settings(settings))
     # Lineage emission (opt-in, best-effort). Build the chosen transport: a Dapr pub/sub publisher (the
     # sidecar persists to NATS) or a direct-HTTP client. The Dapr client targets the local sidecar, so
     # it's cheap to construct and needs no broker reachability at boot.
@@ -275,6 +281,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         yield
     finally:
         app.state.shutting_down = True
+        base_judge.install(None)
         backfill_task.cancel()
         fga_client = getattr(app.state, "fga", None)
         # Each close is isolated so one failing teardown can't strand the other resource.

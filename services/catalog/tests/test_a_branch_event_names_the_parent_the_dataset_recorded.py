@@ -58,7 +58,7 @@ def _table(start: int) -> pa.Table:
 @pytest.fixture
 def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace, a runtime-only type
     namespace = connect("dir", {"root": str(tmp_path / "data")})
-    create_table(namespace, {}, TABLE, _table(1), mode="create")
+    create_table(namespace, {}, TABLE, _table(1), mode="create", registry=None)
     # A SECOND VERSION, so "the parent is main's current version" is a number the request could not
     # have guessed and a null could not stand in for. With one version, 1 and "unset" are too close
     # to tell apart in a failure message.

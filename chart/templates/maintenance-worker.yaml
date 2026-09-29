@@ -312,6 +312,7 @@ spec:
                    a ghost forever, and a divergent warehouses_enabled reports every namespace as unbound. */}}
             - { name: MAINTENANCE_WAREHOUSES_ENABLED, value: {{ .Values.catalog.warehouses.enabled | default false | quote }} }
             - { name: MAINTENANCE_CONTROL_ROOT, value: {{ .Values.maintenance.controlRoot | default "" | quote }} }
+            - { name: LANCE_EXTERNAL_BLOB_BASES, value: {{ include "lance.externalBlobBases" . | quote }} }
             {{- /* The #50 POLICY registry root. Rendered nowhere until 2026-08-16, so an operator who
                    followed values.yaml's "set both together" had no second key to set and moved only
                    half the reads. A policy registry at the wrong root lists cleanly as EMPTY, so every

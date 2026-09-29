@@ -84,6 +84,10 @@ class DatasetWorkItem(BaseModel):
     #: The root that some OTHER dataset's manifest resolves through, when this dataset is one or lies
     #: under one. ``None`` means the pre-pass found no referrer — the dataset may be compacted.
     protected_by: str | None = None
+    #: The source tags that pin every relation through ``protected_by``, when every referrer of it is a
+    #: pinned recorded relation ([[LH-279]]): the dataset may then be compacted while each tag is on it.
+    #: Empty means the protection is unconditional.
+    pin_tags: list[str] = Field(default_factory=list)
     #: The catalog identifier (``namespace$table``) this dataset IS, when the producer knows it.
     #:
     #: Carried rather than derived, because the catalog is addressed by IDENTIFIER and never by

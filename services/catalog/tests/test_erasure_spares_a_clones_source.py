@@ -29,6 +29,7 @@ from catalog.core.config import Settings, get_settings
 from catalog.core.namespace import open_dataset
 from catalog.services.dataplane import create_table, read_arrow_body
 from catalog.services.erasure import ErasureReport, erase
+from service_kit.lakehouse import base_registry
 from service_kit.lakehouse.base_refs import BaseRefs, normalise
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 
@@ -95,15 +96,28 @@ def namespace(tmp_path: Path) -> LanceNamespace:
     sink = pa.BufferOutputStream()
     with pa.ipc.new_stream(sink, _rows(_SUBJECT, "bob").schema) as writer:
         writer.write_table(_rows(_SUBJECT, "bob"))
-    create_table(ns, {}, ["subjects"], read_arrow_body(sink.getvalue().to_pybytes(), max_bytes=_BODY_LIMIT), mode="create")
+    create_table(ns, {}, ["subjects"], read_arrow_body(sink.getvalue().to_pybytes(), max_bytes=_BODY_LIMIT), mode="create", registry=None)
     open_dataset(ns, {}, ["subjects"]).insert(_rows("carol"))
-    open_dataset(ns, {}, ["subjects"]).shallow_clone(str(tmp_path / "data" / "clone.lance"), (None, None))
+    source = open_dataset(ns, {}, ["subjects"])
+    clone = str(tmp_path / "data" / "clone.lance")
+    source.shallow_clone(clone, (None, None))
+    # RECORDED, as the catalog records a clone it made ([[LH-279]]): an unrecorded clone's base is a claim
+    # nothing sanctioned, which protects nothing — the erasure would then reclaim through it, correctly.
+    base_registry.claim_bases(
+        base_registry.BaseRegistry(control_root=str(tmp_path / "control")),
+        clone,
+        [
+            base_registry.RecordedBase(
+                path=source.uri, role=base_registry.BaseRole.DERIVED_FROM, is_dataset_root=True, origin=base_registry.BaseOrigin.SILVER, source_table=source.uri
+            )
+        ],
+    )
     return ns
 
 
 @pytest.fixture
-def client(namespace: LanceNamespace) -> Iterator[TestClient]:
-    settings = Settings(LANCE_S3_ACCESS_KEY_ID="k", LANCE_S3_SECRET_ACCESS_KEY="s")
+def client(namespace: LanceNamespace, tmp_path: Path) -> Iterator[TestClient]:
+    settings = Settings(LANCE_S3_ACCESS_KEY_ID="k", LANCE_S3_SECRET_ACCESS_KEY="s", LANCE_CONTROL_ROOT=str(tmp_path / "control"))
     application = FastAPI()
     install_problem_handlers(application, logging.getLogger(__name__))
     application.include_router(door.router)

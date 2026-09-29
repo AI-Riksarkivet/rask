@@ -126,8 +126,13 @@ class TestThePublicDoor:
         _create_namespace(catalog, "db")
         _write(root / "t", [1], version="2.1")
 
-        def _refuse(*_a: object, **_k: object) -> object:
-            raise ValueError("Not supported: This dataset cannot be read by this version of Lance. Please upgrade Lance to read this dataset.\n Flags: 258")
+        real = core_namespace.lance.dataset
+
+        def _refuse(uri: str, *a: Any, **k: Any) -> Any:
+            # Only the registered dataset is refused; the namespace's own object index still opens.
+            if str(uri).rstrip("/").endswith("/t"):
+                raise ValueError("Not supported: This dataset cannot be read by this version of Lance. Please upgrade Lance to read this dataset.\n Flags: 258")
+            return real(uri, *a, **k)
 
         monkeypatch.setattr(core_namespace.lance, "dataset", _refuse)
 
@@ -258,10 +263,20 @@ class TestThePublicDoor:
         assert resp.status_code == 200, resp.text
         assert _is_registered(catalog, "db$t")
 
-    def test_a_table_whose_only_unusual_flag_is_initial_bases_registers(self, catalog: TestClient, root: Path, tmp_path: Path) -> None:
-        """Flag 16 is what ingest's create_empty(external_base=...) writes, and it is not this door's business."""
+    def test_a_table_whose_only_unusual_flag_is_initial_bases_registers(
+        self, catalog: TestClient, root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Flag 16 is what ingest's create_empty(external_base=...) writes, and it is not this door's business.
+
+        The base is an APPROVED external base, as ingest's is (`approved_external_base`): a base nothing
+        sanctions is refused for its own reason ([[LH-279]]), which is not the flag's.
+        """
+        from catalog.core.config import get_settings
+
         external = tmp_path / "source"
         external.mkdir()
+        monkeypatch.setenv("LANCE_EXTERNAL_BLOB_BASES", f"file://{external}/")
+        get_settings.cache_clear()
         _create_namespace(catalog, "db")
         _write(root / "t", [1], version="2.2", initial_bases=[lance.DatasetBasePath(str(external), "source")])
         assert manifest_feature_flags(lance.dataset(str(root / "t"))) == (18, 18), "precondition: flag 16 plus stable row ids"

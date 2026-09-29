@@ -204,7 +204,8 @@ _BRANCH_CONTAINER = "tree"
 #: `IncompleteScan` — and `report_is_clean` refuses to certify an estate with anything incomplete, which
 #: gates the #79 purge. Measured on the deployed release 2026-09-16: three incomplete entries, all
 #: backup snapshots, against 932 orphan files across 8 datasets the purge could not touch.
-_CONTROL_PREFIXES = ("_warehouses", "_policies", "_protection", "_trash", "_lineage_outbox", "_staging", "_backups")
+#: `_bases` holds the catalog's per-table base records ([[LH-279]]): control-root JSON, never a dataset.
+_CONTROL_PREFIXES = ("_warehouses", "_policies", "_protection", "_trash", "_lineage_outbox", "_staging", "_backups", "_bases")
 
 
 def _may_hide_a_dataset(fs: pafs.FileSystem, path: str) -> bool:
@@ -317,6 +318,21 @@ _WHY_PROTECTED = {
     "under": "this lies inside {root}, whose files another dataset resolves through — deleting or rewriting anything at or beneath it breaks the referrer",
     "ancestor": "{root} lies beneath this location and another dataset resolves its files through it — reclaiming here would take the referenced bytes with it",
 }
+
+
+def _held_by_its_pins(ds: lance.LanceDataset, protected: BaseRefs, *, root: str, relation: str) -> bool:
+    """Whether every referrer of ``root`` is a pinned recorded relation whose tag is still on it ([[LH-279]]).
+
+    Then compaction and version reclamation may run on the root itself: reclamation keeps a tagged
+    version's files (``error_if_tagged_old_versions=False`` below), and a pinned relation reads through
+    exactly that version — measured on pylance 12.0.0 (lh279 p4), the clone read cold after its source
+    was compacted and cleaned. A missing tag, an unconditional referrer, or a location merely UNDER the
+    root keeps the refusal. The tags come from the catalog's record, never from the manifest.
+    """
+    tags = protected.pin_tags(root)
+    if relation != "is" or not tags:
+        return False
+    return tags <= set(ds.tags.list())
 
 
 def _rewrite(ds: lance.LanceDataset, size_kw: dict[str, Any], *, slots: int, defer: bool) -> Any:
@@ -821,11 +837,11 @@ def compact_one(
         # `get_file_info` per declared base), and the overwhelming majority of datasets declare none.
         #
         # `dataset_root_probe` binds the probe to THIS dataset's store, and that binding is load-bearing
-        # rather than tidy: on S3 a manifest states its base as `/bucket/ns/t.lance` while this `uri` is
-        # `s3://bucket/ns/t.lance` (the two spellings `base_refs.normalise` exists to reconcile).
-        # Probing the schemeless form directly reads it as a LOCAL absolute path, finds nothing, and
-        # answers "not a dataset root" — a wrong PERMIT on a real clone, which is the one direction
-        # this gate must never take.
+        # rather than tidy: a base stated WITHOUT a scheme, probed directly, reads as a LOCAL absolute
+        # path, finds nothing, and answers "not a dataset root" — a wrong PERMIT on a real clone, which is
+        # the one direction this gate must never take. (Measured pylance 12.0.0 over moto, lh279 r3
+        # b_store: an S3 branch, clone or multi-base base is stored WITH its `s3://` scheme, so the common
+        # base already names its store; a scheme-less base is the exotic case the probe binds defensively.)
         gather_compaction_bases(ds, dataset_root_probe(uri, storage_options)) if (reader_flags | writer_flags) & FLAG_BASE_PATHS else None,
     )
     # #114 — the OTHER direction, and the flag check above cannot see it. Flag 16 marks the dataset
@@ -838,7 +854,12 @@ def compact_one(
     # the obsoleted originals (-> 1 file) and the clone fails to open IN A FRESH PROCESS. Since this
     # function runs compact -> optimize_indices -> cleanup as one pass, the refusal belongs here, in
     # front of all three, rather than in front of compaction alone.
-    if protected is not None and (root := protected.is_protected(uri)) is not None and (relation := containment_of(uri, root)) != "branch":
+    if (
+        protected is not None
+        and (root := protected.is_protected(uri)) is not None
+        and (relation := containment_of(uri, root)) != "branch"
+        and not _held_by_its_pins(ds, protected, root=root, relation=relation)
+    ):
         # A BRANCH FALLS THROUGH; THE THREE CROSS-ROOT RELATIONS DO NOT. This gate returns before the
         # dataset is opened, so refusing here skipped RECLAMATION as well as compaction — and on the
         # live estate that was most of what the sweep declined (105 `branch` against 94 `is` over ten

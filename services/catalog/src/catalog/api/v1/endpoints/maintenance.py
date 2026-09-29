@@ -48,13 +48,14 @@ from fastapi.concurrency import run_in_threadpool
 from catalog.api import lineage_deps
 from catalog.api.dependencies import LineageEmitterDep, NamespaceDep, SettingsDep, StorageOptionsDep
 from catalog.api.security import CurrentToken
+from catalog.core.base_judge import BaseJudge
+from catalog.core.config import Settings
 from catalog.core.identifiers import parse_identifier
 from catalog.core.lineage_emit import COMPACT_TABLE, CREATE_INDEX
 from catalog.core.namespace import open_dataset
 from catalog.schemas import CompactAccepted, CompactRequest, CompactResult, GcPreview, GcRequest, GcRunResult, ReindexAccepted, ReindexRequest, ReindexResult
 from catalog.services import index_specs, maintenance
 from service_kit import dapr_publish
-from service_kit.lakehouse import base_refs
 from service_kit.lakehouse.work_items import DatasetPlan, DatasetWorkItem, IndexWorkItem
 
 
@@ -66,7 +67,7 @@ log = logging.getLogger(__name__)
 router = APIRouter(prefix="/management/v1/table", tags=["maintenance"])
 
 
-async def _base_refs(ds: object, so: dict[str, str]) -> maintenance.BaseRefs:
+async def _base_refs(ds: object, so: dict[str, str], settings: Settings) -> maintenance.BaseRefs:
     """The #114 pre-pass, run BEFORE either destructive verb.
 
     It has to happen out here rather than inside the service function because the evidence is not on
@@ -81,7 +82,9 @@ async def _base_refs(ds: object, so: dict[str, str]) -> maintenance.BaseRefs:
     maintenance unusable. The refusals it can make are the point.
     """
     location = str(getattr(ds, "uri", "") or "")
-    refs = await run_in_threadpool(base_refs.sibling_base_refs, location, so)
+    # Judged against the record and the configured bases ([[LH-279]]): a base a writer planted in a
+    # sibling's manifest protects nothing, so it cannot freeze the table this button maintains.
+    refs = await run_in_threadpool(BaseJudge.from_settings(settings).sibling_base_refs, location, so)
     if refs.unreadable:
         log.warning("maintenance_base_refs_incomplete", extra={"location": location, "unreadable": len(refs.unreadable)})
     return refs
@@ -143,7 +146,7 @@ async def run_maintenance(
     ``open_dataset``."""
     segments = parse_identifier(id, settings.delimiter)
     ds = await run_in_threadpool(open_dataset, ns, so, segments, branch=branch)
-    protected = await _base_refs(ds, so)
+    protected = await _base_refs(ds, so, settings)
     result = await run_in_threadpool(
         maintenance.run_gc,
         ds,
@@ -215,7 +218,7 @@ async def compact_maintenance(
     # notice that.
     segments = parse_identifier(id, settings.delimiter)
     ds = await run_in_threadpool(open_dataset, ns, so, segments, branch=branch)
-    protected = await _base_refs(ds, so)
+    protected = await _base_refs(ds, so, settings)
 
     publisher = getattr(request.app.state, "dapr_client", None)
     if settings.maintenance_work_topic and publisher is not None:

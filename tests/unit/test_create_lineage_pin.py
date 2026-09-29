@@ -42,6 +42,11 @@ class _Settings:
     dapr_secret_s3_field = ""
     # [[XC-104]] The door holds the body to this once its compressed buffers inflate.
     max_body_bytes = 256 * 1024 * 1024
+    # [[LH-279]] Where the create records the bases it registers; the write is faked here, so no record lands.
+    registry_root = ""
+
+    def storage_options(self) -> dict[str, str]:
+        return {}
 
 
 class _Token:

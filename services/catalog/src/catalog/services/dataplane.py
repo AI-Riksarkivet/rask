@@ -90,13 +90,15 @@ from lance_namespace import (
 )
 from pydantic import BaseModel
 
+from catalog.core.base_judge import require_sanctioned_bases
 from catalog.core.config import shared_lance_session
 from catalog.core.modes import CreateMode, InsertMode
-from catalog.core.namespace import open_dataset
-from catalog.services import changes, native, warehouse_credentials
+from catalog.core.namespace import judged_native_version, open_dataset, open_dataset_unchecked
+from catalog.services import changes, native, table_bases, warehouse_credentials
 from catalog.services.base_credentials import compose_base_store_params
 from catalog.services.cast_size import bytes_after_cast
-from service_kit.lakehouse.features import VersionedDataFile, describe_foreign_data_file_versions
+from service_kit.lakehouse import base_registry
+from service_kit.lakehouse.features import VersionedDataFile, describe_foreign_data_file_versions, manifest_base_path_refs
 from service_kit.lakehouse.objectfs import StorageOptions, s3_filesystem
 from service_kit.lakehouse.schema import SchemaFields, facet_fields
 from service_kit.lancekit.absence import reads_as_absent
@@ -378,6 +380,7 @@ def create_table(
     base_credential_refs: dict[str, str] | None = None,
     secret_store: str = "",
     secret_field: str = "",
+    registry: base_registry.BaseRegistry | None,
 ) -> CreateTableResponse:
     """Create a table at file format 2.2 with stable row ids — the ONLY create path (audit 2026-07-14).
 
@@ -404,6 +407,12 @@ def create_table(
     A brand-new table is ``declare``-d to learn its canonical location, then written at
     ``data_storage_version="2.2"`` (lance_docs/guide.md — Version Compatibility). Any failed fresh write is
     rolled back with ``drop_table`` so the name stays retryable rather than stuck describable-but-unreadable.
+
+    ``registry`` is where a fresh write records the bases it registers ([[LH-279]]): the record is the
+    catalog's word on which foreign bases the table may declare, written BEFORE the manifest and removed
+    again when the write fails. Required and never defaulted — the governed door passes the control root;
+    ``None`` is an explicit choice for a caller outside governance (a test building a fixture), which
+    leaves the table with no record at all.
     """
     allow_external = allow_external_blobs
     external_blob_bases = external_blob_bases or []
@@ -445,6 +454,7 @@ def create_table(
             base_credential_refs=base_credential_refs,
             secret_store=secret_store,
             secret_field=secret_field,
+            registry=registry,
         )
 
     location = ns.declare_table(DeclareTableRequest(id=segments, properties=properties)).location
@@ -463,6 +473,7 @@ def create_table(
         base_credential_refs=base_credential_refs,
         secret_store=secret_store,
         secret_field=secret_field,
+        registry=registry,
     )
 
 
@@ -480,11 +491,22 @@ def _write_blob_into(
     base_credential_refs: dict[str, str] | None = None,
     secret_store: str = "",
     secret_field: str = "",
+    registry: base_registry.BaseRegistry | None,
 ) -> CreateTableResponse:
     """Write the blob table's first data version into an already-declared ``location``, rolling the declare
     back with ``drop_table`` on failure so the name stays retryable rather than stuck declared-but-unreadable.
+
+    THE BASE RECORD IS CLAIMED FIRST ([[LH-279]]): every base this write registers through
+    ``initial_bases`` — the configured external blob bases and the approved data bases — is in the
+    catalog's record before the manifest that declares them exists, so no reader ever meets the table
+    declaring a base its record lacks. A failed write releases exactly what it claimed; a record that
+    outlived its write would vouch for a base no manifest names.
     """
+    claim: base_registry.BaseClaim | None = None
     try:
+        if registry is not None:
+            entries = table_bases.create_entries(external_blob_bases, [(base, _base_name(base)) for base in dict.fromkeys(data_bases or [])])
+            claim = base_registry.claim_bases(registry, location, entries)
         dataset = _write_blob(
             table,
             location,
@@ -501,6 +523,11 @@ def _write_blob_into(
     except Exception:
         with suppress(Exception):  # best-effort rollback; re-raise the real write error
             ns.drop_table(DropTableRequest(id=segments))
+        if registry is not None and claim is not None:
+            try:
+                base_registry.release_claim(registry, claim)
+            except Exception as release_exc:  # noqa: BLE001 — the write error is what the caller is told
+                log.error("create_base_record_release_failed", extra={"location": location, "error": str(release_exc)[:300]})
         raise
     if properties:
         # STAMPED ON THE TABLE, not only on the manifest row and the reply. The spec's "properties at
@@ -845,6 +872,7 @@ def commit_appended_fragments(
         frags = [lance.FragmentMetadata.from_json(json.dumps(f)) for f in fragments]
     except (KeyError, TypeError, ValueError, AttributeError) as exc:
         raise InvalidInputError(f"malformed fragment metadata: {exc}") from exc
+    _refuse_based_data_files(fragments)
     judged_version = _refuse_foreign_file_versions(location, so, frags, read_version)
     # HIGH (audit 2026-07-14): Lance's commit validates NEITHER data-file existence NOR the declared row
     # count, so a client whose direct write landed under a DIFFERENT prefix than the catalog-resolved
@@ -870,6 +898,36 @@ def commit_appended_fragments(
     return int(dataset.version), dataset.count_rows()
 
 
+def _refuse_based_data_files(fragments: list[dict[str, Any]]) -> None:
+    """Refuse any client fragment whose data file names a base (a non-null ``base_id``) ([[LH-279]]).
+
+    ``base_id`` indexes the TABLE's base list, which a write vend can extend with ``add_bases`` — and
+    ``add_bases`` with an existing id REPOINTS that base (lh279 m4) — so a fragment resolving through a
+    base is a pointer the writer chose into bytes the writer need not own: measured, an appended fragment
+    through a planted base made the victim's rows the attacker's (lh279 m2). No rule judged at
+    ``read_version`` can bound it, because the base list the commit lands on is the writer's too.
+
+    Refusing the primitive costs no legitimate producer: every base a vend reaches is granted READ only,
+    and the one ``/commit`` client (ingest's lander) calls ``write_fragments`` without ``target_bases``,
+    so its files carry ``base_id`` null. A table spread across bases is written server-side at create.
+
+    Raises:
+        InvalidInputError: A data file carries a non-null ``base_id``; nothing was read or committed.
+    """
+    based = [
+        (index, data_file.get("path"))
+        for index, frag in enumerate(fragments)
+        for data_file in (frag.get("files") if isinstance(frag, dict) else None) or []
+        if isinstance(data_file, dict) and data_file.get("base_id") is not None
+    ]
+    if based:
+        log.warning("catalog_commit_refused_based_data_file", extra={"files": based[:5], "count": len(based)})
+        raise InvalidInputError(
+            f"commit refused: {len(based)} data file(s) resolve through a base (non-null base_id), e.g. fragment/file {based[:5]}. "
+            "A client commit may only append files under the table's own data/ directory; write them there with write_fragments and no target_bases"
+        )
+
+
 def _refuse_foreign_file_versions(location: str, so: StorageOptions, frags: Sequence[lance.FragmentMetadata], read_version: int) -> int:
     """Refuse fragments whose data files would mix the table's file versions; return the version judged.
 
@@ -887,6 +945,9 @@ def _refuse_foreign_file_versions(location: str, so: StorageOptions, frags: Sequ
         if reads_as_absent(exc):
             raise InvalidInputError(f"{_NO_BASE_DETAIL}: {exc}") from exc
         raise ServiceUnavailableError(f"cannot read the table to judge the fragments' file versions, so nothing was committed: {exc}") from exc
+    # THE VERSION THE CALLER BUILT AGAINST, judged like any read ([[LH-279]]): an append onto a table whose
+    # manifest declares a base nothing sanctioned carries that base into the version it mints.
+    require_sanctioned_bases(location, manifest_base_path_refs(base), judge=None)
     files = [data_file for frag in frags for data_file in frag.files]
     reason = describe_foreign_data_file_versions(base.data_storage_version, files)
     if reason is None:
@@ -919,10 +980,10 @@ def _matches_the_latest_version(location: str, so: StorageOptions, files: Sequen
 def _verify_fragment_data_files(location: str, so: StorageOptions, fragments: list[dict[str, Any]]) -> None:
     """Reject a commit that references data files ABSENT under ``<location>/data/`` (audit HIGH fix).
 
-    Each fragment's ``files[].path`` is a bare filename under the dataset's ``data/`` dir (``base_id`` null →
-    dataset root; a non-null ``base_id`` points into a registered external base we don't resolve here, so it
-    is skipped rather than false-rejected). A missing file means the client's direct write targeted the
-    wrong prefix — committing it would publish an unreadable version, so raise 400 and leave the table as-is.
+    Each fragment's ``files[].path`` is a bare filename under the dataset's ``data/`` dir: a file naming a
+    base was already refused by :func:`_refuse_based_data_files`. A missing file means the client's direct
+    write targeted the wrong prefix — committing it would publish an unreadable version, so raise 400 and
+    leave the table as-is.
     """
     fs, base = _dataset_fs(location, so)
     prefix = base.rstrip("/") + "/data/"
@@ -933,7 +994,7 @@ def _verify_fragment_data_files(location: str, so: StorageOptions, fragments: li
         str(rel)
         for frag in fragments
         for data_file in (frag.get("files") if isinstance(frag, dict) else None) or []
-        if isinstance(data_file, dict) and data_file.get("base_id") is None and (rel := data_file.get("path"))
+        if isinstance(data_file, dict) and (rel := data_file.get("path"))
     ]
     infos = fs.get_file_info([prefix + rel for rel in rels]) if rels else []
     missing = [rel for rel, info in zip(rels, infos, strict=True) if info.type == pafs.FileType.NotFound]
@@ -1103,6 +1164,9 @@ def plan_compaction(
         raise TableNotFoundError(
             f"no dataset exists at this table's location ({location}) — it is declared or registered but was never written: {exc}"
         ) from exc
+    # A REWRITE THROUGH AN UNSANCTIONED BASE copies the bytes behind it into this table's own root
+    # ([[LH-279]]), which is the read the base judge refuses, made permanent.
+    require_sanctioned_bases(location, manifest_base_path_refs(dataset), judge=None)
     plan = lance_optimize.Compaction.plan(dataset, cast(Any, options))
     return PlannedCompaction(read_version=int(plan.read_version), tasks=[cast(str, cast(Any, task).json()) for task in plan.tasks])
 
@@ -1146,6 +1210,7 @@ def commit_compaction(location: str, so: StorageOptions, results: Sequence[str],
     # a top-level import is a cycle.
     from catalog.services.maintenance import require_compactable
 
+    require_sanctioned_bases(location, manifest_base_path_refs(dataset), judge=None)
     require_compactable(dataset, so)
     # The rewrites are client-supplied, so their files are judged like an append's: a forged or buggy
     # result at another file version would commit and stamp flag 256 (measured on pylance 12.0.0).
@@ -1463,6 +1528,10 @@ def insert_into_table(ns: LanceNamespace, so: StorageOptions, req: InsertIntoTab
     through `InsertMode`, whose two values are pylance's own spellings of the spec's two modes.
     """
     if req.branch is None:
+        # The native write opens the table inside Rust; judge it first ([[LH-279]]). A write cannot be
+        # pinned to the version judged, so a base planted between the two rides into the new version —
+        # where every later read refuses it.
+        judged_native_version(ns, so, _table_id(req), version=None)
         response = cast(InsertIntoTableResponse, native.call(ns, "insert_into_table", req, data))
         # THE NATIVE BACKEND ANSWERS `{}`, so both declared fields came back None on the ORDINARY path
         # while the branch path below filled them — a caller had to stage on a branch to learn what
@@ -1521,6 +1590,7 @@ def merge_insert_into_table(
     refuse_an_unbounded_boolean_chain(req.when_not_matched_by_source_delete_filt, field="when_not_matched_by_source_delete_filt")
     rows = read_arrow_body(data, max_bytes=max_bytes)
     if req.branch is None:
+        judged_native_version(ns, so, _table_id(req), version=None)
         return cast(MergeInsertIntoTableResponse, native.call(ns, "merge_insert_into_table", req, data))
     dataset = open_dataset(ns, so, _table_id(req), branch=req.branch)
     # THE BUILDER IS CONSTRUCTED INSIDE THE GUARD, and that placement is the fix rather than a tidy-up:
@@ -1622,6 +1692,9 @@ def count_rows(ns: LanceNamespace, so: StorageOptions, req: CountTableRowsReques
     """
     refuse_an_unbounded_boolean_chain(req.predicate, field="predicate")
     if req.branch is None:
+        # PINNED TO THE VERSION JUDGED ([[LH-279]]): the native count opens the table inside Rust, so the
+        # request carries the exact version whose bases were just checked.
+        req.version = judged_native_version(ns, so, _table_id(req), version=req.version)
         response = native.call(ns, "count_table_rows", req)
         if not isinstance(response, CountTableRowsResponse) or response.count is None:
             raise TypeError(f"count_table_rows must answer a CountTableRowsResponse with a count, got {type(response).__name__}: {response!r}")
@@ -1891,7 +1964,7 @@ def read_schema_metadata(ns: LanceNamespace, so: StorageOptions, table_id: list[
     (Arrow bytes keys/values → str) directly. Internal ``lineage.*`` bookkeeping keys are excluded — they're
     not user properties, and the update path MERGES, so hiding them never drops them on a UI save.
     """
-    meta = open_dataset(ns, so, table_id).schema.metadata or {}
+    meta = open_dataset_unchecked(ns, so, table_id).schema.metadata or {}
     out: dict[str, str] = {}
     for k, v in meta.items():
         key = k.decode() if isinstance(k, bytes) else str(k)
@@ -2077,7 +2150,7 @@ def table_history(ns: LanceNamespace, so: StorageOptions, table_id: list[str], l
     ``limit`` bounds the transaction reads, not the versions list: a table with 10k versions should not
     become 10k object-store round trips because a UI asked for a page.
     """
-    dataset = open_dataset(ns, so, table_id)
+    dataset = open_dataset_unchecked(ns, so, table_id)
     versions = sorted(dataset.versions(), key=lambda v: int(v["version"]), reverse=True)[:limit]
     out: list[dict[str, Any]] = []
     for entry in versions:
@@ -2249,7 +2322,7 @@ def list_tags(ns: LanceNamespace, so: StorageOptions, req: ListTableTagsRequest)
     """List the table's tags as ``{name: TagContents{version, manifest_size, branch}}``."""
     table_id = _table_id(req)
     tags: dict[str, dict[str, Any]] = {}
-    for name, tag in open_dataset(ns, so, table_id).tags.list().items():
+    for name, tag in open_dataset_unchecked(ns, so, table_id).tags.list().items():
         # pylance's Tag is a TypedDict (plain dict at runtime), so read by key.
         entry = tag if isinstance(tag, dict) else {"version": getattr(tag, "version", None)}
         tags[name] = {
@@ -2276,7 +2349,7 @@ def create_tag(ns: LanceNamespace, so: StorageOptions, req: CreateTableTagReques
 
 def get_tag_version(ns: LanceNamespace, so: StorageOptions, req: GetTableTagVersionRequest) -> GetTableTagVersionResponse:
     """Return the table version a tag points to (404 on an unknown tag)."""
-    tags = open_dataset(ns, so, _table_id(req)).tags
+    tags = open_dataset_unchecked(ns, so, _table_id(req)).tags
     try:
         version = tags.get_version(req.tag)
     except ValueError as exc:  # pylance 8 raises ("Ref not found"), it does NOT return None
@@ -2298,7 +2371,7 @@ def update_tag(ns: LanceNamespace, so: StorageOptions, req: UpdateTableTagReques
 def delete_tag(ns: LanceNamespace, so: StorageOptions, req: DeleteTableTagRequest) -> DeleteTableTagResponse:
     """Delete a tag from the table."""
     with _ref_errors("tag", req.tag):
-        open_dataset(ns, so, _table_id(req)).tags.delete(req.tag)
+        open_dataset_unchecked(ns, so, _table_id(req)).tags.delete(req.tag)
     return DeleteTableTagResponse()
 
 
@@ -2322,7 +2395,7 @@ def list_branches(ns: LanceNamespace, so: StorageOptions, req: ListTableBranches
     back them in-process here exactly like tags. A ``Branch`` is a TypedDict (plain dict at runtime).
     """
     branches: dict[str, dict[str, Any]] = {}
-    for name, branch in open_dataset(ns, so, _table_id(req)).branches.list().items():
+    for name, branch in open_dataset_unchecked(ns, so, _table_id(req)).branches.list().items():
         entry = branch if isinstance(branch, dict) else {}
         branches[name] = {
             "parent_branch": entry.get("parent_branch"),
@@ -2376,7 +2449,7 @@ def create_branch(ns: LanceNamespace, so: StorageOptions, req: CreateTableBranch
 def delete_branch(ns: LanceNamespace, so: StorageOptions, req: DeleteTableBranchRequest) -> DeleteTableBranchResponse:
     """Delete a branch from the table."""
     with _ref_errors("branch", req.name):
-        open_dataset(ns, so, _table_id(req)).branches.delete(req.name)
+        open_dataset_unchecked(ns, so, _table_id(req)).branches.delete(req.name)
     return DeleteTableBranchResponse()
 
 

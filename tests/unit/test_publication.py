@@ -62,7 +62,7 @@ def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace, a runtime-only type
     own tag operations go through that same resolution, which is the whole point of testing here.
     """
     namespace = connect("dir", {"root": str(tmp_path)})
-    create_table(namespace, {}, TABLE_ID, _table([1, 2, 3]), mode="create")
+    create_table(namespace, {}, TABLE_ID, _table([1, 2, 3]), mode="create", registry=None)
     return namespace
 
 

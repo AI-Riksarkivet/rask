@@ -47,6 +47,19 @@ _provenance_missing = _meter.create_gauge(
 )
 
 
+#: [[LH-279]] Tables whose current manifest declares a base nothing sanctions, as of the last sweep.
+_base_drift = _meter.create_gauge(
+    "lineage.reconcile.base_drift",
+    unit="{table}",
+    description="Tables whose current manifest declares a base the catalog never sanctioned, as of the last reconcile sweep.",
+)
+
+
+def record_base_drift(tables: int) -> None:
+    """Publish one sweep's base-drift count — synchronous, for `record_provenance_gaps`' reason."""
+    _base_drift.set(tables)
+
+
 class ProvenanceGap(StrEnum):
     """WHY a committed write's provenance is absent from the graph — the gauge's only attribute.
 

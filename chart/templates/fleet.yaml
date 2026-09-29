@@ -306,7 +306,7 @@ spec:
                  only — so that divergence cannot be repaired on the tables it lands on. The default
                  mirrors services.yaml's for the same reason. */}}
             {{- if eq $name "ingest" }}
-            - { name: LANCE_EXTERNAL_BLOB_BASES, value: {{ $root.Values.vending.externalBlobBases | default (printf "s3://%s/models/" $root.Values.minio.bucket) | quote }} }
+            - { name: LANCE_EXTERNAL_BLOB_BASES, value: {{ include "lance.externalBlobBases" $root | quote }} }
             {{- end }}
             {{- /* WHICH CHANNELS THIS DEPLOYMENT MAY SEND, derived from the SAME `channels.*.enabled`
                    flags that render the Components in notifications-channels.yaml.

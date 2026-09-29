@@ -271,18 +271,30 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   `read_schema_metadata`, which excludes `lineage.*`, so a replace silently destroys the #21
   self-describing coordinates. `description` is the one RESERVED key (the lakehouse renders it under the
   table name); everything else in that map is opaque user data.
-- **`register` judges what it attaches, on reader flag 256 alone.** The `dir` backend registers a
-  location without opening it (measured on pylance 12.0.0: a mixed table, an absent location and a
-  nested path are all accepted), so `tables.refuse_mixed_file_versions` opens the dataset at the
-  location the backend RESOLVED — after the register, before the seed. Flag 256 (mixed data file
-  versions, sticky) is a 400 `InvalidInput` naming the recreate remedy; an open that fails is a 503;
-  both deregister what the call attached. An absent location still registers. Never gate this on
-  `unsupported_features()`: ingest's `initial_bases` sets flag 16 and would be refused. The catalog's
-  own re-registers (table and namespace undrop) log `restored_mixed_file_versions` instead of
-  refusing, so a governed table is never stranded in the trash. A re-register that lands on the 409
-  converge path never seeds governance onto a flag-256 dataset, and a refusal whose detach fails is a
-  503 `PartiallyApplied` naming `attached: true`. Only `main` is judged. Pinned by
-  `tests/unit/test_a_register_refuses_a_table_that_mixes_file_versions.py`.
+- **`register` judges what it attaches: the location's spelling, its overlaps, reader flag 256 and the
+  bases the dataset declares** ([[LH-279]], `catalog/services/table_bases.py`). The `dir` backend
+  registers a location without opening it (measured on pylance 12.0.0: a mixed table, an absent location
+  and a nested path are all accepted) and keeps no location exclusive. BEFORE anything is attached,
+  `require_registrable_location` refuses an absolute location; one whose spelling is not the place the
+  store opens, by the base judge's own rule (`base_refs.names_a_location`, each segment percent-decoded
+  once: one that decodes to empty, `.` or `..`, holds a control character, or gains a `/` or `\` from the
+  decode — pylance drops the tab from `x/.\t./<victim>` and opens the victim); a segment beginning with
+  `_` once decoded; one equal to or containing the control root; and one overlapping a configured base.
+  Any other `%` is a name: the catalog percent-encodes a table's name into its location
+  (`räksmörgås` -> `r%C3%A4ksm%C3%B6rg%C3%A5s`), so a rule refusing every `%` would strand those tables.
+  AFTER the register and before the seed, `judge_registered_table` opens the dataset at
+  the location the backend RESOLVED: another registered table overlapping it, flag 256 (mixed data file
+  versions, sticky; the message names the recreate remedy) or a declared base nothing sanctions is a 400
+  `InvalidInput`; an open that fails is a 503; both deregister what the call attached. An absent location
+  still registers.
+  Never gate this on `unsupported_features()`: ingest's `initial_bases` sets flag 16 and would be
+  refused. The catalog's own re-registers (table and namespace undrop) log `restored_mixed_file_versions`
+  instead of refusing, so a governed table is never stranded in the trash. A re-register that lands on
+  the 409 converge path never seeds governance onto a flag-256 dataset or one declaring a base nothing
+  sanctions, and a refusal whose detach fails is a 503 `PartiallyApplied` naming `attached: true`. Only
+  `main` is judged. Pinned by `tests/unit/test_a_register_refuses_a_table_that_mixes_file_versions.py`
+  (flag 256) and `tests/integration/test_a_planted_base_is_refused_and_freezes_nothing.py` (spelling,
+  overlaps and bases).
 - **Four doors commit client-produced data, and all four judge its file versions.** `/commit`
   (`dataplane.commit_appended_fragments`), `/compaction_commit` (`commit_compaction`), `register`, and
   ingest's own `Lander.commit_fragments` refuse data files at another version than the table's

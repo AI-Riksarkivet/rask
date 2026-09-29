@@ -51,7 +51,7 @@ CONFORMING = pa.schema(
 
 def _make(tmp_path: Path, schema: pa.Schema, **cols: object):  # noqa: ANN201
     ns = connect("dir", {"root": str(tmp_path / "d")})
-    create_table(ns, {}, TABLE_ID, pa.table(dict(cols), schema=schema), mode="create")
+    create_table(ns, {}, TABLE_ID, pa.table(dict(cols), schema=schema), mode="create", registry=None)
     return open_dataset(ns, {}, TABLE_ID).uri
 
 

@@ -31,7 +31,7 @@ from catalog.services.dataplane import add_columns, create_table, drop_columns
 @pytest.fixture
 def table(tmp_path: Path) -> LanceNamespace:
     ns = connect("dir", {"root": str(tmp_path)})
-    create_table(ns, {}, ["t"], pa.table({"id": [1, 2, 3], "v": ["a", "b", "c"]}), mode="create")
+    create_table(ns, {}, ["t"], pa.table({"id": [1, 2, 3], "v": ["a", "b", "c"]}), mode="create", registry=None)
     return ns
 
 

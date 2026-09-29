@@ -496,6 +496,12 @@ class MaintenanceSettings(FgaSettings, BaseSettings):
     # Defaults to the primary bucket, matching the catalog's own LANCE_CONTROL_ROOT default; override
     # only when the catalog's control root has been moved.
     control_root: str = Field(default="", alias="MAINTENANCE_CONTROL_ROOT")
+    #: THE CATALOG'S ``LANCE_EXTERNAL_BLOB_BASES``, under the same name the catalog and ingest read ([[LH-279]]).
+    #: A base inside one of these, declared as a plain base, is sanctioned by configuration: every vend
+    #: already grants READ there. The base-reference pre-pass judges each declared base against these
+    #: and the catalog's base record, so an unset value here turns every table's blob base into a record
+    #: read and, for a table with no record, a finding that protects nothing.
+    external_blob_bases: str = Field(default="", validation_alias="LANCE_EXTERNAL_BLOB_BASES")
     # Warehouses are a catalog FEATURE FLAG: with them off the deployment is single-bucket by
     # configuration and an unbound namespace is CORRECT, not drift — so the reconciler skips that
     # category rather than reporting every namespace. Must match the catalog's setting.
@@ -542,6 +548,11 @@ class MaintenanceSettings(FgaSettings, BaseSettings):
     def resolved_policy_root(self) -> str:
         """The policy-registry root — `MAINTENANCE_POLICY_ROOT` or the primary bucket."""
         return self.policy_root or f"s3://{self.s3_bucket}"
+
+    @property
+    def external_blob_base_list(self) -> list[str]:
+        """The configured external blob bases, parsed as the catalog parses them."""
+        return [base.strip() for base in self.external_blob_bases.split(",") if base.strip()]
 
     @property
     def resolved_control_root(self) -> str:

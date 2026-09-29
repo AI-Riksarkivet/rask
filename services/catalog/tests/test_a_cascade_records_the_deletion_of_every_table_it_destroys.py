@@ -55,7 +55,7 @@ def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace, a runtime-only type
     namespace = connect("dir", {"root": str(tmp_path / "data")})
     namespace.create_namespace(CreateNamespaceRequest(id=[NS]))
     for table_id in TABLES:
-        create_table(namespace, {}, table_id, _table(), mode="create")
+        create_table(namespace, {}, table_id, _table(), mode="create", registry=None)
     return namespace
 
 

@@ -450,11 +450,13 @@ def test_a_control_prefix_location_is_refused(tmp_path: Path) -> None:
     before = _fingerprint(estate.data)
     estate.put_record("evil_manifest", location=f"{estate.data_root}/__manifest")
     estate.put_record("evil_nested", location=f"{estate.data_root}/_trash/some-record.json")
+    # [[LH-279]] The catalog's base records: purging one would un-sanction a recorded clone source.
+    estate.put_record("evil_bases", location=f"{estate.data_root}/_bases")
 
     out = _run(estate)
 
     assert out.purged == []
-    assert {r.id for r in out.refused} == {"evil_manifest", "evil_nested"}
+    assert {r.id for r in out.refused} == {"evil_manifest", "evil_nested", "evil_bases"}
     assert all("control prefix" in r.reason for r in out.refused)
     assert _fingerprint(estate.data) == before
 
@@ -843,7 +845,7 @@ def test_the_dry_run_NEVER_widens_a_real_purge(tmp_path: Path) -> None:
     assert Path(location.removeprefix("file://")).is_dir(), "the dry run deleted the bytes"
 
 
-def test_the_protection_prepass_scans_AS_DEEP_AS_the_thing_it_protects_against(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_protection_prepass_scans_AS_DEEP_AS_the_thing_it_protects_against(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """CONTRACT: the shallow-clone pre-pass walks to the SAME depth the rest of maintenance walks.
 
     `_estate_base_refs` called `discover_datasets(fs, bucket)` with the default bound while the sweep and
@@ -868,7 +870,7 @@ def test_the_protection_prepass_scans_AS_DEEP_AS_the_thing_it_protects_against(m
     monkeypatch.setattr(optimize_mod, "discover_datasets", _fake_discover)
     monkeypatch.setattr(base_refs_mod, "protected_roots", lambda *_a, **_kw: BaseRefs())
 
-    mod._estate_base_refs({"file:///nowhere"}, {}, max_depth=7)
+    mod._estate_base_refs({"file:///nowhere"}, {}, settings=_settings(tmp_path, discovery_max_depth=7))
 
     assert seen["max_depth"] == 7, f"the protection pre-pass walked to {seen['max_depth']} while the purge reaches 7"
 

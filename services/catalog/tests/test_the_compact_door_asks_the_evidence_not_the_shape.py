@@ -80,7 +80,7 @@ def client(monkeypatch: pytest.MonkeyPatch, opened: _Opened) -> Iterator[TestCli
         yield test_client
 
 
-async def _no_refs(ds: object, so: object) -> Any:
+async def _no_refs(ds: object, so: object, settings: object) -> Any:
     from service_kit.lakehouse.base_refs import BaseRefs
 
     return BaseRefs()

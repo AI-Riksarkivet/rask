@@ -27,8 +27,8 @@ location against whatever root the table actually belongs to, including a wareho
 the part a caller-side join against a configured root would get wrong for exactly the tables that
 matter.
 
-THE SUCCESS PATH TAKES ITS LOCATION FROM THE FLAG JUDGEMENT (`refuse_mixed_file_versions`), which
-describes the table before the seed and fails closed. `absolute_table_location`, tested here, is what
+THE SUCCESS PATH TAKES ITS LOCATION FROM THE REGISTRATION JUDGEMENT (`table_bases.judge_registered_table`),
+which describes the table before the seed and fails closed. `absolute_table_location`, tested here, is what
 the 409 branch uses, and it never fails: an unresolvable describe leaves the registered value. The
 emitted location is pinned by behaviour in
 `tests/unit/test_a_register_refuses_a_table_that_mixes_file_versions.py`.

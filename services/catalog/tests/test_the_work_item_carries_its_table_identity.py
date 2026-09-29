@@ -31,6 +31,7 @@ from fastapi.testclient import TestClient
 from catalog.api.dependencies import get_namespace, get_settings, get_storage_options
 from catalog.api.v1.endpoints import maintenance as door
 from catalog.core.config import Settings
+from service_kit.lakehouse import base_refs as sk_base_refs
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 from service_kit.lakehouse.work_items import DatasetWorkItem
 
@@ -64,7 +65,7 @@ def client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[TestClie
         uri = "s3://lance-catalog/medallion/bronze"
 
     monkeypatch.setattr(door, "open_dataset", lambda ns, so, segments, **kwargs: _Ds())
-    monkeypatch.setattr(door.base_refs, "sibling_base_refs", lambda uri, so: door.base_refs.BaseRefs())
+    monkeypatch.setattr(sk_base_refs, "sibling_base_refs", lambda uri, so, *, configured, record_of: sk_base_refs.BaseRefs())
     application.dependency_overrides[get_settings] = lambda: settings
     application.dependency_overrides[get_namespace] = lambda: object()
     application.dependency_overrides[get_storage_options] = lambda: {}

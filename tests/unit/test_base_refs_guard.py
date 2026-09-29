@@ -18,6 +18,7 @@ import subprocess
 import sys
 import textwrap
 from datetime import timedelta
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -25,19 +26,37 @@ import lance
 import pyarrow as pa
 import pytest
 
+from service_kit.lakehouse import base_registry
 from service_kit.lakehouse.base_refs import containment_of, protected_roots
 from service_kit.lakehouse.features import manifest_base_paths, manifest_feature_flags
 
 
+def _registry(tmp_path: Path) -> base_registry.BaseRegistry:
+    """The control root the catalog's base records live on — ``tmp_path``, the root `_sweep_results` configures."""
+    return base_registry.BaseRegistry(control_root=str(tmp_path))
+
+
+def _judged(tmp_path: Path) -> dict[str, Any]:
+    """What the pre-pass judges a declared base against: no configured bases, and the records under ``tmp_path``."""
+    return {"configured": [], "record_of": partial(base_registry.read_base_record, _registry(tmp_path))}
+
+
 def _source_and_clone(tmp_path: Path, rows: int = 3, files: int = 1) -> tuple[str, str]:
     """A real dataset and a real shallow clone of it. No doubles — the whole subject is Lance's own
-    multi-base resolution, and a fake would only prove the fake agrees with the claim."""
+    multi-base resolution, and a fake would only prove the fake agrees with the claim.
+
+    The clone's source is in the clone's base record, as the catalog records a clone it made: only a
+    sanctioned base protects ([[LH-279]]), and an unrecorded one is a finding that protects nothing."""
     src = str(tmp_path / "src.lance")
     for chunk in range(files):
         table = pa.table({"id": pa.array(range(chunk * rows, (chunk + 1) * rows), pa.int64())})
         lance.write_dataset(table, src, mode="overwrite" if chunk == 0 else "append")
     clone = str(tmp_path / "clone.lance")
     lance.dataset(src).shallow_clone(clone, reference=1)
+    entry = base_registry.RecordedBase(
+        path=src, role=base_registry.BaseRole.DERIVED_FROM, is_dataset_root=True, origin=base_registry.BaseOrigin.SILVER, source_table=src
+    )
+    base_registry.claim_bases(_registry(tmp_path), clone, [entry])
     return src, clone
 
 
@@ -60,7 +79,7 @@ def test_the_pre_pass_finds_the_source_from_the_CLONES_manifest(tmp_path: Path) 
     """The fix's core: collect references ACROSS datasets, because the evidence is on the other side."""
     src, clone = _source_and_clone(tmp_path)
 
-    refs = protected_roots([src, clone], {})
+    refs = protected_roots([src, clone], {}, **_judged(tmp_path))
 
     assert refs.is_protected(src) is not None, "the source of a live clone was not protected"
     assert refs.unreadable == []
@@ -71,7 +90,7 @@ def test_a_dataset_that_references_only_ITSELF_does_not_protect_itself(tmp_path:
     compaction and purge of itself, which is not the hazard and would break ordinary maintenance."""
     src, clone = _source_and_clone(tmp_path)
 
-    refs = protected_roots([src, clone], {})
+    refs = protected_roots([src, clone], {}, **_judged(tmp_path))
 
     assert refs.is_protected(clone) is None, "a dataset protected itself and can now never be maintained"
 
@@ -83,7 +102,7 @@ def test_containment_not_equality_so_a_SUBDIRECTORY_is_refused_too(tmp_path: Pat
     the clone resolves through, while reporting that nothing protected was touched.
     """
     src, clone = _source_and_clone(tmp_path)
-    refs = protected_roots([src, clone], {})
+    refs = protected_roots([src, clone], {}, **_judged(tmp_path))
 
     assert refs.is_protected(f"{src}/data") is not None, "the guard would allow deleting the referenced data directory"
 
@@ -109,7 +128,7 @@ def test_a_BRANCH_is_refused_as_a_REFERRER_rather_than_as_a_referenced_root(tmp_
     spec does not state and which this file's own subprocess reproduction is the way to settle.
     """
     src, clone = _source_and_clone(tmp_path)
-    refs = protected_roots([src, clone], {})
+    refs = protected_roots([src, clone], {}, **_judged(tmp_path))
     branch = f"{src}/tree/mb"
 
     assert refs.is_protected(branch) is not None, "a branch inside a referenced root must still be refused"
@@ -240,7 +259,7 @@ def test_a_scheme_difference_does_not_defeat_the_guard(tmp_path: Path) -> None:
     would only show up in production against real object storage.
     """
     src, clone = _source_and_clone(tmp_path)
-    refs = protected_roots([src, clone], {})
+    refs = protected_roots([src, clone], {}, **_judged(tmp_path))
 
     assert refs.is_protected(f"s3:/{src}") is not None
 
@@ -253,7 +272,7 @@ def test_an_UNREADABLE_dataset_is_recorded_not_silently_skipped(tmp_path: Path) 
     """
     src, _clone = _source_and_clone(tmp_path)
 
-    refs = protected_roots([src, str(tmp_path / "does-not-exist.lance")], {})
+    refs = protected_roots([src, str(tmp_path / "does-not-exist.lance")], {}, **_judged(tmp_path))
 
     assert len(refs.unreadable) == 1
     assert "does-not-exist" in refs.unreadable[0][0]
@@ -414,7 +433,7 @@ def test_the_pre_pass_actually_USES_the_credentials_it_is_given(monkeypatch: pyt
 
     monkeypatch.setattr("lance.dataset", _fake_dataset)
     creds = {"access_key_id": "k", "secret_access_key": "s", "endpoint": "http://rustfs:9000"}
-    protected_roots(["s3://bucket/a.lance"], creds)
+    protected_roots(["s3://bucket/a.lance"], creds, configured=[], record_of=lambda _location: None)
 
     assert seen, "protected_roots never opened the dataset at all"
     assert seen[0].get("storage_options") == creds, f"the credentials were not threaded into the open — the guard is inert against s3://. got {seen[0]}"

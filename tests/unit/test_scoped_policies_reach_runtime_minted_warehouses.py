@@ -328,6 +328,12 @@ def test_the_sweep_still_reads_the_records_it_must_read(maintenance: dict) -> No
     assert allowed(maintenance, action="s3:GetObject", bucket=CONTROL_BUCKET, key="_warehouses/acme-bucket.json")
     assert allowed(maintenance, action="s3:GetObject", bucket=CONTROL_BUCKET, key="_protection/table.json")
     assert allowed(maintenance, action="s3:ListBucket", bucket=CONTROL_BUCKET, prefix="_warehouses/")
+    # [[LH-279]] The base records: read by the pre-pass, removed by the purge with the table it destroys, and
+    # never written — a maintainer that could write one could sanction any base it liked.
+    record = "_bases/table-0123456789abcdef01234567.json"
+    assert allowed(maintenance, action="s3:GetObject", bucket=CONTROL_BUCKET, key=record)
+    assert allowed(maintenance, action="s3:DeleteObject", bucket=CONTROL_BUCKET, key=record)
+    assert not allowed(maintenance, action="s3:PutObject", bucket=CONTROL_BUCKET, key=record)
 
 
 def test_the_sweep_keeps_writing_its_own_cadence_stamp(maintenance: dict) -> None:

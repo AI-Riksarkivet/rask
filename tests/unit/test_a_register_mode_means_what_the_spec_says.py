@@ -52,6 +52,7 @@ async def test_the_door_refuses_before_touching_the_backend(mode: str, named: st
             id="acme$t",
             body=RegisterTableRequest(location="s3://bucket/acme-t", mode=mode),
             ns=cast(Any, None),
+            root=cast(Any, None),
             settings=cast(Any, None),
             token=None,
             so={},

@@ -53,7 +53,7 @@ def _bytes(blob: BlobStream) -> bytes:
 @pytest.fixture
 def ns(tmp_path: Path):
     namespace = connect("dir", {"root": str(tmp_path)})
-    create_table(namespace, {}, ["clips"], _blob_table([b"hello-world", b"X" * 100, None, b""]), mode="create")
+    create_table(namespace, {}, ["clips"], _blob_table([b"hello-world", b"X" * 100, None, b""]), mode="create", registry=None)
     return namespace
 
 
@@ -166,7 +166,7 @@ def test_read_blob_declared_only_table_is_404_not_500(ns) -> None:
 def test_read_blob_version_pins_the_payload_and_etag(ns) -> None:
     # Overwrite replaces the data; the pinned read still serves the ORIGINAL bytes, and the etag
     # names the SERVED version so resumable clients can detect the incarnation they started on.
-    create_table(ns, {}, ["clips"], _blob_table([b"replacement"]), mode="overwrite")
+    create_table(ns, {}, ["clips"], _blob_table([b"replacement"]), mode="overwrite", registry=None)
     head = read_blob(ns, {}, ["clips"], column="payload", row=0)
     assert _bytes(head) == b"replacement"
     pinned = read_blob(ns, {}, ["clips"], column="payload", row=0, version=1)
@@ -191,7 +191,7 @@ def test_read_blob_rows_are_positional_after_delete(tmp_path: Path) -> None:
     # The documented contract: `row` is the POSITIONAL index at the served version. After a
     # delete, positions shift (probed: take_blobs indices stay consistent with count_rows).
     namespace = connect("dir", {"root": str(tmp_path)})
-    create_table(namespace, {}, ["d"], _blob_table([b"first", b"second"]), mode="create")
+    create_table(namespace, {}, ["d"], _blob_table([b"first", b"second"]), mode="create", registry=None)
 
     from catalog.core.namespace import open_dataset
 

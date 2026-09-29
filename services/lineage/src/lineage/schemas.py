@@ -70,6 +70,12 @@ class ReconcileStatus(BaseModel):
     # write lost its event and was then superseded. Measured 2026-09-11 on the live estate: bronze$events
     # answered in_sync at 87/87 with versions 76, 80, 82 and 83 carrying no lineage at all.
     versions_without_lineage: list[int] = Field(default_factory=list)
+    # [[LH-279]] Bases the table's CURRENT manifest declares that nothing sanctions — not inside its own
+    # root, not a configured external blob base, not in the catalog's base record. A manifest's base list
+    # is writable by any holder of the table's write vend, so each is a writer's claim nobody with
+    # authority made. A state compare rather than a version one: the `UpdateBases` version that planted it
+    # is reclaimed by retention while the tip still declares the base (lh279 p2).
+    unrecorded_bases: list[str] = Field(default_factory=list)
 
 
 class DatasetRef(BaseModel):

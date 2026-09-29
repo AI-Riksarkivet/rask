@@ -40,7 +40,7 @@ from catalog.services import dataplane
 @pytest.fixture
 def ns(tmp_path: Path) -> LanceNamespace:
     backend = connect("dir", {"root": str(tmp_path)})
-    dataplane.create_table(backend, {}, ["t"], pa.table({"id": [1, 2, 3], "v": ["a", "b", "c"]}), mode="create")
+    dataplane.create_table(backend, {}, ["t"], pa.table({"id": [1, 2, 3], "v": ["a", "b", "c"]}), mode="create", registry=None)
     return backend
 
 

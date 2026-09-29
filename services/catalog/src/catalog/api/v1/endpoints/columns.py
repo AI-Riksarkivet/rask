@@ -47,6 +47,7 @@ from catalog.core.lineage_emit import (
     UPDATE_FIELD_METADATA,
     UPDATE_SCHEMA_METADATA,
 )
+from catalog.core.namespace import judged_native_version
 from catalog.services import dataplane, native
 from service_kit.governed import fga
 from service_kit.governed.oidc import IDToken
@@ -215,7 +216,9 @@ async def drop_columns(
 # (the `dir` backend stubs them), so nothing exercises the success path — which is exactly why a
 # missing `status_code` would go unnoticed until a backend arrived and silently answered 200.
 @router.post("/{id}/backfill_column", response_model_exclude_none=True, status_code=202)
-def backfill_column(id: str, body: AlterTableBackfillColumnsRequest, ns: NamespaceDep, settings: SettingsDep) -> AlterTableBackfillColumnsResponse:
+def backfill_column(
+    id: str, body: AlterTableBackfillColumnsRequest, ns: NamespaceDep, settings: SettingsDep, so: StorageOptionsDep
+) -> AlterTableBackfillColumnsResponse:
     """Backfill values into columns via the native driver — wraps ``alter_table_backfill_columns``.
 
     No lineage is emitted here: the response carries a ``job_id`` (the backfill runs asynchronously), so the
@@ -223,6 +226,7 @@ def backfill_column(id: str, body: AlterTableBackfillColumnsRequest, ns: Namespa
     version that hasn't been written. The version bump is recovered by #23 reconcile when the job lands.
     """
     body.id = reconcile_body_id(parse_identifier(id, settings.delimiter), body.id)
+    judged_native_version(ns, so, list(body.id or []), version=None)
     return native.call(ns, "alter_table_backfill_columns", body)
 
 

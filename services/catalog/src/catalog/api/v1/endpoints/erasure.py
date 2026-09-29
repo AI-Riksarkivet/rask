@@ -30,12 +30,12 @@ from fastapi import APIRouter, Header, Query
 from fastapi.concurrency import run_in_threadpool
 
 from catalog.api.dependencies import NamespaceDep, SettingsDep, StorageOptionsDep
+from catalog.core.base_judge import BaseJudge
 from catalog.core.config import fresh_lance_session
 from catalog.core.identifiers import parse_identifier
 from catalog.core.namespace import open_dataset
 from catalog.schemas import ErasureRequest
 from catalog.services.erasure import ErasureReport, erase
-from service_kit.lakehouse import base_refs
 
 
 log = logging.getLogger(__name__)
@@ -91,7 +91,7 @@ async def erase_subject(
     # The #114 pre-pass the compact and GC doors run, for the same reason: the evidence that another
     # dataset resolves its files through this one lives only on that dataset. Same bound too, one listing
     # of the table's parent (`sibling_base_refs`), and a partial map is logged and used, as they do.
-    protected = await run_in_threadpool(base_refs.sibling_base_refs, dataset.uri, so)
+    protected = await run_in_threadpool(BaseJudge.from_settings(settings).sibling_base_refs, dataset.uri, so)
     if protected.unreadable:
         log.warning("erasure_base_refs_incomplete", extra={"location": dataset.uri, "unreadable": len(protected.unreadable)})
     return await run_in_threadpool(

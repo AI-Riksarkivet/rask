@@ -555,6 +555,8 @@ def test_cron_route_post_with_token_returns_sweep_report(monkeypatch: pytest.Mon
         "graph_ahead": [],
         "unreadable": {},
         "provenance_holes": {},
+        # [[LH-279]] Present when empty, on the neighbours' contract: an empty map says the drift axis ran.
+        "base_drift": {},
         # `unknown_to_graph` takes its neighbours' contract ONE STEP FURTHER, and the extra step is the
         # point. Every key above is present-when-empty so that "the axis found nothing" cannot be
         # confused with "the axis did not run". This axis can tell those apart, so it does: `[]` means

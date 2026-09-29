@@ -24,7 +24,7 @@ import pyarrow.fs as pafs
 from lance_namespace import NamespaceAlreadyExistsError, ServiceUnavailableError
 
 from catalog.services.control_records import BindingRecord, BucketClaimRecord, WarehouseRecord, read_json, validated, validated_or_refuse, write_json
-from service_kit.lakehouse import trash
+from service_kit.lakehouse import base_registry, trash
 from service_kit.lakehouse.objectfs import StorageOptions, fs_and_base
 from service_kit.lakehouse.records import RecordExistsError, RecordMissingError, create_json, mutate_json
 
@@ -591,12 +591,21 @@ def _clear_trash_under(control_root: str, storage_options: StorageOptions, wareh
     record = get_warehouse(control_root, storage_options, warehouse_id) or {}
     bucket = str(record.get("bucket") or warehouse_id)
     prefix = f"s3://{bucket}/"
+    registry = base_registry.BaseRegistry(control_root=control_root, storage_options=storage_options)
     cleared = 0
     try:
         for entry in trash.list_all(control_root, storage_options):
-            if str(entry.get("location") or "").startswith(prefix) and trash.clear(
-                control_root, storage_options, str(entry.get("id") or ""), kind=str(entry.get("kind") or "table")
-            ):
+            location = str(entry.get("location") or "")
+            if not location.startswith(prefix):
+                continue
+            # [[LH-279]] The base record goes BEFORE the trash record it belongs to. A recoverably-dropped
+            # table keeps its `_bases/` record for an undrop; a warehouse delete clears that trash and (on
+            # `?purge_bucket=true`) deletes the bytes, and the maintenance purge that would otherwise forget
+            # the record never sees the table — so a table registered at the same location in a re-created
+            # warehouse would inherit bases nobody judged for it. Forget-first is fail-safe: a store blip
+            # here aborts the loop with the trash record intact, and the retry forgets it again.
+            base_registry.forget_base_record(registry, location)
+            if trash.clear(control_root, storage_options, str(entry.get("id") or ""), kind=str(entry.get("kind") or "table")):
                 cleared += 1
     except Exception as exc:  # noqa: BLE001 — tidying must never outrank the delete it follows
         log.warning("warehouse_trash_not_cleared", extra={"warehouse": warehouse_id, "error": f"{type(exc).__name__}: {exc}"})

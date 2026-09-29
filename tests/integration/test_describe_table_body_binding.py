@@ -42,7 +42,7 @@ def _version_exists(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     from catalog.api.v1.endpoints import tables
 
-    monkeypatch.setattr(tables, "open_dataset", lambda *a, **k: MagicMock())
+    monkeypatch.setattr(tables, "open_dataset_unchecked", lambda *a, **k: MagicMock())
 
 
 @pytest.fixture

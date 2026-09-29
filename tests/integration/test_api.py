@@ -192,8 +192,10 @@ def test_create_delegates_to_dataplane_create_table(client: TestClient, fake_ns:
         base_credential_refs=None,
         secret_store="",
         secret_field="",
+        registry=None,
     ) -> CreateTableResponse:
         seen["segments"] = segments
+        seen["registry"] = registry  # [[LH-279]] the door hands the write the control root to record its bases in
         seen["mode"] = mode
         seen["allow_external_blobs"] = allow_external_blobs  # proves the endpoint forwards the setting
         seen["external_blob_bases"] = external_blob_bases  # the allowlist is forwarded too
@@ -208,6 +210,12 @@ def test_create_delegates_to_dataplane_create_table(client: TestClient, fake_ns:
     )
 
     assert resp.status_code == 200
+    from catalog.core.config import get_settings
+
+    registry = seen.pop("registry")
+    assert registry is not None and getattr(registry, "control_root", None) == get_settings().registry_root, (
+        "the create must be told where its base record lives"
+    )
     assert seen == {
         "segments": ["media", "clips"],
         "mode": "overwrite",
@@ -305,7 +313,7 @@ def test_backend_stub_message_maps_to_unsupported(client: TestClient, fake_ns: M
     # "unsupported"), not a 500. rename_table is now implemented in-process (#5b), so register_table — a
     # still-native-delegated op — stands in for a genuinely-unwired backend op.
     fake_ns.register_table.side_effect = RuntimeError("register_table not implemented")
-    resp = client.post("/v1/table/db$t/register", json={"location": "s3://b/db$t"})
+    resp = client.post("/v1/table/db$t/register", json={"location": "db-t"})
     assert (
         resp.status_code == 406
     )  # 406 since Q3 (2026-09-02): the spec's UnsupportedOperationErrorResponse is 406, and Lance's own reference server maps ErrorCode::Unsupported to NOT_ACCEPTABLE.
@@ -316,7 +324,7 @@ def test_list_branches_routes_to_dataset_branches(client: TestClient, monkeypatc
     # Branches are now backed in-process via pylance `ds.branches` (was a native Unsupported).
     dataset = MagicMock()
     dataset.branches.list.return_value = {"exp": {"parent_branch": None, "parent_version": 2, "create_at": 1, "manifest_size": 9}}
-    monkeypatch.setattr("catalog.services.dataplane.open_dataset", lambda *a, **k: dataset)
+    monkeypatch.setattr("catalog.services.dataplane.open_dataset_unchecked", lambda *a, **k: dataset)
     resp = client.post("/v1/table/db1$users/branches/list")
     assert resp.status_code == 200
     assert resp.json()["branches"]["exp"]["parentVersion"] == 2  # serialized with the spec's camelCase alias
@@ -355,7 +363,7 @@ def test_create_branch_from_main_uses_no_reference(client: TestClient, monkeypat
 
 def test_delete_branch_routes_to_dataset(client: TestClient, monkeypatch) -> None:
     dataset = MagicMock()
-    monkeypatch.setattr("catalog.services.dataplane.open_dataset", lambda *a, **k: dataset)
+    monkeypatch.setattr("catalog.services.dataplane.open_dataset_unchecked", lambda *a, **k: dataset)
     resp = client.post("/v1/table/db$t/branches/delete", json={"name": "exp"})
     assert resp.status_code == 200
     dataset.branches.delete.assert_called_once_with("exp")
@@ -398,10 +406,14 @@ def _capture_emit(monkeypatch, module: str) -> dict[str, object]:
 def _judge_as_single_version(monkeypatch) -> None:
     """The register door opens the dataset it attached; a MagicMock backend attaches none.
 
-    Only the flag read is replaced, so the describe that resolves the location still runs. What the door
-    does with a real mixed dataset is pinned in `tests/unit/test_a_register_refuses_a_table_that_mixes_file_versions.py`.
+    Only the dataset read is replaced — a single-version dataset declaring no base — so the describe that
+    resolves the location still runs. What the door does with a real mixed dataset is pinned in
+    `tests/unit/test_a_register_refuses_a_table_that_mixes_file_versions.py`, and its location-exclusivity in
+    `tests/integration/test_a_planted_base_is_refused_and_freezes_nothing.py`.
     """
-    monkeypatch.setattr("catalog.api.v1.endpoints.tables.mixes_file_versions_at", lambda _location, _storage_options: False)
+    from catalog.core.namespace import RegisteredDataset
+
+    monkeypatch.setattr("catalog.services.table_bases.registered_dataset_facts", lambda _location, _storage_options: RegisteredDataset(mixed=False))
 
 
 def _capture_measured_emit(monkeypatch) -> dict[str, object]:
@@ -712,7 +724,7 @@ def test_register_emits_versionless_marker_with_source_uri(client: TestClient, f
     _judge_as_single_version(monkeypatch)
     captured = _capture_emit(monkeypatch, "tables")
 
-    resp = client.post("/v1/table/db$t/register", json={"location": "s3://bucket/t"})
+    resp = client.post("/v1/table/db$t/register", json={"location": "t"})
     assert resp.status_code == 200
     assert captured["operation"] == "register_table"
     assert captured["version"] is None  # versionless — reconcile back-fills the on-disk version

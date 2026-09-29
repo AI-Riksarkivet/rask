@@ -193,11 +193,19 @@ async def get_namespace(request: Request, settings: SettingsDep) -> LanceNamespa
     # one, and a test exercising a warehouse-routed path under it would have been green against the
     # wrong configuration. `get_settings` is cached per request, so a route that already declares
     # `SettingsDep` pays nothing for this.
-    if not settings.warehouses_enabled:
+    resolved = await _route_for(request, settings)
+    if resolved is None or resolved[0] == settings.root:
         return default_ns
+    return namespace_for_root(request, settings, resolved[0], endpoint=resolved[1])
+
+
+async def _route_for(request: Request, settings: Settings) -> tuple[str, str | None] | None:
+    """The ``(root, endpoint)`` of the warehouse this request's ``{id}`` is bound to, or ``None`` for the default root."""
+    if not settings.warehouses_enabled:
+        return None
     object_id = request.path_params.get("id")
     if not object_id:  # collection routes (list/health) have no id to route by
-        return default_ns
+        return None
     segments = parse_identifier(object_id, settings.delimiter)
     if not segments:
         # THE ROOT NAMESPACE. Its id IS the delimiter (spec), so it parses to no segments — and there is
@@ -206,11 +214,24 @@ async def get_namespace(request: Request, settings: SettingsDep) -> LanceNamespa
         # `GET /v1/namespace/$/list` with a 500 (measured on the deployed estate 2026-09-03). Only
         # reachable with `warehouses_enabled`, since the branch above returns first when it is off —
         # which is why every id with a segment routed fine and the one naming the root did not.
-        return default_ns
-    resolved = await _resolve_warehouse_root(request, settings, segments[0])
-    if resolved is None or resolved[0] == settings.root:
-        return default_ns
-    return namespace_for_root(request, settings, resolved[0], endpoint=resolved[1])
+        return None
+    return await _resolve_warehouse_root(request, settings, segments[0])
+
+
+async def get_namespace_root(request: Request, settings: SettingsDep) -> str:
+    """The root the request's namespace connection is rooted at: the bound warehouse's, else ``settings.root``.
+
+    The register door needs it to judge a location it has not attached yet ([[LH-279]]): the backend
+    resolves a relative location against exactly this root, so the location-exclusivity rule has to
+    ask the same one. Resolved through the same routing as :func:`get_namespace`, so the two cannot
+    disagree about which root a request lands in; for a warehouse-bound id that repeats the live status
+    read, which only the register door pays.
+    """
+    resolved = await _route_for(request, settings)
+    return settings.root if resolved is None else resolved[0]
+
+
+NamespaceRootDep = Annotated[str, Depends(get_namespace_root)]
 
 
 async def namespace_for_top_ns(request: Request, settings: Settings, top_ns: str) -> LanceNamespace:

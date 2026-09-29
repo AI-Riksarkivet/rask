@@ -61,7 +61,7 @@ async def test_a_COMPACTION_unit_reports_the_memory_it_held(monkeypatch: pytest.
 
     settings = MaintenanceSettings.model_validate({"s3_bucket": "b"})
     monkeypatch.setattr(work_mod, "emit_sweep_lineage", _noop)
-    monkeypatch.setattr(work_mod.base_refs, "sibling_base_refs", lambda uri, opts: work_mod.base_refs.BaseRefs())
+    monkeypatch.setattr(work_mod.base_refs, "sibling_base_refs", lambda uri, opts, *, configured, record_of: work_mod.base_refs.BaseRefs())
     monkeypatch.setattr(work_mod, "execute_unit", lambda *a, **k: DatasetResult(uri="s3://b/t.lance"))
 
     with caplog.at_level(logging.INFO):

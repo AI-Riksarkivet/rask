@@ -74,7 +74,7 @@ spec:
             - { name: LANCE_REST_ROOT, value: "s3://{{ .Values.minio.bucket }}" }
             - { name: LANCE_NS_DELIMITER, value: "$" }
             - { name: LANCE_ALLOW_EXTERNAL_BLOBS, value: {{ .Values.vending.allowExternalBlobs | quote }} }
-            - { name: LANCE_EXTERNAL_BLOB_BASES, value: {{ .Values.vending.externalBlobBases | default (printf "s3://%s/models/" .Values.minio.bucket) | quote }} }
+            - { name: LANCE_EXTERNAL_BLOB_BASES, value: {{ include "lance.externalBlobBases" . | quote }} }
             - { name: LANCE_MAX_BODY_BYTES, value: {{ .Values.catalog.maxBodyBytes | int64 | quote }} }
             {{- /*
                Load-shed cap on concurrent in-flight Arrow-IPC writes (each buffers up to maxBodyBytes).
@@ -675,6 +675,8 @@ spec:
             - { name: LINEAGE_DAPR_SECRET_S3_FIELD, value: "lineage-s3-secret-key" }
             {{- end }}
             - { name: LINEAGE_S3_BUCKET, value: {{ .Values.minio.bucket | quote }} }
+            - { name: LINEAGE_CONTROL_ROOT, value: {{ .Values.maintenance.controlRoot | default "" | quote }} }
+            - { name: LANCE_EXTERNAL_BLOB_BASES, value: {{ include "lance.externalBlobBases" . | quote }} }
             {{- if .Values.services.lineage.outbox.enabled }}
             - { name: LINEAGE_OUTBOX_URI, value: "s3://{{ .Values.minio.bucket }}/_lineage_outbox" }
             {{- end }}

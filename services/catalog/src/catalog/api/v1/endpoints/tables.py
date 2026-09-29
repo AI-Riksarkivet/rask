@@ -33,7 +33,6 @@ from lance_namespace import (
     RenameTableResponse,
     RestoreTableRequest,
     RestoreTableResponse,
-    ServiceUnavailableError,
     TableAlreadyExistsError,
     TableExistsRequest,
     TableNotFoundError,
@@ -46,6 +45,7 @@ from catalog.api.dependencies import (
     FgaClientDep,
     LineageEmitterDep,
     NamespaceDep,
+    NamespaceRootDep,
     SettingsDep,
     StorageOptionsDep,
     VendorDep,
@@ -54,6 +54,7 @@ from catalog.api.dependencies import (
 from catalog.api.pagination import paginate
 from catalog.api.rask_params import RaskFlag
 from catalog.api.security import CurrentToken
+from catalog.core.base_judge import BaseJudge
 from catalog.core.formats import reject_unsupported_format
 from catalog.core.identifiers import MAX_NAMESPACE_DEPTH, parse_identifier, reconcile_body_id, require_safe_segments
 from catalog.core.lineage_emit import (
@@ -66,14 +67,13 @@ from catalog.core.lineage_emit import (
     emit_write_event,
 )
 from catalog.core.modes import RegisterMode
-from catalog.core.namespace import mixes_file_versions_at, open_dataset, warn_if_mixed_file_versions
-from catalog.core.vending import dataset_facts, unsanctioned_bases
+from catalog.core.namespace import judged_native_version, open_dataset_unchecked, registered_dataset_facts, warn_if_mixed_file_versions
+from catalog.core.vending import dataset_facts, require_vendable_bases, unsanctioned_bases
 from catalog.schemas import ProtectionResponse, SetProtectionRequest, TrashEntry
-from catalog.services import dataplane, native, warehouses
+from catalog.services import dataplane, native, table_bases, warehouses
 from service_kit.control_emit import emit_control
 from service_kit.governed import fga
-from service_kit.lakehouse import maintenance_policies, protection, trash
-from service_kit.lakehouse.features import FLAG_MIXED_DATA_FILE_VERSIONS
+from service_kit.lakehouse import base_registry, maintenance_policies, protection, trash
 from service_kit.lakehouse.ns_errors import PartiallyApplied
 
 
@@ -427,7 +427,7 @@ def describe_table(
         # a version exists is told yes about every number they try. Opening the pinned dataset is what
         # mints the spec's own error 11 `TableVersionNotFound`; the open runs ONLY when a version was
         # named, so the unpinned describe every client makes is untouched.
-        open_dataset(ns, so, segments, version=version)
+        open_dataset_unchecked(ns, so, segments, version=version)
     response: DescribeTableResponse = native.call(ns, "describe_table", req)
 
     # pylance 8.0.0 leaves `metadata` empty even with load_detailed_metadata — so the #74 Table Properties
@@ -446,17 +446,20 @@ def describe_table(
         # "does any fragment live in a base", which was the pre-union premise, and then vended with NO
         # `bases=` at all — so every multi-base table that passed the guard got a credential scoped to
         # less than the table is, which is § H12's shortfall on the door nobody re-checked.
-        _, declared_bases, classified = dataset_facts(response.location, so)
+        facts = dataset_facts(response.location, so)
+        # [[LH-279]] The vend door's own refusal, off the same read: a base the catalog did not sanction
+        # answers 409 rather than a credential that would read through it.
+        require_vendable_bases(response.location, facts, BaseJudge.from_settings(settings))
         # [[LH-058]] THE SECOND VENDING HOP, and it has to ask the same question. This door vends too, so
         # gating only `POST /credentials` would leave a classified table's raw bytes reachable through
         # `describe` — the same shortfall this block's own comment describes for the bases, one door over.
         # See `credentials.py` for why a classified column makes a table unvendable rather than narrowly
         # vendable: the field-to-file mapping is write-order dependent, so no policy can exclude a column.
-        if classified:
+        if facts.classified:
             return response  # a classified column cannot be excluded from an object-store grant — server-mediated only
-        if unsanctioned_bases(response.location, declared_bases, settings.vend_sanctioned_bases):
-            return response  # a base the session policy cannot grant — only the catalog's root creds reach it
-        creds = vendor.vend(table_location=response.location, tier="read", bases=declared_bases)
+        if unsanctioned_bases(response.location, facts.base_uris, settings.vend_sanctioned_bases):
+            return response  # a sanctioned base the session policy cannot address — only the catalog's root creds reach it
+        creds = vendor.vend(table_location=response.location, tier="read", bases=facts.base_uris)
         if creds is not None:
             # THE EXPIRY GOES INSIDE `storage_options`, which is where the spec puts it and the only
             # place a stock client looks: `lance_docs/ns_catalog/spec.yaml:2878-2880` — *"If the vended
@@ -557,6 +560,11 @@ async def drop_table(
             trashed = True
     if not trashed:
         response: DropTableResponse = await run_in_threadpool(native.call, ns, "drop_table", DropTableRequest(id=segments))
+        # [[LH-279]] The base record goes with the bytes: left behind, it would sanction its bases for the next
+        # table registered at this location. The `dir` backend's drop answers the dropped location.
+        if response.location:
+            registry = base_registry.BaseRegistry(control_root=settings.registry_root, storage_options=settings.storage_options())
+            await run_in_threadpool(base_registry.forget_base_record, registry, response.location)
     else:
         response = DropTableResponse()
     # The record's job ends with the object: clear it so a LATER table reusing this id does not
@@ -710,47 +718,12 @@ def absolute_table_location(ns: LanceNamespace, segments: list[str], registered:
     return getattr(described, "location", None) or registered
 
 
-def refuse_mixed_file_versions(ns: LanceNamespace, so: dict[str, str], segments: list[str]) -> str:
-    """Refuse the dataset a registration just attached when it carries reader flag 256; return its location.
-
-    The backend registers a location without opening it, so this judges the dataset at the location the
-    backend RESOLVED, which is right for a warehouse-bound table too. Only bit 256 is read: flag 16 is what
-    an externally based ingest dataset carries, and it is no reason to refuse one. A location holding no
-    dataset has no data files to judge, and registers as the backend allows. Two stated bounds: only the
-    MAIN branch is judged (a mixed ``tree/<b>`` registers, and the maintenance alert pages on it), and the
-    open uses the estate's default storage options, so for a warehouse whose record names its own
-    endpoint ([[LH-067]]; none does today) a missing bucket is refused 503 while a same-named bucket
-    without the dataset reads as absent and registers unjudged.
-
-    Raises:
-        InvalidInputError: The dataset mixes data file versions, which no operation removes.
-        ServiceUnavailableError: The location could not be described or opened, so nothing was judged.
-    """
-    table = ".".join(segments)
-    try:
-        described: DescribeTableResponse = native.call(ns, "describe_table", DescribeTableRequest(id=segments))
-        if not described.location:
-            raise TableNotFoundError(f"table {table} describes no location")
-        mixed = mixes_file_versions_at(described.location, so)
-    except Exception as exc:
-        log.warning("register_flags_unreadable", extra={"table": table, "error": str(exc)[:300]})
-        raise ServiceUnavailableError(f"the dataset registered at {table} could not be opened to read its feature flags") from exc
-    if mixed:
-        log.warning("register_refused_mixed_file_versions", extra={"table": table, "location": described.location})
-        raise InvalidInputError(
-            f"the dataset at {described.location!r} carries reader flag {FLAG_MIXED_DATA_FILE_VERSIONS} (mixed data file versions): its "
-            "data files sit at more than one Lance file version, and no operation removes the flag. Maintenance refuses such a table, "
-            "and pylance 11 and lancedb 0.34 cannot open it. Recreate it into a new dataset written at one data_storage_version, then "
-            "register that."
-        )
-    return described.location
-
-
 @router.post("/{id}/register", response_model_exclude_none=True)
 async def register_table(
     id: str,
     body: RegisterTableRequest,
     ns: NamespaceDep,
+    root: NamespaceRootDep,
     settings: SettingsDep,
     token: CurrentToken,
     so: StorageOptionsDep,
@@ -760,9 +733,10 @@ async def register_table(
     authorization: Annotated[str | None, Header()] = None,
     idempotency_key: idem.IdempotencyKeyHeader = None,
 ) -> RegisterTableResponse:
-    """Register an existing table location at ``id`` via ``register_table``, refuse it when the dataset
-    there carries reader flag 256, then seed the caller's FGA ownership and emit a REGISTER_TABLE marker
-    (who attached it + where)."""
+    """Register an existing table location at ``id`` via ``register_table``, refuse it when the location
+    overlaps the control root, a configured base or another table, when the dataset there carries reader
+    flag 256, or when it declares a base nothing sanctions; record the bases it is admitted with, then
+    seed the caller's FGA ownership and emit a REGISTER_TABLE marker (who attached it + where)."""
     # `mode` WAS ACCEPTED AND NEVER READ. The generated model states two: "Create (default): the
     # operation fails with 409. Overwrite: the existing table registration is replaced with the new
     # registration." This door passes `body` straight to the backend, and the backend ignores the
@@ -786,6 +760,18 @@ async def register_table(
             "catalog does not own from the table that currently points at them. Deregister the existing table "
             "first, then register the new location."
         )
+    # LOCATION-EXCLUSIVITY, THE SHAPE HALF ([[LH-279]]) — a shape refusal like the mode's, so before
+    # `idem.begin` for the same reason. What the path alone decides is refused before anything is
+    # attached: the namespace root, a control prefix, the control root and every configured base.
+    context = table_bases.RegistrationContext(
+        root=root,
+        registry=base_registry.BaseRegistry(control_root=settings.registry_root, storage_options=settings.storage_options()),
+        configured=settings.external_blob_base_list,
+        data_allowlist=settings.multibase_data_base_list,
+    )
+    body.location = table_bases.require_registrable_location(
+        body.location, root=root, control_root=settings.registry_root, configured=[*context.configured, *context.data_allowlist]
+    )
     # SAME AMPLIFIER AS create (see `catalog.api.idempotency`): a replay re-enters a door that
     # MINTS an id and seeds its ownership. OPTIONAL, because the spec defines no such header and a stock client must keep working.
     converge = await idem.begin(settings, so, token, idempotency_key, endpoint="POST /v1/table/{id}/register")
@@ -833,30 +819,54 @@ async def register_table(
             # A refused register whose detach failed also lands here on retry; a flag-256 dataset is
             # never converged into governance, and a dataset that cannot be read is not judged clean.
             try:
-                mixed = await run_in_threadpool(mixes_file_versions_at, registered, so)
+                facts = await run_in_threadpool(registered_dataset_facts, registered, so)
             except Exception as exc:
                 log.warning("register_converge_unjudged", extra={"table": id, "location": registered, "error": str(exc)[:300]})
                 raise
-            if mixed:
+            if facts is not None and facts.mixed:
                 log.warning("register_converge_refused_mixed_file_versions", extra={"table": id, "location": registered})
                 raise
+            # THE RECORD CONVERGES WITH THE EDGE ([[LH-279]]). The medallion re-enters this door on
+            # every run, so a table registered before its record existed gets one here — judged exactly
+            # as a fresh registration's bases are, and never for a base nothing sanctions.
+            if facts is not None:
+                unsanctioned = False
+                entries: list[base_registry.RecordedBase] = []
+                try:
+                    entries = await run_in_threadpool(
+                        partial(
+                            table_bases.entries_for_registration,
+                            registered,
+                            facts.bases,
+                            registry=context.registry,
+                            configured=context.configured,
+                            data_allowlist=context.data_allowlist,
+                        )
+                    )
+                except InvalidInputError:
+                    unsanctioned = True
+                if unsanctioned:
+                    log.warning("register_converge_refused_unrecorded_bases", extra={"table": id, "location": registered})
+                    raise
+                await run_in_threadpool(base_registry.claim_bases, context.registry, registered, entries)
             await fga_deps.seed_ownership(client, settings, token, resource="table", segments=segments, may_grant_owner=False)
             log.info("register_converged_governance", extra={"table": id, "location": registered})
         raise
 
-    async def _undo_register() -> None:
+    async def _detach() -> None:
         # DEREGISTER, never drop. Register ATTACHES bytes that already existed and are not ours to
         # destroy — the whole point of the door. Deregister is the exact inverse: it removes the
         # catalog object this request created and leaves the data exactly where it was found.
         await run_in_threadpool(native.call, ns, "deregister_table", DeregisterTableRequest(id=segments))
 
     # AFTER THE REGISTER, because only the backend knows which root a relative location resolves
-    # against; BEFORE THE SEED, so a refused dataset never gains an owner, a lineage node or an event.
+    # against and the overlap check must see this registration's own row; BEFORE THE SEED, so a refused
+    # dataset never gains an owner, a record entry, a lineage node or an event.
     try:
-        location = await run_in_threadpool(refuse_mixed_file_versions, ns, so, segments)
+        verdict = await run_in_threadpool(table_bases.judge_registered_table, ns, so, segments, body.location, context)
     except Exception as refusal:
         try:
-            await _undo_register()
+            await _detach()
         except Exception as undo_exc:
             log.error("register_refusal_compensation_failed", extra={"table": id, "error": str(undo_exc)})
             raise PartiallyApplied(
@@ -864,11 +874,19 @@ async def register_table(
                 problem_extra={
                     "table": id,
                     "attached": True,
-                    "refused": "mixed_file_versions" if isinstance(refusal, InvalidInputError) else "unjudged",
+                    "refused": "refused" if isinstance(refusal, InvalidInputError) else "unjudged",
                     "remedy": "deregister it before retrying",
                 },
             ) from undo_exc
         raise
+    location = verdict.location
+
+    async def _undo_register() -> None:
+        # Detach first: while the table is attached its record must stay, because its manifest still
+        # declares those bases. Then the entries this registration claimed go with it.
+        await _detach()
+        if verdict.claim is not None:
+            await run_in_threadpool(base_registry.release_claim, context.registry, verdict.claim)
 
     await fga_deps.seed_ownership_or_compensate(client, settings, token, resource="table", segments=segments, undo=_undo_register)
     # RESOLVED, not echoed — `response.location` is the caller's own relative path and a relative
@@ -1286,6 +1304,7 @@ def get_table_stats(
     id: str,
     ns: NamespaceDep,
     settings: SettingsDep,
+    so: StorageOptionsDep,
     body: GetTableStatsRequest | None = None,
     branch: Annotated[
         str | None,
@@ -1312,4 +1331,7 @@ def get_table_stats(
         branch = body.branch
     req = GetTableStatsRequest(id=segments, branch=branch)
     dataplane.refuse_a_branch_this_door_cannot_honour(branch, door="get_table_stats")
+    # The request carries no version to pin, so a base planted between this judgement and the native
+    # open is read unjudged; the window is the two opens apart ([[LH-279]]).
+    judged_native_version(ns, so, segments, version=None)
     return native.call(ns, "get_table_stats", req)

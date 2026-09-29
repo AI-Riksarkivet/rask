@@ -131,7 +131,7 @@ async def test_the_handler_relays_the_units_own_verdict(monkeypatch: pytest.Monk
     monkeypatch.setattr(work_mod, "emit_sweep_lineage", lambda *a, **k: _noop())
     # The handler re-reads protection before acting; stub the listing so this test stays about the ACK
     # decision rather than about object storage.
-    monkeypatch.setattr(work_mod.base_refs, "sibling_base_refs", lambda uri, opts: work_mod.base_refs.BaseRefs())
+    monkeypatch.setattr(work_mod.base_refs, "sibling_base_refs", lambda uri, opts, *, configured, record_of: work_mod.base_refs.BaseRefs())
 
     for error, expected in (("maintain: connection reset", RETRY), ("open: no such dataset", SUCCESS), (None, SUCCESS)):
         monkeypatch.setattr(work_mod, "execute_unit", lambda *a, error=error, **k: DatasetResult(uri="u", error=error, error_type="OSError" if error else None))
@@ -243,7 +243,9 @@ async def test_a_QUEUED_unit_reverifies_protection_before_acting(monkeypatch: py
     # Planned clean; a clone appeared since, so the FRESH read says protected.
     monkeypatch.setattr(work_mod, "execute_unit", capture)
     monkeypatch.setattr(work_mod, "emit_sweep_lineage", noop)
-    monkeypatch.setattr(base_refs, "sibling_base_refs", lambda uri, opts: base_refs.BaseRefs(protected={base_refs.normalise("s3://b/t.lance")}))
+    monkeypatch.setattr(
+        base_refs, "sibling_base_refs", lambda uri, opts, *, configured, record_of: base_refs.BaseRefs(protected={base_refs.normalise("s3://b/t.lance")})
+    )
 
     settings = MaintenanceSettings.model_validate({"s3_bucket": "b"})
     item = DatasetWorkItem(uri="s3://b/t.lance", plan=DatasetPlan(), protected_by=None)

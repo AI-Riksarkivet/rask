@@ -41,13 +41,14 @@ from maintenance.core.metrics import (
     record_run_started,
     record_table_parked,
     record_trashed_skipped,
+    record_unrecorded_bases,
 )
 from maintenance.services import catalog_compaction, compaction_executor, credentials, purge
 from maintenance.services.optimize import DatasetResult, Rewriter, compact_one, discover_datasets, summarize_refusals
 from maintenance.services.tiers import target_rows_for
 from service_kit.governed import fga
 from service_kit.governed.audit import SUCCESS, audit
-from service_kit.lakehouse import base_refs, maintenance_policies, trash, warehouse_records
+from service_kit.lakehouse import base_refs, base_registry, maintenance_policies, trash, warehouse_records
 from service_kit.lakehouse.features import flags_from_open_error, manifest_feature_flags, mixes_data_file_versions
 from service_kit.lakehouse.lance_session import affordable_cache_bytes
 from service_kit.lakehouse.objectfs import s3_filesystem
@@ -264,7 +265,54 @@ def _trash_exclusions(settings: MaintenanceSettings, options: dict[str, str]) ->
     return trashed_by_path
 
 
-def _protected_roots(uris: list[str], options: dict[str, str]) -> base_refs.BaseRefs:
+def base_record_reader(settings: MaintenanceSettings, options: dict[str, str]) -> Callable[[str], base_registry.BaseRecord | None]:
+    """How this service reads the catalog's base record for a table root ([[LH-279]]).
+
+    Off the CONTROL root, where the catalog writes ``_bases/`` beside ``_trash/`` and ``_warehouses/``,
+    with the same credential those reads use. The reader RAISES on a record it cannot read: answering
+    "no record" would demote a recorded clone source to a finding and hand its bytes to compaction.
+    """
+    registry = base_registry.BaseRegistry(control_root=settings.resolved_control_root, storage_options=options)
+    return partial(base_registry.read_base_record, registry)
+
+
+def protection_for(refs: base_refs.BaseRefs, uri: str) -> tuple[str | None, list[str]]:
+    """The verdict a work item carries for ``uri``: the protecting root, and the tags that alone pin it.
+
+    Empty tags with a root is an unconditional protection; a root with tags is protected only against
+    deletion, and compactable while every tag is on it.
+    """
+    root = refs.is_protected(uri)
+    if root is None:
+        return None, []
+    return root, sorted(refs.pin_tags(root) or ())
+
+
+def protection_of(item: DatasetWorkItem) -> base_refs.BaseRefs:
+    """The single-root ``BaseRefs`` a work item's verdict stands for."""
+    if not item.protected_by:
+        return base_refs.BaseRefs()
+    root = base_refs.normalise(item.protected_by)
+    if item.pin_tags:
+        return base_refs.BaseRefs(pinned={root: set(item.pin_tags)})
+    return base_refs.BaseRefs(protected={root})
+
+
+def with_fresh_protection(item: DatasetWorkItem, fresh: base_refs.BaseRefs) -> DatasetWorkItem:
+    """``item`` with a re-read verdict UNIONED in: a protection either side finds survives, the strongest wins.
+
+    Unconditional beats pinned; two pinned verdicts need both sets of tags.
+    """
+    root, tags = protection_for(fresh, item.uri)
+    if root is None:
+        return item
+    if item.protected_by is None:
+        return item.model_copy(update={"protected_by": root, "pin_tags": tags})
+    pins = sorted({*item.pin_tags, *tags}) if item.pin_tags and tags else []
+    return item.model_copy(update={"pin_tags": pins})
+
+
+def _protected_roots(uris: list[str], options: dict[str, str], settings: MaintenanceSettings) -> base_refs.BaseRefs:
     """#128d/#114 THE PRE-PASS — over every discovered dataset in EVERY bucket, before one is compacted.
 
     It has to be whole-estate and it has to be first: a shallow clone in bucket B is the only thing that
@@ -272,16 +320,45 @@ def _protected_roots(uris: list[str], options: dict[str, str]) -> base_refs.Base
     SOURCE carries no feature flag and no ``base_paths`` of its own (measured), which is why the flag
     gate inside ``compact_one`` misses this entirely.
 
+    ONLY A SANCTIONED BASE PROTECTS ([[LH-279]]): the referrer's own root, a configured external blob
+    base, or one in the catalog's base record for the referrer's root. Anything else a manifest declares
+    is a writer's claim — a planted base froze every table it named (lh279 p1/p3) — so it is reported as
+    ``maintenance_unrecorded_base`` and counted, and protects nothing. A record that cannot be read
+    ABORTS the tick, the rule the trash and policy registries follow: a protective record read as absent
+    would free a recorded clone source's bytes.
+
     Cost is one manifest read per dataset and no data file is opened — the same order as discovery
-    itself, paid once per tick. The SERVICE's session, not one minted per call:
+    itself, paid once per tick — plus one record read per root declaring a base neither its own nor
+    configured. The SERVICE's session, not one minted per call:
     ``MAINTENANCE_LANCE_METADATA_CACHE_MB`` / ``_INDEX_CACHE_MB`` are the operator's cap, and this
     pre-pass is the one loop that opens EVERY dataset in the estate. Omitting it let base_refs mint its
     own default-sized session, so a tuned-down cap silently did not apply here and a second session
     competed with the tick's.
     """
-    protected = base_refs.protected_roots(uris, options, session=shared_lance_session())
-    if protected.protected:
-        log.info("maintenance_protected_bases", extra={"count": len(protected.protected), "roots": sorted(protected.protected)[:20]})
+    try:
+        protected = base_refs.protected_roots(
+            uris,
+            options,
+            configured=settings.external_blob_base_list,
+            record_of=base_record_reader(settings, options),
+            session=shared_lance_session(),
+        )
+    except base_registry.UnreadableBaseRecordError:
+        log.error("maintenance_base_record_unreadable_tick_aborted")
+        raise
+    if protected.protected or protected.pinned:
+        log.info(
+            "maintenance_protected_bases", extra={"count": len(protected.protected), "pinned": len(protected.pinned), "roots": sorted(protected.protected)[:20]}
+        )
+    record_unrecorded_bases(len(protected.findings))
+    if protected.findings:
+        log.warning(
+            "maintenance_unrecorded_base",
+            extra={
+                "count": len(protected.findings),
+                "bases": [{"referrer": finding.referrer, "base": finding.base, "relation": finding.relation.value} for finding in protected.findings[:20]],
+            },
+        )
     if protected.unreadable:
         # NOT fatal, and not silent either. An unreadable dataset might have been the referrer whose
         # base_paths protect a dataset this tick is about to rewrite, so the gap is named — the same
@@ -352,7 +429,7 @@ def maintain_one_item(item: DatasetWorkItem, *, settings: MaintenanceSettings, o
     looks exactly like having no guard at all". A work item crosses a queue, so it will eventually be
     built by something other than :func:`plan_sweep`.
     """
-    protected = base_refs.BaseRefs(protected={base_refs.normalise(item.protected_by)} if item.protected_by else set())
+    protected = protection_of(item)
     # THE REWRITE IS SIGNED PER TABLE, not by the root key. `options` — the deployment's ambient
     # credential — reaches every bucket in the estate, and a compaction is a WRITE. What signs these
     # bytes becomes a credential scoped to this one table prefix and expiring in 900s, falling back to
@@ -417,6 +494,12 @@ def maintain_one_item(item: DatasetWorkItem, *, settings: MaintenanceSettings, o
         # asked, so this is the only place that answer arrives, and the ambient key must not touch the dataset.
         log.warning("maintenance_table_not_governed", extra={"uri": item.uri, "table_id": table_id, "reason": str(exc)})
         refused.park(str(exc), gate="table_not_governed", table_id=table_id)
+        return refused
+    except compaction_executor.VendUndecided as exc:
+        # The vend door's 5xx: asked, and undecided. A FAILURE of this unit, not a refusal — `ack_for` redelivers
+        # a `maintain:` error and the serial sweep retries next tick — and never the ambient key ([[LH-279]]).
+        log.warning("maintenance_vend_undecided", extra={"uri": item.uri, "table_id": table_id, "reason": str(exc)})
+        refused.error, refused.error_type = f"maintain: {exc}", type(exc).__name__
         return refused
     return _maintain_one(item.uri, item.plan, settings=settings, options=write_options, protected=protected, table_id=table_id)
 
@@ -862,12 +945,13 @@ def plan_sweep(settings: MaintenanceSettings) -> tuple[list[DatasetWorkItem], li
     record_refused(0)
     record_mixed_file_versions(0)
     record_plan_refused(0)
+    record_unrecorded_bases(0)
     options = settings.storage_options()
     older_than = timedelta(days=settings.older_than_days)
     policy_records = _load_policies(settings, options)
     trashed_by_path = _trash_exclusions(settings, options)
     uris = _discover_all(_s3fs(settings), _buckets_to_sweep(settings, options), max_depth=settings.discovery_max_depth)
-    protected = _protected_roots(uris, options)
+    protected = _protected_roots(uris, options, settings)
     uris, decided = _exclude_trashed(uris, trashed_by_path)
     now = datetime.now(UTC)
     # The discovery listing order is deterministic across ticks, so a pass that consistently dies at
@@ -897,11 +981,13 @@ def plan_sweep(settings: MaintenanceSettings) -> tuple[list[DatasetWorkItem], li
         if plan.skipped is not None:
             decided.append(DatasetResult(uri=uri, skipped=plan.skipped))
             continue
+        protected_by, pin_tags = protection_for(protected, uri)
         items.append(
             DatasetWorkItem(
                 uri=uri,
                 plan=plan,
-                protected_by=protected.is_protected(uri),
+                protected_by=protected_by,
+                pin_tags=pin_tags,
                 # Same derivation and same limit as `plan_one`: the flat layout yields an identity, every
                 # other layout yields None rather than a guess.
                 table_id=table_id_from_uri(uri),
@@ -1022,10 +1108,18 @@ def plan_one(uri: str, settings: MaintenanceSettings) -> DatasetWorkItem | None:
     )
     if plan.skipped:
         return None
+    try:
+        siblings = base_refs.sibling_base_refs(uri, options, configured=settings.external_blob_base_list, record_of=base_record_reader(settings, options))
+    except base_registry.UnreadableBaseRecordError as exc:
+        # The sweep aborts its tick on one; the blast radius here is one dataset, and the backstop re-plans it.
+        log.warning("arrival_base_record_unreadable", extra={"uri": uri, "error": str(exc)[:300]})
+        return None
+    protected_by, pin_tags = protection_for(siblings, uri)
     return DatasetWorkItem(
         uri=uri,
         plan=plan,
-        protected_by=base_refs.sibling_base_refs(uri, options).is_protected(uri),
+        protected_by=protected_by,
+        pin_tags=pin_tags,
         # Derived where the flat layout allows it, left unset where it does not. This lane starts from
         # a bare URI, so it is the one producer that cannot always know — and an id guessed from a path
         # the parser cannot read would vend a credential for a DIFFERENT table, which is worse than

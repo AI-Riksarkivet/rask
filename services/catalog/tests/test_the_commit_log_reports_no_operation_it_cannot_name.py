@@ -45,7 +45,7 @@ def compacted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> str:
     for value in (2, 3, 4):
         lance.write_dataset(pa.table({"id": [value]}), uri, mode="append")
     lance.dataset(uri).optimize.compact_files()
-    monkeypatch.setattr(dataplane, "open_dataset", lambda *_args, **_kwargs: lance.dataset(uri))
+    monkeypatch.setattr(dataplane, "open_dataset_unchecked", lambda *_args, **_kwargs: lance.dataset(uri))
     return uri
 
 

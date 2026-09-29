@@ -245,6 +245,12 @@ spec:
                     "Resource": ["arn:aws:s3:::*", "arn:aws:s3:::*/*"]
                   },
                   {
+                    "Sid": "ForgetABaseRecordNeverWriteOne",
+                    "Effect": "Deny",
+                    "Action": ["s3:PutObject"],
+                    "Resource": ["arn:aws:s3:::*/_bases/*"]
+                  },
+                  {
                     "Sid": "NeverTheRecordsThatGovernMaintenance",
                     "Effect": "Deny",
                     "Action": ["s3:PutObject", "s3:DeleteObject"],
@@ -318,6 +324,7 @@ spec:
                     "Resource": [
                       "arn:aws:s3:::*/_projects/*",
                       "arn:aws:s3:::*/_protection/*",
+                      "arn:aws:s3:::*/_bases/*",
                       "arn:aws:s3:::*/_policies/*",
                       "arn:aws:s3:::*/_warehouses/*",
                       "arn:aws:s3:::*/_tasks/*",
@@ -395,6 +402,7 @@ spec:
                     "Resource": [
                       "arn:aws:s3:::*/_projects/*",
                       "arn:aws:s3:::*/_protection/*",
+                      "arn:aws:s3:::*/_bases/*",
                       "arn:aws:s3:::*/_policies/*",
                       "arn:aws:s3:::*/_warehouses/*",
                       "arn:aws:s3:::*/_transforms/*",

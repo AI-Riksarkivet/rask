@@ -148,6 +148,24 @@ class LineageSettings(GovernedAuthSettings, BaseSettings):
     s3_secret_access_key: SecretStr = Field(default=SecretStr(""), alias="LINEAGE_S3_SECRET_ACCESS_KEY")
     s3_region: str = Field(default="us-east-1", alias="LINEAGE_S3_REGION")
     s3_bucket: str = Field(default="lakehouse", alias="LINEAGE_S3_BUCKET")
+    #: THE CATALOG'S CONTROL ROOT, where each table's base record lives under ``_bases/`` ([[LH-279]]).
+    #: Empty = ``s3://{LINEAGE_S3_BUCKET}``, which is where the catalog keeps it when its own
+    #: ``LANCE_CONTROL_ROOT`` is unset (its namespace root), the shipped chart's shape.
+    control_root: str = Field(default="", alias="LINEAGE_CONTROL_ROOT")
+    #: THE CATALOG'S ``LANCE_EXTERNAL_BLOB_BASES``, under the same name: a plain base inside one of these
+    #: is sanctioned by configuration, so the base-drift axis never reports it.
+    external_blob_bases: str = Field(default="", validation_alias="LANCE_EXTERNAL_BLOB_BASES")
+
+    @property
+    def resolved_control_root(self) -> str:
+        """The catalog's control root — ``LINEAGE_CONTROL_ROOT`` or the primary bucket."""
+        return self.control_root or f"s3://{self.s3_bucket}"
+
+    @property
+    def external_blob_base_list(self) -> list[str]:
+        """The configured external blob bases, parsed as the catalog parses them."""
+        return [base.strip() for base in self.external_blob_bases.split(",") if base.strip()]
+
     # #4: the durable lineage-outbox prefix (shared with the medallion stage runners). When set, the reconcile
     # sweep also DRAINS it — re-ingesting any event a producer staged but whose publish never got acked
     # (a crash between the Lance commit and the publish), then deleting it. Empty = drain disabled. Must

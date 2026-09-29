@@ -64,13 +64,6 @@ def test_a_DENIED_vend_refuses_rather_than_handing_back_the_root_key(monkeypatch
     assert "ns$t" in str(caught.value), "the refusal must name the table an operator has to grant"
 
 
-@pytest.mark.parametrize("status", [500, 503])
-def test_an_UNREACHABLE_vend_still_degrades_to_the_ambient_credential(monkeypatch: pytest.MonkeyPatch, status: int) -> None:
-    """The fallback keeps its reason for existing: a catalog outage must not stop reclaiming disk."""
-    _respond(monkeypatch, status, target=credentials.httpx, attr="post")
-    assert credentials.write_options_for("s3://b/t", _settings(), fallback=_FALLBACK, declared_table_id="ns$t") == _FALLBACK
-
-
 @pytest.mark.parametrize("status", [401, 403])
 def test_a_DENIED_plan_is_a_refusal_not_an_outage(monkeypatch: pytest.MonkeyPatch, status: int) -> None:
     """`CompactionPlaneUnavailable` is the caller's signal to compact LOCALLY — exactly what a denial

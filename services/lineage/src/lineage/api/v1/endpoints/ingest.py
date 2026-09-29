@@ -40,20 +40,57 @@ from lineage.models import DatasetEvent, RunEvent, UnauthoredRunError, Ungoverne
 router = APIRouter(tags=["ingest"])
 
 
+def _inlined(schema: dict[str, object]) -> dict[str, object]:
+    """``schema`` with every ``#/$defs/<name>`` reference replaced by that definition, and no ``$defs`` left.
+
+    Pydantic files a model's sub-models under ``$defs`` and points at them as ``#/$defs/<name>`` — a
+    reference to the SCHEMA's root. Placed inside an OpenAPI document, ``#`` is the DOCUMENT's root, so
+    the reference dangles, and a strict reader refuses the whole spec: measured, openapi-typescript
+    7.13.0 fails ``gen:types:lineage`` on "Can't resolve $ref at …/oneOf/0/properties/job".
+
+    Raises:
+        ValueError: A definition refers back to itself, which no inline schema can spell.
+    """
+    defs = schema.get("$defs") or {}
+    if not isinstance(defs, dict):
+        raise TypeError(f"$defs must be an object, got {type(defs).__name__}")
+
+    def _resolve(node: object, inside: tuple[str, ...]) -> object:
+        if isinstance(node, list):
+            return [_resolve(item, inside) for item in node]
+        if not isinstance(node, dict):
+            return node
+        ref = node.get("$ref")
+        if isinstance(ref, str) and ref.startswith("#/$defs/"):
+            name = ref.removeprefix("#/$defs/")
+            if name in inside:
+                raise ValueError(f"$defs/{name} refers to itself, so it cannot be inlined")
+            siblings = {key: value for key, value in node.items() if key != "$ref"}
+            resolved = _resolve(defs[name], (*inside, name))
+            return {**resolved, **siblings} if isinstance(resolved, dict) else resolved
+        return {key: _resolve(value, inside) for key, value in node.items() if key != "$defs"}
+
+    resolved = _resolve(schema, ())
+    if not isinstance(resolved, dict):
+        raise TypeError("a schema inlines to an object")
+    return resolved
+
+
 #: The published request-body schema for the ingest door.
 #:
 #: DECLARED RATHER THAN INFERRED, because the handler parses its own body (one discriminator shared
 #: with the bus door) and FastAPI would otherwise publish a bare object — losing the contract every
 #: external OpenLineage producer reads. Built from the models themselves, so the spec cannot drift
 #: from what the door accepts, and INLINE rather than by `$ref`: no route references either model as
-#: a parameter any more, so the component schemas they would point at are not emitted.
+#: a parameter any more, so the component schemas they would point at are not emitted — which is why
+#: the models' own nested definitions are inlined too (:func:`_inlined`).
 _EVENT_BODY = {
     "requestBody": {
         "required": True,
         "content": {
             "application/json": {
                 "schema": {
-                    "oneOf": [RunEvent.model_json_schema(), DatasetEvent.model_json_schema()],
+                    "oneOf": [_inlined(RunEvent.model_json_schema()), _inlined(DatasetEvent.model_json_schema())],
                     "title": "OpenLineage event",
                     "description": "A RunEvent, or a DatasetEvent for a dataset change no job performed.",
                 }

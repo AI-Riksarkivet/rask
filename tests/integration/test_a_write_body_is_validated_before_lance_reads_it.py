@@ -166,7 +166,7 @@ def test_the_insert_branch_arm_refuses_it_without_the_door(tmp_path: Path, body:
     """`dataplane.insert_into_table` is a seam of its own: its branch arm must not depend on the door's
     coercion having read the body first, because it is the arm that hands the buffers to Lance."""
     ns = connect("dir", {"root": str(tmp_path / "data")})
-    create_table(ns, {}, ["t"], _table([1, 2, 3], [b"a", b"b", b"c"], ["x", "y", "z"]), mode="create")
+    create_table(ns, {}, ["t"], _table([1, 2, 3], [b"a", b"b", b"c"], ["x", "y", "z"]), mode="create", registry=None)
     open_dataset(ns, {}, ["t"]).create_branch("work", None)
 
     with pytest.raises(InvalidInputError, match="^the request body is "):

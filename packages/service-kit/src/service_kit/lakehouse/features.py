@@ -260,6 +260,10 @@ class BasePathRef(BaseModel):
     path: str
     #: False for a plain prefix. Absent in the manifest means false — proto3 omits a zero.
     is_dataset_root: bool = False
+    #: The manifest's alias for the base (`DatasetBasePath.name`); ``None`` when the writer gave none,
+    #: which is what `shallow_clone` writes (lh279 p4). The catalog's base record carries it for an
+    #: operator reading the record, and decides nothing on it.
+    name: str | None = None
 
 
 def manifest_base_path_refs(ds: ManifestCarrier) -> list[BasePathRef]:
@@ -287,7 +291,9 @@ def manifest_base_path_refs(ds: ManifestCarrier) -> list[BasePathRef]:
         # this feeds is fail-closed on the FLAG, which is read from the bytes and unaffected here.
         return []
     return [
-        BasePathRef(path=str(base.path), is_dataset_root=bool(base.is_dataset_root)) for base in accessor().values() if str(getattr(base, "path", "") or "")
+        BasePathRef(path=str(base.path), is_dataset_root=bool(base.is_dataset_root), name=getattr(base, "name", None) or None)
+        for base in accessor().values()
+        if str(getattr(base, "path", "") or "")
     ]
 
 

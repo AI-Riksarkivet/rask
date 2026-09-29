@@ -44,7 +44,7 @@ def blob_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Tes
     from catalog.services.dataplane import create_table
 
     ns = connect("dir", {"root": str(tmp_path)})
-    create_table(ns, {}, ["clips"], _blob_table([b"hello-world", b"X" * 100, b""]), mode="create")
+    create_table(ns, {}, ["clips"], _blob_table([b"hello-world", b"X" * 100, b""]), mode="create", registry=None)
 
     app.dependency_overrides[get_namespace] = lambda: ns
     app.dependency_overrides[get_storage_options] = lambda: {}
@@ -162,7 +162,7 @@ def test_get_blob_version_param_over_http(blob_client: TestClient) -> None:
     from catalog.services.dataplane import create_table as recreate
 
     ns = blob_client.app.dependency_overrides[get_namespace]()
-    recreate(ns, {}, ["clips"], _blob_table([b"replacement"]), mode="overwrite")
+    recreate(ns, {}, ["clips"], _blob_table([b"replacement"]), mode="overwrite", registry=None)
 
     head = blob_client.get("/management/v1/table/clips/blobs", params={"column": "payload", "row": 0})
     assert head.status_code == 200 and head.content == b"replacement"

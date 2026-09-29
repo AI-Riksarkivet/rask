@@ -130,7 +130,7 @@ def test_the_HANDLER_asks_after_acking_and_not_before(monkeypatch: pytest.Monkey
     monkeypatch.setattr(work_module, "execute_unit", _execute)
     monkeypatch.setattr(work_module, "emit_sweep_lineage", _no_lineage)
     monkeypatch.setattr(work_module, "ack_for", lambda _r: (order.append("acked"), "SUCCESS")[1])
-    monkeypatch.setattr(work_module.base_refs, "sibling_base_refs", lambda *_a, **_k: SimpleNamespace(is_protected=lambda _u: False))
+    monkeypatch.setattr(work_module.base_refs, "sibling_base_refs", lambda uri, opts, *, configured, record_of: work_module.base_refs.BaseRefs())
     monkeypatch.setattr(work_module, "passes_committed", lambda: 200)
     monkeypatch.setattr(work_module, "retire_this_worker", lambda *, passes, reason: order.append(f"retired@{passes}"))
 
@@ -141,6 +141,8 @@ def test_the_HANDLER_asks_after_acking_and_not_before(monkeypatch: pytest.Monkey
             delimiter="$",
             recycle_after_passes=200,
             recycle_at_memory_fraction=0.0,
+            external_blob_base_list=[],
+            resolved_control_root="/nonexistent/control",
         ),
     )
     event = {"data": {"uri": "s3://b/t", "table_id": "ns$t", "plan": {}}}
@@ -167,11 +169,21 @@ def test_the_handler_does_NOT_retire_below_the_mark(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(work_module, "execute_unit", lambda item, **_k: SimpleNamespace(error_type=None, uri=item.uri, table_id=item.table_id))
     monkeypatch.setattr(work_module, "emit_sweep_lineage", _no_lineage)
     monkeypatch.setattr(work_module, "ack_for", lambda _r: "SUCCESS")
-    monkeypatch.setattr(work_module.base_refs, "sibling_base_refs", lambda *_a, **_k: SimpleNamespace(is_protected=lambda _u: False))
+    monkeypatch.setattr(work_module.base_refs, "sibling_base_refs", lambda uri, opts, *, configured, record_of: work_module.base_refs.BaseRefs())
     monkeypatch.setattr(work_module, "passes_committed", lambda: 199)
     monkeypatch.setattr(work_module, "retire_this_worker", lambda *, passes, reason: retired.append(passes))
 
-    settings = cast(Any, SimpleNamespace(storage_options=lambda: {}, delimiter="$", recycle_after_passes=200, recycle_at_memory_fraction=0.0))
+    settings = cast(
+        Any,
+        SimpleNamespace(
+            storage_options=lambda: {},
+            delimiter="$",
+            external_blob_base_list=[],
+            resolved_control_root="/nonexistent/control",
+            recycle_after_passes=200,
+            recycle_at_memory_fraction=0.0,
+        ),
+    )
     asyncio.run(work_module.handle_unit({"data": {"uri": "s3://b/t", "table_id": "ns$t", "plan": {}}}, settings, cast(Any, object())))
     assert retired == []
 
@@ -374,13 +386,23 @@ def test_the_HANDLER_retires_on_memory_with_zero_committed_passes(monkeypatch: p
     monkeypatch.setattr(work_module, "execute_unit", lambda item, **_k: SimpleNamespace(error_type=None, uri=item.uri, table_id=item.table_id))
     monkeypatch.setattr(work_module, "emit_sweep_lineage", _no_lineage)
     monkeypatch.setattr(work_module, "ack_for", lambda _r: (order.append("acked"), "SUCCESS")[1])
-    monkeypatch.setattr(work_module.base_refs, "sibling_base_refs", lambda *_a, **_k: SimpleNamespace(is_protected=lambda _u: False))
+    monkeypatch.setattr(work_module.base_refs, "sibling_base_refs", lambda uri, opts, *, configured, record_of: work_module.base_refs.BaseRefs())
     monkeypatch.setattr(work_module, "passes_committed", lambda: 0)
     monkeypatch.setattr(work_module, "memory_readings", lambda: {"rss_bytes": int(4 * 1024**3 * 0.9), "python_blocks": 1, "session_bytes": 1})
     monkeypatch.setattr(work_module, "container_memory_limit", lambda: 4 * 1024**3)
     monkeypatch.setattr(work_module, "retire_this_worker", lambda *, passes, reason: order.append(f"retired@{passes}:{reason}"))
 
-    settings = cast(Any, SimpleNamespace(storage_options=lambda: {}, delimiter="$", recycle_after_passes=200, recycle_at_memory_fraction=0.70))
+    settings = cast(
+        Any,
+        SimpleNamespace(
+            storage_options=lambda: {},
+            delimiter="$",
+            external_blob_base_list=[],
+            resolved_control_root="/nonexistent/control",
+            recycle_after_passes=200,
+            recycle_at_memory_fraction=0.70,
+        ),
+    )
     got = asyncio.run(work_module.handle_unit({"data": {"uri": "s3://b/t", "table_id": "ns$t", "plan": {}}}, settings, cast(Any, object())))
 
     assert got == {"status": "SUCCESS"}, got
@@ -404,13 +426,23 @@ def test_the_handler_stays_when_BOTH_budgets_are_intact(monkeypatch: pytest.Monk
     monkeypatch.setattr(work_module, "execute_unit", lambda item, **_k: SimpleNamespace(error_type=None, uri=item.uri, table_id=item.table_id))
     monkeypatch.setattr(work_module, "emit_sweep_lineage", _no_lineage)
     monkeypatch.setattr(work_module, "ack_for", lambda _r: "SUCCESS")
-    monkeypatch.setattr(work_module.base_refs, "sibling_base_refs", lambda *_a, **_k: SimpleNamespace(is_protected=lambda _u: False))
+    monkeypatch.setattr(work_module.base_refs, "sibling_base_refs", lambda uri, opts, *, configured, record_of: work_module.base_refs.BaseRefs())
     monkeypatch.setattr(work_module, "passes_committed", lambda: 0)
     monkeypatch.setattr(work_module, "memory_readings", lambda: {"rss_bytes": 920 * 1024**2, "python_blocks": 1, "session_bytes": 1})
     monkeypatch.setattr(work_module, "container_memory_limit", lambda: 4 * 1024**3)
     monkeypatch.setattr(work_module, "retire_this_worker", lambda *, passes, reason: retired.append(reason))
 
-    settings = cast(Any, SimpleNamespace(storage_options=lambda: {}, delimiter="$", recycle_after_passes=200, recycle_at_memory_fraction=0.70))
+    settings = cast(
+        Any,
+        SimpleNamespace(
+            storage_options=lambda: {},
+            delimiter="$",
+            external_blob_base_list=[],
+            resolved_control_root="/nonexistent/control",
+            recycle_after_passes=200,
+            recycle_at_memory_fraction=0.70,
+        ),
+    )
     asyncio.run(work_module.handle_unit({"data": {"uri": "s3://b/t", "table_id": "ns$t", "plan": {}}}, settings, cast(Any, object())))
     assert retired == []
 

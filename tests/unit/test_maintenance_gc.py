@@ -336,13 +336,18 @@ def test_sibling_base_refs_FINDS_a_real_clone_reference(tmp_path: Any) -> None:
     import lance
     import pyarrow as pa
 
-    from service_kit.lakehouse import base_refs
+    from service_kit.lakehouse import base_refs, base_registry
 
     source = str(tmp_path / "aa11_ns$src.lance")
+    clone = str(tmp_path / "bb22_ns$clone.lance")
     src = lance.write_dataset(pa.table({"id": pa.array(range(9), pa.int64())}), source)
-    src.shallow_clone(str(tmp_path / "bb22_ns$clone.lance"), reference=src.version)
+    src.shallow_clone(clone, reference=src.version)
+    # Recorded, as the catalog records a clone it made: only a sanctioned base protects ([[LH-279]]).
+    registry = base_registry.BaseRegistry(control_root=str(tmp_path / "control"))
+    entry = base_registry.RecordedBase(path=source, role=base_registry.BaseRole.DERIVED_FROM, is_dataset_root=True, origin=base_registry.BaseOrigin.SILVER)
+    base_registry.claim_bases(registry, clone, [entry])
 
-    refs = base_refs.sibling_base_refs(source, {})
+    refs = base_refs.sibling_base_refs(source, {}, configured=[], record_of=lambda location: base_registry.read_base_record(registry, location))
 
     assert refs.is_protected(source) is not None, f"the clone's reference to its source was not found: {refs}"
     assert refs.is_protected(str(tmp_path / "cc33_ns$unrelated.lance")) is None

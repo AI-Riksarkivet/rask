@@ -15,6 +15,7 @@ session policy then enforces the same scope at the object store.
 from __future__ import annotations
 
 import logging
+from functools import partial
 from typing import Annotated
 
 from botocore.exceptions import BotoCoreError, ClientError
@@ -31,8 +32,9 @@ from lance_namespace import (
 
 from catalog.api.dependencies import FgaClientDep, NamespaceDep, SettingsDep, VendorDep
 from catalog.api.security import CurrentToken, RawBearerToken
+from catalog.core.base_judge import BaseJudge
 from catalog.core.identifiers import parse_identifier
-from catalog.core.vending import Tier, dataset_facts, table_has_branch, unsanctioned_bases
+from catalog.core.vending import Tier, dataset_facts, require_vendable_bases, table_has_branch, unsanctioned_bases
 from catalog.schemas import CredentialResponse
 from catalog.services import native
 from service_kit.governed import fga
@@ -118,7 +120,11 @@ async def vend_credentials(
     # credential, so there is no flow that must vend for one before it exists.
     if branch and not await run_in_threadpool(table_has_branch, described.location, settings.storage_options(), branch):
         raise TableBranchNotFoundError(f"branch {branch!r} not found on this table")
-    read_version, declared_bases, classified = await run_in_threadpool(dataset_facts, described.location, settings.storage_options())
+    facts = await run_in_threadpool(partial(dataset_facts, described.location, settings.storage_options(), branch=branch))
+    # [[LH-279]] A BASE NOTHING SANCTIONED REFUSES THE VEND, before the classification answer below can
+    # route it anywhere: a writer can plant any root in its manifest, and a credential granting READ on
+    # it — or a server-mediated read through it — hands over another table's bytes. 409, not a fallback.
+    await run_in_threadpool(require_vendable_bases, described.location, facts, BaseJudge.from_settings(settings))
     # [[LH-058]] A CLASSIFIED COLUMN MAKES A TABLE UNVENDABLE RAW, and it is a property of the TABLE
     # rather than of the caller — the same shape as the unsanctioned base below, for a reason that was
     # measured rather than chosen.
@@ -138,17 +144,15 @@ async def vend_credentials(
     # WHAT THIS DOES NOT YET DO, stated so it is not mistaken for more: the server-mediated path does
     # not mask either. This stops the raw bytes leaving under a 900 s credential the caller holds,
     # which is the precondition for masking rather than masking itself.
-    if classified:
-        log.info("vend_server_mediated_classified_columns", extra={"location": described.location, "columns": list(classified)})
+    if facts.classified:
+        log.info("vend_server_mediated_classified_columns", extra={"location": described.location, "columns": list(facts.classified)})
         return CredentialResponse(mode="server_mediated")
-    # #3-B ⊥ #2, NARROWED to the bases the policy would actually miss ([[LH-057]]). A multi-base table
-    # whose every declared base is sanctioned IS direct-vendable: `build_session_policy` grants each one
-    # a `ListBase<n>`/`BaseObjects<n>` pair, so the client reaches its own bytes. Only a base
-    # `_base_is_sanctioned` refuses is unreachable, and only that justifies proxying the whole table
-    # through the catalog's root credential. Asked off the manifest read above rather than by walking
-    # every fragment's data files, and no feature flag is needed: a single-bucket table declares no
-    # bases and this costs nothing.
-    if missed := unsanctioned_bases(described.location, declared_bases, settings.vend_sanctioned_bases):
+    # #3-B ⊥ #2, NARROWED to the bases the policy would actually miss ([[LH-057]]). Every base here is
+    # already one the catalog sanctioned (above); what remains is whether the session policy can ADDRESS
+    # it — `build_session_policy` grants each allowlisted base a `ListBase<n>`/`BaseObjects<n>` pair, so the
+    # client reaches its own bytes. A sanctioned base the policy cannot grant is reachable only through
+    # the catalog's root credential, which is what the server-mediated answer routes the caller to.
+    if missed := unsanctioned_bases(described.location, facts.base_uris, settings.vend_sanctioned_bases):
         log.info("vend_server_mediated_unreachable_bases", extra={"location": described.location, "bases": list(missed)})
         return CredentialResponse(mode="server_mediated")
     # The blocking STS call (AssumeRole / AssumeRoleWithWebIdentity) runs in the threadpool. A rejected
@@ -156,7 +160,7 @@ async def vend_credentials(
     # the STS backend is unavailable/misconfigured → 503. Either way a meaningful 4xx/5xx, never a bare 500.
     try:
         creds = await run_in_threadpool(
-            vendor.vend, table_location=described.location, tier=tier, web_identity_token=web_identity_token, bases=declared_bases, branch=branch
+            vendor.vend, table_location=described.location, tier=tier, web_identity_token=web_identity_token, bases=facts.base_uris, branch=branch
         )
     except ClientError as exc:
         # A REJECTED exchange (the STS backend refused the request). Only web_identity re-presents the
@@ -179,4 +183,4 @@ async def vend_credentials(
             resource=obj,
             tier=tier,
         )
-    return CredentialResponse(mode=mode, credentials=creds, location=described.location, read_version=read_version)
+    return CredentialResponse(mode=mode, credentials=creds, location=described.location, read_version=facts.read_version)

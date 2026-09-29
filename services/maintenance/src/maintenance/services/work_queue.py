@@ -46,7 +46,8 @@ def ack_for(result: DatasetResult) -> str:
     this wrong is silent in both directions: always-ack turns every transient S3 failure into a
     dropped dataset, always-retry recirculates an unreadable directory until it dead-letters.
 
-    * ``maintain:`` — compaction or GC genuinely failed, past Lance's own retry. **RETRY**, so the
+    * ``maintain:`` — compaction or GC genuinely failed, past Lance's own retry, or the vend door answered
+      5xx and could not decide the unit's credential. **RETRY**, so the
       broker redelivers on its schedule and parks the unit on the DLQ once ``maxDeliver`` is spent.
       Redelivery does not flood the lineage graph: the FAIL event's run id is deterministic per dataset
       (``lineage_emit.emit_maintenance_failed``), so every redelivery MERGEs onto one node.

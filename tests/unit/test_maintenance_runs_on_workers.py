@@ -24,6 +24,7 @@ These pin the dataplane primitives against real pylance — no S3, no cluster �
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -32,7 +33,9 @@ import pyarrow as pa
 import pytest
 from lance_namespace import InvalidInputError, TableNotFoundError
 
+from catalog.core import base_judge
 from catalog.services.dataplane import commit_compaction, plan_compaction
+from service_kit.lakehouse import base_registry
 
 
 def _table_of(n: int) -> pa.Table:
@@ -311,12 +314,22 @@ def test_a_table_whose_BYTES_are_missing_is_a_client_error_not_a_500(tmp_path: P
 # --------------------------------------------------------------------------- #
 
 
-def _clone_shaped(tmp_path: Path) -> str:
-    """A dataset whose data resolves through ANOTHER dataset's root — the shallow-clone shape.
+@pytest.fixture
+def judge(tmp_path: Path) -> Iterator[base_judge.BaseJudge]:
+    """The catalog's base judge, as the lifespan installs it, over a control root in ``tmp_path``."""
+    installed = base_judge.BaseJudge(registry=base_registry.BaseRegistry(control_root=str(tmp_path / "control")), configured=[])
+    base_judge.install(installed)
+    yield installed
+    base_judge.install(None)
+
+
+def _clone_shaped(tmp_path: Path, judge: base_judge.BaseJudge) -> str:
+    """A dataset whose data resolves through ANOTHER dataset's root — the shallow-clone shape, RECORDED.
 
     This is the case `require_compactable` exists to refuse: compacting a clone materialises the shared
     base into its own root, so the rewrite is not the cost-free identity-preserving operation the
-    fragment count suggests.
+    fragment count suggests. The clone's source is in its base record, as the catalog records a clone
+    it made; an unrecorded one is refused earlier at both doors, as a base nothing sanctioned ([[LH-279]]).
     """
     # FRAGMENTED at the source, so the clone has real compaction work to plan — a single-fragment
     # clone plans nothing and the door would refuse it for having no results, which proves nothing
@@ -325,10 +338,14 @@ def _clone_shaped(tmp_path: Path) -> str:
     clone = str(tmp_path / "clone")
     ds = lance.dataset(source)
     ds.shallow_clone(clone, reference=ds.version)
+    entry = base_registry.RecordedBase(
+        path=source, role=base_registry.BaseRole.DERIVED_FROM, is_dataset_root=True, origin=base_registry.BaseOrigin.SILVER, source_table=source
+    )
+    base_registry.claim_bases(judge.registry, clone, [entry])
     return clone
 
 
-def test_the_distributed_commit_door_refuses_what_the_BUTTON_refuses(tmp_path: Path) -> None:
+def test_the_distributed_commit_door_refuses_what_the_BUTTON_refuses(tmp_path: Path, judge: base_judge.BaseJudge) -> None:
     """CONTRACT: `compaction_commit` applies the same gate `/maintenance/compact` applies.
 
     The catalog exposes TWO ways to rewrite a table's fragments. `POST /management/v1/table/{id}/maintenance/compact`
@@ -346,7 +363,7 @@ def test_the_distributed_commit_door_refuses_what_the_BUTTON_refuses(tmp_path: P
     while the commit is what mints the version and drops the old fragments. A plan that is never
     committed costs nothing.
     """
-    clone = _clone_shaped(tmp_path)
+    clone = _clone_shaped(tmp_path, judge)
     plan = plan_compaction(clone, {}, target_rows_per_fragment=1000, batch_size=64, num_threads=2, max_source_bytes=256 * 1024 * 1024)
     results = [_worker_executes(clone, task) for task in plan.tasks]
 
@@ -356,7 +373,7 @@ def test_the_distributed_commit_door_refuses_what_the_BUTTON_refuses(tmp_path: P
     assert "clone" in message or "base" in message, f"the refusal does not name the shallow clone: {caught.value}"
 
 
-def test_the_distributed_doors_refuse_with_the_SAME_reason_the_button_gives(tmp_path: Path) -> None:
+def test_the_distributed_doors_refuse_with_the_SAME_reason_the_button_gives(tmp_path: Path, judge: base_judge.BaseJudge) -> None:
     """The two doors must not merely both refuse — they must say the same thing.
 
     An operator who is told "no" at one door and given a different sentence at the other cannot tell
@@ -365,7 +382,7 @@ def test_the_distributed_doors_refuse_with_the_SAME_reason_the_button_gives(tmp_
     """
     from catalog.services.maintenance import require_compactable
 
-    clone = _clone_shaped(tmp_path)
+    clone = _clone_shaped(tmp_path, judge)
     button_reason = ""
     try:
         require_compactable(lance.dataset(clone), {}, None)

@@ -21,7 +21,7 @@ import asyncio
 from typing import Any, cast
 
 import pytest
-from lance_namespace import InvalidTableStateError, NamespaceNotEmptyError, TableNotFoundError
+from lance_namespace import DropTableResponse, InvalidTableStateError, NamespaceNotEmptyError, TableNotFoundError
 
 from catalog.api import fga_deps
 from catalog.core.config import Settings
@@ -80,7 +80,7 @@ class _RecordingNamespace:
 
     def drop_table(self, request: Any) -> Any:
         self.calls.append("drop_table")
-        return type("R", (), {"model_fields_set": set()})()
+        return DropTableResponse()
 
     def deregister_table(self, request: Any) -> Any:
         self.calls.append("deregister_table")

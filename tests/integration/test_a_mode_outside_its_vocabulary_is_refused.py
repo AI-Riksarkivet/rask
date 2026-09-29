@@ -202,7 +202,7 @@ def test_the_data_plane_refuses_it_without_the_door(tmp_path: Path, branch: str 
     """`dataplane.insert_into_table` is a seam of its own, so its branch arm must not depend on the door
     having parsed first: handed the raw value, pylance's `insert` answers a bare ValueError, which is a 500."""
     ns = connect("dir", {"root": str(tmp_path / "data")})
-    create_table(ns, {}, ["t"], _id_table(), mode="create")
+    create_table(ns, {}, ["t"], _id_table(), mode="create", registry=None)
     if branch is not None:
         open_dataset(ns, {}, ["t"]).create_branch(branch, None)
 

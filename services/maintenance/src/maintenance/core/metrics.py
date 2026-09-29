@@ -71,6 +71,15 @@ _tables_parked = _meter.create_counter(
 #: Datasets whose manifest carries reader flag 256 (mixed data file versions). Its own series because
 #: `_refused` cannot page on one table: measured 2026-09-24, 45.3-46.5% of every sweep is already refused.
 #: The flag is sticky and the table is unopenable by pylance 11 and lancedb 0.34, so one is an incident.
+#: [[LH-279]] Declared bases the pre-pass judged sanctioned by NOTHING — not the referrer's own root,
+#: not configured, not in the catalog's record. Each protects nothing; the count is how an operator
+#: learns a writer planted one. Its own series because nothing was refused: the finding is the table
+#: that declares the base, while the table it names is maintained as usual.
+_unrecorded_bases = _meter.create_counter(
+    "compaction.bases.unrecorded",
+    unit="{base}",
+    description="Declared base paths the maintenance pre-pass found sanctioned by nothing, counted each tick they are seen.",
+)
 _mixed_file_versions = _meter.create_counter(
     "compaction.datasets.mixed_file_versions",
     unit="{dataset}",
@@ -312,6 +321,15 @@ def record_mixed_file_versions(datasets: int) -> None:
     `increase()` sees that mix as a step from 0 rather than as a series appearing.
     """
     _mixed_file_versions.add(datasets)
+
+
+def record_unrecorded_bases(bases: int) -> None:
+    """Record how many declared bases the pre-pass found sanctioned by nothing.
+
+    Always emits, including zero, for `record_mixed_file_versions`' reason: a plant must read as a step
+    from 0, not as a series appearing.
+    """
+    _unrecorded_bases.add(bases)
 
 
 def record_plan_refused(requests: int) -> None:

@@ -50,7 +50,7 @@ async def test_an_executed_unit_logs_its_elapsed_time(monkeypatch: pytest.Monkey
 
     settings = MaintenanceSettings.model_validate({"s3_bucket": "b"})
     monkeypatch.setattr(work_mod, "emit_sweep_lineage", _noop)
-    monkeypatch.setattr(work_mod.base_refs, "sibling_base_refs", lambda uri, opts: work_mod.base_refs.BaseRefs())
+    monkeypatch.setattr(work_mod.base_refs, "sibling_base_refs", lambda uri, opts, *, configured, record_of: work_mod.base_refs.BaseRefs())
     monkeypatch.setattr(work_mod, "execute_unit", lambda *a, **k: DatasetResult(uri="s3://b/t.lance"))
 
     with caplog.at_level(logging.INFO):
@@ -83,7 +83,7 @@ async def test_the_clock_covers_the_WHOLE_delivery_to_ack_window(monkeypatch: py
     settings = MaintenanceSettings.model_validate({"s3_bucket": "b"})
     monkeypatch.setattr(work_mod, "emit_sweep_lineage", _noop)
 
-    def _slow_protection_read(uri: str, opts: Any) -> Any:
+    def _slow_protection_read(uri: str, opts: Any, *, configured: Any, record_of: Any) -> Any:
         time.sleep(0.15)
         return work_mod.base_refs.BaseRefs()
 
@@ -114,7 +114,7 @@ async def test_a_unit_that_FAILS_still_reports_its_cost(monkeypatch: pytest.Monk
 
     settings = MaintenanceSettings.model_validate({"s3_bucket": "b"})
     monkeypatch.setattr(work_mod, "emit_sweep_lineage", _noop)
-    monkeypatch.setattr(work_mod.base_refs, "sibling_base_refs", lambda uri, opts: work_mod.base_refs.BaseRefs())
+    monkeypatch.setattr(work_mod.base_refs, "sibling_base_refs", lambda uri, opts, *, configured, record_of: work_mod.base_refs.BaseRefs())
     monkeypatch.setattr(work_mod, "execute_unit", lambda *a, **k: DatasetResult(uri="s3://b/t.lance", error="maintain: connection reset", error_type="OSError"))
 
     with caplog.at_level(logging.INFO):

@@ -47,6 +47,7 @@ from catalog.core.formats import reject_unsupported_format
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.core.lineage_emit import COMPACT_TABLE, DELETE, INSERT, MERGE_INSERT, UPDATE, merge_source_pin, parse_run_facets
 from catalog.core.modes import CreateMode, InsertMode
+from catalog.core.namespace import judged_native_version
 from catalog.core.serialization import dump
 from catalog.schemas import (
     CommitFragmentsRequest,
@@ -690,11 +691,14 @@ def _reader(token: object) -> str:
 
 
 @router.post("/{id}/query", responses=_serves(ARROW_FILE), response_class=ArrowFileResponse)
-def query_table(id: str, body: QueryTableRequest, ns: NamespaceDep, settings: SettingsDep, token: CurrentToken = None) -> Response:
+def query_table(id: str, body: QueryTableRequest, ns: NamespaceDep, settings: SettingsDep, so: StorageOptionsDep, token: CurrentToken = None) -> Response:
     """Run a query and return matching rows as an Arrow-IPC file — wraps ``query_table``."""
     body.id = reconcile_body_id(parse_identifier(id, settings.delimiter), body.id)
     dataplane.refuse_a_branch_this_door_cannot_honour(body.branch, door="query_table")
     dataplane.refuse_an_unbounded_boolean_chain(body.filter, field="filter")
+    # PINNED TO THE VERSION WHOSE BASES WERE JUDGED ([[LH-279]]): the native query opens the table inside
+    # Rust, where a planted base answered with another table's rows (lh279 m2).
+    body.version = judged_native_version(ns, so, list(body.id or []), version=body.version)
     response = native.call(ns, "query_table", body)
     if not isinstance(response, QueryTableResponse) or not isinstance(response.data, bytes):
         raise TypeError(f"query_table must answer a QueryTableResponse carrying Arrow bytes, got {type(response).__name__}: {response!r:.200}")
@@ -803,7 +807,9 @@ def count_table_rows(
 
 
 @router.post("/{id}/explain_plan")
-def explain_table_query_plan(id: str, body: ExplainTableQueryPlanRequest, ns: NamespaceDep, settings: SettingsDep, token: CurrentToken = None) -> Response:
+def explain_table_query_plan(
+    id: str, body: ExplainTableQueryPlanRequest, ns: NamespaceDep, settings: SettingsDep, so: StorageOptionsDep, token: CurrentToken = None
+) -> Response:
     """Return the logical query plan — ``explain_table_query_plan``; plain text."""
     body.id = reconcile_body_id(parse_identifier(id, settings.delimiter), body.id)
     # BOTH CHANNELS. `ExplainTableQueryPlanRequest` nests the whole query, so a branch can arrive at
@@ -812,6 +818,9 @@ def explain_table_query_plan(id: str, body: ExplainTableQueryPlanRequest, ns: Na
     # channels reads as a guard while being none.
     dataplane.refuse_a_branch_this_door_cannot_honour(body.branch or (body.query.branch if body.query else None), door="explain_table_query_plan")
     dataplane.refuse_an_unbounded_boolean_chain(body.query.filter if body.query else None, field="query.filter")
+    judged = judged_native_version(ns, so, list(body.id or []), version=body.query.version if body.query else None)
+    if body.query is not None:
+        body.query.version = judged
     result = native.call(ns, "explain_table_query_plan", body)
     # A JSON-ENCODED STRING, per `components.responses`. It answered `text/plain`, which the 0.12.0
     # reqwest client rejects outright (the Python urllib3 client tolerates it, which is why rask's own
@@ -826,11 +835,12 @@ def explain_table_query_plan(id: str, body: ExplainTableQueryPlanRequest, ns: Na
 
 
 @router.post("/{id}/analyze_plan")
-def analyze_table_query_plan(id: str, body: AnalyzeTableQueryPlanRequest, ns: NamespaceDep, settings: SettingsDep) -> Response:
+def analyze_table_query_plan(id: str, body: AnalyzeTableQueryPlanRequest, ns: NamespaceDep, settings: SettingsDep, so: StorageOptionsDep) -> Response:
     """Return the analyzed query plan with runtime metrics — ``analyze_table_query_plan``; plain text."""
     body.id = reconcile_body_id(parse_identifier(id, settings.delimiter), body.id)
     dataplane.refuse_a_branch_this_door_cannot_honour(body.branch, door="analyze_table_query_plan")
     dataplane.refuse_an_unbounded_boolean_chain(body.filter, field="filter")
+    body.version = judged_native_version(ns, so, list(body.id or []), version=body.version)
     result = native.call(ns, "analyze_table_query_plan", body)
     # A JSON-ENCODED STRING, per `components.responses`. It answered `text/plain`, which the 0.12.0
     # reqwest client rejects outright (the Python urllib3 client tolerates it, which is why rask's own

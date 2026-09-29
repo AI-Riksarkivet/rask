@@ -63,6 +63,9 @@ SEED = {
     "_gates/acme.json": b'{"require_human": false}',
     "_transforms/acme/lane.json": b'{"task": "stage-transform"}',
     "_tasks/stage-transform.json": b'{"engine": "ray"}',
+    # [[LH-279]] The catalog's base record: without it every table declaring a recorded foreign base is
+    # refused by the vend and read doors, and a restored clone source loses its protection.
+    "_bases/0123456789abcdef01234567.json": b'{"location": "acme-bucket/silver", "entries": []}',
     "_control_outbox/pending-0001.json": b'{"action": "grant_added"}',
     "_lineage_outbox/pending-0002.json": b'{"eventType": "COMPLETE"}',
 }

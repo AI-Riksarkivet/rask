@@ -11,16 +11,18 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import UTC, datetime
+from functools import partial
 from typing import Final, Protocol
 
 import lance
 
 from lineage.core.config import shared_lance_session
 from lineage.schemas import DatasetSummary, ReconcileState, ReconcileStatus
-from service_kit.lakehouse import blobs
-from service_kit.lakehouse.features import unsupported_features_from_open_error
+from service_kit.lakehouse import base_registry, blobs
+from service_kit.lakehouse.base_refs import normalise
+from service_kit.lakehouse.features import manifest_base_path_refs, unsupported_features_from_open_error
 from service_kit.lakehouse.schema import SchemaFields, facet_fields
 from service_kit.lancekit.absence import reads_as_absent
 from service_kit.lancekit.versions import committed_at
@@ -136,6 +138,14 @@ def read_storage_versions(uri: str, storage_options: dict[str, str]) -> list[int
 #: mistake this whole classifier exists to stop making.
 INERT_UNKNOWN: Final = "<inert>"
 
+#: What an unnamed version reports when its data counters match the version below it but its declared
+#: BASES do not ([[LH-279]]). An `UpdateBases` commit changes no counter — measured on pylance 12.0.0
+#: (lh279 p2/p3) it answered :data:`INERT_UNKNOWN` exactly like compaction's `ReserveFragments`, and so
+#: was laundered as maintenance — yet it adds or repoints a base (m4) a later fragment can read another
+#: table's bytes through. In NEITHER :data:`MAINTENANCE_OPERATIONS` nor :data:`DATA_OPERATIONS`: it is
+#: reported as a hole and never back-filled as a write.
+BASES_CHANGED: Final = "<bases-changed>"
+
 #: The per-version counters ``dataset.versions()`` already carries. Read from the call
 #: :func:`read_storage_versions` makes anyway, so proving a version inert costs no extra I/O.
 _COUNTER_KEYS: Final = ("total_rows", "total_data_files", "total_deletion_files", "total_deletion_file_rows")
@@ -167,9 +177,10 @@ def read_version_operations(uri: str, storage_options: dict[str, str], versions:
     EXCEPT WHEN THE VERSION IS PROVABLY INERT. Measured 2026-09-11, one ``compact_files()`` commits TWO
     versions — an unmodelled one whose counters are identical to its predecessor's, then the ``Rewrite``
     — so treating every unnamed version as reportable makes each compaction a permanent finding. A
-    version whose ``total_rows``, data files and deletion counters all match the version below it wrote
-    no data whatever its operation is called, and answers :data:`INERT_UNKNOWN`. Any counter moving, or a
-    predecessor whose manifest is gone, keeps the honest ``None``.
+    version whose ``total_rows``, data files and deletion counters all match the version below it, AND
+    whose declared bases match too, wrote no data whatever its operation is called, and answers
+    :data:`INERT_UNKNOWN`. Equal counters with different bases answer :data:`BASES_CHANGED`. Any counter
+    moving, or a predecessor whose manifest is gone, keeps the honest ``None``.
     """
     try:
         dataset = lance.dataset(uri, storage_options=storage_options, session=shared_lance_session())
@@ -192,10 +203,54 @@ def read_version_operations(uri: str, storage_options: dict[str, str], versions:
         op = getattr(txn, "operation", None)
         if op is None or type(op) is lance.LanceOperation.BaseOperation:
             here, below = counters.get(version), counters.get(version - 1)
-            operations[version] = INERT_UNKNOWN if here is not None and here == below else None
+            operations[version] = _unnamed_with_equal_counters(dataset, version) if here is not None and here == below else None
             continue
         operations[version] = type(op).__name__
     return operations
+
+
+def _declared_bases(dataset: lance.LanceDataset, version: int) -> frozenset[tuple[str, bool]]:
+    """The bases ``version`` declares, by normalised path and root-ness — what a repoint changes."""
+    return frozenset((normalise(ref.path), ref.is_dataset_root) for ref in manifest_base_path_refs(dataset.checkout_version(version)))
+
+
+def _unnamed_with_equal_counters(dataset: lance.LanceDataset, version: int) -> str | None:
+    """:data:`INERT_UNKNOWN` when the bases match the version below too, :data:`BASES_CHANGED` when they do not.
+
+    Paid only on a hole whose counters already matched, off the handle the caller opened. ``None`` when
+    either version's bases cannot be read: an unread fact must not certify a version inert.
+    """
+    try:
+        here, below = _declared_bases(dataset, version), _declared_bases(dataset, version - 1)
+    except BaseException as exc:
+        _swallow_dataset_error(exc)
+        return None
+    return INERT_UNKNOWN if here == below else BASES_CHANGED
+
+
+def read_unrecorded_bases(uri: str, storage_options: dict[str, str], *, registry: base_registry.BaseRegistry, configured: Sequence[str]) -> list[str] | None:
+    """The bases the dataset at ``uri`` declares NOW that nothing sanctions; ``None`` when that cannot be said ([[LH-279]]).
+
+    Judged by the one predicate the catalog's doors use
+    (:func:`service_kit.lakehouse.base_registry.judge_bases`): inside the table's own root, inside a
+    configured external blob base, or in the catalog's base record for it. The record is read only when a
+    base needs it. MAIN only — the graph's ``dataSource`` names main, and a plant on ``tree/<b>`` is the
+    catalog's read doors' to refuse.
+
+    ``None`` — an unreadable dataset, or a record that exists and cannot be read — finds NOTHING, the rule
+    the ``governed`` axis follows: absent evidence must not become a verdict about every table.
+    """
+    try:
+        refs = manifest_base_path_refs(lance.dataset(uri, storage_options=storage_options, session=shared_lance_session()))
+    except BaseException as exc:
+        _swallow_dataset_error(exc)
+        return None
+    try:
+        judged = base_registry.judge_bases(uri, refs, configured=configured, load_record=partial(base_registry.read_base_record, registry, uri))
+    except Exception as exc:  # noqa: BLE001 — an unreadable record degrades this axis, never the sweep
+        log.warning("lineage_reconcile_base_record_unreadable", extra={"uri": uri, "error": str(exc)[:300]})
+        return None
+    return sorted({normalise(judgement.ref.path) for judgement in judged if judgement.standing is base_registry.BaseStanding.UNRECORDED})
 
 
 def read_dangling_blob_columns(uri: str, storage_options: dict[str, str]) -> list[str]:
@@ -350,6 +405,7 @@ async def reconcile_all(
     read_age: Callable[[str], Awaitable[float | None]] | None = None,
     read_versions: Callable[[str], Awaitable[list[int] | None]] | None = None,
     read_operations: Callable[[str, list[int]], Awaitable[dict[int, str | None]]] | None = None,
+    read_unrecorded_bases: Callable[[str], Awaitable[list[str] | None]] | None = None,
     freshness_budget_hours: float = 0,
     declared: dict[str, list[str]] | None = None,
     governed: set[str] | None = None,
@@ -376,6 +432,10 @@ async def reconcile_all(
     skipped dataset — it reported 1,007 where the true answer was 127. An out-parameter rather than a
     second ``list_datasets()`` in the caller, because two listings of a live graph can disagree and the
     difference between them would surface as a table that appeared or vanished between two queries.
+
+    ``read_unrecorded_bases`` (optional, same threadpool wrapping) is the BASE-DRIFT axis ([[LH-279]]): the
+    bases a readable dataset's current manifest declares that nothing sanctions, onto
+    ``unrecorded_bases``. Only run when a storage version exists; ``None`` from it finds nothing.
 
     ``governed`` (optional) is the set of table ids anyone holds an authorization tuple on. A dataset
     absent from it is classified UNGOVERNED and skips every axis below, because those axes all reason
@@ -453,6 +513,8 @@ async def reconcile_all(
         )
         if storage_version is not None and read_dangling is not None:
             status.dangling_blob_columns = await read_dangling(uri)
+        if storage_version is not None and read_unrecorded_bases is not None:
+            status.unrecorded_bases = await read_unrecorded_bases(uri) or []
         # Freshness (data-contract gap #2): only when a budget is configured AND storage is readable —
         # an unreadable dataset is already the version check's finding, and budget 0 means the axis is
         # off (no probe at all, so default deployments pay nothing).

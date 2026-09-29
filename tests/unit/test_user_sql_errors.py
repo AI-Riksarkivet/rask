@@ -37,7 +37,7 @@ from catalog.services.dataplane import create_table, delete_from_table, update_t
 def table(tmp_path: Path) -> LanceNamespace:
     """A two-column table (`id`, `v`) in a real dir namespace."""
     ns = connect("dir", {"root": str(tmp_path)})
-    create_table(ns, {}, ["t"], pa.table({"id": [1, 2, 3], "v": ["a", "b", "c"]}), mode="create")
+    create_table(ns, {}, ["t"], pa.table({"id": [1, 2, 3], "v": ["a", "b", "c"]}), mode="create", registry=None)
     return ns
 
 

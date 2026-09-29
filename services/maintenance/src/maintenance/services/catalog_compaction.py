@@ -90,6 +90,23 @@ def table_not_governed(response: httpx.Response, *, table_id: str) -> TableNotGo
     return TableNotGoverned(f"the catalog answered 404 {ErrorCode(code).name} (code {code}) for {table_id}: {detail}")
 
 
+def table_in_invalid_state(response: httpx.Response, *, table_id: str) -> MaintenanceDenied | None:
+    """`MaintenanceDenied` when ``response`` is the catalog's 409 ``InvalidTableState`` (code 19); ``None`` otherwise.
+
+    [[LH-279]] The catalog answers 19 for a table whose manifest declares a base it never sanctioned:
+    maintaining it would rewrite bytes read through that base into the table's own root, and a
+    credential for it would carry READ on the base. So it stops the unit exactly as a 403 does — and never
+    reaches the vend client's "unavailable" arm, whose fallback signs the rewrite with the ambient key.
+    Shared by the vend and plan clients so the two doors cannot disagree about it.
+    """
+    if response.status_code != 409:
+        return None
+    code, detail = _problem(response)
+    if code != ErrorCode.INVALID_TABLE_STATE:
+        return None
+    return MaintenanceDenied(f"the catalog refused {table_id} as in an invalid state (409 code {code}): {detail}")
+
+
 def plan_via_catalog(table_id: str, policy: dict[str, Any], *, settings: MaintenanceSettings) -> PlannedWork:
     """Ask the catalog which fragments should merge. Raises `CompactionPlaneUnavailable` when the door cannot answer.
 
@@ -119,6 +136,8 @@ def plan_via_catalog(table_id: str, policy: dict[str, Any], *, settings: Mainten
     if 400 <= response.status_code < 500 and response.status_code not in _RETRY_LATER:
         if (absent := table_not_governed(response, table_id=table_id)) is not None:
             raise absent
+        if (invalid := table_in_invalid_state(response, table_id=table_id)) is not None:
+            raise invalid
         _, detail = _problem(response)
         log.error("compaction_plan_refused", extra={"table_id": table_id, "status": response.status_code, "detail": detail})
         raise CompactionPlanRefused(

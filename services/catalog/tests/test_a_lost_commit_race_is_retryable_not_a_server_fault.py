@@ -50,7 +50,7 @@ WRITERS = 6
 @pytest.fixture
 def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace is runtime-only
     namespace = connect("dir", {"root": str(tmp_path / "data")})
-    create_table(namespace, {}, TABLE_ID, pa.table({"id": pa.array([1, 2, 3], pa.int64())}, schema=SCHEMA), mode="create")
+    create_table(namespace, {}, TABLE_ID, pa.table({"id": pa.array([1, 2, 3], pa.int64())}, schema=SCHEMA), mode="create", registry=None)
     return namespace
 
 

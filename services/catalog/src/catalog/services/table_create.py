@@ -62,6 +62,7 @@ from catalog.services import dataplane, native
 from service_kit.control_emit import ControlEmitter, emit_control
 from service_kit.governed import fga
 from service_kit.governed.oidc import IDToken
+from service_kit.lakehouse import base_registry
 from service_kit.lakehouse.objectfs import StorageOptions
 
 
@@ -233,6 +234,9 @@ async def create_governed_table(
     existok_kept_existing = pre_existed and mode is CreateMode.EXIST_OK
     if overwrote_existing:
         await fga_deps.require_can_drop_table(client, settings, token, segments=segments)
+    # [[LH-279]] Where the create records the bases it registers — the catalog's control root, written
+    # with the catalog's own credential and never through a vend.
+    registry = base_registry.BaseRegistry(control_root=settings.registry_root, storage_options=settings.storage_options())
     # ``dataplane.create_table`` picks the write path by schema off the event loop: a blob-v2 column needs
     # file format 2.2 (native create pins 2.1 and rejects it) → a direct 2.2 write; else → native create. (§9)
     response: CreateTableResponse = await run_in_threadpool(
@@ -253,6 +257,7 @@ async def create_governed_table(
         base_credential_refs=settings.multibase_base_credential_ref_map,
         secret_store=settings.dapr_secret_store,
         secret_field=settings.dapr_secret_s3_field,
+        registry=registry,
     )
     # An Overwrite that replaced an EXISTING table (owner-authorized above) resets its ACL: revoke the prior
     # incarnation's grants (any reader/writer/validator that must not survive onto the reused id) before
@@ -280,6 +285,10 @@ async def create_governed_table(
     # skips the compensation (there is nothing this request wrote to compensate).
     async def _undo_create() -> None:
         await run_in_threadpool(native.call, ns, "drop_table", DropTableRequest(id=segments))
+        # The bytes are gone with the table, so its base record goes too: a record that outlives the
+        # manifest it describes would vouch for bases nothing declares.
+        if response.location:
+            await run_in_threadpool(base_registry.forget_base_record, registry, response.location)
 
     # The revoke-then-drop pair moved into `seed_ownership_or_compensate` (diff2 F3) because it was
     # ONE try block here: the revoke is an OpenFGA call, so on the outage this compensation exists

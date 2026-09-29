@@ -33,6 +33,7 @@ from fastapi.testclient import TestClient
 from catalog.api.dependencies import get_namespace, get_settings, get_storage_options
 from catalog.api.v1.endpoints import maintenance as door
 from catalog.core.config import Settings
+from service_kit.lakehouse import base_refs as sk_base_refs
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 
@@ -85,7 +86,7 @@ def _app(settings: Settings, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) ->
         uri = "s3://warehouse/aa3bed10_ns$events"
 
     monkeypatch.setattr(door, "open_dataset", lambda ns, so, segments, **kwargs: _Ds())
-    monkeypatch.setattr(door.base_refs, "sibling_base_refs", lambda uri, so: door.base_refs.BaseRefs())
+    monkeypatch.setattr(sk_base_refs, "sibling_base_refs", lambda uri, so, *, configured, record_of: sk_base_refs.BaseRefs())
     application.dependency_overrides[get_settings] = lambda: settings
     application.dependency_overrides[get_namespace] = lambda: object()
     application.dependency_overrides[get_storage_options] = lambda: {}
@@ -142,7 +143,9 @@ def test_the_protection_verdict_rides_the_unit(monkeypatch: pytest.MonkeyPatch, 
     from service_kit.lakehouse import base_refs
     from service_kit.lakehouse.work_items import DatasetWorkItem
 
-    monkeypatch.setattr(door.base_refs, "sibling_base_refs", lambda uri, so: base_refs.BaseRefs(protected={base_refs.normalise(uri)}))
+    monkeypatch.setattr(
+        sk_base_refs, "sibling_base_refs", lambda uri, so, *, configured, record_of: sk_base_refs.BaseRefs(protected={sk_base_refs.normalise(uri)})
+    )
     queued.post("/management/v1/table/ns$events/maintenance/compact", json={})
     item = DatasetWorkItem.model_validate_json(published.calls[0]["data"])
     assert item.protected_by == base_refs.normalise("s3://warehouse/aa3bed10_ns$events")

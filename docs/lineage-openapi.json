@@ -1396,6 +1396,13 @@
             ],
             "title": "Unreadable Reason"
           },
+          "unrecorded_bases": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Unrecorded Bases",
+            "type": "array"
+          },
           "versions_without_lineage": {
             "items": {
               "type": "integer"
@@ -2074,33 +2081,47 @@
                 "description": "A RunEvent, or a DatasetEvent for a dataset change no job performed.",
                 "oneOf": [
                   {
-                    "$defs": {
-                      "Dataset": {
-                        "additionalProperties": true,
-                        "description": "An OpenLineage dataset (a Lance table / source); ``name`` is the catalog id.\n\n``facets`` carries the standard OpenLineage dataset facets; we read several:\n``version`` (which Lance version a run produced), ``dataSource`` (where the table\nphysically lives \u2014 the S3-compatible location), and ``tags`` (governance labels).\n\nThe spec splits dataset metadata across THREE slots, by the facet's base type: plain\n``DatasetFacet``s ride ``facets``, ``InputDatasetFacet``s ride ``inputFacets`` on an input, and\n``OutputDatasetFacet``s ride ``outputFacets`` on an output. Two facets we consume are not plain\n``DatasetFacet``s \u2014 ``OutputStatisticsOutputDatasetFacet`` is an output facet and\n``DataQualityAssertionsDatasetFacet`` is an input facet \u2014 so the official ``openlineage-python``\nclient (and therefore Spark/Airflow/dbt/Marquez producers, and our own ``lineage.seed``) serialises\nthem into the typed slots, NOT into ``facets``. Reading only ``facets`` silently dropped them from\nevery such producer; :meth:`facet` looks in all three.",
-                        "properties": {
-                          "facets": {
-                            "additionalProperties": true,
-                            "title": "Facets",
-                            "type": "object"
-                          },
-                          "name": {
-                            "title": "Name",
-                            "type": "string"
-                          },
-                          "namespace": {
-                            "title": "Namespace",
-                            "type": "string"
-                          }
-                        },
-                        "required": [
-                          "namespace",
-                          "name"
-                        ],
-                        "title": "Dataset",
-                        "type": "object"
+                    "additionalProperties": true,
+                    "description": "An OpenLineage run event (START/RUNNING/COMPLETE/FAIL/ABORT) with its inputs and outputs.",
+                    "properties": {
+                      "eventTime": {
+                        "title": "Eventtime",
+                        "type": "string"
                       },
-                      "Job": {
+                      "eventType": {
+                        "title": "Eventtype",
+                        "type": "string"
+                      },
+                      "inputs": {
+                        "items": {
+                          "additionalProperties": true,
+                          "description": "An OpenLineage dataset (a Lance table / source); ``name`` is the catalog id.\n\n``facets`` carries the standard OpenLineage dataset facets; we read several:\n``version`` (which Lance version a run produced), ``dataSource`` (where the table\nphysically lives \u2014 the S3-compatible location), and ``tags`` (governance labels).\n\nThe spec splits dataset metadata across THREE slots, by the facet's base type: plain\n``DatasetFacet``s ride ``facets``, ``InputDatasetFacet``s ride ``inputFacets`` on an input, and\n``OutputDatasetFacet``s ride ``outputFacets`` on an output. Two facets we consume are not plain\n``DatasetFacet``s \u2014 ``OutputStatisticsOutputDatasetFacet`` is an output facet and\n``DataQualityAssertionsDatasetFacet`` is an input facet \u2014 so the official ``openlineage-python``\nclient (and therefore Spark/Airflow/dbt/Marquez producers, and our own ``lineage.seed``) serialises\nthem into the typed slots, NOT into ``facets``. Reading only ``facets`` silently dropped them from\nevery such producer; :meth:`facet` looks in all three.",
+                          "properties": {
+                            "facets": {
+                              "additionalProperties": true,
+                              "title": "Facets",
+                              "type": "object"
+                            },
+                            "name": {
+                              "title": "Name",
+                              "type": "string"
+                            },
+                            "namespace": {
+                              "title": "Namespace",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "namespace",
+                            "name"
+                          ],
+                          "title": "Dataset",
+                          "type": "object"
+                        },
+                        "title": "Inputs",
+                        "type": "array"
+                      },
+                      "job": {
                         "additionalProperties": true,
                         "description": "The compute job that produced a run \u2014 for us a Ray job (Ray is the compute engine).\n\n``facets`` carries the standard ``ownership`` (who owns the job) and ``jobType``\n(``processingType`` BATCH/STREAMING, ``integration`` = RAY, ``jobType`` = ETL /\nTRANSFORMATION) facets.",
                         "properties": {
@@ -2125,7 +2146,47 @@
                         "title": "Job",
                         "type": "object"
                       },
-                      "Run": {
+                      "outputs": {
+                        "items": {
+                          "additionalProperties": true,
+                          "description": "An OpenLineage dataset (a Lance table / source); ``name`` is the catalog id.\n\n``facets`` carries the standard OpenLineage dataset facets; we read several:\n``version`` (which Lance version a run produced), ``dataSource`` (where the table\nphysically lives \u2014 the S3-compatible location), and ``tags`` (governance labels).\n\nThe spec splits dataset metadata across THREE slots, by the facet's base type: plain\n``DatasetFacet``s ride ``facets``, ``InputDatasetFacet``s ride ``inputFacets`` on an input, and\n``OutputDatasetFacet``s ride ``outputFacets`` on an output. Two facets we consume are not plain\n``DatasetFacet``s \u2014 ``OutputStatisticsOutputDatasetFacet`` is an output facet and\n``DataQualityAssertionsDatasetFacet`` is an input facet \u2014 so the official ``openlineage-python``\nclient (and therefore Spark/Airflow/dbt/Marquez producers, and our own ``lineage.seed``) serialises\nthem into the typed slots, NOT into ``facets``. Reading only ``facets`` silently dropped them from\nevery such producer; :meth:`facet` looks in all three.",
+                          "properties": {
+                            "facets": {
+                              "additionalProperties": true,
+                              "title": "Facets",
+                              "type": "object"
+                            },
+                            "name": {
+                              "title": "Name",
+                              "type": "string"
+                            },
+                            "namespace": {
+                              "title": "Namespace",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "namespace",
+                            "name"
+                          ],
+                          "title": "Dataset",
+                          "type": "object"
+                        },
+                        "title": "Outputs",
+                        "type": "array"
+                      },
+                      "producer": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "title": "Producer"
+                      },
+                      "run": {
                         "additionalProperties": true,
                         "description": "A single run of a job. ``facets.author`` carries the OIDC sub when present.",
                         "properties": {
@@ -2146,49 +2207,6 @@
                         "type": "object"
                       }
                     },
-                    "additionalProperties": true,
-                    "description": "An OpenLineage run event (START/RUNNING/COMPLETE/FAIL/ABORT) with its inputs and outputs.",
-                    "properties": {
-                      "eventTime": {
-                        "title": "Eventtime",
-                        "type": "string"
-                      },
-                      "eventType": {
-                        "title": "Eventtype",
-                        "type": "string"
-                      },
-                      "inputs": {
-                        "items": {
-                          "$ref": "#/$defs/Dataset"
-                        },
-                        "title": "Inputs",
-                        "type": "array"
-                      },
-                      "job": {
-                        "$ref": "#/$defs/Job"
-                      },
-                      "outputs": {
-                        "items": {
-                          "$ref": "#/$defs/Dataset"
-                        },
-                        "title": "Outputs",
-                        "type": "array"
-                      },
-                      "producer": {
-                        "anyOf": [
-                          {
-                            "type": "string"
-                          },
-                          {
-                            "type": "null"
-                          }
-                        ],
-                        "title": "Producer"
-                      },
-                      "run": {
-                        "$ref": "#/$defs/Run"
-                      }
-                    },
                     "required": [
                       "eventType",
                       "eventTime",
@@ -2199,8 +2217,10 @@
                     "type": "object"
                   },
                   {
-                    "$defs": {
-                      "Dataset": {
+                    "additionalProperties": true,
+                    "description": "An OpenLineage ``DatasetEvent`` \u2014 a dataset change that no job performed.\n\nThe spec calls it \"A Dataset sent within static metadata events\", which is exactly a catalog DDL\nchange: there is no run to name and nothing executed. Its ``\"not\": { \"required\": [\"job\", \"run\"] }``\nrefuses the two TOGETHER rather than either alone \u2014 `required` is satisfied only when every listed\nproperty is present, so a payload carrying just one passes the schema. This model refuses EITHER,\ndeliberately stricter: one of them is enough to make a static change look like something that ran. Emitting one as a ``RunEvent`` mints a Job node\nfor an operation nobody performed, and the ``/jobs`` governance fold makes that Job's output set an\naccess handle \u2014 so a phantom is an access-control object, not only untidy.\n\nTHE FORBIDDEN MEMBERS ARE REFUSED RATHER THAN IGNORED. ``extra=\"allow\"`` keeps this model\nforward-compatible with spec fields it does not read yet, and that same tolerance would accept a\n``run`` as an unread extra \u2014 re-admitting the phantom through the new door while every test here\npassed.\n\nIt answers ``run_id`` / ``inputs`` / ``outputs`` so the ingest authorizer needs no second\nimplementation: a static change amends no run and reads no input, and the dataset it changed is the\noutput the write check gates on.",
+                    "properties": {
+                      "dataset": {
                         "additionalProperties": true,
                         "description": "An OpenLineage dataset (a Lance table / source); ``name`` is the catalog id.\n\n``facets`` carries the standard OpenLineage dataset facets; we read several:\n``version`` (which Lance version a run produced), ``dataSource`` (where the table\nphysically lives \u2014 the S3-compatible location), and ``tags`` (governance labels).\n\nThe spec splits dataset metadata across THREE slots, by the facet's base type: plain\n``DatasetFacet``s ride ``facets``, ``InputDatasetFacet``s ride ``inputFacets`` on an input, and\n``OutputDatasetFacet``s ride ``outputFacets`` on an output. Two facets we consume are not plain\n``DatasetFacet``s \u2014 ``OutputStatisticsOutputDatasetFacet`` is an output facet and\n``DataQualityAssertionsDatasetFacet`` is an input facet \u2014 so the official ``openlineage-python``\nclient (and therefore Spark/Airflow/dbt/Marquez producers, and our own ``lineage.seed``) serialises\nthem into the typed slots, NOT into ``facets``. Reading only ``facets`` silently dropped them from\nevery such producer; :meth:`facet` looks in all three.",
                         "properties": {
@@ -2224,13 +2244,6 @@
                         ],
                         "title": "Dataset",
                         "type": "object"
-                      }
-                    },
-                    "additionalProperties": true,
-                    "description": "An OpenLineage ``DatasetEvent`` \u2014 a dataset change that no job performed.\n\nThe spec calls it \"A Dataset sent within static metadata events\", which is exactly a catalog DDL\nchange: there is no run to name and nothing executed. Its ``\"not\": { \"required\": [\"job\", \"run\"] }``\nrefuses the two TOGETHER rather than either alone \u2014 `required` is satisfied only when every listed\nproperty is present, so a payload carrying just one passes the schema. This model refuses EITHER,\ndeliberately stricter: one of them is enough to make a static change look like something that ran. Emitting one as a ``RunEvent`` mints a Job node\nfor an operation nobody performed, and the ``/jobs`` governance fold makes that Job's output set an\naccess handle \u2014 so a phantom is an access-control object, not only untidy.\n\nTHE FORBIDDEN MEMBERS ARE REFUSED RATHER THAN IGNORED. ``extra=\"allow\"`` keeps this model\nforward-compatible with spec fields it does not read yet, and that same tolerance would accept a\n``run`` as an unread extra \u2014 re-admitting the phantom through the new door while every test here\npassed.\n\nIt answers ``run_id`` / ``inputs`` / ``outputs`` so the ingest authorizer needs no second\nimplementation: a static change amends no run and reads no input, and the dataset it changed is the\noutput the write check gates on.",
-                    "properties": {
-                      "dataset": {
-                        "$ref": "#/$defs/Dataset"
                       },
                       "eventTime": {
                         "title": "Eventtime",

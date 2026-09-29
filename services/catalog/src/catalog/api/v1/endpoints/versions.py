@@ -33,11 +33,12 @@ from catalog.api.dependencies import FgaClientDep, NamespaceDep, SettingsDep, St
 from catalog.api.pagination import paginate_versions
 from catalog.api.rask_params import RaskFlag
 from catalog.api.security import CurrentToken
+from catalog.core.base_judge import BaseJudge
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
-from catalog.core.namespace import open_dataset
+from catalog.core.namespace import open_dataset_unchecked
 from catalog.services import dataplane, maintenance, native
 from service_kit.governed import fga
-from service_kit.lakehouse import base_refs, protection
+from service_kit.lakehouse import protection
 
 
 log = logging.getLogger(__name__)
@@ -243,13 +244,13 @@ def batch_delete_table_versions(
     canonical = fga.canonical_object_id(segments, delimiter=settings.delimiter)
     guard = protection.get_protection(settings.registry_root, settings.storage_options(), "table", canonical)
     fga_deps.require_not_protected(guard or {}, kind="table", obj_id=canonical, force=force)
-    ds = open_dataset(ns, so, segments, branch=body.branch)
+    ds = open_dataset_unchecked(ns, so, segments, branch=body.branch)
     ranges = [(r.start_version, r.end_version) for r in body.ranges]
     # Judged before the sibling scan, which opens every dataset beside this one, so a refused request
     # does no estate I/O. `delete_versions` judges again against the handle it deletes from.
     maintenance.versions_in_ranges(ranges, current=int(ds.version))
     location = str(getattr(ds, "uri", "") or "")
-    refs = base_refs.sibling_base_refs(location, so)
+    refs = BaseJudge.from_settings(settings).sibling_base_refs(location, so)
     if refs.unreadable:
         log.warning("version_delete_base_refs_incomplete", extra={"location": location, "unreadable": len(refs.unreadable)})
     deleted = maintenance.delete_versions(ds, ranges=ranges, branch=body.branch, protected=refs)

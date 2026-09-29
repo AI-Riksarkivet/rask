@@ -45,7 +45,7 @@ def test_plan_one_stamps_the_identity_it_derived(monkeypatch) -> None:
     monkeypatch.setattr(sweep, "_trash_exclusions", lambda settings, options: set())
     monkeypatch.setattr(sweep, "_load_policies", lambda settings, options: [])
     monkeypatch.setattr(sweep, "_resolve_plan", lambda *a, **k: sweep.DatasetPlan())
-    monkeypatch.setattr(sweep.base_refs, "sibling_base_refs", lambda u, o: sweep.base_refs.BaseRefs())
+    monkeypatch.setattr(sweep.base_refs, "sibling_base_refs", lambda u, o, *, configured, record_of: sweep.base_refs.BaseRefs())
 
     item = sweep.plan_one(uri, _settings())
     assert item is not None
@@ -59,7 +59,7 @@ def test_plan_one_leaves_the_identity_unset_when_it_cannot_derive_one(monkeypatc
     monkeypatch.setattr(sweep, "_trash_exclusions", lambda settings, options: set())
     monkeypatch.setattr(sweep, "_load_policies", lambda settings, options: [])
     monkeypatch.setattr(sweep, "_resolve_plan", lambda *a, **k: sweep.DatasetPlan())
-    monkeypatch.setattr(sweep.base_refs, "sibling_base_refs", lambda u, o: sweep.base_refs.BaseRefs())
+    monkeypatch.setattr(sweep.base_refs, "sibling_base_refs", lambda u, o, *, configured, record_of: sweep.base_refs.BaseRefs())
 
     item = sweep.plan_one(uri, _settings())
     assert item is not None

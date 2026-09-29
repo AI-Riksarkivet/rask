@@ -23,6 +23,11 @@ import pytest
 from lance_namespace import InvalidInputError, NamespaceNotFoundError
 
 from catalog.api import fga_deps
+from service_kit.lakehouse import base_registry
+
+
+#: A registry the cascade's record-forget may be pointed at: the double's drops name no location, so it is never read.
+_NO_RECORDS = base_registry.BaseRegistry(control_root="/nonexistent/control")
 
 
 class _RecordingNs:
@@ -40,8 +45,10 @@ class _RecordingNs:
         return type("R", (), {"model_fields_set": set()})()
 
     def drop_table(self, request: Any) -> Any:
+        from lance_namespace import DropTableResponse
+
         self.calls.append(f"drop_table:{'$'.join(request.id)}")
-        return type("R", (), {"model_fields_set": set()})()
+        return DropTableResponse(id=request.id)
 
     def drop_namespace(self, request: Any) -> Any:
         self.calls.append(f"drop_namespace:{'$'.join(request.id)}:{(request.behavior or 'restrict').lower()}")
@@ -99,7 +106,7 @@ def test_the_cascade_destroys_BOTTOM_UP_and_never_asks_the_backend_to() -> None:
         ("namespace", ["bronze", "inner"]),
         ("table", ["bronze", "inner", "t2"]),
     ]
-    asyncio.run(_destroy_subtree(ns, ["bronze"], descendants))
+    asyncio.run(_destroy_subtree(ns, ["bronze"], descendants, registry=_NO_RECORDS))
 
     assert "drop_table:bronze$pages" in ns.calls
     assert "drop_table:bronze$inner$t2" in ns.calls
@@ -123,5 +130,5 @@ def test_an_already_absent_child_is_DRIFT_not_an_error() -> None:
             raise TableNotFoundError("Table not found")
 
     ns: Any = _Vanishing()
-    asyncio.run(_destroy_subtree(ns, ["bronze"], [("table", ["bronze", "ghost"])]))
+    asyncio.run(_destroy_subtree(ns, ["bronze"], [("table", ["bronze", "ghost"])], registry=_NO_RECORDS))
     assert "drop_namespace:bronze:restrict" in ns.calls, "one absent child blocked the whole cascade"

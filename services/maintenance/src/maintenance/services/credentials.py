@@ -21,11 +21,13 @@ rewritten — no per-table credential can express a whole-estate read, and narro
 turn the guard off. Those are READS. The clause this serves is that no service holds a root key on a
 WRITE path, and the write path is here.
 
-A door that could not ANSWER degrades to the ambient credential and says so. Vending is a hardening, and
-a hardening that can fail a maintenance run turns an optional improvement into a new way to stop
-reclaiming disk. An answer refuses instead: a 401 about this service's own credential
-(`MaintenanceUnauthenticated`), and three about the id — a 403 (`MaintenanceDenied`), a 404 naming no table
-or namespace (`TableNotGoverned`), or a location that does not cover the dataset (`GovernedElsewhere`).
+A door that could not be ASKED — unreachable, or answering a body that does not parse — degrades to the
+ambient credential and says so. Vending is a hardening, and a hardening that can fail a maintenance run
+turns an optional improvement into a new way to stop reclaiming disk. An answer refuses instead: a 401
+about this service's own credential (`MaintenanceUnauthenticated`), and three about the id — a 403
+(`MaintenanceDenied`), a 404 naming no table or namespace (`TableNotGoverned`), or a location that does not
+cover the dataset (`GovernedElsewhere`). A 5xx is the door failing to decide (`VendUndecided`): the unit
+stops and is retried, because the catalog's own fail-closed refusals are 5xx too ([[LH-279]]).
 """
 
 from __future__ import annotations
@@ -43,9 +45,16 @@ from service_kit.lakehouse.table_locations import table_id_from_location
 if TYPE_CHECKING:
     from maintenance.core.config import MaintenanceSettings
 from maintenance.core.metrics import record_credential_tier
-from maintenance.services.catalog_compaction import table_not_governed
+from maintenance.services.catalog_compaction import table_in_invalid_state, table_not_governed
 from maintenance.services.catalog_identity import service_headers
-from maintenance.services.compaction_executor import GovernedElsewhere, MaintenanceDenied, MaintenanceUnauthenticated, denial_remedy, unauthenticated_remedy
+from maintenance.services.compaction_executor import (
+    GovernedElsewhere,
+    MaintenanceDenied,
+    MaintenanceUnauthenticated,
+    VendUndecided,
+    denial_remedy,
+    unauthenticated_remedy,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -99,8 +108,8 @@ def write_options_for(uri: str, settings: MaintenanceSettings, *, fallback: dict
     is not a weaker credential, it is a credential for a different tenant's data.
 
     Raises ``MaintenanceDenied`` (or its ``MaintenanceUnauthenticated`` or ``GovernedElsewhere``) or
-    ``TableNotGoverned`` where the door answered; each stops the caller's unit, which must not fall back
-    to ``fallback``.
+    ``TableNotGoverned`` where the door answered, and ``VendUndecided`` where it answered 5xx; each stops
+    the caller's unit, which must not fall back to ``fallback``.
 
     A DECLARED id is never repaired or second-guessed here. If a producer stamps a wrong one the vend
     fails on a table that does exist, which is a visible 403 in the log — whereas silently falling back
@@ -244,8 +253,18 @@ def _vend(table_id: str, settings: MaintenanceSettings) -> Vended | None:
         )
     if (absent := table_not_governed(response, table_id=table_id)) is not None:
         # AN ANSWER ABOUT THE ID, not an outage, so no fallback either: a trashed table, or with authorization
-        # off any unregistered id. Every other 4xx or 5xx below still degrades to the ambient credential.
+        # off any unregistered id.
         raise absent
+    if (invalid := table_in_invalid_state(response, table_id=table_id)) is not None:
+        # AN ANSWER ABOUT THE TABLE ([[LH-279]]): its manifest declares a base the catalog never sanctioned.
+        # Falling through to the generic arm below would sign this rewrite with the ambient key — the
+        # bypass of a refusal this client exists to prevent.
+        raise invalid
+    if response.status_code >= 500:
+        # ASKED AND UNDECIDED ([[LH-279]]): the catalog answers 503 when the base record it must judge cannot
+        # be read, and 500 when the store fails under it — the ambient key standing in for either signs a
+        # rewrite the door may be about to refuse. The unit stops and is retried.
+        raise VendUndecided(f"the catalog could not decide a write credential for {table_id} ({response.status_code}): {response.text[:200]}")
     if response.status_code >= 400:
         logger.info("credential vending unavailable for %s (%s)", table_id, response.status_code)
         return None

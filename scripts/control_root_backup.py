@@ -55,6 +55,7 @@ CONTROL_PREFIXES: tuple[str, ...] = (
     "_gates/",
     "_transforms/",
     "_tasks/",
+    "_bases/",
 )
 
 #: Queues, not records — and restoring a queue re-publishes what the estate already handled. Listed

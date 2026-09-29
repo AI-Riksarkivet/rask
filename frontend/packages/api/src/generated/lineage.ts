@@ -39,12 +39,17 @@ export interface paths {
         put?: never;
         /**
          * Replay Dlq
-         * @description Re-ingest one staged event on demand, then drop it — the manual twin of the reconcile relay's drain.
+         * @description Re-ingest one staged event on demand, re-publish it, then drop it — the manual twin of the reconcile relay's drain.
          *
-         *     A replay IS a re-ingest, so it carries the SAME authz as a fresh ingest: ``can_write_data`` on the
-         *     event's outputs + ``can_get_metadata`` on its inputs (:func:`enforce_output_authz`, fail-closed). The
-         *     ingest MERGEs on ``run_id`` (idempotent), the durable feed insert is ON CONFLICT DO NOTHING, and the drop
-         *     is only reached on success — a failed re-ingest leaves the object staged for the relay to retry.
+         *     A replay IS a re-ingest, so it carries the SAME authz as a fresh ingest, twice over: the relay's gate on
+         *     the staged bytes (:func:`enforce_bus_authz` — signature and stamped author) and the ingest door's on the
+         *     operator (:func:`enforce_output_authz` — ``can_write_data`` on the outputs, ``can_get_metadata`` on the
+         *     inputs, fail-closed). Both doors are idempotent: a run MERGEs on its run id, a static change on its
+         *     derived feed id, and the durable feed insert is ON CONFLICT DO NOTHING. The staged bytes are re-published
+         *     to the lineage topic exactly as the relay re-publishes them, so subscribers hear of the event as well as
+         *     the graph. The drop is only reached on success — a failed re-ingest or re-publish leaves the object
+         *     staged for the relay to retry, and a failed re-publish answers 503 because the graph is already
+         *     repaired.
          *
          *     Non-disclosure (audit 2026-07-20): replay must not become an oracle for events ``list_dlq`` hid. So a
          *     run whose datasets the caller cannot SEE (or an unparseable poison object, which the governed list also
@@ -69,7 +74,17 @@ export interface paths {
         put?: never;
         /**
          * Ingest Event
-         * @description Ingest one OpenLineage ``RunEvent`` into the lineage graph.
+         * @description Ingest one OpenLineage event — a ``RunEvent``, or a ``DatasetEvent`` for a change no job performed.
+         *
+         *     PARSED HERE RATHER THAN BY THE SIGNATURE, so this door and the bus door share ONE discriminator
+         *     (`models.parse_event`). Declaring the body as `RunEvent` is what made a static event 422 before
+         *     any handler ran: [[LIN-004]] moved catalog DDL onto `DatasetEvent` and taught only the bus. The
+         *     catalog's HTTP emitter is best-effort, so every create it sent lost its provenance in silence —
+         *     measured 2026-09-24, three creates, `{"events":[]}` in the durable feed, and a governance
+         *     assertion reading `expected lineage creator=..., got None`.
+         *
+         *     A body that is neither shape raises `RequestValidationError`, which `install_problem_handlers`
+         *     renders exactly as FastAPI's own 422 — the wire answer for a malformed payload is unchanged.
          *
          *     This is the OpenLineage HTTP-transport default path, so any OpenLineage producer
          *     (our emitter, Airflow, Spark, dbt, …) configured with ``OPENLINEAGE_URL`` pointed
@@ -925,35 +940,6 @@ export interface components {
             dataset: string;
         };
         /**
-         * Dataset
-         * @description An OpenLineage dataset (a Lance table / source); ``name`` is the catalog id.
-         *
-         *     ``facets`` carries the standard OpenLineage dataset facets; we read several:
-         *     ``version`` (which Lance version a run produced), ``dataSource`` (where the table
-         *     physically lives — the S3-compatible location), and ``tags`` (governance labels).
-         *
-         *     The spec splits dataset metadata across THREE slots, by the facet's base type: plain
-         *     ``DatasetFacet``s ride ``facets``, ``InputDatasetFacet``s ride ``inputFacets`` on an input, and
-         *     ``OutputDatasetFacet``s ride ``outputFacets`` on an output. Two facets we consume are not plain
-         *     ``DatasetFacet``s — ``OutputStatisticsOutputDatasetFacet`` is an output facet and
-         *     ``DataQualityAssertionsDatasetFacet`` is an input facet — so the official ``openlineage-python``
-         *     client (and therefore Spark/Airflow/dbt/Marquez producers, and our own ``lineage.seed``) serialises
-         *     them into the typed slots, NOT into ``facets``. Reading only ``facets`` silently dropped them from
-         *     every such producer; :meth:`facet` looks in all three.
-         */
-        Dataset: {
-            /** Facets */
-            facets?: {
-                [key: string]: unknown;
-            };
-            /** Name */
-            name: string;
-            /** Namespace */
-            namespace: string;
-        } & {
-            [key: string]: unknown;
-        };
-        /**
          * DatasetGovernance
          * @description A dataset's human-curated governance metadata (#49): tags + description, with last-writer
          *     attribution per field family (who/when persisted on the node — the auditable trail for curation).
@@ -1109,7 +1095,8 @@ export interface components {
          *
          *     A file's presence in the outbox means "committed write, lineage not yet confirmed delivered" — the
          *     at-risk set the reconcile relay drains. ``parseable=False`` marks a poison object (the relay would drop
-         *     it): its run_id is the filename, the rest is unknown.
+         *     it): its run_id is the filename, the rest is unknown. A catalog DDL change (a ``DatasetEvent``) names no
+         *     run, so it lists under its staged key too, with its event time and dataset but no type, job or inputs.
          */
         DlqEvent: {
             /** Event Time */
@@ -1248,26 +1235,6 @@ export interface components {
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
-        };
-        /**
-         * Job
-         * @description The compute job that produced a run — for us a Ray job (Ray is the compute engine).
-         *
-         *     ``facets`` carries the standard ``ownership`` (who owns the job) and ``jobType``
-         *     (``processingType`` BATCH/STREAMING, ``integration`` = RAY, ``jobType`` = ETL /
-         *     TRANSFORMATION) facets.
-         */
-        Job: {
-            /** Facets */
-            facets?: {
-                [key: string]: unknown;
-            };
-            /** Name */
-            name: string;
-            /** Namespace */
-            namespace: string;
-        } & {
-            [key: string]: unknown;
         };
         /**
          * JobSummary
@@ -1446,7 +1413,7 @@ export interface components {
          * @description Result of reconciling the lineage graph's recorded version against the on-disk Lance version.
          * @enum {string}
          */
-        ReconcileState: "in_sync" | "storage_ahead" | "graph_ahead" | "untracked" | "missing_on_storage" | "absent" | "unreadable" | "ungoverned";
+        ReconcileState: "in_sync" | "storage_ahead" | "graph_ahead" | "untracked" | "missing_on_storage" | "absent" | "unreadable" | "ungoverned" | "ungoverned_live" | "drop_observed";
         /**
          * ReconcileStatus
          * @description Whether a dataset's lineage-graph version matches its actual on-disk Lance version (#23).
@@ -1477,42 +1444,10 @@ export interface components {
             storage_version?: number | null;
             /** Unreadable Reason */
             unreadable_reason?: string | null;
+            /** Unrecorded Bases */
+            unrecorded_bases?: string[];
             /** Versions Without Lineage */
             versions_without_lineage?: number[];
-        };
-        /**
-         * Run
-         * @description A single run of a job. ``facets.author`` carries the OIDC sub when present.
-         */
-        Run: {
-            /** Facets */
-            facets?: {
-                [key: string]: unknown;
-            };
-            /** Runid */
-            runId: string;
-        } & {
-            [key: string]: unknown;
-        };
-        /**
-         * RunEvent
-         * @description An OpenLineage run event (START/RUNNING/COMPLETE/FAIL/ABORT) with its inputs and outputs.
-         */
-        RunEvent: {
-            /** Eventtime */
-            eventTime: string;
-            /** Eventtype */
-            eventType: string;
-            /** Inputs */
-            inputs?: components["schemas"]["Dataset"][];
-            job: components["schemas"]["Job"];
-            /** Outputs */
-            outputs?: components["schemas"]["Dataset"][];
-            /** Producer */
-            producer?: string | null;
-            run: components["schemas"]["Run"];
-        } & {
-            [key: string]: unknown;
         };
         /**
          * RunInput
@@ -1744,7 +1679,114 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["RunEvent"];
+                "application/json": {
+                    [key: string]: unknown;
+                } & (({
+                    /** Eventtime */
+                    eventTime: string;
+                    /** Eventtype */
+                    eventType: string;
+                    /** Inputs */
+                    inputs?: ({
+                        /** Facets */
+                        facets?: {
+                            [key: string]: unknown;
+                        };
+                        /** Name */
+                        name: string;
+                        /** Namespace */
+                        namespace: string;
+                    } & {
+                        [key: string]: unknown;
+                    })[];
+                    /**
+                     * Job
+                     * @description The compute job that produced a run — for us a Ray job (Ray is the compute engine).
+                     *
+                     *     ``facets`` carries the standard ``ownership`` (who owns the job) and ``jobType``
+                     *     (``processingType`` BATCH/STREAMING, ``integration`` = RAY, ``jobType`` = ETL /
+                     *     TRANSFORMATION) facets.
+                     */
+                    job: {
+                        /** Facets */
+                        facets?: {
+                            [key: string]: unknown;
+                        };
+                        /** Name */
+                        name: string;
+                        /** Namespace */
+                        namespace: string;
+                    } & {
+                        [key: string]: unknown;
+                    };
+                    /** Outputs */
+                    outputs?: ({
+                        /** Facets */
+                        facets?: {
+                            [key: string]: unknown;
+                        };
+                        /** Name */
+                        name: string;
+                        /** Namespace */
+                        namespace: string;
+                    } & {
+                        [key: string]: unknown;
+                    })[];
+                    /** Producer */
+                    producer?: string | null;
+                    /**
+                     * Run
+                     * @description A single run of a job. ``facets.author`` carries the OIDC sub when present.
+                     */
+                    run: {
+                        /** Facets */
+                        facets?: {
+                            [key: string]: unknown;
+                        };
+                        /** Runid */
+                        runId: string;
+                    } & {
+                        [key: string]: unknown;
+                    };
+                } & {
+                    [key: string]: unknown;
+                }) | ({
+                    /**
+                     * Dataset
+                     * @description An OpenLineage dataset (a Lance table / source); ``name`` is the catalog id.
+                     *
+                     *     ``facets`` carries the standard OpenLineage dataset facets; we read several:
+                     *     ``version`` (which Lance version a run produced), ``dataSource`` (where the table
+                     *     physically lives — the S3-compatible location), and ``tags`` (governance labels).
+                     *
+                     *     The spec splits dataset metadata across THREE slots, by the facet's base type: plain
+                     *     ``DatasetFacet``s ride ``facets``, ``InputDatasetFacet``s ride ``inputFacets`` on an input, and
+                     *     ``OutputDatasetFacet``s ride ``outputFacets`` on an output. Two facets we consume are not plain
+                     *     ``DatasetFacet``s — ``OutputStatisticsOutputDatasetFacet`` is an output facet and
+                     *     ``DataQualityAssertionsDatasetFacet`` is an input facet — so the official ``openlineage-python``
+                     *     client (and therefore Spark/Airflow/dbt/Marquez producers, and our own ``lineage.seed``) serialises
+                     *     them into the typed slots, NOT into ``facets``. Reading only ``facets`` silently dropped them from
+                     *     every such producer; :meth:`facet` looks in all three.
+                     */
+                    dataset: {
+                        /** Facets */
+                        facets?: {
+                            [key: string]: unknown;
+                        };
+                        /** Name */
+                        name: string;
+                        /** Namespace */
+                        namespace: string;
+                    } & {
+                        [key: string]: unknown;
+                    };
+                    /** Eventtime */
+                    eventTime: string;
+                    /** Producer */
+                    producer?: string | null;
+                } & {
+                    [key: string]: unknown;
+                }));
             };
         };
         responses: {
@@ -1755,7 +1797,7 @@ export interface operations {
                 };
                 content: {
                     "application/json": {
-                        [key: string]: string;
+                        [key: string]: string | null;
                     };
                 };
             };

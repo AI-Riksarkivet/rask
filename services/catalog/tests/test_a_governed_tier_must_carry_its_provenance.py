@@ -135,7 +135,7 @@ def registry_root(tmp_path: Path) -> str:
 
 def _client_over(payload: pa.Table, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, registry_root: str) -> Iterator[tuple[TestClient, LanceNamespace]]:
     namespace = connect("dir", {"root": str(tmp_path / "data")})
-    create_table(namespace, {}, TABLE_ID, payload, mode="create")
+    create_table(namespace, {}, TABLE_ID, payload, mode="create", registry=None)
     with TestClient(_app(namespace, monkeypatch, registry_root)) as c:
         yield c, namespace
 

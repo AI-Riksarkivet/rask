@@ -43,10 +43,13 @@ from collections.abc import Callable, Sequence
 from typing import Any, Final, Literal, Protocol, assert_never, cast, runtime_checkable
 from urllib.parse import urlsplit
 
-from lance_namespace import InvalidInputError
-from pydantic import BaseModel
+from lance_namespace import InvalidInputError, ServiceUnavailableError
+from pydantic import BaseModel, Field
 
+from catalog.core.base_judge import BaseJudge, require_sanctioned_bases
 from catalog.core.config import shared_lance_session
+from service_kit.lakehouse.base_refs import location_within
+from service_kit.lakehouse.features import BasePathRef
 from service_kit.lakehouse.objectfs import lance_storage_options
 
 
@@ -264,7 +267,13 @@ def _covered(table_location: str, base: str, sanctioned_bases: Sequence[str]) ->
     path, a spelling this module does not know. The policy is written in S3 ARNs, so a base it cannot
     address is a base a direct client could not reach, and the honest answer is the fallback rather than
     an exception out of the vend door. Fail-closed, the same direction ``sanctioned_bases`` defaults in.
+
+    A base inside the table's own location needs no grant of its own, whatever its spelling: the table
+    statement already covers it. That is every base a BRANCH handle declares — its parent's root — and
+    the vend doors judge the branch's own manifest ([[LH-279]]).
     """
+    if location_within(table_location, base):
+        return True
     try:
         return _base_is_sanctioned(split_s3_location(base), split_s3_location(table_location), sanctioned_bases)
     except ValueError:
@@ -307,8 +316,21 @@ def classified_columns(dataset: Any) -> tuple[str, ...]:
     return tuple(sorted(found))
 
 
-def dataset_facts(location: str, storage_options: dict[str, str]) -> tuple[int, tuple[str, ...], tuple[str, ...]]:
-    """``(current version, declared base paths, classified column names)`` from ONE root-cred manifest read.
+class VendFacts(BaseModel):
+    """What a vend needs to know about the ref it vends, read from ONE root-credential open."""
+
+    #: The client's optimistic-append base; 0 for a declared-only table with no readable dataset yet.
+    read_version: int = 0
+    #: Every base the ref's manifest declares, as the manifest spells it — what the base judge reads.
+    bases: list[BasePathRef] = Field(default_factory=list)
+    #: The same bases in the table location's own spelling — what the session policy grants.
+    base_uris: tuple[str, ...] = ()
+    #: Fields carrying :data:`CLASSIFICATION_KEY` ([[LH-058]]).
+    classified: tuple[str, ...] = ()
+
+
+def dataset_facts(location: str, storage_options: dict[str, str], *, branch: str = "") -> VendFacts:
+    """The version, declared bases and classified columns of the REF being vended, from ONE root-cred open.
 
     The version is the client's optimistic-append base; 0 for a declared-only/new table with no
     readable dataset yet. The bases are what the vended policy must also be able to READ — a table
@@ -316,8 +338,12 @@ def dataset_facts(location: str, storage_options: dict[str, str]) -> tuple[int, 
     the table prefix alone is scoped to less than the table is (§ H12, measured: 69 datasets a tick
     refused compaction because the maintainer could not probe a declared base).
 
-    Both facts come off the same handle deliberately: this read already existed for the version, and a
+    All three come off the same handle deliberately: this read already existed for the version, and a
     second open to learn the bases would double the manifest reads on every vend.
+
+    ``branch`` IS THE REF THE CREDENTIAL IS FOR ([[LH-279]]), so it is the ref these facts describe: a
+    base planted on ``tree/<b>`` is invisible from main (lh279 m7), and a branch credential read through
+    main's manifest would be judged on a base list it does not use.
 
     HERE RATHER THAN IN AN ENDPOINT MODULE, for the reason :func:`unsanctioned_bases` states: the vend
     door and describe-with-vending must answer from the same read, and a private copy in each is how
@@ -326,9 +352,9 @@ def dataset_facts(location: str, storage_options: dict[str, str]) -> tuple[int, 
     Base spellings are normalised through :func:`same_store_uri` because a manifest states a base in
     the manifest's own spelling, which may be schemeless — the policy needs a bucket and a key.
 
-    The CLASSIFIED COLUMNS ride the same handle for the same reason the bases do ([[LH-058]]): the vend
-    already opens this dataset once, and a second open to read field metadata would double the manifest
-    reads on every single vend.
+    Raises:
+        ServiceUnavailableError: The dataset opened and its base list could not be read. Answering "no
+            bases" here would vend without judging them, which the base judge exists to refuse.
     """
     import lance  # lazy, matching this module's STS-client style: pylance loads only where vending runs
 
@@ -337,18 +363,34 @@ def dataset_facts(location: str, storage_options: dict[str, str]) -> tuple[int, 
 
     try:
         ds = lance.dataset(location, storage_options=storage_options, session=shared_lance_session())
+        if branch:
+            ds = ds.checkout_version((branch, None))
     except (ValueError, OSError):
-        return 0, (), ()
-    bases: list[str] = []
+        return VendFacts()
     try:
-        for ref in manifest_base_path_refs(ds):
-            bases.append(same_store_uri(location, ref.path))
-    except Exception:
-        # A base we cannot SPELL is one the policy must not guess at. Vending without it yields exactly
-        # today's behaviour — the narrower credential — rather than a wrong grant.
-        log.warning("vend_base_paths_unreadable", extra={"location": location}, exc_info=True)
-        bases = []
-    return int(ds.version), tuple(bases), classified_columns(ds)
+        refs = manifest_base_path_refs(ds)
+        uris = tuple(same_store_uri(location, ref.path) for ref in refs)
+    except Exception as exc:
+        log.warning("vend_base_paths_unreadable", extra={"location": location, "branch": branch}, exc_info=True)
+        raise ServiceUnavailableError("the table's declared bases could not be read, so no credential was vended for it") from exc
+    return VendFacts(read_version=int(ds.version), bases=refs, base_uris=uris, classified=classified_columns(ds))
+
+
+def require_vendable_bases(location: str, facts: VendFacts, judge: BaseJudge) -> None:
+    """Refuse a vend for a ref declaring a base the catalog did not sanction — both vending doors ask this ([[LH-279]]).
+
+    A vended session policy grants READ on every declared base it can address, so vending for a table
+    that planted another table's root hands its holder that table's bytes for the credential's lifetime.
+    Judged by the same predicate as every read (:func:`catalog.core.base_judge.require_sanctioned_bases`):
+    the table's own root, a configured external blob base, or its record. The operator's allowlists stay
+    the policy's own second check (:func:`build_session_policy`), and gate what a create or register may
+    record.
+
+    Raises:
+        InvalidTableStateError: A declared base is sanctioned by none of those (code 19, 409).
+        ServiceUnavailableError: The table's record could not be read.
+    """
+    require_sanctioned_bases(location, facts.bases, judge=judge)
 
 
 def table_has_branch(location: str, storage_options: dict[str, str], branch: str) -> bool:

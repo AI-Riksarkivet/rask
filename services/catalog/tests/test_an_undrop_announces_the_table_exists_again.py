@@ -53,7 +53,7 @@ def client(tmp_path: Path, emitted: list[dict[str, Any]], monkeypatch: pytest.Mo
     ns = connect("dir", {"root": str(tmp_path / "data")})
     ns.create_namespace(CreateNamespaceRequest(id=[NS]))
     for table_id in TABLES:
-        create_table(ns, {}, table_id, pa.table({"id": pa.array([1, 2, 3], pa.int64())}), mode="create")
+        create_table(ns, {}, table_id, pa.table({"id": pa.array([1, 2, 3], pa.int64())}), mode="create", registry=None)
 
     application = FastAPI()
     install_problem_handlers(application, logging.getLogger(__name__))

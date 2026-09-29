@@ -172,7 +172,7 @@ def test_the_planner_CARRIES_the_pre_passs_verdict_into_the_item(monkeypatch: ob
     plain_uri = "s3://bucket/ordinary.lance"
     seen: dict[str, object] = {}
 
-    def fake_protected_roots(uris: list[str], options: dict[str, str]) -> base_refs.BaseRefs:
+    def fake_protected_roots(uris: list[str], options: dict[str, str], settings: object) -> base_refs.BaseRefs:
         seen["uris"] = list(uris)
         return base_refs.BaseRefs(protected={base_refs.normalise(protected_uri)})
 

@@ -49,7 +49,7 @@ def _table() -> pa.Table:
 
 def test_a_property_set_at_create_is_readable_off_the_table(real_ns: LanceNamespace) -> None:
     """The whole row: create with properties, then ask the TABLE what it carries."""
-    dataplane.create_table(real_ns, {}, ["props_at_create"], _table(), properties={"owner": "team-a", "tier": "gold"})
+    dataplane.create_table(real_ns, {}, ["props_at_create"], _table(), properties={"owner": "team-a", "tier": "gold"}, registry=None)
 
     stored = dataplane.read_schema_metadata(real_ns, {}, ["props_at_create"])
 
@@ -59,7 +59,7 @@ def test_a_property_set_at_create_is_readable_off_the_table(real_ns: LanceNamesp
 
 def test_creating_without_properties_writes_no_metadata(real_ns: LanceNamespace) -> None:
     """A create that names nothing must not invent a key — the boundary the merge could get wrong."""
-    dataplane.create_table(real_ns, {}, ["no_props"], _table())
+    dataplane.create_table(real_ns, {}, ["no_props"], _table(), registry=None)
 
     assert dataplane.read_schema_metadata(real_ns, {}, ["no_props"]) == {}
 
@@ -72,7 +72,7 @@ def test_the_create_stamp_does_not_evict_the_internal_lineage_keys(real_ns: Lanc
     """
     import lance
 
-    location = dataplane.create_table(real_ns, {}, ["keeps_lineage"], _table(), properties={"owner": "team-a"}).location
+    location = dataplane.create_table(real_ns, {}, ["keeps_lineage"], _table(), properties={"owner": "team-a"}, registry=None).location
     assert location
 
     lance.dataset(location).update_schema_metadata({"lineage.dataset_id": "acme$gold"})

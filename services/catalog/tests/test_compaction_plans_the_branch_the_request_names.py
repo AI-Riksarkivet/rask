@@ -46,7 +46,7 @@ def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace is runtime-only
     the branch finds work. Equal fragment counts would make both answers look alike.
     """
     namespace = lance_ns = __import__("lance_namespace").connect("dir", {"root": str(tmp_path / "data")})
-    create_table(namespace, {}, TABLE_ID, _rows(1), mode="create")
+    create_table(namespace, {}, TABLE_ID, _rows(1), mode="create", registry=None)
     open_dataset(namespace, {}, TABLE_ID).create_branch(BRANCH, None)
     branch = open_dataset(namespace, {}, TABLE_ID, branch=BRANCH)
     for i in range(1, 5):  # four more single-row fragments, only on the branch

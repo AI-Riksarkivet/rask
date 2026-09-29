@@ -94,7 +94,7 @@ def _table(ids: list[int]) -> pa.Table:
 def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace is runtime-only
     """A table carrying one tag and one branch, so the missing and the colliding case are both real."""
     namespace = connect("dir", {"root": str(tmp_path / "data")})
-    create_table(namespace, {}, TABLE_ID, _table([1, 2, 3]), mode="create")
+    create_table(namespace, {}, TABLE_ID, _table([1, 2, 3]), mode="create", registry=None)
     dataset = open_dataset(namespace, {}, TABLE_ID)
     dataset.tags.create(LIVE_TAG, 1)
     dataset.create_branch(LIVE_BRANCH, None)

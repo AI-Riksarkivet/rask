@@ -53,21 +53,24 @@ the first place.
 from __future__ import annotations
 
 import logging
+from enum import StrEnum
 from typing import TYPE_CHECKING
+from urllib.parse import unquote_to_bytes
 
 import pyarrow.fs as pafs
 from pydantic import BaseModel, Field
 
-from service_kit.lakehouse.features import manifest_base_paths
+from service_kit.lakehouse.features import BasePathRef
 from service_kit.lakehouse.lance_session import lance_session
 from service_kit.lakehouse.objectfs import fs_and_base
 
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Callable, Iterable, Mapping, Sequence
 
     import lance
 
+    from service_kit.lakehouse.base_registry import BaseRecord
     from service_kit.lakehouse.objectfs import StorageOptions
 
 
@@ -81,6 +84,26 @@ DEFAULT_METADATA_CACHE_MB = 128
 DEFAULT_INDEX_CACHE_MB = 256
 
 
+class BaseRelation(StrEnum):
+    """Where an unsanctioned base sits against the root of the dataset that declares it."""
+
+    #: Outside the referrer's root and not containing it — another table, another prefix.
+    FOREIGN = "foreign"
+    #: CONTAINS the referrer's root — a parent prefix or a bucket root, which would otherwise protect
+    #: every table beneath it at once.
+    ANCESTOR = "ancestor"
+
+
+class BaseFinding(BaseModel):
+    """One declared base nothing sanctions: not the referrer's own root, not configured, not recorded."""
+
+    #: The dataset whose manifest declares the base, as it was discovered.
+    referrer: str
+    #: The declared base, as the path it decodes to (:func:`decoded_path`).
+    base: str
+    relation: BaseRelation
+
+
 class BaseRefs(BaseModel):
     """Roots that some OTHER dataset's manifest resolves through, plus what could not be read.
 
@@ -90,24 +113,56 @@ class BaseRefs(BaseModel):
     ``checked=False``.
     """
 
-    #: Absolute roots referenced BY another dataset, normalised (scheme dropped, trailing `/` gone).
+    #: Absolute roots referenced BY another dataset, as the paths they decode to (:func:`decoded_path`),
+    #: like every root here. No verb may touch one: every referrer that names it is unconditional.
     protected: set[str] = Field(default_factory=set)
+    #: Roots every referrer reaches through a PINNED recorded relation ([[LH-279]]), mapped to the source
+    #: tags that pin them — the tags come from the catalog's record, never the manifest (a clone's
+    #: ``BasePath.name`` is ``None``, lh279 p4). Deletion is refused as for ``protected``; compaction and
+    #: version reclamation are permitted while every tag exists on the root, because reclamation keeps a
+    #: tagged version's files and the relation reads through exactly that version (lh279 p4: the clone
+    #: read cold after source ``compact_files`` + ``cleanup_old_versions(error_if_tagged_old_versions=False)``).
+    pinned: dict[str, set[str]] = Field(default_factory=dict)
     #: ``(dataset_uri, reason)`` for every dataset whose manifest could not be read.
     unreadable: list[tuple[str, str]] = Field(default_factory=list)
+    #: Declared bases that protect nothing because nothing sanctions them ([[LH-279]]). A manifest's
+    #: base list is writable by any holder of the table's write vend (``UpdateBases``), so a base that
+    #: is not the referrer's own, not operator-configured and not in the catalog's record is a claim
+    #: nobody with authority made — honouring it froze the table it named (lh279 p1/p3).
+    findings: list[BaseFinding] = Field(default_factory=list)
 
     def is_protected(self, location: str) -> str | None:
-        """The referencing root when ``location`` is one, or lies UNDER one; else ``None``.
+        """The referencing root when ``location`` is one, or lies UNDER one; else ``None`` — the DELETE answer.
 
         Containment, not equality: a base path may name a dataset root whose subdirectories
         (``data/``, ``_deletions/``, ``_indices/``) hold the referenced files, so deleting anything at
         or beneath it breaks the referrer. Equality alone would pass a request to delete
         ``<root>/data`` — which destroys precisely the files a clone resolves through.
+
+        Pinned roots count: no pin survives its source's directory being deleted. An unconditional root
+        is answered before a pinned one, so a caller that then asks :meth:`pin_tags` about the answer
+        learns the strongest protection over ``location``.
+
+        ``location`` may be spelled either way the estate holds it: the catalog's percent-encoded
+        location or the decoded directory discovery lists (lh279 r6 spellings). It is compared as the
+        path it decodes to, the form every root here is held in.
         """
-        target = _normalise(location)
-        for root in self.protected:
+        target = decoded_path(location)
+        for root in (*sorted(self.protected), *sorted(self.pinned)):
             if target == root or target.startswith(f"{root}/") or root.startswith(f"{target}/"):
                 return root
         return None
+
+    def pin_tags(self, root: str) -> frozenset[str] | None:
+        """The tags whose presence on ``root`` permits compacting it, or ``None`` when nothing does.
+
+        ``None`` when an unconditional referrer names ``root`` too, or when no pinned one does. The
+        compaction gate asks this about the root :meth:`is_protected` answered, and permits the pass
+        only while every tag is on the dataset it opened.
+        """
+        if root in self.protected or root not in self.pinned:
+            return None
+        return frozenset(self.pinned[root])
 
 
 #: The directory a named branch's own files live under — `file_format.md:2763`, "Named branches store
@@ -137,8 +192,11 @@ def containment_of(location: str, root: str) -> str:
     ``tree/{branch}/`` its own ``_versions/``/``_transactions/``/``_deletions/``/``_indices/`` and no
     ``data/``, so it resolves its data through the parent. That is what makes the parent protected, and
     it is why naming the branch as a referenced root inverts the fact an operator needs.
+
+    ``location`` is a spelling and is compared as the path it decodes to (:func:`decoded_path`); ``root``
+    is one :meth:`BaseRefs.is_protected` answered, already in that form, and is not decoded again.
     """
-    here, there = _normalise(location), _normalise(root)
+    here, there = decoded_path(location), _normalise(root)
     if here == there:
         return "is"
     if here.startswith(f"{there}/"):
@@ -164,24 +222,145 @@ def normalise(uri: str) -> str:
 
 
 #: PUBLIC as of the F6(d) trash exclusion — the sweep must compare a trash record's `location` against
-#: a discovered dataset URI, and the estate gets exactly ONE comparator for "two spellings of one path".
+#: a discovered dataset URI. It drops the scheme and the edge slashes and decodes nothing, so two
+#: spellings of one path that differ in percent-encoding compare equal only as :func:`decoded_path`,
+#: the form every base-reference verdict here compares and keys in.
 #: Re-implementing the compare at the call site is how a guard silently never matches, which this
 #: function's own docstring names as the failure mode indistinguishable from having no guard at all.
 #: The private alias stays so the in-module call sites read unchanged.
 _normalise = normalise
+
+#: Path segments that name no object of their own. `..` is the one that matters: pylance 12.0.0
+#: resolves ``<attacker>/../victim`` on a local root, and the attacker then reads the victim's rows
+#: (lh279 s4) — a base textually UNDER the attacker's root that is not. `.` and the empty segment are
+#: refused with it because a comparison on the spelling cannot say where they resolve either.
+_NON_LOCATION_SEGMENTS = frozenset({"", ".", ".."})
+
+#: Characters that can divide a path into segments: `/` in every store, and `\\` in a ``file://`` URL or
+#: on a Windows filesystem. A decode that adds one to a segment can give the opened path a boundary the
+#: spelling does not show. pylance 12.0.0 on Linux opens a decoded `\\` as a name character
+#: (lh279 r5 escape: ``x/..%5C..%5Cvictim`` reads nothing), so refusing it is the conservative half.
+_SEPARATORS = ("/", "\\")
+
+
+def _decoded_once(segment: str) -> str | None:
+    """``segment`` percent-decoded once, as pylance decodes it; ``None`` when the bytes are not UTF-8.
+
+    pylance 12.0.0 refuses such a path outright ("contained non-unicode characters", over moto and a local
+    root, lh279 r5 not_utf8), so it names no location.
+    """
+    try:
+        return unquote_to_bytes(segment).decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+
+
+def decoded_segments(uri: str) -> list[str] | None:
+    """The segments of ``uri``'s path as pylance opens them, or ``None`` when it names no location (:func:`names_a_location`)."""
+    path = _normalise(uri)
+    if not path:
+        return None
+    segments: list[str] = []
+    for spelled in path.split("/"):
+        segment = _decoded_once(spelled)
+        if segment is None or segment in _NON_LOCATION_SEGMENTS:
+            return None
+        if any(ord(char) < 0x20 or ord(char) == 0x7F for char in segment):
+            return None
+        if any(segment.count(separator) > spelled.count(separator) for separator in _SEPARATORS):
+            return None
+        segments.append(segment)
+    return segments
+
+
+def decoded_path(uri: str) -> str:
+    """The path ``uri`` names, as pylance opens it: its :func:`decoded_segments` joined by ``/``.
+
+    THE ONE FORM a base-reference verdict compares and keys a location in. The estate holds one table in
+    two spellings: the catalog percent-encodes the name into the location it records and a branch's
+    manifest declares (``…$r%C3%A4ksm%C3%B6rg%C3%A5s``), while the store keeps the decoded directory and
+    discovery lists that (``…$räksmörgås``; lh279 r6 spellings). Compared as spelled they never match: a
+    branch's base on its parent is judged a finding, and nothing protects the parent (lh279 rvw finding1).
+
+    A spelling that names no location keeps its normalised spelling (:func:`normalise`): no decode says
+    where it is, and every predicate here already answers it as naming nothing.
+    """
+    segments = decoded_segments(uri)
+    return _normalise(uri) if segments is None else "/".join(segments)
+
+
+def names_a_location(uri: str) -> bool:
+    """Whether ``uri`` spells one place, so that comparing the path it decodes to says where it is.
+
+    Every containment answer below compares decoded paths (:func:`decoded_path`), and that is an answer
+    about the place only when the decode is the one the store performs. pylance 12.0.0 decodes a location
+    the way a URL is decoded: it percent-decodes each segment ONCE, resolves the ``.`` and ``..`` segments
+    that leaves, and drops a tab, line feed or carriage return (measured over moto and a local root, lh279
+    r3 a_escape). So each ``/``-separated segment is judged as it reads after one decode, and the spelling
+    names no location when any decoded segment is empty, ``.`` or ``..``, holds an ASCII control
+    character, is not UTF-8, or holds a ``/`` or ``\\`` the decode added. That refuses
+    ``<own>/%2e%2e/<victim>``, ``<own>/.%2e/<victim>``, ``<own>/.\\t./<victim>`` and a configured
+    ``<models>/%2e%2e/<victim>``, each spelled inside a sanctioned prefix while opening another table.
+
+    Any other ``%`` escape names the place it decodes to, and must stay a location: the catalog
+    percent-encodes a table's name into its location (``räksmörgås`` -> ``r%C3%A4ksm%C3%B6rg%C3%A5s``,
+    ``growth%`` -> ``growth%25``, a space -> ``%20``), and a branch of that table declares its root spelled
+    so (lh279 r3b names, r5 manifest). A second level of encoding is a name: ``%252e%252e`` decodes once to the literal
+    segment ``%2e%2e``, which pylance opens as a directory of that name (lh279 r5 escape).
+    """
+    return decoded_segments(uri) is not None
+
+
+def location_within(outer: str, inner: str) -> bool:
+    """Whether ``inner`` is the location ``outer`` names or lies beneath it, segment by decoded segment.
+
+    On a path BOUNDARY: ``bucket/t`` does not contain ``bucket/t-evil``. Each side is read as
+    :func:`decoded_segments` reads it, so the catalog's ``…$r%C3%A4ksm%C3%B6rg%C3%A5s`` and the
+    ``…$räksmörgås`` discovery lists are one location. Refuses to vouch for either side when it does not
+    name a location (:func:`names_a_location`), because ``bucket/t/../victim`` starts with ``bucket/t/``
+    and is not under it.
+    """
+    there, here = decoded_segments(outer), decoded_segments(inner)
+    return there is not None and here is not None and here[: len(there)] == there
+
+
+def store_of(uri: str) -> str:
+    """The store a spelled location resolves in: its URI scheme, case-folded, and ``file`` for a bare path.
+
+    :func:`normalise` drops the scheme so two spellings of one path compare equal, which is right only
+    inside ONE store. A base resolves through the scheme its own spelling names, not the table's —
+    measured on pylance 12.0.0 over moto (lh279fx probe_scheme_resolve): on an S3 table a ``file://`` base
+    and a bare ``/path`` base both read the process's local filesystem, and ``S3://`` reads the same store
+    as ``s3://``. So a comparison that decides whether a base is a table's own, or an operator's, asks
+    this as well as the path.
+    """
+    scheme, separator, _rest = uri.partition("://")
+    return scheme.lower() if separator else "file"
+
+
+def location_in_store(outer: str, inner: str) -> bool:
+    """:func:`location_within`, and only when both spellings name the same store (:func:`store_of`)."""
+    return store_of(outer) == store_of(inner) and location_within(outer, inner)
 
 
 def protected_roots(
     dataset_uris: Iterable[str],
     storage_options: StorageOptions | None = None,
     *,
+    configured: Sequence[str],
+    record_of: Callable[[str], BaseRecord | None],
     session: lance.Session | None = None,
 ) -> BaseRefs:
-    """Collect every root referenced by any of ``dataset_uris``, so callers can refuse to touch them.
+    """Collect every root a sanctioned base of any of ``dataset_uris`` names, so callers can refuse to touch them.
 
-    Opens each dataset and reads its manifest's ``base_paths``. A dataset that references only itself
-    contributes nothing, which is the overwhelmingly common case — the cost is one manifest read per
-    dataset, no data files touched.
+    Opens each dataset and reads its manifest's ``base_paths``, then judges every edge with
+    :func:`classify_base_refs` against ``configured`` (the operator's external blob bases) and
+    ``record_of`` (the catalog's base record for an owning root, which must RAISE when unreadable). A
+    base nothing sanctions is a finding and protects nothing ([[LH-279]]): a manifest's base list is a
+    writer's claim, and honouring a planted one froze every table beneath it. A dataset that references
+    only itself contributes nothing, which is the overwhelmingly common case — the cost is one manifest
+    read per dataset, no data files touched, and a record read only for a root with a base outside its
+    own and outside the configured ones.
 
     A dataset that will not open is RECORDED rather than skipped: it may be the referrer whose
     reference matters, and a caller that proceeds on a partial map is doing the thing this module
@@ -215,28 +394,96 @@ def protected_roots(
     """
     import lance
 
+    from service_kit.lakehouse.features import manifest_base_path_refs
+
     if session is None:
         session = lance_session(DEFAULT_METADATA_CACHE_MB << 20, DEFAULT_INDEX_CACHE_MB << 20)
-    refs = BaseRefs()
+    declared: dict[str, list[BasePathRef]] = {}
+    unreadable: list[tuple[str, str]] = []
     for uri in dataset_uris:
         try:
-            paths = manifest_base_paths(lance.dataset(uri, storage_options=storage_options, session=session))
+            declared[uri] = manifest_base_path_refs(lance.dataset(uri, storage_options=storage_options, session=session))
         except Exception as exc:
-            refs.unreadable.append((uri, f"{type(exc).__name__}: {exc}"))
-            continue
-        for path in paths:
-            root = _normalise(path)
-            # A dataset naming ITSELF is not a foreign reference and must not protect itself from its
-            # own maintenance — that would make every clone permanently unmaintainable.
-            if root == _normalise(uri):
-                continue
-            refs.protected.add(root)
-            log.info("maintenance_base_ref", extra={"referrer": uri, "protects": root})
+            unreadable.append((uri, f"{type(exc).__name__}: {exc}"))
+    refs = classify_base_refs(declared, configured=configured, record_of=record_of)
+    refs.unreadable = unreadable
     return refs
 
 
-def sibling_base_refs(location: str, storage_options: StorageOptions) -> BaseRefs:
-    """Every root referenced by a dataset laid out ALONGSIDE ``location``.
+def classify_base_refs(
+    declared: Mapping[str, Sequence[BasePathRef]],
+    *,
+    configured: Sequence[str],
+    record_of: Callable[[str], BaseRecord | None],
+) -> BaseRefs:
+    """Which declared bases may protect, and which are findings — over manifests already read ([[LH-279]]).
+
+    ``declared`` maps EVERY discovered dataset to the bases its manifest declares, the ones declaring
+    none included: a referrer's OWNING ROOT is the outermost discovered dataset that contains it, so a
+    branch at ``<root>/tree/<b>`` is owned by ``<root>`` because ``<root>`` was discovered, not because
+    its path carries a ``/tree/`` substring anyone can spell.
+
+    Each non-self edge is judged by :func:`service_kit.lakehouse.base_registry.judge_bases` against the
+    owning root — the one predicate the vend, read and register doors share:
+
+    - inside the owning root, in its store (a branch naming its parent, a same-root clone): protects;
+    - inside an operator-configured external blob base: protects, and is never a finding — every vend
+      already grants READ there, so declaring one adds nothing;
+    - named by the owning root's base record: protects — PINNED (:attr:`BaseRefs.pinned`) when the entry
+      is a ``derived_from`` relation carrying its source tag, unconditionally otherwise;
+    - anything else: a :class:`BaseFinding`, and NEVER protected. A planted base naming another table
+      or a bucket root froze everything it named (lh279 p1/p3); a finding reports it and freezes nothing.
+
+    ``record_of`` is asked at most once per owning root, and only for a root with a base the first two
+    rules did not settle. It must RAISE when a record cannot be read: "no record" would turn a
+    recorded clone source into a finding and hand its bytes to compaction.
+    """
+    from service_kit.lakehouse import base_registry  # base_registry imports this module's `normalise`
+
+    # Each root is keyed by the path it decodes to and keeps its spelling: the judge compares a base's STORE
+    # with the owner's (:func:`store_of`), which only the spelling carries, and the record is read by it.
+    roots = sorted({decoded_path(uri): uri for uri in declared if names_a_location(uri)}.items(), key=lambda root: len(root[0]))
+    records: dict[str, BaseRecord | None] = {}
+    refs = BaseRefs()
+    for uri, bases in declared.items():
+        own = decoded_path(uri)
+        owner, spelled = next(((root, spelling) for root, spelling in roots if location_within(spelling, uri)), (own, uri))
+        foreign = [ref for ref in bases if decoded_path(ref.path) != own]
+        if not foreign:
+            continue
+
+        def _record(owner: str = owner, spelled: str = spelled) -> BaseRecord | None:
+            if owner not in records:
+                records[owner] = record_of(spelled)
+            return records[owner]
+
+        for judgement in base_registry.judge_bases(spelled, foreign, configured=configured, load_record=_record):
+            base = decoded_path(judgement.ref.path)
+            if judgement.standing is base_registry.BaseStanding.UNRECORDED:
+                relation = BaseRelation.ANCESTOR if location_within(judgement.ref.path, spelled) else BaseRelation.FOREIGN
+                refs.findings.append(BaseFinding(referrer=uri, base=base, relation=relation))
+                continue
+            entry = judgement.entry
+            if entry is not None and entry.role is base_registry.BaseRole.DERIVED_FROM and entry.tag:
+                refs.pinned.setdefault(base, set()).add(entry.tag)
+            else:
+                refs.protected.add(base)
+            log.info("maintenance_base_ref", extra={"referrer": uri, "protects": base, "standing": judgement.standing.value})
+    return refs
+
+
+def sibling_base_refs(
+    location: str,
+    storage_options: StorageOptions,
+    *,
+    configured: Sequence[str],
+    record_of: Callable[[str], BaseRecord | None],
+) -> BaseRefs:
+    """Every root a sanctioned base of a dataset laid out ALONGSIDE ``location`` names.
+
+    Judged exactly as :func:`protected_roots` judges the sweep's estate ([[LH-279]]): ``configured`` and
+    ``record_of`` are the same two inputs, so the on-demand doors and the sweep cannot disagree about
+    whether a planted base freezes its victim.
 
     Lives here rather than in either consumer because BOTH need the identical refusal: the catalog's
     on-demand maintenance doors (`require_compactable` / `require_reclaimable`) and the maintenance
@@ -281,4 +528,4 @@ def sibling_base_refs(location: str, storage_options: StorageOptions) -> BaseRef
         for info in fs.get_file_info(pafs.FileSelector(base, recursive=False, allow_not_found=True))
         if info.type == pafs.FileType.Directory
     ]
-    return protected_roots(siblings, storage_options)
+    return protected_roots(siblings, storage_options, configured=configured, record_of=record_of)
