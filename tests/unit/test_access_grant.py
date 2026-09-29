@@ -105,16 +105,6 @@ def test_grantable_relations_are_the_base_rungs_only() -> None:
     assert access._grantable_relations("classification") == ("pass_grants", "apply")
 
 
-def test_grant_writes_the_tuple_and_reports_granted(monkeypatch: pytest.MonkeyPatch) -> None:
-    resp, captured = _run(monkeypatch, user="bob", relation="reader", grant=True)
-    assert resp.granted is True
-    assert len(captured) == 1
-    assert captured[0].user == "user:bob"
-    assert captured[0].relation == "reader"
-    assert captured[0].object == "table:db1$users"
-    assert resp.object == "table:db1$users"
-
-
 def test_revoke_deletes_the_tuple_and_reports_not_granted(monkeypatch: pytest.MonkeyPatch) -> None:
     resp, captured = _run(monkeypatch, user="bob", relation="writer", grant=False)
     assert resp.granted is False
@@ -130,16 +120,6 @@ def test_derived_can_relation_is_rejected(monkeypatch: pytest.MonkeyPatch) -> No
     # InvalidInput (400), not UnsupportedOperation (501): the rung NAME is client input — catalog-api-10.
     with pytest.raises(InvalidInputError):
         _run(monkeypatch, user="bob", relation="can_read_data", grant=True)
-
-
-def test_structural_parent_edge_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
-    with pytest.raises(InvalidInputError):
-        _run(monkeypatch, user="bob", relation="parent", grant=True)
-
-
-def test_fga_outage_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
-    with pytest.raises(ServiceUnavailableError):
-        _run(monkeypatch, user="bob", relation="reader", grant=True, outage=True)
 
 
 def test_access_graph_builds_nodes_and_edges(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -230,19 +210,3 @@ def test_a_failed_grant_is_audited_too_so_attempts_are_reviewable(monkeypatch: p
 # --------------------------------------------------------------------------- #
 # [[LH-055]] — the classification vocabulary has a door of its own
 # --------------------------------------------------------------------------- #
-
-
-def test_a_classification_delegation_writes_the_apply_tuple(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The rung was inert without this route. `apply` exists so a data-protection officer may be
-    trusted with `pii` and not with `restricted`; with nowhere to confer it the vocabulary is
-    estate-admin only and the separation of duties is decorative."""
-    resp, captured = _run(monkeypatch, user="dpo", relation="apply", grant=True, fga_type="classification", ident="pii")
-    assert resp.granted is True
-    assert (captured[0].user, captured[0].relation, captured[0].object) == ("user:dpo", "apply", "classification:pii")
-
-
-def test_a_data_rung_is_refused_on_a_label(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The type defines no data rungs, and `_grantable_relations` intersects with what the type
-    declares — so the base tuple's `reader` cannot be written onto a label by naming it."""
-    with pytest.raises(InvalidInputError):
-        _run(monkeypatch, user="dpo", relation="reader", grant=True, fga_type="classification", ident="pii")

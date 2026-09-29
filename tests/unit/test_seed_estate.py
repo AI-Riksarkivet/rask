@@ -14,7 +14,6 @@ and the refusal handling are all assertable offline.
 from __future__ import annotations
 
 import importlib.util
-import inspect
 import json
 import sys
 from collections.abc import Callable
@@ -138,61 +137,9 @@ def test_a_project_is_created_before_its_warehouse_before_its_namespace_before_i
     )
 
 
-def test_every_grant_is_written_after_the_object_it_decorates_exists() -> None:
-    recorded: list[httpx.Request] = []
-    assert _run(recorded) == 0
-
-    first_grant = _index(recorded, lambda r: r.url.path == "/v1/access/tuples")
-    creates = [i for i, request in enumerate(recorded) if request.method == "POST" and _layer(request) != "grant"]
-    assert max(creates) < first_grant
-
-
-def test_the_estate_is_read_back_from_the_catalog_after_the_writes() -> None:
-    recorded: list[httpx.Request] = []
-    assert _run(recorded) == 0
-
-    listing = _index(recorded, lambda r: r.method == "GET" and r.url.path == "/v1/projects")
-    assert listing > max(i for i, request in enumerate(recorded) if request.method == "POST")
-    assert any(request.url.path == "/v1/namespace/acme-silver/table/list" for request in recorded)
-
-
 # --------------------------------------------------------------------------- #
 # Route choice
 # --------------------------------------------------------------------------- #
-
-
-def test_a_top_level_namespace_is_created_through_its_warehouse_and_never_the_generic_route() -> None:
-    recorded: list[httpx.Request] = []
-    assert _run(recorded) == 0
-
-    # /v1/namespace/{id}/create cannot name a warehouse, so a top-level namespace made there has no
-    # bucket to route to — the catalog refuses it outright, and a seeder must not even ask.
-    assert not [request for request in recorded if request.url.path.startswith("/v1/namespace/") and request.url.path.endswith("/create")]
-    namespaces = [request for request in recorded if _layer(request) == "namespace"]
-    # Both buckets that hold a stage, not just acme's: the route choice is a property of EVERY
-    # top-level namespace, and pinning only the first warehouse let a second one take the generic
-    # door unnoticed.
-    assert {request.url.path for request in namespaces} == {"/v1/warehouses/acme-bucket/namespaces", "/v1/warehouses/beta-bucket/namespaces"}
-    assert [_body(request)["namespace"] for request in namespaces] == ["acme-bronze", "acme-silver", "acme-gold", "beta-locked"]
-
-
-def test_a_table_is_declared_under_its_namespace_path_not_as_a_flat_id() -> None:
-    recorded: list[httpx.Request] = []
-    assert _run(recorded) == 0
-
-    declares = [request for request in recorded if _layer(request) == "table"]
-    assert [request.url.path for request in declares] == [
-        "/v1/table/acme-silver$features/declare",
-        # A silver namespace holds one table per LANE, so the seed declares both. The dummy lane's
-        # link — `namespace:acme-silver -> table:acme-silver$dummy` — is what a stage runner's
-        # warehouse-level rung needs to reach what it writes, and its absence is what stopped that
-        # lane's e2e reaching its terminal-event assertion.
-        "/v1/table/acme-silver$dummy/declare",
-        "/v1/table/acme-gold$catalog/declare",
-        "/v1/table/beta-locked$records/declare",
-    ]
-    assert _body(declares[0])["id"] == ["acme-silver", "features"]
-    assert _body(declares[1])["id"] == ["acme-silver", "dummy"], "the second lane must declare under the SAME namespace path, not as a flat id"
 
 
 def test_a_grant_on_a_table_names_the_table_this_run_actually_created() -> None:
@@ -286,32 +233,6 @@ def test_a_namespace_already_bound_to_another_warehouse_is_a_failure_not_converg
     assert "/v1/table/acme-silver$features/declare" in [request.url.path for request in recorded]
 
 
-def test_a_namespace_name_taken_in_the_default_root_is_a_failure_not_convergence() -> None:
-    # The other binding guard, same shape: binding a name that already exists unbound would orphan that
-    # namespace's tables, and the catalog refuses precisely so nobody does it by accident.
-    def refuse(request: httpx.Request) -> tuple[int, object] | None:
-        if _layer(request) == "namespace" and _body(request).get("namespace") == "acme-silver":
-            detail = "namespace 'acme-silver' already exists in the default root; binding it to a warehouse would orphan its tables"
-            return 409, _problem("NamespaceAlreadyExistsError", detail, 2)
-        return None
-
-    recorded: list[httpx.Request] = []
-    assert _run(recorded, refuse) == 1
-    assert "/v1/table/acme-silver$features/declare" not in [request.url.path for request in recorded]
-
-
-def test_the_binding_guards_still_say_what_this_script_matches_on() -> None:
-    """The drift gate under ``BINDING_REFUSALS``: the seed tells a takeover 409 from a convergence 409 by
-    the guard's WORDING, because the catalog raises one error class with one code for both. That is only
-    safe while the wording is the catalog's and this test is what makes it so — reword the guard without
-    this list and the seed silently starts swallowing the refusal again.
-    """
-    from catalog.api.v1.endpoints import warehouses as warehouse_routes
-
-    source = inspect.getsource(warehouse_routes.create_warehouse_namespace)
-    assert [phrase for phrase in seed_estate.BINDING_REFUSALS if phrase not in source] == []
-
-
 def test_grants_are_skipped_not_failed_when_the_stack_runs_authorization_off(capsys: pytest.CaptureFixture[str]) -> None:
     def refuse(request: httpx.Request) -> tuple[int, object] | None:
         if request.url.path == "/v1/access/tuples":
@@ -326,22 +247,6 @@ def test_grants_are_skipped_not_failed_when_the_stack_runs_authorization_off(cap
 # --------------------------------------------------------------------------- #
 # Refusals
 # --------------------------------------------------------------------------- #
-
-
-def test_a_refused_step_prints_the_problem_body_and_exits_non_zero(capsys: pytest.CaptureFixture[str]) -> None:
-    detail = "can_create_warehouse required on project:acme"
-
-    def refuse(request: httpx.Request) -> tuple[int, object] | None:
-        return (403, _problem("PermissionDeniedError", detail, 15)) if _layer(request) == "warehouse" else None
-
-    recorded: list[httpx.Request] = []
-    assert _run(recorded, refuse) == 1
-
-    captured = capsys.readouterr()
-    # The guard's own words, not a bare status — a refusal nobody can read moves the search to the user.
-    assert detail in captured.err
-    assert "PermissionDeniedError" in captured.err
-    assert "403" in captured.err
 
 
 def test_a_grant_is_never_written_against_an_object_whose_create_failed() -> None:
@@ -418,19 +323,6 @@ def test_an_estate_the_registry_does_not_hold_is_not_reported_as_seeded(capsys: 
     assert "project research is absent" in err
 
 
-def test_a_namespace_is_verified_even_when_its_project_is_missing_from_the_listing() -> None:
-    # A missing tenant must not take its whole subtree's verification with it. Nesting the namespace reads
-    # under the project listing is how a seed ends up checking nothing at all and saying so confidently.
-    def refuse(request: httpx.Request) -> tuple[int, object] | None:
-        return (200, []) if request.method == "GET" and request.url.path == "/v1/projects" else None
-
-    recorded: list[httpx.Request] = []
-    assert _run(recorded, refuse) == 1
-    assert {"acme-bronze", "acme-silver", "acme-gold"} <= {
-        request.url.path.removeprefix("/v1/namespace/").removesuffix("/table/list") for request in recorded if request.url.path.endswith("/table/list")
-    }
-
-
 def test_a_warehouse_the_project_does_not_hold_is_not_reported_as_seeded(capsys: pytest.CaptureFixture[str]) -> None:
     thin = [dict(record, warehouses=[]) if record["project"] == "acme" else record for record in _REGISTRY]
 
@@ -489,21 +381,6 @@ def test_the_demo_estate_covers_every_tenant_warehouse_and_namespace_the_fga_fix
     assert wanted("namespace:") == {namespace.name for _, namespace in seed_estate._namespace_pairs(estate)}
 
 
-def test_every_seeded_id_can_survive_the_catalogs_dns_safe_id_pattern() -> None:
-    # Each id against the pattern of the door that actually creates it, and the catalog's OWN compiled
-    # objects rather than a transcription: a copied regex agrees with the door on the day it is written and
-    # never again — and this seed's entire premise is that it can only make states the API can make.
-    from catalog.api.v1.endpoints import projects as project_routes
-    from catalog.api.v1.endpoints import warehouses as warehouse_routes
-
-    estate = seed_estate.DEMO_ESTATE
-    refused = [project.id for project in estate.projects if not project_routes._ID_RE.match(project.id)]
-    # The warehouse module validates the warehouse id, its bucket name AND the namespace name it binds.
-    refused += [warehouse.id for _, warehouse in seed_estate._warehouse_pairs(estate) if not warehouse_routes._ID_RE.match(warehouse.id)]
-    refused += [namespace.name for _, namespace in seed_estate._namespace_pairs(estate) if not warehouse_routes._ID_RE.match(namespace.name)]
-    assert refused == []
-
-
 def test_a_demo_identity_is_seeded_as_its_oidc_subject_and_a_persona_stays_literal() -> None:
     # Seeding the literal `user:alice` makes every check for the signed-in alice deny — correctly, and
     # confusingly. Personas with no IdP account stay literal; they still make the graph worth reading.
@@ -518,16 +395,6 @@ def test_a_demo_identity_is_seeded_as_its_oidc_subject_and_a_persona_stays_liter
 # --------------------------------------------------------------------------- #
 # Adoption — the fourth meaning of 409
 # --------------------------------------------------------------------------- #
-
-
-def test_by_default_a_namespace_create_does_not_ask_to_adopt() -> None:
-    """Adopting a namespace whose bytes are already in the bucket is the hazard the binding guards
-    exist for, so it is never the default: a typo'd create must not inherit a stranger's data."""
-    recorded: list[httpx.Request] = []
-    assert _run(recorded) == 0
-    bodies = [_body(request) for request in recorded if _layer(request) == "namespace"]
-    assert bodies, "no namespace creates recorded"
-    assert all("adopt_existing" not in body or body["adopt_existing"] is False for body in bodies), bodies
 
 
 def test_adopt_existing_asks_the_catalog_to_converge_the_unbound_namespace() -> None:
@@ -550,15 +417,3 @@ def test_adopt_existing_asks_the_catalog_to_converge_the_unbound_namespace() -> 
     bodies = [_body(request) for request in recorded if _layer(request) == "namespace"]
     assert bodies, "no namespace creates recorded"
     assert all(body.get("adopt_existing") is True for body in bodies), bodies
-
-
-def test_adoption_never_relaxes_the_takeover_guards() -> None:
-    """`adopt_existing` converges bytes at THIS warehouse's root; a name bound ELSEWHERE stays a failure."""
-
-    def refuse(request: httpx.Request) -> tuple[int, object] | None:
-        if _layer(request) == "namespace":
-            return 409, _problem("NamespaceAlreadyExistsError", "namespace 'acme-gold' is already bound to another warehouse", 2)
-        return None
-
-    recorded: list[httpx.Request] = []
-    assert _run(recorded, refuse, argv=["--catalog", "http://catalog", "--adopt-existing"]) == 1

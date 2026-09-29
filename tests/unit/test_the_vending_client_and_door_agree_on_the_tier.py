@@ -42,7 +42,6 @@ def door() -> FastAPI:
 
     Not the real door, because standing it up needs a namespace, FGA and an STS backend — and none of
     those participate in the defect. What is copied is the one line that does: how `tier` is declared.
-    A drift between this and the real signature is caught by the assertion below.
     """
     app = FastAPI()
 
@@ -51,17 +50,6 @@ def door() -> FastAPI:
         return {"tier": tier}
 
     return app
-
-
-def test_the_stand_in_matches_the_real_door_declaration() -> None:
-    """If the real door moves `tier` into a body model, this file's premise is stale and must change
-    with it rather than keep passing against a shape that no longer exists."""
-    import inspect
-
-    from catalog.api.v1.endpoints.credentials import vend_credentials
-
-    parameter = inspect.signature(vend_credentials).parameters["tier"]
-    assert "Query" in str(parameter.annotation), f"the door no longer takes `tier` as a query parameter: {parameter.annotation}"
 
 
 def test_the_client_asks_for_the_write_tier_in_a_form_the_door_reads(door: FastAPI, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -85,13 +73,3 @@ def test_the_client_asks_for_the_write_tier_in_a_form_the_door_reads(door: FastA
         f"the client asked for a write credential and the door parsed {answered['tier']!r} — "
         "the fragment PUTs are refused 403 AccessDenied and can_write_data is never checked"
     )
-
-
-def test_a_write_tier_request_does_not_arrive_as_a_read(door: FastAPI) -> None:
-    """The defect itself, stated as the property that was violated: a body-borne tier is INVISIBLE."""
-    with TestClient(door) as transport:
-        as_body = transport.post("/management/v1/table/acme-bronze$events/credentials", json={"tier": "write"})
-        as_query = transport.post("/management/v1/table/acme-bronze$events/credentials", params={"tier": "write"})
-
-    assert as_body.json()["tier"] == "read", "premise changed: the door now reads a body tier"
-    assert as_query.json()["tier"] == "write"

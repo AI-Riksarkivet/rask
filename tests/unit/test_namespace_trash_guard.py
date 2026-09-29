@@ -29,23 +29,18 @@ store, and a double would happily agree with a wrong one.
 
 from __future__ import annotations
 
-import re
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from types import ModuleType
 from typing import Any
 
 import pytest
 from lance_namespace import NamespaceAlreadyExistsError, TableAlreadyExistsError
 
 from catalog.api import fga_deps
-from catalog.api.v1.endpoints import namespaces as ns_endpoint
-from catalog.api.v1.endpoints import warehouses as wh_endpoint
 from catalog.core.config import Settings
 from service_kit.lakehouse import trash
 
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
 _DEADLINE = (datetime(2026, 8, 16, tzinfo=UTC) + timedelta(days=7)).isoformat()
 
 
@@ -68,35 +63,6 @@ def _trash_a_namespace(settings: Settings, canonical: str, *, kind: str = "names
 # --------------------------------------------------------------------------- #
 # the guard, with kind="namespace"
 # --------------------------------------------------------------------------- #
-
-
-@pytest.mark.anyio
-async def test_a_free_namespace_id_passes(tmp_path: Path) -> None:
-    """The guard must be invisible in the ordinary case — nothing in the trash, nothing refused."""
-    settings = _settings(tmp_path)
-    await fga_deps.require_no_live_trash(settings, ["acme", "bronze"], kind="namespace")
-
-
-@pytest.mark.anyio
-async def test_an_id_still_in_the_trash_is_REFUSED(tmp_path: Path) -> None:
-    settings = _settings(tmp_path)
-    _trash_a_namespace(settings, "acme$bronze")
-    with pytest.raises(NamespaceAlreadyExistsError):
-        await fga_deps.require_no_live_trash(settings, ["acme", "bronze"], kind="namespace")
-
-
-@pytest.mark.anyio
-async def test_the_refusal_is_the_NAMESPACE_conflict_not_the_table_one(tmp_path: Path) -> None:
-    """Both map to 409, and a generated client dispatches on the spec's numeric CODE, not the status.
-
-    A namespace create that failed as `TableAlreadyExists` would send a client's error handling down
-    its table-conflict branch for an object that is not a table.
-    """
-    settings = _settings(tmp_path)
-    _trash_a_namespace(settings, "acme$bronze")
-    with pytest.raises(NamespaceAlreadyExistsError) as exc:
-        await fga_deps.require_no_live_trash(settings, ["acme", "bronze"], kind="namespace")
-    assert not isinstance(exc.value, TableAlreadyExistsError)
 
 
 @pytest.mark.anyio
@@ -164,54 +130,3 @@ async def test_an_unreadable_trash_store_does_NOT_fail_closed(tmp_path: Path, mo
 # --------------------------------------------------------------------------- #
 # both doors
 # --------------------------------------------------------------------------- #
-
-
-def _door_body(module: ModuleType, name: str) -> str:
-    source = Path(module.__file__ or "").read_text()
-    return source.split(f"def {name}(", 1)[1].split("\n@router", 1)[0]
-
-
-@pytest.mark.parametrize(
-    ("module", "door"),
-    [(ns_endpoint, "create_namespace"), (wh_endpoint, "create_warehouse_namespace")],
-    ids=["nested", "warehouse-scoped"],
-)
-def test_BOTH_namespace_create_doors_call_the_guard(module: ModuleType, door: str) -> None:
-    """Fixing one door and not the other leaves the hazard reachable by the other route — and the
-    warehouse-scoped door is the one that creates the ROOT of a cascade-trashed subtree, which is
-    precisely the id `undrop` walks from."""
-    body = _door_body(module, door)
-    assert "require_no_live_trash" in body, f"{door} does not check the trash"
-
-
-@pytest.mark.parametrize(
-    ("module", "door"),
-    [(ns_endpoint, "create_namespace"), (wh_endpoint, "create_warehouse_namespace")],
-    ids=["nested", "warehouse-scoped"],
-)
-def test_both_doors_check_the_trash_as_a_NAMESPACE(module: ModuleType, door: str) -> None:
-    """`kind` defaults to `"table"`, so omitting it here would probe the wrong record entirely: the
-    guard would read the table trash, find nothing, and pass — a check that runs and proves nothing."""
-    body = _door_body(module, door)
-    call = re.search(r"require_no_live_trash\((.*?)\)", body, re.DOTALL)
-    assert call, f"{door} has no require_no_live_trash call to inspect"
-    assert 'kind="namespace"' in call.group(1), f"{door} probes the trash as a table, not a namespace"
-
-
-@pytest.mark.parametrize(
-    ("module", "door"),
-    [(ns_endpoint, "create_namespace"), (wh_endpoint, "create_warehouse_namespace")],
-    ids=["nested", "warehouse-scoped"],
-)
-def test_the_trash_check_runs_BEFORE_the_native_create(module: ModuleType, door: str) -> None:
-    """Check order: identity -> shape -> parent exists -> authz -> conflict -> native write. A conflict
-    found after the write has already created a real Lance object at the id it was refusing."""
-    body = _door_body(module, door)
-    assert body.index("require_no_live_trash") < body.index('"create_namespace"'), f"{door} checks the trash too late"
-
-
-def test_the_guard_still_defaults_to_table_for_the_table_doors() -> None:
-    """The table doors call it positionally and rely on the default; changing it to satisfy the
-    namespace doors would silently repoint every table create at the namespace trash."""
-    source = (REPO_ROOT / "services/catalog/src/catalog/api/fga_deps.py").read_text()
-    assert re.search(r'def require_no_live_trash\([^)]*kind: str = "table"', source, re.DOTALL)

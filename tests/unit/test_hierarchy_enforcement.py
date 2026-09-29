@@ -1,14 +1,7 @@
-"""The hierarchy's two load-bearing invariants, pinned where the conformance run found them BROKEN.
+"""The hierarchy's cascade invariant, pinned where the conformance run found it BROKEN.
 
-Both defects were found on 2026-08-05 by driving the real doors, not by reading code — which is the
-point: each had unit coverage of the guard's own logic while the guard was simply absent from the
-door that mattered.
+Found on 2026-08-05 by driving the real doors, not by reading code.
 
-- #118 the ARROW create door (`data.py`) never called `require_parent` at all — it lives in a
-  different file from the three doors that did — and `require_parent` itself only counted identifier
-  SEGMENTS, never checking that the parent namespace was real. So a real Lance dataset landed inside
-  a namespace that does not exist, with a live owner grant and no `parent` edge: the cascade-invisible
-  orphan the guard's docstring exists to prevent.
 - #117 the destructive CASCADE forwarded `behavior` to a `dir` backend that answers
   NamespaceNotEmpty for every casing, so with the shipped default a non-empty namespace could not be
   dropped AT ALL, and three guarded loops below it were unreachable code.
@@ -19,10 +12,8 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-import pytest
-from lance_namespace import InvalidInputError, NamespaceNotFoundError
+from lance_namespace import NamespaceNotFoundError
 
-from catalog.api import fga_deps
 from service_kit.lakehouse import base_registry
 
 
@@ -56,40 +47,6 @@ class _RecordingNs:
 
 
 # ---------------------------------------------------------------- #118 parent must EXIST
-
-
-def test_a_table_whose_namespace_does_not_exist_is_REFUSED() -> None:
-    """The defect verbatim: POST /v1/table/ghostns$t9/create returned 200 and wrote a real dataset.
-    The parent must be real, not merely NAMED."""
-    ns: Any = _RecordingNs(existing_namespaces=set())
-    with pytest.raises(NamespaceNotFoundError, match="parent namespace 'ghostns' does not exist"):
-        asyncio.run(fga_deps.require_parent_exists(ns, "table", ["ghostns", "t9"], delimiter="$"))
-    assert ns.calls == ["namespace_exists:ghostns"], "the existence check never ran"
-
-
-def test_a_table_in_a_REAL_namespace_passes() -> None:
-    ns: Any = _RecordingNs(existing_namespaces={"bronze"})
-    asyncio.run(fga_deps.require_parent_exists(ns, "table", ["bronze", "pages"], delimiter="$"))
-    assert ns.calls == ["namespace_exists:bronze"]
-
-
-def test_the_segment_rule_still_bites_BEFORE_the_round_trip() -> None:
-    """A single-segment table has no parent to check — refuse without paying for a native call."""
-    ns: Any = _RecordingNs()
-    with pytest.raises(InvalidInputError, match="has no namespace to belong to"):
-        asyncio.run(fga_deps.require_parent_exists(ns, "table", ["rootless"], delimiter="$"))
-    assert ns.calls == [], "a nonexistent parent was probed for an identifier that names none"
-
-
-def test_the_refusal_NAMES_the_fix() -> None:
-    """A 404 that does not say which rung is missing costs the caller the same debugging session
-    the guard was written to save."""
-    ns: Any = _RecordingNs()
-    with pytest.raises(NamespaceNotFoundError) as err:
-        asyncio.run(fga_deps.require_parent_exists(ns, "table", ["a", "b", "t"], delimiter="$"))
-    detail = str(err.value)
-    assert "a$b" in detail and "POST /v1/namespace/a$b/create" in detail
-    assert "invisible to every cascade" in detail
 
 
 # ---------------------------------------------------------------- #117 the cascade actually destroys

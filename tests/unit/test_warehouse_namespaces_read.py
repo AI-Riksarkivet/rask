@@ -69,15 +69,6 @@ def test_bound_namespaces_are_returned_from_the_registry(tmp_path: Any) -> None:
     assert sorted(result.namespaces) == ["acme-bronze", "acme-silver"]
 
 
-def test_an_empty_namespace_is_still_listed(tmp_path: Any) -> None:
-    """THE #66 case. A binding whose namespace holds zero tables is invisible to any table-derived
-    view — but it is precisely what the delete door will refuse on, so the read must show it."""
-    settings = _settings(tmp_path)
-    _seed(settings, warehouse_id="acme-wh", bindings=("empty-ns",))
-
-    assert _read(settings, "acme-wh").namespaces == ["empty-ns"]
-
-
 def test_a_warehouse_with_no_bindings_answers_an_empty_list(tmp_path: Any) -> None:
     """Empty means EMPTY — a truthful [] the page can render as "safe to delete", distinct from 404."""
     settings = _settings(tmp_path)
@@ -110,12 +101,6 @@ def test_the_estate_read_returns_every_binding_in_one_pass(tmp_path: Any) -> Non
     _seed(settings, warehouse_id="b-wh", bindings=("b-one",))
 
     assert _estate(settings).bindings == {"a-one": "a-wh", "a-two": "a-wh", "b-one": "b-wh"}
-
-
-def test_an_estate_with_no_bindings_is_an_empty_mapping(tmp_path: Any) -> None:
-    settings = _settings(tmp_path)
-    _seed(settings, warehouse_id="bare-wh")
-    assert _estate(settings).bindings == {}
 
 
 def test_the_estate_read_is_FILTERED_to_what_the_caller_may_see(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:

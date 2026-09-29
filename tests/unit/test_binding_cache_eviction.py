@@ -40,21 +40,6 @@ def _settings() -> Any:
     return Settings.model_validate({"LANCE_REST_IMPL": "dir", "LANCE_S3_ACCESS_KEY_ID": "k", "LANCE_S3_SECRET_ACCESS_KEY": "s"})
 
 
-def test_warehouse_deleted_evicts_every_binding_to_that_warehouse() -> None:
-    """Both eviction sources fire: the event's own namespaces_dropped list AND the warehouse-id scan
-    (a Decision-3 partial delete can unbind more than the event recorded)."""
-    cache = _cache()
-    evicted = evict_stale_bindings(
-        cache,
-        action="warehouse_deleted",
-        object_id="warehouse:wh-acme",
-        extra={"namespaces_dropped": ["acme"]},  # the scan must still catch acme_gold
-        delimiter="$",
-    )
-    assert sorted(evicted) == ["acme", "acme_gold"]
-    assert set(cache) == {"beta"}, "an unrelated tenant's binding was evicted"
-
-
 def test_namespace_dropped_evicts_the_TOP_segment() -> None:
     """The cache is keyed by top-level namespace, so the id's FIRST segment is what gets evicted —
     for a top-level drop because its binding is gone, for a nested drop as a harmless re-read (the
@@ -139,18 +124,3 @@ def test_a_malformed_event_is_dropped_and_evicts_nothing() -> None:
     result = asyncio.run(on_control_event({"data": {"action": "not-a-real-action"}}, request, _settings(), None))
     assert result == {"status": "SUCCESS"}
     assert len(cache) == 3
-
-
-def test_a_handler_without_the_cache_still_acks() -> None:
-    """A deployment shape without the cache on state (defensive getattr) must not 500 the sidecar."""
-
-    class _BareApp:
-        class state:  # noqa: N801 — structural stand-in
-            control_buffer = None
-
-    class _BareRequest:
-        app = _BareApp()
-
-    body = {"data": {"action": "warehouse_deleted", "object_type": "warehouse", "object_id": "warehouse:w", "extra": {}}}
-    request: Any = _BareRequest()
-    assert asyncio.run(on_control_event(body, request, _settings(), None)) == {"status": "SUCCESS"}

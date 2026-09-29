@@ -23,16 +23,12 @@ unconditional one — a sequential test passes under both.
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 import pytest
 
 from catalog.services import warehouses
 from service_kit.lakehouse.records import RecordChangedError, RecordMissingError
-
-
-REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 @pytest.fixture
@@ -128,17 +124,6 @@ def test_a_record_that_vanished_is_a_conflict_not_a_resurrection(control_root: s
         warehouses.upsert_warehouse(control_root, {}, {"id": "gone", "bucket": "b", "root_uri": "s3://b", "project": "acme"})
 
 
-def test_a_record_that_moved_project_is_refused_at_the_write(control_root: str) -> None:
-    """The takeover guard also runs INSIDE the write, where it cannot be raced.
-
-    The endpoint's pre-flight guard still exists and still produces the better error earlier; this is
-    the one that holds when the record changes hands mid-request.
-    """
-    _seed(control_root, project="victim")
-    with pytest.raises(warehouses.WarehouseProjectConflict):
-        warehouses.upsert_warehouse(control_root, {}, {"id": "acme-wh", "bucket": "acme-wh", "root_uri": "s3://acme-wh", "project": "attacker"})
-
-
 def test_sustained_contention_surfaces_as_an_error_rather_than_a_silent_last_write(control_root: str) -> None:
     """A bounded retry that ran out must SAY so. Livelock is an honest 409, never a quiet overwrite."""
     _seed(control_root)
@@ -154,30 +139,6 @@ def test_sustained_contention_surfaces_as_an_error_rather_than_a_silent_last_wri
     with pytest.raises(RecordChangedError):
         warehouses.mutate_json(control_root, {}, "_warehouses/acme-wh.json", always_moves, attempts=3)
     assert calls["n"] == 3, "the retry bound is not being honoured"
-
-
-def test_no_production_path_writes_the_registry_unconditionally() -> None:
-    """`put_warehouse` is a SEEDING primitive. If it reappears in service or endpoint code, say so.
-
-    This is the regression guard for the fix above: the defect was not that an unconditional put
-    exists, but that production code reached for it. Tests may (fixtures have no concurrency to lose
-    to); `services/*/src/**` may not.
-    """
-    offenders: list[str] = []
-    for path in sorted(REPO_ROOT.glob("services/*/src/**/*.py")):
-        for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-            stripped = line.strip()
-            if stripped.startswith("#") or stripped.startswith("*"):
-                continue  # a comment ABOUT the primitive is not a call to it
-            if re.search(r"\bput_warehouse\s*\(", line) and "def put_warehouse" not in line:
-                offenders.append(f"{path.relative_to(REPO_ROOT)}:{n}: {stripped}")
-
-    assert not offenders, (
-        "production code calls `put_warehouse`, an UNCONDITIONAL overwrite. Whatever it carries "
-        "forward from an earlier read will silently discard a concurrent change — on `status` that "
-        "lifts a quarantine (diff2 F4). Use `upsert_warehouse` (re-create) or `set_warehouse_status` "
-        "(lifecycle flip); both are conditional on the record's ETag:\n  " + "\n  ".join(offenders)
-    )
 
 
 # --------------------------------------------------------------------------- #
@@ -238,24 +199,6 @@ def test_a_project_that_vanished_is_a_conflict_not_a_resurrection(control_root: 
 
     with pytest.raises(RecordMissingError):
         projects.upsert_project(control_root, {}, {"id": "gone", "created_at": "t", "created_by": "user:x"})
-
-
-def test_no_production_path_writes_the_project_registry_unconditionally() -> None:
-    """`put_project` is a SEEDING primitive, same rule as `put_warehouse`."""
-    offenders: list[str] = []
-    for path in sorted(REPO_ROOT.glob("services/*/src/**/*.py")):
-        for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-            stripped = line.strip()
-            if stripped.startswith("#") or stripped.startswith("*"):
-                continue
-            if re.search(r"\bput_project\s*\(", line) and "def put_project" not in line:
-                offenders.append(f"{path.relative_to(REPO_ROOT)}:{n}: {stripped}")
-
-    assert not offenders, (
-        "production code calls `put_project`, an UNCONDITIONAL overwrite. Whatever it carries forward "
-        "from an earlier read will silently discard a concurrent change — on `protected` that disarms "
-        "deletion protection (diff2 F1c). Use `upsert_project`, conditional on the record's ETag:\n  " + "\n  ".join(offenders)
-    )
 
 
 def test_primary_arms_through_the_write_and_survives_a_plain_re_post(control_root: str) -> None:

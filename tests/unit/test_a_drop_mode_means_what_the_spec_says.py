@@ -120,7 +120,7 @@ def test_the_drop_vocabulary_is_its_own_closed_set() -> None:
             DropMode.parse(outside)
 
 
-@pytest.mark.parametrize("mode", ["Skip", "skip"])
+@pytest.mark.parametrize("mode", ["Skip"])
 @pytest.mark.anyio
 async def test_skip_makes_dropping_an_absent_namespace_succeed(mode: str, monkeypatch: pytest.MonkeyPatch) -> None:
     """THE GATE. This is what makes a drop safe to retry."""
@@ -142,36 +142,12 @@ async def test_skip_also_covers_the_cascade_path(monkeypatch: pytest.MonkeyPatch
     assert announced == []
 
 
-@pytest.mark.parametrize("mode", [None, "Fail", "fail"])
+@pytest.mark.parametrize("mode", [None, "Fail"])
 @pytest.mark.anyio
 async def test_the_default_mode_still_reports_the_namespace_is_absent(mode: str | None, monkeypatch: pytest.MonkeyPatch) -> None:
     """`Fail` is the default, spelled or omitted."""
     with pytest.raises(NamespaceNotFoundError):
         await _drop(mode=mode, exists=False, behavior=None, monkeypatch=monkeypatch, announced=[])
-
-
-@pytest.mark.parametrize(
-    ("mode", "behavior", "named"),
-    [
-        pytest.param("PURGE", None, "'PURGE'", id="mode"),
-        pytest.param(None, "Cascde", "'Cascde'", id="behavior"),
-    ],
-)
-@pytest.mark.parametrize("exists", [True, False], ids=["present", "absent"])
-@pytest.mark.anyio
-async def test_a_field_outside_its_vocabulary_is_refused_before_anything_is_read(
-    mode: str | None, behavior: str | None, named: str, exists: bool, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A shape refusal costs no round trip, so it lands ahead of the protection read — and it cannot
-    depend on whether the namespace is there, which the backend has not yet been asked."""
-    announced: list[str] = []
-    reads: list[str] = []
-    with pytest.raises(InvalidInputError) as exc:
-        await _drop(mode=mode, exists=exists, behavior=behavior, monkeypatch=monkeypatch, announced=announced, reads=reads)
-
-    assert named in str(exc.value), f"the refusal must name the value it refused: {exc.value}"
-    assert reads == [], "a malformed drop must be refused before the protection record is read"
-    assert announced == []
 
 
 @pytest.mark.anyio

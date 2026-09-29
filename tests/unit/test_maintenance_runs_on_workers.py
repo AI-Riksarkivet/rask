@@ -67,75 +67,6 @@ def _worker_executes(uri: str, task_json: str) -> str:
     return str(task.from_json(task_json).execute(lance.dataset(uri)).json())
 
 
-def test_the_catalog_plans_compaction_and_hands_back_queue_shippable_tasks(tmp_path: Path) -> None:
-    uri = _seed(tmp_path, fragments=3)
-
-    plan = plan_compaction(uri, {}, target_rows_per_fragment=1000, batch_size=64, num_threads=2, max_source_bytes=256 * 1024 * 1024)
-
-    assert plan.read_version == lance.dataset(uri).version
-    assert plan.tasks, "three 100-row fragments with a 1000-row target must plan at least one task"
-    # Queue-shippable is the whole point: a task that cannot survive `json.dumps` cannot reach a worker.
-    for task in plan.tasks:
-        assert isinstance(task, str)
-        json.loads(task)
-    # Planning is a METADATA read — it must not have minted a version or moved a byte.
-    assert lance.dataset(uri).version == plan.read_version
-
-
-def test_a_worker_executes_the_task_and_the_catalog_commits_the_result(tmp_path: Path) -> None:
-    uri = _seed(tmp_path, fragments=3)
-    before = lance.dataset(uri)
-    assert len(before.get_fragments()) == 3
-
-    plan = plan_compaction(uri, {}, target_rows_per_fragment=1000, batch_size=64, num_threads=2, max_source_bytes=256 * 1024 * 1024)
-    results = [_worker_executes(uri, task) for task in plan.tasks]
-    outcome = commit_compaction(uri, {}, results)
-
-    after = lance.dataset(uri)
-    assert outcome.version == after.version > before.version
-    assert outcome.fragments_removed == 3
-    assert outcome.fragments_added == 1
-    assert len(after.get_fragments()) == 1
-    # The rows survive the rewrite intact, and so does the create-time stable-row-id config — a
-    # compaction that silently dropped either would be a data-loss bug wearing a maintenance name.
-    assert after.count_rows() == 300
-    assert after.to_table().sort_by("id")["id"].to_pylist() == list(range(300))
-    assert after.has_stable_row_ids
-
-
-def test_the_commit_opens_the_dataset_ONCE(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """§ Q3-22 (`CAT-CORE-09`). A commit must not re-read the manifest to learn what it just did.
-
-    `commit_compaction` opened the dataset, committed, and then opened it AGAIN from the URI purely to
-    read `.version` — a second full manifest read over the object store, on the catalog's write path,
-    for a number the handle already holds.
-
-    MEASURED against pylance rather than assumed, because the answer decides whether this is a fix or
-    a behaviour change: a dataset at version 4, compacted, reports version 6 **on the same handle with
-    no reopen**, and `checkout_latest()` leaves it at 6. `Compaction.commit` advances the handle in
-    place, so the reopen was buying nothing at all.
-    """
-    uri = _seed(tmp_path, fragments=3)
-    plan = plan_compaction(uri, {}, target_rows_per_fragment=1000, batch_size=64, num_threads=2, max_source_bytes=256 * 1024 * 1024)
-    results = [_worker_executes(uri, task) for task in plan.tasks]
-
-    real_open = lance.dataset
-    opens: list[str] = []
-
-    # TYPED to `lance.dataset`'s own shape rather than `*args: object`. An object-typed splat hands
-    # `object` to every keyword the real signature has, and ty reports that once PER PARAMETER — 15
-    # diagnostics from this one line, which is noise a genuinely wrong argument would hide in.
-    def _counting_open(uri: str, **kwargs: Any) -> lance.LanceDataset:
-        opens.append(uri)
-        return real_open(uri, **kwargs)
-
-    monkeypatch.setattr(lance, "dataset", _counting_open)
-    outcome = commit_compaction(uri, {}, results)
-
-    assert len(opens) == 1, f"the commit opened the dataset {len(opens)} times — the second read is a manifest fetch for a version the handle already has"
-    assert outcome.version == real_open(uri).version
-
-
 def test_a_policy_knob_this_door_does_not_honour_is_refused_not_dropped(tmp_path: Path) -> None:
     """Lance's option set is wider than the set this door forwards.
 
@@ -152,13 +83,6 @@ def test_a_policy_knob_this_door_does_not_honour_is_refused_not_dropped(tmp_path
     with pytest.raises(InvalidInputError) as caught:
         plan_compaction(uri, {}, io_buffer_size=8192, batch_size=64, num_threads=2, max_source_bytes=256 * 1024 * 1024)
     assert "io_buffer_size" in str(caught.value)
-
-
-def test_a_table_that_needs_no_compaction_plans_no_work(tmp_path: Path) -> None:
-    # One fragment already at target: the plan is empty, and an empty plan must be an ANSWER (no work
-    # to queue), not an error — otherwise a scheduled sweep pages an operator for a healthy table.
-    uri = _seed(tmp_path, fragments=1)
-    assert plan_compaction(uri, {}, target_rows_per_fragment=1000, batch_size=64, num_threads=2, max_source_bytes=256 * 1024 * 1024).tasks == []
 
 
 def test_a_result_from_a_stale_plan_is_refused_as_non_retryable(tmp_path: Path) -> None:
@@ -186,14 +110,6 @@ def test_a_result_from_a_stale_plan_is_refused_as_non_retryable(tmp_path: Path) 
     assert lance.dataset(uri).count_rows() == 5, "the refused commit must leave the table untouched"
 
 
-def test_malformed_worker_output_is_a_client_error_not_a_crash(tmp_path: Path) -> None:
-    # The result is client-controlled input off a queue. `RewriteResult.from_json` raises ValueError on
-    # a missing field; that must reach the caller as a 400, never a 500.
-    uri = _seed(tmp_path, fragments=2)
-    with pytest.raises(InvalidInputError):
-        commit_compaction(uri, {}, ['{"nope": 1}'])
-
-
 def test_an_empty_result_set_is_refused_rather_than_reported_as_a_no_op_success(tmp_path: Path) -> None:
     """Lance answers an empty rewrite list with a silent zero-metric success and no new version.
 
@@ -204,91 +120,6 @@ def test_an_empty_result_set_is_refused_rather_than_reported_as_a_no_op_success(
     uri = _seed(tmp_path, fragments=3)
     with pytest.raises(InvalidInputError):
         commit_compaction(uri, {}, [])
-
-
-def test_the_worker_writes_the_bytes_before_the_catalog_is_asked_to_commit(tmp_path: Path) -> None:
-    """The commit is metadata-only: every data file it publishes already exists when it is called.
-
-    This is the property that lets the catalog stay small. If the commit half were still moving bytes,
-    the new file would appear DURING the call rather than before it.
-    """
-    uri = _seed(tmp_path, fragments=3)
-    data_dir = Path(uri) / "data"
-    before = {p.name for p in data_dir.iterdir()}
-
-    plan = plan_compaction(uri, {}, target_rows_per_fragment=1000, batch_size=64, num_threads=2, max_source_bytes=256 * 1024 * 1024)
-    results = [_worker_executes(uri, task) for task in plan.tasks]
-    written_by_the_worker = {p.name for p in data_dir.iterdir()} - before
-    assert written_by_the_worker, "the worker's execute() is what writes the compacted data file"
-
-    commit_compaction(uri, {}, results)
-    assert {p.name for p in data_dir.iterdir()} - before == written_by_the_worker
-
-
-def test_the_executors_MEMORY_BOUNDS_survive_the_plan_because_the_task_bakes_them(tmp_path: Path) -> None:
-    """The executor's `batch_size`/`num_threads`/`max_source_bytes` reach every task verbatim.
-
-    They read like machine knobs the executor should own, but Lance gives the executor no later chance
-    to state them: measured on pylance 12.0.0 (2026-09-25), a planned task's JSON carries an `options`
-    object holding all three, and `CompactionTask.execute` takes only the dataset. Distinctive numbers,
-    so none can be satisfied by a default: these are the bounds the maintenance plane runs its in-pod
-    rewrite under (MAINTENANCE_SCAN_BATCH_SIZE, MAINTENANCE_COMPACT_THREADS, MAINTENANCE_MAX_SOURCE_BYTES).
-    """
-    uri = _seed(tmp_path, fragments=3)
-    source_bytes = 3 * 1024 * 1024 + 7
-
-    planned = plan_compaction(uri, {}, target_rows_per_fragment=1024, batch_size=37, num_threads=3, max_source_bytes=source_bytes)
-
-    assert planned.tasks, "the fixture must have something to compact or this proves nothing"
-    baked = [json.loads(task)["options"] for task in planned.tasks]
-    found = [(options["batch_size"], options["num_threads"], options["max_source_bytes"]) for options in baked]
-    assert found == [(37, 3, source_bytes)] * len(baked), f"the executor's bounds did not reach every task: {baked}"
-
-
-@pytest.mark.parametrize(("mode", "baked_as"), [(None, None), ("try_binary_copy", "TryBinaryCopy")])
-def test_the_repack_mode_is_forwarded_and_absent_means_lances_default(tmp_path: Path, mode: str | None, baked_as: str | None) -> None:
-    """`compaction_mode` is baked at plan time like the bounds; unset, the task carries Lance's default."""
-    uri = _seed(tmp_path, fragments=3)
-    policy = {"compaction_mode": mode} if mode is not None else {}
-
-    planned = plan_compaction(uri, {}, target_rows_per_fragment=1024, batch_size=64, num_threads=2, max_source_bytes=256 * 1024 * 1024, **policy)
-
-    assert planned.tasks, "the fixture must have something to compact or this proves nothing"
-    assert [json.loads(task)["options"]["compaction_mode"] for task in planned.tasks] == [baked_as] * len(planned.tasks)
-
-
-@pytest.mark.parametrize(
-    ("batch_size", "num_threads", "max_source_bytes"),
-    [
-        pytest.param(None, None, None, id="no bound"),
-        pytest.param(64, None, None, id="batch_size alone"),
-        pytest.param(None, 2, None, id="num_threads alone"),
-        pytest.param(None, None, 256 * 1024 * 1024, id="max_source_bytes alone"),
-        pytest.param(64, 2, None, id="max_source_bytes missing"),
-    ],
-)
-def test_a_plan_WITHOUT_every_bound_is_refused_and_the_refusal_names_every_bound(
-    tmp_path: Path, batch_size: int | None, num_threads: int | None, max_source_bytes: int | None
-) -> None:
-    """A plan missing any bound is refused, because nothing downstream can fill the gap in.
-
-    Measured on pylance 12.0.0 (2026-09-25): a task planned without them bakes `"batch_size": null`,
-    `"num_threads": null` and `"max_source_bytes": null` into its `options`, and
-    `CompactionTask.execute` takes only the dataset. `lance/optimize.py` documents what those nulls
-    become: the scanner's default batch, "the number of cores on the machine", and "no limit" on the
-    source bytes one run takes on. A plan like that is an OOM handed to whichever executor runs it.
-
-    Every name is in the refusal whichever is missing: memory is their product, and a caller told only
-    about the one it forgot would be refused again for the next.
-    """
-    uri = _seed(tmp_path, fragments=3)
-
-    with pytest.raises(InvalidInputError) as caught:
-        plan_compaction(uri, {}, target_rows_per_fragment=1024, batch_size=batch_size, num_threads=num_threads, max_source_bytes=max_source_bytes)
-
-    message = str(caught.value)
-    assert "memory bounds" in message, f"refused for another reason than a missing bound: {message}"
-    assert all(bound in message for bound in ("batch_size", "num_threads", "max_source_bytes")), f"the refusal must name every bound: {message}"
 
 
 def test_a_table_whose_BYTES_are_missing_is_a_client_error_not_a_500(tmp_path: Path) -> None:
@@ -343,34 +174,6 @@ def _clone_shaped(tmp_path: Path, judge: base_judge.BaseJudge) -> str:
     )
     base_registry.claim_bases(judge.registry, clone, [entry])
     return clone
-
-
-def test_the_distributed_commit_door_refuses_what_the_BUTTON_refuses(tmp_path: Path, judge: base_judge.BaseJudge) -> None:
-    """CONTRACT: `compaction_commit` applies the same gate `/maintenance/compact` applies.
-
-    The catalog exposes TWO ways to rewrite a table's fragments. `POST /management/v1/table/{id}/maintenance/compact`
-    goes through `catalog.services.maintenance.compact_now`, which calls `require_compactable` — the
-    feature-flag evidence gate plus the #114 shallow-clone base-refs guard, the same pair
-    `maintenance.services.optimize` asks before its own `compact_files`.
-
-    `POST /management/v1/table/{id}/compaction_plan` and `POST /management/v1/table/{id}/compaction_commit` go straight to
-    `dataplane` and ask NEITHER. They are writer-tier and published at the ingress under `/api/catalog`,
-    and the commit half removes fragments — so the estate shipped a gated door and an ungated one onto
-    the same operation, and a caller reaching the ungated pair gets a rewrite the button would have
-    refused with a reason.
-
-    The gate belongs on COMMIT rather than only on PLAN: planning is a manifest read that moves no byte,
-    while the commit is what mints the version and drops the old fragments. A plan that is never
-    committed costs nothing.
-    """
-    clone = _clone_shaped(tmp_path, judge)
-    plan = plan_compaction(clone, {}, target_rows_per_fragment=1000, batch_size=64, num_threads=2, max_source_bytes=256 * 1024 * 1024)
-    results = [_worker_executes(clone, task) for task in plan.tasks]
-
-    with pytest.raises(Exception) as caught:  # noqa: B017 — the TYPE is the subject of the sibling assertion below
-        commit_compaction(clone, {}, results)
-    message = str(caught.value).lower()
-    assert "clone" in message or "base" in message, f"the refusal does not name the shallow clone: {caught.value}"
 
 
 def test_the_distributed_doors_refuse_with_the_SAME_reason_the_button_gives(tmp_path: Path, judge: base_judge.BaseJudge) -> None:

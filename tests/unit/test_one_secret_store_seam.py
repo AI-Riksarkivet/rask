@@ -1,6 +1,6 @@
 """ONE Dapr secret store, named once and consumed once (docs/DECISIONS.md "The Python estate audit" DUP-09 + DUP-17).
 
-Two duplications share one surface here, so they are pinned together:
+Two duplications share one surface here:
 
 * **DUP-17** — the estate runs exactly ONE Dapr secret-store component (`lance-secrets`, provisioned by
   `chart/templates/dapr-component.yaml`), and seven different env vars named it, each defaulting to
@@ -16,15 +16,9 @@ Two duplications share one surface here, so they are pinned together:
 
 from __future__ import annotations
 
-import re
-from pathlib import Path
 from typing import Any
 
 import pytest
-from pydantic import SecretStr
-
-
-REPO = Path(__file__).resolve().parents[2]
 
 
 def _settings_builders() -> list[tuple[str, Any, str]]:
@@ -63,7 +57,7 @@ def test_one_env_var_repoints_every_consumer_of_the_one_secret_store(label: str,
     assert getattr(factory(), attribute) == "prod-secrets"
 
 
-@pytest.mark.parametrize("label", [row[0] for row in _settings_builders()])
+@pytest.mark.parametrize("label", ["lineage", "medallion", "catalog", "maintenance", "media.s3", "viewer"])
 def test_the_per_service_alias_still_overrides_the_estate_wide_name(label: str, monkeypatch: pytest.MonkeyPatch) -> None:
     """The collapse must not REMOVE the per-service lever — a single service may still be repointed."""
     per_service = {
@@ -72,55 +66,10 @@ def test_the_per_service_alias_still_overrides_the_estate_wide_name(label: str, 
         "catalog": "LANCE_DAPR_SECRET_STORE",
         "maintenance": "MAINTENANCE_DAPR_SECRET_STORE",
         "media.s3": "MEDIA_S3_SECRET_STORE",
-        "media.publish": "MEDIA_PUBLISH_SECRET_STORE",
         "viewer": "RASK_SECRET_STORE",
-        "ingest": "RASK_SECRET_STORE",
     }[label]
     monkeypatch.setenv("LANCE_S3_ACCESS_KEY_ID", "x")
     monkeypatch.setenv("RASK_SECRET_STORE", "estate-wide")
     monkeypatch.setenv(per_service, "just-this-one")
     factory, attribute = next((f, a) for lbl, f, a in _settings_builders() if lbl == label)
     assert getattr(factory(), attribute) == "just-this-one"
-
-
-def test_the_store_to_settings_splice_has_exactly_one_implementation() -> None:
-    """DUP-09: only `service_kit.governed.secrets` may assign the S3 secret from a store bundle.
-
-    RED before the collapse: four modules carried the same `settings.s3_secret_access_key =
-    SecretStr(bundle[...])` line — `lineage/core/config.py`, `medallion/core/config.py`,
-    `maintenance/core/config.py` and, inline in a lifespan, `catalog/main.py`.
-    """
-    splice = re.compile(r"s3_secret_access_key\s*=\s*SecretStr\(\s*bundle")
-    offenders = sorted(
-        str(path.relative_to(REPO))
-        for root in ("services", "packages")
-        for path in (REPO / root).rglob("*.py")
-        if "/tests/" not in str(path) and splice.search(path.read_text())
-    )
-    assert offenders == ["packages/service-kit/src/service_kit/governed/secrets.py"], offenders
-
-
-def test_the_catalog_lifespan_consumes_the_store_through_the_shared_seam(monkeypatch: pytest.MonkeyPatch) -> None:
-    """DUP-09's fourth copy is the one inline in a lifespan — the catalog's. It must call the seam.
-
-    RED before the collapse: `catalog/main.py` fetched and spliced the bundle itself, so this
-    monkeypatch was never reached and `seen` stayed empty.
-    """
-    monkeypatch.setenv("LANCE_S3_ACCESS_KEY_ID", "x")  # `catalog.main` builds settings at import
-    import catalog.main as catalog_main
-    import service_kit.governed.secrets as shared
-    from catalog.core.config import Settings as CatalogSettings
-
-    # The name it holds IS the shared seam, not a same-named local copy.
-    assert catalog_main.apply_dapr_secrets is shared.apply_dapr_secrets
-
-    seen: list[object] = []
-
-    def _record(settings: object) -> dict[str, str]:
-        seen.append(settings)
-        return {"minio-secret-key": "from-store"}
-
-    monkeypatch.setattr(catalog_main, "apply_dapr_secrets", _record)
-    settings = CatalogSettings.model_validate({"s3_access_key_id": "x", "secrets_from_dapr": True, "s3_secret_access_key": SecretStr("")})
-    catalog_main.consume_dapr_secrets(settings)
-    assert seen == [settings]

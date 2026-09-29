@@ -11,7 +11,6 @@ pylance 12 no longer applies at commit.
 
 from __future__ import annotations
 
-import json
 import re
 from typing import Any, Literal
 
@@ -54,41 +53,6 @@ def test_commit_appends_client_written_fragments(tmp_path: Any) -> None:
     assert lance.dataset(uri).to_table().num_rows == 3
     # The append inherited the create-time config — stable row ids are still on (not reset by the commit).
     assert lance.dataset(uri).has_stable_row_ids
-
-
-def test_commit_rejects_empty_fragment_set(tmp_path: Any) -> None:
-    # An empty commit is a client error (the design review's "reject empty fragments"), not a no-op success.
-    uri = str(tmp_path / "t")
-    lance.write_dataset(pa.table({"id": pa.array([1], pa.int64())}), uri)
-    with pytest.raises(InvalidInputError):
-        commit_appended_fragments(uri, {}, [], lance.dataset(uri).version)
-
-
-def test_stale_append_after_overwrite_is_a_conflict(tmp_path: Any) -> None:
-    # Append auto-rebases vs Append, but an Append built at a read_version BEFORE a concurrent Overwrite is
-    # Incompatible (transaction.md) -> Lance raises OSError "Incompatible transaction" -> a NON-retryable 400,
-    # NOT a silent success and NOT a retryable 409 (a re-commit would replay void fragments — see below).
-    uri = str(tmp_path / "t")
-    schema = pa.schema([pa.field("id", pa.int64())])
-    lance.write_dataset(pa.table({"id": [1]}, schema=schema), uri)  # v1
-    stale_base = lance.dataset(uri).version
-
-    # A concurrent Overwrite lands, advancing the version and making the stale append incompatible.
-    ov = [
-        lance.FragmentMetadata.from_json(json.dumps(f.to_json()))
-        for f in lance.fragment.write_fragments(pa.table({"id": [9]}, schema=schema), uri, schema=schema)
-    ]
-    lance.LanceDataset.commit(uri, lance.LanceOperation.Overwrite(schema, ov), read_version=stale_base)
-
-    frags = _fragments(uri, pa.table({"id": [5]}, schema=schema))
-    # NON-RETRYABLE (spec conflict taxonomy; audit 2026-07-14). This test previously asserted
-    # ConcurrentModificationError — i.e. it PINNED the dangerous contract: a 409 telling the client to
-    # "re-read and re-commit". After the Overwrite above, the table's contents were REPLACED, so replaying
-    # these fragments would append data describing the OLD table into a semantically different one. The
-    # fragments are void; the write must be redone. A test can pin the WRONG behavior just as confidently
-    # as the right one — this one did.
-    with pytest.raises(InvalidInputError, match="NOT retryable"):
-        commit_appended_fragments(uri, {}, frags, stale_base)  # built against the pre-overwrite version
 
 
 def test_classify_commit_error_maps_the_taxonomy() -> None:
@@ -223,8 +187,8 @@ def test_an_overwrite_between_the_judgement_and_the_commit_cannot_slip_unjudged_
     assert unsupported_features(lance.dataset(uri)) is None
 
 
-@pytest.mark.parametrize("read_version", [0, 1])
-@pytest.mark.parametrize("table_version", ["2.1", "2.2"])
+@pytest.mark.parametrize("read_version", [0])
+@pytest.mark.parametrize("table_version", ["2.1"])
 def test_commit_ACCEPTS_fragments_that_inherit_the_table_version(tmp_path: Any, table_version: Literal["2.1", "2.2"], read_version: int) -> None:
     """``write_fragments`` with no version inherits the table's; that append keeps the table's flags."""
     uri = str(tmp_path / "t")

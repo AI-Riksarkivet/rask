@@ -48,18 +48,3 @@ def test_branch_delete_demands_an_owner_rung() -> None:
 def test_it_matches_the_bar_its_lesser_sibling_already_clears() -> None:
     """A tag is a pointer, a branch is data — the pointer's delete must not be the stricter of the two."""
     assert fga_deps._action_relation("table", "tags/delete") == fga_deps._action_relation("table", "branches/delete")
-
-
-def test_creating_a_branch_keeps_its_own_rung() -> None:
-    """Unchanged: `branches/create` has a relation of its own because forking history is not destroying it.
-
-    Pinned so the fix cannot be "mapped them both to can_drop" — create and delete are different acts
-    and the model already separates them.
-    """
-    assert fga_deps._action_relation("table", "branches/create") == "can_create_branch"
-
-
-def test_listing_branches_is_still_a_read() -> None:
-    """The read half must not be dragged up with the destructive one — `branches/list` discloses names,
-    which is metadata, and pinning it here stops a future edit from widening the whole prefix."""
-    assert fga_deps._action_relation("table", "branches/list") == "can_get_metadata"

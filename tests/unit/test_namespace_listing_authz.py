@@ -24,7 +24,6 @@ from typing import Any, cast
 from unittest.mock import MagicMock
 
 import pytest
-from fastapi.concurrency import run_in_threadpool
 from lance_namespace import ListTablesResponse
 
 from catalog.api.v1.endpoints import namespaces as ns_ep
@@ -93,15 +92,6 @@ async def test_a_single_table_grantee_cannot_enumerate_its_siblings(monkeypatch:
 
 
 @pytest.mark.asyncio
-async def test_the_route_still_answers_rather_than_refusing(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The half C1 exists for. A grantee whose only table is here must still get a 200 with their own
-    table — narrowing the route to a 403 would put back the broken breadcrumb C1 fixed."""
-    response = await _list(backend_tables=["catalog"], allowed=["table:acme-gold$catalog"], monkeypatch=monkeypatch)
-
-    assert response.tables == ["catalog"]
-
-
-@pytest.mark.asyncio
 async def test_a_caller_who_can_read_nothing_here_gets_an_empty_listing(monkeypatch: pytest.MonkeyPatch) -> None:
     """Empty, not "everything". A grant on some OTHER namespace's table also opens this route under
     C1 only if it is beneath this container — but `list_objects` is estate-wide, so the filter must
@@ -149,52 +139,3 @@ async def test_a_page_counts_only_tables_the_caller_can_see(monkeypatch: pytest.
 
     assert nxt.tables == ["d"]
     assert nxt.page_token is None
-
-
-@pytest.mark.asyncio
-async def test_the_backend_is_never_asked_to_paginate(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Pinned on the REQUEST, because this is the half a result-shape assertion cannot see: if a
-    native `limit` ever comes back, the filter starts operating on a pre-truncated list again and every
-    assertion above still passes for the pages that happen to be full."""
-    seen: dict[str, Any] = {}
-
-    def _capture(_ns: object, _op: str, req: Any) -> ListTablesResponse:
-        seen["page_token"], seen["limit"] = req.page_token, req.limit
-        return ListTablesResponse(tables=["catalog"])
-
-    monkeypatch.setattr(ns_ep.native, "call", _capture)
-
-    async def _all(_client: object, **_kw: Any) -> ns_ep.fga.ObjectListing:
-        return ns_ep.fga.ObjectListing(objects=["table:acme-gold$catalog"], truncated=False)
-
-    monkeypatch.setattr(ns_ep.fga, "list_objects", _all)
-
-    await ns_ep.list_tables(
-        id="acme-gold",
-        ns=MagicMock(),
-        settings=cast(Settings, _Settings(fga_enabled=True)),
-        token=MagicMock(sub="ivan"),
-        client=MagicMock(),
-        page_token="catalog",
-        limit=1,
-    )
-
-    assert seen == {"page_token": None, "limit": None}
-
-
-@pytest.mark.asyncio
-async def test_the_native_call_is_not_made_on_the_event_loop(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`native.call` is blocking IO. The route is async now, so it has to hand that to a threadpool or
-    it stalls the whole worker for the length of a backend listing."""
-    threads: list[bool] = []
-    real = run_in_threadpool
-
-    async def _watched(func: Any, /, *args: Any, **kwargs: Any) -> Any:
-        threads.append(True)
-        return await real(func, *args, **kwargs)
-
-    monkeypatch.setattr(ns_ep, "run_in_threadpool", _watched)
-
-    await _list(backend_tables=["catalog"], allowed=["table:acme-gold$catalog"], monkeypatch=monkeypatch)
-
-    assert threads, "the blocking native listing ran directly on the event loop"

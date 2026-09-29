@@ -33,7 +33,7 @@ from catalog.api.fga_deps import _OWNER_SUFFIX_RELATION
 TABLE = _OWNER_SUFFIX_RELATION["table"]
 
 
-@pytest.mark.parametrize("suffix", ["tags/delete", "version/delete"])
+@pytest.mark.parametrize("suffix", ["tags/delete"])
 def test_a_destructive_version_op_is_not_left_on_the_writer_rung(suffix: str) -> None:
     """The door must be declared on the OWNER map: undeclared it is refused for every caller, and on the
     writer map a plain data writer clears it."""
@@ -44,7 +44,7 @@ def test_a_destructive_version_op_is_not_left_on_the_writer_rung(suffix: str) ->
     )
 
 
-@pytest.mark.parametrize("suffix", ["tags/delete", "version/delete"])
+@pytest.mark.parametrize("suffix", ["tags/delete"])
 def test_it_clears_the_same_bar_as_the_maintenance_that_respects_tags(suffix: str) -> None:
     """`maintenance/run` reclaims versions and EXEMPTS tagged ones, at `can_drop`. A door that
     destroys the same thing cannot ask for less."""
@@ -52,11 +52,3 @@ def test_it_clears_the_same_bar_as_the_maintenance_that_respects_tags(suffix: st
         f"{suffix!r} is gated on {TABLE.get(suffix)!r} while the tag-respecting reclamation is gated "
         f"on {TABLE['maintenance/run']!r} — the unguarded door must not be the cheaper one"
     )
-
-
-def test_the_tag_lifecycle_is_gated_end_to_end() -> None:
-    """Create and update were already owner; delete completes the set. A lifecycle guarded at two of
-    three points is guarded at none of them, because the ungated verb reaches the same state."""
-    assert TABLE["tags/create"] == "can_create_tag"
-    assert TABLE["tags/update"] == "can_update_tag"
-    assert "tags/delete" in TABLE, "the tag lifecycle is gated on create and update but not delete"

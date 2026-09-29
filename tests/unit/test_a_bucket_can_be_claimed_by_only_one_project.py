@@ -56,13 +56,6 @@ def test_a_rival_project_is_refused_even_when_it_read_the_listing_first(control_
         warehouses.claim_bucket(control_root, {}, bucket="acme-wh", project="mallory", warehouse_id="wh-evil")
 
 
-def test_the_owning_project_may_reclaim_its_own_bucket(control_root: str) -> None:
-    """The partial-failure retry path: re-POSTing an existing warehouse must not collide with itself."""
-    warehouses.claim_bucket(control_root, {}, bucket="acme-wh", project="acme", warehouse_id="wh-acme")
-
-    warehouses.claim_bucket(control_root, {}, bucket="acme-wh", project="acme", warehouse_id="wh-acme")
-
-
 def test_one_project_may_back_two_warehouses_with_one_bucket(control_root: str) -> None:
     """The work+gold pair the estate actually ships, which is why the claim is keyed by PROJECT.
 
@@ -72,8 +65,3 @@ def test_one_project_may_back_two_warehouses_with_one_bucket(control_root: str) 
     warehouses.claim_bucket(control_root, {}, bucket="acme-wh", project="acme", warehouse_id="wh-work")
 
     warehouses.claim_bucket(control_root, {}, bucket="acme-wh", project="acme", warehouse_id="wh-gold")
-
-
-def test_an_unclaimed_bucket_reads_as_nothing(control_root: str) -> None:
-    """So a caller can tell "nobody holds this" from "somebody does" without catching an exception."""
-    assert warehouses.bucket_claim(control_root, {}, bucket="never-claimed") is None

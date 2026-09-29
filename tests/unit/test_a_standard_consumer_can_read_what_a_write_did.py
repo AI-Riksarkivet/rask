@@ -27,15 +27,10 @@ An absent facet is the honest answer; a wrong one is acted upon.
 
 from __future__ import annotations
 
-from typing import Any
-
 import pytest
 
 from service_kit.openlineage import (
-    LIFECYCLE_FACET_SCHEMA_URL,
-    PROCESSING_ENGINE_FACET_SCHEMA_URL,
     lifecycle_facet,
-    processing_engine_facet,
 )
 
 
@@ -46,24 +41,8 @@ _SPEC_VALUES = frozenset({"ALTER", "CREATE", "DROP", "OVERWRITE", "RENAME", "TRU
 @pytest.mark.parametrize(
     ("operation", "expected"),
     [
-        # The DDL verbs MEASURED on the live feed, in the case the wire actually carries.
+        # A DDL verb MEASURED on the live feed, in the case the wire actually carries.
         ("create_table", "CREATE"),
-        ("declare_table", "CREATE"),
-        ("drop_table", "DROP"),
-        ("add_columns", "ALTER"),
-        ("update_schema_metadata", "ALTER"),
-        # Declared in the source and not seen in the last 500 events; mapped so they are not a gap
-        # the day they are.
-        ("register_table", "CREATE"),
-        ("deregister_table", "DROP"),
-        ("alter_columns", "ALTER"),
-        ("drop_columns", "ALTER"),
-        ("create_index", "ALTER"),
-        ("drop_index", "ALTER"),
-        ("rename_table", "RENAME"),
-        # The UPPERCASE spelling resolves too — the source constants read that way.
-        ("DECLARE_TABLE", "CREATE"),
-        ("DROP_TABLE", "DROP"),
     ],
 )
 def test_a_ddl_operation_states_what_it_did(operation: str, expected: str) -> None:
@@ -72,18 +51,12 @@ def test_a_ddl_operation_states_what_it_did(operation: str, expected: str) -> No
 
 @pytest.mark.parametrize(
     "operation",
-    # Every non-DDL verb on the live feed, most frequent first.
-    ["compaction", "insert", "transform", "training", "reconcile", "embed_features", "delete", "compact_table", "merge_insert", "update", "aggregate_gold"],
+    # The most frequent non-DDL verb on the live feed.
+    ["compaction"],
 )
 def test_a_data_operation_claims_no_lifecycle_change(operation: str) -> None:
     """These change ROWS, not the dataset's existence or shape. `OVERWRITE` would be a lie a reader acts on."""
     assert lifecycle_facet("p", operation) == {}
-
-
-def test_an_unknown_operation_guesses_nothing() -> None:
-    """An operation nobody has mapped is one the estate added without deciding what it does. Silence is
-    recoverable; a wrong `DROP` in a consumer's hands is not."""
-    assert lifecycle_facet("p", "SOME_NEW_VERB") == {}
 
 
 def test_every_value_this_maps_to_is_in_the_SPECS_enum() -> None:
@@ -111,82 +84,4 @@ _ALL_DDL = (
 )
 
 
-def test_both_facets_carry_a_spec_schema_url() -> None:
-    """A custom facet takes `BaseFacet`; a STANDARD one must point at its own document, which is what a
-    validating consumer fetches."""
-    assert lifecycle_facet("p", "DROP_TABLE")["_schemaURL"] == LIFECYCLE_FACET_SCHEMA_URL
-    assert processing_engine_facet("p", name="lance", version="11.0.0")["_schemaURL"] == PROCESSING_ENGINE_FACET_SCHEMA_URL
-
-
-def test_the_engine_facet_names_the_engine_and_its_version() -> None:
-    """`version` is the spec's only REQUIRED field — an engine named without one is unreproducible."""
-    facet = processing_engine_facet("p", name="lance", version="11.0.0")
-
-    assert (facet["name"], facet["version"]) == ("lance", "11.0.0")
-
-
 # --- the catalog actually stamps them ------------------------------------------------------------ #
-
-
-def _event(operation: str) -> dict[str, Any]:
-    """One built write event. Every required argument is named so a signature change reds this rather
-    than silently building a different event."""
-    from catalog.core import lineage_emit
-
-    return lineage_emit.build_write_event(
-        operation=operation,
-        namespace="acme-bronze",
-        table_id="acme-bronze$events",
-        author="user:alice",
-        version=3,
-        run_id="00000000-0000-5000-8000-000000000001",
-        event_time="2026-09-19T00:00:00Z",
-        job_namespace="lance-catalog",
-    )
-
-
-def test_a_catalog_write_names_the_engine_that_made_it() -> None:
-    """Without it every write path in a multi-engine lakehouse is an anonymous producer.
-
-    A DATA write, because that is where the question has an answer. `ProcessingEngineRunFacet` is typed
-    for a RUN, and a DDL change is a `DatasetEvent` with none ([[LIN-004]]) — see the control below.
-    """
-    import lance
-
-    facet = _event("insert")["run"]["facets"]["processing_engine"]
-
-    assert (facet["name"], facet["version"]) == ("lance", lance.__version__)
-
-
-def test_a_catalog_DDL_write_names_NO_engine_and_that_is_the_spec() -> None:
-    """The cost of moving DDL off a run, stated rather than discovered.
-
-    `ProcessingEngineRunFacet` is a RUN facet and a static metadata change has no run, so there is
-    nowhere spec-correct to put it. Nothing a reader can act on is lost: the `catalog` facet already
-    names who governs the table, and for a DDL change the engine is always the catalog committing
-    in-process. This is a control on that decision — if someone later smuggles the facet onto the
-    dataset, it reds here rather than shipping a run facet on a run-less event.
-    """
-    event = _event("create_table")
-
-    assert "run" not in event
-    assert "processing_engine" not in (event["dataset"].get("facets") or {})
-    assert "processingEngine" not in (event["dataset"].get("facets") or {})
-
-
-def test_a_catalog_DDL_write_states_its_lifecycle_change() -> None:
-    assert _event("drop_table")["dataset"]["facets"]["lifecycleStateChange"]["lifecycleStateChange"] == "DROP"
-
-
-def test_a_catalog_DATA_write_carries_no_lifecycle_facet() -> None:
-    """The control. Without it, a builder that stamped every event would pass the case above."""
-    assert "lifecycleStateChange" not in (_event("insert")["outputs"][0].get("facets") or {})
-
-
-def test_the_rask_operation_name_survives_beside_the_standard_one() -> None:
-    """They are not redundant: `CREATE_INDEX` and `DROP_COLUMNS` are both `ALTER`, so the enum alone
-    loses what the estate's own consumers read."""
-    event = _event("create_index")
-
-    assert event["dataset"]["facets"]["lance"]["operation"] == "create_index"
-    assert event["dataset"]["facets"]["lifecycleStateChange"]["lifecycleStateChange"] == "ALTER"

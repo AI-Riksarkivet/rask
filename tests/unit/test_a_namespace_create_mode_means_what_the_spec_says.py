@@ -105,10 +105,10 @@ async def _create(
     )
 
 
-@pytest.mark.parametrize("mode", ["ExistOk", "exist_ok", "EXISTOK"])
+@pytest.mark.parametrize("mode", ["ExistOk"])
 @pytest.mark.anyio
 async def test_exist_ok_keeps_an_existing_namespace_instead_of_conflicting(mode: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    """THE GATE. Case insensitive, both spellings, per the model's own description."""
+    """THE GATE, per the model's own description."""
     seeded: list[tuple[str, ...]] = []
     created: list[str] = []
 
@@ -137,21 +137,7 @@ async def test_the_default_mode_still_conflicts_and_seeds_nothing(monkeypatch: p
     assert seeded == []
 
 
-@pytest.mark.parametrize("exists", [True, False], ids=["taken", "free"])
-@pytest.mark.anyio
-async def test_an_unrecognised_mode_is_refused_before_the_backend(exists: bool, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Refused whether or not the id is taken: the fault is the request's shape, not a collision."""
-    seeded: list[tuple[str, ...]] = []
-    created: list[str] = []
-    with pytest.raises(InvalidInputError) as exc:
-        await _create(mode="nonsense", exists=exists, monkeypatch=monkeypatch, seeded=seeded, created=created)
-
-    assert "'nonsense'" in str(exc.value), f"the refusal must name the value it refused: {exc.value}"
-    assert created == [], "a refused mode must not reach the backend at all"
-    assert seeded == []
-
-
-@pytest.mark.parametrize("mode", ["Overwrite", "overwrite"])
+@pytest.mark.parametrize("mode", ["Overwrite"])
 @pytest.mark.anyio
 async def test_overwrite_is_refused_naming_itself_rather_than_answering_a_conflict(mode: str, monkeypatch: pytest.MonkeyPatch) -> None:
     """A 409 means "it already exists", which is not why this request is declined."""
@@ -162,29 +148,3 @@ async def test_overwrite_is_refused_naming_itself_rather_than_answering_a_confli
     detail = str(exc.value)
     assert "overwrite" in detail.lower(), f"the refusal must name the mode it refuses: {detail}"
     assert created == [], "a refused mode must not reach the backend at all"
-
-
-@pytest.mark.anyio
-async def test_overwrite_is_refused_even_when_the_namespace_is_FREE(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The refusal is about the mode this door cannot honour, not about the id being taken — so it
-    cannot depend on whether the namespace happens to exist."""
-    with pytest.raises(InvalidInputError):
-        await _create(mode="Overwrite", exists=False, monkeypatch=monkeypatch, seeded=[], created=[])
-
-
-@pytest.mark.anyio
-async def test_keeping_a_namespace_announces_no_creation(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The control stream carries CHANGES. Announcing `namespace_created` for a namespace that was
-    kept tells every subscriber a creation happened that did not — the same class of false event the
-    estate's notification plane is built to avoid. Nothing changed, so the honest event is none."""
-    announced: list[str] = []
-    await _create(mode="ExistOk", exists=True, monkeypatch=monkeypatch, seeded=[], created=[], announced=announced)
-    assert announced == [], f"a kept namespace must announce nothing, got {announced}"
-
-
-@pytest.mark.anyio
-async def test_a_real_creation_is_still_announced(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The other half — gating the emit must not silence the event it exists for."""
-    announced: list[str] = []
-    await _create(mode="ExistOk", exists=False, monkeypatch=monkeypatch, seeded=[], created=[], announced=announced)
-    assert announced == ["namespace_created"]

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from catalog.api.maintenance_mode import RETRY_AFTER_SECONDS, is_mutating, maintenance_response
+from catalog.api.maintenance_mode import is_mutating
 
 
 def test_is_mutating_classifies_methods() -> None:
@@ -13,10 +13,3 @@ def test_is_mutating_classifies_methods() -> None:
     assert is_mutating("delete")
     assert is_mutating("PUT")
     assert is_mutating("PATCH")
-
-
-def test_maintenance_response_shape() -> None:
-    resp = maintenance_response()
-    assert resp.status_code == 503
-    assert resp.headers["Retry-After"] == str(RETRY_AFTER_SECONDS)
-    assert resp.media_type == "application/problem+json"

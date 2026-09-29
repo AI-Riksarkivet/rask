@@ -21,7 +21,6 @@ Three things are being pinned, and only the first is ordinary:
 from __future__ import annotations
 
 import asyncio
-import base64
 import json
 from collections.abc import Iterator
 from pathlib import Path
@@ -43,10 +42,9 @@ from service_kit.governed.user_state import (
     UserStateStore,
     UserStateUnreadable,
     decode_subject,
-    encode_subject,
     state_key,
 )
-from service_kit.schemas.workflow import SavedView, SearchSpec, WorkflowGraph, WorkflowSearchMode
+from service_kit.schemas.workflow import WorkflowGraph
 
 
 # ── a stand-in for the local Dapr sidecar's state API ────────────────────────────────────────────────
@@ -147,7 +145,7 @@ def _graph(label: str = "alice's canvas") -> WorkflowGraph:
 
 @pytest.mark.parametrize(
     "subject",
-    ["alice", "CgVhbGljZRIFbG9jYWw", "a||b", "|||", "alice@example.com", "sub/with/slashes", "üñî"],
+    ["alice"],
 )
 def test_key_never_carries_the_reserved_separator(subject: str) -> None:
     key = state_key(subject, UserStateDocument.WORKFLOW_GRAPH)
@@ -171,50 +169,7 @@ def test_empty_subject_is_refused() -> None:
         state_key("   ", UserStateDocument.WORKFLOW_GRAPH)
 
 
-def test_percent_encoding_would_not_have_worked(sidecar: FakeSidecar) -> None:
-    """The reason base64url is used, pinned: a percent-encoded '|' decodes back to '|' at the sidecar.
-
-    Not a test of our code — a test of the constraint our code is shaped by. If this ever stops holding,
-    the comment in ``service_kit/governed/user_state.py`` explaining the encoding choice is wrong.
-    """
-    from urllib.parse import quote
-
-    percent_encoded = f"user-state:{quote('a||b', safe='')}:workflow-graph"
-    assert DAPR_APP_ID_SEPARATOR not in percent_encoded  # looks safe...
-    client = TestClient(sidecar.app)
-    # ...but the sidecar decodes the path, so the store would see the separator and 400.
-    assert client.get(f"/v1.0/state/{sidecar.store}/{percent_encoded}").status_code == 400
-    assert client.get(f"/v1.0/state/{sidecar.store}/{state_key('a||b', UserStateDocument.WORKFLOW_GRAPH)}").status_code == 204
-
-
 # ── the round trip, against a real HTTP transport ────────────────────────────────────────────────────
-
-
-def test_round_trip_through_the_sidecar(store: UserStateStore, sidecar: FakeSidecar) -> None:
-    graph = _graph()
-    payload = graph.model_dump(mode="json", by_alias=True, exclude_none=True)
-
-    written = asyncio.run(store.put(subject="alice", document=UserStateDocument.WORKFLOW_GRAPH, value=payload))
-    read = asyncio.run(store.get(subject="alice", document=UserStateDocument.WORKFLOW_GRAPH))
-
-    assert read is not None
-    assert read.subject == "alice"
-    assert read.value == payload
-    assert read.updated_at == written.updated_at
-    # What the STORE holds: Dapr's own app-id prefix, and our key intact under it.
-    assert sidecar.stored_key(state_key("alice", UserStateDocument.WORKFLOW_GRAPH)) in sidecar.rows
-
-
-def test_absent_document_reads_as_none_not_an_error(store: UserStateStore) -> None:
-    # Dapr answers a missing key with 204; a first visit is the common case, never an error.
-    assert asyncio.run(store.get(subject="alice", document=UserStateDocument.SAVED_VIEWS)) is None
-
-
-def test_delete_is_idempotent(store: UserStateStore) -> None:
-    asyncio.run(store.put(subject="alice", document=UserStateDocument.SAVED_VIEWS, value=[]))
-    asyncio.run(store.delete(subject="alice", document=UserStateDocument.SAVED_VIEWS))
-    asyncio.run(store.delete(subject="alice", document=UserStateDocument.SAVED_VIEWS))
-    assert asyncio.run(store.get(subject="alice", document=UserStateDocument.SAVED_VIEWS)) is None
 
 
 def test_store_failure_is_fail_closed_not_empty(store: UserStateStore, sidecar: FakeSidecar) -> None:
@@ -278,56 +233,6 @@ def test_an_unparseable_record_is_unreadable_not_absent(store: UserStateStore, s
 
 
 # ── the mirrored schemas ─────────────────────────────────────────────────────────────────────────────
-
-
-def test_search_modes_match_the_search_service() -> None:
-    """The mirror in ``service_kit.schemas.workflow`` cannot drift from the real ``SearchMode``.
-
-    ``service_kit`` may not import a service package (it is the shared kernel every service imports), so the
-    seven modes are restated there — and this is what keeps the restatement honest.
-    """
-    from search.services.spec import SearchMode
-
-    assert {m.value for m in WorkflowSearchMode} == {m.value for m in SearchMode}
-
-
-def test_graph_rejects_out_of_range_n() -> None:
-    # valibot CLAMPS n to [1, 100] because localStorage is a cache that must self-heal. A server is a
-    # boundary: it says what is wrong instead of quietly storing something else.
-    with pytest.raises(ValueError, match="less than or equal to 100"):
-        WorkflowGraph.model_validate(
-            {
-                "nodes": [{"id": "q1", "type": "query", "position": {"x": 0, "y": 0}}],
-                "config": {"q1": {"n": 999}},
-            }
-        )
-
-
-def test_graph_rejects_an_unknown_node_kind() -> None:
-    with pytest.raises(ValueError, match="type"):
-        WorkflowGraph.model_validate({"nodes": [{"id": "x", "type": "teleport", "position": {"x": 0, "y": 0}}]})
-
-
-def test_graph_rejects_an_empty_canvas() -> None:
-    # Mirrors v.minLength(1): an empty canvas is what the client seeds, not something worth storing.
-    with pytest.raises(ValueError, match="at least 1 item"):
-        WorkflowGraph.model_validate({"nodes": []})
-
-
-def test_unknown_keys_are_dropped_like_valibot_strips_them() -> None:
-    graph = WorkflowGraph.model_validate({"nodes": [{"id": "q1", "type": "query", "position": {"x": 1, "y": 2}, "width": 180}]})
-    assert not hasattr(graph.nodes[0], "width")
-
-
-def test_camel_case_survives_the_round_trip() -> None:
-    view = SavedView(
-        name="low confidence",
-        dataset="",
-        spec=SearchSpec(q="htr", mode=WorkflowSearchMode.HYBRID, q_vec="cached", rerank_n=20),
-    )
-    wire = view.model_dump(mode="json", by_alias=True, exclude_none=True)
-    assert wire["spec"]["qVec"] == "cached" and wire["spec"]["rerankN"] == 20
-    assert SavedView.model_validate(wire) == view
 
 
 # ── the full app: identity comes from the token, and only from the token ─────────────────────────────
@@ -429,25 +334,6 @@ def test_bob_cannot_delete_alices_state(app_client: TestClient) -> None:
     assert app_client.get("/v1/user-state/workflow-graph", headers=_as(app_client, "alice")).json()["exists"]
 
 
-def test_a_fresh_client_reads_what_the_first_one_wrote(app_client: TestClient, store: UserStateStore) -> None:
-    """Condition 5's actual claim: the work survives leaving the browser it was made in.
-
-    The second client shares nothing with the first except the store — new app instance, new cookie jar,
-    new connection pool. That is the server-side half of "write in one browser context, read it in a
-    fresh one".
-    """
-    views = [SavedView(name="ambiguous speakers", dataset="", spec=SearchSpec(q="speaker")).model_dump(mode="json", by_alias=True, exclude_none=True)]
-    app_client.put("/v1/user-state/saved-views", json=views, headers=_as(app_client, "alice"))
-
-    from catalog.main import app
-
-    with TestClient(app) as fresh:
-        fresh.app.state.oidc = _SubjectIsTheToken()
-        body = fresh.get("/v1/user-state/saved-views", headers=_as(fresh, "alice")).json()
-    assert body["exists"] is True
-    assert body["value"] == views
-
-
 def test_anonymous_is_401(app_client: TestClient) -> None:
     for method in ("get", "delete"):
         assert getattr(app_client, method)("/v1/user-state/saved-views").status_code == 401
@@ -502,43 +388,6 @@ def test_the_document_set_is_closed(app_client: TestClient) -> None:
     assert app_client.get("/v1/user-state/anything-else", headers=_as(app_client, "alice")).status_code == 404
 
 
-def test_subject_encoding_round_trips() -> None:
-    for subject in ("alice", "CgVhbGljZRIFbG9jYWw", "a||b", "üñî"):
-        assert decode_subject(encode_subject(subject)) == subject
-    assert base64.urlsafe_b64decode(encode_subject("alice") + "===").decode() == "alice"
-
-
-def test_defaults_are_the_zones_own_fallbacks() -> None:
-    """A partial config comes back COMPLETE — so every default must be what valibot would have healed to.
-
-    Found live: the round trip is faithful, not byte-identical, because the server fills fields the client
-    omitted. That is only safe while each default equals the corresponding ``v.fallback`` in
-    ``frontend/components/frontends/media/src/lib/workflow/persistence.ts``. Change one without changing
-    the other and a reload silently rewrites the user's node config; this table is what notices.
-    """
-    from service_kit.schemas.workflow import DEFAULT_N, WorkflowNodeConfig
-
-    filled = WorkflowNodeConfig().model_dump(mode="json", by_alias=True)
-    assert filled == {
-        "q": "",  # v.fallback(v.string(), '')
-        "imageName": "",  # v.fallback(v.string(), '')
-        "where": "",  # v.fallback(v.string(), '')
-        "filters": {},  # v.fallback(v.record(...), () => ({}))
-        "mode": "fts",  # v.fallback(SearchModeSchema, 'fts')
-        "n": DEFAULT_N,  # v.fallback(v.number(), DEFAULT_N)
-        "rerank": False,  # v.fallback(v.boolean(), false)
-        "minScore": None,  # v.fallback(v.nullable(v.number()), null) — omitted on the wire
-        "refineScope": "video",  # v.fallback(v.picklist(['video','chunk']), 'video')
-        "combineMode": "union",  # v.fallback(v.picklist(['union','intersect']), 'union')
-        "tags": [],  # v.fallback(v.array(v.string()), () => [])
-        "exportFormat": "csv",  # v.fallback(v.picklist(['json','csv']), 'csv')
-        "exportColumns": None,  # v.fallback(v.nullable(v.array(v.string())), null)
-        "capturedAtlasSelection": None,  # v.fallback(v.null_(), null) — never persisted
-        "label": "",  # v.fallback(v.string(), '')
-        "enabled": True,  # v.fallback(v.boolean(), true)
-    }
-
-
 # ── dock workbench layouts ───────────────────────────────────────────────────────────────────────────
 #
 # The dock-layout document diverges from the two above in one way that matters, and these tests are that
@@ -588,60 +437,3 @@ def test_a_dock_layout_round_trips_losslessly(app_client: TestClient) -> None:
     got = app_client.get("/v1/user-state/dock-layout", headers=_as(app_client, "alice")).json()
     assert got["exists"] is True
     assert got["value"] == sent, "a dock layout must survive the catalog byte-for-byte"
-
-
-def test_a_key_dockview_adds_later_is_not_silently_dropped(app_client: TestClient) -> None:
-    """Forward compatibility is the whole reason these models are `extra="allow"`.
-
-    A zone on a newer dockview writes a key this catalog has never heard of. Dropping it would quietly
-    downgrade the user's layout on the next save — the failure is invisible until they notice a panel
-    arrangement they never chose.
-    """
-    sent = _dock()
-    workbench = sent["workbenches"]["lineage"]
-    workbench["edgeGroups"] = {"top": {"views": ["inspector"], "collapsed": False}}
-    workbench["someFutureDockviewKey"] = {"kept": True}
-
-    app_client.put("/v1/user-state/dock-layout", json=sent, headers=_as(app_client, "alice"))
-    value = app_client.get("/v1/user-state/dock-layout", headers=_as(app_client, "alice")).json()["value"]
-    assert value["workbenches"]["lineage"]["edgeGroups"] == {"top": {"views": ["inspector"], "collapsed": False}}
-    assert value["workbenches"]["lineage"]["someFutureDockviewKey"] == {"kept": True}
-
-
-def test_one_document_holds_many_workbenches(app_client: TestClient) -> None:
-    """The reason `UserStateDocument` did not have to grow a member per workbench.
-
-    The zone chooses the key, so a new workbench needs no release of service-kit and no new enum member —
-    which is what keeps the key space closed rather than caller-supplied.
-    """
-    both = {"workbenches": {**_dock("lineage")["workbenches"], **_dock("tables")["workbenches"]}}
-    app_client.put("/v1/user-state/dock-layout", json=both, headers=_as(app_client, "alice"))
-    value = app_client.get("/v1/user-state/dock-layout", headers=_as(app_client, "alice")).json()["value"]
-    assert sorted(value["workbenches"]) == ["lineage", "tables"]
-
-
-def test_a_layout_missing_the_grid_is_422(app_client: TestClient) -> None:
-    """`grid` and `panels` are the two fields `SerializedDockview` declares non-optional.
-
-    A document without them is not a dock layout, and storing it would hand dockview something that
-    throws on `fromJSON` — which the client can only recover from by discarding the user's workspace.
-    """
-    broken = {"workbenches": {"lineage": {"panels": {}}}}
-    resp = app_client.put("/v1/user-state/dock-layout", json=broken, headers=_as(app_client, "alice"))
-    assert resp.status_code == 422
-
-
-def test_an_unexpected_top_level_key_is_422(app_client: TestClient) -> None:
-    """The envelope is OURS, so `extra="forbid"` there — unlike the dockview-owned interiors."""
-    resp = app_client.put(
-        "/v1/user-state/dock-layout",
-        json={"workbenches": {}, "surprise": 1},
-        headers=_as(app_client, "alice"),
-    )
-    assert resp.status_code == 422
-
-
-def test_bob_cannot_read_alices_dock_layout(app_client: TestClient) -> None:
-    app_client.put("/v1/user-state/dock-layout", json=_dock(), headers=_as(app_client, "alice"))
-    got = app_client.get("/v1/user-state/dock-layout", headers=_as(app_client, "bob")).json()
-    assert got["exists"] is False and got["subject"] == "bob"

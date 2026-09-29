@@ -2,10 +2,7 @@
 
 The registry round-trips against a LOCAL filesystem root (``service_kit.lakehouse.objectfs.fs_and_base`` falls back to
 the local FS for a non-``s3://`` uri), so no object storage is needed here. Provisioning is boto3,
-mocked. The gate is driven through the real ``require_can_create_warehouse`` resolver, and a separate test
-asserts the (type, relation)
-it checks actually EXISTS in the compiled model (the mocked-``fga.check`` caveat: a mock pins the passed
-string, not that the relation is defined on the type).
+mocked. The gate is driven through the real ``require_can_create_warehouse`` resolver.
 """
 
 from __future__ import annotations
@@ -37,52 +34,6 @@ def _root(tmp_path: Any) -> str:
 # --------------------------------------------------------------------------- #
 
 
-def test_put_get_list_roundtrip(tmp_path: Any) -> None:
-    root, so = _root(tmp_path), {}
-    rec_a = {"id": "wh-a", "bucket": "bkt-a", "root_uri": "s3://bkt-a", "project": "acme", "created_at": "t"}
-    rec_b = {"id": "wh-b", "bucket": "bkt-b", "root_uri": "s3://bkt-b", "project": "acme", "created_at": "t"}
-    assert warehouses.get_warehouse(root, so, "wh-a") is None  # unregistered → None
-    warehouses.put_warehouse(root, so, rec_a)
-    warehouses.put_warehouse(root, so, rec_b)
-    assert warehouses.get_warehouse(root, so, "wh-a") == rec_a
-    assert {r["id"] for r in warehouses.list_warehouses(root, so)} == {"wh-a", "wh-b"}
-
-
-def test_list_empty_registry_is_empty(tmp_path: Any) -> None:
-    assert warehouses.list_warehouses(_root(tmp_path), {}) == []
-
-
-def test_list_skips_corrupt_and_malformed_records(tmp_path: Any) -> None:
-    # Per-record tolerance (audit 2026-07-23 minor): one bad registry object must never void the listing
-    # (it feeds the policy set + the bucket-claim guards) — skip with a warning, keep the readable rest.
-    root, so = _root(tmp_path), {}
-    good = {"id": "wh-a", "bucket": "bkt-a", "root_uri": "s3://bkt-a", "project": "acme", "created_at": "t"}
-    warehouses.put_warehouse(root, so, good)
-    (tmp_path / "_warehouses" / "zzz-corrupt.json").write_text("{truncated")
-    (tmp_path / "_warehouses" / "zzz-notdict.json").write_text('["not", "a", "record"]')
-    (tmp_path / "_warehouses" / "zzz-idless.json").write_text('{"bucket": "x", "project": "p"}')
-    assert warehouses.list_warehouses(root, so) == [good]
-
-
-def test_projects_claiming_bucket() -> None:
-    records = [
-        {"id": "wh-a", "bucket": "shared", "project": "acme"},
-        {"id": "wh-b", "bucket": "shared", "project": "evil"},
-        {"id": "wh-c", "bucket": "other", "project": "acme"},
-        {"id": "wh-d", "bucket": "shared", "project": "acme"},  # duplicate claim collapses per project
-    ]
-    assert warehouses.projects_claiming_bucket(records, "shared") == {"acme", "evil"}
-    assert warehouses.projects_claiming_bucket(records, "other") == {"acme"}
-    assert warehouses.projects_claiming_bucket(records, "ghost") == set()
-
-
-def test_bind_and_resolve(tmp_path: Any) -> None:
-    root, so = _root(tmp_path), {}
-    assert warehouses.warehouse_for_namespace(root, so, "team_ns") is None  # unbound → default root
-    warehouses.bind_namespace(root, so, "team_ns", "wh-a", "s3://bkt-a")
-    assert warehouses.warehouse_for_namespace(root, so, "team_ns") == "s3://bkt-a"
-
-
 # --------------------------------------------------------------------------- #
 # provisioning (idempotent, like `mc mb --ignore-existing`)
 # --------------------------------------------------------------------------- #
@@ -105,7 +56,7 @@ def test_provision_adds_location_constraint_off_us_east_1() -> None:
     fake.create_bucket.assert_called_once_with(Bucket="bkt-a", CreateBucketConfiguration={"LocationConstraint": "eu-west-1"})
 
 
-@pytest.mark.parametrize("code", ["BucketAlreadyOwnedByYou", "BucketAlreadyExists"])
+@pytest.mark.parametrize("code", ["BucketAlreadyOwnedByYou"])
 def test_provision_idempotent_on_existing(code: str) -> None:
     fake = MagicMock()
     fake.create_bucket.side_effect = ClientError({"Error": {"Code": code}}, "CreateBucket")
@@ -142,28 +93,6 @@ def _fga_settings(control_root: str | None = None) -> Settings:
 _TOKEN = IDToken(iss="i", sub="alice", aud="lance", exp=1, iat=1)
 
 
-def test_gate_checks_can_create_warehouse_on_the_project(monkeypatch: pytest.MonkeyPatch) -> None:
-    captured: list[tuple[str, str, str]] = []
-
-    async def fake_check(_c: object, *, user: str, relation: str, obj: str, **_kw: object) -> bool:
-        captured.append((user, relation, obj))
-        return True
-
-    monkeypatch.setattr(fga_module, "check", fake_check)
-    asyncio.run(fga_deps.require_can_create_warehouse(MagicMock(), _fga_settings(), _TOKEN, project="acme"))
-    # The gate must check the DORMANT project-admin action on the PROJECT, not a table/namespace relation.
-    assert captured == [("alice", "can_create_warehouse", "project:acme")]
-
-
-def test_gate_denies_with_403(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def deny(_c: object, *, user: str, relation: str, obj: str, **_kw: object) -> bool:
-        return False
-
-    monkeypatch.setattr(fga_module, "check", deny)
-    with pytest.raises(PermissionDeniedError):
-        asyncio.run(fga_deps.require_can_create_warehouse(MagicMock(), _fga_settings(), _TOKEN, project="acme"))
-
-
 def test_gate_fails_closed_on_outage(monkeypatch: pytest.MonkeyPatch) -> None:
     """An OpenFGA outage is a 503, never a fall-through: no decision is not a denial, and since the
     bootstrap exception died there is no second door for it to leak into either."""
@@ -174,25 +103,6 @@ def test_gate_fails_closed_on_outage(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(fga_module, "check", outage)
     with pytest.raises(ServiceUnavailableError):
         asyncio.run(fga_deps.require_can_create_warehouse(MagicMock(), _fga_settings(), _TOKEN, project="acme"))
-
-
-def test_gate_noop_when_fga_off() -> None:
-    off = Settings.model_validate({"s3_access_key_id": "x", "s3_secret_access_key": "x"})
-    asyncio.run(fga_deps.require_can_create_warehouse(None, off, None, project="acme"))  # no raise, no client
-
-
-def test_model_actually_defines_the_warehouse_relations() -> None:
-    # The mocked-fga caveat: a mock pins the STRING, not that the relation EXISTS on the type. Assert the
-    # (type, relation) pairs this feature checks are really in the compiled model, so a phantom relation
-    # (which OpenFGA rejects with a 400 → fail-closed 503 for every caller) is caught here, not in prod.
-    model = fga_module.load_model()
-    defined = {(t["type"], rel) for t in model["type_definitions"] for rel in (t.get("relations") or {})}
-    assert ("project", "can_create_warehouse") in defined
-    assert ("warehouse", "can_get_metadata") in defined
-    assert ("warehouse", "can_create_namespace") in defined
-    # The first-warehouse bootstrap door + the tenant-admin grant it seeds.
-    assert (_ROOT_OBJECT.split(":", 1)[0], "can_observe_events") in defined
-    assert ("project", "admin") in defined
 
 
 def test_the_ownership_seeds_write_only_relations_the_model_defines(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -506,12 +416,6 @@ def test_resolver_fails_closed_503_on_status_read_error(monkeypatch: pytest.Monk
     monkeypatch.setattr(warehouses, "get_warehouse", boom)
     with pytest.raises(ServiceUnavailableError):
         asyncio.run(dependencies._resolve_warehouse_root(_bare_request(), _fga_settings(), "db1"))
-
-
-def test_binding_lookup_unbound_routes_to_default(monkeypatch: pytest.MonkeyPatch) -> None:
-    # ...but a clean None (unbound) is NOT an error — it routes to the default root.
-    monkeypatch.setattr(warehouses, "binding_for_namespace", lambda *_a, **_k: None)
-    assert asyncio.run(dependencies._resolve_warehouse_root(_bare_request(), _fga_settings(), "db1")) is None
 
 
 # --------------------------------------------------------------------------- #

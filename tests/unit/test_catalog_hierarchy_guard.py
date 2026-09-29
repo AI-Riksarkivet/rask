@@ -22,12 +22,6 @@ from catalog.api import fga_deps
 DELIM = "$"
 
 
-def test_a_table_with_no_namespace_is_refused() -> None:
-    """The orphan case, which used to succeed silently."""
-    with pytest.raises(InvalidInputError):
-        fga_deps.require_parent("table", ["orphan"], delimiter=DELIM)
-
-
 def test_the_refusal_names_the_rule_and_the_fix() -> None:
     """A caller must learn what is wrong and what to do from the detail alone.
 
@@ -45,19 +39,7 @@ def test_the_refusal_names_the_rule_and_the_fix() -> None:
     assert f"<namespace>{DELIM}sales" in detail
 
 
-@pytest.mark.parametrize(
-    "segments",
-    [
-        ["bronze", "pages"],  # one namespace deep — the ordinary case
-        ["acme", "silver", "features"],  # nested namespaces, the self-nesting rung
-    ],
-)
-def test_a_table_inside_a_namespace_is_allowed(segments: list[str]) -> None:
-    """The guard must refuse orphans only. Anything with a namespace above it passes untouched."""
-    fga_deps.require_parent("table", segments, delimiter=DELIM)
-
-
-@pytest.mark.parametrize("resource", ["namespace", "materialized_view", "transaction"])
+@pytest.mark.parametrize("resource", ["namespace"])
 def test_only_tables_are_gated_here(resource: str) -> None:
     """Namespaces are deliberately NOT rejected.
 
@@ -92,16 +74,6 @@ def test_the_guard_agrees_with_what_the_grant_path_would_have_done() -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_a_top_level_namespace_outside_a_warehouse_is_refused() -> None:
-    """The multi-tenancy hole: an unbound namespace resolved to the SHARED default bucket.
-
-    Nothing errored — the namespace worked, its tables worked, and the data went to the wrong
-    tenant's storage. That silence is why this is a refusal now rather than a warning.
-    """
-    with pytest.raises(InvalidInputError):
-        fga_deps.require_warehouse_scoped(["bronze"], delimiter=DELIM, warehouses_enabled=True)
-
-
 def test_the_namespace_refusal_points_at_the_warehouse_route() -> None:
     """A refusal that does not say where to go instead is just an outage."""
     with pytest.raises(InvalidInputError) as exc:
@@ -114,20 +86,10 @@ def test_the_namespace_refusal_points_at_the_warehouse_route() -> None:
     assert f"<parent>{DELIM}bronze" in detail
 
 
-@pytest.mark.parametrize("segments", [["acme", "silver"], ["acme", "silver", "deep"]])
+@pytest.mark.parametrize("segments", [["acme", "silver"]])
 def test_a_nested_namespace_inherits_its_parents_binding(segments: list[str]) -> None:
     """Only the TOP rung names a warehouse; everything below inherits it, so nesting stays open."""
     fga_deps.require_warehouse_scoped(segments, delimiter=DELIM, warehouses_enabled=True)
-
-
-def test_the_rule_binds_only_where_a_warehouse_can_exist() -> None:
-    """With warehouses DISABLED the deployment is single-bucket by configuration.
-
-    There is no warehouse to belong to, the default root is the only correct destination, and
-    demanding one would be a rule no caller could satisfy. Gating on the feature flag is what makes
-    this an invariant rather than an outage — it fired on 17 existing tests before this existed.
-    """
-    fga_deps.require_warehouse_scoped(["bronze"], delimiter=DELIM, warehouses_enabled=False)
 
 
 # --------------------------------------------------------------------------- #

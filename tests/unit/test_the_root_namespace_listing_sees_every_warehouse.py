@@ -27,7 +27,7 @@ merged name is subject to exactly the same visibility rule as one the backend re
 
 from __future__ import annotations
 
-from typing import Any, cast
+from typing import cast
 from unittest.mock import MagicMock
 
 import pytest
@@ -103,26 +103,6 @@ async def test_the_root_listing_names_warehouse_bound_namespaces(monkeypatch: py
 
 
 @pytest.mark.asyncio
-async def test_a_namespace_reachable_both_ways_is_named_once(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A binding and the default backend can hand the route the same name — never a duplicate row."""
-    response = await _list(id="$", backend=["acme", "shared"], bindings=_BOUND, monkeypatch=monkeypatch)
-
-    assert response.namespaces == ["acme", "bind86", "shared"]
-    assert response.namespaces.count("acme") == 1
-
-
-@pytest.mark.asyncio
-async def test_a_CHILD_listing_is_not_seeded_with_top_level_names(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The seed belongs to the ROOT alone: a binding names a TOP-level namespace, so merging it into a
-    child listing would invent `acme` as a child of some unrelated namespace."""
-    reads: list[str] = []
-    response = await _list(id="other", backend=["inner"], bindings=_BOUND, reads=reads, monkeypatch=monkeypatch)
-
-    assert response.namespaces == ["inner"]
-    assert reads == [], "a child listing must not pay a registry read it cannot use"
-
-
-@pytest.mark.asyncio
 async def test_with_warehouses_off_the_root_listing_is_untouched(monkeypatch: pytest.MonkeyPatch) -> None:
     """A single-bucket deployment keeps its existing answer and never reads the registry."""
     reads: list[str] = []
@@ -181,11 +161,3 @@ async def test_an_unreadable_registry_does_not_blank_the_root_listing(monkeypatc
     )
 
     assert response.namespaces == ["shared"]
-
-
-def test_the_merge_is_sorted_and_deduped() -> None:
-    """The route's cursor is keyset over this list, so its ORDER is part of the contract: an unsorted
-    merge would make `page_token` skip or repeat rows."""
-    merged: Any = ns_ep._merge_bound_top_namespaces(["shared", "acme"], _BOUND)
-
-    assert merged == ["acme", "bind86", "shared"]

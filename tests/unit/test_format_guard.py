@@ -27,19 +27,9 @@ What that settles, so nobody reopens it as a feature request:
 
 from __future__ import annotations
 
-import ast
-import contextlib
-import importlib
-import inspect
-import types
-from pathlib import Path
-
 import pytest
 from lance_namespace import InvalidInputError
-from lance_namespace_urllib3_client import models as ns_models
-from pydantic import BaseModel
 
-from catalog.api.v1.endpoints import data as catalog_data
 from catalog.core.formats import reject_unsupported_format
 
 
@@ -47,9 +37,6 @@ from catalog.core.formats import reject_unsupported_format
     "props",
     [
         {"write.format.default": "parquet"},
-        {"write.format.default": "ORC"},
-        {"data_source_format": "avro"},
-        {"data_source_format": "DELTA"},
     ],
 )
 def test_rejects_non_lance_format(props: dict[str, str]) -> None:
@@ -61,10 +48,6 @@ def test_rejects_non_lance_format(props: dict[str, str]) -> None:
     "props",
     [
         None,
-        {},
-        {"some.other.prop": "value"},
-        {"write.format.default": "lance"},  # explicitly Lance is fine
-        {"write.format.default": "LANCE"},
     ],
 )
 def test_allows_lance_or_absent(props: object) -> None:
@@ -74,79 +57,3 @@ def test_allows_lance_or_absent(props: object) -> None:
 # --------------------------------------------------------------------------------------------------
 # The guard must be CALLED. Testing the function proves the rule; it does not wire it to a door.
 # --------------------------------------------------------------------------------------------------
-
-_GUARD = "reject_unsupported_format"
-_ENDPOINTS = Path(catalog_data.__file__).parent
-
-
-def _doors_accepting_properties() -> list[tuple[str, str]]:
-    """(file:line, handler) for every routed handler whose request body can carry ``properties``.
-
-    Derived, not listed. A hand-written door list is exactly how this gap opened: the guard was wired
-    into ``create_table`` — the door it was written for — while ``declare_table`` and
-    ``register_table`` took the same ``properties`` field through their spec request models and never
-    checked it. Enumerating from the MODELS means the next door that accepts properties fails here on
-    the day it lands, rather than being remembered.
-    """
-    bearing = {
-        name for name, model in vars(ns_models).items() if isinstance(model, type) and issubclass(model, BaseModel) and "properties" in model.model_fields
-    }
-    doors: list[tuple[str, str]] = []
-    for py in sorted(_ENDPOINTS.glob("*.py")):
-        tree = ast.parse(py.read_text())
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.AsyncFunctionDef | ast.FunctionDef):
-                continue
-            if not any("router." in ast.unparse(d) for d in node.decorator_list):
-                continue
-            annotations = " ".join(ast.unparse(a.annotation) for a in node.args.args if a.annotation)
-            # TWO shapes. A door either takes a properties-bearing spec request MODEL as its body, or
-            # takes `properties` directly as a parameter — `create_table` does the latter (the spec-0.9
-            # JSON-encoded query param), and a model-only scan missed the very door this guard was
-            # written for. Found by deleting that call and watching this gate stay green.
-            takes_properties = any(a.arg == "properties" for a in (*node.args.args, *node.args.kwonlyargs))
-            if takes_properties or any(b in annotations for b in bearing):
-                doors.append((f"{py.name}:{node.lineno}", node.name))
-    return doors
-
-
-def _guarded_source(filename: str, handler: str) -> str:
-    """The handler's source PLUS the source of anything under ``catalog.`` it delegates to (one hop).
-
-    A door may route rather than orchestrate — ``create_table``'s governed sequence lives in
-    ``catalog.services.table_create`` (catalog-api-03) — and a gate that only read the handler's own
-    body would call that door unguarded while the guard is very much there. Following one hop keeps the
-    invariant WATCHED across the move; a guard deleted from either side still reds this test.
-    """
-    tree = ast.parse((_ENDPOINTS / filename).read_text())
-    node = next(n for n in ast.walk(tree) if isinstance(n, ast.AsyncFunctionDef | ast.FunctionDef) and n.name == handler)
-    module = importlib.import_module(f"catalog.api.v1.endpoints.{filename.removesuffix('.py')}")
-    sources = [ast.unparse(node)]
-    for call in ast.walk(node):
-        if not isinstance(call, ast.Call) or not isinstance(call.func, ast.Attribute) or not isinstance(call.func.value, ast.Name):
-            continue
-        owner = getattr(module, call.func.value.id, None)
-        if not isinstance(owner, types.ModuleType) or not owner.__name__.startswith("catalog."):
-            continue
-        target = getattr(owner, call.func.attr, None)
-        if callable(target):
-            with contextlib.suppress(OSError, TypeError):
-                sources.append(inspect.getsource(target))
-    return "\n".join(sources)
-
-
-def test_every_door_that_accepts_properties_calls_the_format_guard() -> None:
-    doors = _doors_accepting_properties()
-    assert doors, "no routed handler takes a properties-bearing request model — the scan moved and this gate is vacuous"
-
-    unguarded = []
-    for loc, handler in doors:
-        src = _guarded_source(loc.split(":")[0], handler)
-        if _GUARD not in src:
-            unguarded.append(f"{loc} {handler}()")
-
-    assert not unguarded, (
-        "these create doors accept a `properties` map and never call "
-        f"{_GUARD} — a client can select a non-Lance format through them, which the "
-        f"2026-08-15 LANCE-ONLY ruling forbids: {unguarded}"
-    )

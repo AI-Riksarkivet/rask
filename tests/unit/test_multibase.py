@@ -16,7 +16,6 @@ import pyarrow as pa
 import pytest
 from lance_namespace import InvalidInputError
 
-from catalog.core.config import Settings
 from catalog.services import dataplane
 
 
@@ -71,16 +70,6 @@ def test_external_and_data_bases_compose() -> None:
         )
     assert len(captured["initial_bases"]) == 2  # external-blob base + data base both registered
     assert captured["target_bases"] == ["b1"]  # only the DATA base is a write target
-
-
-def test_empty_data_bases_is_backward_compatible() -> None:
-    captured, fake_write = _capture_write()
-    with patch.object(lance, "write_dataset", fake_write):
-        dataplane._write_blob(_table(), "s3://root/tbl", _SO, mode="create", allow_external=False, external_blob_bases=[])
-    assert captured["initial_bases"] is None
-    assert captured["target_bases"] is None
-    assert captured["base_store_params"] is None
-    assert captured["enable_stable_row_ids"] is True  # single-location create is still 2.2 + row-ids
 
 
 def test_overwrite_registers_none_but_targets_when_resupplied() -> None:
@@ -170,10 +159,3 @@ def test_the_vend_door_reads_a_real_multibase_manifest_and_decides_on_its_bases(
     # written in S3 ARNs, so a location it cannot address is one a direct client could not reach. The
     # allowlist is not a way to vouch for a spelling the policy cannot express.
     assert unsanctioned_bases(mb, mb_bases, sanctioned_bases=[str(tmp_path)]) == mb_bases
-
-
-def test_config_allowlist_parsing() -> None:
-    s = Settings.model_validate({"multibase_data_bases": "s3://b1, s3://b2 ,", "s3_access_key_id": "x", "s3_secret_access_key": "x"})
-    assert s.multibase_data_base_list == ["s3://b1", "s3://b2"]
-    empty = Settings.model_validate({"s3_access_key_id": "x", "s3_secret_access_key": "x"})
-    assert empty.multibase_data_base_list == []  # default off

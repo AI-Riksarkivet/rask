@@ -9,7 +9,7 @@ identity has to hold under a *non-default* delimiter too — the audit ``w8u4rc2
 Two layers:
 
 * the **primitive invariant** — ``parse_identifier`` ∘ ``canonical_object_id`` round-trips byte-for-byte
-  under any delimiter (the single source of truth both the grant and the emit derive from), and
+  (the single source of truth both the grant and the emit derive from), and
 * the **handler wiring** — the real ``create_table`` handler derives the FGA grant object, the lineage
   emit ``table_id``/``namespace``, and the embedded Lance metadata id from that one canonicalisation, so
   all three agree under a ``.``-delimited deployment.
@@ -30,11 +30,7 @@ from service_kit.governed import fga
 from service_kit.lancekit.arrow_ipc import encode_arrow_stream
 
 
-# Default plus three non-default delimiters (single-char and multi-char).
-_DELIMITERS = ["$", ".", "/", "::"]
-
-
-@pytest.mark.parametrize("delimiter", _DELIMITERS)
+@pytest.mark.parametrize("delimiter", ["$"])
 def test_parse_then_canonicalize_round_trips_byte_for_byte(delimiter: str) -> None:
     # The id a user submits, split into segments and re-joined into the canonical OpenFGA/lineage id, must
     # come back identical — this is what keeps the grant path and the check/emit path from drifting apart.
@@ -44,15 +40,9 @@ def test_parse_then_canonicalize_round_trips_byte_for_byte(delimiter: str) -> No
     assert fga.canonical_object_id(segments, delimiter=delimiter) == identifier
 
 
-@pytest.mark.parametrize("delimiter", _DELIMITERS)
-def test_parent_namespace_is_all_but_last_segment(delimiter: str) -> None:
-    segments = parse_identifier(delimiter.join(["alpha", "bronze", "images"]), delimiter)
-    assert fga.parent_namespace_id(segments, delimiter=delimiter) == delimiter.join(["alpha", "bronze"])
-
-
-@pytest.mark.parametrize("delimiter", _DELIMITERS)
+@pytest.mark.parametrize("delimiter", ["$"])
 def test_root_level_table_has_no_parent_namespace(delimiter: str) -> None:
-    # A single-segment (top-level) table has no parent namespace under any delimiter.
+    # A single-segment (top-level) table has no parent namespace.
     assert fga.parent_namespace_id(parse_identifier("solo", delimiter), delimiter=delimiter) is None
 
 

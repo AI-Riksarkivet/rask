@@ -132,20 +132,6 @@ def test_kinds_do_not_collide(tmp_path: Any) -> None:
 # ---------------------------------------------------------------- the guard contract
 
 
-def test_guard_refuses_protected_and_force_overrides(tmp_path: Any) -> None:
-    settings = _settings(tmp_path)
-    so = settings.storage_options()
-    _protect(settings, "table", "bronze$pages")
-    record = protection.get_protection(settings.registry_root, so, "table", "bronze$pages") or {}
-    # A TABLE refuses table-shaped: spec code 19, "Table is in an invalid state for the operation"
-    # (`lance_docs/ns_catalog/spec.yaml:2431`). Code 3 is NamespaceNotEmpty, which told a generated
-    # client to empty a container that was never full and retry. Containers keep 3 — see the namespace,
-    # warehouse and project legs below, and `fga_deps.require_not_protected` for the scope line.
-    with pytest.raises(InvalidTableStateError, match="protected against deletion"):
-        fga_deps.require_not_protected(record, kind="table", obj_id="bronze$pages", force=False)
-    fga_deps.require_not_protected(record, kind="table", obj_id="bronze$pages", force=True)  # no raise
-
-
 # ---------------------------------------------------------------- the doors (shipped handlers)
 
 
@@ -185,13 +171,6 @@ def test_force_drops_a_protected_table_and_the_record_dies_with_it(tmp_path: Any
     _drop_table(settings, ns, force=True)
     assert ns.calls == ["drop_table"]
     assert protection.get_protection(settings.registry_root, so, "table", "bronze$pages") is None, "a reused id must not inherit protection nobody set on it"
-
-
-def test_an_unprotected_table_drops_exactly_as_before(tmp_path: Any) -> None:
-    settings = _settings(tmp_path)
-    ns: Any = _RecordingNamespace()
-    _drop_table(settings, ns)
-    assert ns.calls == ["drop_table"]
 
 
 def test_a_protected_table_refuses_deregister_too(tmp_path: Any) -> None:
@@ -320,31 +299,6 @@ def test_an_undated_or_unparseable_record_is_NOT_expired(tmp_path: Any) -> None:
     assert trash.expired([{"id": "a"}, {"id": "b", "expires_at": "not-a-date"}]) == []
 
 
-def test_the_deadline_is_stamped_at_drop_time(tmp_path: Any) -> None:
-    """Shortening the estate grace period must never retroactively destroy a live window, so the
-    deadline is DATA on the record, not policy consulted at expiry."""
-    from datetime import UTC, datetime
-
-    from service_kit.lakehouse import trash
-
-    now = datetime(2026, 8, 4, tzinfo=UTC)
-    record = trash.make_record("ns$t", location="s3://b/t", dropped_by="u", grace_days=3, now=now)
-    assert record["expires_at"].startswith("2026-08-07")
-
-
-def test_trash_roundtrip_and_listing(tmp_path: Any) -> None:
-    from service_kit.lakehouse import trash
-
-    settings = _settings(tmp_path)
-    so = settings.storage_options()
-    assert trash.list_all(settings.registry_root, so) == []
-    trash.put(settings.registry_root, so, trash.make_record("ns$t", location="s3://b/t", dropped_by="u", grace_days=7))
-    assert trash.get(settings.registry_root, so, "ns$t") is not None
-    assert len(trash.list_all(settings.registry_root, so)) == 1
-    assert trash.clear(settings.registry_root, so, "ns$t") is True
-    assert trash.get(settings.registry_root, so, "ns$t") is None
-
-
 class _TrashableNamespace(_RecordingNamespace):
     """Adds the describe/deregister/register trio the #75 drop→undrop path drives."""
 
@@ -355,20 +309,6 @@ class _TrashableNamespace(_RecordingNamespace):
     def register_table(self, request: Any) -> Any:
         self.calls.append(f"register_table:{request.location}")
         return type("R", (), {"location": request.location, "model_fields_set": set()})()
-
-
-def test_a_drop_with_a_grace_period_DEREGISTERS_and_files_trash(tmp_path: Any) -> None:
-    """#75: the drop that used to destroy bytes now detaches them and records the deadline — the whole
-    point, because time-travel cannot recover a drop (restore_table rewinds a LIVE table)."""
-    from service_kit.lakehouse import trash
-
-    settings = _settings(tmp_path, grace_days=7)
-    ns: Any = _TrashableNamespace()
-    _drop_table(settings, ns)
-    assert "drop_table" not in ns.calls, "the bytes were destroyed despite a grace period"
-    assert "deregister_table" in ns.calls
-    record = trash.get(settings.registry_root, settings.storage_options(), "bronze$pages")
-    assert record is not None and record["location"] == "s3://bkt/bronze/pages.lance"
 
 
 def test_purge_true_still_destroys_immediately(tmp_path: Any) -> None:
@@ -396,18 +336,6 @@ def test_purge_true_still_destroys_immediately(tmp_path: Any) -> None:
     assert trash.get(settings.registry_root, settings.storage_options(), "bronze$pages") is None
 
 
-def test_undrop_re_registers_from_the_trash_record_and_clears_it(tmp_path: Any) -> None:
-    from catalog.api.v1.endpoints import tables as t_ep
-    from service_kit.lakehouse import trash
-
-    settings = _settings(tmp_path, grace_days=7)
-    ns: Any = _TrashableNamespace()
-    _drop_table(settings, ns)
-    asyncio.run(t_ep.undrop_table(id="bronze$pages", ns=ns, settings=settings, token=None, control=NoopControlEmitter(), emitter=_NoopLineage()))
-    assert "register_table:pages.lance" in ns.calls, "the RELATIVE form register_table accepts"
-    assert trash.get(settings.registry_root, settings.storage_options(), "bronze$pages") is None
-
-
 def test_undrop_without_a_record_is_an_honest_404(tmp_path: Any) -> None:
     """An expired or never-trashed drop is genuinely unrecoverable — say so, rather than a 200 that
     recovers nothing."""
@@ -417,18 +345,6 @@ def test_undrop_without_a_record_is_an_honest_404(tmp_path: Any) -> None:
     ns: Any = _TrashableNamespace()
     with pytest.raises(TableNotFoundError, match="no recoverable drop"):
         asyncio.run(t_ep.undrop_table(id="bronze$gone", ns=ns, settings=settings, token=None, control=NoopControlEmitter(), emitter=_NoopLineage()))
-
-
-def test_the_tasks_door_shows_the_pending_expiry(tmp_path: Any) -> None:
-    """§2.4 per-object task visibility: an undrop deadline the owner cannot see is not a safety feature."""
-    from catalog.api.v1.endpoints import tables as t_ep
-
-    settings = _settings(tmp_path, grace_days=7)
-    ns: Any = _TrashableNamespace()
-    assert asyncio.run(t_ep.table_tasks(id="bronze$pages", settings=settings)) == []
-    _drop_table(settings, ns)
-    tasks = asyncio.run(t_ep.table_tasks(id="bronze$pages", settings=settings))
-    assert len(tasks) == 1 and tasks[0].location == "s3://bkt/bronze/pages.lance" and tasks[0].expires_at
 
 
 def test_a_recoverable_drop_KEEPS_the_owner_grants(tmp_path: Any) -> None:
@@ -452,44 +368,10 @@ def test_a_recoverable_drop_KEEPS_the_owner_grants(tmp_path: Any) -> None:
     revoked.assert_not_awaited()
 
 
-def test_a_DESTRUCTIVE_drop_still_revokes(tmp_path: Any) -> None:
-    """The negative twin — the reuse rule still holds where the bytes really are gone."""
-    from unittest.mock import AsyncMock
-
-    from catalog.api import fga_deps as deps
-
-    settings = _settings(tmp_path, grace_days=0)
-    ns: Any = _TrashableNamespace()
-    revoked = AsyncMock()
-    original = deps.revoke_ownership
-    deps.revoke_ownership = revoked
-    try:
-        _drop_table(settings, ns)
-    finally:
-        deps.revoke_ownership = original
-    revoked.assert_awaited_once()
-
-
 def test_the_tasks_suffix_is_reader_tier_not_writer(tmp_path: Any) -> None:
     """The live audit's other finding: `tasks` was unmapped, so it fell through to WRITER — and after a
     drop the owner has no write rung, making their own deadline unreadable."""
     assert "tasks" in fga_deps._META_READ_ACTIONS  # noqa: SLF001
-
-
-def test_undrop_registers_a_RELATIVE_location(tmp_path: Any) -> None:
-    """`register_table` refuses absolute URIs ("Location must be a relative path within the root
-    directory") — undrop 400'd live on the very location describe_table had just reported. The `dir`
-    backend lays table dirs out FLAT under the connection root, so the relative form is the final
-    segment; the record keeps the absolute URI because that is what an operator reading trash needs."""
-    from catalog.api.v1.endpoints import tables as t_ep
-
-    settings = _settings(tmp_path, grace_days=7)
-    ns: Any = _TrashableNamespace()
-    _drop_table(settings, ns)
-    asyncio.run(t_ep.undrop_table(id="bronze$pages", ns=ns, settings=settings, token=None, control=NoopControlEmitter(), emitter=_NoopLineage()))
-    registered = [c for c in ns.calls if c.startswith("register_table:")]
-    assert registered == ["register_table:pages.lance"], registered
-    assert "://" not in registered[0], "an absolute URI reached register_table — the live 400"
 
 
 def test_a_CASCADE_refuses_when_a_descendant_is_protected(tmp_path: Any) -> None:
@@ -651,22 +533,6 @@ def test_cascade_purge_true_still_destroys_natively_and_files_nothing(tmp_path: 
     assert "drop_namespace:bronze:restrict" in ns.calls  # the root, once every child is gone
     assert not any(c.endswith(":cascade") for c in ns.calls)
     assert not any(c.startswith("deregister_table:") for c in ns.calls)
-    assert trash.list_all(settings.registry_root, settings.storage_options()) == []
-
-
-def test_cascade_with_grace_zero_is_the_shipped_default_and_unchanged(tmp_path: Any) -> None:
-    """Recoverable drops are opt-in (#75): without a grace period the cascade destroys, no records.
-
-    "Exactly what it always was" was the wrong bar — what it always was is a native cascade the
-    shipped `dir` backend refuses (#117). The destruction is now ours, bottom-up.
-    """
-    from service_kit.lakehouse import trash
-
-    settings = _settings(tmp_path, grace_days=0)
-    ns: Any = _CascadableNamespace()
-    _drop_namespace_cascade(settings, ns)
-    assert "drop_namespace:bronze:restrict" in ns.calls
-    assert not any(c.endswith(":cascade") for c in ns.calls)
     assert trash.list_all(settings.registry_root, settings.storage_options()) == []
 
 

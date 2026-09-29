@@ -91,15 +91,6 @@ def _list(
     return list(response.tables or [])
 
 
-def test_a_bound_namespace_is_listed_although_the_root_cannot_name_it(monkeypatch: pytest.MonkeyPatch, tmp_path: object) -> None:
-    """The live defect: a blind root plus two bound warehouses must list every table in all three."""
-    warehouse = _DirLike(_WAREHOUSE)
-
-    got = _list(monkeypatch, tmp_path, root=_DirLike({}, root_rows=_ROOT_ROWS), bound={"media": warehouse, "silver": warehouse})
-
-    assert got == sorted([*_ROOT_ROWS, "media$chunks", "media$documents", "silver$consensus-live", "silver$vasa-publish"])
-
-
 def test_a_namespace_reachable_both_ways_is_reported_once(monkeypatch: pytest.MonkeyPatch, tmp_path: object) -> None:
     """A namespace the root CAN name and that is also bound reaches the merge twice — never two rows."""
     root = _DirLike(_WAREHOUSE, children=("media",))

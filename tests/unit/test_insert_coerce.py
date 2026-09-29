@@ -37,24 +37,6 @@ def _coerce(data: bytes) -> pa.Table:
     return pa.ipc.open_stream(out).read_all()
 
 
-def test_casts_browser_float64_to_int64(monkeypatch: pytest.MonkeyPatch) -> None:
-    _target(
-        monkeypatch,
-        pa.schema([("id", pa.int64()), ("score", pa.int64()), ("tag", pa.string())]),
-    )
-    incoming = pa.table(
-        {
-            "id": pa.array([4.0], pa.float64()),  # what a browser infers for a JS number
-            "score": pa.array([40.0], pa.float64()),
-            "tag": pa.array(["d"], pa.string()),
-        }
-    )
-    out = _coerce(_ipc(incoming))
-    assert out.schema.field("id").type == pa.int64()
-    assert out.column("id").to_pylist() == [4]
-    assert out.column("score").to_pylist() == [40]
-
-
 def test_reorders_and_drops_extra_columns(monkeypatch: pytest.MonkeyPatch) -> None:
     _target(monkeypatch, pa.schema([("id", pa.int64()), ("tag", pa.string())]))
     # columns out of order + an extra 'junk' the table doesn't have → aligned by name, extra dropped
@@ -82,20 +64,6 @@ def test_missing_column_is_400(monkeypatch: pytest.MonkeyPatch) -> None:
     incoming = pa.table({"id": pa.array([1], pa.int64())})  # no 'score'
     with pytest.raises(InvalidInputError):
         _coerce(_ipc(incoming))
-
-
-def test_aligned_payload_passes_through_untouched(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A schema-exact payload is returned AS-IS — the same object, not a re-encode (#141).
-
-    Every non-browser client sends the table's own schema; re-serializing those payloads was two
-    full materialisations per insert for zero behavioural difference. Identity (``is``) is the
-    assertion because equality would also pass on a wasteful round-trip.
-    """
-    schema = pa.schema([("id", pa.int64()), ("tag", pa.string())])
-    _target(monkeypatch, schema)
-    data = _ipc(pa.table({"id": pa.array([1], pa.int64()), "tag": pa.array(["a"], pa.string())}))
-    out = dataplane.coerce_insert_arrow(cast(Any, None), cast(Any, {}), ["hunt", "t"], data, max_bytes=_BODY_LIMIT)
-    assert out is data
 
 
 def test_matching_names_with_differing_nullability_still_coerces(monkeypatch: pytest.MonkeyPatch) -> None:

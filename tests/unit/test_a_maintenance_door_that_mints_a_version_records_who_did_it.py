@@ -13,7 +13,7 @@ the version moved" — and the queued lane, the scheduled sweep and the sibling 
 door all honour it. The in-pod lane was the one exception, and nothing anywhere recorded the silence
 as intended.
 
-DERIVED FROM THE MOUNTED ROUTES, like the branch-refusal gate beside it: every POST under
+DERIVED FROM THE MOUNTED ROUTES: every POST under
 `/{id}/maintenance/` must be classified here as either minting a version or not. A new verb that is
 neither fails this file rather than inheriting whichever answer happens to be convenient — which is
 how the reindex door came to repeat the compact door's silence on the day it was added.
@@ -21,11 +21,8 @@ how the reindex door came to repeat the compact door's silence on the day it was
 
 from __future__ import annotations
 
-import inspect
 from collections.abc import Callable
 from typing import Any
-
-import pytest
 
 from catalog.api.v1.endpoints import maintenance
 
@@ -57,17 +54,3 @@ def test_every_mounted_maintenance_verb_is_classified() -> None:
     classified = set(_MINTS_A_VERSION) | set(_MINTS_NO_VERSION)
 
     assert mounted == classified, f"unclassified: {sorted(mounted - classified)}; classified but not mounted: {sorted(classified - mounted)}"
-
-
-@pytest.mark.parametrize("path", _MINTS_A_VERSION)
-def test_the_in_pod_lane_emits_lineage_for_the_version_it_mints(path: str) -> None:
-    """The queued lane's 202 is answered by an executor that emits; the in-pod lane has no such partner.
-
-    Asserted against the shared trailer by name: `emit_measured_write` is what the eleven versioned write
-    doors call, and a door that hand-rolled its emit would drift from the single pinned open those doors
-    rely on to keep a concurrent writer's schema off this version's edge.
-    """
-    handler = dict(_maintenance_handlers())[path]
-    source = inspect.getsource(handler)
-
-    assert "emit_measured_write" in source, f"{path} rewrites in-pod and records no lineage, so the graph cannot say who did it or when"

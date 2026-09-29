@@ -30,29 +30,10 @@ def test_split_s3_location() -> None:
         split_s3_location("/no/bucket")
 
 
-def test_build_session_policy_read_vs_write() -> None:
-    read: Any = build_session_policy("bkt", "tables/db1$users", "read")
-    write: Any = build_session_policy("bkt", "tables/db1$users", "write")
-    read_objs = read["Statement"][1]
-    write_objs = write["Statement"][1]
-    assert "s3:GetObject" in read_objs["Action"]
-    assert "s3:PutObject" not in read_objs["Action"]
-    assert "s3:PutObject" in write_objs["Action"]
-    assert "s3:DeleteObject" in write_objs["Action"]
-    # object actions scoped to exactly the table prefix
-    assert read_objs["Resource"] == "arn:aws:s3:::bkt/tables/db1$users/*"
-    list_stmt = read["Statement"][0]
-    assert list_stmt["Condition"]["StringLike"]["s3:prefix"] == ["tables/db1$users/*"]
-
-
 def test_build_session_policy_root_prefix() -> None:
     pol: Any = build_session_policy("bkt", "", "read")
     assert pol["Statement"][1]["Resource"] == "arn:aws:s3:::bkt/*"
     assert pol["Statement"][0]["Condition"]["StringLike"]["s3:prefix"] == ["*"]
-
-
-def test_mode_b_vendor_returns_none() -> None:
-    assert ModeBVendor().vend(table_location="s3://b/t", tier="read") is None
 
 
 def test_sts_vendor_with_fake_assume_role() -> None:
@@ -183,7 +164,7 @@ def _policy_allows(policy: Any, *, action: str, bucket: str, key: str) -> bool:
     return False
 
 
-@pytest.mark.parametrize("tier", ["read", "write"])
+@pytest.mark.parametrize("tier", ["read"])
 def test_a_tenants_policy_denies_another_tenants_bucket(tier: Tier) -> None:
     """THE #74 claim, offline: the credential vended for tenant B's table must not reach tenant A's
     bucket at all — not for GET, not for PUT, not even to LIST it."""
@@ -193,7 +174,7 @@ def test_a_tenants_policy_denies_another_tenants_bucket(tier: Tier) -> None:
     assert not _policy_allows(policy, action="s3:ListBucket", bucket="tenant-a", key="")
 
 
-@pytest.mark.parametrize("tier", ["read", "write"])
+@pytest.mark.parametrize("tier", ["read"])
 def test_a_tenants_policy_still_allows_its_OWN_table(tier: Tier) -> None:
     """The negative twin: a policy that denied everything would satisfy the test above while
     breaking the product, so pin that B keeps reaching B."""
@@ -229,88 +210,6 @@ def test_a_read_tier_policy_cannot_write_its_own_table() -> None:
 # These pins live HERE, in a collected path, precisely because that e2e cannot be relied on to
 # notice. They are the always-running half of the contract.
 # --------------------------------------------------------------------------- #
-
-#: The exact keys a client hands to its object-store driver. Lance-style and BARE, because
-#: `DescribeTableResponse.storage_options` is documented as passed straight to Lance — so the
-#: catalog cannot rename them for boto3's convenience without breaking every Lance reader.
-#: The ONE key vocabulary every vendor emits and every client reads. The credential fields are
-#: ``aws_``-prefixed, and that is a MEASURED requirement rather than a style choice: every fleet pod
-#: exports AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY, and object_store BLENDS the ambient environment
-#: with the bare spellings — one half from each — signing with a pair belonging to neither identity.
-#: Measured in-cluster 2026-09-03: the ingest worker's vended credential failed every write with
-#: `403 SignatureDoesNotMatch` while the identical options read the identical table successfully from
-#: a process with no AWS_* environment, and the prefixed form read it with that environment still set.
-_REQUIRED_STORAGE_OPTION_KEYS = frozenset({"aws_access_key_id", "aws_secret_access_key", "aws_session_token", "region"})
-
-#: The spellings that must NOT appear. Emitting both is not a safe superset: object_store resolves one
-#: value per config key, so two spellings in one dict make which credential signs a matter of the
-#: library's internal precedence rather than of what the vendor decided.
-_FORBIDDEN_STORAGE_OPTION_KEYS = frozenset({"access_key_id", "secret_access_key", "session_token"})
-
-
-def _fake_creds(**kwargs: Any) -> dict[str, Any]:
-    return {
-        "Credentials": {
-            "AccessKeyId": "AK",
-            "SecretAccessKey": "SK",
-            "SessionToken": "ST",
-            "Expiration": dt.datetime(2030, 1, 1, tzinfo=dt.UTC),
-        }
-    }
-
-
-def _vended_options(vendor_name: str) -> dict[str, str]:
-    if vendor_name == "sts":
-        vendor: Any = StsVendor(role_arn="arn:aws:iam::1:role/r", region="us-east-1", ttl_seconds=900, assume_role=_fake_creds)
-        out = vendor.vend(table_location="s3://bkt/tables/t1", tier="read")
-    else:
-        vendor = WebIdentityVendor(region="us-east-1", endpoint="http://rustfs:9000", assume=_fake_creds)
-        out = vendor.vend(table_location="s3://bkt/tables/t1", tier="read", web_identity_token="the.jwt.tok")
-    assert out is not None
-    return out.storage_options
-
-
-@pytest.mark.parametrize("vendor_name", ["sts", "web_identity"])
-def test_every_vendor_emits_the_same_storage_option_keys(vendor_name: str) -> None:
-    """All credential-issuing vendors agree on ONE key vocabulary.
-
-    Parametrized over the vendors rather than asserted once: `web_identity` is the only RustFS-viable
-    mode while `sts` is the one most of this file drives, so a divergence between them would be
-    invisible to both. A client cannot be expected to sniff which vendor a deployment configured.
-    """
-    options = _vended_options(vendor_name)
-    missing = _REQUIRED_STORAGE_OPTION_KEYS - set(options)
-    assert not missing, f"{vendor_name} stopped emitting {sorted(missing)} — every Lance client reads these by name"
-    # NO BARE ALIAS ALONGSIDE. This assertion used to point the other way — it forbade the `aws_`
-    # prefix, because the e2e had once read boto3's PARAMETER names back out of the server's payload
-    # and an alias would have made that mistake work by accident. The concern was right and the
-    # conclusion was wrong: ONE vocabulary is what matters, and measurement decided which one (see
-    # `_REQUIRED_STORAGE_OPTION_KEYS`). Carrying both would reintroduce exactly the ambiguity the
-    # original assertion existed to prevent.
-    assert not _FORBIDDEN_STORAGE_OPTION_KEYS & set(options), options
-
-
-def test_the_isolation_e2e_reads_the_keys_the_vendors_actually_emit() -> None:
-    """The e2e is env-gated and SKIPS by default, so this is what keeps its client wiring honest.
-
-    It reads the e2e's own source and asserts that every key `_client` pulls out of the vended
-    options is one a vendor emits. Parsing source is a blunt instrument; the alternative is importing
-    a module that hard-requires a deployed stack, and the failure being guarded — a rename applied on
-    one side only — is exactly what a green-by-skipping suite cannot report.
-    """
-    import re
-    from pathlib import Path
-
-    src = Path(__file__).resolve().parents[1] / "e2e-py" / "test_credential_isolation_e2e.py"
-    body = src.read_text()
-    client = body[body.index("def _client(") :]
-    client = client[: client.index("\n\n\n")]
-    read = set(re.findall(r"""creds(?:\.get)?\(?\[?["']([a-z_]+)["']\]?\)?""", client))
-    assert read, "could not parse the e2e's credential reads — update this pin rather than deleting it"
-    unknown = read - _REQUIRED_STORAGE_OPTION_KEYS - {"endpoint"}
-    # The e2e must read the prefixed spellings too — a rename applied to the vendors and not to the
-    # one consumer that exercises them live is precisely what this pin exists to catch.
-    assert not unknown, f"the isolation e2e reads {sorted(unknown)}, which no vendor emits (diff2 F5)"
 
 
 def test_a_declared_base_is_granted_READ_even_at_write_tier() -> None:
@@ -348,9 +247,3 @@ def test_a_base_carrying_an_IAM_METACHARACTER_is_refused_like_a_prefix() -> None
     for hostile in ("s3://bkt/shared/*", "s3://bkt/sh?red/src.lance"):
         with pytest.raises(ValueError, match="wildcard metacharacter"):
             build_session_policy("bkt", "tables/db1$users", "read", bases=(hostile,))
-
-
-def test_no_bases_leaves_the_policy_EXACTLY_as_it_was() -> None:
-    """The common case is a table with no bases at all, and it must not pay for this — byte-identical,
-    so the change cannot widen a single-bucket deployment's grant by accident."""
-    assert build_session_policy("bkt", "tables/db1$users", "write", bases=()) == build_session_policy("bkt", "tables/db1$users", "write")

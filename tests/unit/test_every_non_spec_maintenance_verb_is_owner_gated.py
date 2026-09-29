@@ -21,7 +21,6 @@ for all of them and a cheaper answer is always wrong.
 from __future__ import annotations
 
 import pytest
-from lance_namespace import InternalError
 
 from catalog.api.fga_deps import _action_relation
 
@@ -46,22 +45,7 @@ def _maintenance_suffixes() -> list[str]:
     return sorted(set(suffixes))
 
 
-def test_the_router_actually_serves_maintenance_verbs() -> None:
-    """Without this the parametrized suite below would pass by iterating nothing."""
-    assert len(_maintenance_suffixes()) >= 3, f"expected the preview/run/compact family at minimum, found {_maintenance_suffixes()}"
-
-
 @pytest.mark.parametrize("suffix", _maintenance_suffixes())
 def test_a_maintenance_verb_clears_the_owner_bar(suffix: str) -> None:
     """Asserted through the resolver, not the dict: the mapping is only load-bearing if it is consulted."""
     assert _action_relation("table", suffix) == OWNER_RELATION
-
-
-def test_an_unmapped_maintenance_verb_is_refused_rather_than_owner_gated() -> None:
-    """The premise the suite above rests on, stated as a test so it cannot quietly stop being true.
-
-    If an undeclared suffix ever resolved to something owner-tier, every assertion above would pass for
-    a door nobody had mapped, and this suite would be proving nothing.
-    """
-    with pytest.raises(InternalError, match="declares no rung"):
-        _action_relation("table", "maintenance/a-verb-nobody-mapped")

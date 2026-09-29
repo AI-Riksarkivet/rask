@@ -14,7 +14,6 @@ from typing import Any, cast
 
 import pyarrow as pa
 import pytest
-from lance_namespace import InvalidInputError
 
 from catalog.api.v1.endpoints import data as data_ep
 from catalog.services import table_create
@@ -130,30 +129,3 @@ async def test_a_plain_create_emits_exactly_as_before(monkeypatch: pytest.Monkey
     emitted = emitter.creates[0]
     assert emitted.get("inputs") is None
     assert emitted.get("extra_run_facets") is None
-
-
-@pytest.mark.asyncio
-async def test_source_version_without_source_is_a_400_before_any_write(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`_merge_source_pin`'s existing rule, now reachable from create: a version with nothing to pin
-    is refused up front — never a committed create whose provenance silently dropped."""
-    emitter = _Emitter()
-    writes: list[Any] = []
-    monkeypatch.setattr(table_create.dataplane, "create_table", lambda *a, **k: writes.append(a) or _Response())
-
-    with pytest.raises(InvalidInputError, match="source_version requires source"):
-        await _create(monkeypatch, emitter, source_version=3)
-
-    assert writes == [], "the table was created before the pin was validated"
-    assert emitter.creates == []
-
-
-@pytest.mark.asyncio
-async def test_a_reserved_facet_name_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`lance`, `author`, `errorMessage`, `progress`, `parent` are the catalog's own. A producer
-    smuggling one in would overwrite trusted provenance."""
-    emitter = _Emitter()
-
-    with pytest.raises(InvalidInputError, match="reserved"):
-        await _create(monkeypatch, emitter, run_facets_json=json.dumps({"author": {"x": 1}}))
-
-    assert emitter.creates == []

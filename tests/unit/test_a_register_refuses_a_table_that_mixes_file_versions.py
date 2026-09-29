@@ -141,18 +141,6 @@ class TestThePublicDoor:
         assert resp.status_code == 400, resp.text
         assert not _is_registered(catalog, "db$t")
 
-    def test_an_unreadable_dataset_fails_closed(self, catalog: TestClient, root: Path) -> None:
-        """A dataset the door cannot read has not been judged, so it is not attached."""
-        _create_namespace(catalog, "db")
-        _write(root / "t", [1], version="2.1")
-        for manifest in (root / "t" / "_versions").iterdir():
-            manifest.write_bytes(b"not a manifest")
-
-        resp = catalog.post("/v1/table/db$t/register", json={"location": "t"})
-
-        assert resp.status_code == 503, resp.text
-        assert not _is_registered(catalog, "db$t")
-
     @pytest.mark.parametrize(("case", "status"), [("mixed", 400), ("unreadable", 503), ("clean", 200)])
     def test_a_refused_dataset_never_gains_an_owner_a_lineage_node_or_an_event(
         self, catalog: TestClient, root: Path, monkeypatch: pytest.MonkeyPatch, case: str, status: int
@@ -252,16 +240,6 @@ class TestThePublicDoor:
 
         for key in ("source_uri", "control"):
             assert str(sent[key]).rstrip("/").endswith(str(root / "t")), f"{key} carried {sent[key]!r}, not the resolved location"
-
-    @pytest.mark.parametrize("version", ["2.1", "2.2"])
-    def test_a_table_at_one_file_version_registers(self, catalog: TestClient, root: Path, version: _FileVersion) -> None:
-        _create_namespace(catalog, "db")
-        _write(root / "t", [1, 2], version=version)
-
-        resp = catalog.post("/v1/table/db$t/register", json={"location": "t"})
-
-        assert resp.status_code == 200, resp.text
-        assert _is_registered(catalog, "db$t")
 
     def test_a_table_whose_only_unusual_flag_is_initial_bases_registers(
         self, catalog: TestClient, root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

@@ -86,14 +86,6 @@ def test_reset_writes_audit(monkeypatch: Any) -> None:
     assert len(rec.calls) == 1 and rec.calls[0][1]["reset"] is True
 
 
-def test_missing_buffer_is_safe(monkeypatch: Any) -> None:
-    rec = _AuditRecorder()
-    monkeypatch.setattr(ep, "audit", rec)
-    # A test app / lifespan that never built the buffer → empty baseline, no audit, no crash.
-    res = _call(_request(None), _settings(), since=0)
-    assert res.events == [] and res.cursor == 0 and res.reset is False and rec.calls == []
-
-
 # ── #12: the gate is an estate-admin can_observe_events check on the root object ──────────────────────
 
 

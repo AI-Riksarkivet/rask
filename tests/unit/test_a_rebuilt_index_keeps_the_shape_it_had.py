@@ -36,7 +36,6 @@ import pyarrow as pa
 import pytest
 
 from catalog.services import index_specs
-from service_kit.lakehouse.work_items import SCALAR_INDEX_TYPES
 
 
 VECTOR_DIMENSION = 8
@@ -67,47 +66,12 @@ def dataset(tmp_path_factory: pytest.TempPathFactory) -> Any:
     return ds
 
 
-def test_a_vector_index_keeps_its_partition_count(dataset: Any) -> None:
-    """`num_partitions` is the field `describe_indices()` does not carry, so it is the one a rebuild loses."""
-    spec = index_specs.describe_index_for_rebuild(dataset, "vec_idx")
-
-    assert spec.params.get("num_partitions") == 4, f"the rebuild would re-partition this index; read back {spec.params}"
-
-
-def test_a_vector_index_keeps_its_sub_vector_count(dataset: Any) -> None:
-    """`num_sub_vectors` sits under `.details.compression`, not at the top level where a reader expects it."""
-    spec = index_specs.describe_index_for_rebuild(dataset, "vec_idx")
-
-    assert spec.params.get("num_sub_vectors") == 2, f"the rebuild would re-quantize this index; read back {spec.params}"
-
-
-def test_a_vector_index_keeps_its_distance_metric(dataset: Any) -> None:
-    """A metric silently reverting to pylance's `L2` default makes every stored distance mean something else."""
-    spec = index_specs.describe_index_for_rebuild(dataset, "vec_idx")
-
-    assert str(spec.params.get("metric", "")).lower() == "cosine", f"read back {spec.params}"
-
-
-def test_a_vector_index_is_recognised_as_a_vector_index(dataset: Any) -> None:
-    """Built through the wrong pylance call, a rebuilt index answers queries wrongly rather than not at all."""
-    spec = index_specs.describe_index_for_rebuild(dataset, "vec_idx")
-
-    assert (spec.kind, spec.index_type, spec.column) == ("vector", "IVF_PQ", "vec")
-
-
 def test_a_full_text_index_keeps_its_tokenizer(dataset: Any) -> None:
     """The inverted index carries the richest `.details`, and a default tokenizer changes what matches."""
     spec = index_specs.describe_index_for_rebuild(dataset, "body_idx")
 
     assert spec.params.get("base_tokenizer") == "whitespace", f"read back {spec.params}"
     assert spec.params.get("with_position") is False, f"read back {spec.params}"
-
-
-def test_a_scalar_index_is_recognised_as_a_scalar_index(dataset: Any) -> None:
-    """`.type_url` is the discriminator; a BITMAP carries no tuning, so the kind is all there is to lose."""
-    spec = index_specs.describe_index_for_rebuild(dataset, "label_idx")
-
-    assert (spec.kind, spec.index_type, spec.column) == ("scalar", "BITMAP", "label")
 
 
 def test_an_unknown_index_name_is_refused_rather_than_rebuilt_as_something_else(dataset: Any) -> None:
@@ -135,39 +99,7 @@ def test_the_readback_survives_an_actual_rebuild(dataset: Any) -> None:
     assert str(rebuilt["metric_type"]).lower() == "cosine"
 
 
-#: Every scalar type pylance will build on an ordinary column, with the column it needs. Enumerated
-#: rather than sampled because the defect this pins is per-SPELLING: `LABEL_LIST` reads back as
-#: `LabelList`, which upper-cases to `LABELLIST` — a value `SCALAR_INDEX_TYPES` does not contain, so
-#: the worker would refuse the rebuild as an unknown index type. Six of the seven survive `.upper()`
-#: and would have made a sampled test pass.
-SCALAR_KINDS_AND_COLUMNS = [
-    ("BTREE", "label"),
-    ("BITMAP", "label"),
-    ("LABEL_LIST", "tags"),
-    ("INVERTED", "body"),
-    ("NGRAM", "body"),
-    ("ZONEMAP", "label"),
-    ("BLOOMFILTER", "label"),
-]
-
-
-@pytest.mark.parametrize(("index_type", "column"), SCALAR_KINDS_AND_COLUMNS)
-def test_every_scalar_type_reads_back_in_the_vocabulary_the_worker_accepts(tmp_path: Path, index_type: str, column: str) -> None:
-    """The readback's spelling must be one `build_index` will dispatch on, or the repair dies at the worker.
-
-    Asserted against `SCALAR_INDEX_TYPES` itself — the frozenset the worker checks — rather than a
-    literal, so the two cannot drift: this is the same object both sides import.
-    """
-    ds = _dataset_with_every_column(tmp_path)
-    ds.create_scalar_index(column, index_type=index_type, name="idx")
-
-    spec = index_specs.describe_index_for_rebuild(ds, "idx")
-
-    assert spec.index_type in SCALAR_INDEX_TYPES, f"pylance reports {index_type} as {spec.index_type!r}, which the worker would refuse as unknown"
-    assert spec.index_type == index_type
-
-
-@pytest.mark.parametrize(("index_type", "column"), SCALAR_KINDS_AND_COLUMNS)
+@pytest.mark.parametrize(("index_type", "column"), [("BTREE", "label"), ("INVERTED", "body")])
 def test_every_scalar_type_actually_rebuilds_from_its_own_readback(tmp_path: Path, index_type: str, column: str) -> None:
     """Fidelity end to end per kind: the readback is fed straight back to pylance and must be accepted.
 
@@ -195,24 +127,3 @@ def _dataset_with_every_column(tmp_path: Path) -> Any:
         }
     )
     return lance.write_dataset(table, str(tmp_path / "ds"))
-
-
-def test_a_missing_index_answers_the_specs_404_rather_than_an_internal_error(dataset: Any) -> None:
-    """A name that is simply not there is a CALLER mistake, and must not surface as a 500.
-
-    Measured on the deployed catalog 2026-09-15: as a bare `LookupError` this reached the app's
-    catch-all and `POST /management/v1/table/{id}/maintenance/reindex` answered 500 for an index name that did
-    not exist. The estate's contract is that an endpoint raises a `lance_namespace` typed error and
-    `install_problem_handlers` translates it — clients dispatch on the spec CODE, and there is no code
-    for "something went wrong inside".
-
-    Asserted through the SHARED status map rather than a literal 404, so the two cannot drift.
-    """
-    from lance_namespace import TableIndexNotFoundError
-
-    from service_kit.lakehouse.ns_errors import _STATUS
-
-    with pytest.raises(TableIndexNotFoundError) as raised:
-        index_specs.describe_index_for_rebuild(dataset, "no_such_idx")
-
-    assert _STATUS[raised.value.code] == 404

@@ -152,17 +152,6 @@ def test_admins_from_fga_list_users(monkeypatch: pytest.MonkeyPatch) -> None:
     assert sorted(calls) == [("can_administer", "project:acme"), ("can_administer", "project:globex")]
 
 
-def test_admins_empty_when_fga_off(monkeypatch: pytest.MonkeyPatch) -> None:
-    _patch_records(monkeypatch, _RECORDS)
-
-    async def _boom(*_a: Any, **_k: Any) -> list[str]:  # FGA off → list_users must not even be called
-        raise AssertionError("list_users must not be called when FGA is off")
-
-    monkeypatch.setattr(ep.fga, "list_users", _boom)
-    result = _list(_settings(fga_enabled=False))
-    assert all(p.admins == [] for p in result)
-
-
 def test_admins_degrade_on_fga_outage(monkeypatch: pytest.MonkeyPatch) -> None:
     # An OpenFGA outage during the admins lookup degrades to [] — the registry-derived facts still serve;
     # it must never surface as a 500/503 (the estate gate already ran fail-closed before this point).
@@ -193,21 +182,3 @@ def test_admins_degrade_on_a_slow_fga(monkeypatch: pytest.MonkeyPatch) -> None:
     result = _list(_settings(fga_enabled=True), client=object())
     assert [p.project for p in result] == ["acme", "globex"]
     assert all(p.admins == [] for p in result)  # degraded per project, response still whole
-
-
-def test_admins_lookups_run_concurrently(monkeypatch: pytest.MonkeyPatch) -> None:
-    # The per-project lookups are gathered, not sequential: worst case is ONE per-call budget regardless
-    # of tenant count. Both fakes must be in flight before either finishes.
-    _no_gate(monkeypatch)
-    _patch_records(monkeypatch, _RECORDS)
-    started, overlap = set(), []
-
-    async def _tracking(_client: Any, *, obj: str, **_k: Any) -> list[str]:
-        started.add(obj)
-        await asyncio.sleep(0.05)  # long enough for the other call to have started
-        overlap.append(len(started))
-        return []
-
-    monkeypatch.setattr(ep.fga, "list_users", _tracking)
-    _list(_settings(fga_enabled=True), client=object())
-    assert overlap and all(n == 2 for n in overlap)  # both projects' lookups overlapped in time

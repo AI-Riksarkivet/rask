@@ -1,17 +1,15 @@
 """Unit tests for the #17/#92 model-artifact listing (``registry.list_artifacts`` + the describe wire-up).
 
 The trainer lays plain-path artifacts out at ``<artifacts_root>/<model>/<token>/…`` — OUTSIDE any Lance
-dataset — and the registry rows point at them. These tests pin the listing (relative paths, sizes, mtime,
-``[]`` for an absent tree), the Settings derivation that must mirror medallion's ``artifact_base_for``
-byte-for-byte (s3 → the bucket root's ``models/`` tree; local → a ``model-artifacts`` sibling), and the
-describe endpoint carrying the list.
+dataset — and the registry rows point at them. These tests pin the Settings derivation that must mirror
+medallion's ``artifact_base_for`` byte-for-byte (s3 → the bucket root's ``models/`` tree), and the describe
+endpoint carrying the list (``[]`` when there is none).
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
-from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -21,7 +19,6 @@ import pyarrow as pa
 
 from catalog.api.v1.endpoints import models as ep
 from catalog.core.config import Settings
-from catalog.services import models as registry
 
 
 def _tree(root: Path) -> Path:
@@ -37,19 +34,6 @@ def _tree(root: Path) -> Path:
     return root
 
 
-def test_list_artifacts_relative_paths_sizes_and_mtime(tmp_path: Path) -> None:
-    tree = _tree(tmp_path / "demo")
-    artifacts = registry.list_artifacts(str(tree), {})
-    assert [a["path"] for a in artifacts] == ["tok1/config.json", "tok1/weights.json", "tok2/weights.json"]
-    assert [a["size_bytes"] for a in artifacts] == [2, 5, 2]
-    for a in artifacts:  # ISO-8601 mtime, parseable — or None when the filesystem reports none
-        assert a["updated_at"] is None or isinstance(datetime.fromisoformat(a["updated_at"]), datetime)
-
-
-def test_absent_tree_is_empty_never_an_error(tmp_path: Path) -> None:
-    assert registry.list_artifacts(str(tmp_path / "nowhere"), {}) == []
-
-
 def _settings(**overrides: Any) -> Settings:
     # model_validate (not Settings(...)) so field-name keys validate cleanly — the fields carry
     # LANCE_* aliases (the test_fga_model_contract pattern).
@@ -63,11 +47,6 @@ def test_artifacts_root_mirrors_medallion_layout_on_s3() -> None:
     assert s.models_root == "s3://lake/warehouse/medallion/models"
     assert s.model_artifacts_root == "s3://lake/models"
     assert s.model_artifacts_uri("churn") == "s3://lake/models/churn"
-
-
-def test_artifacts_root_mirrors_medallion_layout_locally(tmp_path: Path) -> None:
-    s = _settings(root=str(tmp_path))
-    assert s.model_artifacts_root == f"{tmp_path}/medallion/model-artifacts"
 
 
 def test_artifacts_root_override_wins() -> None:

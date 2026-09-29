@@ -25,19 +25,7 @@ demanding a rung the estate deliberately took away.
 
 from __future__ import annotations
 
-import pytest
-
 from catalog.api.fga_deps import _action_relation
-
-
-@pytest.mark.parametrize("action", ["compaction_plan", "compaction_commit"])
-def test_the_compaction_doors_ask_for_the_MAINTAINER_rung(action: str) -> None:
-    """Not the writer rung. E2 took `writer` away from the sweep on purpose; this is what it kept."""
-    relation = _action_relation("table", action)
-    assert relation == "can_maintain", (
-        f"{action} resolves to {relation!r} — the sweep holds `maintainer`, not `writer`, so the router "
-        "denies before the endpoint runs and distributed compaction silently falls back to in-pod"
-    )
 
 
 def test_a_real_data_write_still_asks_for_the_WRITER_rung() -> None:

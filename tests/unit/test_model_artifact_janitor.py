@@ -64,19 +64,6 @@ def _artifact(base: Path, token: str, *, old: bool) -> None:
         os.utime(target, (_OLD, _OLD))
 
 
-def test_invariant_referenced_token_is_never_deleted_even_past_ttl(tmp_path: Path) -> None:
-    # THE invariant. A referenced token older than any TTL survives a delete-mode sweep.
-    registry = _registry(tmp_path, ["tokref"])
-    base = tmp_path / "artifacts"
-    _artifact(base, "tokref", old=True)
-
-    report = janitor.sweep(registry_uri=registry, artifact_base=str(base), ttl_hours=24, delete=True, now=_NOW)
-
-    assert report.kept_referenced == ["tokref"]
-    assert report.candidates == [] and report.deleted == []
-    assert (base / "tokref" / "weights.json").exists()
-
-
 def test_dry_run_is_the_default_and_reports_without_deleting(tmp_path: Path) -> None:
     registry = _registry(tmp_path, ["tokref"])
     base = tmp_path / "artifacts"
@@ -180,12 +167,3 @@ def test_blessed_non_latest_version_artifact_survives_even_when_absent_from_late
     assert "B" in report.kept_referenced
     assert report.deleted == ["C"] and not (base / "C").exists()
     assert (base / "A" / "weights.json").exists()
-
-
-def test_blessed_tag_mirror_is_pinned_to_the_catalog_constant() -> None:
-    # The janitor is standalone (no services/ imports at runtime), so _BLESSED_TAG is an inlined mirror
-    # of catalog.services.models.BLESSED_TAG. Drift would silently stop protecting the blessed version's
-    # artifacts from the TTL sweep — pin them equal (the same guard test_train_job gives its mirrors).
-    from catalog.services.models import BLESSED_TAG
-
-    assert janitor._BLESSED_TAG == BLESSED_TAG

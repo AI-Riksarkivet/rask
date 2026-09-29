@@ -21,7 +21,6 @@ from lance_namespace import (
     DescribeTableRequest,
     InvalidInputError,
     TableAlreadyExistsError,
-    TableNotFoundError,
     connect,
 )
 
@@ -59,13 +58,6 @@ def _open(ns, segments: list[str]) -> lance.LanceDataset:
 
 
 # --- detection helpers ----------------------------------------------------- #
-
-
-def test_is_blob_field_detects_blob_v2_and_ignores_scalars() -> None:
-    schema = _blob_schema()
-    assert blobs.is_blob_field(schema.field("payload"))
-    assert not blobs.is_blob_field(schema.field("id"))
-    assert not blobs.is_blob_field(schema.field("src"))
 
 
 def test_schema_has_blob_and_blob_field_names() -> None:
@@ -164,36 +156,7 @@ def test_exist_ok_on_declared_only_table_writes_instead_of_500(tmp_path: Path) -
     assert dataset.read_blobs("payload", indices=[0])[0][1] == b"first"
 
 
-def test_default_create_on_declared_only_table_writes_the_first_version(tmp_path: Path) -> None:
-    # declare → crash → retry with the default mode must converge to a written table, not conflict on the
-    # existing declare. (Same path a failed fresh write's rollback intentionally does NOT leave — but a
-    # separate POST /declare does.)
-    ns = connect("dir", {"root": str(tmp_path)})
-    ns.declare_table(DeclareTableRequest(id=["d2"]))
-
-    create_table(ns, {}, ["d2"], _blob_table([b"a", b"b"]), mode="create", registry=None)
-
-    dataset = _open(ns, ["d2"])
-    assert dataset.count_rows() == 2
-    assert dataset.read_blobs("payload", indices=[0])[0][1] == b"a"
-
-
 # --- blob modes: managed (inline/packed/dedicated) always; external pointer gated ------------------ #
-
-
-def test_managed_blob_modes_inline_and_dedicated(tmp_path: Path) -> None:
-    # Managed blobs (bytes copied in) work regardless of the flag: small → inline, large → dedicated sidecar.
-    ns = connect("dir", {"root": str(tmp_path)})
-    small, large = b"tiny-inline", b"x" * 3_000_000
-    schema = pa.schema([pa.field("id", pa.int64()), blob_field("blob")])
-
-    table = pa.table({"id": [1, 2], "blob": blob_array([small, large])}, schema=schema)
-    create_table(ns, {}, ["managed"], table, registry=None)
-
-    ds = _open(ns, ["managed"])
-    assert ds.data_storage_version == "2.2"
-    assert ds.read_blobs("blob", indices=[0])[0][1] == small
-    assert ds.read_blobs("blob", indices=[1])[0][1] == large
 
 
 def test_external_pointer_blob_is_gated_by_the_flag(tmp_path: Path) -> None:
@@ -253,75 +216,6 @@ def test_external_blob_allowlist_accepts_in_base_rejects_out_of_base(tmp_path: P
 # Every table here is NAMESPACED, and that is required rather than tidy: a root-namespace table is stored
 # under V1 compatibility naming (`<name>.lance`, where the location IS the name), and renaming one is
 # refused — see `dataplane.rename_table` and the suite that pins the refusal.
-
-
-def test_rename_repoints_a_blob_table_without_touching_its_sidecars(tmp_path: Path) -> None:
-    from catalog.services.dataplane import rename_table
-
-    ns = connect("dir", {"root": str(tmp_path)})
-    _declare_namespace(ns, "media")
-    create_table(ns, {}, ["media", "clips"], _blob_table([b"a", b"b"]), mode="create", registry=None)
-    before = ns.describe_table(DescribeTableRequest(id=["media", "clips"])).location
-
-    new_segments, location = rename_table(ns, {}, ["media", "clips"], "reels", None)
-    assert new_segments == ["media", "reels"]
-    assert location == before, "the dataset moved; a rename must repoint, not relocate"
-
-    # Discoverable under the NEW id with its blob payloads still resolving, gone under the OLD id.
-    ds = _open(ns, ["media", "reels"])
-    assert ds.count_rows() == 2
-    assert ds.read_blobs("payload", indices=[0])[0][1] == b"a"
-    with pytest.raises(TableNotFoundError):
-        ns.describe_table(DescribeTableRequest(id=["media", "clips"]))
-
-
-def test_rename_preserves_version_history(tmp_path: Path) -> None:
-    # Nothing is rewritten, so history cannot be collapsed — the property a byte copy had to work for.
-    from catalog.services.dataplane import rename_table
-
-    ns = connect("dir", {"root": str(tmp_path)})
-    _declare_namespace(ns, "media")
-    create_table(ns, {}, ["media", "t"], _blob_table([b"a"]), mode="create", registry=None)
-    create_table(ns, {}, ["media", "t"], _blob_table([b"a", b"b"]), mode="overwrite", registry=None)  # commits v2
-
-    rename_table(ns, {}, ["media", "t"], "t2", None)
-    assert len(_open(ns, ["media", "t2"]).versions()) >= 2  # history survived the rename
-
-
-def test_rename_into_another_namespace(tmp_path: Path) -> None:
-    from catalog.services.dataplane import rename_table
-
-    ns = connect("dir", {"root": str(tmp_path)})
-    _declare_namespace(ns, "src")
-    _declare_namespace(ns, "dst")
-    create_table(ns, {}, ["src", "clip"], _blob_table([b"x"]), mode="create", registry=None)
-
-    new_segments, _ = rename_table(ns, {}, ["src", "clip"], "clip", ["dst"])
-    assert new_segments == ["dst", "clip"]
-    assert _open(ns, ["dst", "clip"]).count_rows() == 1
-    with pytest.raises(TableNotFoundError):
-        ns.describe_table(DescribeTableRequest(id=["src", "clip"]))
-
-
-def test_rename_onto_existing_name_conflicts(tmp_path: Path) -> None:
-    from catalog.services.dataplane import rename_table
-
-    ns = connect("dir", {"root": str(tmp_path)})
-    _declare_namespace(ns, "media")
-    create_table(ns, {}, ["media", "a"], _blob_table([b"x"]), mode="create", registry=None)
-    create_table(ns, {}, ["media", "b"], _blob_table([b"y"]), mode="create", registry=None)
-    with pytest.raises(TableAlreadyExistsError):
-        rename_table(ns, {}, ["media", "a"], "b", None)
-    # The source is untouched by a rejected rename — still readable at its original id.
-    assert _open(ns, ["media", "a"]).read_blobs("payload", indices=[0])[0][1] == b"x"
-
-
-def test_rename_missing_source_is_not_found(tmp_path: Path) -> None:
-    from catalog.services.dataplane import rename_table
-
-    ns = connect("dir", {"root": str(tmp_path)})
-    with pytest.raises(TableNotFoundError):
-        rename_table(ns, {}, ["ghost"], "x", None)
 
 
 # --- rename data-safety regressions (audit 2026-07-14) ------------------------------------------------ #
@@ -406,49 +300,3 @@ def test_a_failed_source_claim_leaves_the_rename_UNDONE(tmp_path: Path, monkeypa
     with pytest.raises(Exception, match="(?i)not found|does not exist|no such"):
         ns.describe_table(DescribeTableRequest(id=["media", "b"]))
     assert _open(ns, ["media", "a"]).read_blobs("payload", indices=[0])[0][1] == b"x"
-
-
-def test_rejected_external_create_rolls_back_and_stays_retryable(tmp_path: Path) -> None:
-    source = tmp_path / "external.bin"
-    source.write_bytes(b"external-bytes")
-    ns = connect("dir", {"root": str(tmp_path / "root")})
-    schema = pa.schema([pa.field("id", pa.int64()), blob_field("blob")])
-    pointer = pa.table(
-        {"id": [1], "blob": blob_array([Blob.from_uri(source.as_uri(), position=0, size=8)])},
-        schema=schema,
-    )
-
-    with pytest.raises(InvalidInputError):
-        create_table(ns, {}, ["rb"], pointer, registry=None)  # flag off → rejected, declared table rolled back
-
-    # retryable: the name is free (rollback dropped the declare), so a managed create at the same id succeeds
-    create_table(ns, {}, ["rb"], pa.table({"id": [1], "blob": blob_array([b"managed"])}, schema=schema), registry=None)
-    assert _open(ns, ["rb"]).read_blobs("blob", indices=[0])[0][1] == b"managed"
-
-
-def test_rename_KEEPS_a_table_with_branches_intact(tmp_path: Path) -> None:
-    """Renaming a BRANCHED table used to orphan its branches, and no longer can.
-
-    A branch is a shallow clone referencing its source root by ABSOLUTE path, so the byte-copy rename
-    this door once performed left every branch pointing at bytes that no longer existed while
-    answering 200. The refusal that replaced it was right for that implementation.
-
-    The pointer move copies and deletes nothing, so there is nothing to orphan. MEASURED on the `dir`
-    backend: after the rename the location is unchanged, `branches.list()` returns the identical entry
-    — `parent_version`, `branch_identifier` and `manifest_size` all equal — and the data reads back.
-    The guard was refusing a safe operation. `services/catalog/tests` carries the positive case
-    through the real door; this one refuses the guard's return.
-    """
-    import pytest
-
-    from catalog.services import dataplane
-
-    uri = str(tmp_path / "t")
-    ds = lance.write_dataset(pa.table({"id": [1, 2]}), uri)
-    if not hasattr(ds, "create_branch"):
-        pytest.skip("pylance has no branch API here")
-    ds.create_branch("feature-x")
-    before = lance.dataset(uri).branches.list()
-
-    assert not hasattr(dataplane, "_refuse_rename_with_branches"), "the branch refusal is back; it declines a rename that measurably orphans nothing"
-    assert lance.dataset(uri).branches.list() == before

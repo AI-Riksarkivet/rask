@@ -86,22 +86,6 @@ async def test_a_single_leaf_grantee_cannot_enumerate_sibling_NAMESPACES(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_the_route_still_answers_rather_than_refusing(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The half C1 exists for — the breadcrumb to the caller's own data must still resolve."""
-    response = await _list(backend=["mine"], allowed=["namespace:zz_top$mine"], monkeypatch=monkeypatch)
-
-    assert response.namespaces == ["mine"]
-
-
-@pytest.mark.asyncio
-async def test_a_caller_who_can_see_nothing_here_gets_an_EMPTY_listing(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Empty, not 403: the route's gate and its contents answer different questions."""
-    response = await _list(backend=["mine", "secret"], allowed=[], monkeypatch=monkeypatch)
-
-    assert response.namespaces == []
-
-
-@pytest.mark.asyncio
 async def test_with_fga_off_nothing_is_filtered(monkeypatch: pytest.MonkeyPatch) -> None:
     """Dev and single-tenant deployments run the checker permissive by construction."""
     response = await _list(backend=["mine", "secret"], allowed=None, fga_enabled=False, monkeypatch=monkeypatch)

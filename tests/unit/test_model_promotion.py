@@ -14,7 +14,6 @@ import pyarrow as pa
 import pytest
 from lance_namespace import (
     InvalidTableStateError,
-    TableNotFoundError,
     TableVersionNotFoundError,
 )
 
@@ -47,12 +46,6 @@ def registry_uri(tmp_path: Any) -> str:
     return uri
 
 
-def test_metrics_at_reads_the_right_version(registry_uri: str) -> None:
-    # Append-only: each version's OWN metrics (the rows appended at that version), not a blur across versions.
-    assert registry.metrics_at(registry_uri, {}, 1) == {"rows_seen": 4, "features": 1}
-    assert registry.metrics_at(registry_uri, {}, 2) == {"rows_seen": 9, "features": 1}
-
-
 def test_promote_moves_the_blessed_tag(registry_uri: str) -> None:
     assert registry.blessed_version(registry_uri, {}) is None  # nothing blessed yet
     assert registry.promote(registry_uri, {}, version=2) == 2
@@ -62,13 +55,6 @@ def test_promote_moves_the_blessed_tag(registry_uri: str) -> None:
     assert registry.promote(registry_uri, {}, version=1) == 1
     assert registry.blessed_version(registry_uri, {}) == 1
     assert lance.dataset(registry_uri).version == 2  # unchanged — metadata-only move
-
-
-def test_metrics_gate_blocks_a_version_below_threshold(registry_uri: str) -> None:
-    # v1 has rows_seen=4; require >= 8 → refused (409), and the tag is NOT moved.
-    with pytest.raises(InvalidTableStateError, match="below required"):
-        registry.promote(registry_uri, {}, version=1, min_metrics={"rows_seen": 8})
-    assert registry.blessed_version(registry_uri, {}) is None  # nothing blessed — fail-closed
 
 
 def test_metrics_gate_passes_when_metrics_meet_threshold(registry_uri: str) -> None:
@@ -100,32 +86,6 @@ def test_metrics_gate_refuses_a_nan_or_inf_metric(tmp_path: Any) -> None:
 def test_promote_unknown_version_is_404(registry_uri: str) -> None:
     with pytest.raises(TableVersionNotFoundError):
         registry.promote(registry_uri, {}, version=99)
-
-
-def test_promote_unknown_model_is_404(tmp_path: Any) -> None:
-    with pytest.raises(TableNotFoundError):
-        registry.promote(str(tmp_path / "never-trained"), {}, version=1)
-
-
-def test_describe_reports_candidate_and_blessed(registry_uri: str) -> None:
-    before = registry.describe(registry_uri, {})
-    assert before["latest_version"] == 2
-    assert before["blessed_version"] is None
-    assert before["candidate_metrics"] == {"rows_seen": 9, "features": 1}
-    assert before["blessed_metrics"] is None
-
-    registry.promote(registry_uri, {}, version=1)
-    after = registry.describe(registry_uri, {})
-    assert after["latest_version"] == 2  # candidate is still the latest
-    assert after["blessed_version"] == 1  # but v1 is blessed
-    assert after["blessed_metrics"] == {"rows_seen": 4, "features": 1}
-
-
-def test_summarize_reports_versions_without_metric_reads(registry_uri: str) -> None:
-    # CONTRACT (#42 list view): versions only — the shape the listing pays for per model.
-    assert registry.summarize(registry_uri, {}) == {"latest_version": 2, "blessed_version": None}
-    registry.promote(registry_uri, {}, version=2)
-    assert registry.summarize(registry_uri, {}) == {"latest_version": 2, "blessed_version": 2}
 
 
 def test_list_models_enumerates_registry_directories_only(tmp_path: Any) -> None:

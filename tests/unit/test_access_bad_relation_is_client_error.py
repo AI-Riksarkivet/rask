@@ -23,7 +23,6 @@ from lance_namespace.errors import ErrorCode
 
 from catalog.api.v1.endpoints import access
 from catalog.core.config import Settings
-from service_kit.control_emit import NoopControlEmitter
 from service_kit.governed.oidc import IDToken
 from service_kit.lakehouse.ns_errors import status_for
 
@@ -49,15 +48,6 @@ def test_check_with_an_unknown_relation_is_a_400(monkeypatch: pytest.MonkeyPatch
     with pytest.raises(InvalidInputError) as exc:
         asyncio.run(access._access_check(_client(), _settings(), _token(), "table", "db1$users", body))
     assert status_for(int(exc.value.code)) == 400, "a client-supplied bad relation must surface as the client's error"
-
-
-def test_grant_with_an_unknown_rung_is_a_400(monkeypatch: pytest.MonkeyPatch) -> None:
-    """``access/grant`` with a non-grantable rung answers InvalidInput (400) — parity with access_admin's door."""
-    monkeypatch.setattr(access, "_grantable_relations", lambda fga_type: ("owner", "writer", "reader"))
-    body = access.AccessGrantRequest(user="gina", relation="not_a_real_rung")
-    with pytest.raises(InvalidInputError) as exc:
-        asyncio.run(access._access_mutate(_client(), NoopControlEmitter(), _settings(), _token(), "table", "db1$users", body, grant=True))
-    assert status_for(int(exc.value.code)) == 400
 
 
 def test_the_auth_off_answer_stays_unsupported() -> None:

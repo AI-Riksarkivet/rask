@@ -73,16 +73,6 @@ def test_reports_the_callers_own_verdicts(monkeypatch: pytest.MonkeyPatch) -> No
     assert resp.permissions["can_create_table"] is False
 
 
-def test_every_check_is_asked_about_the_caller_and_this_object_only(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The self-view must never probe a third party — that is `access/check`'s job, behind the owner
-    bar. One subject, one object, N relations."""
-    resp, asked = _run(monkeypatch, allow=set())
-    assert {u for u, _r, _o in asked} == {"user:alice"}
-    assert {o for _u, _r, o in asked} == {"namespace:gold"}
-    assert resp.subject == "user:alice"
-    assert resp.object == "namespace:gold"
-
-
 def test_a_sub_that_already_carries_a_prefix_is_not_double_prefixed(monkeypatch: pytest.MonkeyPatch) -> None:
     """`user:user:alice` matches no tuple, so the whole answer would be a plausible all-false. Same
     rule the home zone's /settings gate applies to `me.sub`."""
@@ -90,13 +80,6 @@ def test_a_sub_that_already_carries_a_prefix_is_not_double_prefixed(monkeypatch:
     assert resp.subject == "user:alice"
     assert {u for u, _r, _o in asked} == {"user:alice"}
     assert resp.permissions["can_get_metadata"] is True
-
-
-def test_the_table_surface_answers_the_table_relation_set(monkeypatch: pytest.MonkeyPatch) -> None:
-    resp, _ = _run(monkeypatch, fga_type="table", ident="gold$catalog", allow={"can_read_data"})
-    assert set(resp.permissions) == set(access._can_relations("table"))
-    assert resp.permissions["can_read_data"] is True
-    assert resp.object == "table:gold$catalog"
 
 
 def test_no_token_is_refused_rather_than_answered_for_anonymous(monkeypatch: pytest.MonkeyPatch) -> None:

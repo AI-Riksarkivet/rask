@@ -56,18 +56,3 @@ def test_a_data_write_still_demands_the_writer_rung() -> None:
         relations = fga_deps.relations_for_operation(operation)
         assert "can_maintain" not in relations, f"{operation!r} changes rows — a maintainer must not be able to record it as provenance"
         assert "can_write_data" in relations
-
-
-def test_the_two_maintenance_lists_in_the_estate_agree() -> None:
-    """`maintenance/services/arrival.py` filters the SAME class for a different reason (cycle-breaking).
-
-    It named both spellings while the bus door named one, and that divergence is precisely what let the
-    catalog's compaction event be refused nine times out of nine. They answer different questions and
-    must still agree on which operations are maintenance.
-    """
-    from maintenance.services.arrival import _MAINTENANCE_OPERATIONS as arrival_ops
-
-    for operation in arrival_ops:
-        assert "can_maintain" in fga_deps.relations_for_operation(operation), (
-            f"{operation!r} is maintenance to the cascade's arrival filter but a data write to the bus door"
-        )

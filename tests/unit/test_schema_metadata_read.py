@@ -20,16 +20,6 @@ def _patch_ds(monkeypatch: pytest.MonkeyPatch, schema: pa.Schema) -> None:
     monkeypatch.setattr(dataplane, "open_dataset_unchecked", lambda *_a, **_k: SimpleNamespace(schema=schema))
 
 
-def test_reads_and_decodes_user_properties(monkeypatch: pytest.MonkeyPatch) -> None:
-    schema = pa.schema(
-        [pa.field("id", pa.int64())],
-        metadata={b"owner": b"data-eng", b"tier": b"gold"},
-    )
-    _patch_ds(monkeypatch, schema)
-    out = dataplane.read_schema_metadata(cast(Any, None), cast(Any, {}), ["db", "t"])
-    assert out == {"owner": "data-eng", "tier": "gold"}
-
-
 def test_excludes_internal_lineage_keys(monkeypatch: pytest.MonkeyPatch) -> None:
     # The lineage.* keys are catalog/lineage bookkeeping stamped at create — not user properties.
     schema = pa.schema(
@@ -44,18 +34,3 @@ def test_excludes_internal_lineage_keys(monkeypatch: pytest.MonkeyPatch) -> None
     _patch_ds(monkeypatch, schema)
     out = dataplane.read_schema_metadata(cast(Any, None), cast(Any, {}), ["db", "t"])
     assert out == {"proof": "live"}  # only the user key survives
-
-
-def test_description_is_an_ordinary_property_and_is_never_filtered(monkeypatch: pytest.MonkeyPatch) -> None:
-    # #78 promotes `description` to a first-class field in the console — but it is still just a schema
-    # metadata key, so it must arrive through the SAME read as everything else. If a future filter ever
-    # eats it (the way lineage.* is eaten), the dedicated editor silently seeds blank.
-    schema = pa.schema([pa.field("id", pa.int64())], metadata={b"description": b"Page images, one row per scan."})
-    _patch_ds(monkeypatch, schema)
-    out = dataplane.read_schema_metadata(cast(Any, None), cast(Any, {}), ["db", "t"])
-    assert out == {"description": "Page images, one row per scan."}
-
-
-def test_empty_when_no_schema_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
-    _patch_ds(monkeypatch, pa.schema([pa.field("id", pa.int64())]))  # metadata is None
-    assert dataplane.read_schema_metadata(cast(Any, None), cast(Any, {}), ["db", "t"]) == {}

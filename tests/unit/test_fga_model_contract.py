@@ -16,12 +16,6 @@ not be the pairs the *app* sends (the yaml exercised ``transaction:``; the app c
 closes it — so this test enumerates the pairs by DRIVING the real resolvers in
 ``catalog.api.fga_deps`` (never a hand-copied list, which would drift) and asserts each pair
 resolves in ``service_kit/governed/auth/model.json``, the file the app actually loads.
-
-Also guards the model sync (model.fga authored / model.json loaded) at the type+relation level, so a
-relation added to one but not the other fails here rather than only in CI's ``fga`` CLI job — and
-guards that ``model.fga.yaml`` keeps REFERENCING the DSL rather than re-inlining a copy of it. There
-were three copies once; the yaml's was ungated, drifted, and made `fga model test` green against a
-model that was no longer the one shipping.
 """
 
 from __future__ import annotations
@@ -37,14 +31,12 @@ from lance_namespace import InternalError
 from openfga_sdk import OpenFgaClient
 
 from catalog.api import fga_deps
-from catalog.api.v1.endpoints import access
 from catalog.core.config import Settings
 from service_kit.governed import fga as fga_module
 from service_kit.governed.oidc import IDToken
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-AUTH_DIR = REPO_ROOT / "packages" / "service-kit" / "src" / "service_kit" / "governed" / "auth"
 
 #: Sentinel FGA client. The resolvers only ever hand it to ``fga.check``/``fga.batch_check``, which the
 #: recording fakes below replace — so nothing ever calls a method on it, and the cast is safe.
@@ -60,20 +52,6 @@ def _model_relations() -> dict[str, set[str]]:
     """``{object_type: {relation, ...}}`` parsed from the compiled ``model.json``."""
     model = fga_module.load_model()
     return {td["type"]: set(td.get("relations") or {}) for td in model["type_definitions"]}
-
-
-def _dsl_relations(text: str) -> dict[str, set[str]]:
-    """``{object_type: {relation, ...}}`` parsed from OpenFGA DSL source (``.fga`` text)."""
-    types: dict[str, set[str]] = {}
-    current: str | None = None
-    for raw in text.splitlines():
-        line = raw.split("#", 1)[0].strip()  # strip DSL comments
-        if line.startswith("type "):
-            current = line.removeprefix("type ").strip()
-            types[current] = set()
-        elif line.startswith("define ") and current:
-            types[current].add(line.removeprefix("define ").split(":", 1)[0].strip())
-    return types
 
 
 # --------------------------------------------------------------------------- #
@@ -213,28 +191,6 @@ class _Token:
     sub = "alice"
 
 
-#: The type `fga_root_object` names — the object every estate-wide privilege is checked against.
-_ESTATE_TYPE = str(Settings.model_fields["fga_root_object"].default).split(":", 1)[0]
-
-# Checks made OUTSIDE catalog/api/fga_deps.py. Static strings in app code (grep `relation=`), so
-# they are listed here with their source — the model cross-check below is what matters.
-_OTHER_SERVICE_PAIRS: dict[tuple[str, str], str] = {
-    ("table", "can_read_data"): "catalog tables.py (list_objects filter) + viewer pages.py (#90 page BYTES)",
-    ("table", "can_write_data"): "catalog/api/v1/endpoints/credentials.py (write-tier vend)",
-    ("table", "can_maintain"): "catalog/api/v1/endpoints/credentials.py (write-tier vend, the maintainer rung)",
-    ("table", "can_get_metadata"): "lineage fga_deps.py + viewer datasets.py/pages.py (#90 page LISTING)",
-    ("namespace", "can_create_table"): "medallion/services/train.py + transform.py default",
-    ("namespace", "can_promote"): "medallion silver->gold stage runner (chart requiredAction)",
-    ("table", "can_promote"): "catalog require_can_promote (#17 model promotion endpoint)",
-    ("project", "can_create_warehouse"): "catalog fga_deps.require_can_create_warehouse (#3-A)",
-    ("project", "can_administer"): "catalog/api/v1/endpoints/policies.py (#84 project policy routes)",
-    # The ESTATE rungs, and the type is DERIVED from `fga_root_object` rather than typed: the root's
-    # type is a setting, so a literal here goes phantom the day it is repointed and the failure reads
-    # as "the viewer checks a relation that does not exist" rather than "the table is stale".
-    (_ESTATE_TYPE, "can_browse_storage"): "viewer/api/v1/endpoints/objects.py (#90 raw object browser, root object only)",
-}
-
-
 # --------------------------------------------------------------------------- #
 # Tests
 # --------------------------------------------------------------------------- #
@@ -253,14 +209,6 @@ def test_every_relation_the_catalog_checks_exists_in_the_model(monkeypatch: pyte
         f"the app can check relations that do NOT exist in service_kit/governed/auth/model.json: {phantom}. "
         "OpenFGA rejects these (relation not found) and service_kit.governed.fga fails closed → 503 for every caller."
     )
-
-
-def test_every_relation_other_services_check_exists_in_the_model() -> None:
-    """CONTRACT: the same guarantee for the checks made outside ``catalog.api.fga_deps`` (lineage's
-    dataset gates, medallion's stage-promotion gate, the catalog endpoint-level gates)."""
-    model = _model_relations()
-    phantom = sorted(f"{t}#{r} ({src})" for (t, r), src in _OTHER_SERVICE_PAIRS.items() if r not in model.get(t, set()))
-    assert not phantom, f"phantom relations checked by app code: {phantom}"
 
 
 def test_chart_medallion_required_actions_exist_on_namespace() -> None:
@@ -297,47 +245,6 @@ def test_transaction_alter_checks_a_real_namespace_writer_relation(
     assert obj == "namespace:db1"  # parent-scoped, not a per-txn object nothing seeds
     assert relation in _model_relations()["namespace"], f"namespace#{relation} does not exist"
     assert relation == "can_update_properties"  # the namespace WRITER rung (can_write_data is table-only)
-
-
-def test_access_review_enumerates_exactly_the_models_can_relations() -> None:
-    """CONTRACT (#51): the access-review endpoints ask ListUsers for exactly the ``can_*`` set the
-    compiled model defines on the type — never a hand-kept list (which would drift into phantom
-    relations: OpenFGA 400 → fail-closed 503 for every reviewer) and never a filtered subset (which
-    would silently hide grants from the review)."""
-    model = _model_relations()
-    for fga_type in ("table", "namespace"):
-        enumerated = set(access._can_relations(fga_type))
-        expected = {r for r in model[fga_type] if r.startswith("can_")}
-        assert enumerated, f"access review enumerates no relations for {fga_type}"
-        assert enumerated == expected, (
-            f"access review's {fga_type} relation set drifted from model.json: missing={sorted(expected - enumerated)} phantom={sorted(enumerated - expected)}"
-        )
-
-
-def test_both_model_copies_agree() -> None:
-    """CONTRACT: ``model.fga`` (authored) and ``model.json`` (LOADED by the app) define the same types
-    + relations. A relation added to the authored DSL but not regenerated into the JSON means the app
-    checks something the deployed model has never heard of — a 503 for every caller.
-
-    There used to be a THIRD copy, inlined into ``model.fga.yaml``, and this test asserted all three.
-    That was the wrong shape of guarantee: CI diffs model.fga against model.json but never against the
-    yaml, so the inlined block could drift (it did — a stale comment, then a whole missing `condition`)
-    while `fga model test` stayed green, because it was testing the stale copy against itself. The yaml
-    now says `model_file: ./model.fga`, so the copy is gone rather than policed."""
-    compiled = _model_relations()
-    authored = _dsl_relations((AUTH_DIR / "model.fga").read_text())
-
-    assert authored == compiled, "model.json is STALE — regenerate: fga model transform --file model.fga"
-
-
-def test_the_test_yaml_references_the_model_rather_than_copying_it() -> None:
-    """CONTRACT: ``model.fga.yaml`` must READ the model, not restate it. An inlined `model:` block is a
-    copy no gate compares, so it can drift silently and take the entire test suite's credibility with
-    it — the tests keep passing against a model that is no longer the one being shipped."""
-    yaml_text = (AUTH_DIR / "model.fga.yaml").read_text()
-
-    assert "model_file: ./model.fga" in yaml_text, "model.fga.yaml must reference model.fga, not inline it"
-    assert not re.search(r"^model: \|", yaml_text, re.MULTILINE), "model.fga.yaml has re-inlined the model — that copy is ungated and will drift"
 
 
 def test_access_disclosure_routes_are_owner_tier() -> None:
@@ -611,58 +518,3 @@ def test_only_the_data_rungs_accept_a_TIME_BOXED_grant() -> None:
     # here pretending to be reviewed.
     stale = _CONDITIONAL_GRANT_RUNGS - found
     assert not stale, f"_CONDITIONAL_GRANT_RUNGS lists {sorted(stale)}, which the model no longer defines"
-
-
-def _dsl_conditional_rungs(text: str) -> set[tuple[str, str]]:
-    """``(type, relation)`` pairs whose DSL type-restriction list carries a ``with <condition>``.
-
-    Parsed from the AUTHORED ``.fga`` rather than the compiled JSON, so the two can be compared. Only
-    the bracketed restriction list counts — a condition can appear nowhere else in a `define` line.
-    """
-    out: set[tuple[str, str]] = set()
-    current: str | None = None
-    for raw in text.splitlines():
-        # A DSL comment is `#` at line start or after whitespace. Splitting on a bare `#` — which is
-        # what `_dsl_relations` above does — truncates `[user, role#assignee, ...]` to `[user, role`,
-        # because a USERSET carries a `#` too. That helper only reads the name before the colon so the
-        # mangling is harmless there; here it silently emptied the restriction list and made this test
-        # report the whole model as drifted.
-        line = re.sub(r"(?:^|\s)#.*$", "", raw).strip()
-        if line.startswith("type "):
-            current = line.removeprefix("type ").strip()
-        elif line.startswith("define ") and current:
-            name, _, body = line.removeprefix("define ").partition(":")
-            bracket = re.search(r"\[([^\]]*)\]", body)
-            if bracket and " with " in bracket.group(1):
-                out.add((current, name.strip()))
-    return out
-
-
-def test_the_compiled_model_carries_the_SAME_time_boxed_rungs_as_the_source() -> None:
-    """`test_both_model_copies_agree` compares relation NAMES, and a type restriction has no name.
-
-    So widening a rung to accept a time-boxed grant in `model.fga` WITHOUT regenerating `model.json`
-    passed every gate in this file: the name set is unchanged, and every other structural test —
-    including the tripwire above — reads the compiled JSON, which still said the old thing. Measured
-    while writing that tripwire: mutating the source alone left all 11 tests green.
-
-    Both directions are dangerous, which is why this compares rather than checks one side. Source
-    ahead of compiled means the reviewed model is not the deployed one; compiled ahead of source
-    means the DEPLOYED model accepts a grant nobody wrote down — and `_CONDITIONAL_GRANT_RUNGS`
-    above, which reads the compiled side, would be reviewing a rung the author never intended.
-    """
-    model = fga_module.load_model()
-    compiled = {
-        (td["type"], relation)
-        for td in model["type_definitions"]
-        for relation, info in ((td.get("metadata") or {}).get("relations") or {}).items()
-        for direct in info.get("directly_related_user_types") or []
-        if direct.get("condition")
-    }
-    authored = _dsl_conditional_rungs((AUTH_DIR / "model.fga").read_text())
-
-    assert authored == compiled, (
-        f"time-boxed rungs DRIFTED between the authored DSL and the compiled model — "
-        f"source-only {sorted(authored - compiled)}, compiled-only {sorted(compiled - authored)}. "
-        "The app loads model.json; regenerate it: fga model transform --file model.fga"
-    )

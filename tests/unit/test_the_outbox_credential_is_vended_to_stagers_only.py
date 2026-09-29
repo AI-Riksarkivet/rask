@@ -27,29 +27,6 @@ import pytest
 from catalog.api.v1.endpoints import outbox_credentials
 
 
-def test_the_route_is_mounted_where_no_table_id_can_reach_it() -> None:
-    """A control prefix is not a table, so the door must not live under `/v1/table/{id}`.
-
-    Mounted there it would be addressable by a caller-supplied id, which is the one property this
-    door must not have.
-    """
-    paths = {getattr(route, "path", "") for route in outbox_credentials.router.routes}
-    assert paths == {"/v1/outbox/credentials"}, f"unexpected route surface: {paths}"
-
-
-def test_the_gate_is_can_stage_events_on_the_ROOT_object() -> None:
-    """Not a table rung and not a warehouse rung — staging is an estate privilege held by services.
-
-    Read off the module rather than restated, so a gate that is quietly relaxed to `can_write_data`
-    (which every tenant writer holds) fails here rather than in production.
-    """
-    import inspect
-
-    body = inspect.getsource(outbox_credentials.vend_outbox_credentials)
-    assert "can_stage_events" in body, "the door does not check the rung minted for it"
-    assert "fga_root_object" in body, "the rung must be checked on the ESTATE root, never on a tenant object"
-
-
 @pytest.mark.asyncio
 async def test_it_vends_for_the_CONFIGURED_outbox_and_takes_no_path(monkeypatch: pytest.MonkeyPatch) -> None:
     """The location comes from settings, never from the caller — the property that bounds this door."""

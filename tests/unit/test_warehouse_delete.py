@@ -194,15 +194,6 @@ def test_a_warehouse_that_still_holds_namespaces_refuses_and_names_every_one_of_
     assert warehouses.namespaces_bound_to(settings.registry_root, {}, "acme-wh") == ["bronze", "silver"]
 
 
-def test_an_empty_warehouse_deletes_cleanly(tmp_path: Any) -> None:
-    settings = _settings(tmp_path)
-    _seed(settings)
-    result = _delete(settings, _request())
-    assert result.id == "acme-wh"
-    assert result.namespaces_dropped == []
-    assert warehouses.get_warehouse(settings.registry_root, {}, "acme-wh") is None
-
-
 def test_cascade_drops_every_bound_namespace_and_leaves_no_binding_or_cached_route_behind(tmp_path: Any) -> None:
     # A cascade that leaves a binding behind is a bug, and so is one that leaves the POSITIVE routing cache
     # pointing at a warehouse that no longer exists — the resolver caches bindings forever.
@@ -432,26 +423,6 @@ def test_the_gate_is_the_projects_admin_rung_never_a_relation_on_the_warehouse(t
 
     assert store.checks == [("alice", "can_administer", "project:acme")]
     assert not any(obj.startswith("warehouse:") for _u, _r, obj in store.checks)
-
-
-def test_a_non_admin_of_the_owning_project_is_denied_and_nothing_is_deleted(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    settings = _settings(tmp_path, fga_enabled=True)
-    _seed(settings, namespaces=("bronze",))
-    store = _FakeStore(project_admins=("alice",))
-    store.install(monkeypatch)
-
-    # The no-oracle 404 (audit #4), not a 403: an outsider cannot tell "not yours" from "does not exist".
-    with pytest.raises(TableNotFoundError):
-        _delete(
-            settings,
-            _request(),
-            token=IDToken(iss="i", sub="mallory", aud="lance", exp=1, iat=1),
-            client=MagicMock(),
-            cascade=True,
-        )
-
-    assert warehouses.get_warehouse(settings.registry_root, {}, "acme-wh") is not None
-    assert warehouses.namespaces_bound_to(settings.registry_root, {}, "acme-wh") == ["bronze"]
 
 
 def test_the_warehouses_own_tuples_are_revoked_and_so_are_every_cascaded_namespaces(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:

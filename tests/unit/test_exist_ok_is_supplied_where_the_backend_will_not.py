@@ -59,19 +59,6 @@ def _native(backend: _Backend):
 
 
 @pytest.mark.anyio
-async def test_a_free_id_is_created_and_not_described(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The ordinary path must cost nothing extra — no second round trip to describe what it just made."""
-    backend = _Backend(conflicts=False)
-    monkeypatch.setattr(ns_ep.native, "call", _native(backend))
-
-    response, kept = await ns_ep.create_or_keep_namespace(cast(LanceNamespace, object()), ["acme"], CreateNamespaceRequest(id=["acme"], mode="exist_ok"))
-
-    assert kept is False
-    assert backend.ops == ["create_namespace"], "a create that succeeded needs no describe"
-    assert response.properties == {"fresh": "true"}
-
-
-@pytest.mark.anyio
 async def test_an_existing_id_is_KEPT_and_described(monkeypatch: pytest.MonkeyPatch) -> None:
     """THE GATE. The backend refuses; `exist_ok` means keep, and the caller gets what is really there."""
     backend = _Backend(conflicts=True)

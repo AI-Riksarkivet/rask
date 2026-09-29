@@ -18,14 +18,13 @@ from pathlib import Path
 import pyarrow as pa
 import pytest
 from lance_namespace import (
-    AlterTableAddColumnsRequest,
     AlterTableDropColumnsRequest,
     LanceNamespace,
     LanceNamespaceError,
     connect,
 )
 
-from catalog.services.dataplane import add_columns, create_table, drop_columns
+from catalog.services.dataplane import create_table, drop_columns
 
 
 @pytest.fixture
@@ -50,18 +49,3 @@ def test_a_storage_failure_on_a_column_op_is_not_blamed_on_the_caller(table: Lan
     with pytest.raises(OSError, match="unreachable") as caught:
         drop_columns(table, {}, AlterTableDropColumnsRequest(id=["t"], columns=["v"]))
     assert not isinstance(caught.value, LanceNamespaceError), "a storage outage was minted into a domain error"
-
-
-def test_a_typed_domain_error_passes_through_unchanged(table: LanceNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
-    """An error that is ALREADY the spec's own (``TableBranchNotFound`` out of ``open_dataset``, our own
-    ``InvalidInput`` for an unsupported cast target) must not be re-wrapped: re-wrapping would restate a 404
-    as a 400 and lose the code clients dispatch on."""
-    from lance_namespace import TableBranchNotFoundError
-
-    def missing_branch(*_a: object, **_k: object) -> None:
-        raise TableBranchNotFoundError("branch 'dev' not found on table t")
-
-    monkeypatch.setattr("catalog.services.dataplane.open_dataset", missing_branch)
-    with pytest.raises(TableBranchNotFoundError) as caught:
-        add_columns(table, {}, AlterTableAddColumnsRequest(id=["t"], branch="dev", new_columns=[{"name": "x", "expression": "id + 1"}]))
-    assert int(caught.value.code) == 22

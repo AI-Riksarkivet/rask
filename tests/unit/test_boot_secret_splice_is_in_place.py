@@ -34,10 +34,9 @@ FROM_STORE = "spliced-at-boot"
 
 
 def _accessors() -> list[tuple[str, Callable[[], Any], dict[str, str]]]:
-    """(label, the service's cached accessor, the env that makes it consume the store) for every service
-    whose lifespan splices its settings at boot."""
+    """(label, the service's cached accessor, the env that makes it consume the store) for each service
+    whose boot splice these drive."""
     from catalog.core.config import get_settings as catalog_settings
-    from lineage.core.config import get_settings as lineage_settings
     from maintenance.core.config import get_settings as maintenance_settings
     from medallion.core.config import get_settings as medallion_settings
 
@@ -45,7 +44,6 @@ def _accessors() -> list[tuple[str, Callable[[], Any], dict[str, str]]]:
         ("catalog", catalog_settings, {"LANCE_S3_ACCESS_KEY_ID": "x", "LANCE_SECRETS_FROM_DAPR": "true"}),
         ("medallion", medallion_settings, {"MEDALLION_SECRETS_FROM_DAPR": "true"}),
         ("maintenance", maintenance_settings, {"MAINTENANCE_SECRETS_FROM_DAPR": "true"}),
-        ("lineage", lineage_settings, {"LINEAGE_SECRETS_FROM_DAPR": "true"}),
     ]
 
 

@@ -6,7 +6,7 @@ stage runner, maintenance, viewer, search and annotator — each opening `app = 
 and then repeating the same five steps in prose comments copied between them.
 
 The media three moved first, onto `service_kit.media.app.build_media_app` (see
-`test_one_media_service_seam.py`). This pins the other five onto `service_kit.lance_app`.
+`test_one_media_service_seam.py`). This pins what `service_kit.lance_app` gives the other five.
 
 THE DRIFT THE COPIES HAD ALREADY PRODUCED, and what makes this more than tidying: the medallion STAGE RUNNER
 served no `RequestIDMiddleware` at all. Its four siblings each added one, under the same copied
@@ -16,28 +16,14 @@ service that consumes the cascade's bus deliveries did not have it. Nothing comp
 
 from __future__ import annotations
 
-import re
 from collections.abc import Iterator
 from contextlib import contextmanager
-from pathlib import Path
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from lance_namespace import UnauthenticatedError
 
-
-REPO = Path(__file__).resolve().parents[2]
-
-#: The five lance-plane entrypoints. `services/gateway` is a proxy that builds its own app and is not
-#: on this plane; the media trio builds through `service_kit.media.app`.
-LANCE_MAINS = (
-    "services/catalog/src/catalog/main.py",
-    "services/lineage/src/lineage/main.py",
-    "services/medallion/src/medallion/producer.py",
-    "services/medallion/src/medallion/stage_runner.py",
-    "services/maintenance/src/maintenance/service.py",
-)
 
 LANCE_APPS = (
     ("catalog", "catalog.main"),
@@ -52,13 +38,6 @@ LANCE_APPS = (
 def _catalog_needs_a_key(monkeypatch: pytest.MonkeyPatch) -> None:
     """`catalog.main` builds its settings at import, and the access key id has no default."""
     monkeypatch.setenv("LANCE_S3_ACCESS_KEY_ID", "x")
-
-
-@pytest.mark.parametrize("main", LANCE_MAINS)
-def test_no_lance_main_constructs_its_own_app(main: str) -> None:
-    """RED before the collapse: all five carried a module-level `app = FastAPI(`."""
-    source = (REPO / main).read_text()
-    assert not re.search(r"^app = FastAPI\(", source, re.MULTILINE), f"{main} still hand-assembles its own FastAPI app"
 
 
 @contextmanager

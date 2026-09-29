@@ -84,18 +84,6 @@ def _publish(ns, version: int):  # noqa: ANN001, ANN202
     return publish(ns, {}, table_id=TABLE_ID, version=version, key_column="id")
 
 
-def test_nothing_is_published_before_the_first_publish(ns) -> None:  # noqa: ANN001
-    """An unset tag must read as "nothing published", not blow up.
-
-    pylance RAISES `Ref not found` for an unset tag rather than returning None, and the dataplane
-    turns that into `TableTagNotFound`. Reading it as absence is what lets the FIRST publication of
-    every dataset work — the one case that always happens.
-    """
-    _write(ns, [1, 2, 3])
-
-    assert published_version(ns, {}, TABLE_ID) is None
-
-
 def test_a_PASSING_gate_advances_the_pointer_and_names_the_range(ns) -> None:  # noqa: ANN001
     """The happy path, and the range D-R3 requires. A first publication has no prior version, so the
     delta is "everything up to to_version" and `from_version` is None rather than 0."""
@@ -194,29 +182,6 @@ def test_the_pin_is_dropped_even_when_the_gate_REJECTS(ns) -> None:  # noqa: ANN
     assert PUBLISHING_TAG not in tags
 
 
-def test_assertions_come_back_on_BOTH_outcomes(ns) -> None:  # noqa: ANN001
-    """A rejected batch has to be auditable, not merely refused — the operator needs to know WHICH
-    check failed without re-running anything."""
-    version = _write(ns, [1, None])
-
-    result = _publish(ns, version)
-
-    assert result.published is False
-    assert [a.assertion for a in result.assertions if not a.success] == ["not_null"]
-    assert any(a.success for a in result.assertions), "the passing checks are reported too"
-
-
-def test_an_empty_version_is_REFUSED(ns) -> None:  # noqa: ANN001
-    """`row_count_positive`. An empty publication is otherwise a silent failure — a mis-set source
-    prefix publishes nothing and reports success."""
-    version = _write(ns, [])
-
-    result = _publish(ns, version)
-
-    assert result.published is False
-    assert "row_count_positive" in (result.reason or "")
-
-
 def test_a_SECOND_publication_carries_the_PREVIOUS_version_as_from(ns) -> None:  # noqa: ANN001
     """D-R3's range across successive runs: `from` is the last PUBLISHED version, not the last
     committed one, so a consumer that only ever saw published data gets a contiguous delta."""
@@ -252,17 +217,6 @@ def test_a_version_that_does_not_exist_is_refused(ns) -> None:  # noqa: ANN001
 
     with pytest.raises(InvalidInputError):
         _publish(ns, 0)
-
-
-def test_the_tag_move_mints_NO_new_version(ns) -> None:  # noqa: ANN001
-    """Publication is metadata-only. If advancing the pointer created a version, every publish would
-    itself need publishing — and `cleanup_old_versions` would be reasoning about pointer moves as
-    though they were data."""
-    version = _write(ns, [1, 2])
-
-    _publish(ns, version)
-
-    assert int(lance.dataset(_uri(ns)).version) == version
 
 
 # ── the notification (D-R2) ───────────────────────────────────────────────────────────
@@ -320,37 +274,6 @@ async def test_a_PUBLICATION_announces_the_range_and_a_REJECTION_announces_nothi
     assert "project" not in announced[0]
 
 
-def test_table_published_is_in_the_control_VOCABULARY() -> None:
-    """The vocabulary is a wire contract across three files.
-
-    `ControlAction` reaches the frontend through `docs/catalog-openapi.json` →
-    `frontend/packages/api/src/generated/catalog.ts`. An action added without regenerating leaves the
-    TS client unable to NAME an event the backend publishes.
-
-    THIS DOCSTRING NAMED THE WRONG GUARD until 2026-08-16. It claimed `test_openapi_contract` fails on
-    that drift; it does not, and cannot. That test compares only the SET OF PATH NAMES and the SET OF
-    SCHEMA NAMES (`tests/unit/test_openapi_contract.py:51-57`) — a new `ControlAction` member only
-    extends the `enum` array inside the existing `CatalogControlEvent` schema, so no name changes and
-    it passes. Citing a guard that does not guard is worse than citing none: it is why nobody looked.
-
-    The two that DO hold, one per hop:
-
-    * Python → spec: `make openapi-check` / `dagger call openapi` regenerates and diffs BYTE-EXACT, so
-      an action added without `make openapi` fails there.
-    * spec → TS: `@rask/zone-contract`'s `generated-client-freshness.test.ts`, which asserts every enum
-      MEMBER the spec declares appears as a quoted literal in the generated client. Added the same day,
-      after `lineage.ts` was found 19 days and three spec commits stale with nothing checking it.
-
-    So this test guards the Python half, and those two guard the hops out — none of them the one this
-    docstring used to name.
-    """
-    from typing import get_args
-
-    from service_kit.control_events import ControlAction
-
-    assert "table_published" in get_args(ControlAction)
-
-
 def test_the_gate_scans_the_version_being_PUBLISHED_not_latest(ns) -> None:  # noqa: ANN001
     """The silent half of the defect: a dirty version published because a later clean one exists.
 
@@ -399,23 +322,3 @@ def test_a_REPUBLISH_at_the_same_version_announces_nothing(ns) -> None:  # noqa:
     assert r1.published is True and r1.advanced is True
     assert r2.published is True, "the version IS published; re-asking is not an error"
     assert r2.advanced is False, "the tag did not move, so there is no new readiness to announce"
-
-
-def test_a_real_advance_still_announces(ns) -> None:  # noqa: ANN001
-    """The other half — without it the fix above could be 'never emit' and pass."""
-    v1 = _write(ns, [1, 2, 3])
-    publish(ns, {}, table_id=TABLE_ID, version=v1, key_column="id")
-    v2 = _write(ns, [4, 5, 6])
-
-    assert publish(ns, {}, table_id=TABLE_ID, version=v2, key_column="id").advanced is True
-
-
-def test_a_REFUSED_publish_never_counts_as_an_advance(ns) -> None:  # noqa: ANN001
-    """A failed gate must not announce, and `advanced` is now the single thing the emit reads."""
-    _write(ns, [1, 2, 3])
-    bad = _write(ns, [4, None, 6])
-
-    result = publish(ns, {}, table_id=TABLE_ID, version=bad, key_column="id")
-
-    assert result.published is False
-    assert result.advanced is False

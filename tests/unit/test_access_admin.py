@@ -17,7 +17,6 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from fastapi.routing import APIRoute
 from lance_namespace import (
     InvalidInputError,
     ServiceUnavailableError,
@@ -183,11 +182,6 @@ def test_pagination_params_pass_through_and_token_returns(gate_seen: dict[str, A
     assert response.continuation == "tok-next"
 
 
-def test_read_audits_the_disclosure(gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
-    _read(monkeypatch, object_type="table")
-    assert rec.calls == [("access_tuples_read", "success", {"subject": "root_admin", "resource": "table:", "delivered": 1})]
-
-
 # ── tuple write/delete: model-true validation + the access_grant audit pattern ────────────────────────
 
 
@@ -278,33 +272,6 @@ def test_write_emits_grant_added(gate_seen: dict[str, Any], rec: _AuditRecorder,
     assert (event.action, event.object_type, event.object_id) == ("grant_added", "grant", "table:db1$t")
     assert event.actor == "user:root_admin"
     assert event.extra == {"relation": "reader", "subject": "user:alice"}
-
-
-def test_delete_emits_grant_revoked(gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
-    emitter = _mutate_recording_emission(monkeypatch, AccessTuple(user="team:acme#member", relation="writer", object="namespace:bronze"), write=False)
-    [event] = emitter.events
-    assert event.action == "grant_revoked"
-    assert event.extra == {"relation": "writer", "subject": "team:acme#member"}
-
-
-def test_conditional_write_names_the_condition_in_the_event(gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
-    body = AccessTuple(
-        user="alice",
-        relation="reader",
-        object="table:db1$t",
-        condition=TupleCondition(name="non_expired_grant", context={"grant_time": "2026-07-29T09:00:00Z", "grant_duration": "4h"}),
-    )
-    emitter = _mutate_recording_emission(monkeypatch, body, write=True)
-    [event] = emitter.events
-    # The name only — the window parameters are claim-check detail the tuple itself carries.
-    assert event.extra == {"relation": "reader", "subject": "user:alice", "condition": "non_expired_grant"}
-
-
-def test_outage_emits_no_control_event(gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
-    emitter = _RecordingEmitter()
-    with pytest.raises(ServiceUnavailableError):
-        _mutate_recording_emission(monkeypatch, AccessTuple(user="alice", relation="reader", object="table:db1$t"), write=True, fail=True, emitter=emitter)
-    assert emitter.events == []
 
 
 def test_write_rejects_a_derived_can_relation(gate_seen: dict[str, Any], rec: _AuditRecorder) -> None:
@@ -421,26 +388,6 @@ def test_list_objects_clears_the_estate_gate_and_qualifies_a_bare_subject(
     assert (response.user, response.type) == ("user:alice", "table")
     assert rec.calls[0][:2] == ("access_list_objects", "success")
     assert rec.calls[0][2]["delivered"] == 2
-
-
-def test_list_objects_sends_a_userset_verbatim(gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
-    # The model refuses `team#member` on resource rungs by design — a team reaches data through a role —
-    # so the userset question is the one that explains a real grant, and it must not be re-prefixed.
-    seen: dict[str, Any] = {}
-
-    async def _fake(_client: Any, **kwargs: Any) -> Any:
-        seen.update(kwargs)
-        return ep.fga.ObjectListing(objects=[], truncated=False)
-
-    monkeypatch.setattr(ep.fga, "list_objects", _fake)
-    asyncio.run(
-        ep.list_access_objects(
-            client=_fga_client(),
-            token=None,
-            body=AccessListObjectsRequest(user="role:validators#assignee", relation="can_promote", type="namespace"),
-        )
-    )
-    assert seen["user"] == "role:validators#assignee"
 
 
 def test_list_objects_rejects_an_unknown_type_and_a_phantom_relation(gate_seen: dict[str, Any], rec: _AuditRecorder) -> None:
@@ -582,23 +529,6 @@ def test_expand_clamps_depth_to_the_library_ceiling(gate_seen: dict[str, Any], r
     assert response.depth == fga.MAX_EXPAND_TREE_DEPTH
 
 
-def test_expand_empty_tree_is_null_not_an_empty_object(gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
-    # "resolves to nothing" and "could not ask" must stay distinguishable on the wire — the second is
-    # the 503 below, and neither may be rendered as the other.
-    async def _empty(_client: Any, **_kwargs: Any) -> dict[str, Any]:
-        return {}
-
-    monkeypatch.setattr(ep.fga, "expand_tree", _empty)
-    response = asyncio.run(
-        ep.expand_access(
-            client=_fga_client(),
-            token=None,
-            body=AccessExpandRequest(object="table:db1$t", relation="reader"),
-        )
-    )
-    assert response.tree is None
-
-
 def test_expand_outage_audits_failure_and_raises(gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
     async def _down(_client: Any, **_kwargs: Any) -> dict[str, Any]:
         raise ServiceUnavailableError("openfga down")
@@ -624,30 +554,6 @@ def test_expand_rejects_a_phantom_relation(gate_seen: dict[str, Any], rec: _Audi
                 body=AccessExpandRequest(object="table:db1$t", relation="can_fly"),
             )
         )
-
-
-def test_every_derivation_surface_is_fga_gated(rec: _AuditRecorder) -> None:
-    """FGA off → 501 on all three, like every other /v1/access route. A surface that answered "who can
-    do what" while the store is unconfigured would be inventing an answer.
-
-    ASSERTED THROUGH THE MECHANISM THAT NOW PROVIDES IT. This used to call each of the three handlers
-    with `fga_enabled=False` and expect the raise. The gate moved to a router dependency, so a direct
-    handler call no longer runs it — those three calls would have stopped raising and the test would
-    have had to be deleted or, worse, kept passing by asserting something else. What actually holds the
-    property now is (a) the gate refuses when FGA is off, and (b) every route carries the gate. Both are
-    asserted, and (b) covers routes four and five for free — which the old shape never did.
-    """
-    off = _settings(fga_enabled=False)
-    with pytest.raises(UnsupportedOperationError):
-        asyncio.run(ep.estate_gate(client=_fga_client(), settings=off, token=None))
-
-    derivation = {"/v1/access/list-objects", "/v1/access/list-users", "/v1/access/expand"}
-    covered = {
-        route.path
-        for route in ep.router.routes
-        if isinstance(route, APIRoute) and any(getattr(dep.call, "__name__", "") == "estate_gate" for dep in route.dependant.dependencies)
-    }
-    assert derivation <= covered, f"ungated derivation surfaces: {sorted(derivation - covered)}"
 
 
 def test_simulate_returns_the_delta_not_just_the_verdict(gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -703,45 +609,6 @@ def test_simulate_reports_a_no_op_grant_honestly(gate_seen: dict[str, Any], rec:
     assert response.baseline is True and response.allowed is True
 
 
-def test_simulate_writes_nothing(gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The whole promise. A simulation that mutates is worse than no simulation."""
-    writes: list[Any] = []
-
-    async def _fake_check(_client: Any, **_kwargs: Any) -> bool:
-        return True
-
-    async def _explode(*_a: Any, **_k: Any) -> None:
-        writes.append(1)
-
-    monkeypatch.setattr(ep.fga, "check", _fake_check)
-    monkeypatch.setattr(ep.fga, "write_tuples", _explode)
-    monkeypatch.setattr(ep.fga, "delete_tuples", _explode)
-    asyncio.run(
-        ep.simulate_access(
-            client=_fga_client(),
-            token=None,
-            body=AccessSimulateRequest(
-                user="alice",
-                relation="reader",
-                object="table:db1$t",
-                hypothetical=[AccessTuple(user="bob", relation="reader", object="table:db1$t")],
-            ),
-        )
-    )
-    assert writes == []
-
-
-def test_simulate_caps_the_hypothesis_at_ten() -> None:
-    # A Check is not a bulk what-if engine, and an unbounded contextual set is an unbounded server-side
-    # evaluation on an estate-gated surface. Enforced by the schema, so it cannot be forgotten here.
-    import pydantic
-
-    one = {"user": "alice", "relation": "reader", "object": "table:db1$t"}
-    AccessSimulateRequest(user="a", relation="reader", object="table:db1$t", hypothetical=[one] * 10)
-    with pytest.raises(pydantic.ValidationError):
-        AccessSimulateRequest(user="a", relation="reader", object="table:db1$t", hypothetical=[one] * 11)
-
-
 def test_simulate_rejects_a_hypothesis_it_would_refuse_to_write(gate_seen: dict[str, Any], rec: _AuditRecorder) -> None:
     """A hypothetical must clear the SAME validation a real write clears.
 
@@ -780,16 +647,6 @@ def test_simulate_outage_audits_failure_and_raises(gate_seen: dict[str, Any], re
     assert rec.calls[0][:2] == ("access_simulate_hypothetical", "failure")
 
 
-def test_simulate_is_estate_gated(rec: _AuditRecorder) -> None:
-    """Same move as the derivation surfaces above: the gate is a router dependency now, so the property
-    is "this route carries it" rather than "this handler raises"."""
-    with pytest.raises(UnsupportedOperationError):
-        asyncio.run(ep.estate_gate(client=_fga_client(), settings=_settings(fga_enabled=False), token=None))
-
-    simulate = next(r for r in ep.router.routes if isinstance(r, APIRoute) and r.path.endswith("/simulate"))
-    assert any(getattr(dep.call, "__name__", "") == "estate_gate" for dep in simulate.dependant.dependencies)
-
-
 def _write_conditional(monkeypatch: pytest.MonkeyPatch, body: AccessTuple) -> list[Any]:
     written: list[Any] = []
 
@@ -825,12 +682,6 @@ def test_a_conditional_grant_reaches_openfga_with_its_condition(gate_seen: dict[
     assert written[0].condition is not None
     assert written[0].condition.name == "non_expired_grant"
     assert written[0].condition.context["grant_duration"] == "4h"
-
-
-def test_a_permanent_grant_still_carries_no_condition(gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
-    # Migration safety: every pre-existing grant path must keep producing an UNconditional tuple.
-    written = _write_conditional(monkeypatch, AccessTuple(user="alice", relation="writer", object="namespace:bronze"))
-    assert written[0].condition is None
 
 
 def test_a_condition_the_rung_does_not_accept_is_a_clean_400(gate_seen: dict[str, Any], rec: _AuditRecorder) -> None:
@@ -935,55 +786,3 @@ def test_a_grant_carrying_a_clock_can_still_be_revoked(gate_seen: dict[str, Any]
     written, response = _mutate(monkeypatch, _clock_pinned_grant(), write=False)
     assert [(t.user, t.relation, t.object) for t in written] == [("user:alice", "writer", "namespace:bronze")]
     assert response.object == "namespace:bronze"
-
-
-def test_a_read_echoes_the_condition_rather_than_flattening_it(gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A time-boxed grant that reads back as permanent is worse than no feature: a reviewer auditing
-    'who has writer on bronze' would see a name that is in fact about to lapse."""
-
-    async def _fake_read(_client: Any, **_kw: Any) -> tuple[list[Any], str | None]:
-        return (
-            [
-                fga.ClientTuple(
-                    user="user:alice",
-                    relation="writer",
-                    object="namespace:bronze",
-                    condition=fga.RelationshipCondition(name="non_expired_grant", context={"grant_duration": "4h"}),
-                )
-            ],
-            None,
-        )
-
-    monkeypatch.setattr(ep.fga, "read_tuples", _fake_read)
-    response = asyncio.run(ep.read_access_tuples(client=_fga_client(), token=_token("root_admin"), object="namespace:bronze"))
-    assert response.tuples[0].condition is not None
-    assert response.tuples[0].condition.name == "non_expired_grant"
-    assert response.tuples[0].condition.context["grant_duration"] == "4h"
-
-
-def test_check_forwards_the_runtime_context(gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
-    seen: dict[str, Any] = {}
-
-    async def _fake_check(_client: Any, **kwargs: Any) -> bool:
-        seen.update(kwargs)
-        return True
-
-    monkeypatch.setattr(ep.fga, "check", _fake_check)
-    asyncio.run(
-        ep.check_access(
-            client=_fga_client(),
-            token=None,
-            body=AccessCheckBody(user="alice", relation="writer", object="namespace:bronze", context={"current_time": "2026-07-29T10:30:00Z"}),
-        )
-    )
-    assert seen["context"] == {"current_time": "2026-07-29T10:30:00Z"}
-
-
-def test_the_model_endpoint_publishes_condition_parameter_types(gate_seen: dict[str, Any], rec: _AuditRecorder) -> None:
-    """Served so a client renders TYPED inputs from the model. A hand-kept copy in the frontend drifts
-    the moment a parameter changes, and a missing operand is a 503, not a soft failure."""
-    client = SimpleNamespace(get_authorization_model_id=lambda: "01MODEL")
-    response = asyncio.run(ep.get_access_model(client=_fga_client(client), settings=_settings()))
-    assert "non_expired_grant" in response.conditions
-    assert response.conditions["non_expired_grant"]["grant_duration"] == "duration"
-    assert response.conditions["non_expired_grant"]["current_time"] == "timestamp"

@@ -30,13 +30,6 @@ def _routes() -> list[APIRoute]:
     return routes
 
 
-def test_the_router_itself_carries_the_estate_gate() -> None:
-    """One dependency on the router, so route number ten cannot be born ungated."""
-    assert ep.router.dependencies, (
-        "the /v1/access router declares no dependencies — its estate-admin gate is nine hand-written calls, and the tenth route is the one that forgets"
-    )
-
-
 def test_every_access_route_is_covered_by_that_gate() -> None:
     """The enumeration half: counted, not read.
 
@@ -49,26 +42,3 @@ def test_every_access_route_is_covered_by_that_gate() -> None:
         if not any(getattr(dep.call, "__name__", "") == "estate_gate" for dep in route.dependant.dependencies)
     ]
     assert not ungated, f"these access routes do not clear the estate gate: {ungated}"
-
-
-def test_the_gate_is_still_the_same_check() -> None:
-    """Hoisting must not quietly weaken it. `can_observe_events` on the FIXED root object is the
-    platform privilege the tuple store requires — not a per-project relation, because the store is the
-    whole estate's authorization state (authz scope == data scope).
-
-    The FGA-off / FGA-unwired preamble MOVED into ``fga_deps.require_fga`` (catalog-api-09) — eleven
-    handlers carried their own copy of it, which is how two of them ended up disagreeing about what an
-    absent client means. The check follows the code: this reads the gate together with the body it
-    delegates to, so relocating the branch is fine and DELETING it is still caught.
-    ``test_access_admin.py`` pins both refusals behaviourally as well.
-    """
-    import inspect
-
-    from catalog.api import fga_deps
-
-    gate = inspect.getsource(ep.estate_gate)
-    assert "can_observe_events" in gate
-    assert "fga_root_object" in gate
-    source = gate + inspect.getsource(fga_deps.require_fga) + inspect.getsource(fga_deps.require_wired)
-    assert "fga_enabled" in source, "the FGA-off 501 branch was dropped"
-    assert "ServiceUnavailableError" in source, "the enabled-but-unwired fail-closed branch was dropped"

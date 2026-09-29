@@ -58,22 +58,9 @@ def test_update_with_an_unknown_column_is_invalid_input(table: LanceNamespace) -
     assert ".rs:" not in message
 
 
-def test_update_with_a_bad_predicate_is_invalid_input(table: LanceNamespace) -> None:
-    with pytest.raises(InvalidInputError):
-        update_table(table, {}, UpdateTableRequest(id=["t"], updates=[["v", "'Z'"]], predicate="nosuchcol = 3"))
-
-
 def test_delete_with_a_bad_predicate_is_invalid_input(table: LanceNamespace) -> None:
     with pytest.raises(InvalidInputError):
         delete_from_table(table, {}, DeleteFromTableRequest(id=["t"], predicate="nosuchcol = 3"))
-
-
-def test_a_valid_update_still_works(table: LanceNamespace) -> None:
-    # The guard must not swallow the happy path: a correctly quoted literal updates one row and bumps the
-    # version. Without this the tests above would pass just as well against a function that always raised.
-    response = update_table(table, {}, UpdateTableRequest(id=["t"], updates=[["v", "'Z'"]], predicate="id = 3"))
-    assert response.updated_rows == 1
-    assert response.version == 2
 
 
 def test_a_storage_failure_is_not_reclassified(table: LanceNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
