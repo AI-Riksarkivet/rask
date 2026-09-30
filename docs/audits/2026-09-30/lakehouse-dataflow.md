@@ -11,7 +11,7 @@ workflow engine or Ray, (4) events correct, (5) resilient.
 
 Legend for transport: HTTP = a service door; PUB(topic) = Dapr pub/sub on NATS JetStream; WF = Dapr Workflow;
 LANCE = a direct Lance/S3 open; FGA = an OpenFGA check; OL = an OpenLineage event. The chart defaults these topics:
-`lineage.events.v1` (chart/values.yaml:1168), `catalog.control.v1` (values.yaml:1120), `medallion.bronze`
+`lineage.events.v1` (chart/values.yaml:1168), `catalog.control.v1` (the template default, chart/templates/configmap.yaml:78; service_kit/control_events.py:30), `medallion.bronze`
 (values.yaml:1517), and `dlq.*` per app.
 
 ## Headline
@@ -21,18 +21,22 @@ LANCE = a direct Lance/S3 open; FGA = an OpenFGA check; OL = an OpenLineage even
   `rask-medallion` key and announce their own writes. `/ingest-media` also starts its media chain itself instead of
   letting the arrival event do it.
 - **The catalog is not the sole committer of tier writes.** `/commit` is Append only (dataplane.py:887). The in-process
-  lane and the Ray lane commit add_columns, full-sync merges, creates, merges and deletes straight to Lance. LH-202's
+  lane and the Ray lane commit add_columns, full-sync merges, creates, overwrites, merges, deletes, schema-metadata
+  updates and index builds straight to Lance. LH-202's
   narrowed writer policy would refuse every one of those commits once LH-218 and LH-129 put the lanes on table-scoped
-  vends, and no row owns a door for them.
+  vends. No writer-tier door commits a client-written fragment set as anything but an Append (`/compaction_commit`
+  commits a compaction Rewrite only under `can_maintain`: data.py:289-290; fga_deps.py:143). At eb53bfc no row owned how
+  those commits reach the catalog; the register's LH-330 and its commit-door decision now do (see Register §1).
 - **The event lane is forgeable.** NATS authenticates no client, and both cascade heads and the stage runner's
   `/medallion-event` check only the Dapr app token (XC-078, LH-064).
 - **The default cascade is Ray plus Dapr Workflow** (`medallion.ray: true`), and the ingest service, a bronze head, is
   in neither import-linter decoupling contract (XC-109, parked at eb53bfc).
-- **20 weak points**, of which two have no owning row (8 and the door half of 9) and three are owned only by parked
+- **20 weak points**, of which, at eb53bfc, two have no owning row (8 and the door half of 9) and three are owned only by parked
   findings (7, the Ray half of 16, and the maintenance half of 18).
-- **19 doc or comment passages are wrong or stale**, including three CLAUDE.md statements.
+- **20 rows of doc or comment passages are wrong or stale**, including four CLAUDE.md statements.
 - **The FOCUS order fixes no criterion-3 defect, carries no bus authentication and no notifications row, and its
-  acceptance proof (XC-090) cannot close before rows outside FOCUS.**
+  acceptance proof (XC-090) cannot close before rows outside FOCUS.** This describes the FOCUS order at eb53bfc; the
+  owner adopted a new FOCUS order from this audit on 2026-09-30 (see §3).
 
 ---
 
@@ -42,14 +46,14 @@ LANCE = a direct Lance/S3 open; FGA = an OpenFGA check; OL = an OpenLineage even
 
 | # | from → to | transport | identity / credential | cite |
 |---|---|---|---|---|
-| A1 | client → gateway → ingest | HTTP. The gateway strips `dapr-api-token`, `dapr-app-id`, `dapr-caller-app-id`, `x-lance-service-identity`, `x-user` and `x-forwarded-*`, and forwards over Dapr invoke | Dex bearer, or the shared Dapr app token | services/gateway/src/gateway/__init__.py:77-100,235,347 |
-| A2 | ingest door | FGA `can_administer` on `project:{requested}` (human), or the app token limited to the configured project. With no service token configured the door is dev-open | OIDC sub / app token | services/ingest/src/ingest/auth.py:1-30; api.py:388 |
+| A1 | client → gateway → ingest | HTTP. The gateway strips `dapr-api-token`, `dapr-app-id`, `dapr-caller-app-id`, `x-lance-service-identity`, `x-user` and `x-forwarded-*`, and forwards over Dapr invoke | Dex bearer. Through the gateway the app-token door is refused as a public-door call (ingest auth.py:171-189) | services/gateway/src/gateway/__init__.py:77-100,235,347 |
+| A2 | ingest door | FGA `can_administer` on `project:{requested}` (human), or the app token limited to the configured project. With no service token and OIDC and FGA both off, the door is dev-open (auth.py:166-167) | OIDC sub / app token | services/ingest/src/ingest/auth.py:1-30; api.py:388 |
 | A3 | door → `ingest_run` | WF (Dapr Workflow, started in ingest's own lifespan) | n/a | services/ingest/src/ingest/__init__.py:161-165,260-265 |
 | A4 | workflow → catalog create (empty table, v2.2, stable row ids) | HTTP `/v1/table/{id}/create` with an empty Arrow body | `dapr-api-token` + `x-lance-service-identity: service-ingest` (the dedicated token, or the shared one) | services/ingest/src/ingest/catalog_service.py:308-332,595-623; service_identity.py:52-71 |
 | A5 | chunk units → workers | NATS JetStream, called directly with nats-py (no Dapr); `nats.connect` passes no credentials | none (the chart configures no NATS auth, values.yaml:2744-2800; XC-078) | services/ingest/src/ingest/queue.py:33-35,234,377 |
 | A6 | worker → catalog vend → S3 | HTTP `/management/v1/table/{id}/credentials?tier=write`, then LANCE `write_fragments` with the vended STS triple, cached in a VendedCredentialCache | table-scoped STS session. A failed vend refuses by default (`insecure_allow_ambient_storage=False`). The ambient chain is used only when the vend offers none (`server_mediated`), or there is no vending seam or no namespace (CP-007) | catalog_service.py:227-290; config.py:211; runtime.py:836-900; lander.py:292,323-325 |
-| A7 | finalize → catalog `/commit` | HTTP. The catalog folds the fragments as a Lance `Append` using its own static key | service identity. FGA `can_write_data` | runtime.py:697-741; catalog_service.py:420-440; services/catalog/src/catalog/api/v1/endpoints/data.py:191-220; services/catalog/src/catalog/services/dataplane.py:887 |
-| A8 | catalog → bronze-write OL event | PUB(`lineage.events.v1`) through the catalog's lineage outbox (`LANCE_LINEAGE_OUTBOX_URI`, on by default, values.yaml:491-492). The event is a `lance-catalog` job named `insert.<table>`, COMPLETE, signed by the catalog's identity when a key resolves | catalog service key | data.py:210-220 (emit_measured_write INSERT); services/catalog/src/catalog/main.py:205-229; core/lineage_emit.py:374,774-809; chart/templates/services.yaml:186-202 |
+| A7 | finalize → catalog `/commit` | HTTP. The catalog folds the fragments as a Lance `Append` using its own static key | service identity. FGA `can_write_data` | runtime.py:697-741; catalog_service.py:420-440; services/catalog/src/catalog/api/v1/endpoints/data.py:192-230; services/catalog/src/catalog/services/dataplane.py:887 |
+| A8 | catalog → bronze-write OL event | PUB(`lineage.events.v1`) through the catalog's lineage outbox (`LANCE_LINEAGE_OUTBOX_URI`, on by default, values.yaml:491-492). The event is a `lance-catalog` job named `insert.<table>`, COMPLETE, signed by the catalog's identity when a key resolves | catalog service key | data.py:220-229 (emit_measured_write INSERT); services/catalog/src/catalog/main.py:205-229; core/lineage_emit.py:374,774-809; chart/templates/services.yaml:186-202 |
 | A9 | ingest's own START/terminal run events | HTTP `POST /api/v1/lineage` via lineage-kit (whose transports are auto, http, console and noop), never on the topic | dedicated `service-ingest` token when the store has it | services/ingest/src/ingest/lineage.py:143-195; packages/lineage-kit/src/lineage_kit/config.py:68; services/lineage/src/lineage/api/v1/endpoints/ingest.py:103 |
 | A10 | bronze is not published | `_publish` returns `published=None`. The cascade head fires on A8, not on a publication | n/a | runtime.py:801-835 |
 
@@ -118,12 +122,12 @@ Media lane: M4's direct trigger → the media stage runner (B4 onwards). It does
 | # | hop | transport / credential | cite |
 |---|---|---|---|
 | C1 | browser → zone BFF (Dex OIDC session) → gateway `/api/*` | HTTP, Dex bearer. The BFF sends the service header pair only when there is no session AND the call is a read (FE-002) | packages/service-kit/src/service_kit/governed/dapr_auth.py:345-348; frontend/packages/api/src/bff.ts:195-198 |
-| C2 | gateway strips the spoofable headers, re-stamps X-Forwarded-*, and forwards through Dapr invoke | HTTP | gateway `__init__.py`:77-110,340-349 |
-| C3 | catalog `authenticate`: OIDC verify (Dex JWKS), or the service door = a token plus an asserted `x-lance-service-identity` → a synthetic IDToken (iss `rask://service-door`, 60 s). Privileged subjects must present a dedicated token (`auth.dedicatedServiceCredentials: true`); the rest may use the shared one | code | services/catalog/src/catalog/api/security.py:50-160; dapr_auth.py:457-512 (dedicated check :497-503); values.yaml:939 |
+| C2 | gateway strips the spoofable headers, re-stamps X-Forwarded-*, and forwards through Dapr invoke | HTTP | gateway `__init__.py`:77-121,340-349 |
+| C3 | catalog `authenticate`: OIDC verify (Dex JWKS), or the service door = a token plus an asserted `x-lance-service-identity` → a synthetic IDToken (iss `rask://service-door`, 60 s). Privileged subjects must present a dedicated token (`auth.dedicatedServiceCredentials: true`); the rest may use the shared one | code | services/catalog/src/catalog/api/security.py:50-160; dapr_auth.py:457-512 (dedicated check :502-509); values.yaml:939 |
 | C4 | catalog router guard: `authorize` on every route (FGA check on `token.sub`, the raw Dex sub; LH-063) | FGA | services/catalog/src/catalog/api/v1/router.py:48; services/catalog/src/catalog/api/fga_deps.py:808-814 |
 | C5 | vend: `can_write_data` or `can_maintain` for write. Classified columns and unreachable bases route to `server_mediated`. `StsVendor.vend` = AssumeRole plus an inline session policy (TTL 900 s) | HTTP → MinIO STS, **AssumeRole signed with the catalog's static key**: `LANCE_S3_ACCESS_KEY_ID`, rendered as `rask-catalog` | credentials.py:78-112,139-157; services/catalog/src/catalog/core/vending.py:423,589-690; catalog main.py:157-158; chart/templates/services.yaml:130-142; values.yaml:2435 (values.yaml:1031-1033 sets only mode, ttl and roleArn) |
 | C6 | client → S3 directly (ingest workers, stock Lance clients) | LANCE with the vended triple. A main-branch write vend grants Get/Put/Delete/AbortMultipartUpload on `<bucket>/<prefix>/*` (LH-202). A branch write vend grants main READ only, and write on `<prefix>/tree/<branch>/*` | vending.py:129-134,499-526 |
-| C7 | a client-direct commit goes back through `/commit` (Append only). The INSERT emit passes no `pin_version` and re-reads latest | HTTP | data.py:191-220; dataplane.py:875-887 |
+| C7 | a client-direct commit goes back through `/commit` (Append only). The INSERT emit passes no `pin_version` and re-reads latest | HTTP | data.py:192-230; dataplane.py:875-887 |
 
 ---
 
@@ -157,7 +161,7 @@ Media lane: M4's direct trigger → the media stage runner (B4 onwards). It does
 
 | # | edge | cite |
 |---|---|---|
-| F1 | Two static contracts. `the-lakehouse-is-not-built-on-ray` forbids `ray` and `ray_kit` in catalog, lineage, medallion, maintenance and notifications. `the-lakehouse-is-not-built-on-a-workflow-engine` forbids `dapr.ext.workflow` and `durabletask` in catalog, lineage, medallion, maintenance and service_kit, with six ignore lines naming five medallion modules (workflow, api.promotions twice, producer, services.dapr_saga, stage_runner). **`ingest` and `controlplane` are in neither contract** (XC-109, parked at eb53bfc) | .importlinter:51-83 |
+| F1 | Two static contracts. `the-lakehouse-is-not-built-on-ray` forbids `ray` and `ray_kit` in catalog, lineage, medallion, maintenance and notifications. `the-lakehouse-is-not-built-on-a-workflow-engine` forbids `dapr.ext.workflow` and `durabletask` in catalog, lineage, medallion, maintenance and service_kit, with six ignore lines naming five medallion modules (workflow, api.promotions twice, producer, services.dapr_saga, stage_runner). **`ingest` and `controlplane` are in neither contract** (XC-109, parked at eb53bfc) | .importlinter:51-84 |
 | F2 | Medallion producer: it starts a WF runtime when `quality_review_enabled or ray_enabled` (chart: `ray: true`, `qualityReview: false`), hosting `promotion_review` and `train_run` | producer.py:109-141; values.yaml:1365,1436 |
 | F3 | Stage runner: it starts a WF runtime and a raw `DaprWorkflowClient` only when `ray_enabled`. `stage_run` is the only way a Ray stage learns its outcome | stage_runner.py:83-114; workflow.py:252 |
 | F4 | Medallion defaults to Ray: `ray_address` default `ray-lance-head:8265` (CP-042), `ray_enabled` code default False and chart default true, `ray_entrypoint` default script (CP-031) | core/config.py:316-318; values.yaml:1365; medallion.yaml:137-145 |
@@ -173,30 +177,31 @@ Media lane: M4's direct trigger → the media stage runner (B4 onwards). It does
 
 ## Weak points (prioritized)
 
-"Owner row" names the register row at eb53bfc; "(proposed)" marks a row this audit proposes.
+"Owner row" names the register row at eb53bfc; "(proposed)" marks a row this audit proposes. The owner admitted LH-329,
+LH-330 and XC-109 as counted rows on 2026-09-30.
 
 | # | Hop | What is wrong | Why (criterion) | Change | Owner row |
 |---|---|---|---|---|---|
 | 1 | B1, B4, B16, A5, D1, D3 | Any pod can publish to NATS, and the cascade heads accept UNSIGNED lineage and control events. A forged `lance-catalog` `insert.<table>` or `table_published` starts a cascade, and the stage runner's `/medallion-event` accepts a forged `medallion.bronze` trigger with only the app token, skipping both heads (bounded by `_confine_from_uri` and the stage runner's own FGA check) | 4, 1, 2 | NATS JWT per app-id; heads call the lineage-kit verifier and require a signature; sign CatalogControlEvent | XC-078, LH-064 |
-| 2 | C3, A4, P2, B7 | The service door is a token plus an asserted name header: the shared app token for non-privileged subjects, a dedicated token from the secret store for privileged ones (services.yaml:376-399). The catalog reads peers' dedicated tokens, which double as lineage signing keys (catalog core/lineage_emit.py:778-788) | 1, 2 | D1: projected SA tokens, delete `x-lance-service-identity` | LH-220 (+XC-076) |
-| 3 | B7, B10a, P3, M2, B11 | The medallion signs every in-process and head byte with the static `rask-medallion` key, discarding the STS vend it just obtained (catalog_register.py:221-263). `/produce` and `/ingest-media` never ask for a vend at all | 2 | Hold a per-table vend cache and fail the stage on `server_mediated` | LH-218 |
+| 2 | C3, A4, P2, B7 | The service door is a token plus an asserted name header: the shared app token for non-privileged subjects, a dedicated token from the secret store for privileged ones (services.yaml:376-399). The catalog reads peers' dedicated tokens (dapr_auth.py:504), which double as lineage signing keys, as its own does (catalog core/lineage_emit.py:780-789) | 1, 2 | D1: projected SA tokens, delete `x-lance-service-identity` | LH-220 (+XC-076) |
+| 3 | B7, B10a, P3, M2, B11 | The medallion signs every in-process and head byte with the static `rask-medallion` key, discarding the STS vend it just obtained (catalog_register.py:221-263). `/produce` and `/ingest-media` never ask for a vend at all | 2 | Hold a per-table vend cache. A `server_mediated` answer (a table with no location, a classified column, a base the session policy cannot address, or no credential minted; credentials.py:111-112,139-157,176) means that table's writes go through whatever the commit-door decision provides (LH-330); a refused vend fails the stage with its reason | LH-218 |
 | 4 | B10c | The Ray lane writes governed tiers with `S3_KEY` from the pod environment and commits directly, not through the catalog | 2, 3 | Jobs vend or open through the namespace with a projected SA token | LH-129, CP-029 |
-| 5 | C6, C7 | A main-branch writer vend grants Put/Delete over the whole table prefix (it can move tags, forge branches or restore around doors), and `/commit` trusts client fragment metadata (it verifies file existence, file versions and base ids, not row counts) and caller-owned run markers | 2 | Narrow to `data/*` and commit through doors. **This breaks B10a/B10c unless they get a door; see Register §1** | LH-202, LH-211, LH-280; LH-330 (proposed) |
+| 5 | C6, C7 | A main-branch writer vend grants Put/Delete over the whole table prefix (it can move tags, forge branches or restore around doors), and `/commit` trusts client fragment metadata (it verifies file existence, file versions and base ids, not row counts) and caller-owned run markers | 2 | Narrow to `data/*` and commit through doors. **This breaks B10a/B10c's client-direct commits until the commit-door decision (LH-330) gives them a commit path; see Register §1** | LH-202, LH-211, LH-280; LH-330 (proposed) |
 | 6 | B9, B10b, B14, F2, F3, F7 | The default cascade is Ray plus Dapr Workflow. Outcomes are known only through `stage_run`/`train_run`, HOLD needs `promotion_review`, and the operator routes drive a Dapr workflow client | 3 | An outcome door plus a plan document; SagaClient gains state, terminate and signal; declare lanes | CP-029, LH-226, CP-044, CP-031; proof XC-093 |
 | 7 | F1, F6, A3, A5 | Ingest (a bronze head) imports `dapr.ext.workflow` and raw NATS, and sits outside both decoupling contracts, so XC-093 can pass while ingest stays engine-built | 3 | Add ingest (and controlplane) to .importlinter, then port ingest_run to the saga port | XC-109 (**parked at eb53bfc; promotion proposed**) |
-| 8 | M4 | `/ingest-media` fires its media-chain trigger itself, a bare publish outside the outbox, instead of letting the arrival event drive the cascade. CLAUDE.md's literal sentence ("Neither publishes `medallion.bronze` directly") is not broken, because the media head publishes the media topic; its intent ("driven by the ARRIVAL event rather than by the ingest call") is. A trigger lost after a landed emit is not recovered by the outbox relay | 4, 1 | Drop the direct publish, and let `/bronze-arrival` match the media bronze table (it already matches declared lanes, ingest_trigger.py:120-150) and publish to that lane's topic | LH-329 (proposed) |
-| 9 | P3/P4 vs A7/A8, B10a, B10c | Three heads, three announcers. The catalog announces ingest writes (catalog authority, after `/commit`), while the producer self-announces `/produce` and `/ingest-media` writes after a direct Lance write the catalog never commits. Neither stage lane commits through a catalog door either, and `/commit` is Append only | 1, 2 | Route producer bronze writes through catalog doors (create + `/commit`), so the catalog is the only announcer; decide a door (or the maintainer tier) for the stage lanes' non-Append commits | partly LH-218, LH-164; LH-330 (proposed) |
-| 10 | B6, P3 | `/produce` writes bronze at the chart's URI, or at `{root}/medallion/{ns}` for a project, and registers that location with the catalog instead of asking for one. The stage runner asks the catalog on both sides, but falls back to the composed `{root}/medallion/{ns}` when there is no catalog URL or describe answers any 4xx, and a 403 denial counts as 4xx | 2 | Create through the catalog and write at the returned location; a stage whose upstream the catalog will not describe fails with the reason | LH-164 (D6 open), LH-194 |
+| 8 | M4 | `/ingest-media` fires its media-chain trigger itself, a bare publish outside the outbox, instead of letting the arrival event drive the cascade. CLAUDE.md's literal sentence ("Neither publishes `medallion.bronze` directly") is not broken, because the media head publishes the media topic; its intent ("driven by the ARRIVAL event rather than by the ingest call") is. A trigger lost after a landed emit is not recovered by the outbox relay, which never re-fires triggers; only the caller's retry with its idempotency token recovers it (media_produce.py:242-243,279-283) | 4, 1 | Drop the direct publish. `/bronze-arrival` cannot see the media write today: the configured branch expects `bronze_namespace` while the media event names `bronze-media` (core/config.py:607-608; ingest_trigger.py:117-125), the declared-lane branch needs a project the media emit does not stamp (:171-172), the trigger's namespace is always `bronze_namespace` (:294), and it publishes only to `settings.bronze_topic` (:312). The requirements are LH-329's: match the media write but not the catalog's `create_table` event for the empty table (ingest_trigger.py:62), name the matched namespace, and publish to its stage runner's topic (`transform_routes`, publication_trigger.py:189-197) | LH-329 (proposed) |
+| 9 | P3/P4 vs A7/A8, B10a, B10c | Three heads, three announcers. The catalog announces ingest writes (catalog authority, after `/commit`), while the producer self-announces `/produce` and `/ingest-media` writes after a direct Lance write the catalog never commits. Neither stage lane commits through a catalog door either, and `/commit` is Append only | 1, 2 | Route producer bronze writes through catalog doors, so the catalog is the only announcer. Neither head's write is an Append (a full-sync `merge_insert` on a re-seed, compute.py:242-252; an overwrite, services/medallion/src/medallion/services/ingest.py:199-208), and `/produce` asking for its location is D6. The commit-door decision (LH-330) chooses how the non-Append commits reach the catalog: (a) the existing server-side data doors, (b) a new client-direct non-Append commit door, or (c) the maintainer tier for stage identities. What to measure before choosing is in the register's LH-330 | partly LH-218, LH-164; LH-330 (proposed) |
+| 10 | B6, P3 | `/produce` writes bronze at the chart's URI, or at `{root}/medallion/{ns}` for a project, and registers that location with the catalog instead of asking for one. The stage runner asks the catalog on both sides, but falls back to the composed `{root}/medallion/{ns}` when there is no catalog URL or describe answers any 4xx, and a 403 denial counts as 4xx | 2 | Under D6 (open): create through the catalog and write at the returned location; a stage whose upstream the catalog will not describe fails with the reason | LH-164 (D6 open), LH-194 |
 | 11 | A8, B8, B12 | Write events can name a version or ref the write did not commit (the INSERT emit passes no `pin_version`), branch writes are recorded as main on some doors, and a crash between commit and stage loses the author | 1 | Pin the response version; commit markers in transaction properties | LH-214, LH-225 |
 | 12 | D2, D5 | The bus is incomplete (ingest, train and external producers emit HTTP-only), and the one lane that closes the gap (the notifications reconciler) was dead on the live estate at the last read-back and reads a tenant-blind feed (CTL-021); the fixed image is pinned but not read back, and HEAD carries the fix (service_identity.py:60-70) | 4 | CTL-021's narrow feed rung plus the SA token | CTL-021 |
 | 13 | D4 | A refused lineage park is never re-presented. The medallion and notifications DLQs are park-and-log only | 4, 5 | An on-demand re-drive door | LH-148 (LOW) |
 | 14 | E3, E5 | Maintenance rewrites fall back to static or ambient keys, and the purge deletes with the estate-wide static maintenance key | 2 | Remove the fallback arms; a workload vend for the purge | LH-219, XC-084 |
-| 15 | C5 | The vendor's parent credential is the catalog's static key (`rask-catalog`), and the catalog's own IO uses it (main.py:217,248) | 2 | A workload identity for the vendor | XC-083 |
+| 15 | C5 | The vendor's parent credential is the catalog's static key (`rask-catalog`), and the catalog's own IO uses it (main.py:217,249) | 2 | A workload identity for the vendor | XC-083 |
 | 16 | B10a/B10c | The in-process full-sync merge rewrites every matched row (`when_matched_update_all`), the Ray media lane retracts by run id, and the Ray lane implements merge and delta separately from the in-process engine | 1, 5 | Conditional merges; one write semantics per lane | LH-212, LH-213, LH-216; Ray half LH-326 (**parked**) |
 | 17 | E1 | The sweep re-plans the whole estate every 120 s even with the event lane on | 5 | Hourly wall-clock backstop | LH-195 |
 | 18 | F8, F9, F10 | The explorer trio and annotator saves read and write lakehouse storage with deployment keys, bypassing the catalog, and maintenance knows annotator objects | 2 (and CLAUDE.md's no-modality-in-shared-seams rule) | Open through the catalog | LOW-027, LOW-003; LH-325 (**parked**) |
 | 19 | F5 | Training lives in the Phase 1 lakehouse producer: `/train` publishes a train trigger, and its consumer in the same producer submits the Ray job directly, bypassing the executor port. Compute is "second" and the models zone is LOW | 3 | Move the train head out with CP-029's outcome door, or record that it stays | CP-044, CP-029 (they keep it in medallion); decision proposed |
-| 20 | A6 | Ingest signs with the ambient chain when the vend offers none (`server_mediated`), or there is no vending seam or namespace. A failed vend already refuses by default | 2 | Refuse, as LH-219 does | CP-007 |
+| 20 | A6 | Ingest signs with the ambient chain when the vend offers none (`server_mediated`), or there is no vending seam or namespace. A failed vend already refuses by default | 2 | Refuse, as LH-219 proposes | CP-007 |
 
 ---
 
@@ -204,16 +209,23 @@ Media lane: M4's direct trigger → the media stage runner (B4 onwards). It does
 
 ### 1. Rows that conflict with the design or with each other
 
+This is the register at eb53bfc. The current register places CP-022's client outside ray-kit, counts XC-109 (admitted
+2026-09-30), and gives XC-093 an ingest leg.
+
 - **CP-022** (LOW) builds "one httpx Jobs API client in ray-kit" that "compute and the medallion share". `ray_kit` is a
   forbidden import for `medallion` (.importlinter:51-63, criterion 3). As written, the row adds the coupling the
   contract bans. The client belongs in the medallion's Ray adapter, or in a Ray-free package both may import.
 - **LH-202 vs LH-218 / LH-129 / CP-029.** LH-202 narrows a writer vend to Put on `data/*`, with no `_versions/` or
-  `_transactions/` and no Delete, and says "commits go through /commit". `/commit` is Append only (dataplane.py:887).
-  The stage lanes commit add_columns, full-sync merge_insert, create, merge_insert and delete directly
-  (compute.py:363-398; ray_stage_job.py:288-300,570,715,839). Once LH-218 and LH-129 move those lanes onto table-scoped
-  vends, LH-202's policy refuses every tier write. No row adds a server-side commit door for those operations, and none
-  orders these rows; LH-202's How says only "first inventory every client". An owner decision is needed: a door for
-  those operations, or the maintainer tier for stage identities.
+  `_transactions/` and no Delete, and its How routes commits through /commit (Append) and the server-side doors. The
+  stage lanes commit add_columns, full-sync merge_insert and create (compute.py:363-398), and write_dataset
+  (creates at :288, :804 and :864, an overwrite with an empty table when the source is empty at :313, and a staging
+  dataset at :839), merge_insert and delete (ray_stage_job.py:288-313,570,667,715,800-868), directly. Once LH-218 and LH-129 move
+  those lanes onto table-scoped vends, LH-202's policy refuses every such client-direct commit. No writer-tier door
+  commits a client-written fragment set as anything but an Append (`/commit`, dataplane.py:887; `/compaction_commit`
+  commits a compaction Rewrite only under `can_maintain`, data.py:289-290). At eb53bfc no row moved the lanes onto the server-side doors or added a client-direct non-Append
+  door, and none ordered these rows; on 2026-09-30 the owner admitted LH-330, and the adopted FOCUS orders LH-218 and
+  LH-129 after its decision. The decision's options are (a) the existing server-side data doors, (b) a new client-direct
+  non-Append commit door, and (c) the maintainer tier for stage identities; what to measure first is in LH-330.
 - **CP-044 (2)** routes the train submit through the executor port but keeps training in the lakehouse producer. That
   is consistent with criterion 3's letter, but in tension with "compute comes second / models zone LOW" (CLAUDE.md).
   Not a hard conflict; flagged for the owner.
@@ -227,22 +239,30 @@ Media lane: M4's direct trigger → the media stage runner (B4 onwards). It does
 
 ### 2. Design goals no counted row serves
 
+This is the register at eb53bfc. On 2026-09-30 the owner admitted LH-329, LH-330 and XC-109 as counted rows, and the
+register's XC-043 now owns the passages below, except those it hands to LH-195, LH-218 and LH-329.
+
 - An arrival-driven cascade for the media head (WP 8): **none**.
 - The catalog as the single committer and announcer of tier writes, from `/produce`, `/ingest-media` and both stage
-  lanes (WP 9): only partly served (LH-218 credential, LH-164 location), and the door the stage lanes need is owned by
-  nobody.
+  lanes (WP 9): only partly served (LH-218 credential, LH-164 location), and how the heads' and the stage lanes'
+  non-Append writes reach the catalog is owned by nobody.
 - Criterion 3 for ingest and controlplane: only XC-109, **parked**.
 - Criterion 4 for the Ray lane's tier-write semantics: LH-326, **parked**.
 - CLAUDE.md "Architecture" says the producer's three doors are "the whole INGEST surface", while `services/ingest`
   serves `POST /v1/ingests` (api.py:388; gateway `__init__.py`:235). No row reconciles CLAUDE.md or decides whether
   ingest is a Phase 1 component; CLAUDE.md's Phase 1 list does not name it.
-- The **controlplane** service is named a Phase 1 component, but no counted row touches `services/controlplane`; the
-  CTL rows are gateway and notifications. Whether anything there is wrong was not examined.
+- The **controlplane** service is named a Phase 1 component, and one counted row touches `services/controlplane`:
+  LH-076, which moves its project listing onto `can_list_all_projects` (controlplane security.py:42,52). The CTL rows
+  are gateway and notifications. Whether anything else there is wrong was not examined.
 - The stale docs (below): XC-043 (LOW) covers system-overview.md and microservices.md, and its closes-when grep also
-  catches the `/ingest-iiif` lines at data-flow.md:6 and data-model.md:6. It does not cover data-flow.md:21-111,
-  medallion-data-flow.md §3, medallion-cascade.md §12, the three CLAUDE.md statements, or the chart and code comments.
+  catches the `/ingest-iiif` lines at data-flow.md:6 and data-model.md:6, and, among others, the `orchestrator` and
+  `volumes-api` lines at data-flow.md:82-104 and data-model.md:122,132. It does not cover data-flow.md's HTR content (:21-90, beyond the orchestrator lines :82 and :87),
+  medallion-data-flow.md §3, medallion-cascade.md §12, the four CLAUDE.md statements, or the chart and code comments.
 
 ### 3. The FOCUS order (register lines 10-24) against the criteria
+
+This judges the FOCUS order at eb53bfc. On 2026-09-30 the owner adopted a new order from this audit's findings: it pairs
+XC-078 with LH-064 (already in FOCUS), adds CP-029 with LH-226, LH-218 with LH-129 and CTL-021, and closes XC-090 last.
 
 - It covers criterion 2 (LH-280, LH-281, LH-220), criterion 1 (LH-280, LH-064) and criterion 4 partly (LH-064 is the
   lineage lane only). XC-090 is the composition proof.
@@ -252,7 +272,7 @@ Media lane: M4's direct trigger → the media stage runner (B4 onwards). It does
   (headroom) and LH-064".
 - **Notifications is absent**, although the FOCUS scope sentence names it: CTL-021 is HIGH and was dead at its last
   live read-back.
-- LH-218 and LH-129 (HIGH, the criterion-2 byte path) are absent, while LH-220 (the identity they build on) is in.
+- LH-218 and LH-129 (HIGH, the criterion-2 byte path) are absent, while LH-220 is in (LH-129 builds on D1, which LH-220 implements; LH-218's row names neither).
 - XC-090 is item 3, but XC-091 depends on LH-214, LH-064, LH-225, CP-037 and the parked LH-282, and XC-094 on LH-064,
   XC-078, LH-148, CP-037 and CTL-021. The proof can be built early as a RED harness, which the principles endorse, but
   cannot close before rows that are not in FOCUS.
@@ -276,13 +296,14 @@ Media lane: M4's direct trigger → the media stage runner (B4 onwards). It does
 | medallion-data-flow.md:264-268 | ray-cluster "builds packages/ratch" | .docker/ray-cluster.dockerfile:45-73 builds `ray-cluster-env`; ratch is dissolved |
 | ingest-and-tier-movement.md:59-66 | Manual push = a human `writer` on `namespace:<proj>-bronze` | Both human push doors check `can_administer` on the project: produce_auth.py:57-70; ingest auth.py:19-22 |
 | CLAUDE.md Architecture, "services/medallion" | The three producer doors "are the whole INGEST surface" | services/ingest api.py:388 `POST /ingests`, gateway `/api/ingest` (`__init__.py`:235) |
-| CLAUDE.md Architecture, "The orchestrator is gone" | "ONE bronze-write OpenLineage event through packages/lineage-kit" | For ingest the announcer is the catalog's INSERT event (data.py:210-220; ingest lineage.py:154-158); ingest's own events go HTTP only |
+| CLAUDE.md Architecture, "The orchestrator is gone" | "ONE bronze-write OpenLineage event through packages/lineage-kit" | For ingest the announcer is the catalog's INSERT event (data.py:220-229; ingest lineage.py:154-158); ingest's own events go HTTP only |
 | CLAUDE.md Repository layout, `services/` | Lists gateway, compute, notifications, medallion | services/ also holds catalog, lineage, maintenance, ingest, controlplane, viewer, search, annotator, flows (13 directories) |
 | chart/values.yaml:1570 | The maintenance event lane is "OFF (this default)" | `workTopic` defaults on (values.yaml:1630), and the 120 s sweep still runs beside it |
 | chart/values.yaml:1577 | "the catalog's lineage lane has no outbox" | chart/templates/services.yaml:190-202 renders it by default (values.yaml:491-492); catalog main.py:216 |
 | services/ingest/src/ingest/lineage.py:21-24 | "the cascade triggers on the catalog's publication event rather than on a lineage event" | Same file :154-158 and runtime.py:801-835: bronze is never published, and `/bronze-arrival` fires on the catalog's INSERT lineage event |
 | services/medallion/src/medallion/services/catalog_register.py:234-240 | The Ray stage job writes with the "RustFS ROOT credential", and `mode_b` vends nothing | The chart gives the Ray pod the `rask-ray-compute` key (_ray-cluster-config.tpl:173-181; values.yaml:2389), the store is MinIO, and the vending default is `sts` (values.yaml:1031) |
-| services/medallion/src/medallion/producer.py:1-14 | "In production the head is a real Ray Data job" | The head is the producer or ingest; no Ray job writes bronze |
+| services/medallion/src/medallion/producer.py:1-14 | "In production the head is a real Ray Data job"; and (:9-13) only a write to `bronze_namespace`/`bronze_dataset` fires the head, "an ordinary catalog table write does NOT" | The head is the producer or ingest; no Ray job writes bronze. A write to a lane-declared table fires the head (ingest_trigger.py:147-148), and ingest's bronze is announced by the catalog's own INSERT event (data.py:220-229) |
+| services/medallion/src/medallion/services/media_produce.py:167-170; api/ingest_media.py:39 | `ensure_stage_output` is "the catalog's own register door", whose REGISTER_TABLE marker fires no cascade; the door "REGISTERS the bronze media table" | `ensure_stage_output` calls describe, else create with `mode=exist_ok`, and never the register door (catalog_register.py:284-357) |
 
 ---
 
