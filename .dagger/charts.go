@@ -214,8 +214,9 @@ grep -q "k8s-app: kube-dns" /tmp/np.yaml
 grep -q -- "-openbao" /tmp/np.yaml
 grep -q "NotIn" /tmp/np.yaml`
 
-// securityGate: service accounts + infra security contexts are off by default and, when flipped on, render
-// the per-workload SAs (automount off, wired in) and the non-root runAsUser tiers. Verbatim from ci.yml.
+// securityGate: the DEFAULT render wires a dedicated tokenless SA into every first-party pod and ships no
+// `default`-SA secret reader; the infra security contexts stay a switch whose ON render carries the
+// non-root runAsUser tiers.
 const securityGate = `set -euo pipefail
 RENDER_ARGS="` + renderArgs + `"
 # Render CONFIGURATION, not prose. Every assertion in these gates is about what the chart produces for
@@ -225,27 +226,19 @@ RENDER_ARGS="` + renderArgs + `"
 # lines at the source makes every check below mean what it says — and prevents the mirrored bug, where a
 # "must be present" grep is satisfied by documentation rather than by a rendered field.
 render() { helm template chart $RENDER_ARGS "$@" | grep -v '^[[:space:]]*#'; }
-# OFF BY DEFAULT, with ONE documented exception. This asserted a flat zero until 2026-08-22, and it was
-# right when written; the chart has since grown ` + "`-sa-dapr-sweep`" + `, which renders unconditionally and says
-# why at its own definition ("This SA genuinely needs the k8s API, so it does NOT take the zero-grant
-# -sa-jobs identity"). Nothing caught the divergence because this gate has not RUN since 2026-08-04 —
-# see Charts() above. Excluding it by name rather than loosening to a count keeps the assertion exact:
-# a SECOND unconditional service account still fails here, which is the property worth having.
-# THE ABSENCE ASSERTIONS RENDER TO A FILE FIRST, and that is the whole point of the extra line.
-# Written as 'off=$(render ... | grep -c "kind: X" || true)', the '|| true' sits OUTSIDE the pipeline, so
-# 'set -euo pipefail' cannot propagate a render failure into the substitution: a render that produces
-# NOTHING makes grep -c print 0 and exit 1, || true swallows the exit, and [ "0" = "0" ] passes. The gate
-# then reports "the toggle correctly rendered no such object" about a chart that rendered no objects at
-# all. Redirecting to a file puts the render on its own command, where set -e sees its status, and the
-# 'kind: Deployment' probe is the non-vacuity floor: it proves the render produced a real manifest before
-# anything concludes something is absent from it.
-render > /tmp/sa-off.yaml
-grep -q "kind: Deployment" /tmp/sa-off.yaml
-off=$(grep -- "-sa-" /tmp/sa-off.yaml | grep -vc -- "-sa-dapr-sweep" || true); [ "$off" = "0" ] || exit 1
-render --set security.serviceAccounts.enabled=true --set security.infraContexts.enabled=true > /tmp/sec.yaml
-sa_objects=$(grep -c "kind: ServiceAccount" /tmp/sec.yaml || true); [ "$sa_objects" -ge 16 ] || exit 1
-automount_off=$(grep -c "automountServiceAccountToken: false" /tmp/sec.yaml || true); [ "$automount_off" -ge 16 ] || exit 1
-wired=$(grep -c "serviceAccountName: .*-sa-" /tmp/sec.yaml || true); [ "$wired" -ge 12 ] || exit 1
+# RENDERED TO A FILE FIRST, so set -e sees a failed render: inside '$(render | grep -c X || true)' the
+# '|| true' swallows it and a render of nothing reads as a count of zero. The 'kind: Deployment' probe
+# proves the render produced a manifest before anything is concluded from it. Measured 2026-10-02 on
+# this render: 45 ServiceAccounts, 29 'automountServiceAccountToken: false', 32 pods on a '-sa-' SA.
+render > /tmp/sa.yaml
+grep -q "kind: Deployment" /tmp/sa.yaml
+sa_objects=$(grep -c "^kind: ServiceAccount" /tmp/sa.yaml || true); [ "$sa_objects" -ge 30 ] || exit 1
+automount_off=$(grep -c "automountServiceAccountToken: false" /tmp/sa.yaml || true); [ "$automount_off" -ge 25 ] || exit 1
+wired=$(grep -c "serviceAccountName: .*-sa-" /tmp/sa.yaml || true); [ "$wired" -ge 25 ] || exit 1
+# 'if', not '!': set -e ignores a negated command, so '! grep -q' could never fail this gate.
+if grep -q "name: dapr-secret-reader" /tmp/sa.yaml; then exit 1; fi
+if grep -q "runAsUser: 999" /tmp/sa.yaml; then exit 1; fi
+render --set security.infraContexts.enabled=true > /tmp/sec.yaml
 grep -q "runAsUser: 999" /tmp/sec.yaml
 grep -q "runAsUser: 65532" /tmp/sec.yaml`
 

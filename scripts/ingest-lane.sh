@@ -148,8 +148,8 @@ cmd_deploy() {
 	# Split by hand, because a single `kubectl apply -n rask` cannot deliver this manifest:
 	#   * CRDs must be Established BEFORE the CustomResources that use them (Dapr Components, the
 	#     RustFS Tenant) — one apply races that and fails on "no matches for kind";
-	#   * two objects carry an explicit `namespace: default` (the dapr secret-reader Role pair), and
-	#     kubectl REFUSES the whole apply over a namespace mismatch rather than skipping them;
+	#   * a subchart object that pins `namespace: default` makes kubectl REFUSE the whole apply over
+	#     a namespace mismatch rather than skip it;
 	#   * helm test hooks are not part of the release and must not be applied at all.
 	local outdir
 	outdir="$(mktemp -d)"

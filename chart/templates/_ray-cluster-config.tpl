@@ -52,6 +52,8 @@
         {{- end }}
       template:
         spec:
+          {{- /* Its own tokenless SA: no autoscaler runs, so nothing in the head calls the API. */}}
+          serviceAccountName: {{ include "lance.fullname" . }}-sa-ray
           {{- /* The nvidia RuntimeClass exists only on a GPU estate (runtimeclass.yaml renders it under
                the same rask.gpuEnabled gate), and naming a RuntimeClass whose handler containerd does
                not register makes every head pod fail to create. GPU-less => no runtimeClassName at all,

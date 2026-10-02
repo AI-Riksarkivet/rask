@@ -32,9 +32,7 @@ spec:
         lance.dev/logs: otlp # ships logs via the OTel SDK (OTLP) → the collector filter drops the file-tailed dup
     spec:
       terminationGracePeriodSeconds: {{ .Values.lifecycle.terminationGracePeriodSeconds }}
-      {{- if .Values.security.serviceAccounts.enabled }}
       serviceAccountName: {{ include "lance.fullname" . }}-sa-medallion-producer
-      {{- end }}
       {{- with $.Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -447,9 +445,7 @@ spec:
         lance.dev/logs: otlp # ships logs via the OTel SDK (OTLP) → the collector filter drops the file-tailed dup
     spec:
       terminationGracePeriodSeconds: {{ $root.Values.lifecycle.terminationGracePeriodSeconds }}
-      {{- if $root.Values.security.serviceAccounts.enabled }}
       serviceAccountName: {{ include "lance.fullname" $root }}-sa-{{ .name }}
-      {{- end }}
       {{- with $.Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}

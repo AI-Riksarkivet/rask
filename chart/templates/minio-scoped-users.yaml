@@ -106,9 +106,7 @@ spec:
         app.kubernetes.io/component: minio-scoped-users
     spec:
       restartPolicy: OnFailure
-      {{- if .Values.security.serviceAccounts.enabled }}
-      serviceAccountName: {{ include "lance.fullname" . }}-sa-jobs
-      {{- end }}
+      serviceAccountName: {{ include "lance.fullname" . }}-sa-hooks
       volumes:
         {{- include "lance.tmpVolume" . | nindent 8 }}
       containers:

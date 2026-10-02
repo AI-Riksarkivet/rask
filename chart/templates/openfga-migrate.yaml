@@ -39,9 +39,7 @@ spec:
             limits: { cpu: "100m", memory: "64Mi" }
           command: ["sh", "-c", "until nc -z {{ include "lance.ageConnectHost" . }} {{ .Values.age.port }}; do echo wait-age; sleep 3; done"]
           {{- include "lance.rootlessSecurityContext" 65532 | nindent 10 }}
-      {{- if .Values.security.serviceAccounts.enabled }}
       serviceAccountName: {{ include "lance.fullname" . }}-sa-jobs
-      {{- end }}
       volumes:
         {{- include "lance.tmpVolume" . | nindent 8 }}
       containers:

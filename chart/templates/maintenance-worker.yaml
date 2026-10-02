@@ -40,9 +40,7 @@ spec:
     spec:
       # Longer grace than the other apps: an in-flight sweep/Lance write must finish, not be SIGKILLed.
       terminationGracePeriodSeconds: {{ .Values.lifecycle.maintenanceTerminationGracePeriodSeconds }}
-      {{- if .Values.security.serviceAccounts.enabled }}
       serviceAccountName: {{ include "lance.fullname" . }}-sa-maintenance
-      {{- end }}
       {{- with $.Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}

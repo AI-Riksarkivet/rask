@@ -26,9 +26,7 @@ spec:
         app.kubernetes.io/component: minio-mkbucket
     spec:
       restartPolicy: OnFailure
-      {{- if .Values.security.serviceAccounts.enabled }}
       serviceAccountName: {{ include "lance.fullname" . }}-sa-jobs
-      {{- end }}
       {{- /* A FIRST-PARTY IMAGE NEEDS THE ESTATE'S PULL SECRETS, which `minio/mc` never did: it came
              from a public registry, so this Job was the one pod spec that could skip them. Running the
              rask image makes it an ordinary first-party workload, which takes the same pull secrets

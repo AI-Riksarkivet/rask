@@ -131,7 +131,10 @@ for a day with neither half of its credential pair: `LANCE_SERVICE_IDENTITY` and
 - **Security context**, per container and pod: `runAsNonRoot: true`, `runAsUser` explicit,
   `allowPrivilegeEscalation: false`, `readOnlyRootFilesystem: true`, `capabilities.drop: [ALL]`,
   `seccompProfile.type: RuntimeDefault`. Uneven application of these is backlog row XC-061.
-- **`serviceAccount.automount: false`** unless the pod genuinely calls the Kubernetes API.
+- **`serviceAccount.automount: false`** unless the pod genuinely calls the Kubernetes API. Here it is
+  not a switch: every first-party pod runs as its own SA from `templates/security-sa.yaml`, tokenless
+  on the SA object; a first-party pod mounts a token only where a binding gives its SA work: OpenBao
+  under ESO, and the pods whose templates carry their own RBAC (§8).
 - **`values.schema.json`** — validates the MERGED values at install and upgrade, so a missing or
   mistyped key fails before any pod starts. rask has none yet.
 - **Standard labels** (`app.kubernetes.io/name|instance|version|managed-by`, `helm.sh/chart`) through
@@ -154,3 +157,34 @@ for zero trust."*
 | `templates/secret.yaml` rendering a Secret from `.Values` | **No.** Credentials come from OpenBao via the Dapr secret store or ESO. |
 | a literal `value:` in a Job's env for a derived credential | **No** — `minio-scoped-users.yaml` does this today and it is readable by anyone with `get jobs`. |
 | Docker-based chart tooling | **Dagger.** `dagger call charts` runs the chart gate. |
+
+## 8. `default` is a shared identity, and a subchart can hand it every Secret
+
+Any pod with no `serviceAccountName` runs as the namespace's `default` SA, and so does every such pod
+of every subchart. A grant to `default` is a grant to all of them. The Dapr subchart ships exactly
+that: `dapr_rbac.secretReader` (`enabled: true, namespace: default`) binds `secrets: get` to
+`default`, for daprd's built-in Kubernetes secret store. Measured live 2026-09-25 (audit, read-only):
+`kubectl auth can-i get secrets --as=system:serviceaccount:default:default` answered yes, and the
+catalog, lineage, maintenance, the medallion, OpenBao and Dex ran as `default` with a mounted token.
+
+- **rask sets `dapr.dapr_rbac.secretReader.enabled: false`.** No sidecar uses that store: every
+  injected pod sets `dapr.io/disable-builtin-k8s-secret-store`.
+- **Every first-party pod names its own SA**, NATS and nats-box included through the subchart's
+  `serviceAccount` values. A shared SA is allowed only where the sharers are one identity (`sa-web`
+  for the zones, `sa-maintenance` for the sweep and its executor); one-shot Jobs share `sa-jobs`.
+- **A binding names its subject through the helper the pod uses** (`lance.openbaoServiceAccount` for
+  the auth-delegator), never through a free value with a `default` fallback: an unset value then puts
+  the grant on the shared identity. Likewise a pod names its SA with the prefix `security-sa.yaml`
+  renders it with, `lance.fullname` (the release name). `rask.fullname` is pinned to `rask` by
+  `fullnameOverride`, so under any other release name the two diverge and the pod is refused at
+  admission (measured 2026-10-02: 14 pods on a render as release `foo`).
+- **A hook that runs before the manifest runs as an SA that is itself a hook.** Helm applies the release
+  after its `pre-upgrade` hooks, so an ordinary SA does not exist yet on the upgrade that introduces it:
+  the hook's pod is refused at admission and the upgrade waits out its whole timeout. Measured
+  2026-10-02 on rev 259: `openfga-model` (`pre-upgrade`) on `rask-sa-jobs` held the release in
+  `pending-upgrade` with `serviceaccount "rask-sa-jobs" not found`. `rask-sa-hooks` is a hook at weight
+  -10 in every phase those hooks run in, as `kueue-queues.yaml`'s setup SA already was.
+- **The gate is the render, judged by what each role grants**, so a new subchart that binds a
+  secret-reading or token-reviewing role to `default` fails without anyone listing it:
+  `tests/unit/test_a_first_party_pod_cannot_read_a_secret_through_the_kube_api.py`. It carries its own
+  mutation check: re-enabling `secretReader` must fail it.

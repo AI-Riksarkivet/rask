@@ -58,12 +58,8 @@ spec:
             {{- include "lance.labels" . | nindent 12 }}
             app.kubernetes.io/component: minio-backup
         spec:
-          # ALWAYS the dedicated RBAC-bound SA — never the zero-grant shared jobs SA the other hook Jobs
-          # take under security.serviceAccounts.enabled. This pod legitimately needs the k8s API (its
-          # kubectl creates the VolumeSnapshot CR via the Role above); the unbound jobs SA (automount off,
-          # zero grants) would silently break every scheduled backup. The old conditional second key here
-          # was a duplicate-map-key render: lenient last-wins parsing swapped the RBAC SA out (audit
-          # 2026-07-24).
+          {{- /* Its own RBAC-bound SA, not the tokenless shared jobs SA: its kubectl creates the
+               VolumeSnapshot CR through the Role above, so a zero-grant SA fails every backup. */}}
           serviceAccountName: {{ include "lance.fullname" . }}-snapshot
           restartPolicy: OnFailure
           containers:

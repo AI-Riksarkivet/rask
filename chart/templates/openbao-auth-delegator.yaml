@@ -22,6 +22,6 @@ roleRef:
   name: system:auth-delegator
 subjects:
   - kind: ServiceAccount
-    name: {{ .Values.openbao.serviceAccountName | default "default" }}
+    name: {{ include "lance.openbaoServiceAccount" . }}
     namespace: {{ .Release.Namespace }}
 {{- end }}

@@ -54,11 +54,8 @@ spec:
         {{- include "lance.labels" . | nindent 8 }}
         app.kubernetes.io/component: dapr-dashboard
     spec:
-      # ALWAYS the dedicated RBAC-bound SA — never the zero-grant unbound SA that security-sa.yaml renders
-      # under security.serviceAccounts.enabled. The dashboard legitimately reads the k8s API (its
-      # ClusterRole above: Dapr CRDs, pods, deployments); the zero-grant SA would leave it Ready but
-      # broken. The old conditional second key here was a duplicate-map-key render: lenient last-wins
-      # parsing swapped the RBAC SA out (audit 2026-07-24).
+      {{- /* Its own RBAC-bound SA, not a tokenless one from security-sa.yaml: the dashboard reads the
+           API (the ClusterRole above), and a zero-grant SA would leave it Ready but broken. */}}
       serviceAccountName: {{ include "lance.fullname" . }}-dapr-dashboard
       containers:
         - name: dashboard

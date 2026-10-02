@@ -55,7 +55,7 @@ spec:
            kubelet's 30s default: a number nobody chose and no comment describes, on pods that all
            run a Dapr sidecar whose flush the default does not budget for. */}}
       terminationGracePeriodSeconds: {{ $root.Values.lifecycle.terminationGracePeriodSeconds }}
-      serviceAccountName: {{ include "rask.serviceAccountName" $root }}
+      serviceAccountName: {{ include "lance.fullname" $root }}-sa-{{ $name }}
       {{- $waits := list -}}
       {{- range $dep := ($svc.waitFor | default list) -}}
       {{- if and (eq $dep "minio") $root.Values.minio.enabled }}{{- $waits = append $waits $dep -}}{{- end -}}

@@ -117,9 +117,7 @@ spec:
         {{- include "lance.labels" . | nindent 8 }}
         app.kubernetes.io/component: age
     spec:
-      {{- if .Values.security.serviceAccounts.enabled }}
       serviceAccountName: {{ include "lance.fullname" . }}-sa-age
-      {{- end }}
       {{- if .Values.security.infraContexts.enabled }}
       # Per-image uid/fsGroup from values (the audit: data/secret holders need runAsUser+fsGroup for
       # their PVCs — no blind helper reuse). Flag default OFF: flip after the kind boot check (§7a).

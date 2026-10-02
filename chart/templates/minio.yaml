@@ -85,6 +85,7 @@ spec:
         {{- include "lance.labels" . | nindent 8 }}
         app.kubernetes.io/component: minio
     spec:
+      serviceAccountName: {{ include "lance.fullname" . }}-sa-minio
       {{- if .Values.security.infraContexts.enabled }}
       {{- /*
          uid 1000 is the minio image's built-in `minio-user`, which owns the on-disk data. A mismatched

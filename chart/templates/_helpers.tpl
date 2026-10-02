@@ -58,14 +58,6 @@ app.kubernetes.io/name: {{ include "rask.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 
-{{- define "rask.serviceAccountName" -}}
-{{- if .Values.serviceAccount.create -}}
-{{- default (include "rask.fullname" .) .Values.serviceAccount.name -}}
-{{- else -}}
-{{- default "default" .Values.serviceAccount.name -}}
-{{- end -}}
-{{- end -}}
-
 {{/* Component labels: pass (list . "<component>") */}}
 {{- define "rask.componentLabels" -}}
 {{- $root := index . 0 -}}
@@ -773,6 +765,11 @@ operator path) — otherwise externalize silently emits nothing. Non-empty strin
 {{- $c := .Values.observability.otelCollector | default dict -}}
 {{- if or .Values.observability.enabled .Values.observability.externalOtlpEndpoint $c.externalEndpoint -}}true{{- end -}}
 {{- end -}}
+{{/* The SA OpenBao runs as. ONE name for the pod and for its auth-delegator binding, so the grant
+     can only land on the identity that holds the token it reviews with. */}}
+{{- define "lance.openbaoServiceAccount" -}}
+{{ include "lance.fullname" . }}-sa-openbao
+{{- end -}}
 {{- define "lance.vaultAddr" -}}
 {{- if .Values.openbao.externalAddr -}}{{ .Values.openbao.externalAddr }}{{- else -}}http://{{ include "lance.openbaoHost" . }}:{{ .Values.openbao.port }}{{- end -}}
 {{- end -}}
@@ -813,8 +810,8 @@ dapr.io/sidecar-memory-request: {{ $r.memoryRequest | quote }}
 dapr.io/sidecar-memory-limit: {{ $r.memoryLimit | quote }}
 {{/* daprd AUTO-REGISTERS a built-in `kubernetes` secret store in k8s mode and initialises it at boot,
 which builds a client from the pod's k8s-API SA token. We never use that store (our only secret store is
-`lance-secrets` — secretstores.hashicorp.vault, scoped per app), but its init is FATAL on failure: with
-security.serviceAccounts.enabled the per-workload SAs set automountServiceAccountToken=false, the token
+`lance-secrets` — secretstores.hashicorp.vault, scoped per app), but its init is FATAL on failure: the
+per-workload SAs set automountServiceAccountToken=false (security-sa.yaml), so the token
 file is gone, daprd falls back to `stat /home/nonroot/.kube/config`, and EVERY Dapr-injected pod
 CrashLoops ("[INIT_COMPONENT_FAILURE] ... secretstores.kubernetes/v1" — live 2026-07-13; the SA flip was
 unshippable). Disabling the unused store is the fix that KEEPS the audit's intent (no mounted JWT, zero

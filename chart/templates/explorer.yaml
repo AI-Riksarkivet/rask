@@ -71,9 +71,7 @@ spec:
       {{- end }}
     spec:
       terminationGracePeriodSeconds: {{ $root.Values.lifecycle.terminationGracePeriodSeconds }}
-      {{- if $root.Values.security.serviceAccounts.enabled }}
       serviceAccountName: {{ include "lance.fullname" $root }}-sa-{{ $name }}
-      {{- end }}
       {{- with $.Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}

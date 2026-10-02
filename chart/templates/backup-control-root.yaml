@@ -51,9 +51,7 @@ spec:
           imagePullSecrets:
             {{- toYaml . | nindent 12 }}
           {{- end }}
-          {{- if .Values.security.serviceAccounts.enabled }}
-          serviceAccountName: {{ include "rask.fullname" . }}-sa-jobs
-          {{- end }}
+          serviceAccountName: {{ include "lance.fullname" . }}-sa-jobs
           securityContext:
             runAsNonRoot: true
             runAsUser: 65534

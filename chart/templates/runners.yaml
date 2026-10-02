@@ -29,9 +29,7 @@ spec:
       # No Dapr sidecar by design: runners/ code calls no Dapr building block (grep 2026-07-27: zero dapr/pubsub/invoke/cloudevent hits) — assist is plain HTTP behind MEDIA_ASSIST_URL, so dapr.sidecars deliberately skips runner workloads.
     spec:
       terminationGracePeriodSeconds: {{ .Values.lifecycle.terminationGracePeriodSeconds }}
-      {{- if .Values.security.serviceAccounts.enabled }}
       serviceAccountName: {{ include "lance.fullname" . }}-sa-assist
-      {{- end }}
       containers:
         - name: assist
           image: "{{ .Values.runners.assist.image.repository }}:{{ required "runners.assist.image.tag must be set (a release tag in prod; `dev` locally)" .Values.runners.assist.image.tag }}"

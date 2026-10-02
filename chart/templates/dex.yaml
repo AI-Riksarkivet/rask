@@ -83,9 +83,7 @@ spec:
         # (found live 2026-07-24 — the login fix silently didn't take until a manual pod delete).
         checksum/config: {{ .Values.dex | toYaml | sha256sum }}
     spec:
-      {{- if .Values.security.serviceAccounts.enabled }}
       serviceAccountName: {{ include "lance.fullname" . }}-sa-dex
-      {{- end }}
       {{- if .Values.security.infraContexts.enabled }}
       # Per-image uid/fsGroup from values (the audit: data/secret holders need runAsUser+fsGroup for
       # their PVCs — no blind helper reuse). Flag default OFF: flip after the kind boot check (§7a).

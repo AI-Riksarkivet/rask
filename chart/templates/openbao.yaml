@@ -82,9 +82,11 @@ spec:
         {{- include "lance.labels" . | nindent 8 }}
         app.kubernetes.io/component: openbao
     spec:
-      {{- if .Values.security.serviceAccounts.enabled }}
-      serviceAccountName: {{ include "lance.fullname" . }}-sa-openbao
-      {{- end }}
+      serviceAccountName: {{ include "lance.openbaoServiceAccount" . }}
+      {{- /* The Kubernetes auth backend reviews ESO's login with THIS pod's token and reads the API
+           server's CA beside it (openbao-auth-delegator.yaml). Nothing else logs in that way, so
+           without ESO the pod holds no token. */}}
+      automountServiceAccountToken: {{ .Values.externalSecrets.enabled | default false }}
       {{- if .Values.security.infraContexts.enabled }}
       # Per-image uid/fsGroup from values (the audit: data/secret holders need runAsUser+fsGroup for
       # their PVCs — no blind helper reuse). Flag default OFF: flip after the kind boot check (§7a).
@@ -155,9 +157,7 @@ spec:
         app.kubernetes.io/component: openbao-seed
     spec:
       restartPolicy: OnFailure
-      {{- if .Values.security.serviceAccounts.enabled }}
       serviceAccountName: {{ include "lance.fullname" . }}-sa-jobs
-      {{- end }}
       volumes:
         {{- include "lance.tmpVolume" . | nindent 8 }}
       containers:

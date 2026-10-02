@@ -1,13 +1,20 @@
-{{- if .Values.security.serviceAccounts.enabled }}
-# Dedicated UNBOUND ServiceAccounts per first-party workload (security audit: ~13 pods sat on the
-# `default` SA with automountServiceAccountToken defaulting true — each mounted an unused k8s-API
-# JWT). automountServiceAccountToken is set false ON THE SA OBJECT, not the pod spec, deliberately:
-# the Dapr injector's PROJECTED token volume is untouched (the audit's guidance — verify live with
-# `dapr mtls -k` before flipping the flag, §7a). No RoleBindings exist for these SAs: they are
-# identities with zero API grants. NOTE: the snapshot CronJob and the Dapr dashboard pods deliberately
-# do NOT take one of these — they keep their purpose-built RBAC-bound SAs unconditionally (those pods
-# legitimately need the k8s API; a zero-grant swap would silently break them — audit 2026-07-24).
-{{- $components := list "catalog" "lineage" "web" "gateway" "maintenance" "medallion-producer" "minio" "age" "openbao" "dex" "dapr-dashboard" "jobs" "viewer" "search" "annotator" "assist" }}
+{{- /* ONE ServiceAccount PER FIRST-PARTY SERVICE, each with automountServiceAccountToken: false on the
+     SA object, so a pod holds a Kubernetes API token only where its own spec asks for one (OpenBao
+     under ESO). The Dapr injector's projected Sentry token is a separate volume and is unaffected.
+     These SAs carry no grant except issuer discovery below; a pod that calls the API keeps its own
+     RBAC-bound SA in its template. The fleet's SAs come from the same map fleet.yaml ranges, so a new
+     fleet service cannot name an SA this file did not render, and a pod names its SA with this file's
+     prefix (lance.fullname), which follows the release name where rask.fullname does not. Pinned by
+     tests/unit/test_a_first_party_pod_cannot_read_a_secret_through_the_kube_api.py. */}}
+{{- $components := list "catalog" "lineage" "web" "maintenance" "medallion-producer" "minio" "age" "openbao" "dex" "jobs" "viewer" "search" "annotator" "assist" "vmalert" "alertmanager" "ray" }}
+{{- range $name, $_ := .Values.services }}
+{{- if not (has $name $components) }}
+{{- $components = append $components $name }}
+{{- end }}
+{{- end }}
+{{- range .Values.medallion.stageRunners }}
+{{- $components = append $components .name }}
+{{- end }}
 {{- range $c := $components }}
 ---
 apiVersion: v1
@@ -17,13 +24,39 @@ metadata:
   labels: {{- include "lance.labels" $ | nindent 4 }}
 automountServiceAccountToken: false
 {{- end }}
-{{- range .Values.medallion.stageRunners }}
 ---
+{{- /* The identity of the hooks that run BEFORE the release manifest (openfga-model, minio-scoped-users).
+     Helm applies the manifest after its pre-upgrade hooks, so an ordinary SA does not exist yet on the
+     upgrade that introduces it, and the hook's pod is refused at admission until the upgrade times out
+     (measured 2026-10-02, rev 259: `serviceaccount "rask-sa-jobs" not found`). A hook of its own at a
+     lower weight exists in every phase they run in; kueue-queues.yaml does the same. */}}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: {{ include "lance.fullname" $ }}-sa-{{ .name }}
-  labels: {{- include "lance.labels" $ | nindent 4 }}
+  name: {{ include "lance.fullname" . }}-sa-hooks
+  labels: {{- include "lance.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,pre-upgrade,post-upgrade
+    "helm.sh/hook-weight": "-10"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 automountServiceAccountToken: false
-{{- end }}
-{{- end }}
+---
+{{- /* The SA issuer's discovery document and JWKS, which the API server serves only to a grant. The D1
+     verifiers (LH-220) read them to validate a caller's projected token offline; an in-cluster reader
+     authenticates this request with its own projected token. A third-party verifier that fetches
+     anonymously (OpenFGA OIDC, MinIO STS) is not covered by a per-SA grant. */}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "lance.fullname" . }}-sa-issuer-discovery
+  labels: {{- include "lance.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:service-account-issuer-discovery
+subjects:
+  {{- range (list "catalog" "lineage") }}
+  - kind: ServiceAccount
+    name: {{ include "lance.fullname" $ }}-sa-{{ . }}
+    namespace: {{ $.Release.Namespace }}
+  {{- end }}

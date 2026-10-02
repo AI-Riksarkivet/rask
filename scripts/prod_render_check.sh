@@ -222,16 +222,15 @@ jobs_missing=$(awk '
 grep -q "app.kubernetes.io/component: minio-mkbucket" "$OUT" || fail "the mkbucket hook pod must carry its component label"
 grep -q -- "- minio-mkbucket" "$OUT" || fail "the minio ingress client list must admit the mkbucket hook component"
 
-# POD IDENTITY. All three default OFF in values.yaml because the dev loop runs PSA-unlabelled, and all
-# three were live-proven 2026-07-13 — so their absence from the prod overlay read as a posture and was
-# an omission (XC-028). Asserted on the RENDER rather than on the values file: a `security:` block can
-# be present and still reach no pod if a template stops consuming it, which is the failure a values
-# grep cannot see. Counted, not merely found: one dedicated ServiceAccount proves the switch is
-# readable, not that the fleet uses it. Measured on this overlay 2026-09-16 — 37 ServiceAccounts and 20
-# `automountServiceAccountToken: false` with the switches on, against 18 and 1 with them off.
+# POD IDENTITY. Asserted on the RENDER: a template that stops naming its SA is invisible to any values
+# grep. Counted, not merely found: one dedicated ServiceAccount proves the SAs render, not that the
+# fleet uses them. Measured on this overlay 2026-10-02: 45 ServiceAccounts and 30
+# `automountServiceAccountToken: false`. The per-pod verdict (no first-party pod on `default`, no idle
+# token, no secret grant to their SAs) is
+# tests/unit/test_a_first_party_pod_cannot_read_a_secret_through_the_kube_api.py.
 sa=$(grep -c "^kind: ServiceAccount" "$OUT" || true)
 [ "$sa" -ge 30 ] \
-  || fail "prod must give the fleet dedicated ServiceAccounts (security.serviceAccounts.enabled), rendered $sa (>=30 expected; 18 is the everything-runs-as-default baseline)"
+  || fail "prod must give the fleet dedicated ServiceAccounts (templates/security-sa.yaml), rendered $sa (>=30 expected; 18 is the everything-runs-as-default baseline)"
 automount=$(grep -c "automountServiceAccountToken: false" "$OUT" || true)
 [ "$automount" -ge 15 ] \
   || fail "prod must stop mounting the SA token into app pods, rendered $automount refusals (>=15 expected; 1 is the baseline)"

@@ -21,11 +21,6 @@ nameOverride: ""
 
 imagePullSecrets: []
 
-serviceAccount:
-  create: true
-  name: ""
-  annotations: {}
-
 # singleTenant gates the LEGACY single-tenant default workloads (the default
 # domain services + /default frontends + default Postgres/Ray/NATS/migration).
 # Default false => front-door-only install (picker + controlplane + gateway +
@@ -743,12 +738,14 @@ security:
   # compaction genuinely spills more; the media body cap (32 MiB/request, MEDIA_MAX_BODY_BYTES) is the
   # bound that stops uploads reaching this one.
   tmpSizeLimit: 2Gi
-  # Batch 10 (2026-07-11) — both default OFF (behavior-identical); flip after the §7a live checks.
-  # Dedicated unbound SA per first-party workload, automountServiceAccountToken:false ON THE SA
-  # object (never the pod — the Dapr injector's projected token stays untouched). Pre-flip check:
-  # `dapr mtls -k` must still verify after enabling (the audit's guidance).
-  serviceAccounts:
-    enabled: false
+  # POD IDENTITY is not a value. Every first-party workload runs as its own ServiceAccount
+  # (templates/security-sa.yaml), tokenless on the SA object. A first-party pod holds a Kubernetes API
+  # token only when its SA carries a grant it uses: OpenBao under ESO, and the RBAC-bound controlplane,
+  # Collector, Dapr dashboard, snapshot, injection-sweep and Kueue-setup pods (measured on the render
+  # 2026-10-02). `default` is the identity every
+  # unnamed pod in the namespace shares, and the Dapr subchart grants it `secrets: get` unless told
+  # not to (dapr.dapr_rbac below). Pinned by
+  # tests/unit/test_a_first_party_pod_cannot_read_a_secret_through_the_kube_api.py.
   # securityContexts for the INFRA pods (app tier is already hardened via lance.securityContext)
   # + PSA-restricted compliance for the root busybox wait-age init containers (the audit's
   # sequencing footgun: label the namespace `pod-security.kubernetes.io/enforce=restricted` ONLY
@@ -2780,7 +2777,17 @@ nats:
       resources:
         requests: { cpu: 10m, memory: 16Mi }
         limits: { memory: 64Mi }
+  # Its own identity, not `default`, with no API token: the server, its reloader and the box CLI
+  # never call the Kubernetes API.
+  serviceAccount:
+    enabled: true
+    merge:
+      automountServiceAccountToken: false
   natsBox:
+    serviceAccount:
+      enabled: true
+      merge:
+        automountServiceAccountToken: false
     container:
       merge:
         resources:
@@ -2849,6 +2856,16 @@ dapr:
       requests: { cpu: 25m, memory: 64Mi }
       limits: { memory: 256Mi }
   # --- SUBCHART values (dapr 1.18.1) --------------------------------------------------------------
+  # OFF. The subchart ships a `secret-reader` Role (`secrets: get`) bound to the namespace's `default`
+  # SA, for daprd's built-in Kubernetes secret store. No sidecar here has that store: every injected
+  # pod sets `dapr.io/disable-builtin-k8s-secret-store` (lance.daprSidecarResources), and a pod's own
+  # SA holds no API token to use it with. Left on, code execution in any pod running as `default`
+  # reads every Secret in the namespace. A Component `secretKeyRef` (lance-secrets' vaultToken when
+  # openbao.devMode is off) is inlined by the Dapr operator under dapr-operator-admin, which carries
+  # `secrets` itself; that path is not measured on a live devMode-off estate.
+  dapr_rbac:
+    secretReader:
+      enabled: false
   dapr_sidecar_injector:
     resources:
       requests: { cpu: 25m, memory: 32Mi }

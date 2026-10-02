@@ -74,9 +74,7 @@ spec:
                     [ -s /dump/"$db".sql.gz ] || { echo "no dump produced for database $db" >&2; exit 1; }
                   done
               volumeMounts: [{ name: dump, mountPath: /dump }]
-          {{- if .Values.security.serviceAccounts.enabled }}
           serviceAccountName: {{ include "lance.fullname" . }}-sa-jobs
-          {{- end }}
           containers:
             - name: upload
               {{- /* THE ESTATE'S OWN S3 SEAM, not a third-party CLI. `minio/mc` refuses ANONYMOUS

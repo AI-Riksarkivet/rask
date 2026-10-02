@@ -181,15 +181,11 @@ dapr:
   dapr_sidecar_injector:
     sidecarDropALLCapabilities: true
 
-# --- Pod identity. Both default OFF in values.yaml because the dev loop runs PSA-unlabelled, and both
-# were live-proven on 2026-07-13 — so their absence here was an oversight, not a posture. MEASURED on
-# the prod render 2026-09-16: flipping them takes ServiceAccounts 18 -> 37 and
-# `automountServiceAccountToken: false` from 1 -> 20, i.e. every app pod stops running as SA `default`
-# with its token mounted. `scripts/prod_render_check.sh` asserts both, so a values edit cannot silently
-# undo it. -----------------------------------------------------------------------------------------
+# --- Infra pod security contexts. Default OFF in values.yaml because the dev loop runs PSA-unlabelled;
+# live-proven on 2026-07-13. Pod IDENTITY is not a switch: every first-party pod runs as its own
+# tokenless SA in every overlay (templates/security-sa.yaml). `scripts/prod_render_check.sh` asserts
+# both on this render. ------------------------------------------------------------------------------
 security:
-  serviceAccounts:
-    enabled: true
   infraContexts:
     enabled: true
 
