@@ -2,7 +2,8 @@
 
 `test_outbox_crash_e2e` STAGES AN EVENT INTO THE OUTBOX AND EXPECTS THE RELAY TO DRAIN IT, and
 `enforce_bus_authz` asks two questions of that event: does its author resolve to a real subject, and
-may that subject write the output table it names.
+may that subject write the output table it names. Where signing is enforced it asks a first one, whether
+a listed signer's key verifies the event, and the crash suite answers it by signing as the catalog.
 
 AN EVENT THAT ANSWERS NEITHER NEVER LEAVES. Measured on the deployed estate 2026-09-20:
 `s3://lance-catalog/_lineage_outbox` held five objects dated 2026-09-14, one per run of the crash

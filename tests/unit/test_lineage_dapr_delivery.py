@@ -209,6 +209,7 @@ def test_redelivery_acks_and_writes_the_identical_idempotent_statements(
        function of the event, which is what makes (2) sufficient.
     """
     import lineage.services.repository as repo_mod
+    from lineage.core.metrics import Door
     from lineage.services.consumer import handle_cloud_event
 
     calls: list[tuple[str, dict[str, object]]] = []
@@ -263,11 +264,11 @@ def test_redelivery_acks_and_writes_the_identical_idempotent_statements(
     pool = _Pool()
     repo = repo_mod.LineageRepository(cast(Any, pool), "g")
 
-    first_status = asyncio.run(handle_cloud_event(repo, _CLOUD_EVENT))
+    first_status = asyncio.run(handle_cloud_event(repo, _CLOUD_EVENT, door=Door.SUBSCRIBER))
     first, first_sql = list(calls), list(pool.conn.sql)
     calls.clear()
     pool.conn.sql.clear()
-    second_status = asyncio.run(handle_cloud_event(repo, _CLOUD_EVENT))
+    second_status = asyncio.run(handle_cloud_event(repo, _CLOUD_EVENT, door=Door.SUBSCRIBER))
     second, second_sql = list(calls), list(pool.conn.sql)
 
     assert first_status == second_status == {"status": "SUCCESS"}

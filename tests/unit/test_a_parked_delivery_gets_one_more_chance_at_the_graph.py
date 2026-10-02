@@ -75,8 +75,8 @@ class _Repo:
         self.known.add(run_id)
 
 
-def _client(monkeypatch: pytest.MonkeyPatch, repo: _Repo | None, *, authorized: bool = True) -> TestClient:
-    """The parking route on its own app. ``repo=None`` leaves ``app.state`` without a repository."""
+def _client(monkeypatch: pytest.MonkeyPatch, repo: _Repo | None, *, authorized: bool = True, refusal: Exception | None = None) -> TestClient:
+    """The parking route on its own app. ``repo=None`` leaves ``app.state`` without a repository; ``refusal`` is what the gate raises."""
     monkeypatch.setenv("APP_API_TOKEN", "s3cret")
     monkeypatch.setenv("LINEAGE_DAPR_ENABLED", "true")
     monkeypatch.setenv("LINEAGE_DLQ_TOPIC", "dlq.lineage.events")
@@ -91,6 +91,8 @@ def _client(monkeypatch: pytest.MonkeyPatch, repo: _Repo | None, *, authorized: 
     # inside the route's `except Exception`, which reads as an authz OUTAGE and answers RETRY: the
     # replay then looks like an unreachable authorizer rather than a broken stand-in.
     async def _authz(parsed: Any, request: Any, settings: Any, arrived: Any) -> None:
+        if refusal is not None:
+            raise refusal
         if not authorized:
             from lineage.api.fga_deps import UnauthoredRunError
 
@@ -166,6 +168,23 @@ def test_a_role_literal_delivery_still_parks_and_the_ruling_is_untouched(monkeyp
     assert _park(client, _event("run-role-literal")) == {"status": "SUCCESS"}
     assert repo.ingested == [], "an unauthorized delivery must never reach the graph"
     assert seen == [str(Outcome.DEAD_LETTERED)], f"an unrecoverable park is still the loss signal, got {seen}"
+
+
+def test_a_parked_delivery_no_listed_signer_signed_is_counted_as_the_parking_doors_refusal(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The re-presentation names its own door, so one refusal is counted once, as the parking route's, and not as a second
+    arrival on the subscription. The delivery is acked and never reaches the graph."""
+    import lineage.services.consumer as consumer_mod
+    from lineage.core.metrics import Door, Outcome
+    from lineage.models import UnverifiedEventError
+
+    counted: list[tuple[Outcome, Door]] = []
+    monkeypatch.setattr(consumer_mod, "record_outcome", lambda outcome, *, door: counted.append((outcome, door)))
+    repo = _Repo(known=set())
+    client = _client(monkeypatch, repo, refusal=UnverifiedEventError("the event carries no signature", "unsigned"))
+
+    assert _park(client, _event("run-forged")) == {"status": "SUCCESS"}
+    assert counted == [(Outcome.SIGNATURE_REFUSED, Door.DEAD_LETTER)], f"the refusal was counted under {counted}"
+    assert repo.ingested == [], "an event no listed signer signed reached the graph"
 
 
 def test_a_failed_re_ingest_falls_back_to_exactly_the_old_behaviour(monkeypatch: pytest.MonkeyPatch) -> None:

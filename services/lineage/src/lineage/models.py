@@ -12,6 +12,7 @@ from lance_namespace import PermissionDeniedError
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from lineage.schemas import SchemaField
+from lineage_kit.signing import SIGNATURE_FACET, RefusalReason
 from service_kit.openlineage import static_event_id
 
 
@@ -364,6 +365,48 @@ class UngovernedOutputError(PermissionDeniedError):
     gate raises the plain :class:`PermissionDeniedError` there — parking a repairable event costs a
     duplicate, while acking an unreadable one deletes provenance, and only the second is unrecoverable.
     """
+
+
+class UnverifiedEventError(PermissionDeniedError):
+    """An event no listed signer's published key verifies: unsigned, forged, or signed by an identity the chart does not list ([[LH-064]]).
+
+    Its own type for the reason :class:`UnauthoredRunError` has one: the ack differs and the message cannot
+    carry the distinction. A named person who lacks a grant keeps the DROP that routes the event to the
+    dead-letter topic, because a tuple can be written and the same event then succeeds on its next
+    presentation. Bytes already published cannot gain a signature, so no grant, redelivery or restart changes
+    this answer: the bus ACKS it and counts it (`Outcome.SIGNATURE_REFUSED`), and the drain records it and
+    retires the staged object, which is the only copy a retry would have re-read.
+
+    ``reason`` is the kit's closed :data:`~lineage_kit.signing.RefusalReason`, the label `lineage.signature.refused`
+    is keyed on; the message names what was wrong with the signature and never its bytes.
+
+    THE OUTAGE IS NOT THIS TYPE. A public-key list that cannot be read says nothing about the signature, so
+    the gate raises :class:`lance_namespace.ServiceUnavailableError` there and the delivery is retried.
+    """
+
+    def __init__(self, message: str, reason: RefusalReason) -> None:
+        super().__init__(message)
+        self.reason: RefusalReason = reason
+
+
+def without_signature_facet(raw: dict[str, Any]) -> dict[str, Any]:
+    """``raw`` without a ``rask_signature`` facet on either facet bag: what a door that cannot verify may record.
+
+    The facet means "a listed signer's key verified these bytes" wherever lineage stores or serves an event, and
+    only the bus and the outbox can check that. A caller of the HTTP door holds a bearer token and no signing
+    key, so a facet it supplies is a claim and not a signature: recorded, it would sit in the feed under the name
+    of a verified one. Both bags are cleared, the run's and the dataset's, rather than the one a signature would
+    ride on, because which bag a reader takes is the reader's rule. Only the path to a facet is copied; the rest
+    of the event is shared and not touched.
+    """
+    cleared = raw
+    for holder in ("run", "dataset"):
+        section = cleared.get(holder)
+        facets = section.get("facets") if isinstance(section, dict) else None
+        if isinstance(section, dict) and isinstance(facets, dict) and SIGNATURE_FACET in facets:
+            kept = {name: facet for name, facet in facets.items() if name != SIGNATURE_FACET}
+            cleared = {**cleared, holder: {**section, "facets": kept}}
+    return cleared
 
 
 class DatasetEvent(BaseModel):

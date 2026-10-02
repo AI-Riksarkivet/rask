@@ -24,6 +24,7 @@ import pytest
 from lance_namespace import PermissionDeniedError
 
 from lineage.api.fga_deps import relations_for_operation
+from lineage.core.config import Signing
 from lineage.models import RunEvent
 
 
@@ -132,6 +133,7 @@ def test_the_ROUTE_itself_refuses_an_unauthorized_delivery(monkeypatch: pytest.M
 class _Settings:
     fga_enabled = True
     fga_object_type = "table"
+    signing = Signing(signers=frozenset(), delegators=frozenset())
 
 
 def _request(repository: object) -> Any:

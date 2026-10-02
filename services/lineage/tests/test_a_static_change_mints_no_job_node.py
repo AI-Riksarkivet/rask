@@ -24,6 +24,7 @@ from typing import Any, cast
 
 import pytest
 
+from lineage.core.metrics import Door
 from lineage.models import DatasetEvent, RunEvent
 from lineage.services.consumer import handle_cloud_event
 
@@ -66,5 +67,5 @@ async def test_a_static_event_is_AUTHORIZED_before_it_reaches_the_graph() -> Non
     async def authorize(event: RunEvent | DatasetEvent, _arrived: Mapping[str, Any]) -> None:
         seen.append(event.run_id)
 
-    assert await handle_cloud_event(cast(Any, repo), {"data": _static_payload()}, authorize=authorize) == {"status": "SUCCESS"}
+    assert await handle_cloud_event(cast(Any, repo), {"data": _static_payload()}, authorize=authorize, door=Door.SUBSCRIBER) == {"status": "SUCCESS"}
     assert seen == [None], "the static event bypassed authorization on its way to the graph"

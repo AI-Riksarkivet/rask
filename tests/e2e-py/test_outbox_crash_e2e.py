@@ -15,6 +15,13 @@ What this drives, for real:
   4. the reconcile relay must drain it into BOTH the AGE graph and the durable `/events` feed,
   5. the outbox must end empty (the recovered object is removed, not left to re-ingest forever).
 
+THE STAGED EVENT IS SIGNED, because an estate that enforces signing ([[LH-064]]) refuses and retires an event no listed signer's
+key verifies, and an unsigned one is exactly that. The harness signs as the catalog, the one identity that may stamp a person as
+the author, with the catalog's seed: `LANCE_E2E_SIGNING_SEED` when the stack script exports it, else read the way an operator
+reads it, from the dev store's own `seed` container. The seed is never printed or logged. An estate that enforces nothing ignores
+the signature, so signing is harmless there; where no seed can be read the event is staged unsigned, and an enforcing estate then
+refuses it, which the drain assertion below names.
+
 Skipped unless the live stack env is set. Run via `make e2e-ci` / the CI `e2e-stack` job.
 """
 
@@ -23,6 +30,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -34,6 +42,7 @@ import pytest
 import requests
 from outbox_probe import owned_output_table
 
+from lineage_kit.signing import SigningKey, attach_signature
 from medallion.schemas.events import build_run_event
 from service_kit.lakehouse import outbox
 
@@ -49,6 +58,11 @@ S3 = os.environ.get("LANCE_E2E_S3", "http://localhost:9900")
 # is a real bug this repo has already shipped once (a drained run visible on /runs but SILENTLY absent from
 # /events). Assert both, at the source of truth.
 DSN = os.environ.get("LINEAGE_DATABASE_URL", "")
+
+#: WHO THE HARNESS SIGNS AS: the catalog, the one chart-listed identity that may stamp a person as the author. The release names the
+#: OpenBao Deployment whose `seed` container holds the store's CLI token, for the case where the stack script exports no seed.
+SIGNING_IDENTITY = os.environ.get("LANCE_E2E_SIGNING_IDENTITY", "service-catalog")
+RELEASE = os.environ.get("LANCE_E2E_RELEASE", "rask")
 
 #: The output this probe's staged event names. NAMESPACE AND TABLE SEPARATELY because the event needs
 #: both spellings: `output_namespace` is the OpenLineage domain label and `output_name` carries the
@@ -82,6 +96,36 @@ def _read_back(run_id: str) -> tuple[list, list]:
             await pool.close()
 
     return asyncio.run(go())
+
+
+def _signing_key() -> SigningKey | None:
+    """The catalog's signing key, or None when this harness cannot read one.
+
+    A SEED IS A SECRET, so nothing here prints it and a failed read says only that it failed. It is read as an operator reads it:
+    from the environment when the stack script exported it, else from the dev store through the pod that holds the store's own
+    token. An estate whose store this harness cannot reach holds no key for it, and the event is then staged unsigned.
+    """
+    seed = os.environ.get("LANCE_E2E_SIGNING_SEED", "").strip()
+    kubectl = shutil.which("kubectl")
+    if not seed and kubectl is not None:
+        read_seed = [
+            kubectl,
+            "exec",
+            f"deploy/{RELEASE}-openbao",
+            "-c",
+            "seed",
+            "--",
+            "bao",
+            "kv",
+            "get",
+            "-field=seed",
+            f"secret/signing-key-{SIGNING_IDENTITY}",
+        ]
+        try:
+            seed = subprocess.run(read_seed, capture_output=True, text=True, check=True, timeout=60).stdout.strip()  # noqa: S603
+        except (OSError, subprocess.SubprocessError):
+            return None
+    return SigningKey.from_seed(seed) if seed else None
 
 
 def _so() -> dict[str, str]:
@@ -228,6 +272,9 @@ def test_sigkilled_producer_loses_nothing(lineage: str) -> None:
         version=1,
         token=token,
     )
+    key = _signing_key()
+    if key is not None:
+        event = attach_signature(event, key=key, identity=SIGNING_IDENTITY, on_behalf_of=author or "e2e")
     run_id = event["run"]["runId"]
     event_json = json.dumps(event)
 
@@ -244,7 +291,10 @@ def test_sigkilled_producer_loses_nothing(lineage: str) -> None:
 
     # 4. The relay recovers it.
     drained = _drive_the_relay(lineage, run_id)
-    assert drained, "the relay never drained this run — every sweep skipped and the run stayed staged"
+    assert drained, (
+        "the relay never drained this run: every sweep skipped, or an estate that enforces signing refused an event this harness "
+        f"{'signed' if key is not None else 'could not sign (no seed for ' + SIGNING_IDENTITY + ': set LANCE_E2E_SIGNING_SEED)'}"
+    )
 
     # 4b. ...into BOTH surfaces. `outbox_drained` only proves the relay COUNTED it. The graph and the durable
     # feed are separate writes, and one landing without the other is a bug this repo has actually shipped.

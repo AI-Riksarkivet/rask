@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any, cast
 
+from lineage.core.metrics import Door
 from lineage.models import RunEvent
 from lineage.services.consumer import handle_cloud_event
 from lineage.services.repository import feed_columns
@@ -52,7 +53,7 @@ class _FakeRepo:
 def test_handle_retries_on_transient_ingest_failure() -> None:
     # AGE down → RETRY; Dapr redelivers per the component backOff (ingest is idempotent, so retry is safe).
     repo = _FakeRepo(fail=True)
-    status = asyncio.run(handle_cloud_event(cast(Any, repo), _CLOUD_EVENT))
+    status = asyncio.run(handle_cloud_event(cast(Any, repo), _CLOUD_EVENT, door=Door.SUBSCRIBER))
     assert status == {"status": "RETRY"}
 
 

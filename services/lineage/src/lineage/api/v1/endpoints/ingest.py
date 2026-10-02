@@ -32,7 +32,7 @@ from lineage.api.dependencies import RepositoryDep, SettingsDep
 from lineage.api.fga_deps import enforce_author, enforce_output_authz
 from lineage.api.security import CurrentToken
 from lineage.core.metrics import Door, Outcome, record_ingest_duration, record_outcome
-from lineage.models import DatasetEvent, RunEvent, UnauthoredRunError, UngovernedOutputError, parse_event
+from lineage.models import DatasetEvent, RunEvent, UnauthoredRunError, UngovernedOutputError, parse_event, without_signature_facet
 
 
 # Unversioned like every sibling router — the composition layer (api/v1/router.py) mounts this one
@@ -141,8 +141,13 @@ async def ingest_event(
     # `tests/unit/test_both_lineage_doors_count_the_same_loss.py`: a denied grant is repairable by
     # writing a tuple, while an ungoverned output and an unauthored run are repairable by nothing. Two
     # doors that disagreed about which is which would make the alert mean different things by route.
+    #
+    # NO SIGNATURE IS TAKEN FROM THIS DOOR ([[LH-064]]). `rask_signature` means "a listed signer's key verified
+    # these bytes", which only the bus and the outbox can check; a caller here holds a bearer token and no
+    # signing key. A facet it supplies is a claim, so it is cleared from both facet bags before the event is
+    # parsed, and whatever is stored never carries a signature nobody verified.
     try:
-        event: RunEvent | DatasetEvent = parse_event(body)
+        event: RunEvent | DatasetEvent = parse_event(without_signature_facet(body))
     except ValidationError as exc:
         raise RequestValidationError(exc.errors()) from exc
     try:
