@@ -31,12 +31,16 @@ _SENTINEL = "secret/openbao-seeded"
 _MINTED = "service-token-service-catalog"
 _SERVED_TOKEN = "Kx7Q2mZ9pLr4Vn8Bt1Wc6Hy3Ja5Ds0Fg2Ek9Uo4Z"
 
-#: Answers by BAO_ADDR from two directories of `key=value` files. A store holding `<name>.refused` refuses
+#: Answers by BAO_ADDR from two directories of `key=value` files, the second only at the rendered Service's address. A store holding `<name>.refused` refuses
 #: the connection, `<name>.forbidden` answers 403, and `local.readonly` fails every write; the messages are
 #: OpenBao 2.2.0's, measured on the estate 2026-10-02.
 _BAO = """\
 #!/bin/sh
-if [ "$BAO_ADDR" = "http://127.0.0.1:8200" ]; then name=local; else name=served; fi
+case "$BAO_ADDR" in
+  http://127.0.0.1:8200) name=local ;;
+  "$SERVICE_ADDR") name=served ;;
+  *) echo "Get \\"$BAO_ADDR/v1/sys/internal/ui/mounts/secret\\": dial tcp: lookup: no such host" >&2; exit 2 ;;
+esac
 store="$STORES/$name"
 echo "$BAO_ADDR $*" >> "$STORES/calls"
 [ "$1" = status ] && exit 0
@@ -93,6 +97,8 @@ def _store(stores: Path, name: str, key: str) -> dict[str, str]:
         pytest.param(DEFAULT_ARGS, "forbidden", "", False, None, id="a-served-store-it-cannot-read-stops-the-seed"),
         pytest.param(DEFAULT_ARGS, "holds", "readonly", False, None, id="a-failed-write-stops-the-seed"),
         pytest.param(DEFAULT_ARGS, "holds", "restart", True, "carried", id="a-server-restarted-in-place-gets-the-same-token"),
+        pytest.param(DEFAULT_ARGS, "malformed", "", False, None, id="a-malformed-token-behind-the-service-is-refused-and-not-kept"),
+        pytest.param(DEFAULT_ARGS, "holds", "kept-malformed", True, "carried", id="a-malformed-kept-copy-is-read-again"),
     ],
 )
 def test_the_dev_store_is_seeded_by_its_own_pod_and_keeps_its_minted_tokens(  # noqa: PLR0913 — parametrized
@@ -110,6 +116,8 @@ def test_the_dev_store_is_seeded_by_its_own_pod_and_keeps_its_minted_tokens(  # 
     (stores / "served" / "secret").mkdir(parents=True)
     if served == "holds":
         (stores / "served" / "secret" / _MINTED).write_text(f"token={_SERVED_TOKEN}\n")
+    elif served == "malformed":
+        (stores / "served" / "secret" / _MINTED).write_text(f"token={_SERVED_TOKEN[:39]}\n")
     elif served in {"refused", "forbidden"}:
         (stores / f"served.{served}").touch()
     if local == "readonly":
@@ -119,8 +127,20 @@ def test_the_dev_store_is_seeded_by_its_own_pod_and_keeps_its_minted_tokens(  # 
     for name, body in (("bao", _BAO), ("sleep", _SLEEP)):
         (tmp_path / name).write_text(body)
         (tmp_path / name).chmod(0o755)
-    (tmp_path / "home").mkdir()
-    run_env = {**os.environ, **env, "HOME": str(tmp_path / "home"), "PATH": f"{tmp_path}:{os.environ['PATH']}", "STORES": str(stores)}
+    (tmp_path / "home" / "seed").mkdir(parents=True)
+    kept = tmp_path / "home" / "seed" / _MINTED
+    if local == "kept-malformed":
+        kept.write_text(_SERVED_TOKEN[:12])
+    [service] = [d for d in docs if d.get("kind") == "Service" and f"Deployment/{d['metadata']['name']}" == workload]
+    service_addr = f"http://{service['metadata']['name']}:{service['spec']['ports'][0]['port']}"
+    run_env = {
+        **os.environ,
+        **env,
+        "HOME": str(tmp_path / "home"),
+        "PATH": f"{tmp_path}:{os.environ['PATH']}",
+        "STORES": str(stores),
+        "SERVICE_ADDR": service_addr,
+    }
 
     ran = subprocess.run(["sh", "-c", container["command"][-1]], env=run_env, capture_output=True, text=True, timeout=60, check=False)  # noqa: S603, S607
 
@@ -136,6 +156,8 @@ def test_the_dev_store_is_seeded_by_its_own_pod_and_keeps_its_minted_tokens(  # 
     if not succeeds:
         assert not seeded, f"the seed stopped but still marked the store ready: {seeded}"
         assert not _store(stores, "local", f"secret/{_MINTED}"), "a token was written after the seed refused"
+        if served == "malformed":
+            assert not kept.exists(), "the refused token was kept, so every restart reads it back and refuses again"
         return
     assert writes[-1].startswith(f"{_OWN} kv put {_SENTINEL} "), f"the readiness key is not the last write: {writes[-1]}"
     assert len(seeded) == (2 if local == "restart" else 1), f"seeds that completed: {len(seeded)}"
@@ -146,13 +168,28 @@ def test_the_dev_store_is_seeded_by_its_own_pod_and_keeps_its_minted_tokens(  # 
     else:
         assert re.fullmatch(r"[A-Za-z0-9]{40}", written), f"not a 40-character token: {written!r}"
 
-    [server] = [
-        c
-        for doc in docs
-        if f"{doc.get('kind')}/{doc['metadata']['name']}" == workload
-        for c in doc["spec"]["template"]["spec"]["containers"]
-        if c["name"] == "openbao"
+    [deployment] = [doc for doc in docs if f"{doc.get('kind')}/{doc['metadata']['name']}" == workload]
+    rolling = deployment["spec"].get("strategy") or {}
+    assert (rolling.get("type"), rolling.get("rollingUpdate", {}).get("maxUnavailable"), rolling.get("rollingUpdate", {}).get("maxSurge")) == (
+        "RollingUpdate",
+        0,
+        1,
+    ), f"the rollout is {rolling}: unless the outgoing pod serves until its replacement is Ready, there is nothing to carry the tokens from"
+    policies = [
+        d
+        for d in chart_render.render(*overlay, "--set", "networkPolicy.enabled=true")
+        if d.get("kind") == "NetworkPolicy" and d["spec"]["podSelector"].get("matchLabels") == {"app.kubernetes.io/component": "openbao"}
     ]
+    admitted = {
+        value
+        for policy in policies
+        for rule in policy["spec"]["ingress"]
+        for source in rule["from"]
+        for expr in source.get("podSelector", {}).get("matchExpressions", [])
+        for value in expr["values"]
+    }
+    assert policies and "openbao" in admitted, f"the OpenBao lock admits {sorted(admitted)}: a seed cannot read the outgoing pod through it"
+    [server] = [c for c in deployment["spec"]["template"]["spec"]["containers"] if c["name"] == "openbao"]
     probe = server["readinessProbe"]["httpGet"]
     assert probe["path"] == f"/v1/{_SENTINEL.replace('/', '/data/', 1)}", f"the server is Ready on {probe['path']}, before the seed is complete"
     assert {"name": "X-Vault-Token", "value": env["BAO_TOKEN"]} in probe.get("httpHeaders", []), "the readiness read carries no token the server accepts"

@@ -181,21 +181,26 @@ spec:
                      which the Service answers "connection refused" (both measured on OpenBao 2.2.0,
                      2026-10-02). Any other read failure stops the seed rather than rotating a credential
                      it could not see. */}}
+              {{- /* A VALUE IS CHECKED BEFORE IT IS KEPT, so one bad read cannot outlive a restart: a kept copy
+                     that fails the check is read again from behind the Service rather than trusted. */}}
+              token_shaped() { case "$1" in *[!A-Za-z0-9]*) return 1 ;; esac; [ "${#1}" -eq 40 ]; }
               put_minted() {
-                if [ ! -s "$HOME/seed/$1" ]; then
-                  if out=$(BAO_ADDR=http://{{ include "lance.openbaoHost" . }}:{{ .Values.openbao.port }} BAO_CLIENT_TIMEOUT=5s bao kv get -field=token "secret/$1" 2>&1); then
-                    printf '%s' "$out" > "$HOME/seed/$1"
+                tok=$(cat "$HOME/seed/$1" 2>/dev/null || true)
+                if ! token_shaped "$tok"; then
+                  if tok=$(BAO_ADDR=http://{{ include "lance.openbaoHost" . }}:{{ .Values.openbao.port }} BAO_CLIENT_TIMEOUT=5s bao kv get -field=token "secret/$1" 2>&1); then
+                    token_shaped "$tok" || { echo "secret/$1 behind the Service is not a 40-character token, refusing to replace it" >&2; return 1; }
                   else
-                    case "$out" in
+                    case "$tok" in
                       "No value found at"*|*"connect: connection refused") ;;
-                      *) echo "cannot read secret/$1 behind the Service, refusing to mint over it: $out" >&2; return 1 ;;
+                      *) echo "cannot read secret/$1 behind the Service, refusing to mint over it: $tok" >&2; return 1 ;;
                     esac
-                    dd if=/dev/urandom bs=96 count=1 2>/dev/null | base64 | tr -dc 'A-Za-z0-9' | cut -c1-40 > "$HOME/seed/$1"
+                    tok=$(dd if=/dev/urandom bs=96 count=1 2>/dev/null | base64 | tr -dc 'A-Za-z0-9' | cut -c1-40)
+                    token_shaped "$tok" || { echo "could not mint a 40-character token for $1" >&2; return 1; }
                     echo "minted secret/$1"
                   fi
+                  printf '%s' "$tok" > "$HOME/seed/$1.new"
+                  mv "$HOME/seed/$1.new" "$HOME/seed/$1"
                 fi
-                tok=$(cat "$HOME/seed/$1")
-                [ "${#tok}" -eq 40 ] || { echo "secret/$1 is not a 40-character token" >&2; return 1; }
                 bao kv put "secret/$1" token="$tok" >/dev/null
               }
               seed() {

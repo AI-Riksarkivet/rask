@@ -86,7 +86,7 @@ def test_every_declared_identity_has_a_token_minted(rendered: list[dict]) -> Non
     seeded = "\n".join(
         " ".join(container.get("command") or [])
         for d in rendered
-        if (d.get("kind"), d["metadata"]["name"]) == ("Deployment", "rask-openbao")
+        if d.get("kind") == "Deployment" and d["metadata"]["name"].endswith("-openbao")
         for container in d["spec"]["template"]["spec"]["containers"]
     )
     assert "bao kv put secret/service-token-" in seeded, "no token seeding found in the OpenBao pod — the parse moved, not the chart"

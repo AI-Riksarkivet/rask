@@ -40,6 +40,9 @@ TOKEN_FIELD = re.compile(r"service-token-(\S+?)=")
 #: A credential written as its OWN secret -- the shape that is scopeable.
 TOKEN_SECRET = re.compile(r"secret/service-token-(\S+)")
 
+#: A credential the seed mints rather than renders ([[LH-304]]), still its own secret.
+TOKEN_MINTED = re.compile(r"put_minted service-token-(\S+)")
+
 #: The Configuration a scoped app-id must carry, by app-id.
 CONFIG_FOR = "lance-config-{}".format
 
@@ -63,7 +66,7 @@ def _seeded_token_identities(docs: list[dict]) -> set[str]:
     """The identities the OpenBao seed writes a dedicated credential for, read off the rendered command."""
     identities: set[str] = set()
     for doc in docs:
-        if (doc.get("kind"), (doc.get("metadata") or {}).get("name")) != ("Deployment", "rask-openbao"):
+        if doc.get("kind") != "Deployment" or not (doc.get("metadata") or {}).get("name", "").endswith("-openbao"):
             continue
         pod = (doc.get("spec") or {}).get("template", {}).get("spec", {})
         for container in (pod.get("containers") or []) + (pod.get("initContainers") or []):
@@ -72,7 +75,7 @@ def _seeded_token_identities(docs: list[dict]) -> set[str]:
                 # on the field shape alone it went red the moment the fix landed -- which is the guard
                 # doing its job, and the reason it now asks the question the fix does not change:
                 # "does the seed write ANY dedicated credential at all".
-                identities |= set(TOKEN_FIELD.findall(str(part))) | set(TOKEN_SECRET.findall(str(part)))
+                identities |= set(TOKEN_FIELD.findall(str(part))) | set(TOKEN_SECRET.findall(str(part))) | set(TOKEN_MINTED.findall(str(part)))
     return identities
 
 
@@ -116,6 +119,7 @@ def test_only_the_verifier_doors_may_read_more_than_their_own_credential() -> No
     """
     docs = _docs()
     seeded = _seeded_token_identities(docs)
+    assert seeded, "the OpenBao seed writes no dedicated credential in this render: the parse moved, not the chart"
     readable = _readable_identities(docs, seeded)
     doors = {CONFIG_FOR(app) for app in ("catalog", "lineage")}
 
