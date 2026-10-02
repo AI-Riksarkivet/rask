@@ -1602,8 +1602,6 @@ export interface operations {
                 limit?: number;
             };
             header?: {
-                "dapr-api-token"?: string | null;
-                "x-lance-service-identity"?: string | null;
                 "dapr-caller-app-id"?: string | null;
             };
             path?: never;
@@ -1635,8 +1633,6 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                "dapr-api-token"?: string | null;
-                "x-lance-service-identity"?: string | null;
                 "dapr-caller-app-id"?: string | null;
             };
             path: {
@@ -1670,8 +1666,6 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                "dapr-api-token"?: string | null;
-                "x-lance-service-identity"?: string | null;
                 "dapr-caller-app-id"?: string | null;
             };
             path?: never;
@@ -1841,8 +1835,6 @@ export interface operations {
                 limit?: number;
             };
             header?: {
-                "dapr-api-token"?: string | null;
-                "x-lance-service-identity"?: string | null;
                 "dapr-caller-app-id"?: string | null;
             };
             path?: never;
@@ -1876,8 +1868,6 @@ export interface operations {
                 depth?: number;
             };
             header?: {
-                "dapr-api-token"?: string | null;
-                "x-lance-service-identity"?: string | null;
                 "dapr-caller-app-id"?: string | null;
             };
             path: {
@@ -1913,8 +1903,6 @@ export interface operations {
                 depth?: number | null;
             };
             header?: {
-                "dapr-api-token"?: string | null;
-                "x-lance-service-identity"?: string | null;
                 "dapr-caller-app-id"?: string | null;
             };
             path: {
@@ -1951,8 +1939,6 @@ export interface operations {
                 depth?: number | null;
             };
             header?: {
-                "dapr-api-token"?: string | null;
-                "x-lance-service-identity"?: string | null;
                 "dapr-caller-app-id"?: string | null;
             };
             path: {
@@ -1987,8 +1973,6 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                "dapr-api-token"?: string | null;
-                "x-lance-service-identity"?: string | null;
                 "dapr-caller-app-id"?: string | null;
             };
             path: {
@@ -2022,8 +2006,6 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                "dapr-api-token"?: string | null;
-                "x-lance-service-identity"?: string | null;
                 "dapr-caller-app-id"?: string | null;
             };
             path: {
@@ -2063,8 +2045,6 @@ export interface operations {
                 depth?: number | null;
             };
             header?: {
-                "dapr-api-token"?: string | null;
-                "x-lance-service-identity"?: string | null;
                 "dapr-caller-app-id"?: string | null;
             };
             path: {
@@ -2098,8 +2078,6 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                "dapr-api-token"?: string | null;
-                "x-lance-service-identity"?: string | null;
                 "dapr-caller-app-id"?: string | null;
             };
             path: {
@@ -2135,8 +2113,6 @@ export interface operations {
                 depth?: number | null;
             };
             header?: {
-                "dapr-api-token"?: string | null;
-                "x-lance-service-identity"?: string | null;
                 "dapr-caller-app-id"?: string | null;
             };
             path: {
@@ -2172,8 +2148,6 @@ export interface operations {
                 limit?: number;
             };
             header?: {
-                "dapr-api-token"?: string | null;
-                "x-lance-service-identity"?: string | null;
                 "dapr-caller-app-id"?: string | null;
             };
             path: {
@@ -2209,8 +2183,6 @@ export interface operations {
                 limit?: number;
             };
             header?: {
-                "dapr-api-token"?: string | null;
-                "x-lance-service-identity"?: string | null;
                 "dapr-caller-app-id"?: string | null;
             };
             path: {
@@ -2244,8 +2216,6 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                "dapr-api-token"?: string | null;
-                "x-lance-service-identity"?: string | null;
                 "dapr-caller-app-id"?: string | null;
             };
             path: {
@@ -2281,8 +2251,6 @@ export interface operations {
                 version?: number | null;
             };
             header?: {
-                "dapr-api-token"?: string | null;
-                "x-lance-service-identity"?: string | null;
                 "dapr-caller-app-id"?: string | null;
             };
             path: {
@@ -2316,8 +2284,6 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                "dapr-api-token"?: string | null;
-                "x-lance-service-identity"?: string | null;
                 "dapr-caller-app-id"?: string | null;
             };
             path: {
@@ -2352,8 +2318,6 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                "dapr-api-token"?: string | null;
-                "x-lance-service-identity"?: string | null;
                 "dapr-caller-app-id"?: string | null;
             };
             path: {
@@ -2390,8 +2354,6 @@ export interface operations {
                 depth?: number | null;
             };
             header?: {
-                "dapr-api-token"?: string | null;
-                "x-lance-service-identity"?: string | null;
                 "dapr-caller-app-id"?: string | null;
             };
             path: {
@@ -2425,8 +2387,6 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                "dapr-api-token"?: string | null;
-                "x-lance-service-identity"?: string | null;
                 "dapr-caller-app-id"?: string | null;
             };
             path?: never;
@@ -2462,8 +2422,6 @@ export interface operations {
                 summary?: boolean;
             };
             header?: {
-                "dapr-api-token"?: string | null;
-                "x-lance-service-identity"?: string | null;
                 "dapr-caller-app-id"?: string | null;
             };
             path?: never;
@@ -2499,8 +2457,6 @@ export interface operations {
                 summary?: boolean;
             };
             header?: {
-                "dapr-api-token"?: string | null;
-                "x-lance-service-identity"?: string | null;
                 "dapr-caller-app-id"?: string | null;
             };
             path?: never;
@@ -2534,8 +2490,6 @@ export interface operations {
                 limit?: number;
             };
             header?: {
-                "dapr-api-token"?: string | null;
-                "x-lance-service-identity"?: string | null;
                 "dapr-caller-app-id"?: string | null;
             };
             path?: never;
@@ -2567,8 +2521,6 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                "dapr-api-token"?: string | null;
-                "x-lance-service-identity"?: string | null;
                 "dapr-caller-app-id"?: string | null;
             };
             path?: never;
@@ -2620,8 +2572,6 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                "dapr-api-token"?: string | null;
-                "x-lance-service-identity"?: string | null;
                 "dapr-caller-app-id"?: string | null;
             };
             path?: never;
@@ -2675,8 +2625,6 @@ export interface operations {
                 limit?: number;
             };
             header?: {
-                "dapr-api-token"?: string | null;
-                "x-lance-service-identity"?: string | null;
                 "dapr-caller-app-id"?: string | null;
             };
             path?: never;
@@ -2708,8 +2656,6 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                "dapr-api-token"?: string | null;
-                "x-lance-service-identity"?: string | null;
                 "dapr-caller-app-id"?: string | null;
             };
             path: {
@@ -2743,8 +2689,6 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                "dapr-api-token"?: string | null;
-                "x-lance-service-identity"?: string | null;
                 "dapr-caller-app-id"?: string | null;
             };
             path: {
@@ -2781,8 +2725,6 @@ export interface operations {
                 limit?: number;
             };
             header?: {
-                "dapr-api-token"?: string | null;
-                "x-lance-service-identity"?: string | null;
                 "dapr-caller-app-id"?: string | null;
             };
             path?: never;

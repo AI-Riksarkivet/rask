@@ -1843,38 +1843,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -1939,38 +1907,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -2024,38 +1960,6 @@
         "description": "Ingest one OpenLineage event \u2014 a ``RunEvent``, or a ``DatasetEvent`` for a change no job performed.\n\nPARSED HERE RATHER THAN BY THE SIGNATURE, so this door and the bus door share ONE discriminator\n(`models.parse_event`). Declaring the body as `RunEvent` is what made a static event 422 before\nany handler ran: [[LIN-004]] moved catalog DDL onto `DatasetEvent` and taught only the bus. The\ncatalog's HTTP emitter is best-effort, so every create it sent lost its provenance in silence \u2014\nmeasured 2026-09-24, three creates, `{\"events\":[]}` in the durable feed, and a governance\nassertion reading `expected lineage creator=..., got None`.\n\nA body that is neither shape raises `RequestValidationError`, which `install_problem_handlers`\nrenders exactly as FastAPI's own 422 \u2014 the wire answer for a malformed payload is unchanged.\n\nThis is the OpenLineage HTTP-transport default path, so any OpenLineage producer\n(our emitter, Airflow, Spark, dbt, \u2026) configured with ``OPENLINEAGE_URL`` pointed\nhere ingests with no glue \u2014 the lightweight-Marquez contract.\n\nWhen OIDC is enabled the ``CurrentToken`` dependency requires a verified bearer token\n(401 otherwise), :func:`~lineage.api.fga_deps.enforce_author` binds the run author to that\ntoken's subject (no self-asserted identity), and :func:`~lineage.api.fga_deps.enforce_output_authz`\nrequires ``can_write_data`` on every output dataset (a producer can't record provenance for a table\nit can't write). Both are no-ops when auth is off.",
         "operationId": "ingest_event_api_v1_lineage_post",
         "parameters": [
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
           {
             "in": "header",
             "name": "dapr-caller-app-id",
@@ -2401,38 +2305,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -2505,38 +2377,6 @@
               "minimum": 1,
               "title": "Depth",
               "type": "integer"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -2632,38 +2472,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -2755,38 +2563,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -2851,38 +2627,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -2943,38 +2687,6 @@
             "schema": {
               "title": "Name",
               "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -3071,38 +2783,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -3163,38 +2843,6 @@
             "schema": {
               "title": "Name",
               "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -3281,38 +2929,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -3385,38 +3001,6 @@
               "minimum": 1,
               "title": "Limit",
               "type": "integer"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -3497,38 +3081,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -3589,38 +3141,6 @@
             "schema": {
               "title": "Name",
               "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -3705,38 +3225,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -3810,38 +3298,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -3909,38 +3365,6 @@
             "schema": {
               "title": "Tag",
               "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -4027,38 +3451,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -4112,38 +3504,6 @@
         "description": "The medallion datasets as they currently exist on S3 \u2014 schema per Lance version + rows.\n\nGOVERNED (audit: this endpoint reads real medallion schemas/row-counts + gold's lineage JSONB from S3\nwith the SERVICE root credentials, so it must not disclose a dataset the caller cannot see). Every\nother lineage read gates on ``can_get_metadata``; this does the same via the shared batch filter \u2014\nONE ``batch_check`` over the layout, not a per-dataset round-trip loop (F-LIN-13). The ladder is\nunchanged: 401 unauthenticated / 503 FGA unwired propagate; a denied dataset is dropped, not fatal.\nFGA off \u2192 pass-through (the dev demo).",
         "operationId": "demo_datasets_demo_datasets_get",
         "parameters": [
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
           {
             "in": "header",
             "name": "dapr-caller-app-id",
@@ -4236,38 +3596,6 @@
               "default": false,
               "title": "Summary",
               "type": "boolean"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -4366,38 +3694,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -4465,38 +3761,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -4550,38 +3814,6 @@
         "description": "The jobs (compute identities) that have run \u2014 governed by the datasets each wrote.\n\nA job is shown only if the caller can see every dataset it wrote (a read-only / output-less job is\nhidden when auth is on, mirroring how ``/events`` drops a dataset-less row). Auth off \u2192 pass-through.",
         "operationId": "list_jobs_jobs_get",
         "parameters": [
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
           {
             "in": "header",
             "name": "dapr-caller-app-id",
@@ -4658,38 +3890,6 @@
         "description": "The namespaces containing at least one dataset the caller may see (for a namespace-tree browse).\n\nDerived from the governed dataset set, so a namespace the caller can see no dataset in never appears.",
         "operationId": "list_namespaces_namespaces_get",
         "parameters": [
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
           {
             "in": "header",
             "name": "dapr-caller-app-id",
@@ -4780,38 +3980,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -4876,38 +4044,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -4968,38 +4104,6 @@
             "schema": {
               "title": "Run Id",
               "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -5078,38 +4182,6 @@
               "minimum": 1,
               "title": "Limit",
               "type": "integer"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {

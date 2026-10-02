@@ -1198,24 +1198,25 @@ values.yaml `auth.serviceAccountIssuer`. Call: include "lance.identityTokens" (l
 {{- end -}}
 
 {{/* A verifier door's map of caller service account (full username) -> subject, as JSON. Every key is an
-SA security-sa.yaml renders for a pod that projects this door's audience.
+SA security-sa.yaml renders for a pod that projects this door's audience. A blank identity fails the render: the
+account would authenticate as the empty subject, and every account mapped to it as the same one.
 Call: include "lance.saSubjects" (list $root "catalog"|"lineage"|"producer"|"stage"). */}}
 {{- define "lance.saSubjects" -}}
 {{- $root := index . 0 -}}{{- $door := index . 1 -}}{{- $v := $root.Values -}}
 {{- $sa := printf "system:serviceaccount:%s:%s-sa-" $root.Release.Namespace (include "lance.fullname" $root) -}}
 {{- $m := dict -}}
 {{- if and $v.medallion.enabled (eq $door "catalog" "lineage" "stage") -}}
-{{- $_ := set $m (printf "%smedallion-producer" $sa) $v.medallion.producer.serviceIdentity -}}
+{{- $_ := set $m (printf "%smedallion-producer" $sa) (required "medallion.producer.serviceIdentity is blank" $v.medallion.producer.serviceIdentity) -}}
 {{- end -}}
 {{- if and $v.medallion.enabled (eq $door "catalog" "lineage") -}}
-{{- range $v.medallion.stageRunners }}{{- $_ := set $m (printf "%s%s" $sa .name) .serviceIdentity }}{{- end -}}
+{{- range $v.medallion.stageRunners }}{{- $_ := set $m (printf "%s%s" $sa .name) (required (printf "medallion.stageRunners[%s].serviceIdentity is blank" .name) .serviceIdentity) }}{{- end -}}
 {{- end -}}
 {{- if and $v.maintenance.enabled (eq $door "catalog") -}}
-{{- $_ := set $m (printf "%smaintenance" $sa) $v.maintenance.catalogServiceIdentity -}}
+{{- $_ := set $m (printf "%smaintenance" $sa) (required "maintenance.catalogServiceIdentity is blank" $v.maintenance.catalogServiceIdentity) -}}
 {{- end -}}
 {{- if eq $door "lineage" -}}
-{{- if and $v.ray.enabled (or $v.ray.cluster.enabled $v.singleTenant.enabled) }}{{- $_ := set $m (printf "%sray" $sa) $v.medallion.train.trainerIdentity }}{{- end -}}
-{{- if $v.frontend.enabled }}{{- $_ := set $m (printf "%sweb" $sa) $v.frontend.serviceIdentity }}{{- end -}}
+{{- if and $v.ray.enabled (or $v.ray.cluster.enabled $v.singleTenant.enabled) }}{{- $_ := set $m (printf "%sray" $sa) (required "medallion.train.trainerIdentity is blank" $v.medallion.train.trainerIdentity) }}{{- end -}}
+{{- if $v.frontend.enabled }}{{- $_ := set $m (printf "%sweb" $sa) (required "frontend.serviceIdentity is blank" $v.frontend.serviceIdentity) }}{{- end -}}
 {{- end -}}
 {{- range $name, $svc := $v.services -}}
 {{- if and (not (has $name (list "catalog" "lineage"))) (or $svc.frontDoor $v.singleTenant.enabled) -}}

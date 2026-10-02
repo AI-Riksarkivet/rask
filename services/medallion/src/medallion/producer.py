@@ -22,6 +22,7 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 
+import httpx
 from dapr.aio.clients import DaprClient
 from fastapi import FastAPI
 from fastapi.concurrency import run_in_threadpool
@@ -139,6 +140,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             # turns an ordering blip into a CrashLoopBackOff. A hold that cannot be scheduled RETRYs
             # at the subscription, where it is visible.
             log.warning("dapr workflow runtime unavailable — held promotions cannot be reviewed", exc_info=True)
+    # The operator doors' forward to the stage runner that hosts a run (`stage_runner_ops._forward`): one
+    # pooled client for the app, bounded so a stage runner that hangs answers 502 rather than holding the door.
+    app.state.http = httpx.AsyncClient(timeout=httpx.Timeout(10.0))
     app.state.startup_complete = True
     try:
         # ARMED AT SIGTERM, not at lifespan shutdown. The flag below flips in the `finally`,
@@ -156,6 +160,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 app.state.workflow_runtime.shutdown()
         with suppress(Exception):
             await app.state.dapr.close()
+        with suppress(Exception):
+            await app.state.http.aclose()
         fga_client = getattr(app.state, "fga", None)
         if fga_client is not None:
             with suppress(Exception):

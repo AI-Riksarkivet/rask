@@ -11,8 +11,13 @@ data lands and the graph never hears of it (measured twice before D1: the traine
 from __future__ import annotations
 
 import json
+import subprocess
+from pathlib import Path
 
-from tests.unit.chart_render import REPO, env_of, render
+import pytest
+import yaml
+
+from tests.unit.chart_render import REPO, env_of, render, render_text
 
 
 #: The overlay `make k3s-up` deploys, which also renders the Ray head the default leaves out.
@@ -70,3 +75,30 @@ def test_each_door_maps_exactly_the_service_accounts_that_project_its_audience()
                 problems[f"{door} <- {account}"] = f"admitted as {subject!r}, declares {sorted(declared)}"
 
     assert not problems, f"a door's subject map disagrees with the pods that call it: {problems}"
+
+
+@pytest.mark.parametrize(
+    "identity",
+    [
+        "medallion.producer.serviceIdentity",
+        "medallion.stageRunners[bronze-to-silver].serviceIdentity",
+        "maintenance.catalogServiceIdentity",
+        "medallion.train.trainerIdentity",
+        "frontend.serviceIdentity",
+    ],
+)
+def test_an_identity_that_names_no_subject_fails_the_render(identity: str, tmp_path: Path) -> None:
+    """Mapped to a blank subject, an account authenticates as the empty principal, and so does every other one mapped there."""
+    if identity.startswith("medallion.stageRunners"):
+        runners = yaml.safe_load((REPO / "chart/values.yaml").read_text())["medallion"]["stageRunners"]
+        blanked = [{**runner, "serviceIdentity": ""} if runner["name"] == "bronze-to-silver" else runner for runner in runners]
+        overlay = tmp_path / "blank.yaml"
+        overlay.write_text(yaml.safe_dump({"medallion": {"stageRunners": blanked}}))
+        extra: tuple[str, ...] = ("-f", str(overlay))
+    else:
+        extra = ("--set", f"{identity}=")
+
+    with pytest.raises(subprocess.CalledProcessError) as refused:
+        render_text(*DEPLOYED, *extra)
+
+    assert f"{identity} is blank" in refused.value.stderr, refused.value.stderr

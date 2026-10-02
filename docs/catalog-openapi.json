@@ -6431,7 +6431,7 @@
           },
           "complete": {
             "default": false,
-            "description": "True only when no surface failed, `verify` among them. It can be True beside `dangling:` surfaces, which hold no subject data but stay listed and fail to read. A caller reporting completion to a data subject reads this, never the status code.",
+            "description": "True only when no surface failed or was skipped, `verify` among them. It can be True beside `dangling:` surfaces, which hold no subject data but stay listed and fail to read. A caller reporting completion to a data subject reads this, never the status code.",
             "title": "Complete",
             "type": "boolean"
           },
@@ -6457,7 +6457,7 @@
             "type": "string"
           },
           "residual_versions": {
-            "description": "Retained versions of any ref that still answer the predicate or could not be read, as `<ref>@<version>` with `main` for main. Non-empty means the erasure is incomplete however cleanly each step reported.",
+            "description": "Retained versions of any ref that still answer the predicate, still hold its rows behind a deletion vector, or could not be read, as `<ref>@<version>` with `main` for main. Non-empty means the erasure is incomplete however cleanly each step reported.",
             "items": {
               "type": "string"
             },
@@ -11012,7 +11012,7 @@
             "type": "string"
           },
           "outcome": {
-            "description": "What the estate did there: `deleted`, `untagged`, `retained`, `rewritten`, `reclaimed`, `clean`, `failed`, or `dangling` \u2014 a listed version that fails to read and is proved not to hold the subject; it stays listed until what its detail names lets go.",
+            "description": "What the estate did there: `deleted`, `untagged`, `retained`, `rewritten`, `reclaimed`, `clean`, `failed`, `skipped` \u2014 not attempted because an earlier step on that ref did not go through, so it would destroy history while the subject stays \u2014 or `dangling` \u2014 a listed version that fails to read and is proved not to hold the subject; it stays listed until what its detail names lets go.",
             "title": "Outcome",
             "type": "string"
           },
@@ -12702,38 +12702,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -12826,38 +12794,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -12936,38 +12872,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -13064,38 +12968,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -13184,38 +13056,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -13312,38 +13152,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -13422,38 +13230,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -13540,38 +13316,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -13650,38 +13394,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -13778,38 +13490,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -13888,38 +13568,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -14016,38 +13664,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -14130,38 +13746,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -14240,38 +13824,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -14368,38 +13920,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -14476,38 +13996,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -14600,38 +14088,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -14738,38 +14194,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -14868,38 +14292,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -14982,38 +14374,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -15092,38 +14452,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -15220,38 +14548,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -15334,38 +14630,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -15444,38 +14708,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -15572,38 +14804,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -15696,38 +14896,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -15806,38 +14974,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -15924,38 +15060,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -16034,38 +15138,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -16231,38 +15303,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -16342,38 +15382,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -16483,38 +15491,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -16661,38 +15637,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -16819,38 +15763,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -16969,38 +15881,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -17051,7 +15931,7 @@
     },
     "/management/v1/table/{id}/erasure": {
       "post": {
-        "description": "Remove every row matching the predicate from every ref, then reclaim what no longer pins it.\n\nOwner-gated (``can_drop``) \u2014 it destroys history, which is a stronger claim than the drop rung\nguards, and there is no rung above it.\n\n**THE RESPONSE IS THE POINT, and a 200 is not the answer.** `complete` is False whenever a retained\nversion of any ref still answers the predicate after every step ran \u2014 which happens when a retained\nbranch version still stands on the files of the version it was cut from ([[LH-178]]). The residual\nis named per ref (`main@2`, `work@3`) with what keeps it: `pinned_by` the tags, and a branch only\nwhen its head stands on the residual's files, in an order Lance accepts; `held_by_retention` what\nthe `retain_days` window keeps. A caller reporting completion to a data subject reads `complete`; a\ncaller reading the status code reports the wrong thing.\n\n`complete` can be True beside `dangling:<ref>@<n>` surfaces. Each is a version that stays listed and\nfails to read, because a branch standing on some of its files kept its manifest when the rest were\nreclaimed; no fragment of it that still reads holds the subject. It stays listed, and time travel to\nit fails, until what its detail names lets go: that branch deleted or its head rewritten.\n\n`complete` is evidence about every retained version of every ref, and about nothing else: a data\nfile no version references that is younger than 7 days, an aborted write's residue, is neither\nreclaimed nor probed, because Lance keeps it as possibly an in-flight write's\n(`lance_docs/lance_sdk.md` cleanup_old_versions `delete_unverified`).\n\nA table a shallow clone resolves its files through is neither rewritten nor reclaimed, because the\nclone would break: its `compact:` and `history:` surfaces fail and `complete` is False.\n\n``branch`` is accepted and IGNORED rather than refused, and the description says so on the wire.\nRefusing would suggest a per-ref erasure exists; honouring it would let a caller believe they had\nerased a subject when they had narrowed the operation to one ref.",
+        "description": "Remove every row matching the predicate from every ref, then reclaim what no longer pins it.\n\nOwner-gated (``can_drop``) \u2014 it destroys history, which is a stronger claim than the drop rung\nguards, and there is no rung above it.\n\n**THE RESPONSE IS THE POINT, and a 200 is not the answer.** `complete` is False whenever a retained\nversion of any ref still answers the predicate after every step ran \u2014 which happens when a retained\nbranch version still stands on the files of the version it was cut from ([[LH-178]]). The residual\nis named per ref (`main@2`, `work@3`) with what keeps it: `pinned_by` the tags, and a branch only\nwhen its head stands on the residual's files, in an order Lance accepts; `held_by_retention` what\nthe `retain_days` window keeps. A caller reporting completion to a data subject reads `complete`; a\ncaller reading the status code reports the wrong thing. The one status that does answer is the refusal\nbefore anything is touched: 400 for a predicate Lance refuses, 503 when the store cannot plan it.\n\n`complete` can be True beside `dangling:<ref>@<n>` surfaces. Each is a version that stays listed and\nfails to read, because a branch standing on some of its files kept its manifest when the rest were\nreclaimed; no fragment of it that still reads holds the subject. It stays listed, and time travel to\nit fails, until what its detail names lets go: that branch deleted or its head rewritten.\n\n`complete` is evidence about every retained version of every ref, and about nothing else: a data\nfile no version references that is younger than 7 days, an aborted write's residue, is neither\nreclaimed nor probed, because Lance keeps it as possibly an in-flight write's\n(`lance_docs/lance_sdk.md` cleanup_old_versions `delete_unverified`).\n\nA table a shallow clone resolves its files through is neither rewritten nor reclaimed, because the\nclone would break: its `compact:` and `history:` surfaces fail and `complete` is False.\n\n``branch`` is accepted and IGNORED rather than refused, and the description says so on the wire.\nRefusing would suggest a per-ref erasure exists; honouring it would let a caller believe they had\nerased a subject when they had narrowed the operation to one ref.",
         "operationId": "erase_subject_management_v1_table__id__erasure_post",
         "parameters": [
           {
@@ -17113,38 +15993,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -17249,38 +16097,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -17399,38 +16215,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -17579,38 +16363,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -17733,38 +16485,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -17913,38 +16633,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -18037,38 +16725,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -18151,38 +16807,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -18261,38 +16885,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -18389,38 +16981,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -18497,38 +17057,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -18621,38 +17149,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -18765,38 +17261,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -18899,38 +17363,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -19029,38 +17461,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -19143,38 +17543,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -19253,38 +17621,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -19393,38 +17729,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -19504,38 +17808,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -19623,38 +17895,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -19734,38 +17974,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -19853,38 +18061,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -19954,38 +18130,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -20069,38 +18213,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -20276,38 +18388,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -20375,38 +18455,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -20507,38 +18555,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -20617,38 +18633,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -20745,38 +18729,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -20863,38 +18815,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -21002,38 +18922,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -21112,38 +19000,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -21242,38 +19098,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -21386,38 +19210,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -21513,38 +19305,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -21664,38 +19424,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -21807,38 +19535,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -21967,38 +19663,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -22123,38 +19787,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -22224,38 +19856,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -22338,38 +19938,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -22460,38 +20028,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -22578,38 +20114,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -22706,38 +20210,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -22826,38 +20298,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -22954,38 +20394,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -23069,38 +20477,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -23172,38 +20548,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -23300,38 +20644,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -23410,38 +20722,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -23538,38 +20818,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -23646,38 +20894,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -23763,38 +20979,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -23892,38 +21076,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -24003,38 +21155,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -24122,38 +21242,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -24221,38 +21309,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -24337,38 +21393,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -24497,38 +21521,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -24598,38 +21590,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -24713,38 +21673,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -24853,38 +21781,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -25013,38 +21909,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -25153,38 +22017,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -25271,38 +22103,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -25399,38 +22199,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -25519,38 +22287,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -25681,38 +22417,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -25791,38 +22495,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -25918,38 +22590,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -26134,38 +22774,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -26288,38 +22896,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -26448,38 +23024,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -26600,38 +23144,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -26763,38 +23275,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -26938,38 +23418,6 @@
                 }
               ],
               "title": "Idempotency-Key"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -27203,38 +23651,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -27369,38 +23785,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -27515,38 +23899,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -27655,38 +24007,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -27775,38 +24095,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -27953,38 +24241,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -28127,38 +24383,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -28297,38 +24521,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -28478,38 +24670,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -28802,38 +24962,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -28940,38 +25068,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -29100,38 +25196,6 @@
                 }
               ],
               "title": "Idempotency-Key"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -29279,38 +25343,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -29454,38 +25486,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -29606,38 +25606,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -29768,38 +25736,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -29899,38 +25835,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -30019,38 +25923,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -30147,38 +26019,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -30255,38 +26095,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -30369,38 +26177,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -30493,38 +26269,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -30633,38 +26377,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -30793,38 +26505,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -30933,38 +26613,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -31053,38 +26701,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -31193,38 +26809,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -31396,38 +26980,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -31506,38 +27058,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -31634,38 +27154,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -31756,38 +27244,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -31848,38 +27304,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -31951,38 +27375,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -32070,38 +27462,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -32162,38 +27522,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -32265,38 +27593,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -32384,38 +27680,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -32476,38 +27740,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -32579,38 +27811,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -32702,38 +27902,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -32794,38 +27962,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -32897,38 +28033,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -33016,38 +28120,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -33119,38 +28191,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -33234,38 +28274,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -33382,38 +28390,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -33490,38 +28466,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -33608,38 +28552,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -33718,38 +28630,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -33836,38 +28716,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -33944,38 +28792,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
@@ -34081,38 +28897,6 @@
           },
           {
             "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -34191,38 +28975,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
             }
           },
           {
