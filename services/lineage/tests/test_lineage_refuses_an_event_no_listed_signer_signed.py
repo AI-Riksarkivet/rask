@@ -84,7 +84,7 @@ def door(monkeypatch: pytest.MonkeyPatch) -> tuple[TestClient, _Feed]:
     ("case", "status", "recorded"),
     [
         pytest.param("unsigned", "SUCCESS", False, id="an-unsigned-event"),
-        pytest.param("forged", "SUCCESS", False, id="a-signature-no-published-key-verifies"),
+        pytest.param("tampered", "SUCCESS", False, id="an-event-changed-after-its-signer-signed-it"),
         pytest.param("store-down", "RETRY", False, id="a-public-key-source-lineage-cannot-read"),
         pytest.param("signed", "SUCCESS", True, id="a-signature-the-published-key-verifies"),
     ],
@@ -93,10 +93,12 @@ def test_lineage_records_a_bus_event_only_when_a_listed_signer_signed_it(
     door: tuple[TestClient, _Feed], event_signer: Any, respx_allows_unused_routes: None, case: str, status: str, recorded: bool
 ) -> None:
     client, feed = door
-    signer, impostor = event_signer(SIGNER), event_signer(SIGNER)
+    signer = event_signer(SIGNER)
     published = respx.get(f"{SECRETS}/signing-public-{SIGNER}")
     published.mock(return_value=httpx.Response(500) if case == "store-down" else httpx.Response(200, json={"keys": signer.public}))
-    event = {"unsigned": _event(), "forged": impostor.sign(_event())}.get(case) or signer.sign(_event())
+    event = _event() if case == "unsigned" else signer.sign(_event())
+    if case == "tampered":
+        event["outputs"] = [{"namespace": "gold", "name": "acme-gold$events"}]
 
     answered = client.post("/lineage-events", json={"data": event}, headers={"dapr-api-token": "the-estate-app-token"})
 
