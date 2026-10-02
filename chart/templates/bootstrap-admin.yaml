@@ -144,9 +144,9 @@ spec:
               # Delivery is re-authorized per recipient at fan-out (can_be_notified) and again at read
               # (can_get_metadata), so this widens what the SERVICE observes, never what a PERSON gets.
               #
-              # A RENDER-TIME LITERAL from the one values path services.yaml uses to build
-              # LINEAGE_SERVICE_SUBJECTS, so the subject lineage admits cannot drift from the one
-              # granted here.
+              # A RENDER-TIME LITERAL from the one values path `lance.saSubjects` uses to map the
+              # callers' ServiceAccounts at lineage's door, so the subject lineage admits cannot
+              # drift from the one granted here.
               #
               # Each grant is checked before it is written, so re-running this hook on every upgrade
               # stays a no-op — and one already-granted subject never short-circuits another that is

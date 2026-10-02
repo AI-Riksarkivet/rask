@@ -182,73 +182,6 @@
                     secretKeyRef:
                       name: {{ include "lance.fullname" . }}-infra-credentials
                       key: ray-compute-secret-key
-                - name: LINEAGE_SERVICE_TOKEN
-                  valueFrom:
-                    secretKeyRef:
-{{- if .Values.auth.dedicatedServiceCredentials }}
-                      {{- /* THE TRAINER'S OWN CREDENTIAL, because that is what the door demands. The
-                           same flag renders `LINEAGE_PRIVILEGED_SUBJECTS` with `trainerIdentity` on it
-                           (`services.yaml`), and `dapr_auth.service_principal` refuses a privileged
-                           subject that presents the SHARED token — deliberately, since one token
-                           across an allowlist lets any holder claim the most privileged name on it.
-                           The head runs no daprd, so it cannot read `service-token-<identity>` out of
-                           the secret store the way every first-party service does; it mounts it off
-                           infra-credentials, the same route `ray-compute-*` above takes.
-
-                           Handed the shared token instead, the train job logged `lineage emit attempt
-                           1 rejected: HTTP 401` on every event and published its model anyway, so a
-                           governed training run lost ALL of its provenance with nothing red (measured
-                           2026-09-06). NOT optional here: with the flag on, a head that cannot mount
-                           this can only emit refusals, and that belongs at schedule time. */}}
-                      name: {{ include "lance.fullname" . }}-infra-credentials
-                      key: service-token-{{ .Values.medallion.train.trainerIdentity }}
-{{- else }}
-                      name: {{ .Release.Name }}-dapr-app-token
-                      key: token
-                      {{- /* optional: the token Secret renders only with dapr.sidecars, and the jobs
-                           read this with .get() — absent token = header omitted = the open (auth-off)
-                           ingest, which is that profile's correct behaviour. S3_SECRET above is NOT
-                           optional: a job hard-requires it, and a pod that cannot mount it should
-                           fail at schedule time, not at job time. */}}
-                      optional: true
-{{- end }}
-{{- if .Values.auth.dedicatedServiceCredentials }}
-                {{- /* ONE POD, SEVERAL IDENTITIES. This head runs `ray_train_job.py` (claiming
-                     `trainerIdentity`) AND every stage lane's job, which authenticates as its
-                     submitting stage runner's own `fga_service_identity` — so the single
-                     `LINEAGE_SERVICE_TOKEN` above can be right for exactly one of them, and the door
-                     refuses a privileged subject presenting another's key with no fallback.
-
-                     NOT FIRING, AND NOT FOR THE REASON A READER WOULD GUESS. `stage_lineage_url` IS
-                     wired: measured 2026-09-18, all three stage runners carry
-                     `MEDALLION_STAGE_LINEAGE_URL=http://rask-lineage:8000`. The stage lanes still emit
-                     nothing from the JOB because `scripts/ray_stage_job.py` never reads `LINEAGE_URL`
-                     at all — it writes the `lineage` COLUMN from `RASK_LINEAGE_DOCUMENT`, and
-                     `scripts/ray_train_job.py:202` is the only reader. So wiring the URL does not arm
-                     this mismatch; teaching the stage job to POST would, and that is the change that
-                     must carry the per-lane token with it.
-                     What the door does with a mismatch was measured directly, one POST replayed twice
-                     from inside the head: `service-trainer` -> 201, a second subject -> 401 "the
-                     presented credential may not claim '<subject>'", while the job writes its data and
-                     exits SUCCEEDED. So the credentials land before the lane is wired, not after it
-                     silently loses its provenance.
-
-                     The job-side emitters pick `RASK_LINEAGE_TOKEN_<IDENTITY>` for the identity they
-                     claim. Only the identity rides the job's `runtime_env`; a token there is the P0
-                     leak `ray_submit` records, because Ray echoes runtime_env back on the job. */}}
-                - name: RASK_LINEAGE_TOKEN_{{ .Values.medallion.train.trainerIdentity | upper | replace "-" "_" }}
-                  valueFrom:
-                    secretKeyRef:
-                      name: {{ include "lance.fullname" . }}-infra-credentials
-                      key: service-token-{{ .Values.medallion.train.trainerIdentity }}
-                {{- range .Values.medallion.stageRunners }}
-                - name: RASK_LINEAGE_TOKEN_{{ .serviceIdentity | upper | replace "-" "_" }}
-                  valueFrom:
-                    secretKeyRef:
-                      name: {{ include "lance.fullname" $ }}-infra-credentials
-                      key: service-token-{{ .serviceIdentity }}
-                {{- end }}
-{{- end }}
                 {{- /* PRE-STAGED for P7b, and inert today — stated plainly so nobody reads it as wiring
                      that already works. This image is built solely from runners/htr's own lock
                      (.docker/ray-cluster.dockerfile), and lineage-kit is deliberately NOT a dependency
@@ -256,9 +189,8 @@
                      rendered now so the transport is present the day the actor seam lands, rather than
                      that day beginning with a silent NoopEmitter; wiring the emission itself is P7b's
                      job. Workers inherit the raylet's environment, and workerGroupSpecs is empty today.
-                     NOTE: a P7b image that ships lineage-kit will ALSO need the service door
-                     (LINEAGE_SERVICE_TOKEN + LINEAGE_SERVICE_ID) under auth.enabled — ray_submit.py
-                     already threads both into the train job's runtime_env; follow that shape. */}}
+                     The head authenticates to lineage as `-sa-ray` through its projected `rask-lineage`
+                     token below, which lineage maps to `trainerIdentity` alone ([[LH-220]]). */}}
                 {{- include "lance.lineageEmitEnv" (list .) | nindent 16 }}
               ports:
                 - {containerPort: 6379, name: gcs}
@@ -300,12 +232,14 @@
                 - {name: RAY_gcs_storage_path, value: /var/lib/ray-gcs}
               {{- end }}
               volumeMounts:
+                {{- include "lance.identityTokens" (list "mounts" "rask-lineage") | nindent 16 }}
                 - {name: dshm, mountPath: /dev/shm}
                 - {name: hf-cache, mountPath: /cache/hf}
                 {{- if .Values.ray.cluster.gcsFaultTolerance.enabled }}
                 - {name: gcs-store, mountPath: /var/lib/ray-gcs}
                 {{- end }}
           volumes:
+            {{- include "lance.identityTokens" (list "volumes" "rask-lineage") | nindent 12 }}
             - name: dshm
               emptyDir:
                 medium: Memory

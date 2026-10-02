@@ -55,7 +55,9 @@ roleRef:
   kind: ClusterRole
   name: system:service-account-issuer-discovery
 subjects:
-  {{- range (list "catalog" "lineage") }}
+  {{- $verifiers := list "catalog" "lineage" "medallion-producer" }}
+  {{- range .Values.medallion.stageRunners }}{{- $verifiers = append $verifiers .name }}{{- end }}
+  {{- range $verifiers }}
   - kind: ServiceAccount
     name: {{ include "lance.fullname" $ }}-sa-{{ . }}
     namespace: {{ $.Release.Namespace }}

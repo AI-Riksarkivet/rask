@@ -272,44 +272,13 @@ spec:
             {{- if .Values.auth.enabled }}
             {{- include "lance.governedOidcEnv" . | nindent 12 }}
             {{- include "lance.governedFgaEnv" . | nindent 12 }}
-            {{- /* THE CATALOG'S SERVICE DOOR, which had no chart wiring at all — the same shape
-                   LINEAGE_SERVICE_SUBJECTS has below, and absent here for no stated reason. The
-                   catalog reads `LANCE_SERVICE_SUBJECTS` (catalog/core/config.py) and every caller
-                   that authenticates as a SERVICE is refused until its subject is listed.
-
-                   Without it a governed estate is broken in a way that reads as a data fault: the
-                   catalog verifies OIDC JWTs, a service has no JWT, so every register 401s and the
-                   medallion's `RegisterError -> _RETRY` redelivers forever. Measured on the live
-                   cluster: the allowlist held `service-ingest` and nothing had put it there.
-
-                   DERIVED from the same `medallion.stageRunners[]` declarations the FGA seeds use, so a
-                   new stage runner cannot be added with an identity the door never learned. */}}
-            {{- $catalogSubjects := list .Values.medallion.train.trainerIdentity .Values.medallion.producer.serviceIdentity }}
-            {{- range .Values.medallion.stageRunners }}
-              {{- $catalogSubjects = append $catalogSubjects .serviceIdentity }}
-            {{- end }}
-            {{- /* The maintenance plane is NOT under `.Values.services` — it has its own top-level
-                   block — so the loop below cannot see it, and its identity has to be added here or
-                   the allowlist check refuses every vend with 403 BEFORE any FGA decision is made.
-                   Measured in-cluster 2026-09-03: with the FGA grant correctly in place and
-                   `can_write_data` returning allowed, the door still answered 403 and the service
-                   fell back to the root key, saying so per dataset. Gated on the same flag as the
-                   env it pairs with, so an estate not vending admits no subject it does not use. */}}
-            {{- if and .Values.maintenance.enabled .Values.maintenance.vendWriteCredentials }}
-              {{- $catalogSubjects = append $catalogSubjects .Values.maintenance.catalogServiceIdentity }}
-            {{- end }}
-            {{- range $svcName, $svc := .Values.services }}
-              {{- with (get ($svc.env | default dict) "RASK_CATALOG_SERVICE_IDENTITY") }}
-                {{- $catalogSubjects = append $catalogSubjects . }}
-              {{- end }}
-            {{- end }}
-            - { name: LANCE_SERVICE_SUBJECTS, value: {{ compact $catalogSubjects | uniq | sortAlpha | join "," | quote }} }
+            {{- include "lance.saVerifier" (list $root "env" "catalog") | nindent 12 }}
             {{- /* The cascade's WRITERS, granted `writer` + `publisher` + `validator` on every warehouse
                    this catalog creates — never `owner` (owner ruling 2026-09-10, zero trust). The RUNGS
                    live in `catalog/api/fga_deps.py::_CASCADE_RUNGS`; this list is only WHO.
                    Admission and authorization are different questions and this is deliberately NOT
-                   $catalogSubjects: that list exists so a service may SPEAK to the catalog and includes
-                   read-only identities like the web BFF, which must never hold a write rung on a
+                   RASK_SA_SUBJECTS: that map says who may SPEAK to the catalog and includes identities
+                   such as ingest's and maintenance's, which must never hold a cascade rung on a
                    tenant's data. Only the identities that actually move data between tiers appear here —
                    the producer (which resumes a human-approved promotion, so it publishes too) and the
                    stage runners.
@@ -352,50 +321,6 @@ spec:
               {{- $maintainers = append $maintainers (printf "user:%s" $root.Values.maintenance.catalogServiceIdentity) }}
             {{- end }}
             - { name: LANCE_FGA_MAINTAINERS, value: {{ toJson (compact $maintainers) | quote }} }
-            {{- /* DEDICATED CREDENTIALS for the identities that hold a rung above read.
-                   `dapr_auth.py` binds a PRIVILEGED subject to its own `service-token-<identity>`;
-                   everyone else authenticates with the estate's SHARED APP_API_TOKEN. That control was
-                   written and tested, and rendered NOWHERE — `grep -rn PRIVILEGED chart/` matched one
-                   comment — so any holder of the shared token could claim any name on
-                   LANCE_SERVICE_SUBJECTS. Reading one web pod's environment was the whole attack.
-
-                   WHAT THAT BOUGHT AN ATTACKER SHRANK on 2026-09-10 but did not vanish: those names
-                   held `owner` on every warehouse (can_drop, can_deregister, can_restore,
-                   manage_grants across every tenant) and now hold `writer` + `publisher` + `validator`,
-                   so the prize is corrupting and blessing a tenant's data rather than destroying it.
-                   Still the estate's widest claimable identity, which is why this control is on by
-                   default rather than something to turn on later.
-
-                   The same set as the cascade writers plus the trainer — deliberately NOT
-                   $catalogSubjects, which includes read-only identities like the web BFF that need no
-                   dedicated credential. openbao.yaml seeds one token per name from this same
-                   derivation; in prod an operator seeds them, and an unseeded one is a fail-closed
-                   refusal rather than a silent downgrade to the shared token. */}}
-            {{- $privileged := append (compact $cascadeWriters | uniq) .Values.medallion.train.trainerIdentity }}
-            {{- $privileged = append $privileged .Values.maintenance.catalogServiceIdentity }}
-            {{- /* Ingest, DERIVED from its own `RASK_CATALOG_SERVICE_IDENTITY` rather than written out,
-                   for the reason the allowlist above already records: a name that must agree with a
-                   service's own declaration and is typed here instead WILL drift. */}}
-            {{- with (get ((.Values.services.ingest).env | default dict) "RASK_CATALOG_SERVICE_IDENTITY") }}
-              {{- $privileged = append $privileged . }}
-            {{- end }}
-            {{- /* EVERY NAME HERE MUST ALREADY PRESENT ITS OWN CREDENTIAL. The server-side expectation is
-                   half the control: this makes the catalog demand `service-token-<identity>` from a
-                   privileged subject, and a subject still sending the shared APP_API_TOKEN is refused
-                   outright — measured 2026-08-26, when rendering this alone 401'd every catalog call and
-                   stopped the cascade (`POST /v1/table/acme-silver$features/describe -> 401`, repeating).
-                   The client half exists for each name on this list: the cascade writers and the trainer
-                   through `medallion.core.config.dedicated_token_for`, maintenance through
-                   `maintenance.services.catalog_identity.dedicated_token_for`, and ingest through
-                   `ingest.service_identity.dedicated_token_for`. ADDING A NAME WITHOUT ITS CLIENT HALF IS
-                   AN OUTAGE, and there is no safe ordering — the two land together, and the token must be
-                   SEEDED in the same change or the resolver answers None and the shared bearer is refused
-                   for being privileged. `notifications` is absent for exactly that reason: it reads no
-                   dedicated token yet. Pinned by
-                   `tests/unit/test_a_privileged_subject_can_present_its_own_credential.py`. */}}
-            {{- if .Values.auth.dedicatedServiceCredentials }}
-            - { name: LANCE_PRIVILEGED_SUBJECTS, value: {{ compact $privileged | uniq | sortAlpha | join "," | quote }} }
-            {{- end }}
             {{- with include "lance.governedFgaPins" . }}{{- . | nindent 12 }}{{- end }}
             {{- /*
                #41 compliance audit trail (who/what/outcome for authn/authz/vending) — configurable.
@@ -427,8 +352,10 @@ spec:
           resources: {{- include "lance.resources" (dict "root" . "comp" "catalog") | nindent 12 }}
           volumeMounts:
             {{- include "lance.tmpMount" . | nindent 12 }}
+            {{- include "lance.saVerifier" (list $root "mounts" "catalog") | nindent 12 }}
       volumes:
         {{- include "lance.tmpVolume" . | nindent 8 }}
+        {{- include "lance.saVerifier" (list $root "volumes" "catalog") | nindent 8 }}
 ---
 apiVersion: v1
 kind: Service
@@ -717,149 +644,16 @@ spec:
                  catalog's copy: `| default` makes an explicit false un-settable, and a bare reference
                  renders "" on a `--reuse-values` upgrade, which is a bool_parsing crash at boot. */}}
             - { name: LANCE_AUDIT_ENABLED, value: {{ hasKey .Values.auth "audit" | ternary .Values.auth.audit true | quote }} }
-            {{- /*
-               The SERVICE door on the HTTP ingest (lineage/api/security.py ServicePrincipal): bare FGA
-               subjects that may ingest with the shared app token instead of an OIDC bearer. The Ray TRAIN
-               job is a sidecar-less in-cluster producer (RAY-TRAIN.md D2) — before this, every training
-               RunEvent 401'd under auth and ALL training provenance was lost (live 2026-07-13). Only the
-               trainer is listed: the allowlist is what stops an app-token holder speaking as a human, and
-               its outputs are still FGA-checked as `service-trainer`, so D5's rung still bounds it.
-               The service subjects allowed to speak app-to-app to lineage: the trainer + the P5
-               micro-frontend zones (frontend.serviceIdentity) — the zones read lineage as a SERVICE on the
-               no-login governed path, so their identity MUST be allowlisted or every zone's read fails closed
-               (403). (The retired web pod's identity was here too; frontend.serviceIdentity carries it now.)
-               …and the INGEST plane, which was MISSING and cost it every provenance record on an
-               auth-enabled estate. Its emitter sent no identity, lineage answered 401, and the emitter
-               swallows that by design (a landed commit must not become a failed run) — so the data
-               landed and the graph never heard about it, silently. Exactly the failure recorded above
-               for the trainer in 2026-07, repeated on a second lane two months later.
-               Read from the ingest service's OWN `RASK_LINEAGE_SERVICE_IDENTITY` so the two halves
-               cannot drift: the door's allowlist and the caller's claim come from ONE value.
-            */}}
-            {{- /* DERIVED, not enumerated. This was a hand-written list of three names, and a list that
-                 must be kept in sync with the set of services that emit lineage WILL drift — nothing
-                 connected the two. It drifted twice: the trainer in 2026-07 (recorded above), and
-                 `service-ingest` on 2026-08-06, where every ingest emit 403'd for a day while the
-                 data landed. The emitter swallows a refused emit by design (a landed commit must not
-                 become a failed run), so the symptom is a silent gap in the graph, not an error.
-
-                 A service DECLARES its identity by setting `env.RASK_LINEAGE_SERVICE_IDENTITY`. That
-                 declaration is now the ONLY input: the door's allowlist and the caller's claim are
-                 read from one value, so a new emitter is admitted by declaring itself and cannot be
-                 forgotten into a string. Same principle as `project_namespace` — a convention two
-                 sides must agree on cannot live in one of them.
-
-                 `trainerIdentity` and `frontend.serviceIdentity` are appended explicitly because they
-                 live outside `.Values.services` and have no env block to declare from; folding them
-                 in would mean inventing one. `uniq` because a value may legitimately appear twice;
-                 `compact` because an unset identity must contribute nothing rather than an empty
-                 subject, which would allowlist the empty string. */}}
-            {{- $subjects := list .Values.medallion.train.trainerIdentity .Values.frontend.serviceIdentity }}
-            {{- range $svcName, $svc := .Values.services }}
-              {{- with (get ($svc.env | default dict) "RASK_LINEAGE_SERVICE_IDENTITY") }}
-                {{- $subjects = append $subjects . }}
-              {{- end }}
-            {{- end }}
-            {{- /* notifications carries its identity's CODE DEFAULT here as well, which is the one
-                   exception to declaration-only and is about upgrades rather than about this service.
-                   `env` is a values KEY, so `helm upgrade --reuse-values` — which the repo itself
-                   performs (scripts/verify_produce_door.sh) — renders the OLD chart's values and drops
-                   a key that did not exist then. Every S1-era release is in exactly that state. The
-                   cron Component still renders (it defaults), so the tick would fire while the door
-                   refused it: `IngressSettings.service_identity` defaults to `notifications`, so the
-                   caller claims a subject the allowlist never learned, and `_is_transient` refuses to
-                   retry a 403 — a lane 403ing every 30 s forever, with a Ready pod and a working bus
-                   lane beside it. Defaulting the ALLOWLIST to the same literal the APP defaults to is
-                   what makes the two halves agree with no values at all. */}}
-            {{- if .Values.services.notifications }}
-              {{- $subjects = append $subjects ((get (.Values.services.notifications.env | default dict) "RASK_LINEAGE_SERVICE_IDENTITY") | default "notifications") }}
-            {{- end }}
-            {{- /* THE CASCADE-LAG DETECTOR reads lineage's `/runs` board to learn the highest source
-                   version each tier has CONSUMED — the half of the lag arithmetic the catalog cannot
-                   answer. Measured live 2026-09-04: without this the door refuses it outright with
-                   "service identity not allowed: service-medallion-producer", and the detector then
-                   publishes NO POINT for any edge. That failure is silent by construction — a reader
-                   that cannot read reports `known=False`, which publishes nothing and looks exactly
-                   like a healthy cascade. An allowlist entry is what makes the detector able to fail
-                   loudly instead. */}}
-            {{- if and .Values.medallion.enabled .Values.medallion.cascadeLag.bindingName }}
-              {{- $subjects = append $subjects .Values.medallion.producer.serviceIdentity }}
-            {{- end }}
-            {{- /* EVERY STAGE RUNNER'S IDENTITY, because the PRIVILEGED list below already carries them
-                   and the allowlist is checked FIRST. Measured live 2026-09-08: asking the door as
-                   `service-bronze-to-silver` answered `403 service identity not allowed` while the same
-                   name sat in `LINEAGE_PRIVILEGED_SUBJECTS` — a subject named privileged and never
-                   admitted, which is a grant that cannot be exercised.
-
-                   ADMITTING THEM GRANTS NOTHING. `service_principal` asks two questions in order, and
-                   this only answers the first: a privileged subject must still present its OWN
-                   dedicated credential, and these have none provisioned, so the refusal moves from 403
-                   to `401 the presented credential may not claim ...`. Neither answer lets them in —
-                   what changes is that the two lists stop contradicting each other, which is what the
-                   render gate below can then hold. */}}
-            {{- range .Values.medallion.stageRunners }}{{- $subjects = append $subjects .serviceIdentity }}{{- end }}
-            {{- range (.Values.medallion.mediaStageRunners | default list) }}{{- $subjects = append $subjects .serviceIdentity }}{{- end }}
-            - { name: LINEAGE_SERVICE_SUBJECTS, value: {{ compact $subjects | uniq | sortAlpha | join "," | quote }} }
-            {{- /* THE SAME PRIVILEGED SET THE CATALOG USES, and it has to be the same set rather than a
-                   list of its own. `dapr_auth.service_principal` refuses a privileged subject that
-                   presents the shared token AND an ordinary subject that presents a dedicated one, so
-                   the two branches are mutually exclusive — while `catalog_register.credential`, the
-                   one builder every medallion client uses, resolves the dedicated token once and sends
-                   it to whatever it calls. A subject privileged at one door and ordinary at the other
-                   therefore cannot satisfy both: whichever token it sends, one door refuses it.
-
-                   Measured live 2026-09-05 on the cascade-lag detector, which reads BOTH: the catalog
-                   answered its published-tag read and lineage answered `401 invalid service token` on
-                   every consumed read, so every edge had half its arithmetic and reported UNKNOWN —
-                   publishing nothing, which is indistinguishable from a healthy cascade.
-                   `lineage/core/config.py` has read `LINEAGE_PRIVILEGED_SUBJECTS` all along; nothing
-                   set it, so lineage's privileged branch was unreachable. */}}
-            {{- if .Values.auth.dedicatedServiceCredentials }}
-            {{- /* Re-derived from the same values the catalog's list is built from — `$cascadeWriters`
-                   is scoped to that block, and reaching across would couple two Deployments' render
-                   order. Same inputs, same result, and `test_the_two_doors_agree_on_who_is_privileged`
-                   compares the two rendered strings rather than trusting that. */}}
-            {{- $lineageWriters := list .Values.medallion.producer.serviceIdentity }}
-            {{- range .Values.medallion.stageRunners }}{{- $lineageWriters = append $lineageWriters .serviceIdentity }}{{- end }}
-            {{- range (.Values.medallion.mediaStageRunners | default list) }}{{- $lineageWriters = append $lineageWriters .serviceIdentity }}{{- end }}
-            {{- /* The web BFF joins the privileged set: it is the widest holder of the shared bearer
-                   (seven zone pods) and needs no client half, since it already reads its token from
-                   env. Ingest joins it through `ingest.service_identity`, which is ONE builder for both
-                   of its doors — a subject privileged at one door and ordinary at the other cannot
-                   satisfy both, since `service_principal` refuses the shared token from a privileged
-                   name AND a dedicated one from an ordinary name. `notifications` joins them through
-                   `notifications.api.service_identity` — the LAST holder of the shared bearer, and the
-                   one whose refusal hides best: its reconciler WALKS `GET /events` to catch what the
-                   bus provably misses, and a refused walk returns no rows rather than an error, so a
-                   401 there is a quietly incomplete inbox rather than a failure. */}}
-            {{- $lineagePrivileged := concat (compact $lineageWriters | uniq) (list .Values.medallion.train.trainerIdentity .Values.frontend.serviceIdentity) }}
-            {{- with (get ((.Values.services.ingest).env | default dict) "RASK_LINEAGE_SERVICE_IDENTITY") }}
-              {{- $lineagePrivileged = append $lineagePrivileged . }}
-            {{- end }}
-            {{- /* `notifications` IS ABSENT, and not for want of a client half — it has one
-                   (`notifications.api.service_identity`), which resolves its dedicated token correctly.
-                   It cannot PRESENT it. Measured live 2026-09-07 (release 107, reverted in 108): the
-                   reconciler reaches lineage through DAPR SERVICE INVOCATION
-                   (`127.0.0.1:3500/v1.0/invoke/lineage/method/events`), and daprd stamps its own
-                   `dapr-api-token` on every request it delivers — so the credential lineage's door sees
-                   is the estate's shared one no matter what the caller sets. Naming the subject
-                   privileged therefore made the door demand a token the transport cannot carry, and
-                   every walk answered `401 the presented credential may not claim 'notifications'`.
-
-                   THE DISTINCTION THAT MATTERS: ingest holds a dedicated credential at this same door
-                   because it calls lineage DIRECTLY over HTTP. A dedicated credential is a property of
-                   the TRANSPORT, not only of the service — so this subject needs its call moved off
-                   service invocation before the server half can land, which is a design change rather
-                   than a credential one. */}}
-            - { name: LINEAGE_PRIVILEGED_SUBJECTS, value: {{ compact $lineagePrivileged | uniq | sortAlpha | join "," | quote }} }
-            {{- end }}
+            {{- include "lance.saVerifier" (list $root "env" "lineage") | nindent 12 }}
             {{- end }}
           {{- include "lance.appProbes" . | nindent 10 }}
           resources: {{- include "lance.resources" (dict "root" . "comp" "lineage") | nindent 12 }}
           volumeMounts:
             {{- include "lance.tmpMount" . | nindent 12 }}
+            {{- include "lance.saVerifier" (list $root "mounts" "lineage") | nindent 12 }}
       volumes:
         {{- include "lance.tmpVolume" . | nindent 8 }}
+        {{- include "lance.saVerifier" (list $root "volumes" "lineage") | nindent 8 }}
 ---
 apiVersion: v1
 kind: Service

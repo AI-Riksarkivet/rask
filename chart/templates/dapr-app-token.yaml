@@ -1,14 +1,12 @@
 {{- /* RENDERED WHEN EITHER CONSUMER NEEDS IT, not only for the sidecar.
 
      This Secret does DOUBLE DUTY and the two uses are gated differently. As the Dapr app token it is
-     injected by the sidecar and belongs to `dapr.sidecars`. But it is ALSO `LINEAGE_SERVICE_TOKEN` —
-     the credential the frontends and several services present to authenticate to lineage as a SERVICE
-     — and that use is gated on `auth.enabled`.
+     injected by the sidecar and belongs to `dapr.sidecars`. But it is ALSO the `APP_API_TOKEN` env a
+     service reads through `lance.appTokenEnv` — and that use is gated on `auth.enabled`.
 
-     So `dapr.sidecars=false` with auth on left THIRTEEN Deployments (all seven zones, maintenance, the
-     producer, three stage runners and lineage) carrying a secretKeyRef to a Secret nothing created. Each of
-     them fails to start with CreateContainerConfigError — a documented, supported toggle producing a
-     dead estate, and the render is green so nothing says why.
+     So `dapr.sidecars=false` with auth on left Deployments carrying a secretKeyRef to a Secret nothing
+     created. Each of them fails to start with CreateContainerConfigError — a documented, supported toggle
+     producing a dead estate, and the render is green so nothing says why.
 
      Measured against the render 2026-08-31, with `catalog.controlEmit=false` — the combination
      services.yaml's own fail message tells an operator to use. */}}

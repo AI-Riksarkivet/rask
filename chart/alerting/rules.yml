@@ -580,7 +580,7 @@ groups:
           description: >-
             The feed lane has ingested no events for 30m. On an idle estate that is correct; on a busy one it
             means the reconciler is running and seeing nothing — check that RASK_LINEAGE_SERVICE_IDENTITY is
-            in lineage's LINEAGE_SERVICE_SUBJECTS allowlist AND that the subject holds grants on the datasets
+            in lineage's RASK_SA_SUBJECTS map AND that the subject holds grants on the datasets
             it should see. A reconciler that is admitted but ungranted runs perfectly and reconciles zero.
             Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled
 

@@ -474,41 +474,6 @@ def test_no_env_var_is_rendered_TWICE_on_any_workload(ray_enabled: str) -> None:
     assert offenders == [], f"duplicated env names make the release unupgradable: {offenders}"
 
 
-def test_the_lineage_allowlist_is_DERIVED_from_every_declared_identity() -> None:
-    """The door's allowlist and the callers' claims must come from ONE value, not two lists.
-
-    `LINEAGE_SERVICE_SUBJECTS` was a hand-written string naming three services, and a list that has
-    to be kept in sync with the set of services that emit lineage WILL drift — nothing connected the
-    two. It drifted twice: the trainer in 2026-07, and `service-ingest` on 2026-08-06, where every
-    ingest emit 403'd for a day while the data landed perfectly.
-
-    The failure is SILENT by construction, which is why a gate is the only thing that catches it. The
-    emitter swallows a refused emit on purpose — a landed commit must not become a failed run — so
-    the symptom is an absence in the graph, not an error anywhere.
-
-    A service now DECLARES itself by setting `env.RASK_LINEAGE_SERVICE_IDENTITY`, and the chart reads
-    those declarations. This asserts the derivation actually holds: declare an identity and you are
-    admitted; the string cannot be edited out from under a declaration.
-    """
-    import re
-
-    rendered = _helm_template("auth.enabled=true")
-
-    declared = {m.group(1) for m in re.finditer(r'name:\s*RASK_LINEAGE_SERVICE_IDENTITY,\s*value:\s*"?([\w-]+)"?', rendered)}
-    assert declared, "no service declares a lineage identity — the derivation has nothing to read, so this gate is vacuous"
-
-    allowlist_match = re.search(r'name:\s*LINEAGE_SERVICE_SUBJECTS,\s*value:\s*"([^"]*)"', rendered)
-    assert allowlist_match, "the lineage door renders no allowlist at all — every service emit will 401"
-    allowed = set(allowlist_match.group(1).split(","))
-
-    missing = declared - allowed
-    assert not missing, (
-        f"{sorted(missing)} declare RASK_LINEAGE_SERVICE_IDENTITY but are NOT in LINEAGE_SERVICE_SUBJECTS. "
-        "Their lineage emits will 403 and the emitter will swallow it — the data lands and the graph "
-        "stays empty, with nothing reporting the gap."
-    )
-
-
 def test_every_DURABLE_pubsub_component_has_a_sidecar_retry_target() -> None:
     """A trigger consumer that must not lose messages must also be named in the Resiliency CRD.
 
@@ -1170,68 +1135,6 @@ def test_ray_serve_is_actually_IMPORTABLE_from_the_root_lock() -> None:
     # schema path is intact, and it is the schema path the operator's GetServeDetails exercises.
     schema = importlib.import_module("ray.serve.schema")
     assert hasattr(schema, "ServeInstanceDetails"), "ray.serve.schema is missing ServeInstanceDetails — the operator's GetServeDetails would 500"
-
-
-def test_every_privileged_identity_has_a_dedicated_credential_seeded() -> None:
-    """A privileged subject with no `service-token-<identity>` is a fail-closed outage, not a downgrade.
-
-    `service_kit.governed.dapr_auth` binds a PRIVILEGED service identity to its own dedicated
-    credential; every other identity authenticates with the estate's SHARED `APP_API_TOKEN`. Until
-    2026-08-26 nothing rendered `*_PRIVILEGED_SUBJECTS` — `grep -rn PRIVILEGED chart/` matched a single
-    comment — so the control was inert in every deployment the chart produced, and any holder of the
-    shared token could authenticate as any name on `LANCE_SERVICE_SUBJECTS`. Those names hold
-    `writer` + `publisher` + `validator` on every warehouse (`LANCE_FGA_CASCADE_WRITERS`), so claiming
-    one buys the ability to corrupt and then BLESS any tenant's data. It bought more until
-    2026-09-10 — the rung was `owner`, carrying `can_drop`, `can_deregister`, `can_restore` and
-    `manage_grants` across every tenant — and the narrowing is why this control shipping ON matters
-    rather than why it stopped mattering.
-
-    The two halves must be rendered from ONE derivation, and this pins that they are. Rendering the
-    subject list without seeding a token turns each privileged service into a hard refusal
-    (`privileged but has no dedicated credential provisioned`) — the cascade stops, loudly. Seeding a
-    token without listing the subject silently restores the shared-token path. Both failure modes are
-    a one-line edit away, and neither is visible in review.
-
-    RENDERED WITH THE FLAG ON, because the flag is OFF by default and for a measured reason: turning
-    it on refuses every stage runner, since the server-side expectation is only half the control. The catalog
-    demands `service-token-<identity>` while the stage runners still PRESENT the shared APP_API_TOKEN, so
-    every catalog call 401s and the cascade stops — driven live 2026-08-26 and rolled back. The
-    remaining work is the CLIENT half: each privileged service reading its own token from the secret
-    store and sending that. This invariant guards the halves that DO exist, so they cannot drift
-    apart while that work is pending.
-    """
-    rendered = _helm_template("auth.dedicatedServiceCredentials=true")
-
-    subjects: set[str] = set()
-    for match in re.finditer(r'name:\s*\w*_?PRIVILEGED_SUBJECTS,\s*value:\s*"([^"]*)"', rendered):
-        subjects |= {s.strip() for s in match.group(1).split(",") if s.strip()}
-    assert subjects, "no *_PRIVILEGED_SUBJECTS is rendered at all — the credential binding is inert"
-
-    # ONE SECRET PER IDENTITY ([[XC-072]]): written as rendered (`bao kv put secret/service-token-<id> token=<value>`)
-    # or minted by the OpenBao seed when absent (`put_minted service-token-<id>`, [[LH-304]]).
-    written = re.findall(r"secret/service-token-([A-Za-z0-9_-]+) token=|^\s*put_minted service-token-([A-Za-z0-9_-]+)$", rendered, re.MULTILINE)
-    seeded = {as_rendered or minted for as_rendered, minted in written}
-    assert seeded, "no service-token-<identity> is seeded — every privileged identity would be refused"
-
-    missing_token = sorted(subjects - seeded)
-    assert not missing_token, f"privileged identities with no dedicated credential seeded (each one is a fail-closed refusal): {missing_token}"
-
-    # A SEEDED CREDENTIAL MUST HAVE A USER, and there are now two kinds of user. A PRIVILEGED SUBJECT
-    # is demanded by a door; a SIGNING IDENTITY is presented by a producer on the lineage bus
-    # ([[LH-064]]) and no door ever asks for it — the catalog signs as `service-catalog` and nothing
-    # calls the catalog as `service-catalog`. Both are read off the render rather than listed, so a new
-    # identity of either kind moves this gate with it. What stays refused is a credential nothing uses:
-    # seeded, rotated, scoped, and reaching no workload.
-    presented: set[str] = set()
-    for match in re.finditer(r'name:\s*[A-Z_]*SERVICE_IDENTITY,\s*value:\s*"([a-z0-9-]+)"', rendered):
-        presented.add(match.group(1))
-    assert presented, "no *_SERVICE_IDENTITY is rendered at all — either the parse broke or nothing presents an identity"
-
-    orphan_token = sorted(seeded - subjects - presented)
-    assert not orphan_token, (
-        f"dedicated credentials seeded for identities nothing demands and nothing presents: {orphan_token}. "
-        "A credential with no reader is rotation and scoping spent on nobody."
-    )
 
 
 #: Every deployed app and the env var its own config reads for the docs opt-in. The names differ

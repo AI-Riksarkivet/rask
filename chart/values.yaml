@@ -215,29 +215,15 @@ services:
       RASK_INGEST_LANCE_ROOT: ""
       RASK_LINEAGE_ENDPOINT: http://rask-lineage:8000
       RASK_LINEAGE_URL: http://rask-lineage:8000
-      # WHO this plane is at the lineage door. Without it, on an auth-enabled estate, the ingest
-      # plane loses ALL provenance SILENTLY: the emitter sends no identity, lineage answers 401, and
-      # the emitter swallows the failure by design (a landed commit must not become a failed run).
-      # Measured — four `401 Unauthorized` in five minutes while the same run reported
-      # `{"status":"COMPLETE","defect":null}` and the lane printed "OK  A8 — no provenance defect".
-      #
-      # The emitter warns about exactly this and was being ignored by the chart:
-      #   "lineage_service_door_half_configured — need BOTH RASK_LINEAGE_APP_TOKEN (or APP_API_TOKEN)
-      #    and RASK_LINEAGE_SERVICE_IDENTITY; sending neither, so an authenticated ingest will 401"
-      #
-      # The TOKEN half is already present: the fleet template injects `APP_API_TOKEN`, which both the
-      # emitter and the provenance reader accept under that name. This supplies the missing half, and
-      # `services.yaml` adds the same subject to `LINEAGE_SERVICE_SUBJECTS` so the door admits it.
+      # The subject ingest's ServiceAccount maps to at lineage's door (`lance.saSubjects`), where
+      # the pod's projected `rask-lineage` token authenticates it. The subject must hold the grants
+      # its emits need: an admitted subject with none is refused on every emit, which the emitter
+      # swallows by design (a landed commit must not become a failed run), so the run reports
+      # COMPLETE while the graph stays empty. Measured on 2026-08-06: four `401 Unauthorized` in
+      # five minutes against a COMPLETE run.
       RASK_LINEAGE_SERVICE_IDENTITY: service-ingest
-      # The CATALOG's service door, the same shape as lineage's above and declared nowhere until now.
-      # `ingest/catalog_service.py` reads this and prefers it over the bearer, for the reason its own
-      # docstring gives: the catalog verifies OIDC JWTs, a JWT expires, and a static string in a
-      # secret store cannot be one — chasing that produced a fail-closed run on a `catalog-token`
-      # secret that never needed to exist. Unset, ingest silently falls back to that bearer.
-      #
-      # `services.yaml` scans this key to build LANCE_SERVICE_SUBJECTS, so the subject the catalog
-      # admits cannot drift from the one ingest claims. Measured on the live cluster: the allowlist
-      # already held `service-ingest` and nothing in the chart had put it there.
+      # The subject ingest's ServiceAccount maps to at the catalog's door (`lance.saSubjects`), where
+      # its projected `rask-catalog` token authenticates it.
       RASK_CATALOG_SERVICE_IDENTITY: service-ingest
       # Ingest presents its OWN `service-token-service-ingest` at both doors it calls, resolved from
       # the store by `ingest.service_identity`. Explicitly opt-in rather than implied by the identity:
@@ -381,14 +367,13 @@ services:
     # lets ticks stack on each other instead of the next one finding the same work still to do.
     reconcileSchedule: "@every 30s"
     env:
-      # This service DECLARES its identity here, and that single declaration is what admits it to
-      # lineage's service door: `services.yaml` builds LINEAGE_SERVICE_SUBJECTS by scanning every
-      # service's own `env.RASK_LINEAGE_SERVICE_IDENTITY`, and `IngressSettings.service_identity`
-      # reads the same var for the claim it sends. Remove it and the reconciler 401s at every tick.
+      # The subject notifications' ServiceAccount maps to at lineage's door (`lance.saSubjects`
+      # reads it; its projected `rask-lineage` token is what authenticates). Remove it and the
+      # reconciler maps to the `notifications` default.
       #
       # Admission is only half of it: the feed is GOVERNED, so this subject sees exactly the rows its
       # grants allow. A deployment that admits it and grants it nothing gets a reconciler that runs
-      # cleanly and reconciles nothing — the quiet failure this whole lane exists to prevent.
+      # cleanly and reconciles nothing, the quiet failure this whole lane exists to prevent.
       RASK_LINEAGE_SERVICE_IDENTITY: notifications
       # NOT ARMED, deliberately — the flag is absent and `secrets_from_dapr` defaults false.
       # `notifications.api.service_identity` can resolve a dedicated credential and is tested, but this
@@ -868,7 +853,7 @@ frontend:
   # swallows this explicit 0 (the bug tests/unit/test_invariants.py now forbids chart-wide).
   idleTimeoutSeconds: 0
   # The bare FGA subject the zones' BFF names when reading lineage as a SERVICE (no user session) — must be
-  # READER on the warehouse (seed_medallion_fga.sh) + allowlisted in LINEAGE_SERVICE_SUBJECTS.
+  # READER on the warehouse (seed_medallion_fga.sh) + the subject `-sa-web` maps to at lineage's door.
   serviceIdentity: service-web
   # The zones. home = the catch-all "/"; every other zone is pinned to /<name>.
   # The union of both estates — one entry per zone directory (the zone-contract deploy-path gate
@@ -949,6 +934,20 @@ auth:
   # one here only to pin a credential you hold elsewhere; the alternative to supplying is generation,
   # not derivation.
   serviceTokens: {}
+  # THE CLUSTER'S SERVICE-ACCOUNT ISSUER: a service authenticates to a door as the ServiceAccount its pod
+  # runs as, never as a name it claims ([[LH-220]], D1; Lakekeeper's multi-provider path,
+  # docs/docs/authentication.md:457-483). Each caller projects one token per door audience
+  # (`rask-catalog`, `rask-lineage`, `rask-medallion`) at /var/run/secrets/rask/identity/<audience>/token,
+  # 600 s (the Kubernetes minimum; the kubelet rotates it at ~515 s, measured 2026-10-02) and re-read on
+  # every request. A door verifies it offline against this issuer's JWKS and maps the full
+  # `system:serviceaccount:<ns>:<sa>` to the subject its grants name (`RASK_SA_SUBJECTS`, rendered by
+  # `lance.saSubjects` from the same identity values the FGA seeds use); an unmapped account is refused.
+  # The issuer serves discovery and keys only to a bearer from a private CA (k3s runs
+  # --anonymous-auth=false), so each door also projects an API-audience token (3600 s) and
+  # `kube-root-ca.crt` at /var/run/secrets/rask/sa-fetch. Never the automount token: it is a one-year
+  # extended credential (P5.3 d3) and XC-076 keeps it off. The value is k3s's default issuer, read live
+  # from /.well-known/openid-configuration on 2026-10-02.
+  serviceAccountIssuer: https://kubernetes.default.svc.cluster.local
   # ON BY DEFAULT (2026-08-06). It was `false`, and values-prod.yaml flipped it — which meant every
   # install that forgot to pass a values file came up UNGOVERNED, silently and green. That is exactly
   # how it kept happening: a `helm upgrade` without `-f values-prod.yaml` reverts a governed estate to
@@ -1064,9 +1063,8 @@ catalog:
   # emitting service already had one and this one did not, which is why it was the last producer that
   # could not sign: an identity is what a credential is seeded against.
   #
-  # It is the identity this service PRESENTS, never one it accepts — deliberately absent from the
-  # `LANCE_PRIVILEGED_SUBJECTS` allowlist in `services.yaml`, which names the subjects the catalog's
-  # own door demands a dedicated credential from. The catalog does not call itself.
+  # It is the identity this service PRESENTS, never one it accepts: `lance.saSubjects` does not map
+  # `-sa-catalog` at the catalog's door, because the catalog does not call itself.
   #
   # Empty disables signing and emits unsigned, which the lineage bus door still admits.
   serviceIdentity: service-catalog

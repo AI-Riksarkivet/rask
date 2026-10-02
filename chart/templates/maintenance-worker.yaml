@@ -341,7 +341,9 @@ spec:
           resources: {{- toYaml $root.Values.maintenance.dedicatedWorkers.resources | nindent 12 }}
           volumeMounts:
             {{- include "lance.tmpMount" . | nindent 12 }}
+            {{- include "lance.identityTokens" (list "mounts" "rask-catalog") | nindent 12 }}
       {{- include "lance.spreadConstraints" "maintenance-worker" | nindent 6 }}
       volumes:
         {{- include "lance.tmpVolume" . | nindent 8 }}
+        {{- include "lance.identityTokens" (list "volumes" "rask-catalog") | nindent 8 }}
 {{- end }}

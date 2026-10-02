@@ -97,24 +97,10 @@ spec:
   template:
     metadata:
       annotations:
-        {{- /* A ROTATED SECRET DOES NOT REACH A POD THAT CONSUMED IT THROUGH `secretKeyRef`: the value
-               is injected at pod CREATION and never refreshed, so the render stays correct, the
-               reference stays correct, and the running pod holds a dead credential with no signal
-               anywhere. Measured 2026-09-08: six of the seven zones carried a stale
-               `service-token-service-web`, every lineage read answered `the presented credential may
-               not claim 'service-web'`, and that was 2,627 x 401 — 46% of ALL traffic to the service —
-               rendering as an empty panel, which is what an idle estate looks like too.
-
-               Hashing the Secret into the pod template is what closes it: a rotation changes the
-               annotation, which changes the template, which rolls the consumers. Nothing else in this
-               chart makes a credential change reach the pods holding it. */}}
-        checksum/infra-credentials: {{ include (print $root.Template.BasePath "/infra-credentials.yaml") $root | sha256sum }}
-        {{- /* [[XC-001]]. The SESSION secret's own checksum, and it is not a duplicate of the line
-             above. `infra-credentials.yaml` renders EMPTY when `externalSecrets.enabled=true` — the
-             ESO half writes that Secret instead — so on a live estate the hash above is a constant
-             and rotating anything hashes to the same value. This one hashes the template that owns
-             `<release>-frontend-session`, which all seven zones consume for the session-cookie
-             sealing key and the confidential Dex client secret.
+        {{- /* [[XC-001]]. The SESSION secret's checksum: a value taken through `secretKeyRef` is injected at
+             pod creation and never refreshed, so a rotation reaches the zones only by changing the pod
+             template. All seven consume `<release>-frontend-session` for the session-cookie sealing
+             key and the confidential Dex client secret.
              ROTATING THE SEALING KEY LOGS EVERYONE OUT, which is exactly why the rotation must reach
              the pods: half the fleet holding the old key and half the new is a cookie that verifies
              on one zone and 401s on the next, and the estate has no way to tell that apart from a
@@ -299,15 +285,10 @@ spec:
                as a SERVICE (bounded by frontend.serviceIdentity's FGA READER rung), so the
                read-only UI works without a per-user browser login.
             */}}
-            {{- /* THE PATH, NOT THE SECRET ([[XC-001]], [[LH-160]]). A zone has no Dapr sidecar, so its
-                 sanctioned delivery is an ESO-managed Secret taken as a MOUNT; what rides in the
-                 environment is where to read it. Two things follow that `secretKeyRef` could not give:
-                 the value never enters the process environment, and `readSecretFile` re-reads it per
-                 request — so an ESO rotation reaches a running pod with no restart and no reloader,
-                 which is the whole of XC-001's mechanism (2). kubelet updates a projected Secret
-                 volume in place, so the file is simply newer on the next read. */}}
+            {{- /* The zone's projected `rask-lineage` identity ([[LH-220]]): the BFF re-reads the file per
+                 request, so the kubelet's rotation reaches a running pod with no restart. */}}
             - name: LINEAGE_SERVICE_TOKEN_FILE
-              value: /etc/rask/service-token/token
+              value: /var/run/secrets/rask/identity/rask-lineage/token
             - name: LINEAGE_SERVICE_ID
               value: {{ $fe.serviceIdentity | quote }}
             {{- if $fe.oidc.enabled }}
@@ -407,31 +388,10 @@ spec:
             {{- toYaml $tier | nindent 12 }}
           volumeMounts:
             {{- include "lance.tmpMount" $root | nindent 12 }}
-            - name: service-token
-              mountPath: /etc/rask/service-token
-              readOnly: true
+            {{- include "lance.identityTokens" (list "mounts" "rask-lineage") | nindent 12 }}
       volumes:
         {{- include "lance.tmpVolume" $root | nindent 8 }}
-        {{- /* ITS OWN CREDENTIAL, not the estate's shared bearer. `service_principal` refuses a
-             PRIVILEGED subject presenting the shared token, and `frontend.serviceIdentity` is on that
-             list under the same flag — so the two move together or every BFF call 401s. No sidecar
-             here, so it takes the Ray head's route: infra-credentials, which external-secrets already
-             syncs from OpenBao. `items` narrows the mount to ONE key: the Secret also holds MinIO and
-             Postgres credentials, and mounting it whole would put every one of them in the zone's
-             filesystem to deliver a single token. */}}
-        - name: service-token
-          secret:
-{{- if $root.Values.auth.dedicatedServiceCredentials }}
-            secretName: {{ include "lance.fullname" $root }}-infra-credentials
-            items:
-              - key: service-token-{{ $root.Values.frontend.serviceIdentity }}
-                path: token
-{{- else }}
-            secretName: {{ $root.Release.Name }}-dapr-app-token
-            items:
-              - key: token
-                path: token
-{{- end }}
+        {{- include "lance.identityTokens" (list "volumes" "rask-lineage") | nindent 8 }}
 ---
 apiVersion: v1
 kind: Service

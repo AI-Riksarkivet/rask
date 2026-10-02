@@ -382,8 +382,10 @@ spec:
           resources: {{- include "lance.resources" (dict "root" . "comp" "maintenance") | nindent 12 }}
           volumeMounts:
             {{- include "lance.tmpMount" . | nindent 12 }}
+            {{- include "lance.identityTokens" (list "mounts" "rask-catalog") | nindent 12 }}
       volumes:
         {{- include "lance.tmpVolume" . | nindent 8 }}
+        {{- include "lance.identityTokens" (list "volumes" "rask-catalog") | nindent 8 }}
 ---
 apiVersion: v1
 kind: Service

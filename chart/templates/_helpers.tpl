@@ -466,8 +466,7 @@ dapr.io/config: "lance-tracing"
 
      Every one of these is referenced by a grafted lance template (services.yaml, medallion.yaml,
      compaction.yaml, media.yaml, gateway.yaml, minio-buckets.yaml, openbao.yaml, dex.yaml, age-postgres.yaml,
-     otel-collector.yaml, network-policy.yaml, ha.yaml, runners.yaml, …) or by a template still being
-     merged by another owner (frontends.yaml → "lance.frontendEnv"). None of them
+     otel-collector.yaml, network-policy.yaml, ha.yaml, runners.yaml, …). None of them
      was renamed: no lance name collided with a rask name.
 
      VALUES THEY REQUIRE (the values.yaml merge must land these or the render breaks):
@@ -600,118 +599,6 @@ named after the chart), and the tag/digest/prefix rules are now whatever the res
 {{- define "lance.catalogImage" -}}
 {{- $name := (.Values.image.catalog).repository | default "lance-rest-catalog" -}}
 {{- include "rask.image" (list . $name) -}}
-{{- end -}}
-{{/* The SHARED env every micro-frontend zone gets — the cross-cutting "auth/secret similar in every MFE"
-seam (mirrors the retired web pod's env, single-sourced here). Backend URLs the zones' BFF proxies target
-directly (CATALOG_API/LINEAGE_API/MEDALLION_API/GREPTIME_API), the in-cluster gateway for the SSR /api
-rewrite, and — auth-on — the service-cred READ fallback + (oidc-on) the OIDC config so EVERY zone reads the
-shared origin-wide session cookie (home additionally exchanges the code). Emit under a container `env:`. */}}
-{{- define "lance.frontendEnv" -}}
-- { name: LINEAGE_API, value: "http://{{ include "lance.fullname" . }}-lineage:{{ .Values.services.lineage.port }}" }
-- { name: CATALOG_API, value: "http://{{ include "lance.fullname" . }}-catalog:{{ .Values.services.catalog.port }}" }
-{{- if .Values.medallion.enabled }}
-- { name: MEDALLION_API, value: "http://{{ include "lance.fullname" . }}-medallion-producer:{{ .Values.medallion.port }}" }
-{{- end }}
-- { name: GREPTIME_API, value: "http://{{ include "lance.greptimeHost" . }}:{{ (hasKey .Values.observability "greptimePort") | ternary .Values.observability.greptimePort 4000 }}" }
-{{- if .Values.nats.enabled }}
-# JetStream visibility (admin /streams): the NATS HTTP monitor port, unauthenticated by design and
-# ClusterIP-only — consumed strictly server-side behind the zone BFF's admin gate, never by the browser.
-# The headless Service is the one that carries :8222 (the plain Service exposes only 4222).
-- { name: NATS_MONITOR_API, value: "http://{{ include "lance.natsHost" . }}-headless:8222" }
-{{- if and .Values.dapr.enabled .Values.dapr.sidecars }}
-{{/* Dead-subscription detector (admin /streams): the comma list of "STREAM:service" consumer groups the
-estate EXPECTS on JetStream, rendered from the SAME values (and the same medallion.enabled /
-catalog.controlEmit / dapr.resiliency.enabled gates) dapr-component.yaml and the *_DLQ_TOPIC envs render
-their subscriptions from — so the expectation cannot drift from the real subscription topology. Gated on
-dapr.sidecars too (not just dapr.enabled): components may render, but without injected sidecars no app
-subscribes, and the panel would report every group as a false dead subscription. The zone BFF diffs this
-against live /jsz consumers: an expected group that is absent (or present-but-unbound) is a silently-dead
-subscription (a Ready pod reading nothing — the 2026-07-13 cascade stall), invisible in the raw monitor
-payload. The catalog control consumer is group-less by design (broadcast); the BFF counts any no-group
-ephemeral on CATALOG_CONTROL as the catalog. */}}
-{{- $expected := list (printf "LINEAGE:%s" .Values.services.lineage.daprAppId) }}
-{{- if .Values.dapr.resiliency.enabled }}
-{{/* DLQ parking subscription (services.yaml LINEAGE_DLQ_TOPIC): lineage subscribes dlq.lineage.events
-on its own component, so its group must be live on the DLQ stream whenever resiliency is on. */}}
-{{- $expected = append $expected (printf "DLQ:%s" .Values.services.lineage.daprAppId) }}
-{{- end }}
-{{- if .Values.medallion.enabled }}
-{{- $expected = append $expected (printf "LINEAGE:%s" .Values.medallion.producer.daprAppId) }}
-{{- range .Values.medallion.stageRunners }}
-{{- $expected = append $expected (printf "MEDALLION:%s" .daprAppId) }}
-{{- end }}
-{{- $expected = append $expected (printf "TRAINING:%s" .Values.medallion.producer.daprAppId) }}
-{{- if .Values.dapr.resiliency.enabled }}
-{{/* DLQ parking subscriptions (medallion.yaml MEDALLION_DLQ_TOPIC, same resiliency gate): the producer
-parks on dlq.medallion-producer, each stage runner on dlq.<daprAppId> — all queue-grouped by app-id on the DLQ stream. */}}
-{{- $expected = append $expected (printf "DLQ:%s" .Values.medallion.producer.daprAppId) }}
-{{- range .Values.medallion.stageRunners }}
-{{- $expected = append $expected (printf "DLQ:%s" .daprAppId) }}
-{{- end }}
-{{- end }}
-{{- end }}
-{{- if .Values.catalog.controlEmit }}
-{{- $expected = append $expected (printf "CATALOG_CONTROL:%s" .Values.services.catalog.daprAppId) }}
-{{- end }}
-- { name: JETSTREAM_EXPECTED_CONSUMERS, value: {{ join "," $expected | quote }} }
-{{- end }}
-{{- end }}
-{{/* MERGE FIX — the surviving gateway's port. docs/architecture/lance-ns-merge.md §decision 4: "rask's
-FastAPI gateway (:8888, Dapr-aware) wins; lance-ns's nginx gateway retires (P1/P4)", and rask's gateway
-carries the lance routes (/api/catalog, /api/lineage, the producer's
-/api/{produce,train,trains,promotions,stage-runners,cascade}, /api/explorer/*). The nginx
-gateway (and its top-level `gateway:` values block, port 8080) is DELETED, so the fleet entry
-(`services.gateway.port`) is the source of truth; 8888 is the last-resort fallback for a values file with
-no fleet gateway (the port CLAUDE.md pins). */}}
-{{- $gwPort := 8888 -}}
-{{- with (index .Values.services "gateway") }}{{- $gwPort = .port }}{{- end }}
-- { name: LANCE_GATEWAY_URL, value: "http://{{ include "lance.fullname" $ }}-gateway:{{ $gwPort }}" }
-- { name: PORT, value: "3000" }
-{{/* IDLE_TIMEOUT is read by svelte-adapter-bun's server bootstrap (dist/files/index.js:
-`parseInt(env("IDLE_TIMEOUT", "10"))` → Bun.serve's idleTimeout, in SECONDS) and it is the FIRST thing
-that severs a live query, well before the edge. Measured on kind 2026-07-26: with the ingress annotation
-alone, `query.live` streams died every ~12s — nginx logged "upstream prematurely closed connection" with
-upstream_response_time 12.001, i.e. the zone's own server hung up 10s after its last yield, not the proxy.
-A generator that yields only on change is idle by design, so the default made every live subscription a
-12-second reconnect loop: more traffic than the setInterval it replaced. Bun caps idleTimeout at 255s.
-
-255 turned out NOT to be enough, and the note that used to sit here — that a feed outliving it needs a
-keepalive rather than a bigger number — is refuted by measurement: the estate has a 20s keepalive and a
-stream still died at 256.8s over a 290s hold. Bun's idleTimeout is not refreshed by outbound SSE writes;
-for a streaming response it is a maximum connection LIFETIME. So 0 (disabled) is now the default, and the
-old objection (a wedged client leaking a socket) is answered by that keepalive: the server writes every
-20s, so a vanished peer fails the write and the generator ends.
-
-`hasKey` rather than `| default`: Helm's `default` treats 0 as empty, so `| default 255` rendered 255 for
-an explicit 0 and the change looked applied while nothing moved — the same trap already recorded for
-booleans, biting an integer. Pair with ingress.annotations' proxy-read-timeout: both hops must hold, and
-the SMALLER one always wins. */}}
-- { name: IDLE_TIMEOUT, value: {{ (hasKey .Values.frontend "idleTimeoutSeconds") | ternary .Values.frontend.idleTimeoutSeconds 255 | quote }} }
-{{- if .Values.auth.enabled }}
-# Governed READ fallback: with no user session the BFF authenticates to lineage as a SERVICE (bounded by
-# frontend.serviceIdentity's FGA READER rung), so the read-only UI works without a per-user browser login.
-- name: LINEAGE_SERVICE_TOKEN
-  valueFrom:
-    secretKeyRef: { name: {{ .Release.Name }}-dapr-app-token, key: token }
-- { name: LINEAGE_SERVICE_ID, value: {{ .Values.frontend.serviceIdentity | quote }} }
-{{- if .Values.frontend.oidc.enabled }}
-# Per-user OIDC login (opt-in; needs a browser-reachable IdP). Every zone reads the sealed session cookie
-# (ISSUER+CLIENT_ID+REDIRECT_URI make authEnabled true; SESSION_SECRET decodes it); the home zone also
-# presents the confidential client secret at the token exchange. Secrets ride a Secret via secretKeyRef.
-{{- if not .Values.frontend.oidc.sessionSecret }}{{ fail "frontend.oidc.enabled requires frontend.oidc.sessionSecret (>=32 chars) to seal the session cookie" }}{{- end }}
-{{- if not .Values.frontend.oidc.publicIssuer }}{{ fail "frontend.oidc.enabled requires frontend.oidc.publicIssuer (a browser-reachable IdP)" }}{{- end }}
-{{- if not .Values.frontend.oidc.publicOrigin }}{{ fail "frontend.oidc.enabled requires frontend.oidc.publicOrigin (the browser-reachable origin)" }}{{- end }}
-- { name: OIDC_ISSUER, value: {{ .Values.frontend.oidc.publicIssuer | quote }} }
-- { name: OIDC_CLIENT_ID, value: {{ .Values.dex.clientId | quote }} }
-- name: OIDC_CLIENT_SECRET
-  valueFrom:
-    secretKeyRef: { name: {{ .Release.Name }}-frontend-session, key: clientSecret }
-- { name: OIDC_REDIRECT_URI, value: "{{ .Values.frontend.oidc.publicOrigin | trimSuffix "/" }}/auth/callback" }
-- name: SESSION_SECRET
-  valueFrom:
-    secretKeyRef: { name: {{ .Release.Name }}-frontend-session, key: secret }
-{{- end }}
-{{- end }}
 {{- end -}}
 
 {{/* CONSUMER endpoints — return the EXTERNAL override when set (the in-cluster component is then usually
@@ -944,13 +831,8 @@ would 404, and ClientEmitter catches-and-logs transport errors, so that too woul
 {{- $root := index . 0 -}}
 - { name: RASK_LINEAGE_ENDPOINT, value: "http://{{ include "lance.fullname" $root }}-lineage:{{ $root.Values.services.lineage.port }}" }
 - { name: RASK_LINEAGE_ENDPOINT_PATH, value: "api/v1/lineage" }
-{{- /* NO service-door credentials are rendered here, deliberately. These pods reach lineage over the
-     DAPR subscription route, which the sidecar-stamped app token already guards; the HTTP service door
-     (LINEAGE_SERVICE_TOKEN + LINEAGE_SERVICE_ID) exists for the sidecar-LESS producers — the Ray train
-     job (ray_submit.py passes both through the job's runtime_env) and the frontend zones' governed read
-     (lance.frontendEnv). Both already carry them, and lineage-kit reads those exact names, so a producer
-     that has them authenticates and one that does not stays on the open dev path. The allowlist those
-     subjects are checked against is rendered once, on the lineage service (services.yaml). */}}
+{{- /* No credential here: a pod that calls lineage over HTTP authenticates with its projected
+     `rask-lineage` token (lance.identityTokens), which lineage maps through `lance.saSubjects`. */}}
 {{- end -}}
 
 
@@ -1289,6 +1171,86 @@ can never drift into a profile that sets neither.
 */}}
 {{- define "lance.governedAuthAck" -}}
 - { name: RASK_INSECURE_ALLOW_UNAUTHENTICATED, value: "true" }
+{{- end -}}
+
+{{/* A caller's projected identity, one volume per door audience it calls ([[LH-220]], D1); rationale in
+values.yaml `auth.serviceAccountIssuer`. Call: include "lance.identityTokens" (list "volumes"|"mounts" <aud>...). */}}
+{{- define "lance.identityTokens" -}}
+{{- $part := first . -}}
+{{- range rest . }}
+{{- if eq $part "volumes" }}
+- name: identity-{{ . }}
+  projected:
+    sources:
+      - serviceAccountToken: { path: token, audience: {{ . }}, expirationSeconds: 600 }
+{{- else }}
+- { name: identity-{{ . }}, mountPath: /var/run/secrets/rask/identity/{{ . }}, readOnly: true }
+{{- end }}
+{{- end }}
+{{- end -}}
+
+{{/* A fleet service's door audiences, read off the identities it declares in `env`. */}}
+{{- define "lance.fleetAudiences" -}}
+{{- $name := index . 0 -}}{{- $env := (index . 1).env | default dict -}}{{- $out := list -}}
+{{- if get $env "RASK_CATALOG_SERVICE_IDENTITY" }}{{ $out = append $out "rask-catalog" }}{{ end -}}
+{{- if or (get $env "RASK_LINEAGE_SERVICE_IDENTITY") (eq $name "notifications") }}{{ $out = append $out "rask-lineage" }}{{ end -}}
+{{- join " " $out -}}
+{{- end -}}
+
+{{/* A verifier door's map of caller service account (full username) -> subject, as JSON. Every key is an
+SA security-sa.yaml renders for a pod that projects this door's audience.
+Call: include "lance.saSubjects" (list $root "catalog"|"lineage"|"producer"|"stage"). */}}
+{{- define "lance.saSubjects" -}}
+{{- $root := index . 0 -}}{{- $door := index . 1 -}}{{- $v := $root.Values -}}
+{{- $sa := printf "system:serviceaccount:%s:%s-sa-" $root.Release.Namespace (include "lance.fullname" $root) -}}
+{{- $m := dict -}}
+{{- if and $v.medallion.enabled (eq $door "catalog" "lineage" "stage") -}}
+{{- $_ := set $m (printf "%smedallion-producer" $sa) $v.medallion.producer.serviceIdentity -}}
+{{- end -}}
+{{- if and $v.medallion.enabled (eq $door "catalog" "lineage") -}}
+{{- range $v.medallion.stageRunners }}{{- $_ := set $m (printf "%s%s" $sa .name) .serviceIdentity }}{{- end -}}
+{{- end -}}
+{{- if and $v.maintenance.enabled (eq $door "catalog") -}}
+{{- $_ := set $m (printf "%smaintenance" $sa) $v.maintenance.catalogServiceIdentity -}}
+{{- end -}}
+{{- if eq $door "lineage" -}}
+{{- if and $v.ray.enabled (or $v.ray.cluster.enabled $v.singleTenant.enabled) }}{{- $_ := set $m (printf "%sray" $sa) $v.medallion.train.trainerIdentity }}{{- end -}}
+{{- if $v.frontend.enabled }}{{- $_ := set $m (printf "%sweb" $sa) $v.frontend.serviceIdentity }}{{- end -}}
+{{- end -}}
+{{- range $name, $svc := $v.services -}}
+{{- if and (not (has $name (list "catalog" "lineage"))) (or $svc.frontDoor $v.singleTenant.enabled) -}}
+{{- $env := $svc.env | default dict -}}
+{{- if eq $door "catalog" }}{{- with get $env "RASK_CATALOG_SERVICE_IDENTITY" }}{{- $_ := set $m (printf "%s%s" $sa $name) . }}{{- end }}{{- end -}}
+{{- if eq $door "lineage" }}{{- with (get $env "RASK_LINEAGE_SERVICE_IDENTITY") | default (ternary "notifications" "" (eq $name "notifications")) }}{{- $_ := set $m (printf "%s%s" $sa $name) . }}{{- end }}{{- end -}}
+{{- if and (eq $door "producer") (eq $name "ingest") }}{{- with get $env "RASK_CATALOG_SERVICE_IDENTITY" }}{{- $_ := set $m (printf "%s%s" $sa $name) . }}{{- end }}{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- toJson $m -}}
+{{- end -}}
+
+{{/* The SA verifier a door builds beside Dex: its env, and the API-audience token + cluster CA it fetches
+the issuer's keys with. Renders nothing with auth off or for a door no service calls.
+Call: include "lance.saVerifier" (list $root "env"|"volumes"|"mounts" <door>). */}}
+{{- define "lance.saVerifier" -}}
+{{- $root := index . 0 -}}{{- $part := index . 1 -}}{{- $door := index . 2 -}}
+{{- $subjects := include "lance.saSubjects" (list $root $door) | fromJson -}}
+{{- if and $root.Values.auth.enabled $subjects -}}
+{{- if eq $part "env" }}
+- { name: RASK_SA_ISSUER, value: {{ $root.Values.auth.serviceAccountIssuer | quote }} }
+- { name: RASK_SA_AUDIENCE, value: {{ ternary "rask-medallion" (printf "rask-%s" $door) (eq $door "producer" "stage") }} }
+- { name: RASK_SA_SUBJECTS, value: {{ toJson $subjects | quote }} }
+- { name: RASK_SA_FETCH_TOKEN_FILE, value: /var/run/secrets/rask/sa-fetch/token }
+- { name: RASK_SA_CA_FILE, value: /var/run/secrets/rask/sa-fetch/ca.crt }
+{{- else if eq $part "volumes" }}
+- name: sa-fetch
+  projected:
+    sources:
+      - serviceAccountToken: { path: token, expirationSeconds: 3600 }
+      - configMap: { name: kube-root-ca.crt, items: [{ key: ca.crt, path: ca.crt }] }
+{{- else }}
+- { name: sa-fetch, mountPath: /var/run/secrets/rask/sa-fetch, readOnly: true }
+{{- end }}
+{{- end -}}
 {{- end -}}
 
 
@@ -1777,20 +1739,10 @@ measured decision, and a second copy would drift without anything saying so. */}
 {{/* The service identities ONE app-id may read a dedicated credential for ([[XC-072]]).
 Call: include "lance.identitiesForApp" (list $root $appId) -> space-separated identities.
 
-TWO POPULATIONS, and the split is forced by how a symmetric credential is checked rather than chosen:
-
-  * THE VERIFIER DOORS (`catalog`, `lineage`) resolve the CLAIMED identity's token and compare it --
-    `service_principal(..., dedicated_token=...)` in `service_kit.governed.dapr_auth` -- so a door that
-    could not read a producer's credential could not authenticate that producer at all. They get the
-    whole set.
-    THE EXEMPTION IS NOT INHERENT, and it should not be read as settled: it exists because the
-    credential is stored in PLAINTEXT. The house pattern for a service-to-service key is hashed at rest
-    with a constant-time compare (`fastapi/authn.md`, "API keys"); the compare is already constant-time
-    (`dapr_auth.py:507`) and the storage is not. Hold a HASH for the doors and a plaintext only its
-    owner reads, and a door can verify without being able to forge -- which removes this exemption
-    entirely. See [[XC-072]].
-  * EVERY OTHER APP presents exactly its own, so it gets exactly its own. That is the population this
-    row is about: before this, `medallion-producer` read `service-ingest`, measured on the live estate.
+LINEAGE ALONE reads the whole set: it verifies every producer's event signature, keyed on that
+producer's credential, until per-identity signing keys move to Transit ([[LH-064]]). The catalog verifies
+no credential since a service is the service account its projected token names ([[LH-220]]), so it
+reads its own signing key, like every other app.
 
 DERIVED FROM THE SAME VALUES THE SEED USES, never a second hand-written list -- an identity seeded but
 not allowed here is an app that boots and then 401s with nothing naming the cause. */}}
@@ -1845,10 +1797,11 @@ set and the Secret's `service-token-*` entries drift.
 {{- define "lance.identitiesForApp" -}}
 {{- $root := index . 0 -}}{{- $app := index . 1 -}}
 {{- $all := include "lance.allServiceIdentities" $root | splitList " " -}}
-{{- if or (eq $app $root.Values.services.catalog.daprAppId) (eq $app $root.Values.services.lineage.daprAppId) -}}
+{{- if eq $app $root.Values.services.lineage.daprAppId -}}
 {{- join " " $all -}}
 {{- else -}}
 {{- $mine := list -}}
+{{- if eq $app $root.Values.services.catalog.daprAppId }}{{- $mine = append $mine $root.Values.catalog.serviceIdentity }}{{- end -}}
 {{- if eq $app $root.Values.medallion.producer.daprAppId }}{{- $mine = append $mine $root.Values.medallion.producer.serviceIdentity }}{{- end -}}
 {{- if eq $app $root.Values.maintenance.daprAppId }}{{- $mine = append $mine $root.Values.maintenance.catalogServiceIdentity }}{{- end -}}
 {{- range $root.Values.medallion.stageRunners }}{{- if eq $app .daprAppId }}{{- $mine = append $mine .serviceIdentity }}{{- end }}{{- end -}}
