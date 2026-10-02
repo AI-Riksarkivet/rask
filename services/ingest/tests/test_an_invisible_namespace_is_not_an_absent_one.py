@@ -31,7 +31,7 @@ BASE = "http://catalog.test"
 
 
 def _client() -> CatalogServiceClient:
-    return CatalogServiceClient(pa.schema([pa.field("id", pa.int64())]), base_url=BASE, token="t")
+    return CatalogServiceClient(pa.schema([pa.field("id", pa.int64())]), base_url=BASE)
 
 
 @respx.mock

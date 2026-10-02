@@ -394,7 +394,6 @@ async def create_ingest(
     starter: Annotated[WorkflowStarter, Depends(get_starter)],
     settings: AuthSettingsDep,
     idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=1, max_length=64, pattern=r"^[A-Za-z0-9._-]+$")],
-    dapr_api_token: Annotated[str | None, Header()] = None,
     authorization: Annotated[str | None, Header()] = None,
     # The INVOKING Dapr app-id. Without it the door cannot tell a service from the public front
     # door invoking on a stranger's behalf — see `auth.public_callers`.
@@ -403,7 +402,7 @@ async def create_ingest(
     # BEFORE anything else. The body names the project this write lands in, so the admin check targets
     # that project rather than a configured one — authorization scope must equal write scope, or an
     # admin of project A passes the gate while the rows land in project B.
-    originator = await authorize_ingest(request, settings, body.project, dapr_api_token, authorization, dapr_caller_app_id)
+    originator = await authorize_ingest(request, settings, body.project, authorization, dapr_caller_app_id)
     await _refuse_unusable_source(body)
     return await dispatch_run(body, response, store=store, starter=starter, idempotency_key=idempotency_key, originator=originator)
 
@@ -451,7 +450,6 @@ async def list_ingests(
     # DECLARED, not clamped. `store.recent(min(max(limit, 0), 200))` below applied the real
     # ceiling three frames away, so the schema advertised an unbounded integer.
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
-    dapr_api_token: Annotated[str | None, Header()] = None,
     authorization: Annotated[str | None, Header()] = None,
     dapr_caller_app_id: Annotated[str | None, Header()] = None,
 ) -> RunListResponse:
@@ -480,7 +478,7 @@ async def list_ingests(
     """
     records = await store.recent(limit)
 
-    permitted = await authorize_ingest_projects(request, settings, (record.project for record in records), dapr_api_token, authorization, dapr_caller_app_id)
+    permitted = await authorize_ingest_projects(request, settings, (record.project for record in records), authorization, dapr_caller_app_id)
     # DEBUG, not warning: a caller seeing only their own runs is the endpoint WORKING. Logging it
     # louder would make a correctly-filtered list look like a stream of authorization failures,
     # which is how a real signal gets tuned out.
@@ -495,7 +493,6 @@ async def get_ingest(
     store: Annotated[RunStore, Depends(get_store)],
     reader: Annotated[WorkflowRunReader | None, Depends(get_reader)],
     settings: AuthSettingsDep,
-    dapr_api_token: Annotated[str | None, Header()] = None,
     authorization: Annotated[str | None, Header()] = None,
     # The INVOKING Dapr app-id. Without it the door cannot tell a service from the public front
     # door invoking on a stranger's behalf — see `auth.public_callers`.
@@ -517,7 +514,7 @@ async def get_ingest(
     # Authorized against the run's OWN project, which is only knowable after the record is resolved —
     # a run id names a tenant, and a status body carries that tenant's project, dataset, source keys
     # and error detail. Reading it is not public.
-    await authorize_ingest(request, settings, record.project, dapr_api_token, authorization, dapr_caller_app_id)
+    await authorize_ingest(request, settings, record.project, authorization, dapr_caller_app_id)
 
     # The store holds only what the caller asked for; everything that MOVES is read from the engine.
     # Without this a completed run reported ACCEPTED forever — nothing writes the record a second
@@ -548,8 +545,8 @@ async def get_ingest(
             refused = (
                 "provenance could NOT be verified: the lineage graph refused this service's read. "
                 "The run may or may not have a provenance record — this service has no valid lineage "
-                "credential, so its A8 verdict cannot be trusted. Check RASK_LINEAGE_APP_TOKEN and "
-                "RASK_LINEAGE_SERVICE_IDENTITY, and that the identity is in LINEAGE_SERVICE_SUBJECTS."
+                "credential, so its A8 verdict cannot be trusted. Check that this pod projects its rask-lineage "
+                "token (RASK_LINEAGE_IDENTITY_TOKEN_FILE) and that the lineage door maps its service account (RASK_SA_SUBJECTS)."
             )
         record = record.model_copy(update={"lineage_run_present": present is not False})
 
@@ -581,7 +578,6 @@ async def terminate_ingest(
     terminator: Annotated[WorkflowTerminator, Depends(get_terminator)],
     reader: Annotated[WorkflowRunReader | None, Depends(get_reader)],
     settings: AuthSettingsDep,
-    dapr_api_token: Annotated[str | None, Header()] = None,
     authorization: Annotated[str | None, Header()] = None,
     # The INVOKING Dapr app-id. Without it the door cannot tell a service from the public front
     # door invoking on a stranger's behalf — see `auth.public_callers`.
@@ -617,7 +613,7 @@ async def terminate_ingest(
     if record is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"no ingest run {run_id!r}")
 
-    await authorize_ingest(request, settings, record.project, dapr_api_token, authorization, dapr_caller_app_id)
+    await authorize_ingest(request, settings, record.project, authorization, dapr_caller_app_id)
 
     # ALREADY TERMINAL IS A 409, not a cheerful 202. Nothing on this path filtered a finished run:
     # `record_from_workflow_state` rebuilds a record from `serialized_input` with no runtime-status
@@ -666,7 +662,6 @@ async def _lifecycle(
     store: RunStore,
     reader: WorkflowRunReader | None,
     terminator: WorkflowTerminator | None,
-    dapr_api_token: str | None,
     authorization: str | None,
     dapr_caller_app_id: str | None,
     *,
@@ -688,7 +683,7 @@ async def _lifecycle(
     if record is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"no ingest run {run_id!r}")
 
-    await authorize_ingest(request, settings, record.project, dapr_api_token, authorization, dapr_caller_app_id)
+    await authorize_ingest(request, settings, record.project, authorization, dapr_caller_app_id)
 
     current = str((engine_state or {}).get("runtime_status") or "")
     if engine_state is not None and current not in allowed:
@@ -724,7 +719,6 @@ async def pause_ingest(
     terminator: Annotated[WorkflowTerminator, Depends(get_terminator)],
     reader: Annotated[WorkflowRunReader | None, Depends(get_reader)],
     settings: AuthSettingsDep,
-    dapr_api_token: Annotated[str | None, Header()] = None,
     authorization: Annotated[str | None, Header()] = None,
     dapr_caller_app_id: Annotated[str | None, Header()] = None,
 ) -> LifecycleAccepted:
@@ -742,7 +736,6 @@ async def pause_ingest(
         store,
         reader,
         terminator,
-        dapr_api_token,
         authorization,
         dapr_caller_app_id,
         action="pause",
@@ -758,7 +751,6 @@ async def resume_ingest(
     terminator: Annotated[WorkflowTerminator, Depends(get_terminator)],
     reader: Annotated[WorkflowRunReader | None, Depends(get_reader)],
     settings: AuthSettingsDep,
-    dapr_api_token: Annotated[str | None, Header()] = None,
     authorization: Annotated[str | None, Header()] = None,
     dapr_caller_app_id: Annotated[str | None, Header()] = None,
 ) -> LifecycleAccepted:
@@ -771,7 +763,6 @@ async def resume_ingest(
         store,
         reader,
         terminator,
-        dapr_api_token,
         authorization,
         dapr_caller_app_id,
         action="resume",

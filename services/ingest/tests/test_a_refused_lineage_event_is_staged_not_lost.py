@@ -2,10 +2,9 @@
 
 § E1's second half. Four of the five lakehouse producers stage durably through the shared object-store
 outbox; `ingest` had zero outbox usage and emitted bare, so a refused or unreachable door lost the
-event outright. That is recorded as having happened twice on this lane — `service_identity.py`: "a 401
-there does not surface as an error, it surfaces as a permanent gap in the graph that looks exactly like
-a healthy estate. That has already happened twice on this lane (the trainer in 2026-07,
-`service-ingest` on 2026-08-06, a day of 403s while the data landed)."
+event outright. That happened twice on this lane (the trainer in 2026-07, `service-ingest` on 2026-08-06,
+a day of 403s while the data landed), and a 401 there does not surface as an error: it surfaces as a permanent
+gap in the graph that looks exactly like a healthy estate.
 
 The swallow itself is CORRECT and stays — a run whose data landed must not be reported as failed
 because the graph was unreachable (I8). Staging is what honours that constraint without losing the

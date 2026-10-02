@@ -84,7 +84,7 @@ def test_the_catalog_client_reuses_the_pool(monkeypatch: pytest.MonkeyPatch) -> 
 
     monkeypatch.setattr(httpx.Client, "post", _post)
 
-    client = CatalogServiceClient(pa.schema([pa.field("id", pa.string())]), base_url="http://catalog.test", token="t")
+    client = CatalogServiceClient(pa.schema([pa.field("id", pa.string())]), base_url="http://catalog.test")
     client.ensure("bronze", "pages")
 
     assert len(seen) >= 2, f"expected several catalog calls, saw {len(seen)}"

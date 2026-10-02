@@ -21,10 +21,18 @@ A gate that passes when the thing it guards is entirely broken is worse than no 
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Any
+
 import httpx
 import pytest
+import respx
 
-from ingest.provenance import LineageProvenanceReader, ProvenanceRefused, _service_headers
+from ingest.lineage import lineage_run_id
+from ingest.provenance import LineageProvenanceReader, ProvenanceRefused
+
+
+if TYPE_CHECKING:
+    import pathlib
 
 
 @pytest.mark.parametrize("status_code", [401, 403])
@@ -52,32 +60,28 @@ def test_a_5xx_is_an_outage_NOT_a_refusal(monkeypatch: pytest.MonkeyPatch) -> No
     assert LineageProvenanceReader().has_run("some-run") is None
 
 
-# ── the credentials, which is why the read was refused in the first place ────
+# ── the credential: this pod's projected rask-lineage token ([[LH-220]], D1) ────
 
 
-def test_the_read_SENDS_the_service_credential_when_configured(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The read and the WRITE go through the same lineage door, so the reader needs the same pair the
-    emitter does. Sending none is what made a refusal indistinguishable from an outage."""
-    monkeypatch.setenv("RASK_LINEAGE_APP_TOKEN", "tok")
-    monkeypatch.setenv("RASK_LINEAGE_SERVICE_IDENTITY", "service-ingest")
+@respx.mock
+def test_the_read_carries_the_lineage_identity_token(sa_issuer: Any, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The read and the WRITE go through the same lineage door, so the reader presents the same identity the emitter does."""
+    token = sa_issuer.mint("rask-sa-ingest", audience="rask-lineage")
+    token_file = tmp_path / "rask-lineage-token"
+    token_file.write_text(token)
+    monkeypatch.setenv("RASK_LINEAGE_IDENTITY_TOKEN_FILE", str(token_file))
+    route = respx.get(f"http://rask-lineage:8000/runs/{lineage_run_id('some-run')}").mock(return_value=httpx.Response(404))
 
-    headers = _service_headers()
+    assert LineageProvenanceReader().has_run("some-run") is False
 
-    assert headers["dapr-api-token"] == "tok"
-    assert headers["x-lance-service-identity"] == "service-ingest"
+    assert route.calls.last.request.headers["Authorization"] == f"Bearer {token}"
 
 
-def test_a_HALF_configured_credential_sends_NOTHING(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The lineage door needs BOTH. Sending one produces a request that is refused for a reason
-    invisible from here — the emitter warns about exactly this pair
-    ("lineage_service_door_half_configured"), and a matching silence on the read side would repeat
-    the defect. Sending nothing at least makes the refusal unambiguous."""
-    monkeypatch.setenv("RASK_LINEAGE_APP_TOKEN", "tok")
-    monkeypatch.delenv("RASK_LINEAGE_SERVICE_IDENTITY", raising=False)
+@respx.mock
+def test_no_identity_token_is_a_refusal_not_an_outage(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A pod with no token to present cannot be answered by the graph at all: its A8 verdict is untrustworthy, which
+    an operator must be told, and "could not ask" would render as no defect. Nothing is sent without it."""
+    monkeypatch.setenv("RASK_LINEAGE_IDENTITY_TOKEN_FILE", str(tmp_path / "absent"))
 
-    assert _service_headers() == {}
-
-    monkeypatch.delenv("RASK_LINEAGE_APP_TOKEN", raising=False)
-    monkeypatch.setenv("RASK_LINEAGE_SERVICE_IDENTITY", "service-ingest")
-
-    assert _service_headers() == {}
+    with pytest.raises(ProvenanceRefused, match="no lineage identity token"):
+        LineageProvenanceReader().has_run("some-run")

@@ -28,6 +28,22 @@ def _local_dir_root(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytes
     monkeypatch.setenv("RASK_INGEST_LOCAL_ROOT", str(tmp_path_factory.getbasetemp()))
 
 
+@pytest.fixture(autouse=True)
+def _projected_identity_tokens(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Give every test the per-door token files a deployed ingest pod carries ([[LH-220]]).
+
+    The catalog and lineage clients read the projected token on every request and refuse to send without it, so a
+    test that drives either client needs the files to exist; the claim under test there is the request, not the
+    token. A test whose claim IS the token repoints the variables. Outside the test's own `tmp_path`, which several
+    tests enumerate as a source.
+    """
+    directory = tmp_path_factory.mktemp("identity")
+    for door in ("catalog", "lineage"):
+        token = directory / f"rask-{door}-token"
+        token.write_text(f"projected-rask-{door}-token")
+        monkeypatch.setenv(f"RASK_{door.upper()}_IDENTITY_TOKEN_FILE", str(token))
+
+
 #: The context a Dapr activity is CALLED with, for tests that call activities directly.
 #:
 #: Every activity in this plane takes `ctx: WorkflowActivityContext` as its first parameter because

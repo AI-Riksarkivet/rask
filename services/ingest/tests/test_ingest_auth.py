@@ -7,12 +7,15 @@ with any kind it is an anonymous writer into a tenant's bronze tier and an anony
 records that name a project, its datasets, its source keys and its errors.
 
 Both doors are asserted here, and both fail closed. The shape is deliberately the medallion's
-`authorize_produce`: same question, so it must not have a second, weaker answer.
+`authorize_produce`: same question, so it must not have a second, weaker answer. The service door verifies a real
+projected service-account token against the root conftest's loopback issuer ([[LH-220]], D1).
 """
 
 from __future__ import annotations
 
+import json
 import logging
+from collections.abc import Iterator
 from typing import Annotated, Any
 
 import pytest
@@ -21,13 +24,41 @@ from fastapi.testclient import TestClient
 from lance_namespace import ServiceUnavailableError, UnauthenticatedError
 
 from ingest.auth import AuthSettingsDep, IngestAuthSettings, authorize_ingest, get_auth_settings
+from service_kit.governed.machine_identity import ServiceAccountVerifier
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 
-SERVICE_TOKEN = "s3cr3t-service-token"
+#: The door's audience and the one account its subject map names.
+AUDIENCE = "rask-ingest"
+PRODUCER_ACCOUNT = "rask-sa-medallion-producer"
 
 
-def _app(*, oidc: object = None, fga: object = None, service_project: str = "demo") -> FastAPI:
+@pytest.fixture
+def service_door(sa_issuer: Any, monkeypatch: pytest.MonkeyPatch) -> Iterator[ServiceAccountVerifier]:
+    """The service-account door configured as the chart configures it, and the verifier `attach_auth` builds from it."""
+    monkeypatch.setenv("RASK_SA_ISSUER", sa_issuer.issuer)
+    monkeypatch.setenv("RASK_SA_AUDIENCE", AUDIENCE)
+    monkeypatch.setenv("RASK_SA_SUBJECTS", json.dumps({f"system:serviceaccount:default:{PRODUCER_ACCOUNT}": "service-medallion-producer"}))
+    monkeypatch.setenv("RASK_SA_FETCH_TOKEN_FILE", str(sa_issuer.fetch_token_file))
+    monkeypatch.setenv("RASK_SA_CA_FILE", str(sa_issuer.ca_file))
+    settings = IngestAuthSettings()
+    assert settings.sa_issuer and settings.sa_audience
+    yield ServiceAccountVerifier(
+        settings.sa_issuer,
+        settings.sa_audience,
+        settings.sa_subjects,
+        cache_ttl=settings.oidc_cache_ttl,
+        leeway=settings.oidc_leeway,
+        fetch_token_file=settings.sa_fetch_token_file,
+        ca_file=settings.sa_ca_file,
+    )
+
+
+def _service_bearer(sa_issuer: Any, account: str = PRODUCER_ACCOUNT) -> dict[str, str]:
+    return {"authorization": f"Bearer {sa_issuer.mint(account, audience=AUDIENCE)}"}
+
+
+def _app(*, oidc: object = None, fga: object = None, sa_oidc: ServiceAccountVerifier | None = None, service_project: str = "demo") -> FastAPI:
     """A minimal app carrying only what the door reads."""
     app = FastAPI()
     # The REAL problem-body translation, so these assert on the status a caller actually receives
@@ -37,6 +68,7 @@ def _app(*, oidc: object = None, fga: object = None, service_project: str = "dem
     install_problem_handlers(app, logging.getLogger(__name__))
     app.state.oidc = oidc
     app.state.fga = fga
+    app.state.sa_oidc = sa_oidc
 
     def _settings() -> IngestAuthSettings:
         s = IngestAuthSettings()
@@ -54,52 +86,88 @@ def _app(*, oidc: object = None, fga: object = None, service_project: str = "dem
         request: Request,
         body: dict[str, Any],
         settings: AuthSettingsDep,
-        dapr_api_token: Annotated[str | None, Header()] = None,
         authorization: Annotated[str | None, Header()] = None,
         dapr_caller_app_id: Annotated[str | None, Header()] = None,
     ):
-        await authorize_ingest(request, settings, body.get("project"), dapr_api_token, authorization, dapr_caller_app_id)
+        await authorize_ingest(request, settings, body.get("project"), authorization, dapr_caller_app_id)
         return {"ok": True}
 
     return app
 
 
-def test_an_ANONYMOUS_request_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The hole, closed. Before this, an unauthenticated POST drove a write into any project."""
-    monkeypatch.setenv("APP_API_TOKEN", SERVICE_TOKEN)
+class _Verifier:
+    def __init__(self, sub: str | None) -> None:
+        self._sub = sub
+        self.verified: list[str] = []
 
-    with TestClient(_app(), raise_server_exceptions=False) as client:
+    def verify(self, raw: str) -> Any:
+        self.verified.append(raw)
+        if self._sub is None:
+            raise UnauthenticatedError("invalid token")
+        return type("Tok", (), {"sub": self._sub})()
+
+
+# ── the service door ──────────────────────────────────────────────────────────────────
+
+
+def test_an_ANONYMOUS_request_is_refused(service_door: ServiceAccountVerifier) -> None:
+    """The hole, closed. Before this, an unauthenticated POST drove a write into any project."""
+    with TestClient(_app(sa_oidc=service_door), raise_server_exceptions=False) as client:
         assert client.post("/ingests", json={"project": "demo"}).status_code == 403
 
 
-def test_the_SERVICE_token_may_ingest_into_its_CONFIGURED_project(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("APP_API_TOKEN", SERVICE_TOKEN)
+def test_a_SERVICE_caller_may_ingest_into_its_CONFIGURED_project(service_door: ServiceAccountVerifier, sa_issuer: Any) -> None:
+    """Service-to-service ingest, the credential's actual job: a mapped account, arriving from a service sidecar."""
+    with TestClient(_app(sa_oidc=service_door, service_project="demo")) as client:
+        response = client.post("/ingests", json={"project": "demo"}, headers={**_service_bearer(sa_issuer), "dapr-caller-app-id": "medallion"})
 
-    with TestClient(_app(service_project="demo")) as client:
-        assert client.post("/ingests", json={"project": "demo"}, headers={"dapr-api-token": SERVICE_TOKEN}).status_code == 200
+    assert response.status_code == 200
 
 
-def test_the_SERVICE_token_may_NOT_cross_into_another_project(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_SERVICE_caller_may_NOT_cross_into_another_project(service_door: ServiceAccountVerifier, sa_issuer: Any) -> None:
     """The escalation the per-project check exists to stop.
 
-    The shared token authenticates a SERVICE, not a tenant. Honouring an arbitrary requested project
-    would let any holder of it write into every tenant's bronze — and the token is mounted in several
-    pods. Crossing tenants takes a user bearer, which gets the per-project FGA check.
+    A service caller is held to the configured project. Honouring an arbitrary requested project would let one
+    service write into every tenant's bronze. Crossing tenants takes a user bearer, which gets the per-project FGA
+    check.
     """
-    monkeypatch.setenv("APP_API_TOKEN", SERVICE_TOKEN)
-
-    with TestClient(_app(service_project="demo"), raise_server_exceptions=False) as client:
-        assert client.post("/ingests", json={"project": "victim"}, headers={"dapr-api-token": SERVICE_TOKEN}).status_code == 403
+    with TestClient(_app(sa_oidc=service_door, service_project="demo"), raise_server_exceptions=False) as client:
+        assert client.post("/ingests", json={"project": "victim"}, headers=_service_bearer(sa_issuer)).status_code == 403
 
 
-def test_NO_service_token_configured_is_dev_open(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_service_account_the_door_does_not_map_is_401_and_never_reaches_the_human_door(
+    service_door: ServiceAccountVerifier, sa_issuer: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Signature and audience accept every account in the cluster that carries the audience (P5.3 c0), so the subject
+    map is the only binder; a token the cluster issuer claims is answered by that verifier alone."""
+    monkeypatch.setenv("RASK_OIDC_ENABLED", "true")
+    monkeypatch.setenv("RASK_OIDC_ISSUER", "https://issuer.test")
+    monkeypatch.setenv("RASK_OIDC_AUDIENCE", "rask")
+    human_door = _Verifier("anyone")
+
+    with TestClient(_app(oidc=human_door, fga=object(), sa_oidc=service_door), raise_server_exceptions=False) as client:
+        response = client.post("/ingests", json={"project": "demo"}, headers=_service_bearer(sa_issuer, account="rask-sa-notifications"))
+
+    assert response.status_code == 401
+    assert human_door.verified == []
+
+
+def test_a_VALID_service_token_from_the_PUBLIC_DOOR_is_refused(service_door: ServiceAccountVerifier, sa_issuer: Any) -> None:
+    """A machine credential arriving through the gateway's sidecar names the proxy's hop, not a service this door
+    may trust: the estate's list of public front doors is refused on the service branch."""
+    with TestClient(_app(sa_oidc=service_door), raise_server_exceptions=False) as client:
+        response = client.post("/ingests", json={"project": "demo"}, headers={**_service_bearer(sa_issuer), "dapr-caller-app-id": "gateway"})
+
+    assert response.status_code == 403, "a service credential relayed by a public front door authorized a write"
+    assert "public front door" in response.json()["detail"]
+
+
+def test_NOTHING_configured_is_dev_open() -> None:
     """Matches every other door in the estate: a dev stack with nothing configured still works.
 
     Pinned as a TEST so the behaviour is a decision on record rather than an accident — and so that
     tightening it later is a visible change to this assertion, not a silent one.
     """
-    monkeypatch.delenv("APP_API_TOKEN", raising=False)
-
     with TestClient(_app()) as client:
         assert client.post("/ingests", json={"project": "anything"}).status_code == 200
 
@@ -107,19 +175,8 @@ def test_NO_service_token_configured_is_dev_open(monkeypatch: pytest.MonkeyPatch
 # ── the human door ────────────────────────────────────────────────────────────────────
 
 
-class _Verifier:
-    def __init__(self, sub: str | None) -> None:
-        self._sub = sub
-
-    def verify(self, raw: str) -> Any:
-        if self._sub is None:
-            raise UnauthenticatedError("invalid token")
-        return type("Tok", (), {"sub": self._sub})()
-
-
 @pytest.fixture
 def _oidc_on(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("APP_API_TOKEN", SERVICE_TOKEN)
     monkeypatch.setenv("RASK_OIDC_ENABLED", "true")
     monkeypatch.setenv("RASK_OIDC_ISSUER", "https://issuer.test")
     monkeypatch.setenv("RASK_OIDC_AUDIENCE", "rask")
@@ -193,65 +250,12 @@ def test_OIDC_on_with_NO_fga_client_fails_CLOSED(_oidc_on: None) -> None:
         assert client.post("/ingests", json={"project": "demo"}, headers={"authorization": "Bearer t"}).status_code == 503
 
 
-# ── the gateway must not launder anonymous traffic into a service-authenticated write ──
+# ── ING-01: an absent service door is not an absent door ─────────────────────────────────────────
 
 
-def test_a_VALID_service_token_from_the_PUBLIC_DOOR_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The measured bypass: 403 straight to the pod, 202 through the gateway, with NO credential.
-
-    `dapr.io/app-token-secret` makes daprd stamp `dapr-api-token` on every request it hands the app,
-    and the gateway forwards through Dapr service invocation, so an anonymous public request arrives
-    here already holding a valid service token. A browser with no login started a real ingest run
-    that way. The token proves the request came through Dapr; it says nothing about who sent it.
-    """
-    monkeypatch.setenv("APP_API_TOKEN", SERVICE_TOKEN)
-
-    with TestClient(_app(), raise_server_exceptions=False) as client:
-        response = client.post(
-            "/ingests",
-            json={"project": "demo"},
-            headers={"dapr-api-token": SERVICE_TOKEN, "dapr-caller-app-id": "gateway"},
-        )
-
-    assert response.status_code == 403, "a token stamped by daprd on behalf of an anonymous caller authorized a write"
-    assert "public front door" in response.json()["detail"]
-
-
-def test_the_SAME_token_from_a_SERVICE_caller_still_works(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The guard must not sever service-to-service ingest, which is the token's actual job.
-
-    Without this, the fix would be indistinguishable from deleting the service-token path — and every
-    cascade head that legitimately drives an ingest would start failing.
-    """
-    monkeypatch.setenv("APP_API_TOKEN", SERVICE_TOKEN)
-
-    with TestClient(_app()) as client:
-        response = client.post(
-            "/ingests",
-            json={"project": "demo"},
-            headers={"dapr-api-token": SERVICE_TOKEN, "dapr-caller-app-id": "medallion"},
-        )
-
-    assert response.status_code == 200
-
-
-# ── ING-01: an absent service token is not an absent door ─────────────────────────────────────────
-#
-# Every test above SETS `APP_API_TOKEN`, which is exactly how the bypass survived a read-through audit.
-# `authorize_ingest` opened with `if not expected: return`, so a deployment with OIDC enabled, a live
-# FGA client and a BLANK or unset service token accepted every ingest from anyone who could reach the
-# port — while `/v1/me`, the navbar and the catalog all reported authorization as ON. The blank case is
-# the likelier one: a secret that renders empty is far more common than one nobody wired, and it failed
-# open rather than loudly.
-
-
-def test_a_BLANK_service_token_does_not_open_the_door_when_auth_is_ON(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The likelier shape of the same fault — a secret that rendered empty, not one nobody wired."""
-    monkeypatch.setenv("APP_API_TOKEN", "")
-    monkeypatch.setenv("RASK_OIDC_ENABLED", "true")
-    monkeypatch.setenv("RASK_OIDC_ISSUER", "https://issuer.test")
-    monkeypatch.setenv("RASK_OIDC_AUDIENCE", "rask")
-
+def test_with_OIDC_on_and_no_service_door_an_anonymous_request_is_refused(_oidc_on: None) -> None:
+    """The open posture means NOTHING is configured to authenticate against; a deployment with no service-account
+    issuer but OIDC on is not open (docs/DECISIONS.md "The Python estate audit", ING-01)."""
     with TestClient(_app(fga=object()), raise_server_exceptions=False) as client:
         assert client.post("/ingests", json={"project": "demo"}).status_code == 403
 

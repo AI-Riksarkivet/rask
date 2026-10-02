@@ -36,7 +36,7 @@ def test_the_catalog_delimiter_has_ONE_reader(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setenv("RASK_CATALOG_DELIMITER", "~")
     monkeypatch.delenv("MEDALLION_BRONZE_NAMESPACE", raising=False)
 
-    client = CatalogServiceClient(pa.schema([pa.field("id", pa.string())]), base_url="http://catalog.test", token="t")
+    client = CatalogServiceClient(pa.schema([pa.field("id", pa.string())]), base_url="http://catalog.test")
 
     assert delimiter() == "~"
     assert client.table_id("bronze", "pages") == "bronze~pages"

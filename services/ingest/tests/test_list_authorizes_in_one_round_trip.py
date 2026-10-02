@@ -29,7 +29,6 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
 
 
-SERVICE_TOKEN = "s3cr3t-service-token"
 _BEARER = {"authorization": "Bearer t"}
 
 
@@ -58,7 +57,6 @@ def _oidc_on(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     after monkeypatch has restored the environment, and every later test in the session runs against
     a door it never configured. Measured: sixteen unrelated failures across three modules.
     """
-    monkeypatch.setenv("APP_API_TOKEN", SERVICE_TOKEN)
     monkeypatch.setenv("RASK_OIDC_ENABLED", "true")
     monkeypatch.setenv("RASK_OIDC_ISSUER", "https://issuer.test")
     monkeypatch.setenv("RASK_OIDC_AUDIENCE", "rask")

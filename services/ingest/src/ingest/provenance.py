@@ -39,7 +39,8 @@ import threading
 from collections import OrderedDict
 
 from ingest.config import settings
-from ingest.service_identity import service_headers
+from ingest.service_identity import lineage_bearer
+from service_kit.governed.machine_identity import IdentityTokenUnavailableError
 
 
 logger = logging.getLogger(__name__)
@@ -62,20 +63,8 @@ def lineage_base_url() -> str:
     return settings().lineage_url.rstrip("/")
 
 
-#: The credentials the READ needs on a governed estate — the same pair the EMITTER uses, because
-#: reading the graph and writing to it are the same door. Sending neither is what made a refusal
-#: indistinguishable from an outage.
-def _service_headers() -> dict[str, str]:
-    config = settings()
-    # ONE builder for both of ingest's doors (`ingest.service_identity`), so the dedicated credential
-    # cannot reach the catalog and miss the graph. It keeps the half-configured rule this function
-    # established: the lineage door needs BOTH halves, and sending one is a request refused for a
-    # reason nobody can see from here, so it answers `{}` rather than a doomed request.
-    return service_headers(config, identity=config.lineage_service_identity, shared_token=config.lineage_app_token)
-
-
 class ProvenanceRefused(Exception):
-    """The graph was reachable and REFUSED the read — a misconfiguration, not an outage.
+    """The graph REFUSED the read, or this pod had no identity token to present — a misconfiguration, not an outage.
 
     Its own exception rather than a `None`, because the two demand opposite responses from an
     operator: a `None` says "try again / check the service is up", while this says "this service has
@@ -116,7 +105,8 @@ class LineageProvenanceReader:
     def has_run(self, run_id: str) -> bool | None:
         """True / False / None, where None means "the graph could not be asked".
 
-        Raises `ProvenanceRefused` when the graph answers 401/403 — see the module docstring.
+        Raises `ProvenanceRefused` when the graph answers 401/403, or this pod has no identity token to present — see
+        the module docstring.
         """
         from ingest.http import shared_client
         from ingest.lineage import lineage_run_id
@@ -125,6 +115,13 @@ class LineageProvenanceReader:
         with self._lock:
             if target in self._present:
                 return True
+        # Read before the request and outside the outage branch below: a pod with no readable identity token
+        # cannot be answered by the graph at all, which is this service's misconfiguration, not the graph's outage.
+        try:
+            credential = lineage_bearer()
+        except IdentityTokenUnavailableError as exc:
+            logger.warning("no lineage identity token to present (%s) — this service's A8 verdict is not trustworthy", exc)
+            raise ProvenanceRefused(f"no lineage identity token to present: {exc}") from exc
         try:
             # `/runs`, at the service ROOT. The lineage service mounts its v1 routers without a
             # version prefix — the gateway supplies `/api/lineage` and the pod serves `/runs`
@@ -132,14 +129,14 @@ class LineageProvenanceReader:
             # ingestion at `/api/v1/lineage`). Guessing `/v1/runs` from the module layout returns a
             # 404, which this method's except-branch would have reported as "graph unreachable" —
             # a wrong path and a down service would have been indistinguishable.
-            response = shared_client().get(f"{lineage_base_url()}/runs/{target}", headers=_service_headers(), timeout=TIMEOUT_SECONDS)
+            response = shared_client().get(f"{lineage_base_url()}/runs/{target}", headers=credential, timeout=TIMEOUT_SECONDS)
             # BEFORE raise_for_status, so a refusal never reaches the generic handler below. This is
             # the whole fix: a 401 used to fall into `except Exception` and be reported as an outage,
             # which the endpoint then rendered as "no defect".
             if response.status_code in (401, 403):
                 logger.warning(
                     "lineage refused the provenance read (%s) — this service's A8 verdict is not trustworthy "
-                    "until it has a lineage credential (RASK_LINEAGE_APP_TOKEN + RASK_LINEAGE_SERVICE_IDENTITY)",
+                    "until its service account is one the lineage door maps (RASK_SA_SUBJECTS)",
                     response.status_code,
                 )
                 raise ProvenanceRefused(f"lineage refused the provenance read with {response.status_code}")

@@ -138,32 +138,19 @@ class IngestSettings(BaseSettings):
     #: reached by a one-character mistake with nothing anywhere reporting it. Pydantic's boolean
     #: parsing accepts the same words and raises on anything else, so the misconfiguration is loud.
     use_catalog: bool = Field(default=False, validation_alias="RASK_INGEST_USE_CATALOG")
-    #: The catalog-SPECIFIC half of the service credential, if a deployment sets one. Read through
-    #: `catalog_app_token` rather than directly — see that property for the fallback and why it is a
-    #: property rather than an `AliasChoices` pair.
-    catalog_app_token_override: str | None = Field(default=None, validation_alias="RASK_CATALOG_APP_TOKEN")
-    catalog_service_identity: str | None = Field(default=None, validation_alias="RASK_CATALOG_SERVICE_IDENTITY")
-    #: The field inside the secret bundle holding the catalog bearer — the pre-identity-door path.
-    catalog_token_field: str = Field(default="catalog-token", validation_alias="RASK_CATALOG_TOKEN_FIELD")
+    #: This pod's projected service-account token for the catalog's door (audience `rask-catalog`). Read on every
+    #: request, because the kubelet replaces it at ~515 s of a 600 s lifetime (measured 2026-10-02, LH-220 P5.3 d).
+    catalog_identity_token_file: str = Field(default="/var/run/secrets/rask/identity/rask-catalog/token", validation_alias="RASK_CATALOG_IDENTITY_TOKEN_FILE")
 
     # ── the lineage graph (`provenance.py`) ───────────────────────────────────────────
     lineage_url: str = Field(default="http://rask-lineage:8000", validation_alias="RASK_LINEAGE_URL")
-    lineage_app_token_override: str | None = Field(default=None, validation_alias="RASK_LINEAGE_APP_TOKEN")
-    lineage_service_identity: str | None = Field(default=None, validation_alias="RASK_LINEAGE_SERVICE_IDENTITY")
+    #: The same, for the lineage door (audience `rask-lineage`).
+    lineage_identity_token_file: str = Field(default="/var/run/secrets/rask/identity/rask-lineage/token", validation_alias="RASK_LINEAGE_IDENTITY_TOKEN_FILE")
 
-    # ── the secret store (`catalog_service.py`, `objectstore.py`) ─────────────────────
-    #: The Dapr secret store and key holding this plane's credentials. Same store the rest of the
+    # ── the secret store (`objectstore.py`) ───────────────────────────────────────────
+    #: The Dapr secret store holding a registered source store's credentials. Same store the rest of the
     #: governed fleet reads (`lance-secrets` -> OpenBao), so there is one place a credential rotates.
     secret_store: str = Field(default="lance-secrets", validation_alias="RASK_SECRET_STORE")
-    secret_key: str = Field(default="lance", validation_alias="RASK_SECRET_KEY")
-    #: Whether this deployment's DEDICATED service credential comes from the store
-    #: (`service_identity.dedicated_token_for`). Symmetric with `MAINTENANCE_SECRETS_FROM_DAPR`, and
-    #: OFF by default for a reason specific to ingest: `catalog_token` above deliberately SKIPS the
-    #: store when the identity and the shared token are both set, because a fail-closed fetch written
-    #: before the catalog had an identity door turned a missing-and-unneeded `catalog-token` into a
-    #: failed run at the first activity. Resolving the dedicated token unconditionally would put that
-    #: read back and fail closed on a dev stack that has no store and needs none.
-    secrets_from_dapr: bool = Field(default=False, validation_alias="RASK_INGEST_SECRETS_FROM_DAPR")
 
     # ── the medallion handshake (`naming.py`) ─────────────────────────────────────────
     #: The bronze TIER's namespace name, read from the same chart value the medallion reads. A tier
@@ -177,25 +164,6 @@ class IngestSettings(BaseSettings):
     cron_kind: str = Field(default="", validation_alias="RASK_INGEST_CRON_KIND")
     cron_dataset: str = Field(default="", validation_alias="RASK_INGEST_CRON_DATASET")
     cron_options: str = Field(default="", validation_alias="RASK_INGEST_CRON_OPTIONS")
-
-    # ── the estate's shared service token ─────────────────────────────────────────────
-    #: What daprd injects into every fleet pod. Read here ONLY as the fallback under the two
-    #: per-upstream overrides below; the ingest DOOR reads it straight from `os.environ` on purpose,
-    #: because `get_auth_settings` is cached and a cached credential is a rotated secret nobody picks
-    #: up (`auth.authorize_ingest`).
-    app_api_token: str | None = Field(default=None, validation_alias="APP_API_TOKEN")
-
-    @property
-    def catalog_app_token(self) -> str | None:
-        """The token presented to the catalog's service door: the specific one, else the shared one.
-
-        A PROPERTY rather than an `AliasChoices` pair, and the difference is not cosmetic. Alias
-        choices resolve to the first variable that is PRESENT, so a `RASK_CATALOG_APP_TOKEN` rendered
-        EMPTY — a secret that resolved to nothing, which is the likely failure and the one ING-01 was
-        about — would win and the estate token would never be tried. `or` treats blank as absent,
-        which is what the two `os.getenv(...) or os.getenv(...)` call sites this replaces did.
-        """
-        return self.catalog_app_token_override or _shared_app_token(self)
 
     #: Whether a vending FAILURE may sign the run's bytes with the pod's ambient credential.
     #:
@@ -222,34 +190,6 @@ class IngestSettings(BaseSettings):
     #: EMPTY DISABLES STAGING, deliberately: a deployment that has not wired an outbox must not have
     #: events written to a guessed prefix nothing drains, which is a leak wearing recovery's name.
     lineage_outbox_uri: str = Field(default="", validation_alias="RASK_INGEST_LINEAGE_OUTBOX_URI")
-
-    @property
-    def lineage_app_token(self) -> str | None:
-        """The token presented to the lineage door. Same fallback, same reason, as the catalog's."""
-        return self.lineage_app_token_override or _shared_app_token(self)
-
-
-def _shared_app_token(config: IngestSettings) -> str | None:
-    """The estate's shared token, read through the resolver the INBOUND doors use.
-
-    `expected_app_token()` returns the Dapr store's value when `RASK_APP_TOKEN_FROM_STORE` is set and
-    the env value otherwise; `config.app_api_token` is env-only, so on a store-path deployment the two
-    disagree — and this service runs on one (measured live 2026-09-22:
-    `RASK_APP_TOKEN_FROM_STORE=true`).
-
-    NOT A LIVE DEFECT HERE, and saying so is the point of writing it down: ingest is privileged at both
-    doors and `RASK_INGEST_SECRETS_FROM_DAPR=true`, so the dedicated resolver answers and this fallback
-    is unreached in production. It becomes one the moment the dedicated path is turned off while the
-    estate's token stays in the store — every outbound call then goes out unauthenticated, silently.
-    `notifications` is what that looks like: 3,087 cron failures against a reconciler that had never
-    run.
-
-    IT DOES NOT CATCH `SecretStoreUnreadable`: a store outage must not degrade into an unauthenticated
-    request, which turns a transient condition into a 401 raised a service away.
-    """
-    from service_kit.governed import dapr_auth
-
-    return dapr_auth.expected_app_token() or config.app_api_token
 
 
 def settings() -> IngestSettings:

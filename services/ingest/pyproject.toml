@@ -83,14 +83,12 @@ extend = "../../pyproject.toml"
 "pyannote".msg = "No model framework in a shared seam: models live in sealed runners/."
 "nats".msg = "The broker appears only in ingest.queue (the queue seam)."
 "ray_kit.await_success".msg = "Poll a Ray job through the shared submit-or-reattach kernel."
-"os.getenv".msg = "Declare the value on IngestSettings (config.py); auth.py's call-time APP_API_TOKEN read is the one exception."
-"os.environ".msg = "Declare the value on IngestSettings (config.py); auth.py's call-time APP_API_TOKEN read is the one exception."
+"os.getenv".msg = "Declare the value on IngestSettings (config.py)."
+"os.environ".msg = "Declare the value on IngestSettings (config.py)."
 "httpx.get".msg = "Use ingest.http.shared_client(): one pooled client with explicit timeouts."
 "httpx.post".msg = "Use ingest.http.shared_client(): one pooled client with explicit timeouts."
 "httpx.Client".msg = "Use ingest.http.shared_client(): one pooled client with explicit timeouts."
 
-# http.py IS the shared pool, so the whole module is the sanctioned httpx.Client site. auth.py's one
-# call-time APP_API_TOKEN read carries a line-level noqa instead of a per-file ignore: auth.py is the
-# service's authorization door, and a per-file ignore would waive the FGA grant and revoke bans there too.
+# http.py IS the shared pool, so the whole module is the sanctioned httpx.Client site.
 [tool.ruff.lint.extend-per-file-ignores]
 "src/ingest/http.py" = ["TID251"]  # httpx.Client: the shared pool

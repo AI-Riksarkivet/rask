@@ -11,7 +11,7 @@ The schedule lives in the chart as component config, never here — there is no 
 service, and a cadence in code cannot be changed without a deploy.
 
 ONE PROJECT, BY CONSTRUCTION, and this is a designed limit rather than an oversight. A tick carries no
-user, so the run authorizes on the service-token branch, which `auth.py` pins to
+user, so the run authorizes on the service branch, which `auth.py` pins to
 ``RASK_INGEST_SERVICE_PROJECT``. A multi-tenant watch set cannot work through that door as it stands,
 because nothing in the plane carries a watch creator's authority forward to fire time. Anything
 broader needs that question answered first, not a wider loop here.

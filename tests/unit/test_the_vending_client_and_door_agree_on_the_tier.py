@@ -26,6 +26,7 @@ the DOOR parses it.
 
 from __future__ import annotations
 
+import pathlib
 from typing import Annotated, Any
 
 import pytest
@@ -52,10 +53,14 @@ def door() -> FastAPI:
     return app
 
 
-def test_the_client_asks_for_the_write_tier_in_a_form_the_door_reads(door: FastAPI, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_client_asks_for_the_write_tier_in_a_form_the_door_reads(door: FastAPI, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The client's OWN request, replayed against the door. Nothing here supplies the tier on its
     behalf — that is the whole point, since the defect was the client supplying it somewhere the door
     does not look."""
+    # The projected token every catalog request carries ([[LH-220]]); the client refuses to send without it.
+    token_file = tmp_path / "rask-catalog-token"
+    token_file.write_text("projected-rask-catalog-token")
+    monkeypatch.setenv("RASK_CATALOG_IDENTITY_TOKEN_FILE", str(token_file))
     with TestClient(door) as transport:
         answered: dict[str, Any] = {}
 

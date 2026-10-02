@@ -45,7 +45,7 @@ class TestTheNamespaceRefusalNamesTheFix:
             return_value=httpx.Response(400, text="top-level namespace 'acme-bronze' must belong to a warehouse")
         )
 
-        service = CatalogServiceClient(pa.schema([("id", pa.int64())]), base_url="http://catalog.test", token="t")
+        service = CatalogServiceClient(pa.schema([("id", pa.int64())]), base_url="http://catalog.test")
         with pytest.raises(CatalogError) as excinfo:
             service._ensure_namespace("acme-bronze")
 
@@ -61,7 +61,7 @@ class TestTheNamespaceRefusalNamesTheFix:
         respx.post(url__regex=r".*/v1/namespace/.*/exists").mock(return_value=httpx.Response(404))
         respx.post(url__regex=r".*/v1/namespace/.*/create").mock(return_value=httpx.Response(400, text="delimiter '$' is not permitted in a namespace segment"))
 
-        service = CatalogServiceClient(pa.schema([("id", pa.int64())]), base_url="http://catalog.test", token="t")
+        service = CatalogServiceClient(pa.schema([("id", pa.int64())]), base_url="http://catalog.test")
         with pytest.raises(CatalogError) as excinfo:
             service._ensure_namespace("badname")
 

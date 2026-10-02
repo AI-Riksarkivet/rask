@@ -163,34 +163,13 @@ def _emitter() -> Any:  # noqa: ANN401 — Emitter
     publish would be a second announcement of the same write — a double-fired cascade whose two
     triggers nothing keeps in agreement.
 
-    THE CREDENTIAL IS RESOLVED HERE, and it was not before. lineage-kit builds the service-door pair
-    from `LineageSettings` alone, whose `app_token` is the estate's SHARED bearer — and `service-ingest`
-    is on `LINEAGE_PRIVILEGED_SUBJECTS`, where `dapr_auth.service_principal` refuses the shared token
-    from a privileged name and does not fall back. So every emit was 401'd. Ingest's OTHER lineage
-    client, `provenance.py`, has always sent the right token through `service_identity.service_headers`:
-    one service, one door, two clients, and only one of them credentialed.
-
-    Measured on the deployed estate 2026-09-10 — `POST /api/v1/lineage` had served TWO requests in the
-    retained log and answered 401 to both, a 100% failure rate, while 806 events reached the graph over
-    the Dapr topic from producers that do not use this path. It read as a healthy estate because the
-    run still reports COMPLETE (I8, above) and the recovery hook could not write either.
-
-    The token comes from the Dapr secret store via the resolver ingest already owns — never from an
-    env var. `RASK_LINEAGE_TOKEN_<IDENTITY>` exists and is deliberately NOT used here: it is the Ray
-    lane's answer, where a pod carries several identities and has no sidecar to ask.
+    THE CREDENTIAL IS lineage-kit's: its transport presents this pod's projected `rask-lineage` token on every emit
+    ([[LH-220]], D1), the same file `provenance.py`'s read presents through `ingest.service_identity`.
     """
-    from ingest.config import settings
-    from ingest.service_identity import dedicated_token_for
     from lineage_kit import build_emitter
     from lineage_kit.config import LineageSettings
 
-    transport = LineageSettings()
-    identity = transport.service_identity
-    resolver = dedicated_token_for(settings()) if identity else None
-    own = resolver(identity) if resolver is not None and identity else None
-    # An identity the store simply lacks resolves to None and the shared bearer stands — the door stays
-    # the single authority on whether that is acceptable, exactly as `service_headers` leaves it.
-    return build_emitter(transport.model_copy(update={"app_token": own}) if own else transport)
+    return build_emitter(LineageSettings())
 
 
 def _run(
@@ -226,9 +205,9 @@ def _stage_undelivered(event: RunEvent) -> None:
 
     § E1. This lane emitted BARE — four of the five lakehouse producers stage through the shared
     object-store outbox and this one did not — so a refused door lost the event outright. That is not
-    hypothetical: `service_identity.py` records it happening twice, most recently a day of 403s while
-    the data landed, and a 401 here "surfaces as a permanent gap in the graph that looks exactly like a
-    healthy estate".
+    hypothetical: it happened twice on this lane (the trainer in 2026-07, `service-ingest` on 2026-08-06, a day of
+    403s while the data landed), and a 401 here surfaces as a permanent gap in the graph that looks exactly like a
+    healthy estate.
 
     The SAME prefix every other producer stages to, because lineage's reconcile cron drains exactly one.
     Unwired (`lineage_outbox_uri` empty) writes nothing: staging to a guessed prefix nothing drains is a
@@ -276,11 +255,10 @@ def _outbox_storage_options() -> dict[str, str]:
     endpoint = config.s3_endpoint_url
     base: dict[str, str] = {"endpoint": endpoint} if endpoint else {}
     from ingest.catalog_service import vend_outbox_options
-    from ingest.service_identity import service_headers
+    from ingest.service_identity import catalog_bearer
 
-    headers = service_headers(config, identity=config.catalog_service_identity, shared_token=config.catalog_app_token)
     try:
-        vended = vend_outbox_options(headers=headers, allow_ambient_fallback=config.insecure_allow_ambient_storage)
+        vended = vend_outbox_options(headers=catalog_bearer(), allow_ambient_fallback=config.insecure_allow_ambient_storage)
     except Exception as exc:
         # Degrades, never raises — see the rule above. Staging is the backstop, and a vend that cannot
         # be reached must not turn a run whose data already landed into a failed one (I8).
@@ -326,11 +304,11 @@ def _tenant_facet(
     if run_id:
         fields["run_id"] = run_id
     # The HUMAN who asked for this harvest. This run reaches lineage over HTTP, where `enforce_author`
-    # replaces the author facet with the CALLER's sub — and the caller is this SERVICE
-    # (`RASK_LINEAGE_SERVICE_IDENTITY`). So without this field every ingest run was announced to an
+    # replaces the author facet with the CALLER's sub — and the caller is this SERVICE (the subject its
+    # service account maps to at the lineage door). So without this field every ingest run was announced to an
     # inbox named `service-ingest`, and the person who started it heard nothing about their own run.
     # Read by `notifications.api.lineage_events.originator_subject`; absent is byte-identical, which is
-    # the right answer for a service-token call — an invented placeholder would re-create the defect.
+    # the right answer for a service call — an invented placeholder would re-create the defect.
     if originator:
         fields["originator"] = originator
     # THE PUBLICATION VERDICT. A commit is not a publication (§ D2 D-R1), and until this landed the

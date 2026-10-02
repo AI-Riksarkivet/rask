@@ -15,7 +15,7 @@ poll at the outer boundary. Bucket notification was rejected as the general mech
 covers one of three registered kinds and IIIF has no notification channel and never will.
 
 THE AUTHORIZATION CONSTRAINT IS REAL AND DESIGNED. A tick carries no user, so the run authorizes on
-the service-token branch, which is pinned to the configured service project. A multi-tenant watch set
+the service branch, which is pinned to the configured service project. A multi-tenant watch set
 cannot work through that door as it stands, and nothing carries a watch creator's authority forward
 to fire time — so this trigger serves ONE project by construction, and the tests say so rather than
 letting someone discover it from a 403.

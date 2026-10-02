@@ -33,13 +33,12 @@ from __future__ import annotations
 
 import json
 import logging
-from functools import lru_cache
 from typing import TYPE_CHECKING
 
 from ingest.catalog import assert_creation_contract
 from ingest.config import settings
 from ingest.naming import delimiter
-from ingest.service_identity import service_headers
+from ingest.service_identity import catalog_bearer
 
 
 if TYPE_CHECKING:
@@ -70,45 +69,6 @@ def catalog_enabled() -> bool:
     with governed data that no catalog knows about.
     """
     return settings().use_catalog
-
-
-@lru_cache(maxsize=1)
-def catalog_token() -> str | None:
-    """The catalog bearer, from the SECRET STORE — never from process env.
-
-    This was `os.getenv("RASK_CATALOG_TOKEN")`, and the consequence was measured in-cluster rather
-    than reasoned about: on a governed estate the variable is unset (the chart ships no plaintext env
-    for a credential, which is the rule working), so every call went out with NO Authorization header
-    and the catalog answered
-
-        401 {"detail": "Missing bearer token"}
-
-    on `describe`. That is `ensure_dataset` — the FIRST activity of every run — so no ingest could
-    create its bronze dataset and every run ended FAILED with `units 0/0`. A door refusing an
-    unauthenticated caller is correct; the caller having no way to be authenticated is the defect.
-
-    FAIL-CLOSED, via the estate's one helper (`fetch_required_secrets`), which catalog / lineage /
-    maintenance already use — so a missing secret raises here rather than booting a service that will
-    401 on its first real call. Deliberately NO env fallback: a fallback makes the store optional, and
-    an optional secret store is the "wired but never read" state an audit already found once.
-
-    Returns None only when the catalog is not in use at all (`catalog_enabled()` false — the local/dev
-    path, which has no catalog to authenticate to). Cached because a token fetch per HTTP call would
-    put the secret store on the hot path of every unit.
-    """
-    if not catalog_enabled():
-        return None
-    # The SERVICE DOOR makes the bearer unnecessary, so do not demand a secret that is not needed.
-    # This fail-closed fetch was written before the catalog had an identity door, and it turned a
-    # missing-and-unneeded `catalog-token` into a failed run at the first activity. A service that
-    # can authenticate as itself has nothing to look up.
-    config = settings()
-    if config.catalog_service_identity and config.catalog_app_token:
-        return None
-    from service_kit.governed.secrets import fetch_required_secrets
-
-    bundle = fetch_required_secrets(config.secret_store, config.secret_key, require=config.catalog_token_field)
-    return bundle[config.catalog_token_field]
 
 
 class CatalogError(RuntimeError):
@@ -210,13 +170,11 @@ class CatalogServiceClient:
         self,
         schema: pa.Schema,
         base_url: str | None = None,
-        token: str | None = None,
         *,
         allow_ambient_fallback: bool = False,
     ) -> None:
         self._schema = schema
         self._base = (base_url or catalog_base_url()).rstrip("/")
-        self._token = token if token is not None else catalog_token()
         #: Whether a vending FAILURE may degrade to the pod's ambient credential. Off, because that
         #: credential is the storage root and the degrade was invisible; see `VendingUnavailableError`.
         self._allow_ambient_fallback = allow_ambient_fallback
@@ -306,30 +264,8 @@ class CatalogServiceClient:
         return f"{namespace}{delimiter()}{dataset}"
 
     def _headers(self, extra: dict[str, str] | None = None) -> dict[str, str]:
-        """The credential this plane presents to the catalog.
-
-        THE SERVICE IDENTITY IS PREFERRED, and that ordering is the fix. The catalog now runs the
-        same identity door lineage does (`service_kit.governed.dapr_auth.service_principal`), so a
-        service authenticates the way a service should — with the app token daprd already injects
-        plus the subject it claims — and needs no bearer at all.
-
-        The bearer path came first and was the wrong shape for the problem: the catalog verifies OIDC
-        JWTs, a JWT EXPIRES, and a static string in a secret store cannot be one. Chasing it produced
-        a fail-closed run on a `catalog-token` secret that never needed to exist. Kept below only for
-        a caller that genuinely holds a user's bearer — forwarding a human's token is a real case, and
-        it takes precedence over nothing here because a service call has no human to forward.
-
-        Both halves, never one: the door requires the token AND the identity, and sending one is a
-        request refused for a reason invisible from this side.
-        """
-        headers = dict(extra or {})
-        config = settings()
-        service = service_headers(config, identity=config.catalog_service_identity, shared_token=config.catalog_app_token)
-        if service:
-            headers.update(service)
-        elif self._token:
-            headers["Authorization"] = f"Bearer {self._token}"
-        return headers
+        """The request's headers: ``extra`` plus this pod's catalog identity token, read now (`ingest.service_identity`)."""
+        return {**(extra or {}), **catalog_bearer()}
 
     # ── the two doors ─────────────────────────────────────────────────────────────────
 

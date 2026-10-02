@@ -64,7 +64,7 @@ def test_the_catalog_client_vends_scoped_options() -> None:
     from ingest.catalog_service import CatalogServiceClient
 
     schema = pa.schema([("id", pa.int64())])
-    client = CatalogServiceClient(schema, base_url="http://catalog:2333", token="t")
+    client = CatalogServiceClient(schema, base_url="http://catalog:2333")
     with respx.mock:
         respx.post("http://catalog:2333/management/v1/table/ns$ds/credentials").mock(
             return_value=httpx.Response(
@@ -102,7 +102,7 @@ def test_a_vending_failure_REFUSES_rather_than_signing_with_the_storage_root() -
 
     from ingest.catalog_service import CatalogServiceClient, VendingUnavailableError
 
-    client = CatalogServiceClient(pa.schema([("id", pa.int64())]), base_url="http://catalog:2333", token="t")
+    client = CatalogServiceClient(pa.schema([("id", pa.int64())]), base_url="http://catalog:2333")
     with respx.mock:
         respx.post("http://catalog:2333/management/v1/table/ns$ds/credentials").mock(return_value=httpx.Response(503, json={"detail": "vendor down"}))
         with pytest.raises(VendingUnavailableError):

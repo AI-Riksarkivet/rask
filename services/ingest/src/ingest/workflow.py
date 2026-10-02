@@ -372,7 +372,7 @@ class RunSpec(BaseModel):
     #: exists. Everything after runs as a workflow activity behind a service token, and lineage's
     #: `enforce_author` then stamps THAT as the author, so without carrying it here an ingest run is
     #: announced to an inbox named `service-ingest` and the person who started it is never told.
-    #: Empty for a service-token call, which has no human behind it — see `notifications` ORIGINATOR.
+    #: Empty for a service call, which has no human behind it — see `notifications` ORIGINATOR.
     originator: str = ""
     #: Resolved at ACCEPT (`api.create_ingest`) so a refusal is a 400 rather than a drain that hangs,
     #: and so the whole fan-out shares one set of numbers. `None` rather than a `resolve()` default

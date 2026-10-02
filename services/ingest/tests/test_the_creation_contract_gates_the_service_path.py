@@ -48,7 +48,7 @@ def _dataset(tmp: str, *, with_id: bool, stable: bool) -> str:
 
 
 def _client() -> CatalogServiceClient:
-    return CatalogServiceClient(pa.schema([pa.field("id", pa.int64())]), base_url=CATALOG, token="t")
+    return CatalogServiceClient(pa.schema([pa.field("id", pa.int64())]), base_url=CATALOG)
 
 
 def _catalog_serves(uri: str) -> None:

@@ -35,8 +35,8 @@ SCHEMA = pa.schema([("id", pa.string())])
 URL = "http://catalog:2333/management/v1/table/ns$ds/credentials"
 
 
-def _client(**kw: object) -> CatalogServiceClient:
-    return CatalogServiceClient(SCHEMA, base_url="http://catalog:2333", token="t", **kw)  # ty: ignore[invalid-argument-type]
+def _client(*, allow_ambient_fallback: bool = False) -> CatalogServiceClient:
+    return CatalogServiceClient(SCHEMA, base_url="http://catalog:2333", allow_ambient_fallback=allow_ambient_fallback)
 
 
 @respx.mock
@@ -78,14 +78,9 @@ def test_the_setting_reaches_the_client_that_has_to_honour_it(monkeypatch: pytes
     `build_catalog` is the one place that constructs the real client, so it is the one place this can
     come apart.
     """
-    import ingest.catalog_service as mod
     from ingest.catalog_service import build_catalog
 
     monkeypatch.setenv("RASK_INGEST_USE_CATALOG", "true")
-    # `catalog_token` reads the Dapr secret store and NEVER env — the estate's rule, and it fails
-    # closed with no sidecar. Stubbed because this pin is about the FLAG reaching the client, not
-    # about how the token is fetched.
-    monkeypatch.setattr(mod, "catalog_token", lambda: "t")
     for value, expected in (("true", True), ("false", False)):
         monkeypatch.setenv("RASK_INGEST_INSECURE_ALLOW_AMBIENT_STORAGE", value)
         built = build_catalog(SCHEMA)

@@ -145,7 +145,7 @@ def claimed(table: _Table, monkeypatch: pytest.MonkeyPatch) -> _Table:
 
 
 def _ingest() -> CatalogServiceClient:
-    return CatalogServiceClient(_SCHEMA, base_url="http://testserver", token="")
+    return CatalogServiceClient(_SCHEMA, base_url="http://testserver")
 
 
 def test_a_run_id_another_writer_claimed_does_not_answer_the_runs_commit(claimed: _Table) -> None:
