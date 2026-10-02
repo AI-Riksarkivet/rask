@@ -279,12 +279,11 @@ class MedallionSettings(OidcSettings, FgaSettings, BaseSettings):
     fga_service_identity: str = Field(default="service-stage-runner", alias="MEDALLION_FGA_SERVICE_IDENTITY")
     fga_required_action: str = Field(default="can_create_table", alias="MEDALLION_FGA_REQUIRED_ACTION")
 
-    # --- Produce-trigger admin auth (#64): ``/produce`` accepts EITHER the Dapr app-api-token (service-to-
-    # service, unchanged) OR a signed-in OIDC user who is a project admin (``can_administer``). The OIDC path
-    # lets the web UI trigger produce WITHOUT the web pod ever holding the service token — the human/external
-    # door, mirroring the catalog's OIDC verifier. Off by default; enabled with an issuer + audience. --------
-    # The verifier's knobs are `OidcSettings`' (`RASK_OIDC_*`); only the project below is medallion's.
-    # The project a trigger-ing user must administer — the gate is ``can_administer`` on ``project:<this>``.
+    # --- Produce-trigger admin auth (#64): ``/produce`` admits a service by its projected service-account
+    # token (`RASK_SA_*`) or a signed-in OIDC user (`RASK_OIDC_*`), and either one must hold
+    # ``can_administer`` on the project. The OIDC path lets the web UI trigger produce with the user's own
+    # bearer, so the web pod holds no credential of its own for it. -------------------------------------
+    # The project a caller that names none must administer — the gate is ``can_administer`` on ``project:<this>``.
     produce_admin_project: str = Field(default="acme", alias="MEDALLION_PRODUCE_ADMIN_PROJECT")
 
     def fga_object(self, to_namespace: str | None = None) -> str:
@@ -419,21 +418,14 @@ class MedallionSettings(OidcSettings, FgaSettings, BaseSettings):
     #: Empty with a catalog URL set is a REFUSAL, not a guess: an unaddressable registration means an
     #: ungoverned bronze tier, which is the defect this closes.
     catalog_root: str = Field(default="", alias="MEDALLION_CATALOG_ROOT")
-    # Optional bearer for auth-enabled catalogs (mirrors the annotator's MEDIA_CATALOG_TOKEN
-    # pattern; the OpenBao/Dapr secret flow is the production source — this is the pinned override).
-    catalog_token: str | None = Field(default=None, alias="MEDALLION_CATALOG_TOKEN")
-    #: The subject this stage runner claims at the catalog's SERVICE door — a name, never a secret, so it is
-    #: ordinary chart env. Preferred over the bearer above: the catalog verifies OIDC JWTs and a static
-    #: string cannot be one (the lesson `ingest/catalog_service.py` records).
-    #:
-    #: Deliberately NOT `fga_service_identity`, which carries the same value but is rendered only when
-    #: FGA is on. Authentication and authorization are different questions, and coupling them means a
-    #: governed estate running `auth.enabled: true` with FGA off cannot authenticate at all.
-    catalog_service_identity: str = Field(default="", alias="MEDALLION_CATALOG_SERVICE_IDENTITY")
-    #: The Dapr app token as the ENVIRONMENT carries it, which on a store-path deployment is EMPTY.
-    #: Read it through `outbound_app_token` rather than directly — see that function for why.
-    #: Paired with the identity above; one without the other is refused at a door that cannot say why.
-    app_api_token: str = Field(default="", alias="APP_API_TOKEN")
+    #: This pod's projected service-account token for each door it calls, one audience per file ([[LH-220]], D1).
+    #: Every call reads its file afresh, because the kubelet replaces the token at 80% of its 600 s lifetime
+    #: (measured 2026-10-02: rotated at age 515 s); nothing else names the caller. The producer calls all
+    #: three, a stage runner the catalog and lineage.
+    catalog_identity_token_file: str = Field(default="/var/run/secrets/rask/identity/rask-catalog/token", alias="RASK_CATALOG_IDENTITY_TOKEN_FILE")
+    lineage_identity_token_file: str = Field(default="/var/run/secrets/rask/identity/rask-lineage/token", alias="RASK_LINEAGE_IDENTITY_TOKEN_FILE")
+    #: The audience of the medallion's own doors: the producer presents it to the stage runners.
+    medallion_identity_token_file: str = Field(default="/var/run/secrets/rask/identity/rask-medallion/token", alias="RASK_MEDALLION_IDENTITY_TOKEN_FILE")
     # The catalog id delimiter (`gold$catalog`) — matches LANCE_DELIMITER's default, same rationale as
     # MAINTENANCE_DELIMITER: a mismatch addresses a DIFFERENT table rather than failing.
     delimiter: str = Field(default=CATALOG_DELIMITER, alias="MEDALLION_DELIMITER")
@@ -623,28 +615,22 @@ def get_settings() -> MedallionSettings:
 
 @lru_cache(maxsize=1)
 def _dedicated_token_resolver(store: str) -> Callable[[str], str | None]:
-    """Cached so a resolver is built once per process, not once per catalog call."""
+    """Cached so a resolver is built once per process, not once per signed event."""
     from service_kit.governed.dapr_auth import dedicated_token_from_store
 
     return dedicated_token_from_store(store)
 
 
 def dedicated_token_for(settings: MedallionSettings) -> Callable[[str], str | None] | None:
-    """The resolver a stage runner uses to present its OWN credential, or ``None`` when it cannot.
+    """The resolver for this service's `service-token-<identity>`, the key it SIGNS its bus events with.
 
-    THE CLIENT HALF of the dedicated-credential binding. `service_kit.governed.dapr_auth` binds a
-    privileged subject to `service-token-<identity>` at the DOOR; a caller that goes on presenting the
-    shared `APP_API_TOKEN` is simply refused. Measured on the live estate 2026-08-26: rendering the
-    server-side expectation alone 401'd every stage runner call to the catalog until it was reverted.
+    Signing only: no door accepts this value as a credential any more, a service authenticates with its
+    projected service-account token ([[LH-220]]). The key keeps a second reader, lineage's signature check,
+    until per-identity signing moves to Transit ([[LH-064]]), which is why it stays readable here.
 
-    Returns ``None`` when secrets do not come from Dapr — a dev stack with no secret store keeps the
-    shared-token path exactly as before. A store that is READABLE but has no entry for this identity
-    resolves to ``None`` per-identity inside the resolver, and the caller falls back; the door remains
-    the single authority on whether that is acceptable.
-
-    An unreadable store raises out of the resolver rather than silently downgrading to the shared
-    token: "we could not read it" and "this identity is not privileged" are different answers, and
-    quietly treating the first as the second is how a credential control becomes decorative.
+    Returns ``None`` when secrets do not come from Dapr — a dev stack with no secret store signs nothing.
+    An unreadable store raises out of the resolver; `core/lineage_publish.py` decides what an outage means
+    for a signature.
     """
     if not settings.secrets_from_dapr:
         return None
@@ -673,26 +659,3 @@ def shared_lance_session() -> lance.Session:
     settings = get_settings()
     metadata, index = affordable_cache_bytes(settings.lance_metadata_cache_mb << 20, settings.lance_index_cache_mb << 20)
     return lance_session(metadata, index)
-
-
-def outbound_app_token(settings: MedallionSettings) -> str:
-    """The app token this service PRESENTS, resolved the way its own doors VERIFY one.
-
-    THE TWO ARE THE SAME SECRET, and reading them through different accessors is what breaks a
-    deployment silently. `service_kit.governed.dapr_auth.expected_app_token` is the single resolver the
-    inbound doors use: it returns the Dapr secret store's value when `RASK_APP_TOKEN_FROM_STORE` is set
-    and the env value otherwise. The outbound credential read `settings.app_api_token` directly, so the
-    moment the estate's secrets rule moved the token off the environment — which is the whole point of
-    the rule — every catalog call this service makes went out with NO headers at all.
-
-    `catalog_register.credential` needs both halves and returns `{}` when either is missing, so the
-    failure is not a refusal anybody can see from here: it is a 401 raised one service away, on every
-    call. Measured live: 2,700 in twenty-five minutes with zero successes.
-
-    IT DOES NOT CATCH `SecretStoreUnreadable`. A store outage must not degrade into an unauthenticated
-    request — that turns a transient, retryable condition into a permission error whose cause is a
-    service away. Raising keeps the caller's own retry meaning what it says.
-    """
-    from service_kit.governed import dapr_auth
-
-    return dapr_auth.expected_app_token() or settings.app_api_token or ""

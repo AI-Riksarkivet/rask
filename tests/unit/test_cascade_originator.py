@@ -135,6 +135,7 @@ def _publish_stage_output(**kw: Any) -> _CapturingTransport:
             version=2,
             key_column="id",
             cascade_id="tok1",
+            identity_token_file=MedallionSettings().catalog_identity_token_file,
             client=client,
             **kw,
         )

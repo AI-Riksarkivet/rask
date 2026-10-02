@@ -31,7 +31,7 @@ from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
 from PIL import Image
 
-from medallion.core.config import MedallionSettings, dedicated_token_for, outbound_app_token
+from medallion.core.config import MedallionSettings
 from medallion.core.lineage_publish import emit_lineage
 from medallion.schemas.events import build_run_event
 from medallion.services import catalog_register
@@ -178,10 +178,7 @@ async def ingest_media(dapr: DaprClient, settings: MedallionSettings, token: str
                         table_id=settings.media_bronze_dataset,
                         schema=media_bronze_schema(),
                         delimiter=settings.delimiter,
-                        token=settings.catalog_token,
-                        app_token=outbound_app_token(settings),
-                        service_identity=settings.catalog_service_identity,
-                        dedicated_token=dedicated_token_for(settings),
+                        identity_token_file=settings.catalog_identity_token_file,
                     )
                 )
             except catalog_register.RegisterError as exc:
@@ -225,7 +222,7 @@ async def ingest_media(dapr: DaprClient, settings: MedallionSettings, token: str
             # `author` is the SERVICE that performed the ingest; `originator` is the person who asked for
             # it, resolved at the door. They are different lanes on purpose — the ORIGINATOR lane exists
             # precisely for work a service runs on somebody's behalf. None on a service-to-service call:
-            # the shared token names nobody, and an unattributable run must stay unattributed rather than
+            # a service's subject is no person, and an unattributable run must stay unattributed rather than
             # address an inbox actor named after a role.
             originator=originator,
         )

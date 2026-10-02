@@ -60,10 +60,11 @@ async def produce(
     grants all key off that object). A catalog that refuses or cannot be reached is also a **503**: the
     refusal happens before the first byte, so the run did not half-happen and the same retry converges.
 
-    Guarded by ``require_dapr_token`` (the shared app-api-token) so an in-cluster workload can't forge the
-    cascade head: /produce is a direct operator trigger (not sidecar-delivered), and without this any pod that
-    could reach ``medallion-producer:8000`` could drive the pipeline / fabricate medallion provenance. No-op in dev
-    (unset token); enforced once APP_API_TOKEN is set. A NetworkPolicy (chart) is the network-isolation layer.
+    Guarded by ``authorize_produce`` so an in-cluster workload can't forge the cascade head: /produce is a
+    direct operator trigger (not sidecar-delivered), and without it any pod that could reach
+    ``medallion-producer:8000`` could drive the pipeline / fabricate medallion provenance. A service is
+    admitted by its own projected token and a person by an OIDC bearer, and either must administer the
+    project produced into. A NetworkPolicy (chart) is the network-isolation layer.
 
     ``Idempotency-Key`` (REQUIRED — the header param above carries no default, so a caller omitting it
     is refused 422 before any auth or cascade work) is the retry pairing this route's own 503+Retry-After contract demands:

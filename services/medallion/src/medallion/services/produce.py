@@ -27,7 +27,7 @@ from fastapi.concurrency import run_in_threadpool
 from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
 
-from medallion.core.config import MedallionSettings, dedicated_token_for, outbound_app_token, project_namespace
+from medallion.core.config import MedallionSettings, project_namespace
 from medallion.core.lineage_publish import emit_lineage
 from medallion.schemas.events import build_run_event
 from medallion.services import catalog_register
@@ -55,10 +55,7 @@ def _unwind_registration(settings: MedallionSettings, *, table_id: str, token: s
             catalog_url=settings.catalog_url,
             table_id=table_id,
             delimiter=settings.delimiter,
-            token=settings.catalog_token,
-            app_token=outbound_app_token(settings),
-            service_identity=settings.catalog_service_identity,
-            dedicated_token=dedicated_token_for(settings),
+            identity_token_file=settings.catalog_identity_token_file,
         )
     except catalog_register.RegisterError as unwind:
         # THE TYPED ERROR, not a bare `Exception`. `deregister_dataset` raises exactly this — for an
@@ -194,10 +191,7 @@ async def produce(
                         table_id=bronze_dataset_id,
                         dataset_uri=bronze_uri,
                         delimiter=settings.delimiter,
-                        token=settings.catalog_token,
-                        app_token=outbound_app_token(settings),
-                        service_identity=settings.catalog_service_identity,
-                        dedicated_token=dedicated_token_for(settings),
+                        identity_token_file=settings.catalog_identity_token_file,
                     )
                 )
             except catalog_register.LocationConflictError as exc:

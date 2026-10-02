@@ -17,11 +17,14 @@ the empty table exists only to make the catalog mint and govern a URI the stage 
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import httpx
 import pyarrow as pa
 import pytest
 import respx
 
+from medallion.core.config import MedallionSettings
 from medallion.services.catalog_register import RegisterError, ensure_stage_output
 
 
@@ -30,18 +33,12 @@ SCHEMA = pa.schema([pa.field("id", pa.int64())])
 VENDED = "s3://acme-bucket/8f3a21bc_silver$features"
 
 
-def _ensure(
-    *,
-    catalog_url: str = CATALOG,
-    app_token: str | None = None,
-    service_identity: str | None = None,
-) -> str:
+def _ensure(*, catalog_url: str = CATALOG) -> str:
     return ensure_stage_output(
         catalog_url=catalog_url,
         table_id="silver$features",
         schema=SCHEMA,
-        app_token=app_token,
-        service_identity=service_identity,
+        identity_token_file=MedallionSettings().catalog_identity_token_file,
     )
 
 
@@ -89,11 +86,13 @@ class TestItNeverComposesAPath:
 
 class TestItAuthenticatesAsAService:
     @respx.mock
-    def test_both_calls_carry_the_service_door_headers(self) -> None:
+    def test_both_calls_carry_the_projected_token_and_name_nobody(self) -> None:
         describe = respx.post(f"{CATALOG}/v1/table/silver$features/describe").mock(return_value=httpx.Response(403, json={}))
         create = respx.post(f"{CATALOG}/v1/table/silver$features/create").mock(return_value=httpx.Response(200, json={"location": VENDED}))
 
-        _ensure(app_token="stamped", service_identity="service-bronze-to-silver")
+        _ensure()
 
         for route in (describe, create):
-            assert route.calls.last.request.headers["x-lance-service-identity"] == "service-bronze-to-silver"
+            sent = route.calls.last.request.headers
+            assert sent["authorization"] == f"Bearer {Path(MedallionSettings().catalog_identity_token_file).read_text()}"
+            assert "x-lance-service-identity" not in sent, "nothing but the token names the caller"

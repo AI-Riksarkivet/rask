@@ -9,9 +9,10 @@ measured 2026-09-25 on e4e60b60 (the orchestrator's `probe_cross_tenant.py`): al
 
 Everything below runs the real routers and the real door. Faked: the OIDC verifier (the bearer's text
 IS the sub), OpenFGA (a fixed grant set), the stage runner's workflow engine, the lag tick and the
-edge declaration it measures. The producer reaches the stage runner over a real ASGI hop carrying the
-real service token, so the tenant the producer authorizes on is the one the stage runner read off the
-instance it hosts.
+edge declaration it measures. A service's token is real: the root conftest's loopback issuer mints it
+and each door verifies it against that issuer. The producer reaches the stage runner over a real ASGI
+hop carrying its own projected token, so the tenant the producer authorizes on is the one the stage
+runner read off the instance it hosts.
 """
 
 from __future__ import annotations
@@ -63,8 +64,9 @@ def _bearer(sub: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {sub}"}
 
 
+#: The app token daprd stamps on every invocation. It proves a sidecar delivered the request and names nobody.
 SERVICE = {"dapr-api-token": APP_TOKEN}
-#: The service token as daprd stamps it on a request the public gateway forwards for an anonymous caller.
+#: What daprd stamps on a request the public gateway forwards for an anonymous caller.
 PUBLIC = {**SERVICE, "dapr-caller-app-id": "gateway"}
 
 
@@ -191,12 +193,46 @@ class _Ticks:
         return LagTickReport(edges=len(edges), published_points=0, failed=0, unpublished_source=[StalledTier(edge=e, project=p) for e, p in edges])
 
 
-def _stage_runner(stages: dict[str, _State]) -> FastAPI:
+class _Identities:
+    """The two medallion doors' service accounts on the loopback issuer, as the chart maps them.
+
+    The producer's door maps the ingest service's account and a stage runner's door maps the producer's
+    alone. The producer's own token sits in the file the kubelet would project.
+    """
+
+    def __init__(self, issuer: Any, directory: Any) -> None:
+        self._issuer = issuer
+        self.token_file = directory / "rask-medallion-token"
+        self.token_file.write_text(self._mint(PRODUCER_SA))
+
+    def _mint(self, sa: str) -> str:
+        return self._issuer.mint(sa, audience=MEDALLION_AUDIENCE, namespace=NAMESPACE)
+
+    def verifier(self, sa: str, subject: str) -> ServiceAccountVerifier:
+        """A door's verifier mapping ``sa`` alone."""
+        return _sa_verifier(self._issuer, {_account(sa): subject})
+
+    def producer_bearer(self) -> dict[str, str]:
+        return _bearer(self._mint(PRODUCER_SA))
+
+    def service_bearer(self) -> dict[str, str]:
+        """The ingest service's token, whose subject administers `mine` only."""
+        return _bearer(self._mint(INGEST_SA))
+
+
+@pytest.fixture
+def identities(sa_issuer: Any, tmp_path: Any) -> _Identities:
+    return _Identities(sa_issuer, tmp_path)
+
+
+def _stage_runner(stages: dict[str, _State], identities: _Identities | None = None) -> FastAPI:
     app = FastAPI()
     register_handlers(app)
     install_problem_handlers(app, logging.getLogger(__name__))
     app.include_router(stage_ops.router)
     app.state.workflow_client = _Workflows(stages)
+    if identities is not None:
+        app.state.sa_oidc = identities.verifier(PRODUCER_SA, "service-medallion-producer")
     return app
 
 
@@ -204,7 +240,9 @@ def _stage_runner(stages: dict[str, _State]) -> FastAPI:
 _WIRED = object()
 
 
-def _producer(stage_runner: Any, *, fga_client: object | None = _WIRED, settings_update: dict[str, object] | None = None) -> FastAPI:
+def _producer(
+    stage_runner: Any, identities: _Identities | None = None, *, fga_client: object | None = _WIRED, settings_update: dict[str, object] | None = None
+) -> FastAPI:
     """The producer's operator routers, assembled in the order `build_lance_service_app` uses."""
     app = FastAPI()
     register_handlers(app)
@@ -216,13 +254,15 @@ def _producer(stage_runner: Any, *, fga_client: object | None = _WIRED, settings
         update={
             "oidc_enabled": True,
             "produce_admin_project": CONFIGURED,
-            "app_api_token": APP_TOKEN,
             "stage_runner_urls": {RUNNER: "http://sr:8000"},
+            **({"medallion_identity_token_file": str(identities.token_file)} if identities is not None else {}),
             **(settings_update or {}),
         }
     )
     app.dependency_overrides[get_settings] = lambda: settings
     app.state.oidc = _Verifier()
+    if identities is not None:
+        app.state.sa_oidc = identities.verifier(INGEST_SA, "service-ingest")
     app.state.fga = fga_client
     app.state.http = httpx.AsyncClient(transport=httpx.ASGITransport(app=stage_runner))
     app.state.workflow_client = _Workflows(dict(TRAINS))
@@ -230,9 +270,8 @@ def _producer(stage_runner: Any, *, fga_client: object | None = _WIRED, settings
 
 
 @pytest.fixture
-def stage_runner(monkeypatch: pytest.MonkeyPatch) -> FastAPI:
-    monkeypatch.setenv("APP_API_TOKEN", APP_TOKEN)
-    return _stage_runner(dict(STAGES))
+def stage_runner(identities: _Identities) -> FastAPI:
+    return _stage_runner(dict(STAGES), identities)
 
 
 @pytest.fixture
@@ -246,15 +285,15 @@ def ticks(monkeypatch: pytest.MonkeyPatch) -> _Ticks:
 
 
 @pytest.fixture
-def producer(stage_runner: FastAPI, fga: _Fga, ticks: _Ticks) -> Iterator[TestClient]:
-    with TestClient(_producer(stage_runner), raise_server_exceptions=False) as client:
+def producer(stage_runner: FastAPI, identities: _Identities, fga: _Fga, ticks: _Ticks) -> Iterator[TestClient]:
+    with TestClient(_producer(stage_runner, identities), raise_server_exceptions=False) as client:
         yield client
 
 
 @pytest.fixture
-def unwired(stage_runner: FastAPI, fga: _Fga, ticks: _Ticks) -> Iterator[TestClient]:
+def unwired(stage_runner: FastAPI, identities: _Identities, fga: _Fga, ticks: _Ticks) -> Iterator[TestClient]:
     """The producer with OIDC on and no authorization client: a person must never be let through."""
-    with TestClient(_producer(stage_runner, fga_client=None), raise_server_exceptions=False) as client:
+    with TestClient(_producer(stage_runner, identities, fga_client=None), raise_server_exceptions=False) as client:
         yield client
 
 
@@ -273,17 +312,17 @@ def _stop(stage: str) -> str:
 # ── the stage runner names the tenant of the instance it hosts ──────────────────────────────────────
 
 
-def test_the_stage_runner_reports_the_project_its_instance_RECORDS(stage_runner: FastAPI) -> None:
+def test_the_stage_runner_reports_the_project_its_instance_RECORDS(stage_runner: FastAPI, identities: _Identities) -> None:
     """The producer cannot read another app's workflow state, so the tenant has to cross this hop."""
     with TestClient(stage_runner) as client:
-        assert client.get("/stages/stage-other", headers=SERVICE).json()["project"] == "other"
-        assert client.get("/stages/stage-single", headers=SERVICE).json()["project"] == "", "a single-tenant run must be told apart from an unreadable one"
+        assert client.get("/stages/stage-other", headers=identities.producer_bearer()).json()["project"] == "other"
+        single = client.get("/stages/stage-single", headers=identities.producer_bearer()).json()["project"]
+        assert single == "", "a single-tenant run must be told apart from an unreadable one"
 
 
-def test_an_UNREADABLE_instance_names_no_project(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("APP_API_TOKEN", APP_TOKEN)
-    with TestClient(_stage_runner({"stage-garbled": _State("not json", name="stage_run")})) as client:
-        body = client.get("/stages/stage-garbled", headers=SERVICE).json()
+def test_an_UNREADABLE_instance_names_no_project(identities: _Identities) -> None:
+    with TestClient(_stage_runner({"stage-garbled": _State("not json", name="stage_run")}, identities)) as client:
+        body = client.get("/stages/stage-garbled", headers=identities.producer_bearer()).json()
 
     assert body["status"] == "RUNNING", "the status question is still answered"
     assert body["project"] is None
@@ -334,10 +373,11 @@ def test_an_UNKNOWN_stage_is_still_404(producer: TestClient) -> None:
     assert producer.get(_show("stage-nope"), headers=_bearer("alice")).status_code == 404
 
 
-@pytest.mark.parametrize("headers", [SERVICE, _bearer("carol")], ids=["service", "person"])
-def test_an_UNKNOWN_stage_runner_is_NAMED_to_every_admitted_caller(producer: TestClient, headers: dict[str, str]) -> None:
+@pytest.mark.parametrize("who", ["service", "person"])
+def test_an_UNKNOWN_stage_runner_is_NAMED_to_every_admitted_caller(producer: TestClient, identities: _Identities, who: str) -> None:
     """The typo against a values-driven list is the common cause, and the configured names are
     `GET /stage-runners`' to give any admitted caller, carol included."""
+    headers = identities.service_bearer() if who == "service" else _bearer("carol")
     response = producer.get("/stage-runners/typo/stages/stage-mine", headers=headers)
 
     assert response.status_code == 404, response.text
@@ -362,26 +402,18 @@ def _runner_without_the_field() -> FastAPI:
 
 
 @pytest.mark.parametrize(
-    "runner", [lambda: _stage_runner({"stage-x": _State("not json", name="stage_run")}), _runner_without_the_field], ids=["unreadable-input", "older-build"]
+    "runner",
+    [lambda ids: _stage_runner({"stage-x": _State("not json", name="stage_run")}, ids), lambda _ids: _runner_without_the_field()],
+    ids=["unreadable-input", "older-build"],
 )
-def test_a_stage_whose_tenant_cannot_be_read_is_REFUSED_to_a_person(fga: _Fga, monkeypatch: pytest.MonkeyPatch, runner: Any) -> None:
+def test_a_stage_whose_tenant_cannot_be_read_is_REFUSED_to_a_person(fga: _Fga, identities: _Identities, runner: Any) -> None:
     """Nothing to authorize on. Reading it as single-tenant would hand a tenant's run to acme's admins."""
-    monkeypatch.setenv("APP_API_TOKEN", APP_TOKEN)
-    app = runner()
-    with TestClient(_producer(app), raise_server_exceptions=False) as client:
+    app = runner(identities)
+    with TestClient(_producer(app, identities), raise_server_exceptions=False) as client:
         refused = client.post(_stop("stage-x") + "?project=acme", headers=_bearer("bob"))
-        served = client.get(_show("stage-x"), headers=SERVICE)
 
     assert refused.status_code == 503, refused.text
     assert _terminated(app) == []
-    assert served.status_code == 200, "the service path needs no tenant and must not lose the run"
-
-
-def test_the_SERVICE_path_is_unchanged_on_the_stage_doors(producer: TestClient, stage_runner: FastAPI) -> None:
-    """The shared token is decided whole at the door: it needs no project to act on a run."""
-    assert producer.get(_show("stage-other"), headers=SERVICE).status_code == 200
-    assert producer.post(_stop("stage-other"), headers=SERVICE).status_code == 202
-    assert _terminated(stage_runner) == ["stage-other"]
 
 
 def test_an_UNWIRED_authorization_service_refuses_a_person_THEIR_OWN_stage(unwired: TestClient, stage_runner: FastAPI) -> None:
@@ -393,11 +425,10 @@ def test_an_UNWIRED_authorization_service_refuses_a_person_THEIR_OWN_stage(unwir
     assert _terminated(stage_runner) == []
 
 
-def test_a_trigger_that_is_not_a_MAPPING_names_no_project(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("APP_API_TOKEN", APP_TOKEN)
+def test_a_trigger_that_is_not_a_MAPPING_names_no_project(identities: _Identities) -> None:
     spec = StageJobSpec(from_uri="s3://wh/in", to_uri="s3://wh/out", stage="gold").model_dump() | {"trigger": "tok-1"}
-    with TestClient(_stage_runner({"stage-odd": _State(spec, name="stage_run")})) as client:
-        body = client.get("/stages/stage-odd", headers=SERVICE).json()
+    with TestClient(_stage_runner({"stage-odd": _State(spec, name="stage_run")}, identities)) as client:
+        body = client.get("/stages/stage-odd", headers=identities.producer_bearer()).json()
 
     assert body["project"] is None, "a trigger the stage runner cannot read is not a single-tenant one"
 
@@ -419,10 +450,10 @@ def _runner_reporting(project: object) -> FastAPI:
     return app
 
 
-def test_a_stage_whose_recorded_project_is_UNSAFE_is_refused_to_a_person(fga: _Fga) -> None:
+def test_a_stage_whose_recorded_project_is_UNSAFE_is_refused_to_a_person(fga: _Fga, identities: _Identities) -> None:
     """A project id no mint rule issues is nothing to authorize on, and never an FGA object."""
     app = _runner_reporting("../acme")
-    with TestClient(_producer(app), raise_server_exceptions=False) as client:
+    with TestClient(_producer(app, identities), raise_server_exceptions=False) as client:
         refused = client.post(_stop("stage-x"), headers=_bearer("bob"))
 
     assert refused.status_code == 503, refused.text
@@ -520,12 +551,13 @@ def _refused(request: httpx.Request) -> httpx.Response:
     raise httpx.ConnectError("connection refused", request=request)
 
 
-@pytest.mark.parametrize("headers", [SERVICE, _bearer("alice"), PUBLIC, {}], ids=["service", "admin-of-mine", "public", "none"])
-def test_a_stage_door_tells_no_caller_a_runner_name_the_list_withholds(fga: _Fga, headers: dict[str, str]) -> None:
+@pytest.mark.parametrize("who", ["service", "admin-of-mine", "public", "none"])
+def test_a_stage_door_tells_no_caller_a_runner_name_the_list_withholds(fga: _Fga, identities: _Identities, who: str) -> None:
     """A configured runner that is down answers 502 before any run is read, where an unknown name
     answers 404, so every caller a stage door admits can tell a real runner from a made-up one. The
     list must answer exactly those callers, or the doors are an oracle for what it withholds."""
-    app = _producer(FastAPI())
+    headers = {"service": identities.service_bearer(), "admin-of-mine": _bearer("alice"), "public": PUBLIC, "none": {}}[who]
+    app = _producer(FastAPI(), identities)
     app.state.http = httpx.AsyncClient(transport=httpx.MockTransport(_refused))
     with TestClient(app, raise_server_exceptions=False) as client:
         door = client.get(_show("stage-mine"), headers=headers)
@@ -563,10 +595,6 @@ def test_an_authz_OUTAGE_is_503_never_an_empty_answer(producer: TestClient, fga:
     fga.down = True
 
     assert producer.get("/cascade/stalled", headers=_bearer("alice")).status_code == 503
-
-
-def test_the_SERVICE_path_still_reads_every_cell(producer: TestClient) -> None:
-    assert _projects(producer.get("/cascade/stalled", headers=SERVICE)) == [CONFIGURED, CONFIGURED, "other", "mine"]
 
 
 def test_an_UNWIRED_authorization_service_is_503_and_measures_nothing(unwired: TestClient, ticks: _Ticks) -> None:
@@ -611,7 +639,6 @@ def test_an_UNWIRED_authorization_service_refuses_a_person_THEIR_OWN_watch(unwir
 def test_a_training_watch_whose_input_cannot_be_read_is_REFUSED_to_a_person(producer: TestClient) -> None:
     """Unreadable is not the configured project: reading it so would hand an unknown run to acme's admins."""
     assert producer.get("/trains/train-garbled", headers=_bearer("bob")).status_code == 503
-    assert producer.get("/trains/train-garbled", headers=SERVICE).status_code == 200, "the service path needs no tenant"
 
 
 @pytest.mark.parametrize("instance_id", ["train-unsafe", "train-listed"])
@@ -632,7 +659,9 @@ def test_a_training_stop_is_logged_with_WHO_asked(producer: TestClient, caplog: 
     assert (line.__dict__["instance_id"], line.__dict__["subject"]) == ("train-acme", "bob")
 
 
-def test_the_training_doors_serve_the_watch_the_MINT_schedules(stage_runner: FastAPI, fga: _Fga, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_training_doors_serve_the_watch_the_MINT_schedules(
+    stage_runner: FastAPI, identities: _Identities, fga: _Fga, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The id and state come from `schedule_train_watch`, not from a literal: a mint whose ids the door
     refuses would leave every real training watch unobservable and unstoppable."""
     started: list[tuple[Any, dict[str, Any]]] = []
@@ -645,15 +674,14 @@ def test_the_training_doors_serve_the_watch_the_MINT_schedules(stage_runner: Fas
     minted = train_service.schedule_train_watch(MedallionSettings(), token="tok-1", model="churn", project=CONFIGURED)
     assert minted is not None
     [(saga, payload)] = started
-    app = _producer(stage_runner)
+    app = _producer(stage_runner, identities)
     app.state.workflow_client = _Workflows({minted: _State(payload, name=saga.__name__)})
 
     with TestClient(app, raise_server_exceptions=False) as client:
         shown = client.get(f"/trains/{minted}", headers=_bearer("bob"))
-        served = client.get(f"/trains/{minted}", headers=SERVICE)
         stopped = client.post(f"/trains/{minted}/terminate", headers=_bearer("bob"))
 
-    assert (shown.status_code, served.status_code, stopped.status_code) == (200, 200, 202), (shown.text, served.text, stopped.text)
+    assert (shown.status_code, stopped.status_code) == (200, 202), (shown.text, stopped.text)
     assert _terminated(app) == [minted]
 
 
@@ -719,39 +747,33 @@ def _all_decisions(records: list[logging.LogRecord]) -> list[tuple[object, ...]]
     return [(f["audit.action"], f["audit.outcome"], f["audit.subject"], f["audit.resource"], f.get("audit.reason")) for f in fields if "audit.action" in f]
 
 
-def test_a_SERVICE_read_of_a_training_watch_is_audited_on_the_WATCHS_project(producer: TestClient, audited: list[logging.LogRecord]) -> None:
-    producer.get("/trains/train-other", headers=SERVICE)
-
-    assert _all_decisions(audited) == [("produce_service_token", "allow", "service:direct", "project:other", None)]
-
-
-@pytest.mark.parametrize(
-    ("headers", "record"),
-    [
-        (SERVICE, ("produce_service_token", "allow", "service:direct", "/stage-runners", None)),
-    ],
-    ids=["service"],
-)
-def test_a_runner_list_read_is_AUDITED_as_the_admission_it_is(
-    producer: TestClient, audited: list[logging.LogRecord], headers: dict[str, str], record: tuple[object, ...]
+def test_a_SERVICE_read_of_a_training_watch_is_audited_on_the_WATCHS_project(
+    producer: TestClient, identities: _Identities, audited: list[logging.LogRecord]
 ) -> None:
-    """No project is checked, so the record is the admission: a person's as the catalog records an
-    authentication-only read, the service token's as every producer door records its acceptance, both
-    against the path the refusal of the same door names."""
-    assert producer.get("/stage-runners", headers=headers).status_code == 200
+    """Recorded as a person's is: the decision on the watch's project, under the subject the account maps to."""
+    producer.get("/trains/train-other", headers=identities.service_bearer())
 
-    assert _all_decisions(audited) == [record]
+    assert _all_decisions(audited) == [("can_administer", "deny", "service-ingest", "project:other", None)]
 
 
-def test_a_PUBLIC_callers_refusal_names_what_it_asked_for(producer: TestClient, stage_runner: FastAPI, audited: list[logging.LogRecord]) -> None:
-    """Refused at the door, before any run is read, so the record names the request's target rather
-    than the configured project."""
-    stamped = {**SERVICE, "dapr-caller-app-id": "gateway"}
-    response = producer.post(_stop("stage-other"), headers=stamped)
+def test_a_runner_list_read_is_AUDITED_as_the_admission_it_is(producer: TestClient, identities: _Identities, audited: list[logging.LogRecord]) -> None:
+    """No project is checked, so the record is the admission, as the catalog records an authentication-only
+    read: a service's under the subject its account maps to, against the path the door's refusal names."""
+    assert producer.get("/stage-runners", headers=identities.service_bearer()).status_code == 200
+
+    assert _all_decisions(audited) == [("authn", "success", "service-ingest", "/stage-runners", None)]
+
+
+def test_a_PUBLIC_callers_refusal_names_what_it_asked_for(
+    producer: TestClient, stage_runner: FastAPI, identities: _Identities, audited: list[logging.LogRecord]
+) -> None:
+    """A service never arrives through the public front door, so one that does is refused at the door,
+    before any run is read, and the record names the request's target rather than the configured project."""
+    response = producer.post(_stop("stage-other"), headers={**PUBLIC, **identities.service_bearer()})
 
     assert response.status_code == 403, response.text
     assert _terminated(stage_runner) == []
-    assert _all_decisions(audited) == [("produce_service_token", "deny", "service:gateway", _stop("stage-other"), "public_caller")]
+    assert _all_decisions(audited) == [("authn", "deny", "service-ingest", _stop("stage-other"), "public_caller")]
 
 
 # ── which doors may take `?project=` at all ─────────────────────────────────────────────────────────

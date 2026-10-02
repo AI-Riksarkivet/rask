@@ -23,7 +23,7 @@ from dapr.aio.clients import DaprClient
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import ServiceUnavailableError
 
-from medallion.core.config import MedallionSettings, dedicated_token_for, outbound_app_token, shared_lance_session
+from medallion.core.config import MedallionSettings, shared_lance_session
 from medallion.services import catalog_register, ray_submit
 from service_kit import dapr_publish
 from service_kit.governed import fga
@@ -130,10 +130,7 @@ def feature_uri_for(settings: MedallionSettings, dataset: str) -> str:
         located = catalog_register.describe_table_location(
             catalog_url=settings.catalog_url,
             table_id=dataset,
-            token=settings.catalog_token,
-            app_token=outbound_app_token(settings),
-            service_identity=settings.catalog_service_identity,
-            dedicated_token=dedicated_token_for(settings),
+            identity_token_file=settings.catalog_identity_token_file,
         )
     except Exception as exc:  # noqa: BLE001 — an outage must not become an invalid-request answer
         # TYPE AND MESSAGE, which is the shape `writing-python`'s batch pattern records: a connect

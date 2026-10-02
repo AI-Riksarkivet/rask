@@ -8,9 +8,10 @@ the call anyway**: a 202 for a terminate that stopped nothing. `promotions.py` r
 from the other direction, which is why the promotion workflow is hosted beside its door.
 
 The stage runner has no gateway row and no Ingress, so it is reached through the producer, which has both:
-`producer.py` authenticates the human and forwards here over the stage runner's ClusterIP. Authorization
-happens THERE, at the door a person can reach; this side verifies the service token, exactly like the
-stage runner's event routes.
+`producer.py` authenticates the caller, authorizes it on the run's project, and forwards here over the
+stage runner's ClusterIP with its own projected `rask-medallion` token. Authorization happens THERE, at the
+door a person can reach; this side admits the producer's service account and no other
+(`service_door.require_producer`), so the ClusterIP is not a way round that check.
 
 What terminate does NOT do is stated in the response body. `stage_run` submits a Ray job and then
 polls it; terminating stops the WATCH and the next-tier trigger, never the job. An operator told
@@ -22,13 +23,13 @@ from __future__ import annotations
 import asyncio
 import json
 from contextlib import suppress
-from typing import Annotated, Any
+from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
+from medallion.api.service_door import ProducerService
 from service_kit.exceptions import ServiceUnavailableError
-from service_kit.governed.dapr_auth import require_dapr_token
 
 
 router = APIRouter(tags=["stages"])
@@ -76,7 +77,7 @@ async def _state_or_404(client: Any, instance_id: str, *, payloads: bool) -> Any
 
 
 @router.get("/stages/{instance_id}")
-async def show_stage(instance_id: str, request: Request, _token: Annotated[None, Depends(require_dapr_token)]) -> StageRunState:
+async def show_stage(instance_id: str, request: Request, _producer: ProducerService) -> StageRunState:
     """DWF-MGT-002. Before this, an in-flight cascade stage was unobservable over HTTP entirely —
     `services/compute` proxies Ray read-only and knows nothing about the workflow watching it."""
     state = await _state_or_404(_client(request), instance_id, payloads=True)
@@ -116,7 +117,7 @@ def _trigger_project(spec: dict[str, Any]) -> str | None:
 
 
 @router.post("/stages/{instance_id}/terminate", status_code=202)
-async def terminate_stage(instance_id: str, request: Request, _token: Annotated[None, Depends(require_dapr_token)]) -> StageTerminateAccepted:
+async def terminate_stage(instance_id: str, request: Request, _producer: ProducerService) -> StageTerminateAccepted:
     """DWF-MGT-003 for the cascade.
 
     A HARD terminate is right here, and it is worth saying why this differs from ingest, where the

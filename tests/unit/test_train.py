@@ -107,8 +107,11 @@ def test_head_surfaces_resolution_and_publish_failures(monkeypatch: pytest.Monke
     assert result["status"] == "publish_failed"
 
 
-def test_train_route_enforces_the_app_token(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("APP_API_TOKEN", "s3cret")
+def test_train_route_refuses_a_caller_nobody_vouched_for(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The suite's root conftest acknowledges an open door by default; this one does not, so the door
+    has nothing to authenticate a caller with and refuses. The `dapr-api-token` a sidecar stamps names
+    nobody, so presenting one changes nothing."""
+    monkeypatch.setenv("RASK_INSECURE_ALLOW_UNAUTHENTICATED", "false")
     app = FastAPI()
     # Same problem+json handlers the producer installs: the guard raises the lance_namespace domain
     # errors (PermissionDeniedError), which a bare FastAPI() would surface as 500 rather than 403.
@@ -119,7 +122,7 @@ def test_train_route_enforces_the_app_token(monkeypatch: pytest.MonkeyPatch) -> 
     client = TestClient(app, raise_server_exceptions=False)
     body = {"model": "m", "features": [{"dataset": "silver$features"}]}
     assert client.post("/train", json=body).status_code == 403
-    assert client.post("/train", json=body, headers={"dapr-api-token": "nope"}).status_code == 403
+    assert client.post("/train", json=body, headers={"dapr-api-token": "the-estate-app-token"}).status_code == 403
 
 
 # --------------------------------------------------------------------------- #

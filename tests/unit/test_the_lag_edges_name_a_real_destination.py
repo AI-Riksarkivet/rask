@@ -41,7 +41,7 @@ def test_every_ROUTED_source_has_a_destination() -> None:
     assert not missing, f"these routed lanes have no declared destination: {missing}"
 
 
-def test_both_lag_readers_SEND_THE_SERVICE_CREDENTIAL(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_each_lag_reader_SENDS_THE_TOKEN_PROJECTED_FOR_THE_DOOR_IT_CALLS(monkeypatch: pytest.MonkeyPatch) -> None:
     """A bare `httpx.get` cannot read an authenticated estate, and the gauge cannot say so.
 
     MEASURED LIVE 2026-09-04, which is the only way this was ever going to surface: both readers sent
@@ -49,9 +49,13 @@ def test_both_lag_readers_SEND_THE_SERVICE_CREDENTIAL(monkeypatch: pytest.Monkey
     `known=False` path then published NOTHING and reported nothing wrong — a detector that is
     silently blind is worse than an absent one, because the empty series reads as a healthy cascade.
 
-    Asserted over the REQUEST the reader actually makes, not over a helper: a helper that returns the
-    right dict proves nothing if the call site forgets to pass it, which is exactly what happened.
+    A service is the account its projected token names ([[LH-220]]), and the catalog and lineage verify
+    different audiences, so each reader presents the token projected for ITS door and nothing else names
+    the caller. Asserted over the REQUEST the reader actually makes, not over a helper: a helper that
+    returns the right dict proves nothing if the call site forgets to pass it, which is exactly what happened.
     """
+    from pathlib import Path
+
     import httpx
 
     from medallion.core.config import MedallionSettings
@@ -61,19 +65,17 @@ def test_both_lag_readers_SEND_THE_SERVICE_CREDENTIAL(monkeypatch: pytest.Monkey
         {
             "catalog_url": "http://catalog:2333",
             "train_lineage_url": "http://lineage:8000",
-            "app_api_token": "tok",
-            "catalog_service_identity": "service-medallion-producer",
             # The lane's TABLES, without which the reader refuses before it builds a request — the
             # credential is only observable on a call the reader is willing to make.
             "lane_sources": {"bronze": "bronze$events"},
             "lane_destination_datasets": {"bronze": "silver$features"},
         }
     )
-    seen: list[dict[str, str]] = []
+    seen: dict[str, dict[str, str]] = {}
 
     def _capture(url: str, **kwargs: Any) -> httpx.Response:
         headers: Mapping[str, str] = kwargs.get("headers") or {}
-        seen.append({k.lower(): v for k, v in headers.items()})
+        seen[url] = {k.lower(): v for k, v in headers.items()}
         return httpx.Response(200, json={"tags": {}, "runs": []}, request=httpx.Request("GET", url))
 
     monkeypatch.setattr(readers.httpx, "get", _capture)
@@ -81,6 +83,6 @@ def test_both_lag_readers_SEND_THE_SERVICE_CREDENTIAL(monkeypatch: pytest.Monkey
     readers.consumed_reader(settings)("bronze->silver", "acme")
 
     assert len(seen) == 2, "both readers must make a request"
-    for headers in seen:
-        assert headers.get("dapr-api-token") == "tok", f"a reader sent no app token: {headers}"
-        assert headers.get("x-lance-service-identity") == "service-medallion-producer", f"a reader sent no identity: {headers}"
+    catalog_call, lineage_call = seen.values()
+    assert catalog_call == {"authorization": f"Bearer {Path(settings.catalog_identity_token_file).read_text()}"}
+    assert lineage_call == {"authorization": f"Bearer {Path(settings.lineage_identity_token_file).read_text()}"}

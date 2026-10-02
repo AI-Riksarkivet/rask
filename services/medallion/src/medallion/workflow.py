@@ -57,7 +57,6 @@ from opentelemetry.trace import Status, StatusCode
 from pydantic import BaseModel, Field
 
 from medallion.core.best_effort import best_effort
-from medallion.core.config import outbound_app_token
 from medallion.core.lineage_publish import emit_lineage
 from medallion.core.metrics import record_promotion_outcome, record_stage_outcome, record_train_outcome
 from medallion.schemas.promotion import PromotionSpec
@@ -66,7 +65,7 @@ from service_kit.lakehouse.executor import RunState
 
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Generator
+    from collections.abc import Generator
 
     from dapr.ext.workflow import DaprWorkflowContext, WorkflowActivityContext
 
@@ -1336,13 +1335,6 @@ def request_approval(ctx: WorkflowActivityContext, spec: PromotionSpec) -> bool:
     return True
 
 
-def _dedicated(settings: Any) -> Callable[[str], str | None] | None:
-    """The stage runner's own credential resolver — imported locally, like every other config use here."""
-    from medallion.core.config import dedicated_token_for
-
-    return dedicated_token_for(settings)
-
-
 def _resume_publish(
     *,
     catalog_url: str,
@@ -1350,12 +1342,9 @@ def _resume_publish(
     version: int,
     key_column: str,
     accept_assertions: list[str],
-    app_token: str,
-    service_identity: str,
-    token: str | None,
+    identity_token_file: str,
     timeout_seconds: float,
     originator: str = "",
-    dedicated_token: Callable[[str], str | None] | None = None,
 ) -> None:
     """The tag move an approval resumes with. A seam so the activity is testable without a catalog.
 
@@ -1371,10 +1360,7 @@ def _resume_publish(
         version=version,
         key_column=key_column,
         accept_assertions=accept_assertions,
-        app_token=app_token,
-        service_identity=service_identity,
-        dedicated_token=dedicated_token,
-        token=token,
+        identity_token_file=identity_token_file,
         timeout_seconds=timeout_seconds,
         originator=originator,
     )
@@ -1403,10 +1389,7 @@ def publish_promotion(ctx: WorkflowActivityContext, spec: PromotionSpec) -> None
         version=spec.version,
         key_column=settings.quality_key_column,
         accept_assertions=list(spec.reasons),
-        app_token=outbound_app_token(settings),
-        service_identity=settings.catalog_service_identity,
-        dedicated_token=_dedicated(settings),
-        token=settings.catalog_token,
+        identity_token_file=settings.catalog_identity_token_file,
         timeout_seconds=settings.publish_timeout_seconds,
         originator=spec.originator,
     )

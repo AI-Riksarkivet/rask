@@ -54,7 +54,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from medallion.api.dependencies import FgaClientDep, SettingsDep
 from medallion.api.produce_auth import authenticate_subject
 from medallion.api.stage_runner_ops import STAGE_RUNNERS_PREFIX
-from medallion.core.config import MedallionSettings, StageRunnerGate, dedicated_token_for, outbound_app_token
+from medallion.core.config import MedallionSettings, StageRunnerGate
 from medallion.services import catalog_register
 from medallion.services.publication_trigger import build_stage_trigger
 from medallion.services.trigger_guards import SAFE_TOKEN_MAX_LENGTH, SAFE_TOKEN_PATTERN
@@ -196,10 +196,7 @@ async def _vended_location(settings: MedallionSettings, object_id: str) -> str |
                 catalog_register.describe_table_location,
                 catalog_url=settings.catalog_url,
                 table_id=table_id,
-                token=settings.catalog_token,
-                app_token=outbound_app_token(settings),
-                service_identity=settings.catalog_service_identity,
-                dedicated_token=dedicated_token_for(settings),
+                identity_token_file=settings.catalog_identity_token_file,
             )
         )
     except catalog_register.RegisterError as exc:

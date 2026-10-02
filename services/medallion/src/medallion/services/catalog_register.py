@@ -52,13 +52,14 @@ in which rows exist that the catalog has no record of.
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 
 import httpx
 import pyarrow as pa
 from pydantic import BaseModel, Field
 
+from service_kit.governed.machine_identity import IdentityTokenUnavailableError, identity_bearer
 from service_kit.lakehouse.naming import CATALOG_DELIMITER
 from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 
@@ -92,40 +93,20 @@ class LocationConflictError(RegisterError):
     """
 
 
-def credential(
-    *,
-    token: str | None,
-    app_token: str | None,
-    service_identity: str | None,
-    dedicated_token: Callable[[str], str | None] | None = None,
-) -> dict[str, str]:
-    """The credential a stage runner presents to the catalog, service door first.
+def credential(identity_token_file: str) -> dict[str, str]:
+    """The credential a medallion service presents to the catalog: its own projected token, read now.
 
-    A service authenticates AS ITSELF — the app token daprd already injects plus the subject it
-    claims — and needs no bearer. The bearer path came first here and was the wrong shape: the
-    catalog verifies OIDC JWTs, a JWT expires, and a static string in a secret store cannot be one.
-    The ingest plane hit this and its fix records the cost — a fail-closed run chasing a
-    `catalog-token` secret that never needed to exist.
+    The service-account token the kubelet projects with audience `rask-catalog` is the whole credential
+    ([[LH-220]], D1): the catalog verifies it offline and maps its account to the subject the grants name,
+    so no header names the caller. Read on every call, because the kubelet rotates it at 515 s.
 
-    Both halves or neither: the door requires the token AND the identity
-    (`catalog/api/security.py`), and sending one is refused for a reason invisible from this side.
-    A forwarded human bearer stays supported below, because that is a real case a service call
-    simply does not have.
+    A token that cannot be read is a `RegisterError`, so the call is not sent rather than sent anonymously,
+    and the stage RETRYs exactly as it does for an unreachable catalog.
     """
-    if app_token and service_identity:
-        # A PRIVILEGED identity presents its OWN credential, never the estate's shared one. The door
-        # (`service_kit.governed.dapr_auth`) binds such a subject to `service-token-<identity>`, and
-        # rendering that server-side alone is not enabling the control — it is refusing every
-        # privileged caller. Measured 2026-08-26: the catalog began demanding the dedicated token
-        # while stage runners still sent APP_API_TOKEN, and every call 401'd until it was reverted.
-        #
-        # `None` from the resolver means the bundle was READ and this identity is not privileged, so
-        # the shared token is correct. Falling back rather than refusing keeps ONE authority over the
-        # decision: the door already hard-refuses a privileged subject presenting the wrong
-        # credential, and a refusal here would only reach the same outcome with less information.
-        presented = (dedicated_token(service_identity) if dedicated_token else None) or app_token
-        return {"dapr-api-token": presented, "x-lance-service-identity": service_identity}
-    return {"Authorization": f"Bearer {token}"} if token else {}
+    try:
+        return identity_bearer(identity_token_file)
+    except IdentityTokenUnavailableError as exc:
+        raise RegisterError(f"this service's catalog identity token is unavailable: {exc}") from exc
 
 
 class PublishOutcome(BaseModel):
@@ -151,10 +132,7 @@ def publish_stage_output(
     key_column: str,
     required_columns: Sequence[str] = (),
     accept_assertions: Sequence[str] = (),
-    token: str | None = None,
-    app_token: str | None = None,
-    service_identity: str | None = None,
-    dedicated_token: Callable[[str], str | None] | None = None,
+    identity_token_file: str,
     timeout_seconds: float = 30.0,
     gate_only: bool = False,
     cascade_id: str = "",
@@ -183,7 +161,7 @@ def publish_stage_output(
     """
     if not catalog_url:
         raise RegisterError("MEDALLION_CATALOG_URL is not set — this stage cannot publish its output table")
-    headers = credential(token=token, app_token=app_token, service_identity=service_identity, dedicated_token=dedicated_token)
+    headers = credential(identity_token_file)
     body = {
         "version": version,
         "key_column": key_column,
@@ -194,8 +172,8 @@ def publish_stage_output(
         # would otherwise be lost — the publication head mints the next token from the event id.
         "cascade_id": cascade_id,
         # THE HUMAN THE BATCH IS FOR, across the same lost hop and for the same reason. A stage runner
-        # authenticates to this door AS ITSELF (`_credential` above), so the control event's actor is
-        # `service-<daprAppId>` — an inbox actor named after a stage runner, which is worse than silence because
+        # authenticates to this door AS ITSELF (`credential` above), so the control event's actor is the
+        # subject its service account maps to — an inbox actor named after a stage runner, which is worse than silence because
         # it looks delivered. The person is only in this body, and the catalog decides what to do with
         # the claim (`publication_originator`): it authorizes nothing here and the notifications plane
         # re-derives every recipient's visibility at delivery.
@@ -222,10 +200,7 @@ def authorize_stage_write(
     *,
     catalog_url: str,
     table_id: str,
-    token: str | None = None,
-    app_token: str | None = None,
-    service_identity: str | None = None,
-    dedicated_token: Callable[[str], str | None] | None = None,
+    identity_token_file: str,
     timeout_seconds: float = 30.0,
     client: httpx.Client | None = None,
 ) -> str:
@@ -253,7 +228,7 @@ def authorize_stage_write(
     """
     if not catalog_url:
         raise RegisterError("MEDALLION_CATALOG_URL is not set — this stage cannot authorize its write")
-    headers = credential(token=token, app_token=app_token, service_identity=service_identity, dedicated_token=dedicated_token)
+    headers = credential(identity_token_file)
     with _catalog_client(catalog_url, timeout_seconds, client) as client:
         try:
             response = client.post(f"/management/v1/table/{table_id}/credentials", params={"tier": "write"}, headers=headers)
@@ -287,10 +262,7 @@ def ensure_stage_output(
     table_id: str,
     schema: pa.Schema,
     delimiter: str = CATALOG_DELIMITER,
-    token: str | None = None,
-    app_token: str | None = None,
-    service_identity: str | None = None,
-    dedicated_token: Callable[[str], str | None] | None = None,
+    identity_token_file: str,
     timeout_seconds: float = 30.0,
     client: httpx.Client | None = None,
 ) -> str:
@@ -321,7 +293,7 @@ def ensure_stage_output(
     """
     if not catalog_url:
         raise RegisterError("MEDALLION_CATALOG_URL is not set — this stage cannot resolve where to write")
-    headers = credential(token=token, app_token=app_token, service_identity=service_identity, dedicated_token=dedicated_token)
+    headers = credential(identity_token_file)
     segments = table_id.split(delimiter)
     with _catalog_client(catalog_url, timeout_seconds, client) as client:
         try:
@@ -379,10 +351,7 @@ def describe_table_location(
     *,
     catalog_url: str,
     table_id: str,
-    token: str | None = None,
-    app_token: str | None = None,
-    service_identity: str | None = None,
-    dedicated_token: Callable[[str], str | None] | None = None,
+    identity_token_file: str,
     timeout_seconds: float = 30.0,
     client: httpx.Client | None = None,
 ) -> str | None:
@@ -405,7 +374,7 @@ def describe_table_location(
     """
     if not catalog_url:
         raise RegisterError("MEDALLION_CATALOG_URL is not set — this caller cannot ask where a table lives")
-    headers = credential(token=token, app_token=app_token, service_identity=service_identity, dedicated_token=dedicated_token)
+    headers = credential(identity_token_file)
     with _catalog_client(catalog_url, timeout_seconds, client) as client:
         try:
             described = client.post(f"/v1/table/{table_id}/describe", json={}, headers=headers)
@@ -448,10 +417,7 @@ def register_written_dataset(
     table_id: str,
     dataset_uri: str,
     delimiter: str = CATALOG_DELIMITER,
-    token: str | None = None,
-    app_token: str | None = None,
-    service_identity: str | None = None,
-    dedicated_token: Callable[[str], str | None] | None = None,
+    identity_token_file: str,
     timeout_seconds: float = 30.0,
     client: httpx.Client | None = None,
 ) -> None:
@@ -475,7 +441,7 @@ def register_written_dataset(
         raise RegisterError("MEDALLION_CATALOG_URL is not set — this writer cannot register the dataset it lands")
     location = relative_location(dataset_uri, catalog_root)
     segments = table_id.split(delimiter)
-    headers = credential(token=token, app_token=app_token, service_identity=service_identity, dedicated_token=dedicated_token)
+    headers = credential(identity_token_file)
     with _catalog_client(catalog_url, timeout_seconds, client) as client:
         try:
             response = client.post(f"/v1/table/{table_id}/register", json={"id": segments, "location": location}, headers=headers)
@@ -500,10 +466,7 @@ def deregister_dataset(
     catalog_url: str,
     table_id: str,
     delimiter: str = CATALOG_DELIMITER,
-    token: str | None = None,
-    app_token: str | None = None,
-    service_identity: str | None = None,
-    dedicated_token: Callable[[str], str | None] | None = None,
+    identity_token_file: str,
     timeout_seconds: float = 30.0,
     client: httpx.Client | None = None,
 ) -> None:
@@ -528,7 +491,7 @@ def deregister_dataset(
     if not catalog_url:
         raise RegisterError("MEDALLION_CATALOG_URL is not set — this writer cannot deregister the dataset it registered")
     segments = table_id.split(delimiter)
-    headers = credential(token=token, app_token=app_token, service_identity=service_identity, dedicated_token=dedicated_token)
+    headers = credential(identity_token_file)
     with _catalog_client(catalog_url, timeout_seconds, client) as client:
         try:
             response = client.post(f"/v1/table/{table_id}/deregister", json={"id": segments}, headers=headers)

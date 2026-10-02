@@ -1,180 +1,78 @@
-"""A stage runner authenticates to the catalog as a SERVICE, not by presenting a human's bearer.
+"""A medallion service authenticates to the catalog as the service account its projected token names ([[LH-220]], D1).
 
-`MEDALLION_CATALOG_TOKEN` sends `Authorization: Bearer {token}`. That setting is rendered by no chart
-template, and it should not be: the catalog verifies OIDC JWTs, a JWT EXPIRES, and a static string in
-a secret store cannot be one. The ingest plane made this exact mistake first and its own fix records
-the reasoning — "chasing it produced a fail-closed run on a `catalog-token` secret that never needed
-to exist" (`ingest/catalog_service.py`).
+The kubelet projects a token for audience `rask-catalog` into this pod, and the catalog verifies it offline
+and maps the account to the subject its grants name. That token is the whole credential: no header claims
+a name, and the `dapr-api-token` daprd stamps on an invocation names nobody.
 
-The catalog runs an identity door instead (`catalog/api/security.py`): `dapr-api-token` — which daprd
-already injects from a managed secret — plus `x-lance-service-identity`, the subject the caller
-claims, checked against `LANCE_SERVICE_SUBJECTS`. The stage runner has both halves in-cluster, and on a
-governed estate (`auth.enabled: true`, the shipped default) a call that sends neither 401s, raises
-`RegisterError` and returns RETRY — an infinite redelivery.
+THE KUBELET REPLACES THAT TOKEN at 80% of its 600 s lifetime (measured 2026-10-02: rotated at age 515 s),
+so a token held for the life of the process is refused after ten minutes. Each call reads its file afresh,
+and one that cannot be read is not sent anonymously.
 
-BOTH HALVES OR NEITHER: the door requires the token AND the identity, and sending one is a request
-refused for a reason invisible from this side.
-
-THE SEAM UNDER TEST IS `publish_stage_output`, and this file used to drive `register_stage_output`.
-That door was deleted with its last caller: `_credential` is shared by every call this module makes,
-so the rule is pinned on a seam the cascade actually reaches rather than on one only tests opened.
-Two properties the old file pinned went with the door and are now STRUCTURAL, which is why no
-replacement assertion appears below: a stage runner cannot mint a top-level namespace (no namespace call
-remains in the module at all — the one test that could still say so is kept), and a registration
-cannot disagree about WHERE the stage wrote (the stage writes where `ensure_stage_output` vended,
-so there is no second claim to disagree with).
+THE SEAM UNDER TEST IS `publish_stage_output`, the one catalog call whose route is a single request; the
+credential is built by the one function every call in `catalog_register` shares.
 """
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import httpx
+import pytest
 import respx
 
-from medallion.services.catalog_register import publish_stage_output
+from medallion.core.config import MedallionSettings
+from medallion.services.catalog_register import RegisterError, publish_stage_output
 
 
 CATALOG = "http://catalog.test"
 
 
-def _routes() -> respx.Route:
-    """The publish door, which is ONE call — so the assertions read the credential, not a sequence."""
+def _route() -> respx.Route:
     return respx.post(f"{CATALOG}/management/v1/table/silver$features/publish").mock(return_value=httpx.Response(200, json={"published": True}))
 
 
-def _publish(*, token: str | None = None, app_token: str | None = None, service_identity: str | None = None) -> None:
+def _publish() -> None:
     publish_stage_output(
         catalog_url=CATALOG,
         table_id="silver$features",
         version=2,
         key_column="id",
-        token=token,
-        app_token=app_token,
-        service_identity=service_identity,
+        identity_token_file=MedallionSettings().catalog_identity_token_file,
     )
 
 
-class TestTheServiceDoor:
-    @respx.mock
-    def test_the_identity_and_the_app_token_are_sent_together(self) -> None:
-        route = _routes()
+@respx.mock
+def test_the_projected_token_is_the_whole_credential() -> None:
+    route = _route()
 
-        _publish(app_token="stamped-by-daprd", service_identity="service-bronze-to-silver")
+    _publish()
 
-        headers = route.calls.last.request.headers
-        assert headers["dapr-api-token"] == "stamped-by-daprd"
-        assert headers["x-lance-service-identity"] == "service-bronze-to-silver"
-
-    @respx.mock
-    def test_the_bearer_is_NOT_sent_when_the_service_door_is_available(self) -> None:
-        """A service call has no human to forward. Sending both would present two principals and let
-        the catalog pick, which is not a decision this side gets to delegate."""
-        route = _routes()
-
-        _publish(app_token="stamped-by-daprd", service_identity="service-bronze-to-silver", token="a-jwt")
-
-        assert "authorization" not in route.calls.last.request.headers
+    sent = route.calls.last.request.headers
+    assert sent["authorization"] == f"Bearer {Path(MedallionSettings().catalog_identity_token_file).read_text()}"
+    assert "x-lance-service-identity" not in sent, "no header claims a name"
+    assert "dapr-api-token" not in sent, "the app token proves a sidecar delivered the call and names nobody"
 
 
-class TestBothHalvesOrNeither:
-    @respx.mock
-    def test_an_identity_with_no_token_does_not_open_the_door(self) -> None:
-        """Half a credential is refused for a reason the caller cannot see. Don't send it."""
-        route = _routes()
+@respx.mock
+def test_a_token_the_kubelet_rotated_is_the_one_sent_next() -> None:
+    route = _route()
+    token_file = Path(MedallionSettings().catalog_identity_token_file)
+    before = f"Bearer {token_file.read_text()}"
 
-        _publish(service_identity="service-bronze-to-silver")
+    _publish()
+    token_file.write_text("the-rotated-token")
+    _publish()
 
-        assert "x-lance-service-identity" not in route.calls.last.request.headers
-
-    @respx.mock
-    def test_a_token_with_no_identity_does_not_open_the_door(self) -> None:
-        route = _routes()
-
-        _publish(app_token="stamped-by-daprd")
-
-        assert "dapr-api-token" not in route.calls.last.request.headers
+    assert [call.request.headers["authorization"] for call in route.calls] == [before, "Bearer the-rotated-token"]
 
 
-class TestTheBearerRemainsForTheCaseThatNeedsIt:
-    @respx.mock
-    def test_a_forwarded_human_bearer_still_rides(self) -> None:
-        """Forwarding a user's token is a real case, and this is the only door for it. Kept, not
-        preferred — the service path takes precedence when it is available."""
-        route = _routes()
+@respx.mock
+def test_a_token_that_cannot_be_read_sends_nothing() -> None:
+    """An anonymous call would be refused one service away, for a reason invisible from here. The stage
+    gets the error and RETRYs exactly as it does for an unreachable catalog."""
+    Path(MedallionSettings().catalog_identity_token_file).unlink()
 
-        _publish(token="a-humans-jwt")
-
-        assert route.calls.last.request.headers["authorization"] == "Bearer a-humans-jwt"
-
-    @respx.mock
-    def test_no_credential_at_all_sends_no_auth_headers(self) -> None:
-        """The dev/local path: an ungoverned catalog needs nothing, and inventing a header would make
-        an anonymous call look like a failed authenticated one."""
-        route = _routes()
-
+    with pytest.raises(RegisterError, match="identity token"):
         _publish()
 
-        sent = route.calls.last.request.headers
-        assert "authorization" not in sent
-        assert "dapr-api-token" not in sent
-        assert "x-lance-service-identity" not in sent
-
-
-class TestAPrivilegedIdentityPresentsItsOwnCredential:
-    """The CLIENT half of the dedicated-credential binding.
-
-    `service_kit.governed.dapr_auth` already binds a privileged subject to its own
-    `service-token-<identity>` on the SERVER side. Rendering that alone is not enabling the control,
-    it is refusing every privileged caller — measured on the live estate 2026-08-26, where the catalog
-    began demanding the dedicated token while the stage runners went on presenting the shared
-    `APP_API_TOKEN`, and every call answered `401 Unauthorized` until it was reverted.
-
-    So the stage runner must PRESENT what the door will ask for. Until it does, the estate is stuck with the
-    shared token, and any holder of it can authenticate as any allowlisted identity — including ones
-    that hold `writer` + `publisher` + `validator` on every warehouse, i.e. the ability to corrupt and
-    then bless any tenant's data. That was `owner` until 2026-09-10, which also carried drop,
-    deregister, restore and grant management estate-wide.
-
-    The resolver is injected rather than read from the store here, for the same reason the server side
-    takes a `dedicated_token=` callback: the secret store is a Dapr sidecar call, and a unit test that
-    needed one would be testing the sidecar.
-    """
-
-    @respx.mock
-    def test_a_dedicated_token_is_sent_instead_of_the_shared_one(self) -> None:
-        route = _routes()
-
-        publish_stage_output(
-            catalog_url=CATALOG,
-            table_id="silver$features",
-            version=2,
-            key_column="id",
-            app_token="shared-app-token",
-            service_identity="service-bronze-to-silver",
-            dedicated_token=lambda identity: f"dedicated-for-{identity}",
-        )
-
-        headers = route.calls.last.request.headers
-        assert headers["dapr-api-token"] == "dedicated-for-service-bronze-to-silver", "the stage runner still presented the SHARED token"
-        assert headers["x-lance-service-identity"] == "service-bronze-to-silver"
-
-    @respx.mock
-    def test_an_identity_with_no_dedicated_token_falls_back_to_the_shared_one(self) -> None:
-        """`None` means the bundle was READ and this identity simply is not privileged.
-
-        Falling back rather than refusing keeps ONE authority over the decision: the door already
-        hard-refuses a privileged subject that presents the wrong credential, so a client-side refusal
-        would only produce the same outcome from a place with less information.
-        """
-        route = _routes()
-
-        publish_stage_output(
-            catalog_url=CATALOG,
-            table_id="silver$features",
-            version=2,
-            key_column="id",
-            app_token="shared-app-token",
-            service_identity="service-web",
-            dedicated_token=lambda _identity: None,
-        )
-
-        assert route.calls.last.request.headers["dapr-api-token"] == "shared-app-token"
+    assert respx.calls.call_count == 0

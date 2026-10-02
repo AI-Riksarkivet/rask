@@ -32,7 +32,7 @@ from medallion.services.ray_submit import close_ray_client
 from service_kit.activity_loop import run_activity, stop_worker_loop
 from service_kit.draining import arm_drain_on_sigterm
 from service_kit.governed.actor_state_store import probe_actor_state_store
-from service_kit.governed.auth_lifespan import build_fga_client
+from service_kit.governed.auth_lifespan import attach_auth
 from service_kit.governed.dapr_auth import assert_app_token_configured
 from service_kit.governed.secrets import apply_dapr_secrets
 from service_kit.lakehouse.lance_metrics import instrument_lance_if_available
@@ -65,21 +65,22 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # and tearing down its own connection — `fastapi` -> production-patterns.md § Lifespan: build once,
     # dispose once. Closed below, beside the sidecar client.
     app.state.catalog_http = httpx.Client(base_url=_settings.catalog_url.rstrip("/"), timeout=_settings.publish_timeout_seconds)
-    # THE FGA HALF ONLY, deliberately. A stage runner is bus-only — no gateway row, no Ingress, no human
-    # caller — so it has never had an OIDC door and must not grow one as a side effect of sharing the
-    # bootstrap: constructing a verifier here would fetch discovery at boot for a token nothing
-    # presents. It checks authorization as its OWN service identity before every transition.
+    # NO PERSON'S DOOR, deliberately. A stage runner is bus-only — no gateway row, no Ingress, no human
+    # caller — and the chart renders it with OIDC off, so `attach_auth` builds no Dex verifier here. What
+    # it does build, when `RASK_SA_ISSUER` is set, is the service-account verifier its operator routes
+    # admit the producer through (`service_door.require_producer`, [[LH-220]]), and the FGA client it
+    # checks its own service identity against before every transition.
     #
     # Pre-set to None because the transition guard reads the attribute directly; unset would be an
     # AttributeError on the hot path rather than a fail-closed refusal. Pinned ids when set (the
-    # production posture), else provision by store NAME so the stage runner converges on the catalog's
-    # Zanzibar store (idempotent).
+    # production posture), else the store is resolved by NAME, read-only (`fga.resolve`).
     #
     # `fatal=True` KEEPS THIS APP'S POSTURE: no `try` wrapped the build, so a failed one has always
     # crashed the pod. A stage runner that cannot authorize must not sit in the subscription quietly
     # refusing every stage — nothing downstream would report it.
     settings = get_settings()
-    app.state.fga = await build_fga_client(settings, service="medallion-stage-runner", fatal=True)
+    app.state.fga = None
+    await attach_auth(app, settings, service="medallion-stage-runner", fatal=True)
     # THE WORKFLOW WORKER (S1). Without this the stage runner can SCHEDULE `stage_run` and nothing will ever
     # execute it: `DaprWorkflowClient` only enqueues, and the runtime is what registers the definitions
     # and pulls work. Ingest's first in-cluster deploy had the engine running in the sidecar and still

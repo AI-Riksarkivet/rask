@@ -23,9 +23,8 @@ from urllib.parse import quote
 
 import httpx
 
-from medallion.core.config import dedicated_token_for, outbound_app_token
-from medallion.services import catalog_register
 from medallion.services.cascade_lag import ConsumedRange, EdgeNotMeasurable
+from service_kit.governed.machine_identity import identity_bearer
 from service_kit.lakehouse.record_store import list_records
 from service_kit.lakehouse.warehouse_records import REGISTRY_PREFIX, measurable_projects
 from service_kit.lakehouse.warehouse_registry import project_namespace
@@ -88,32 +87,6 @@ def _destination(settings: Any, source: str) -> str:  # noqa: ANN401 — the set
     return str(lanes.get(source) or "?")
 
 
-def _service_headers(settings: Any) -> dict[str, str]:  # noqa: ANN401 — the settings seam
-    """The credential these reads present, built by the SAME function every other medallion client uses.
-
-    Measured live 2026-09-04, in two stages, and the second is why this delegates rather than
-    reimplements. Both readers first sent a bare `httpx.get` with no headers at all → **401 on every
-    edge**. Adding the obvious pair (`dapr-api-token` + `x-lance-service-identity`) still 401'd,
-    because `service-medallion-producer` is a PRIVILEGED subject: the door binds it to
-    `service-token-<identity>` and refuses the estate's shared token. `catalog_register._credential`
-    has resolved that since 2026-08-26 — a second hand-written copy of a credential rule is exactly
-    how one caller ends up refused while every other works.
-
-    The gauge's own `known=False` path is what made this survive: a reader that cannot read publishes
-    NOTHING and reports nothing wrong, so an empty series read as a healthy cascade.
-    """
-    return catalog_register.credential(
-        token=None,
-        # RESOLVED, not read off the settings object. On a store-path deployment `app_api_token` is
-        # empty by design ([[LH-160]]) and `credential` returns `{}` for a missing half, so these reads
-        # go out with no headers and every edge 401s — which is indistinguishable from a detector that
-        # simply cannot see the estate. Measured: 2,700 401s and zero successes in twenty-five minutes.
-        app_token=outbound_app_token(settings) or None,
-        service_identity=getattr(settings, "catalog_service_identity", "") or None,
-        dedicated_token=dedicated_token_for(settings),
-    )
-
-
 def _lane_table(settings: Any, lane: str, *, table_map: str) -> str | None:  # noqa: ANN401 — the settings seam
     """One lane's SOURCE or DESTINATION table id, project-unqualified, or ``None`` when undeclared.
 
@@ -145,7 +118,10 @@ def published_reader(settings: Any) -> Any:  # noqa: ANN401 — the settings sea
         # NO route exposing the published version directly: the publication router serves `POST
         # /{id}/publish` and nothing else, which the first live tick proved by failing every edge.
         url = f"{str(settings.catalog_url).rstrip('/')}/v1/table/{quote(table_id, safe='')}/tags/list"
-        response = httpx.get(url, timeout=_TIMEOUT_SECONDS, headers=_service_headers(settings))
+        # The producer's own projected `rask-catalog` token, read now ([[LH-220]]): a bare request reads
+        # nothing on an authenticated estate, and the gauge's `known=False` path would publish no point and
+        # report nothing wrong, so an empty series would read as a healthy cascade.
+        response = httpx.get(url, timeout=_TIMEOUT_SECONDS, headers=identity_bearer(settings.catalog_identity_token_file))
         if response.status_code in (403, 404):
             # ONE answer for "absent" and "forbidden" — the catalog's no-existence-oracle rule, with
             # its authz gate running before existence resolution. Neither "idle" nor "broken" is
@@ -197,7 +173,8 @@ def consumed_reader(settings: Any) -> Any:  # noqa: ANN401 — the settings seam
         # that did not exist — a route is not a thing to infer from a prefix convention. `/datasets`
         # mounts the same way (`datasets.router`, no version prefix).
         url = f"{str(settings.train_lineage_url).rstrip('/')}/datasets/{quote(wanted, safe='')}/producers"
-        response = httpx.get(url, timeout=_TIMEOUT_SECONDS, headers=_service_headers(settings))
+        # Lineage is a door of its own, so it takes the token projected for ITS audience, `rask-lineage`.
+        response = httpx.get(url, timeout=_TIMEOUT_SECONDS, headers=identity_bearer(settings.lineage_identity_token_file))
         if response.status_code in (403, 404):
             # THE SAME ANSWER `published_reader` GIVES, thirty lines up, for the same condition. It
             # translated a refusal and this one did not, so one identical 403 was `unmeasurable` on one

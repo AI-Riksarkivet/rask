@@ -36,7 +36,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from lineage_kit.consume import LineageDoc
 from medallion.core.best_effort import best_effort
-from medallion.core.config import MedallionSettings, dedicated_token_for, outbound_app_token, project_namespace
+from medallion.core.config import MedallionSettings, project_namespace
 from medallion.core.lineage_publish import emit_lineage
 from medallion.core.metrics import (
     record_denied,
@@ -715,10 +715,7 @@ async def _resolve_roots(settings: MedallionSettings, *, project: str, from_data
                 catalog_register.describe_table_location,
                 catalog_url=settings.catalog_url,
                 table_id=from_dataset,
-                token=settings.catalog_token,
-                app_token=outbound_app_token(settings),
-                service_identity=settings.catalog_service_identity,
-                dedicated_token=dedicated_token_for(settings),
+                identity_token_file=settings.catalog_identity_token_file,
             )
         )
         if vended:
@@ -1101,10 +1098,7 @@ async def _run_compute(
                     table_id=to_dataset,
                     schema=upstream.schema,
                     delimiter=settings.delimiter,
-                    token=settings.catalog_token,
-                    app_token=outbound_app_token(settings),
-                    service_identity=settings.catalog_service_identity,
-                    dedicated_token=dedicated_token_for(settings),
+                    identity_token_file=settings.catalog_identity_token_file,
                 )
                 # AND PROVE WE MAY WRITE IT. `_run_compute` is where this lane's destination is
                 # GOVERNED — it runs before `_write_stage` dispatches — so this is the one place a
@@ -1119,10 +1113,7 @@ async def _run_compute(
                     catalog_register.authorize_stage_write,
                     catalog_url=settings.catalog_url,
                     table_id=to_dataset,
-                    token=settings.catalog_token,
-                    app_token=outbound_app_token(settings),
-                    service_identity=settings.catalog_service_identity,
-                    dedicated_token=dedicated_token_for(settings),
+                    identity_token_file=settings.catalog_identity_token_file,
                 )
             lineage_doc = promotion_lineage(
                 settings,
@@ -1394,10 +1385,7 @@ async def _probe_gate(
                 version=result.version,
                 key_column=settings.quality_key_column,
                 required_columns=settings.required_column_list,
-                token=settings.catalog_token,
-                app_token=outbound_app_token(settings),
-                service_identity=settings.catalog_service_identity,
-                dedicated_token=dedicated_token_for(settings),
+                identity_token_file=settings.catalog_identity_token_file,
                 timeout_seconds=settings.publish_timeout_seconds,
                 gate_only=True,
                 cascade_id=trigger.cascade_id or "",
@@ -1482,10 +1470,7 @@ async def _evaluate_promotion(
             version=result.version,
             key_column=settings.quality_key_column,
             required_columns=settings.required_column_list,
-            token=settings.catalog_token,
-            app_token=outbound_app_token(settings),
-            service_identity=settings.catalog_service_identity,
-            dedicated_token=dedicated_token_for(settings),
+            identity_token_file=settings.catalog_identity_token_file,
             timeout_seconds=settings.publish_timeout_seconds,
             # Carried so the NEXT tier inherits them: the catalog echoes both onto
             # `table_published`, which is what wakes the next stage runner. This publish is the ONLY hop

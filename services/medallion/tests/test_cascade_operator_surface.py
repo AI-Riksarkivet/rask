@@ -29,7 +29,7 @@ from dapr.ext.workflow.workflow_state import WorkflowStatus
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from medallion.api import stage_ops
+from medallion.api import service_door, stage_ops
 from service_kit.exceptions import register_handlers
 
 
@@ -59,9 +59,9 @@ def _stage_runner_app(client: _Client | None) -> FastAPI:
     register_handlers(app)
     app.include_router(stage_ops.router)
     app.state.workflow_client = client
-    # The service-token check has its own suite; overridden so these assertions are about the
-    # management surface rather than the auth posture.
-    app.dependency_overrides[stage_ops.require_dapr_token] = lambda: None
+    # The producer-only door has its own suite (`test_the_operator_doors_authorize_on_the_resource.py`);
+    # overridden so these assertions are about the management surface rather than the auth posture.
+    app.dependency_overrides[service_door.require_producer] = lambda: None
     return app
 
 

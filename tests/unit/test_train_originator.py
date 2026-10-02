@@ -82,20 +82,18 @@ class _Verifier:
         return SimpleNamespace(sub=self._sub)
 
 
-def _run_authorize_train(monkeypatch: pytest.MonkeyPatch, *, app_token: str, authz: str | None, dapr_token: str | None = None) -> str | None:
+def _run_authorize_train(monkeypatch: pytest.MonkeyPatch, *, authz: str | None) -> str | None:
     async def allow(_client: object, **_kw: object) -> bool:
         return True
 
     monkeypatch.setattr(produce_auth.fga, "check", allow)
-    request = cast(Request, SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(oidc=_Verifier("alice")))))
-    # The token rides SETTINGS (MED-009): the door reads `settings.app_api_token`, never the raw env.
-    settings = cast(MedallionSettings, SimpleNamespace(oidc_enabled=True, produce_admin_project="acme", app_api_token=app_token))
+    request = cast(Request, SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(oidc=_Verifier("alice"), sa_oidc=None))))
+    settings = cast(MedallionSettings, SimpleNamespace(oidc_enabled=True, produce_admin_project="acme", sa_issuer=None, insecure_allow_unauthenticated=False))
     return asyncio.run(
         produce_auth.authorize_train(
             request,
             settings,
             cast(OpenFgaClient, object()),
-            dapr_api_token=dapr_token,
             authorization=authz,
             dapr_caller_app_id=None,
         )
@@ -106,7 +104,7 @@ def test_the_train_door_returns_the_verified_subject(monkeypatch: pytest.MonkeyP
     """`/train` delegates its whole decision to `authorize_produce`, which already returns the sub —
     and then dropped it on the floor. The delegation is what makes the two doors one door, so the
     RETURN has to be delegated too, not just the checks."""
-    assert _run_authorize_train(monkeypatch, app_token="secret", authz="Bearer t") == "alice"
+    assert _run_authorize_train(monkeypatch, authz="Bearer t") == "alice"
 
 
 # ── link 2: the head puts it on the trigger ──────────────────────────────────────────────────────

@@ -6,8 +6,8 @@ so the terminate has to run in the stage runner's process. But a stage runner is
 Ingress, nothing a person can POST to. Hosting only the route there would be a lever nobody can pull.
 
 So: the producer authenticates and AUTHORIZES (it has the gateway row and already runs the dual-auth
-door for `/produce` and `/train`), then forwards to the stage runner's ClusterIP with the service token. The
-stage runner verifies that token and does the work under its own app-id.
+door for `/produce` and `/train`), then forwards to the stage runner's ClusterIP with its own projected
+`rask-medallion` token. The stage runner admits that account alone and does the work under its own app-id.
 
 AUTHORIZED ON THE RUN, not on a caller-chosen project (owner ruling 2026-09-25). The producer cannot
 read another app's workflow state, so it asks the hosting stage runner first; the stage runner reads
@@ -31,26 +31,9 @@ from pydantic import BaseModel
 
 from medallion.api.dependencies import FgaClientDep, SettingsDep
 from medallion.api.produce_auth import AdmittedCaller, ConfigReader, ProducerCaller, require_project_admin
-from medallion.core.config import MedallionSettings, outbound_app_token
+from medallion.core.config import MedallionSettings
+from service_kit.governed.machine_identity import identity_bearer
 from service_kit.lakehouse.warehouse_registry import is_safe_project
-
-
-def _app_token_header(settings: MedallionSettings) -> dict[str, str]:
-    """The service credential the stage runner's routes verify, resolved the way they verify it.
-
-    THROUGH `outbound_app_token`, which is the sender-side helper this function once said did not
-    exist. It resolves `dapr_auth.expected_app_token()` first and falls back to the typed setting, so
-    the header this sends and the token `require_dapr_token` expects come from ONE accessor.
-
-    Reading `settings.app_api_token` directly was the same defect `outbound_app_token` was written to
-    fix one caller earlier, and its old justification — "absent in the open dev default, where the
-    stage runner's check is a no-op too, so the two stay consistent" — is false wherever the estate
-    keeps the token off the environment: measured on the deployed producer 2026-09-19,
-    `expected_app_token()` returns a token while `settings.app_api_token` is `''`. The receiving check
-    is NOT a no-op there, so the two were consistent only in the deployment that needed it least.
-    """
-    token = outbound_app_token(settings)
-    return {"dapr-api-token": token} if token else {}
 
 
 #: The cascade operator surface's one path segment, shared with `rerun.py`'s router and forwarded to by
@@ -87,8 +70,11 @@ async def _forward(request: Request, settings: Any, *, stage_runner: str, instan
         # Built once in the lifespan; a per-request client re-opens a connection every call, which is
         # the anti-pattern this estate has already paid for once.
         raise HTTPException(status_code=503, detail="the producer has no HTTP client")
+    # The producer's own projected token for the stage runners' audience, read now: the kubelet rotates it,
+    # and an unreadable one is a 503 here rather than a request the stage runner would refuse anonymously.
+    headers = identity_bearer(settings.medallion_identity_token_file)
     try:
-        response = await client.request(method, url, headers=_app_token_header(settings))
+        response = await client.request(method, url, headers=headers)
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502, detail=f"stage runner {stage_runner!r} is unreachable: {exc}") from exc
     if response.status_code >= 400:

@@ -95,7 +95,7 @@ async def train(
     body: TrainRequest,
     dapr: DaprClientDep,
     settings: SettingsDep,
-    # #64: service token OR an admin of the CONFIGURED project — pinned, a stray ?project= is ignored
+    # #64: a service or a person administering the CONFIGURED project — pinned, a stray ?project= is ignored
     # (single-tenant write; see authorize_train). It hands back the verified sub on the human path,
     # which is the ONLY moment this run is attributable: everything after here is a bus trigger and a
     # detached Ray job, and the job's own events author as `service-trainer` by design.

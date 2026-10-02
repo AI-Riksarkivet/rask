@@ -90,7 +90,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # directly rather than through `getattr`: the trainer consumer (#115a) gates as its own identity
     # and the client MUST exist here or the gate is silently off with RASK_FGA_ENABLED=true
     # (review 2026-07-10 caught exactly that bypass), and #64's OIDC verifier is the /produce human
-    # door — an admin can trigger the cascade without the service token.
+    # door. `attach_auth` also builds `sa_oidc`, the service-account verifier a service is admitted by.
     #
     # `fatal=True` KEEPS THIS APP'S POSTURE: it wrapped neither construction in a `try`, so a failed
     # build has always crashed the pod. That is the loud failure, and the cascade head is not a place

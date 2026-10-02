@@ -18,6 +18,7 @@ import httpx
 import pytest
 import respx
 
+from medallion.core.config import MedallionSettings
 from medallion.services.catalog_register import PublishOutcome, publish_stage_output
 
 
@@ -36,8 +37,6 @@ def _publish(
     key_column: str = "id",
     required_columns: tuple[str, ...] = (),
     accept_assertions: tuple[str, ...] = (),
-    app_token: str | None = None,
-    service_identity: str | None = None,
 ) -> PublishOutcome:
     return publish_stage_output(
         catalog_url=catalog_url,
@@ -46,8 +45,7 @@ def _publish(
         key_column=key_column,
         required_columns=required_columns,
         accept_assertions=accept_assertions,
-        app_token=app_token,
-        service_identity=service_identity,
+        identity_token_file=MedallionSettings().catalog_identity_token_file,
     )
 
 

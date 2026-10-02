@@ -246,6 +246,23 @@ def respx_allows_unused_routes() -> Iterator[None]:
 
 
 @pytest.fixture(autouse=True)
+def _projected_identity_tokens(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Give every test the token files the kubelet projects into a pod, one per door ([[LH-220]]).
+
+    A service authenticates to the catalog, lineage and the medallion's own doors with the service-account
+    token projected for that audience, read afresh on every call, and a call whose file is absent is not
+    sent. So a test that drives such a call reads a file the way the pod does, and the settings find it
+    where the chart mounts it. The contents are opaque: the door under test is a double, or a real
+    verifier minted its own token. In the ROOT conftest because the callers live in both `services/
+    medallion/tests/` and `tests/unit/`, and two copies is the drift `_reset_pooled_ray_client` names.
+    """
+    for audience in ("catalog", "lineage", "medallion"):
+        path = tmp_path / f"projected-rask-{audience}-token"
+        path.write_text(f"projected-for-rask-{audience}")
+        monkeypatch.setenv(f"RASK_{audience.upper()}_IDENTITY_TOKEN_FILE", str(path))
+
+
+@pytest.fixture(autouse=True)
 def _reset_pooled_ray_client() -> Iterator[None]:
     """Drop `ray_submit`'s module-level Ray client between tests.
 
