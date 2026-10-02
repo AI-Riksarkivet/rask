@@ -32,6 +32,7 @@ from service_kit.draining import retry_when_draining
 from service_kit.governed import fga
 from service_kit.governed.audit import ALLOW, DENY, FAILURE, audit
 from service_kit.governed.dapr_auth import require_dapr_token
+from service_kit.governed.signing_key import retry_until_signed
 
 
 #: Ceiling on any single synchronous workflow-client call from these routes.
@@ -357,11 +358,14 @@ def register_promotion_route(app: FastAPI, dapr_app: DaprApp | None = None) -> D
         config: SettingsDep,
         _: Annotated[None, Depends(require_dapr_token)],
         drain: Annotated[dict[str, str] | None, Depends(retry_when_draining)] = None,
+        signing: Annotated[dict[str, str] | None, Depends(retry_until_signed)] = None,
     ) -> dict[str, str]:
         """Thin wrapper over the testable :func:`handle_promotion_held`. Token-guarded: a forged hold
         would park a promotion nobody asked for and name an approver who never agreed to be asked."""
         if drain is not None:
             return drain
+        if signing is not None:
+            return signing
         return await handle_promotion_held(event)
 
     return dapr_app

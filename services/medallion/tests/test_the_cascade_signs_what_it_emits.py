@@ -1,49 +1,60 @@
-"""Every lineage event the cascade emits carries a signature the bus door can check.
+"""Every lineage event the cascade emits is signed as its service with the key its identity publishes, or not emitted.
 
-[[LH-064]]. The bus door reads `author.sub` off the payload and authorizes as it, and until a producer
-signs, that stamp is a self-assertion any pod holding the shared Dapr app token can make. `maintenance`
-signs already; the medallion is the second producer, and the larger one — nine emit sites across four
-modules, every hop of the bronze->silver->gold cascade plus the media head and the train lane.
+[[LH-064]]. The bus verifier refuses an unsigned event and acknowledges the refusal, so an event that left unsigned
+would be gone, and the cascade head reacts to the bronze-write event, so a run whose first event is lost never starts.
+`emit_lineage` is the one door out of this service, so what it does with the key is the whole claim: a resolved key
+signs the event the service built, and a service that is meant to sign and has no key sends nothing.
 
-ONE DOOR, because nine were nine chances to forget. Each site repeated the same eight-argument
-`publish_lineage_with_outbox` call with `json.dumps(event)`, so signing "at the emit" would have meant
-signing in nine places and in every one added later — and a site that forgot would emit something
-indistinguishable from a signed event until a reader checked. `emit_lineage` is now the only way out of
-this service, which makes the signature a property of the service rather than of each caller, and the
-source gate below keeps it that way.
+The sidecar's secret API is answered by respx, so the key reaches the door the way it does in the cluster: through
+`start_signing`, the holder and the two secrets. The events are the real builder's, with a float duration, because that
+is the shape a medallion COMPLETE carries on the wire.
 
-SIGNED WITH THE SERVICE IDENTITY, NEVER THE ROLE. `settings.author` is a display name (`data_eng`) and
-`settings.fga_service_identity` is what the run is authorized as — `build_run_event` has kept the two
-apart since a role literal in `author.sub` got every cascade run refused. `verify_signed_event` requires
-the signer to EQUAL the stamped subject, so signing as the role would refuse the estate's own events.
-
-UNSIGNED IS A REAL ANSWER and stays one for the length of the rollout: the door verifies if a signature
-is present and admits an event that carries none. What must never happen is a placeholder — something
-that looks signed and verifies for nobody is worse than nothing, because the door refuses it.
+The route-level half of "emits nothing" (the readiness probe and the RETRY on every delivery while the key is
+unresolved) is `test_a_signer_without_its_key_emits_nothing.py`.
 """
 
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from typing import Any
 
+import httpx
 import pytest
+import respx
+from fastapi import FastAPI
 
-from lineage_kit.signing import signature_of, verify_signed_event
+from lineage_kit import verify_signature
+from medallion.core import lineage_publish
+from medallion.core.config import MedallionSettings
+from medallion.schemas.events import build_run_event
+from service_kit.governed.signing_key import SigningKeyUnavailableError
+from service_kit.lakehouse import outbox
 
 
-KEY = "Rq7hVx2LmZ0aTpCw9NdEyGs4Bk1JfUo6XiPnMr3t"
-PEER = "Zt3rMnPiX6oUfJ1kB4sGyEdN9wCpT0aZmL2xVh7R"
 IDENTITY = "service-bronze-to-silver"
 ROLE = "data_eng"
+SECRETS = "http://localhost:3500/v1.0/secrets/lance-secrets"
 
 
-def _settings() -> Any:  # noqa: ANN401 — MedallionSettings, built from the env-shaped mapping
-    from medallion.core.config import MedallionSettings
+class _Published:
+    """The one identity's public keys, as lineage would read them."""
 
+    def __init__(self, *keys: str) -> None:
+        self._keys = keys
+
+    def published(self, identity: str) -> Sequence[str]:
+        return self._keys
+
+    def refresh(self, identity: str) -> Sequence[str]:
+        return self._keys
+
+
+def _settings(*, from_store: bool = True, identity: str = IDENTITY) -> MedallionSettings:
     return MedallionSettings.model_validate(
         {
+            "MEDALLION_SECRETS_FROM_DAPR": from_store,
+            "RASK_SIGNING_IDENTITY": identity,
             "MEDALLION_FGA_SERVICE_IDENTITY": IDENTITY,
             "MEDALLION_AUTHOR": ROLE,
             "MEDALLION_LINEAGE_OUTBOX_URI": "",
@@ -52,78 +63,99 @@ def _settings() -> Any:  # noqa: ANN401 — MedallionSettings, built from the en
 
 
 def _event() -> dict[str, Any]:
-    """A cascade event in the shape `build_run_event` produces — no empty facet bags, because `_wire`
-    strips them, and that stripping is exactly why the bytes on the wire are the bytes to sign."""
-    return {
-        "eventType": "COMPLETE",
-        "eventTime": "2026-09-24T08:00:00Z",
-        "producer": "https://rask/medallion",
-        "run": {
-            "runId": "0198e0f2-1b2c-7a3d-8e4f-5a6b7c8d9e0f",
-            "facets": {"author": {"_producer": "https://rask/medallion", "name": ROLE, "sub": IDENTITY}},
-        },
-        "job": {"namespace": "lance-medallion", "name": "stage.silver"},
-        "inputs": [{"namespace": "lance", "name": "bronze$events"}],
-        "outputs": [{"namespace": "lance", "name": "silver$events"}],
-    }
+    return build_run_event(
+        operation="stage_silver",
+        author=ROLE,
+        author_subject=IDENTITY,
+        job_namespace="lance-medallion",
+        inputs=[("lance", "bronze$events")],
+        output_namespace="lance",
+        output_name="silver$events",
+        token="a-token",
+        duration_seconds=12.345678901,
+        event_type="COMPLETE",
+    )
 
 
 @pytest.fixture
-def published(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[str]]:
-    """Capture the JSON the outbox seam is handed — the bytes that are staged AND published."""
-    from medallion.core import lineage_publish
-    from service_kit.lakehouse import outbox
-
+def published(monkeypatch: pytest.MonkeyPatch, respx_allows_unused_routes: None) -> Iterator[list[str]]:
+    """The JSON the outbox seam is handed: the bytes that are staged AND published."""
     captured: list[str] = []
 
     async def _capture(_client: object, **kwargs: Any) -> None:
         captured.append(str(kwargs["event_json"]))
 
     monkeypatch.setattr(outbox, "publish_lineage_with_outbox", _capture)
-    lineage_publish.reset_signing_key()
-    yield captured
-    lineage_publish.reset_signing_key()
+    monkeypatch.setenv("DAPR_HTTP_PORT", "3500")
+    with respx.mock:
+        yield captured
 
 
-def _keyed(**by_identity: str) -> Any:  # noqa: ANN401 — the resolver callable the estate passes around
-    """KEY-AWARE. A resolver answering one key whatever it is asked for cannot see the producer signing
-    as the wrong identity, which is the mistake this whole binding exists to catch."""
-    return lambda identity: by_identity.get(identity)
-
-
-async def _emit(monkeypatch: pytest.MonkeyPatch, resolver: Any) -> None:  # noqa: ANN401
-    from medallion.core import lineage_publish
-
-    monkeypatch.setattr(lineage_publish, "dedicated_token_for", lambda _settings: resolver)
-    await lineage_publish.emit_lineage(object(), _settings(), _event())
+def _store(seed: httpx.Response, keys: httpx.Response) -> None:
+    respx.get(f"{SECRETS}/signing-key-{IDENTITY}").mock(return_value=seed)
+    respx.get(f"{SECRETS}/signing-public-{IDENTITY}").mock(return_value=keys)
 
 
 @pytest.mark.asyncio
-async def test_an_emitted_event_verifies_with_this_service_s_own_key(published: list[str], monkeypatch: pytest.MonkeyPatch) -> None:
-    await _emit(monkeypatch, _keyed(**{IDENTITY: KEY}))
+async def test_an_emitted_event_verifies_against_the_published_key_as_the_service_and_not_the_role(published: list[str], event_signer: Any) -> None:
+    pair = event_signer(IDENTITY)
+    _store(httpx.Response(200, json={"seed": pair.seed}), httpx.Response(200, json={"keys": pair.public}))
+    settings = _settings()
+    holder = await lineage_publish.start_signing(FastAPI(), settings)
+    try:
+        await lineage_publish.emit_lineage(object(), settings, _event())
+    finally:
+        await lineage_publish.stop_signing(holder)
 
-    assert published, "nothing was published"
-    assert verify_signed_event(json.loads(published[0]), key=KEY), f"the cascade's event does not verify: {published[0]}"
+    assert len(published) == 1, "nothing was published"
+    verified = verify_signature(json.loads(published[0]), source=_Published(pair.public), signers=frozenset({IDENTITY}), delegators=frozenset())
+    assert (verified.identity, verified.kid, verified.on_behalf_of) == (IDENTITY, pair.kid, None)
+
+
+@pytest.mark.parametrize(
+    "lifespan_ran",
+    [
+        pytest.param(True, id="a-key-the-store-will-not-give"),
+        pytest.param(False, id="a-service-whose-lifespan-never-ran"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_a_service_meant_to_sign_that_has_no_key_emits_nothing(published: list[str], lifespan_ran: bool) -> None:
+    _store(httpx.Response(500), httpx.Response(404))
+    settings = _settings()
+    holder = await lineage_publish.start_signing(FastAPI(), settings) if lifespan_ran else None
+    try:
+        with pytest.raises(SigningKeyUnavailableError):
+            await lineage_publish.emit_lineage(object(), settings, _event())
+    finally:
+        await lineage_publish.stop_signing(holder)
+
+    assert published == [], f"a signer without its key published {published}"
+
+
+@pytest.mark.parametrize(
+    ("from_store", "identity"),
+    [
+        pytest.param(False, IDENTITY, id="a-service-with-no-secret-store"),
+        pytest.param(True, "", id="a-service-the-chart-gave-no-signing-identity"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_a_service_that_is_not_configured_to_sign_emits_the_event_it_built(published: list[str], from_store: bool, identity: str) -> None:
+    _store(httpx.Response(500), httpx.Response(404))
+    settings = _settings(from_store=from_store, identity=identity)
+    event = _event()
+    holder = await lineage_publish.start_signing(FastAPI(), settings)
+    try:
+        await lineage_publish.emit_lineage(object(), settings, event)
+    finally:
+        await lineage_publish.stop_signing(holder)
+
+    assert [json.loads(sent) for sent in published] == [event]
 
 
 @pytest.mark.asyncio
-async def test_it_signs_as_the_SERVICE_IDENTITY_and_not_the_display_role(published: list[str], monkeypatch: pytest.MonkeyPatch) -> None:
-    """`verify_signed_event` requires signer == stamped subject, so signing as `author` would make the
-    estate refuse its own cascade. The resolver holds a key for BOTH names, so the leg fails on the
-    identity chosen rather than on a missing credential."""
-    await _emit(monkeypatch, _keyed(**{IDENTITY: KEY, ROLE: PEER}))
-
-    found = signature_of(json.loads(published[0]))
-    assert found is not None, "the event is unsigned"
-    assert found.identity == IDENTITY, f"signed as {found.identity!r}, which is the role a person reads and not the subject the door authorizes"
-
-
-@pytest.mark.asyncio
-async def test_NO_credential_emits_UNSIGNED_rather_than_a_placeholder(published: list[str], monkeypatch: pytest.MonkeyPatch) -> None:
-    """The rollout property, and the one that must not be satisfied by faking a signature: the door
-    admits an unsigned event and REFUSES one that does not verify, so a placeholder would take the
-    cascade's provenance off the graph entirely."""
-    await _emit(monkeypatch, _keyed())
-
-    assert signature_of(json.loads(published[0])) is None, f"an unkeyed producer attached something anyway: {published[0]}"
-    assert json.loads(published[0])["run"]["facets"]["author"]["sub"] == IDENTITY, "the event lost its author on the way out"
+async def test_a_service_refuses_to_sign_as_an_identity_it_does_not_stamp_as_its_author(published: list[str]) -> None:
+    """A verifier refuses a signer that is not its event's author, so every event would be lost: the boot refuses."""
+    with pytest.raises(ValueError, match="signer that is not its event's author"):
+        await lineage_publish.start_signing(FastAPI(), _settings(identity="service-someone-else"))

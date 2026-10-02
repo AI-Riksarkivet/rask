@@ -1,154 +1,181 @@
-"""The catalog signs its lineage as itself, DECLARING the person it is acting for.
+"""The catalog signs the lineage it emits as itself, declaring the person it authenticated, and withholds what it cannot sign.
 
-[[LH-064]]. The catalog is the third and last producer, and the only one whose events are authored by
-a HUMAN: all eight emit sites pass `author=token.sub`, the signed-in subject, and the builder stamps
-it as both `author.name` and `author.sub`. A service cannot sign as that person — it holds no
-credential of theirs — so the first binding (signer == author) had nothing to offer here.
+[[LH-064]]. Every catalog event is authored by the signed-in PERSON, and the service holds no credential of theirs, so it
+signs as ITSELF and DECLARES the subject it acts for: an attestation ("the catalog authenticated this person and says
+so"), never a claim that the person signed. A create is a DatasetEvent and an insert a RunEvent, and both carry the
+author, so both are signed. A write nobody authenticated has no author, and a signature on an event with none could
+never verify, so it goes out unsigned.
 
-WHAT IT SIGNS IS AN ATTESTATION, not a proof the person acted. The catalog authenticated the bearer
-at its own door; the signature says so, under the service's own key, with the subject named inside
-what the HMAC covers. A reader of the graph can then answer "transmitted by the catalog, on behalf of
-this person", which is strictly more than today, where only the person is recorded and nothing attests
-to it. The person's own non-repudiation is not on offer and is not claimed.
+DRIVEN THROUGH THE REAL APP over HTTP, on a real `dir` namespace, because the claim spans the whole wiring: the secret
+store, the lifespan that builds the holder, the emitter it is handed, and the door that stamps the author. A test of the
+emitter alone passes with a lifespan that never gives it a key. The sidecar's secret API is answered by respx and its
+publish is a recording stand-in, so what the verifier sees is exactly what the catalog put on the bus.
 
-AN UNAUTHORED EVENT IS LEFT UNSIGNED, and that is not laziness. `verify_signed_event` refuses an event
-with no author — admitting one would make the binding optional and a forger would simply omit the
-facet — so attaching a signature to an unauthored event would take that event OFF the graph. The
-catalog emits some of those (a static metadata change carries no run author), and unsigned is exactly
-what the door still admits.
+A SIGNER WITHOUT ITS KEY ANNOUNCES NOTHING AND FAILS NOTHING. The emit runs after the Lance write committed, so a
+signature that cannot be made is a withheld announcement, never a failed request; the pod reports not ready meanwhile.
 """
 
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import ExitStack
+from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any, ClassVar
 
+import httpx
+import pyarrow as pa
+import pyarrow.ipc as ipc
 import pytest
+import respx
+from fastapi.testclient import TestClient
+from lance_namespace import connect
 
-from lineage_kit.signing import signature_of, verify_signed_event
+from lineage_kit import verify_signature
 
 
-KEY = "Nx8cV2bM4qW6eR9tY1uI3oP5aS7dF0gH2jK4lZ6x"
 CATALOG = "service-catalog"
 PERSON = "CiQwOGE4Njg0Yi1kYjg4LTRiNzMtOTBhOS0zY2QxNjYxZjU0NjY"
+SECRETS = "http://localhost:3500/v1.0/secrets/lance-secrets"
+ARROW_STREAM = {"content-type": "application/vnd.apache.arrow.stream"}
 
 
-def _event(author: str | None) -> dict[str, Any]:
-    facets: dict[str, Any] = {}
-    if author is not None:
-        facets["author"] = {"_producer": "https://rask/catalog", "name": author, "sub": author}
-    return {
-        "eventType": "COMPLETE",
-        "eventTime": "2026-09-24T09:30:00Z",
-        "run": {"runId": "0198e0f2-1b2c-7a3d-8e4f-aaaabbbbcccc", "facets": facets},
-        "job": {"namespace": "lance", "name": "catalog.drop_table"},
-        "outputs": [{"namespace": "lance", "name": "acme$customers"}],
-    }
+class _Sidecar:
+    """What the catalog does with its Dapr client: publish, and close at shutdown."""
+
+    published: ClassVar[list[dict[str, Any]]] = []
+
+    async def publish_event(self, *, data: str = "", **_kwargs: object) -> None:
+        _Sidecar.published.append(json.loads(data))
+
+    async def close(self) -> None:
+        return None
 
 
-def _keyed(**by_identity: str) -> Any:  # noqa: ANN401 — the resolver callable the estate passes around
-    """KEY-AWARE, so signing as the wrong identity fails on the identity rather than on a missing key."""
-    return lambda identity: by_identity.get(identity)
+class _Published:
+    """One identity's public keys, as lineage would read them."""
+
+    def __init__(self, *keys: str) -> None:
+        self._keys = keys
+
+    def published(self, identity: str) -> Sequence[str]:
+        return self._keys
+
+    def refresh(self, identity: str) -> Sequence[str]:
+        return self._keys
+
+
+def _rows() -> bytes:
+    sink = pa.BufferOutputStream()
+    table = pa.table({"id": pa.array(range(3), pa.int64())})
+    with ipc.new_stream(sink, table.schema) as writer:
+        writer.write_table(table)
+    return bytes(sink.getvalue().to_pybytes())
+
+
+type Boot = Callable[[httpx.Response, httpx.Response, object], TestClient]
 
 
 @pytest.fixture
-def published(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[str]]:
-    from service_kit.lakehouse import outbox
+def boot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, respx_allows_unused_routes: None) -> Iterator[Boot]:
+    """Boot the real catalog with signing configured: `boot(seed, keys, token)` answers the running client.
 
-    captured: list[str] = []
-
-    async def _capture(_client: object, **kwargs: Any) -> None:
-        captured.append(str(kwargs["event_json"]))
-
-    monkeypatch.setattr(outbox, "publish_lineage_with_outbox", _capture)
-    yield captured
-
-
-def _emitter(resolver: Any, identity: str = CATALOG) -> Any:  # noqa: ANN401 — DaprEmitter
-    from dapr.aio.clients import DaprClient
-
-    from catalog.core.lineage_emit import DaprEmitter
-
-    # CAST, never an ignore: the emitter takes a DaprClient and the publish is intercepted before it is
-    # touched, so a stand-in is honest here. Saying so in a cast keeps the claim checkable.
-    return DaprEmitter(
-        cast("DaprClient", SimpleNamespace()),
-        "lance-pubsub",
-        "lineage.events.v1",
-        job_namespace="lance",
-        timeout_seconds=1.0,
-        service_identity=identity,
-        token_resolver=resolver,
-    )
-
-
-async def _emit(resolver: Any, author: str | None) -> None:  # noqa: ANN401
-    await _emitter(resolver)._send(_event(author), operation="drop_table", table_id="acme$customers", authorization=None)
-
-
-@pytest.mark.asyncio
-async def test_an_event_authored_by_a_PERSON_is_signed_as_a_DELEGATION(published: list[str]) -> None:
-    await _emit(_keyed(**{CATALOG: KEY}), PERSON)
-
-    assert published, "nothing was published"
-    found = signature_of(json.loads(published[0]))
-    assert found is not None, f"the catalog emitted unsigned: {published[0]}"
-    assert found.identity == CATALOG, f"signed as {found.identity!r} rather than as itself"
-    assert found.on_behalf_of == PERSON, "the delegation does not name the person, so it is a substitution rather than an attestation"
-    assert verify_signed_event(json.loads(published[0]), key=KEY)
-
-
-@pytest.mark.asyncio
-async def test_an_event_the_SERVICE_authored_is_SELF_signed(published: list[str]) -> None:
-    """No delegation where there is nobody to act for — a declaration naming the signer would say
-    the service vouched for itself, which is noise in the record."""
-    await _emit(_keyed(**{CATALOG: KEY}), CATALOG)
-
-    found = signature_of(json.loads(published[0]))
-    assert found is not None
-    assert found.on_behalf_of is None, f"a self-authored event declared a delegation: {found}"
-    assert verify_signed_event(json.loads(published[0]), key=KEY)
-
-
-@pytest.mark.asyncio
-async def test_an_UNAUTHORED_event_is_left_UNSIGNED(published: list[str]) -> None:
-    """Signing it would REFUSE it. `verify_signed_event` rejects an event with no author, so a
-    signature here would take a static metadata change off the graph entirely."""
-    await _emit(_keyed(**{CATALOG: KEY}), None)
-
-    assert signature_of(json.loads(published[0])) is None, f"an unauthored event was signed, which the door refuses: {published[0]}"
-
-
-@pytest.mark.asyncio
-async def test_NO_credential_emits_UNSIGNED_rather_than_a_placeholder(published: list[str]) -> None:
-    """The rollout property. A signature that verifies for nobody is worse than none, because the door
-    refuses it while unsigned is admitted."""
-    await _emit(_keyed(), PERSON)
-
-    assert signature_of(json.loads(published[0])) is None, f"an unkeyed producer attached something anyway: {published[0]}"
-
-
-# --------------------------------------------------------------------------- #
-# THE WIRING HOPS. Everything above tests the emitter; none of it notices the
-# factory dropping the identity, or the app never passing one.
-# --------------------------------------------------------------------------- #
-
-
-def test_the_APP_passes_both_when_it_builds_the_emitter() -> None:
-    """Hop two, and the one a unit test cannot reach: the lifespan builds this emitter, and a
-    construction that named neither argument would default both to empty and emit unsigned forever.
-
-    Read off the call rather than the running app, because building it needs a Dapr sidecar. The
-    keywords are what the factory dispatches on, so their presence is the property.
+    The order is the one `tests/integration/conftest.py::real_ns_client` documents: env, then the settings cache, then
+    the app imported inside the fixture. `token` is what the catalog's door resolves for the caller: a subject, or None
+    for a write nobody authenticated.
     """
-    import ast
-    from pathlib import Path
+    env = {
+        "LANCE_REST_IMPL": "dir",
+        "LANCE_REST_ROOT": str(tmp_path),
+        "LANCE_S3_ACCESS_KEY_ID": "test",
+        "LANCE_SECRETS_FROM_DAPR": "true",
+        "RASK_SIGNING_IDENTITY": CATALOG,
+        "LANCE_LINEAGE_EMIT_ENABLED": "true",
+        "LANCE_LINEAGE_TRANSPORT": "dapr",
+        "DAPR_HTTP_PORT": "3500",
+    }
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.delenv("LANCE_S3_SECRET_ACCESS_KEY", raising=False)
+    from catalog import main
+    from catalog.api.dependencies import get_namespace, get_storage_options
+    from catalog.api.security import CurrentToken
+    from catalog.core.config import get_settings
 
-    source = (Path(__file__).resolve().parents[1] / "src" / "catalog" / "main.py").read_text()
-    calls = [node for node in ast.walk(ast.parse(source)) if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "make_emitter"]
+    monkeypatch.setattr(main, "DaprClient", _Sidecar)
+    _Sidecar.published = []
+    get_settings.cache_clear()
+    with ExitStack() as stack:
 
-    assert calls, "main.py no longer builds the emitter here — this gate is measuring something that moved"
-    named = {kw.arg for call in calls for kw in call.keywords}
-    assert {"service_identity", "token_resolver"} <= named, f"the app builds an emitter that cannot sign: passed {sorted(n for n in named if n)}"
+        def _boot(seed: httpx.Response, keys: httpx.Response, token: object) -> TestClient:
+            stack.enter_context(respx.mock)
+            respx.get(f"{SECRETS}/lance").mock(return_value=httpx.Response(200, json={"minio-secret-key": "the-s3-secret"}))
+            respx.get(f"{SECRETS}/signing-key-{CATALOG}").mock(return_value=seed)
+            respx.get(f"{SECRETS}/signing-public-{CATALOG}").mock(return_value=keys)
+            namespace = connect("dir", {"root": str(tmp_path)})
+            main.app.dependency_overrides[get_namespace] = lambda: namespace
+            main.app.dependency_overrides[get_storage_options] = lambda: {}
+            main.app.dependency_overrides[CurrentToken.__metadata__[0].dependency] = lambda: token
+            stack.callback(main.app.dependency_overrides.clear)
+            return stack.enter_context(TestClient(main.app))
+
+        yield _boot
+    get_settings.cache_clear()
+
+
+def _write_a_table_and_a_row(client: TestClient) -> None:
+    assert client.post("/v1/namespace/db/create", json={}).status_code == 200
+    assert client.post("/v1/table/db$t/create", content=_rows(), headers=ARROW_STREAM).status_code == 200
+    assert client.post("/v1/table/db$t/insert", content=_rows(), headers=ARROW_STREAM).status_code == 200
+
+
+@pytest.mark.parametrize(
+    ("subject", "on_behalf_of"),
+    [
+        pytest.param(PERSON, PERSON, id="a-person-the-catalog-authenticated"),
+        pytest.param(CATALOG, None, id="the-catalog-itself"),
+    ],
+)
+def test_every_event_a_write_causes_is_signed_as_the_catalog_for_the_subject_it_authenticated(
+    boot: Boot, event_signer: Any, subject: str, on_behalf_of: str | None
+) -> None:
+    pair = event_signer(CATALOG)
+    client = boot(httpx.Response(200, json={"seed": pair.seed}), httpx.Response(200, json={"keys": pair.public}), SimpleNamespace(sub=subject))
+
+    _write_a_table_and_a_row(client)
+
+    shapes = {"DatasetEvent" if "dataset" in event and "run" not in event else "RunEvent" for event in _Sidecar.published}
+    verified = [
+        verify_signature(event, source=_Published(pair.public), signers=frozenset({CATALOG}), delegators=frozenset({CATALOG})) for event in _Sidecar.published
+    ]
+    assert shapes == {"DatasetEvent", "RunEvent"}, f"the writes did not announce both event shapes: {sorted(shapes)}"
+    assert {(v.identity, v.on_behalf_of) for v in verified} == {(CATALOG, on_behalf_of)}
+
+
+def test_a_write_nobody_authenticated_is_announced_unsigned(boot: Boot, event_signer: Any) -> None:
+    pair = event_signer(CATALOG)
+    client = boot(httpx.Response(200, json={"seed": pair.seed}), httpx.Response(200, json={"keys": pair.public}), None)
+
+    _write_a_table_and_a_row(client)
+
+    unsigned = [event for event in _Sidecar.published if "rask_signature" not in (event.get("run") or event["dataset"])["facets"]]
+    assert _Sidecar.published, "nothing was announced"
+    assert unsigned == _Sidecar.published, "an event with no author was signed, and a signature on it could never verify"
+
+
+@pytest.mark.parametrize(
+    "token",
+    [
+        pytest.param(SimpleNamespace(sub=PERSON), id="a-write-by-a-person"),
+        pytest.param(None, id="a-write-nobody-authenticated"),
+    ],
+)
+def test_a_catalog_without_its_key_commits_the_write_announces_nothing_and_is_not_ready(boot: Boot, token: object) -> None:
+    client = boot(httpx.Response(500), httpx.Response(404), token)
+
+    _write_a_table_and_a_row(client)
+    readiness = client.get("/readyz")
+
+    assert _Sidecar.published == [], f"a catalog without its key announced {len(_Sidecar.published)} events"
+    assert (readiness.status_code, sorted(readiness.json()["components"])) == (503, ["namespace", "signing"])

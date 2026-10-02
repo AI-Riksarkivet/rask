@@ -19,8 +19,10 @@ from ingest.health import router as health_router
 from ingest.provenance import LineageProvenanceReader
 from ingest.queue_health import router as queue_health_router
 from ingest.runs import SCHEDULE_TIMEOUT_SECONDS, InMemoryRunStore, ScheduleUnavailable
+from ingest.signing import start_signing, stop_signing
 from service_kit.governed.actor_state_store import probe_actor_state_store
 from service_kit.governed.auth_lifespan import attach_auth
+from service_kit.governed.signing_key import signing_ready_check
 from service_kit.lakehouse.ns_errors import PROBLEM_JSON
 
 
@@ -48,7 +50,12 @@ def create_app() -> FastAPI:
 
     register_builtin_sources()
 
-    app = make_service_app(title="ingest", routers=[health_router, queue_health_router, ingest_router], lifespan=_lifespan)
+    app = make_service_app(
+        title="ingest",
+        routers=[health_router, queue_health_router, ingest_router],
+        lifespan=_lifespan,
+        ready_check=signing_ready_check(),
+    )
     app.state.run_store = InMemoryRunStore()
     app.state.workflow_starter = _DaprWorkflowStarter()
     app.state.workflow_reader = _DaprWorkflowReader()
@@ -179,9 +186,14 @@ def _lifespan(settings: Any) -> Any:  # noqa: ANN401 — service_kit's LifespanF
             # where the operator can actually see them.
             logger.warning("dapr workflow runtime unavailable — runs cannot execute", exc_info=True)
             app.state.workflow_runtime = None
+        # THIS SERVICE'S OWN SIGNING KEY ([[LH-064]]), resolved through its own sidecar. Started last so the probes
+        # are served from the moment the app boots whether or not the key resolved: ingest waits for its key, reports
+        # itself not ready, and heals in place when the key is published.
+        signing = await start_signing(app)
         try:
             yield
         finally:
+            await stop_signing(signing)
             # Close the OpenFGA client `attach_auth` opened. The SDK is aiohttp-backed, so an unclosed
             # client leaks one half-open connection per replica (plus an "Unclosed client session" on
             # the way out); `fga.dispose` is None-safe and suppress-wrapped, so it is safe whether or

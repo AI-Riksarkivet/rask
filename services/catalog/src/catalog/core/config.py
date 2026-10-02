@@ -299,11 +299,12 @@ class CatalogAuthzSettings(BaseSettings):
     every one of its fields, aliases and defaults.
     """
 
-    #: THIS SERVICE'S OWN NAME on the estate, used to sign the lineage it emits ([[LH-064]]). Empty is
-    #: the unconfigured estate and emits unsigned, which the bus door still admits — never a placeholder
-    #: signature, which it would refuse. The services this catalog ACCEPTS at its door are the
-    #: `RASK_SA_SUBJECTS` map (`OidcSettings`); this is the name it presents.
-    service_identity: str = Field(default="", alias="LANCE_SERVICE_IDENTITY")
+    #: THE IDENTITY THIS CATALOG SIGNS THE LINEAGE IT EMITS AS ([[LH-064]]), one variable on every signer
+    #: (`RASK_SIGNING_IDENTITY`). With `secrets_from_dapr` it decides whether the catalog signs at all: its private
+    #: key is `signing-key-<this>` in the store. Empty is an estate with no store to sign from, and it emits
+    #: unsigned. The services this catalog ACCEPTS at its door are the `RASK_SA_SUBJECTS` map (`OidcSettings`);
+    #: this is the name it signs under.
+    signing_identity: str = Field(default="", alias="RASK_SIGNING_IDENTITY")
     #: Service identities the CASCADE runs as, granted ``owner`` on every warehouse this catalog creates.
     #:
     #: They need it because `publish` is guarded by ``can_update_tag`` and the model defines

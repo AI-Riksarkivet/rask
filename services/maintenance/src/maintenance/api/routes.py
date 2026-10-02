@@ -22,7 +22,7 @@ default (`MAINTENANCE_TRASH_PURGE_ENABLED`), so the shipped configuration is sti
 import asyncio
 import logging
 from collections import Counter
-from typing import Any
+from typing import Annotated, Any
 
 import pyarrow.fs as pafs
 from fastapi import APIRouter, Depends
@@ -43,6 +43,7 @@ from maintenance.services.sweep import emit_sweep_lineage, memory_readings, plan
 from maintenance.services.tombstones import Tombstone, sweep_tombstones
 from maintenance.services.work_queue import enqueue_units
 from service_kit.governed.dapr_auth import require_dapr_token
+from service_kit.governed.signing_key import retry_until_signed
 from service_kit.lakehouse import trash
 from service_kit.lakehouse.objectfs import fs_and_base
 
@@ -69,7 +70,12 @@ log = logging.getLogger(__name__)
 _sweep_lock = asyncio.Lock()
 
 
-async def on_cron(settings: SettingsDep, emitter: LineageEmitterDep, dapr: DaprClientDep) -> dict[str, Any]:
+async def on_cron(
+    settings: SettingsDep,
+    emitter: LineageEmitterDep,
+    dapr: DaprClientDep,
+    signing: Annotated[dict[str, str] | None, Depends(retry_until_signed)] = None,
+) -> dict[str, Any]:
     """One maintenance tick, triggered by a Dapr cron tick (POST /<binding-name>).
 
     TWO LANES, and which one runs is decided by whether there IS a queue rather than by a flag — so a
@@ -89,7 +95,12 @@ async def on_cron(settings: SettingsDep, emitter: LineageEmitterDep, dapr: DaprC
     were the MAINT-04 defect — so every publish reaches the durable Dapr/JetStream transport before we
     return, and it is best-effort throughout, so a publish failure never fails the tick. On the queue
     lane each unit emits its own lineage from the subscription that executed it.
+
+    A tick is SKIPPED while this service's signing key is unresolved: the lineage this sweep emits could not be
+    signed, an unsigned event is refused and lost, and the next tick re-plans every dataset anyway.
     """
+    if signing is not None:
+        return {"status": "skipped", "reason": "signing key unresolved"}
     if _sweep_lock.locked():
         log.warning("maintenance_sweep_skipped", extra={"reason": "previous sweep still running"})
         return {"status": "skipped", "reason": "overlapping sweep still running"}

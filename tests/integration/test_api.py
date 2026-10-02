@@ -461,6 +461,9 @@ def test_merge_insert_rejects_malformed_or_reserved_run_facets(client: TestClien
     # before the merge — the run-facet forgery + 500-from-header findings. The last two are the re-audit
     # catch: json.loads raises a bare ValueError past the 4300-digit int limit, and RecursionError on deep
     # nesting; neither is a JSONDecodeError, so the original narrow except missed them (→ 500).
+    #
+    # The last three are numbers that have no canonical form, so the event this header rides on could not be signed
+    # after the write committed: NaN and Infinity (which `json.loads` accepts) and an integer past 2^53-1.
     bad_headers = [
         "{not json",
         '"a string"',
@@ -468,6 +471,9 @@ def test_merge_insert_rejects_malformed_or_reserved_run_facets(client: TestClien
         '{"params": {"producer": "x"}}',
         '{"params": {"n": ' + "9" * 4400 + "}}",  # >4300-digit int → bare ValueError, not JSONDecodeError
         "[" * 60000 + "]" * 60000,  # deep nesting → RecursionError
+        '{"params": {"loss": NaN}}',
+        '{"params": {"lr": -Infinity}}',
+        '{"params": {"seed": 9007199254740993}}',
     ]
     for bad in bad_headers:
         resp = client.post(

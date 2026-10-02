@@ -191,6 +191,14 @@ class IngestSettings(BaseSettings):
     #: events written to a guessed prefix nothing drains, which is a leak wearing recovery's name.
     lineage_outbox_uri: str = Field(default="", validation_alias="RASK_INGEST_LINEAGE_OUTBOX_URI")
 
+    # ── the lineage signature (`signing.py`) ──────────────────────────────────────────
+    #: Whether this service's secrets come from the Dapr secret store. With `signing_identity` it decides whether
+    #: ingest signs the event it stages for recovery ([[LH-064]]): its private key is `signing-key-<identity>` there.
+    secrets_from_dapr: bool = Field(default=False, validation_alias="RASK_INGEST_SECRETS_FROM_DAPR")
+    #: The identity this service signs as, one variable on every signer (`RASK_SIGNING_IDENTITY`). When it signs it is
+    #: also the author the staged event stamps.
+    signing_identity: str = Field(default="", validation_alias="RASK_SIGNING_IDENTITY")
+
 
 def settings() -> IngestSettings:
     """The operational settings, read from the environment NOW.

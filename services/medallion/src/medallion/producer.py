@@ -39,6 +39,7 @@ from medallion.api.stage_runner_ops import router as stage_runner_ops_router
 from medallion.api.train import register_train_trigger_route
 from medallion.api.train import router as train_router
 from medallion.core.config import get_settings
+from medallion.core.lineage_publish import start_signing, stop_signing
 from medallion.services.task_register import register_tasks
 from service_kit.draining import arm_drain_on_sigterm
 from service_kit.governed.actor_state_store import probe_actor_state_store
@@ -46,6 +47,7 @@ from service_kit.governed.auth_lifespan import attach_auth
 from service_kit.governed.dapr_auth import assert_app_token_configured
 from service_kit.governed.secrets import apply_dapr_secrets
 from service_kit.governed.settings import assert_authentication_configured
+from service_kit.governed.signing_key import signing_ready_check
 from service_kit.lakehouse.lance_metrics import instrument_lance_if_available
 from service_kit.lance_app import build_lance_service_app
 from service_kit.obs import configure_app_logging
@@ -143,6 +145,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # The operator doors' forward to the stage runner that hosts a run (`stage_runner_ops._forward`): one
     # pooled client for the app, bounded so a stage runner that hangs answers 502 rather than holding the door.
     app.state.http = httpx.AsyncClient(timeout=httpx.Timeout(10.0))
+    # THE PRODUCER'S OWN SIGNING KEY, resolved through its own sidecar. Started last so the probes and the retry
+    # answers are served from the moment the app boots whether or not the key resolved: a producer that is waiting
+    # for its key takes no delivery (`retry_until_signed` on its routes), reports itself not ready, and heals in
+    # place when the key is published.
+    signing = await start_signing(app, settings)
     app.state.startup_complete = True
     try:
         # ARMED AT SIGTERM, not at lifespan shutdown. The flag below flips in the `finally`,
@@ -155,6 +162,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     finally:
         _disarm_drain()
         app.state.shutting_down = True
+        await stop_signing(signing)
         if app.state.workflow_runtime is not None:
             with suppress(Exception):
                 app.state.workflow_runtime.shutdown()
@@ -178,6 +186,7 @@ app = build_lance_service_app(
     audit_enabled=get_settings().audit_enabled,
     lifespan=lifespan,
     log=log,
+    ready_check=signing_ready_check(),
 )
 app.include_router(produce_router)
 # The multimodal head (§9): POST /ingest-media lands external media as bronze blobs + triggers the

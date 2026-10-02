@@ -35,6 +35,7 @@ from medallion.services.train import (
 from service_kit.draining import refuse_when_draining, retry_when_draining
 from service_kit.exceptions import ServiceUnavailableError
 from service_kit.governed.dapr_auth import require_dapr_token
+from service_kit.governed.signing_key import retry_until_signed
 from service_kit.lakehouse.ns_errors import problem_body
 from service_kit.lakehouse.warehouse_registry import is_safe_project
 
@@ -143,6 +144,7 @@ def register_train_trigger_route(app: FastAPI, dapr_app: DaprApp | None = None) 
         config: SettingsDep,
         _: Annotated[None, Depends(require_dapr_token)],
         drain: Annotated[dict[str, str] | None, Depends(retry_when_draining)] = None,
+        signing: Annotated[dict[str, str] | None, Depends(retry_until_signed)] = None,
     ) -> dict[str, str]:
         """Thin wrapper over the testable :func:`handle_train_trigger` (submit-and-ack, D2).
         Authenticated by the Dapr app-api-token so a forged trigger can't spend training compute; the
@@ -150,6 +152,8 @@ def register_train_trigger_route(app: FastAPI, dapr_app: DaprApp | None = None) 
         RASK_FGA_ENABLED, ``None`` otherwise → gate off, symmetric with the stage runners)."""
         if drain is not None:
             return drain
+        if signing is not None:
+            return signing
         fga_client = getattr(request.app.state, "fga", None)
         return await handle_train_trigger(config, event, fga_client=fga_client)
 
