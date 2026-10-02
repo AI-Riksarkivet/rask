@@ -1,13 +1,11 @@
 """The Ray head's own env carries the lineage endpoint, so a `WorkOrder` does not.
 
 Measured live 2026-09-21, the Ray head's own process env already carries
-`RASK_LINEAGE_ENDPOINT=http://rask-lineage:8000` (rendered by `lance.lineageEmitEnv`,
-`chart/templates/_ray-cluster-config.tpl:259`), which is `build_emitter`'s FIRST alias choice, and the
-submitting stage runner would send the identical value (`MEDALLION_STAGE_LINEAGE_URL=http://rask-lineage:8000`).
-It is one deployment fact about where this cluster's lineage ingest is — the same shape as
-`S3_ENDPOINT`, which left the submission for the same reason. Sending it too would give one value two
-owners, and Ray merges `runtime_env.env_vars` OVER the worker's process env, so the submission would
-WIN — which is how a repointed pod keeps talking to the old address and nothing says so.
+`RASK_LINEAGE_ENDPOINT=http://rask-lineage:8000` (rendered by `lance.lineageEmitEnv`), which is
+`build_emitter`'s FIRST alias choice. It is one deployment fact about where this cluster's lineage
+ingest is, the same shape as `S3_ENDPOINT`, which left the submission for the same reason. Sending it too
+would give one value two owners, and Ray merges `runtime_env.env_vars` OVER the worker's process env, so
+the submission would WIN: a repointed pod keeps talking to the old address and nothing says so.
 """
 
 from __future__ import annotations

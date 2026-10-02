@@ -222,18 +222,22 @@ def _as_daprd_delivers(app: ASGIApp, *, app_token: str) -> ASGIApp:
 def test_a_public_caller_is_refused_by_the_door_behind_the_row(gw, monkeypatch: pytest.MonkeyPatch, method: str, public: str) -> None:
     """The whole forward, as Dapr delivers it: the gateway's own proxy into the producer's own app.
 
-    The stamp carries a VALID app token, so a door that trusted it would serve an anonymous caller from the
-    internet. The refusal must come from the door, in its words; a row that reaches no route answers 404.
+    The stamp carries a VALID app token, which names nobody ([[LH-220]]): a door that trusted it would serve an
+    anonymous caller from the internet. With authentication on, as the chart deploys the producer, the refusal
+    comes from the door, in its words; a row that reaches no route answers 404.
     """
+    from medallion.core.config import MedallionSettings, get_settings
     from medallion.producer import app as producer
 
+    deployed = MedallionSettings.model_validate({"RASK_OIDC_ENABLED": True, "RASK_OIDC_ISSUER": "https://idp.invalid", "RASK_OIDC_AUDIENCE": "rask"})
+    monkeypatch.setitem(producer.dependency_overrides, get_settings, lambda: deployed)
     monkeypatch.setenv("APP_API_TOKEN", "the-estate-app-token")
     with TestClient(gw.app) as client:
         gw.app.state.http = httpx.AsyncClient(transport=httpx.ASGITransport(app=_as_daprd_delivers(producer, app_token="the-estate-app-token")))
         response = client.request(method, public)
 
     assert response.status_code == 403, response.text
-    assert "is a public front door" in response.text, response.text
+    assert "invalid or missing produce credential" in response.text, response.text
 
 
 class _HostedWorkflows:

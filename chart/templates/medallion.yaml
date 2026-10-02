@@ -292,15 +292,10 @@ spec:
             - { name: MEDALLION_CASCADE_LAG_BINDING_NAME, value: {{ $.Values.medallion.cascadeLag.bindingName | quote }} }
             {{- end }}
             - { name: MEDALLION_CATALOG_ROOT, value: {{ printf "s3://%s" .Values.minio.bucket | quote }} }
-            - { name: MEDALLION_CATALOG_SERVICE_IDENTITY, value: {{ .Values.medallion.producer.serviceIdentity | quote }} }
-            {{- /* THE SAME IDENTITY, AT LINEAGE'S DOOR. `catalog_service_identity` is who this app is to the
-                 CATALOG; `fga_service_identity` is who it is when it AUTHORS a run, and lineage authorizes the
-                 author `sub` against FGA. Rendered here for the same reason the stage-runner block above
-                 renders it and states: absent, the app claims a code default (`service-stage-runner`) that
-                 holds no tuple, and lineage refuses the run while the request answers 202.
-                 Measured 2026-09-10: every `/produce` emitted `sub='ray'`, every one was refused, and the
-                 provenance of every cascade head was discarded with nothing red. The stage runners were
-                 given this on 2026-09-08; the producer was not, and the gap outlived the fix. */}}
+            {{- /* WHO THIS APP IS WHEN IT AUTHORS A RUN, which lineage authorizes. Absent, the app claims a
+                 code default (`service-stage-runner`) that holds no tuple, and lineage refuses the run while
+                 the request answers 202: measured 2026-09-10, every `/produce` emitted `sub='ray'`, every one
+                 was refused, and the provenance of every cascade head was discarded with nothing red. */}}
             - { name: MEDALLION_FGA_SERVICE_IDENTITY, value: {{ .Values.medallion.producer.serviceIdentity | quote }} }
             {{- if .Values.medallion.qualityReview }}
             {{- /*
@@ -616,13 +611,6 @@ spec:
             */}}
             - { name: MEDALLION_RAY_ENABLED, value: "true" }
             - { name: MEDALLION_RAY_ADDRESS, value: {{ $root.Values.medallion.rayAddress | default (printf "http://%s-ray-head-svc:8265" (include "rask.fullname" $root)) | quote }} }
-            {{- /* WHERE THE STAGE JOB POSTS ITS OWN PROVENANCE. Ray pods carry no daprd, so a job
-                 emits over HTTP — the same reason the train lane has `MEDALLION_TRAIN_LINEAGE_URL`,
-                 and derived the same way. The CODE default is empty on purpose (an unwired estate
-                 must post to no guessed address); the chart is not guessing, it knows its own lineage
-                 Service. Without it `emit()` returns early and the entire stage lane is unlineaged
-                 while every job reports success. */}}
-            - { name: MEDALLION_STAGE_LINEAGE_URL, value: {{ $root.Values.medallion.stageLineageUrl | default (printf "http://%s-lineage:%v" (include "lance.fullname" $root) $root.Values.services.lineage.port) | quote }} }
             {{- if .stageJob }}
             {{- /*
                P7b seam: this stage runner's stage-job entrypoint (stageRunners[].stageJob) — how the HTR lanes select
@@ -651,13 +639,6 @@ spec:
                Sourced from the image this pod actually runs, so it cannot drift from the code.
             */}}
             - { name: MEDALLION_RAY_CODE_VERSION, value: {{ include "lance.catalogImage" $root | quote }} }
-            {{- /* The subject this stage runner claims at the catalog's SERVICE door. A NAME, not a secret,
-                   so it is plain env — the credential is APP_API_TOKEN, which daprd injects from a
-                   managed secret above. Rendered unconditionally and NOT beside
-                   MEDALLION_FGA_SERVICE_IDENTITY, which is gated on fgaEnabled: authentication and
-                   authorization are different questions, and coupling them leaves a governed estate
-                   with FGA off unable to authenticate at all. Same value, so the two cannot drift. */}}
-            - { name: MEDALLION_CATALOG_SERVICE_IDENTITY, value: {{ .serviceIdentity | quote }} }
             - { name: MEDALLION_CATALOG_URL, value: {{ printf "http://%s-catalog:%v" (include "lance.fullname" $root) $root.Values.services.catalog.port | quote }} }
             - { name: MEDALLION_CATALOG_ROOT, value: {{ printf "s3://%s" $root.Values.minio.bucket | quote }} }
             {{- if $root.Values.medallion.quality }}
@@ -700,13 +681,11 @@ spec:
             {{- end }}
             - { name: MEDALLION_FGA_REQUIRED_ACTION, value: {{ .requiredAction | quote }} }
             {{- end }}
-            {{- /* THE IDENTITY IS WHO THIS RUNNER IS, so it renders whether or not FGA is on — the
-                 lesson `catalog_service_identity` already records in its own docstring, repeated here
-                 because `ray_submit` fills the stage job's `LINEAGE_SERVICE_ID` from this value.
-                 Gated on `fgaEnabled` it was ABSENT from all three running stage runners (measured
-                 2026-09-08), so a stage job claimed a code default at lineage's door and the emit was
-                 refused while the job exited SUCCEEDED. Authentication and authorization are
-                 different questions; only the ACTION below belongs to the authorization toggle. */}}
+            {{- /* THE IDENTITY IS WHO THIS RUNNER IS, so it renders whether or not FGA is on: it is the author
+                 `sub` of every run this runner emits. Gated on `fgaEnabled` it was ABSENT from all three
+                 running stage runners (measured 2026-09-08), so a run claimed a code default and lineage
+                 refused it while the job exited SUCCEEDED. Only the required action above belongs to the
+                 authorization toggle. */}}
             - { name: MEDALLION_FGA_SERVICE_IDENTITY, value: {{ .serviceIdentity | quote }} }
             {{- include "lance.saVerifier" (list $root "env" "stage") | nindent 12 }}
           {{- include "lance.appProbes" $root | nindent 10 }}

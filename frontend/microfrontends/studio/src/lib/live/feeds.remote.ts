@@ -24,7 +24,6 @@ const LINEAGE_API = env.LINEAGE_API ?? 'http://localhost:8001';
 function lineageHeaders(): Record<string, string> {
 	return lineageAuthHeaders({
 		serviceToken: readSecretFile(env.LINEAGE_SERVICE_TOKEN_FILE),
-		serviceId: env.LINEAGE_SERVICE_ID,
 	});
 }
 

@@ -127,12 +127,9 @@ def build_run_event(
 def emit(event: RunEvent) -> bool:
     """Send the event to the lineage ingest. Returns whether it landed; never raises.
 
-    Ray pods carry no Dapr sidecar, so this is the plain HTTP ingest, and `build_emitter` resolves the
-    credential the way every rask producer does — including the rule that ONE POD RUNS SEVERAL
-    IDENTITIES, so `RASK_LINEAGE_TOKEN_<IDENTITY>` wins over the shared token. That rule was measured
-    against the live door (a second identity presenting the shared token -> 401, while the job wrote
-    its rows and exited SUCCEEDED), and it lives in `lineage_kit.config` where every producer gets it
-    rather than in this lane alone.
+    Ray pods carry no Dapr sidecar, so this is the plain HTTP ingest. `build_emitter` presents the pod's
+    projected `rask-lineage` ServiceAccount token, re-read on every emit, and the lineage door takes the
+    subject from that verified token alone, so the event reports as the account this pod runs under.
     """
     try:
         return build_emitter().emit(event)

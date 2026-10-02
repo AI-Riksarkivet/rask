@@ -23,9 +23,8 @@ the catalog, flows and notifications alike; asking whether one particular class 
 accuse a variable that its own service reads perfectly well. The union under-reports and never
 falsely accuses, which is the right trade for a gate whose whole subject is "binds to NOTHING".
 
-THE WEB ZONES ARE OUT OF THIS GATE'S SCOPE. Their `LINEAGE_SERVICE_TOKEN`, `LINEAGE_API`,
-`LINEAGE_SERVICE_ID` and `LANCE_GATEWAY_URL` are read by SvelteKit (`bff.ts`), a plane with no
-`BaseSettings` at all — which is why the gate names the Python plane in its title. The zone and runner
+THE WEB ZONES ARE OUT OF THIS GATE'S SCOPE. Their `LINEAGE_SERVICE_TOKEN_FILE`, `LINEAGE_API` and
+`LANCE_GATEWAY_URL` are read by SvelteKit (`bff.ts`), a plane with no `BaseSettings` at all — which is why the gate names the Python plane in its title. The zone and runner
 planes are checked by nothing here.
 """
 

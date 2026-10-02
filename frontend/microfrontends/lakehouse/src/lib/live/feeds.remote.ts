@@ -80,7 +80,6 @@ function lineageHeaders(): Record<string, string> {
 	return lineageAuthHeaders({
 		accessToken: locals.session?.accessToken,
 		serviceToken: readSecretFile(env.LINEAGE_SERVICE_TOKEN_FILE),
-		serviceId: env.LINEAGE_SERVICE_ID,
 	});
 }
 

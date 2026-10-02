@@ -260,7 +260,6 @@ export const listIngestRuns = query(async (): Promise<IngestRunRow[]> => {
 		headers: lineageAuthHeaders({
 			accessToken: locals.session?.accessToken,
 			serviceToken: readSecretFile(env.LINEAGE_SERVICE_TOKEN_FILE),
-			serviceId: env.LINEAGE_SERVICE_ID,
 		}),
 	});
 	// A governed refusal and an outage are both "no board" to this page, and neither is worth

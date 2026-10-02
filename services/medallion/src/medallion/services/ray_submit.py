@@ -161,14 +161,9 @@ async def submit_train_job(
                 "REGISTRY_URI": registry_uri,
                 "ARTIFACT_BASE": artifact_base,
                 "LINEAGE_URL": settings.train_lineage_url,
-                # The job authenticates to the lineage ingest as the SERVICE it already is (D5's
-                # `service-trainer`) — but the shared app TOKEN no longer rides this dict. It did, and
-                # the old NOTE here conceded the exposure out loud: the Jobs API echoes runtime_env
-                # back. Fixed 2026-08-28 exactly as that note prescribed — a secret mounted on the Ray
-                # pods (secretKeyRef; see chart/templates/rayservice.yaml) — so the job still reads
-                # LINEAGE_SERVICE_TOKEN and S3_SECRET from `os.environ`, now sourced from the pod.
-                # Empty/absent token (dev/auth-off) → header omitted → the ingest stays open.
-                "LINEAGE_SERVICE_ID": settings.trainer_identity,
+                # NO CREDENTIAL AND NO IDENTITY ride this dict, because the Jobs API echoes runtime_env
+                # back. The job reports to the lineage ingest as the Ray head's projected ServiceAccount
+                # token names it (`service-trainer`, [[LH-220]]) and reads S3_SECRET from the pod's env.
                 # NO S3 NAME RIDES THIS BODY either — same rule and same owner as the stage lane
                 # above, and `scripts/ray_train_job.py:20` documents the same required set. The pod
                 # supplies all four.

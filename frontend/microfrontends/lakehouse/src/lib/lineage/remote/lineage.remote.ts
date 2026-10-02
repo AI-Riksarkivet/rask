@@ -43,7 +43,6 @@ function authHeaders(isRead: boolean): Record<string, string> {
 	return lineageAuthHeaders({
 		accessToken,
 		serviceToken: readSecretFile(env.LINEAGE_SERVICE_TOKEN_FILE),
-		serviceId: env.LINEAGE_SERVICE_ID,
 	});
 }
 

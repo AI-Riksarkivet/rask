@@ -709,29 +709,3 @@ def test_a_service_triggered_stage_sends_NO_blank_identity(monkeypatch: pytest.M
     env = api.posts[0]["runtime_env"]["env_vars"]
     assert "RASK_ORIGINATOR" not in env, f"a service-run cascade must send no principal, neither blank nor fabricated: {env.get('RASK_ORIGINATOR')!r}"
     assert "rask.originator" not in api.posts[0]["metadata"]
-
-
-def test_the_stage_job_is_told_WHO_it_posts_its_lineage_AS(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The reporting SUBJECT rides; the endpoint is the pod's.
-
-    The subject cannot come from the pod: one Ray head serves all three stage lanes and each claims its
-    own submitter's identity, which also selects the `RASK_LINEAGE_TOKEN_<IDENTITY>` the emitter
-    presents. Gated on the lane being wired, so an unconfigured estate asserts no subject rather than a
-    blank one — a blank would send the job looking for `RASK_LINEAGE_TOKEN_` and fall back to the shared
-    token, claiming a name it has no key for.
-
-    That the head supplies the endpoint is pinned where the claim is argued,
-    `test_the_order_carries_its_lineage_identity.py` — here it is only asserted absent, because a
-    submitted copy would beat the pod's under Ray's merge-over-process-env rule.
-    """
-    api = _FakeJobsAPI()
-    monkeypatch.setattr(ray_submit.httpx, "AsyncClient", lambda **_kw: api)
-    settings = MedallionSettings.model_validate(
-        {"compute_enabled": True, "ray_enabled": True, "to_namespace": "silver", "stage_lineage_url": "http://rask-lineage:8000"}
-    )
-
-    asyncio.run(stage_submit.submit_stage_job(settings, from_uri="s3://lake/b", to_uri="s3://lake/s", stage="silver", token="t", originator="alice-sub"))
-
-    env = api.posts[0]["runtime_env"]["env_vars"]
-    assert env.get("RASK_LINEAGE_SERVICE_IDENTITY"), "the ingest is governed; a run that claims no subject 401s and the provenance is lost"
-    assert "LINEAGE_URL" not in env, "the endpoint has two owners now, and the submission outvotes the pod"

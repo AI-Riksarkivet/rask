@@ -289,8 +289,6 @@ spec:
                  request, so the kubelet's rotation reaches a running pod with no restart. */}}
             - name: LINEAGE_SERVICE_TOKEN_FILE
               value: /var/run/secrets/rask/identity/rask-lineage/token
-            - name: LINEAGE_SERVICE_ID
-              value: {{ $fe.serviceIdentity | quote }}
             {{- if $fe.oidc.enabled }}
             {{- /*
                Per-user OIDC login (opt-in; needs a browser-reachable IdP). Every zone reads

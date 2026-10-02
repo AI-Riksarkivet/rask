@@ -199,11 +199,6 @@ async def submit_stage_job(
             project=project,
             originator=originator,
             code_version=code_version,
-            # WHO THE JOB REPORTS AS at the lineage ingest, and the only lineage fact that can not come
-            # from the pod: one head serves all three stage lanes, and this selects which
-            # `RASK_LINEAGE_TOKEN_<IDENTITY>` the job's emitter presents. Gated on the lane being
-            # wired, so an unconfigured lane asserts no subject rather than a blank one.
-            service_identity=settings.fga_service_identity if settings.stage_lineage_url else "",
         ),
         params=job_params,
         # THE RUN'S IDENTITY, and now also the engine's handle for it: the executor submits under this

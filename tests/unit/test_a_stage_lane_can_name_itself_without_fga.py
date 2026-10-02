@@ -1,19 +1,9 @@
 """A stage runner's IDENTITY must not be gated on an authorization toggle.
 
-`MedallionSettings.catalog_service_identity` already records this lesson, in its own docstring:
-"Deliberately NOT `fga_service_identity`, which carries the same value but is rendered only when FGA
-is on. Authentication and authorization are different questions, and coupling them means a governed
-estate running `auth.enabled: true` with FGA off cannot authenticate at all."
-
-`ray_submit` then reaches for `fga_service_identity` anyway, to fill the stage job's
-`LINEAGE_SERVICE_ID` — an AUTHENTICATION claim taken from an AUTHORIZATION-gated value. Measured on
-the live estate 2026-09-08: `MEDALLION_FGA_SERVICE_IDENTITY` is absent from all three running stage
-runners, so the value falls back to its code default and every stage job would claim a subject the
-door has never heard of.
-
-The failure is silent by construction. `emit()` returns early on an unset LINEAGE_URL, so the estate
-that has not wired `stage_lineage_url` sees nothing at all; the estate that wires it sees its jobs
-land their rows and lose their provenance, which is the 2026-07-13 trainer incident's exact shape.
+`MEDALLION_FGA_SERVICE_IDENTITY` is the author `sub` of every run a stage runner emits, and lineage
+authorizes that author. Measured on the live estate 2026-09-08, rendered only with FGA on it was absent
+from all three running stage runners, so the value fell back to its code default and every run claimed a
+subject that holds no tuple: lineage refused the emit while the job landed its rows and reported success.
 """
 
 from __future__ import annotations
@@ -75,7 +65,6 @@ def test_a_stage_runner_names_itself_with_fga_off() -> None:
     for name, env in runners.items():
         claimed = env.get("MEDALLION_FGA_SERVICE_IDENTITY")
         assert claimed in STAGE_IDENTITIES, (
-            f"{name} renders no identity with FGA off (got {claimed!r}) — its stage jobs claim a code "
-            "default at lineage's door, which the allowlist has never heard of, and the emit is refused "
-            "while the job exits SUCCEEDED"
+            f"{name} renders no identity with FGA off (got {claimed!r}) — its runs claim a code default as "
+            "their author, which holds no tuple, and lineage refuses the emit while the job exits SUCCEEDED"
         )

@@ -64,7 +64,6 @@ def _medallion_settings() -> Any:
             "MEDALLION_S3_ENDPOINT": "http://minio.invalid:9000",
             "MEDALLION_S3_ACCESS_KEY_ID": "platform-key",
             "MEDALLION_S3_SECRET_ACCESS_KEY": MATERIAL["AWS_SECRET_ACCESS_KEY"],
-            "MEDALLION_STAGE_LINEAGE_URL": "http://lineage.invalid:8000/events",
             "MEDALLION_TRAIN_LINEAGE_URL": "http://lineage.invalid:8000/events",
         }
     )

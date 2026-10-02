@@ -169,15 +169,10 @@ def build_event(
 def emit(event: RunEvent) -> None:
     """Send the event to the lineage ingest. Best-effort — provenance must never crash the training.
 
-    THE CREDENTIAL RULES ARE `lineage-kit`'s NOW, not this file's, and they are the same rules: it
-    reads ``LINEAGE_URL`` / ``LINEAGE_SERVICE_TOKEN`` / ``LINEAGE_SERVICE_ID`` / ``LINEAGE_TOKEN``
-    through ``AliasChoices`` — the exact trio this lane's pod sets — and it applies the rule that
-    matters most here, that ONE POD RUNS SEVERAL IDENTITIES so ``RASK_LINEAGE_TOKEN_<IDENTITY>`` wins
-    over the shared token. This head runs the train lane and every stage lane, so a single shared
-    token can be right for exactly one of them; measured against the live door 2026-09-08, the same
-    POST twice from inside the Ray head gave `service-trainer` -> 201 and a second identity -> 401,
-    while the job wrote its data and exited SUCCEEDED — the 2026-07-13 trainer incident's exact shape,
-    reported by nothing.
+    THE CREDENTIAL RULES ARE `lineage-kit`'s, not this file's. It takes the endpoint from the head's
+    ``RASK_LINEAGE_ENDPOINT`` (or the submission's ``LINEAGE_URL``) and presents the head's projected
+    `rask-lineage` ServiceAccount token, re-read on every emit, so the job reports as the subject the
+    lineage door maps that account to: `service-trainer` ([[LH-220]]).
     """
     if not build_emitter().emit(event):
         print(f"lineage emit failed for {event.job.name}", file=sys.stderr)
