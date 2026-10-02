@@ -328,9 +328,9 @@ def test_jwks_client_is_built_with_an_explicit_timeout(monkeypatch: pytest.Monke
     captured: dict[str, Any] = {}
 
     class _FakeJWKClient:
-        def __init__(self, uri: str, **kwargs: Any) -> None:
-            captured["uri"] = uri
-            captured.update(kwargs)
+        def __init__(self, uri: str, credential: object, *, max_cached_keys: int, timeout: float) -> None:
+            del credential
+            captured.update(uri=uri, max_cached_keys=max_cached_keys, timeout=timeout)
 
     def _fake_get(self: Any, url: str, *a: object, **k: object) -> httpx.Response:
         del self, a, k
@@ -344,7 +344,7 @@ def test_jwks_client_is_built_with_an_explicit_timeout(monkeypatch: pytest.Monke
             request=httpx.Request("GET", url),
         )
 
-    monkeypatch.setattr(oidc.jwt, "PyJWKClient", _FakeJWKClient)
+    monkeypatch.setattr(oidc, "_CredentialedJWKClient", _FakeJWKClient)
     monkeypatch.setattr(httpx.Client, "get", _fake_get)
 
     verifier = oidc.OIDCVerifier(issuer="https://idp.example", audience="rask", cache_ttl=60)

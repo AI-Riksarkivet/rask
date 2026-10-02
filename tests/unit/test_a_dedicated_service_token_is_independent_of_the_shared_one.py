@@ -1,15 +1,14 @@
-"""A privileged identity's dedicated credential is independent material, and the chart's two writers agree.
+"""A service's dedicated credential is independent material, and the chart's two writers agree.
 
-[[ZT-001]]. `service_kit.governed.dapr_auth` introduces the dedicated pair for one stated reason: a
-subject NOT on the privileged allowlist authenticates with the estate's shared `APP_API_TOKEN`, so
-without a per-identity credential "any holder of that one token may claim ANY allowlisted service" —
-including identities holding a write and publish rung on every warehouse. A dedicated token computed
-FROM that shared token leaves the property it exists to remove exactly where it was.
+[[ZT-001]]. `service-token-<identity>` keys that service's lineage event signatures (verified by lineage until
+[[LH-064]] moves signing to per-identity keys); no door authenticates with it since [[LH-220]]. A key computed
+FROM the estate-wide app token would let every holder of that token forge any service's signature, which is the
+property a per-identity key exists to remove.
 
-`lance.dedicatedServiceToken` has TWO writers that must produce the same bytes: `openbao.yaml` seeds
-the store the door reads, and `infra-credentials.yaml` holds the copy a daprd-less consumer mounts.
-`dapr_auth.service_principal` compares them with `secrets.compare_digest`, so a near-miss is a 401 that
-nothing renders as an error — which is why cross-writer agreement is gated here and not just observed.
+`lance.dedicatedServiceToken` has TWO writers that must produce the same bytes: `openbao.yaml` seeds the store a
+sidecar'd signer and lineage's verifier read, and `infra-credentials.yaml` holds the copy a daprd-less consumer
+mounts. A signer and a verifier holding different bytes refuse every signature with nothing naming the cause,
+which is why cross-writer agreement is gated here and not just observed.
 
 ONE BRANCH IS OUT OF REACH HERE AND IS NOT COVERED: the helper's `lookup` of the live Secret, and with
 it the rule that a looked-up value still equal to the old derivation is discarded rather than carried

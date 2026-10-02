@@ -141,10 +141,10 @@ def is_public_caller(caller: str | None) -> bool:
 def expected_app_token() -> str | None:
     """The token every door on this app authenticates against — from the store, or from env.
 
-    ONE resolver for all three consumers (`require_dapr_token`, `service_principal`,
-    `assert_app_token_configured`), because a deployment that moves its token to the store must move
-    every door with it: a service door still reading env while the Dapr door reads the store is a pod
-    where half the credentials are configured and nothing says which half.
+    ONE resolver for both consumers (`require_dapr_token`, `assert_app_token_configured`), because a
+    deployment that moves its token to the store must move every door with it: one door still reading
+    env while another reads the store is a pod where half the credentials are configured and nothing
+    says which half.
 
     Cached through `_secret_bundle` (per process, per store+key), so the store is read once and the
     per-request cost is a dict lookup. An unreadable store RAISES rather than answering `None` — the
@@ -255,8 +255,7 @@ def require_dapr_token(
         # problem handlers map; the fleet's own `ServiceUnavailableError` is a different class and is
         # mapped by only one of them.
         raise ServiceUnavailableError(f"cannot authenticate this Dapr delivery: {outage}") from outage
-    # FAIL CLOSED WHEN UNCONFIGURED, which is the same answer `service_principal` below gives to the
-    # identical condition (`ServiceDoorClosed`). A guard with no expected value cannot distinguish a
+    # FAIL CLOSED WHEN UNCONFIGURED. A guard with no expected value cannot distinguish a
     # legitimate delivery from a forged one, so admitting is not leniency — it is the control being
     # absent while every probe reports it present. Measured 2026-09-15: an actor host with no token
     # answered 200 to a caller presenting none.
@@ -299,81 +298,7 @@ def assert_app_token_configured(*, dapr_enabled: bool) -> None:
         )
 
 
-# ── the SERVICE DOOR: an in-cluster caller authenticating AS a named service ──────────
-
-
-class ServiceIdentity:
-    """A service principal — an in-cluster caller that is not a human.
-
-    `sub` is the bare FGA subject, so every authorization decision downstream reads the same way for
-    a service as for a person. That symmetry is the point: a service is bounded by its own rung, not
-    exempt from the model.
-    """
-
-    __slots__ = ("_sub",)
-
-    def __init__(self, sub: str) -> None:
-        self._sub = sub
-
-    @property
-    def sub(self) -> str:
-        return self._sub
-
-    def __repr__(self) -> str:  # pragma: no cover - debugging aid
-        return f"ServiceIdentity({self._sub!r})"
-
-
-class ServiceDoorError(Exception):
-    """Base of every refusal the shared service door issues.
-
-    THE DOOR DECIDES, THE CALL SITE RENDERS. `service_kit` must not pick the wire shape: both
-    consumers answer in RFC 9457 problem+json through `service_kit.lakehouse.ns_errors`, and a raw
-    `fastapi.HTTPException` slips past those handlers as a bare ``{"detail": …}`` body — the exact
-    contract each of their module docstrings promises not to break. So the door raises these neutral
-    types and each call site maps them onto its own error vocabulary. One decision, two renderings,
-    never two decisions.
-    """
-
-
-class ServiceDoorClosed(ServiceDoorError):
-    """No ``APP_API_TOKEN`` here: the service door does not exist in this deployment.
-
-    THE UNIFIED NO-CREDENTIAL ANSWER IS A REFUSAL THAT NAMES ITSELF (401), NOT A FALL-THROUGH TO
-    OIDC. This class used to say the opposite and the two call sites disagreed accordingly —
-    lineage refused, the catalog swallowed it and re-asked OIDC. The refusal
-    wins on three counts:
-
-      * REACHING THIS DOOR IS DELIBERATE. A caller only gets here by sending BOTH ``dapr-api-token``
-        and ``x-lance-service-identity``; the gateway strips both at the edge
-        (`gateway/__init__.py` ``_CLIENT_SPOOFABLE``) and the zones' BFF sends them only when there
-        is no session. Such a request has asked to be authenticated AS A SERVICE, so the service
-        door is the only door it gets — quietly answering with a different one is the surprise.
-      * OTHERWISE THE LESS-CONFIGURED DEPLOYMENT IS THE MORE PERMISSIVE ONE. With the door
-        configured, a rejected service credential is a 401 with no OIDC second chance; falling
-        through would hand that same request a second chance precisely when the door is missing.
-      * DIAGNOSTICS. An operator who set the allowlist but forgot ``APP_API_TOKEN`` reads "Missing
-        bearer token" under a fall-through and goes hunting in the IdP. This names the missing knob.
-
-    It does NOT re-create the 2026-08-06 outage. That refusal fired on ``dapr-caller-app-id``, which
-    the SIDECAR stamps on every request it delivers — so it caught humans who never asked for this
-    door. These two headers are the caller's own choice. Nor does it close anything a fall-through
-    opened: OIDC admits only a valid bearer either way, so the only caller whose answer changes is
-    one holding a valid bearer AND both service headers, and the honest answer to them is "you asked
-    for the service door".
-    """
-
-
-class SubjectNotAllowed(ServiceDoorError):
-    """The claimed subject is not on this deployment's allowlist — 403 at every call site."""
-
-
-class CredentialRejected(ServiceDoorError):
-    """The presented credential may not be the claimed subject — 401 at every call site.
-
-    Covers all three ways the second question is answered "no": the shared token presented for a
-    privileged subject, a privileged subject whose dedicated credential was never provisioned, and a
-    plain wrong token. They are one refusal on purpose — a caller must not be able to tell which.
-    """
+# ── a service's own signing key, read from the secret store ─────────────────────────
 
 
 class SecretStoreUnreadable(RuntimeError):
@@ -414,13 +339,11 @@ def _secret_bundle(store: str, key: str) -> tuple[tuple[str, str], ...]:
 
 
 def dedicated_token_from_store(store: str) -> Callable[[str], str | None]:
-    """The estate's ONE resolver for a privileged subject's dedicated credential.
+    """The estate's ONE resolver for a service's own signing key, ``service-token-<identity>``.
 
-    Lifted from `services/lineage`: the shared `service_principal` grew the
-    `dedicated_token=` parameter for exactly this callback, but the catalog never passed one — so
-    its privileged door hard-refused every privileged subject with "no dedicated credential
-    provisioned" no matter what was seeded — while lineage kept a private fork of the resolver.
-    Both halves are closed now: one resolver, one door. Returns ``None`` only when the secret was READ
+    The key signs that service's lineage events (HMAC) and lineage verifies them with the same read; no
+    door authenticates with it ([[LH-220]]: a service is the service account its projected token names),
+    and [[LH-064]] moves signing to per-identity keys. Returns ``None`` only when the secret was READ
     and carries no token; an unreadable store raises :class:`SecretStoreUnreadable` (§2.17's
     absent-vs-unreadable split rides along).
 
@@ -452,65 +375,6 @@ def dedicated_token_from_store(store: str) -> Callable[[str], str | None]:
             return None
 
     return _resolve
-
-
-def service_principal(
-    *,
-    token: str | None,
-    identity: str | None,
-    allowed_subjects: str,
-    privileged_subjects: str = "",
-    dedicated_token: Callable[[str], str | None] | None = None,
-) -> ServiceIdentity:
-    """Authenticate an in-cluster service: a valid credential + an ALLOWLISTED subject.
-
-    THE ESTATE'S ONLY SERVICE DOOR. Extracted from `services/lineage` when the catalog needed the
-    same door — but for a while lineage kept its own copy alongside, and the two answered the
-    no-credential question differently. Two doors with different answers to the
-    same question is worse than either answer: whichever one an auditor reads, the other is live.
-    There is now one body here and two thin renderings at the call sites.
-
-    The lessons it carries were each paid for once and must not be re-learned per service:
-
-      * TWO questions, not one. The allowlist answers "may this SUBJECT use the door"; the credential
-        answers "may THIS CALLER be that subject". Without the second, the identity is a claim the
-        door BELIEVES — and with one shared token across an allowlist, any holder can pick the
-        highest-privileged name on it.
-      * PRIVILEGED subjects need their own credential, and a missing one FAILS CLOSED rather than
-        falling back to the shared token. A quiet fallback restores the escalation while looking
-        configured, which is worse than not having the control.
-      * The allowlist is checked FIRST, so an unknown caller-supplied subject never reaches the
-        credential store — a door that looks up arbitrary names is an enumeration oracle.
-
-    Every refusal is a :class:`ServiceDoorError`, never a `fastapi.HTTPException` — see that class.
-    `ServiceDoorClosed` (no `APP_API_TOKEN`) is a REFUSAL both call sites render as 401, not a
-    fall-through signal; its docstring carries the reasoning.
-
-    `dedicated_token` is not optional in practice — omitting it makes the privileged branch refuse
-    every privileged subject no matter what the store holds, which is exactly how §2.8 shipped. It
-    stays keyword-defaulted only so a deployment with an empty `privileged_subjects` need not build
-    a resolver it will never call.
-    """
-    expected = expected_app_token()
-    if not expected:
-        raise ServiceDoorClosed(f"the service door is not configured here: {missing_app_token_knob()}")
-
-    allowed = {s.strip() for s in allowed_subjects.split(",") if s.strip()}
-    if not identity or identity not in allowed:
-        raise SubjectNotAllowed(f"service identity not allowed: {identity or '<missing>'}")
-
-    privileged = {s.strip() for s in privileged_subjects.split(",") if s.strip()}
-    if identity in privileged:
-        dedicated = dedicated_token(identity) if dedicated_token else None
-        if not dedicated:
-            raise CredentialRejected(f"service identity {identity!r} is privileged but has no dedicated credential provisioned")
-        if not secrets.compare_digest((token or "").encode(), dedicated.encode()):
-            raise CredentialRejected(f"the presented credential may not claim {identity!r}")
-        return ServiceIdentity(identity)
-
-    if not secrets.compare_digest((token or "").encode(), expected.encode()):
-        raise CredentialRejected("invalid service token")
-    return ServiceIdentity(identity)
 
 
 #: What `dapr.ext.fastapi.DaprActor` mounts at the ROOT of an app — outside `settings.api_prefix`, and

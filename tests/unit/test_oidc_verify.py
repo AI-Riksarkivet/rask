@@ -228,8 +228,8 @@ def _stub_network(
 ) -> tuple[list[str], list[str]]:
     """Serve ``document`` from any discovery URL and the local key from any JWKS URI.
 
-    Returns two recorders — the discovery URLs fetched and the JWKS URIs the
-    ``PyJWKClient`` was constructed with — so tests assert the *fetch locations*
+    Returns two recorders — the discovery URLs fetched and the JWKS URIs the key-set
+    client was constructed with — so tests assert the *fetch locations*
     while ``_resolve``'s own logic (issuer match, https guard, allowlist) runs real.
 
     Both clients are the real classes, cut at the wire: a real ``httpx.Client`` on a
@@ -247,12 +247,13 @@ def _stub_network(
     def _client(**kwargs: Any) -> httpx.Client:
         return real_client(transport=httpx.MockTransport(_serve), **kwargs)
 
-    def _jwk_client(uri: str, **kwargs: Any) -> _LocalJWKClient:
+    def _jwk_client(uri: str, credential: object, *, max_cached_keys: int, timeout: float) -> _LocalJWKClient:
+        del credential
         jwks_urls.append(uri)
-        return _LocalJWKClient(uri, public_key, **kwargs)
+        return _LocalJWKClient(uri, public_key, max_cached_keys=max_cached_keys, timeout=timeout)
 
     monkeypatch.setattr(oidc_module.httpx, "Client", _client)
-    monkeypatch.setattr(oidc_module.jwt, "PyJWKClient", _jwk_client)
+    monkeypatch.setattr(oidc_module, "_CredentialedJWKClient", _jwk_client)
     return discovery_urls, jwks_urls
 
 

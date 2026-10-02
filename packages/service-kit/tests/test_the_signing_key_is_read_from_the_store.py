@@ -1,19 +1,9 @@
-"""The estate's ONE service door — its refusals, and the fact that they are the door's own types.
+"""A service's signing key is read from the secret store once, and an unreadable store is never read as absent.
 
-The shared resolver landed but not the shared door: `services/lineage` kept a full
-second copy of this body, and the two disagreed about the unconfigured door — lineage refused, the
-catalog swallowed the signal and re-asked OIDC. Two doors with different answers to the same question
-is worse than either answer, because whichever one an auditor reads, the other is the one that ran.
-
-These tests pin the single body. The call-site RENDERINGS are pinned next to each service
-(`services/lineage/tests/test_service_door.py`, `services/catalog/tests/test_service_door.py`); what
-lives here is the decision itself:
-
-  * the unconfigured door REFUSES — `ServiceDoorClosed` is a refusal, not a fall-through signal;
-  * every refusal is a `ServiceDoorError`, never a `fastapi.HTTPException`, because both consumers
-    answer in RFC 9457 problem+json and a raw HTTPException escapes those handlers as a bare
-    `{"detail": ...}` body;
-  * absent vs unreadable stays split (§2.17) — a store outage is never a credential refusal.
+`dedicated_token_from_store` resolves `service-token-<identity>`, the key a service signs its lineage events with and
+lineage verifies them with until [[LH-064]] moves signing to per-identity keys. No door authenticates with it: a
+service is the service account its projected token names ([[LH-220]]). What lives here is the resolver's half of the
+absent-vs-unreadable split (§2.17): a store outage is never reported as a missing credential.
 """
 
 from __future__ import annotations
@@ -23,18 +13,11 @@ from collections.abc import Iterator
 import pytest
 
 from service_kit.governed import dapr_auth
-from service_kit.governed.dapr_auth import (
-    CredentialRejected,
-    SecretStoreUnreadable,
-    ServiceDoorClosed,
-    dedicated_token_from_store,
-    service_principal,
-)
+from service_kit.governed.dapr_auth import SecretStoreUnreadable, dedicated_token_from_store
 
 
 SHARED = "the-shared-dapr-app-token"
 TRAINER_OWN = "the-trainers-own-credential"
-ALLOWED = "service-trainer,service-web"
 
 
 @pytest.fixture(autouse=True)
@@ -44,53 +27,6 @@ def _clean_bundle_cache() -> Iterator[None]:
     dapr_auth._secret_bundle.cache_clear()
     yield
     dapr_auth._secret_bundle.cache_clear()
-
-
-@pytest.fixture
-def app_token(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("APP_API_TOKEN", SHARED)
-
-
-# --------------------------------------------------------------------------- #
-# THE UNIFIED NO-CREDENTIAL ANSWER
-# --------------------------------------------------------------------------- #
-
-
-def test_the_unconfigured_door_is_refused_BEFORE_the_allowlist(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Order matters for the message: an unconfigured door must not be reported as an allowlist
-    problem, or the operator fixes the wrong knob."""
-    monkeypatch.delenv("APP_API_TOKEN", raising=False)
-
-    with pytest.raises(ServiceDoorClosed):
-        service_principal(token=SHARED, identity="nobody-at-all", allowed_subjects=ALLOWED)
-
-
-# --------------------------------------------------------------------------- #
-# the PRIVILEGED branch — the escalation this door exists to stop
-# --------------------------------------------------------------------------- #
-
-
-def test_omitting_the_resolver_cannot_open_the_privileged_branch(app_token: None) -> None:
-    """§2.8 as it actually shipped: the catalog passed no `dedicated_token=`, the callback defaulted
-    to None, and every privileged subject was refused no matter what the store held. Refusing is the
-    right direction — pinned here so the default can never become "fall back to the shared token"."""
-    with pytest.raises(CredentialRejected, match="no dedicated credential"):
-        service_principal(token=SHARED, identity="service-trainer", allowed_subjects=ALLOWED, privileged_subjects="service-trainer")
-
-
-def test_an_unprivileged_subject_never_consults_the_store(app_token: None) -> None:
-    """`privileged_subjects` is empty by default, and until a deployment opts in the store must not
-    be touched — populating it requires seeding a secret per listed subject first."""
-    consulted: list[str] = []
-
-    def _resolver(identity: str) -> str | None:
-        consulted.append(identity)
-        return TRAINER_OWN
-
-    admitted = service_principal(token=SHARED, identity="service-trainer", allowed_subjects=ALLOWED, dedicated_token=_resolver)
-
-    assert admitted.sub == "service-trainer"
-    assert consulted == [], "the store was consulted for a subject nobody marked privileged"
 
 
 # --------------------------------------------------------------------------- #

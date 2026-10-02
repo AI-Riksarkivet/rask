@@ -7,8 +7,9 @@ answered with the claimer's version, so its rows never landed and its finalize r
 version as its own. A version's transaction record is likewise its committer's word: the catalog may
 recognize a run's commit only in what the version's manifest holds.
 
-ONE ESTATE, ON MOTO: the catalog app with OIDC on and its service door open to two subjects, ``ingest``,
-whose run it is, and ``mallory``, another writer of the same table. FGA is off: the claim is who wrote,
+ONE ESTATE, ON MOTO: the catalog app with OIDC on, mapping two service accounts to subjects: ``ingest``,
+whose run it is, and ``mallory``, another writer of the same table, each presenting its projected token
+from the root conftest's loopback issuer. FGA is off: the claim is who wrote,
 not who may. The run speaks through ingest's own catalog client, making the calls ``finalize_run`` and its
 prior-commit probe make, so what the client is answered is what the run reports.
 """
@@ -18,6 +19,8 @@ from __future__ import annotations
 import json
 import uuid
 from collections.abc import Iterator
+from pathlib import Path
+from typing import Any
 
 import boto3
 import lance
@@ -30,15 +33,18 @@ from service_kit.lakehouse.objectfs import lance_storage_options
 from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 
 
-_SHARED = "the-shared-app-token"
 _RUN = "run-8d1f"
 _SCHEMA = pa.schema([("id", pa.int64())])
 _SEED, _DOOR_CLAIM, _RUNS_OWN = [0], [666], [1, 2, 3]
 
 
-def _as(subject: str) -> dict[str, str]:
-    """The service door's two headers: the Dapr app token and the subject it vouches for."""
-    return {"dapr-api-token": _SHARED, "x-lance-service-identity": subject}
+#: The service account each subject runs as.
+_ACCOUNTS = {"ingest": "rask-sa-ingest", "mallory": "rask-sa-mallory"}
+
+
+def _as(issuer: Any, subject: str) -> dict[str, str]:
+    """The bearer a pod running as that subject's service account presents at the catalog."""
+    return {"Authorization": f"Bearer {issuer.mint(_ACCOUNTS[subject], audience='rask-catalog')}"}
 
 
 def _rows(ids: list[int]) -> pa.Table:
@@ -48,12 +54,15 @@ def _rows(ids: list[int]) -> pa.Table:
 class _Table:
     """``db$pages``, created through the door as ``ingest``, and the estate key a write vend stands in for."""
 
-    def __init__(self, url: str, client: TestClient) -> None:
+    def __init__(self, url: str, client: TestClient, issuer: Any) -> None:
         self.client = client
+        self.issuer = issuer
         self.key = lance_storage_options(url, "test", "test", "us-east-1")
-        assert client.post("/v1/namespace/db/create", json={}, headers=_as("ingest")).status_code == 200
+        assert client.post("/v1/namespace/db/create", json={}, headers=_as(issuer, "ingest")).status_code == 200
         created = client.post(
-            "/v1/table/db$pages/create", content=encode_arrow_stream(_rows(_SEED)), headers={"Content-Type": ARROW_STREAM_MEDIA_TYPE, **_as("ingest")}
+            "/v1/table/db$pages/create",
+            content=encode_arrow_stream(_rows(_SEED)),
+            headers={"Content-Type": ARROW_STREAM_MEDIA_TYPE, **_as(issuer, "ingest")},
         )
         assert created.status_code == 200, created.text
         self.location = str(created.json()["location"])
@@ -74,8 +83,10 @@ class _Table:
 
 
 @pytest.fixture
-def table(moto_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[_Table]:
+def table(moto_url: str, sa_issuer: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[_Table]:
     bucket = f"lh280-{uuid.uuid4().hex[:10]}"
+    ingest_token = tmp_path / "rask-catalog-token"
+    ingest_token.write_text(sa_issuer.mint(_ACCOUNTS["ingest"], audience="rask-catalog"))
     boto3.client("s3", endpoint_url=moto_url, aws_access_key_id="test", aws_secret_access_key="test", region_name="us-east-1").create_bucket(Bucket=bucket)
     for key, value in {
         "LANCE_REST_IMPL": "dir",
@@ -88,12 +99,14 @@ def table(moto_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[_Table]:
         "RASK_OIDC_ENABLED": "true",
         "RASK_OIDC_ISSUER": "https://idp.invalid",
         "RASK_OIDC_AUDIENCE": "rask",
-        "LANCE_SERVICE_SUBJECTS": "ingest,mallory",
-        "APP_API_TOKEN": _SHARED,
-        # Ingest's catalog client: the door it calls and the identity it presents there.
+        "RASK_SA_ISSUER": sa_issuer.issuer,
+        "RASK_SA_AUDIENCE": "rask-catalog",
+        "RASK_SA_SUBJECTS": json.dumps({f"system:serviceaccount:default:{sa}": subject for subject, sa in _ACCOUNTS.items()}),
+        "RASK_SA_FETCH_TOKEN_FILE": str(sa_issuer.fetch_token_file),
+        "RASK_SA_CA_FILE": str(sa_issuer.ca_file),
+        # Ingest's catalog client: the door it calls and the projected token it presents there.
         "RASK_CATALOG_URL": "http://testserver",
-        "RASK_CATALOG_APP_TOKEN": _SHARED,
-        "RASK_CATALOG_SERVICE_IDENTITY": "ingest",
+        "RASK_CATALOG_IDENTITY_TOKEN_FILE": str(ingest_token),
     }.items():
         monkeypatch.setenv(key, value)
     from catalog.core.config import get_settings
@@ -104,7 +117,7 @@ def table(moto_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[_Table]:
     with TestClient(app) as client:
         # The TestClient IS an httpx.Client, so ingest's pooled client reaches this app in-process.
         monkeypatch.setattr("ingest.http.shared_client", lambda: client)
-        yield _Table(moto_url, client)
+        yield _Table(moto_url, client, sa_issuer)
     get_settings.cache_clear()
 
 
@@ -134,7 +147,7 @@ def claimed(table: _Table, monkeypatch: pytest.MonkeyPatch) -> _Table:
     door = table.client.post(
         "/management/v1/table/db$pages/commit",
         json={"fragments": [f.to_json() for f in table.staged(_DOOR_CLAIM)], "read_version": table.read_version, "run_id": _RUN},
-        headers=_as("mallory"),
+        headers=_as(table.issuer, "mallory"),
     )
     assert door.status_code == 200, door.text
     claim_version = table.open().version
