@@ -57,10 +57,9 @@ from lance_namespace import (
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from catalog.api.dependencies import SettingsDep, UserStateStoreDep
-from catalog.api.security import CurrentToken
+from catalog.api.security import CurrentToken, Principal
 from catalog.core.config import Settings
 from catalog.schemas import UserStateEnvelope
-from service_kit.governed.oidc import IDToken
 from service_kit.governed.user_state import UserStateDocument, UserStateStore, UserStateUnreadable
 from service_kit.schemas.dock_layout import DockLayoutLibrary, DockLayouts
 from service_kit.schemas.workflow import SavedView, WorkflowGraph
@@ -77,7 +76,7 @@ _DOCK_LAYOUTS = TypeAdapter(DockLayouts)
 _DOCK_LAYOUT_LIBRARY = TypeAdapter(DockLayoutLibrary)
 
 
-def _subject(token: IDToken | None) -> str:
+def _subject(token: Principal | None) -> str:
     """The caller's verified subject, or 401. The ONLY identity source these routes have.
 
     With OIDC off there is no token and therefore no subject: per-subject state without a subject is not a
@@ -97,7 +96,7 @@ def _require_store(store: UserStateStore | None) -> UserStateStore:
 
 async def _fetch[T](
     store: UserStateStore | None,
-    token: IDToken | None,
+    token: Principal | None,
     document: UserStateDocument,
     adapter: TypeAdapter[T],
 ) -> tuple[str, datetime | None, T | None]:
@@ -138,7 +137,7 @@ async def _fetch[T](
 
 async def _store_document(
     store: UserStateStore | None,
-    token: IDToken | None,
+    token: Principal | None,
     settings: Settings,
     document: UserStateDocument,
     payload: JsonValue,
@@ -154,7 +153,7 @@ async def _store_document(
 
 async def _read[T](
     store: UserStateStore | None,
-    token: IDToken | None,
+    token: Principal | None,
     document: UserStateDocument,
     adapter: TypeAdapter[T],
 ) -> UserStateEnvelope[T]:
@@ -168,7 +167,7 @@ async def _read[T](
 
 async def _write[T](
     store: UserStateStore | None,
-    token: IDToken | None,
+    token: Principal | None,
     settings: Settings,
     document: UserStateDocument,
     value: T,
@@ -181,7 +180,7 @@ async def _write[T](
     return UserStateEnvelope[T](subject=subject, document=document, exists=True, updated_at=updated_at, value=value)
 
 
-async def _erase(store: UserStateStore | None, token: IDToken | None, document: UserStateDocument) -> Response:
+async def _erase(store: UserStateStore | None, token: Principal | None, document: UserStateDocument) -> Response:
     """Drop the caller's document. Idempotent — deleting what was never written is still a 204."""
     await _require_store(store).delete(subject=_subject(token), document=document)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

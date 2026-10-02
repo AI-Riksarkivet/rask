@@ -34,11 +34,10 @@ from lance_namespace import ServiceUnavailableError, UnauthenticatedError
 from openfga_sdk import OpenFgaClient
 
 from catalog.api.dependencies import FgaClientDep, SettingsDep
-from catalog.api.security import CurrentToken
+from catalog.api.security import CurrentToken, Principal
 from catalog.core.config import Settings
 from catalog.schemas import MeProject, MeResponse
 from service_kit.governed import fga
-from service_kit.governed.oidc import IDToken
 
 
 log = logging.getLogger(__name__)
@@ -52,7 +51,7 @@ router = APIRouter(prefix="/v1/me", tags=["me"])
 _LOOKUP_BUDGET_SECONDS = 2.0
 
 
-def _claim(token: IDToken, name: str) -> str | None:
+def _claim(token: Principal, name: str) -> str | None:
     """A non-empty string claim off the verified token (``extra='allow'`` keeps them), else ``None``."""
     value = getattr(token, name, None)
     return value if isinstance(value, str) and value else None

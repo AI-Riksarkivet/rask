@@ -51,13 +51,13 @@ from lance_namespace import (
 from openfga_sdk import OpenFgaClient
 
 from catalog.api.dependencies import FgaClientDep, SettingsDep
-from catalog.api.security import SERVICE_DOOR_ISSUER, CurrentToken
+from catalog.api.security import CurrentToken, Principal
 from catalog.core.config import Settings
 from catalog.core.identifiers import MAX_NAMESPACE_DEPTH, parse_identifier
 from catalog.services import native
 from service_kit.governed import fga
 from service_kit.governed.audit import ALLOW, DENY, FAILURE, audit
-from service_kit.governed.oidc import IDToken
+from service_kit.governed.machine_identity import ServicePrincipal
 from service_kit.lakehouse import trash
 
 
@@ -919,7 +919,7 @@ async def _absent_to_a_reader_of_the_parent(
     client: OpenFgaClient,
     settings: Settings,
     *,
-    token: IDToken,
+    token: Principal,
     fga_type: str,
     denied: str,
     segments: list[str],
@@ -1244,7 +1244,7 @@ async def require_project_exists(settings: Settings, project: str) -> None:
 async def seed_project_admin(
     client: OpenFgaClient | None,
     settings: Settings,
-    token: IDToken | None,
+    token: Principal | None,
     *,
     project: str,
 ) -> bool:
@@ -1276,7 +1276,7 @@ async def seed_project_admin(
 async def seed_ownership(
     client: OpenFgaClient | None,
     settings: Settings,
-    token: IDToken | None,
+    token: Principal | None,
     *,
     resource: str,
     segments: list[str],
@@ -1316,13 +1316,12 @@ async def seed_ownership(
     # an orphaning, and is why the parent edge below is still written unconditionally. Pinned against
     # the real evaluator in `model.fga.yaml`, not argued from the model text.
     #
-    # THE ISSUER IS THE DISCRIMINATOR, never a name pattern: the service door mints
-    # `SERVICE_DOOR_ISSUER`, and a synthetic principal is required never to look like a human login.
-    # Matching `sub` against `service_subjects` would work today and drift the moment a service is
-    # renamed or an allowlist is edited.
+    # THE PRINCIPAL'S TYPE IS THE DISCRIMINATOR, never a name pattern: only the service-account
+    # verifier builds a `ServicePrincipal`, so the question is answered by how the caller was proved,
+    # not by what its subject is called — a name test drifts the moment a service is renamed.
     await fga.grant_on_create(  # noqa: TID251
         client,
-        grant_owner=may_grant_owner and token.iss != SERVICE_DOOR_ISSUER,
+        grant_owner=may_grant_owner and not isinstance(token, ServicePrincipal),
         user_sub=token.sub,
         resource=resource,
         obj_id=fga.canonical_object_id(segments, delimiter=settings.delimiter),
@@ -1339,7 +1338,7 @@ async def revoke_ownership(
     *,
     resource: str,
     segments: list[str],
-    token: IDToken | None,
+    token: Principal | None,
 ) -> None:
     """Delete every FGA tuple on a just-dropped / renamed-away object (the revoke counterpart of
     :func:`seed_ownership`).
@@ -1370,7 +1369,7 @@ async def revoke_ownership(
 async def seed_ownership_or_compensate(
     client: OpenFgaClient | None,
     settings: Settings,
-    token: IDToken | None,
+    token: Principal | None,
     *,
     resource: str,
     segments: list[str],
@@ -1433,7 +1432,7 @@ async def seed_ownership_or_compensate(
 async def require_can_drop_table(
     client: OpenFgaClient | None,
     settings: Settings,
-    token: IDToken | None,
+    token: Principal | None,
     *,
     segments: list[str],
 ) -> None:
@@ -1454,7 +1453,7 @@ async def require_can_drop_table(
 async def require_can_promote(
     client: OpenFgaClient | None,
     settings: Settings,
-    token: IDToken | None,
+    token: Principal | None,
     *,
     segments: list[str],
 ) -> None:
@@ -1478,7 +1477,7 @@ async def require_can_promote(
 async def require_can_get_metadata(
     client: OpenFgaClient | None,
     settings: Settings,
-    token: IDToken | None,
+    token: Principal | None,
     *,
     segments: list[str],
 ) -> None:
@@ -1498,7 +1497,7 @@ async def require_can_get_metadata(
 async def require_create_on_parent(
     client: OpenFgaClient | None,
     settings: Settings,
-    token: IDToken | None,
+    token: Principal | None,
     *,
     resource: str,
     segments: list[str],
@@ -1518,7 +1517,7 @@ async def require_create_on_parent(
 async def require_relation(
     client: OpenFgaClient | None,
     settings: Settings,
-    token: IDToken | None,
+    token: Principal | None,
     *,
     relation: str,
     obj: str,
@@ -1536,7 +1535,7 @@ async def require_relation(
 async def require_can_create_warehouse(
     client: OpenFgaClient | None,
     settings: Settings,
-    token: IDToken | None,
+    token: Principal | None,
     *,
     project: str,
 ) -> None:
@@ -1562,7 +1561,7 @@ async def require_can_create_warehouse(
 async def seed_warehouse(
     client: OpenFgaClient | None,
     settings: Settings,
-    token: IDToken | None,
+    token: Principal | None,
     *,
     warehouse_id: str,
     project: str,

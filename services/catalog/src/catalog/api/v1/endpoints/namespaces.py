@@ -42,7 +42,7 @@ from catalog.api import fga_deps
 from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, LineageEmitterDep, NamespaceDep, SettingsDep, namespace_for_root
 from catalog.api.pagination import paginate
 from catalog.api.rask_params import RaskFlag
-from catalog.api.security import CurrentToken
+from catalog.api.security import CurrentToken, Principal
 from catalog.core.config import Settings
 from catalog.core.formats import reject_unsupported_format
 from catalog.core.identifiers import MAX_NAMESPACE_DEPTH, parse_identifier, reconcile_body_id, require_safe_segments
@@ -57,7 +57,6 @@ from catalog.schemas import ProtectionResponse, SetProtectionRequest, TrashEntry
 from catalog.services import native, warehouses
 from service_kit.control_emit import emit_control
 from service_kit.governed import fga
-from service_kit.governed.oidc import IDToken
 from service_kit.lakehouse import base_registry, maintenance_policies, protection, trash
 
 
@@ -387,7 +386,9 @@ def describe_namespace(id: str, ns: NamespaceDep, settings: SettingsDep, body: D
     return native.call(ns, "describe_namespace", req)
 
 
-async def _trash_subtree(ns: LanceNamespace, settings: Settings, token: IDToken | None, segments: list[str], descendants: list[tuple[str, list[str]]]) -> None:
+async def _trash_subtree(
+    ns: LanceNamespace, settings: Settings, token: Principal | None, segments: list[str], descendants: list[tuple[str, list[str]]]
+) -> None:
     """DETACH the subtree instead of destroying it — the recoverable half of a cascade (#96).
 
     A trash record pointing at bytes the native cascade already deleted would be a LIE: undrop

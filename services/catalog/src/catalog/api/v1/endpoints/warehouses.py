@@ -60,7 +60,7 @@ from catalog.api.dependencies import (
     VendorDep,
     namespace_for_root,
 )
-from catalog.api.security import CurrentToken
+from catalog.api.security import CurrentToken, Principal
 from catalog.api.v1.endpoints import namespaces as namespaces_api
 from catalog.core.config import Settings
 from catalog.core.identifiers import parse_identifier
@@ -78,7 +78,6 @@ from catalog.services import native, warehouses
 from catalog.services.vend_probe import CAS_CHECK, CAS_RESERVE, SCOPE_CHECK, ProbeCheck, ProbeReport, summarize_probe
 from service_kit.control_emit import emit_control
 from service_kit.governed import fga
-from service_kit.governed.oidc import IDToken
 from service_kit.lakehouse.naming import CONTROL_ID_RE
 from service_kit.lakehouse.ns_errors import PartiallyApplied
 from service_kit.lakehouse.records import RecordExistsError, RecordMissingError
@@ -420,7 +419,7 @@ async def _set_warehouse_status(
     warehouse_id: str,
     status: str,
     settings: Settings,
-    token: IDToken | None,
+    token: Principal | None,
     client: OpenFgaClient | None,
 ) -> WarehouseResponse:
     """Shared deactivate/activate: admin-gate on the warehouse's OWN project, flip ``status``, persist.
@@ -748,7 +747,7 @@ async def _revoke_descendants_of(
     ns_conn: Any,
     client: OpenFgaClient | None,
     settings: Settings,
-    token: IDToken | None,
+    token: Principal | None,
     segments: list[str],
 ) -> int:
     """Revoke the tuples of every table and nested namespace under ``segments``. Returns the count.
@@ -780,7 +779,7 @@ async def _revoke_descendants_of(
     return removed
 
 
-async def _revoke_tuples(client: OpenFgaClient | None, settings: Settings, token: IDToken | None, obj: str) -> int:
+async def _revoke_tuples(client: OpenFgaClient | None, settings: Settings, token: Principal | None, obj: str) -> int:
     """Delete every FGA tuple on ``obj`` and return the count (0 when FGA is off/unwired).
 
     Distinct from :func:`fga_deps.revoke_ownership` in exactly two ways that matter here: the audit origin

@@ -37,7 +37,7 @@ from openfga_sdk import OpenFgaClient
 
 from catalog.api import fga_deps, lineage_deps
 from catalog.api.dependencies import FgaClientDep, LineageEmitterDep, NamespaceDep, SettingsDep, StorageOptionsDep
-from catalog.api.security import CurrentToken
+from catalog.api.security import CurrentToken, Principal
 from catalog.core.config import Settings
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.core.lineage_emit import (
@@ -50,7 +50,6 @@ from catalog.core.lineage_emit import (
 from catalog.core.namespace import judged_native_version
 from catalog.services import dataplane, native
 from service_kit.governed import fga
-from service_kit.governed.oidc import IDToken
 
 
 #: The GOVERNANCE namespace in field metadata: keys the estate acts on, not user properties.
@@ -69,7 +68,7 @@ GOVERNANCE_FIELD_PREFIX: Final = "rask."
 async def _require_classifier_for_governance_keys(
     client: OpenFgaClient | None,
     settings: Settings,
-    token: IDToken | None,
+    token: Principal | None,
     *,
     segments: list[str],
     updates: list[dict[str, Any]],

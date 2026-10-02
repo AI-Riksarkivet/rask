@@ -32,7 +32,7 @@ from openfga_sdk import OpenFgaClient
 
 from catalog.api import fga_deps
 from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, SettingsDep
-from catalog.api.security import CurrentToken
+from catalog.api.security import CurrentToken, Principal
 from catalog.schemas import (
     AccessCheckBody,
     AccessCheckResult,
@@ -53,7 +53,6 @@ from catalog.schemas import (
 from service_kit.control_emit import ControlEmitter, emit_control
 from service_kit.governed import fga
 from service_kit.governed.audit import FAILURE, SUCCESS, audit
-from service_kit.governed.oidc import IDToken
 
 
 log = logging.getLogger(__name__)
@@ -310,7 +309,7 @@ def _validated_write_tuple(body: AccessTuple, *, evaluated: bool) -> fga.ClientT
     return tup
 
 
-async def _mutate_tuple(client: OpenFgaClient, control: ControlEmitter, token: IDToken | None, body: AccessTuple, *, write: bool) -> AccessTuple:
+async def _mutate_tuple(client: OpenFgaClient, control: ControlEmitter, token: Principal | None, body: AccessTuple, *, write: bool) -> AccessTuple:
     tup = _validated_write_tuple(body, evaluated=write)
     actor = token.sub if token else "anonymous"
     event = "access_tuple_write" if write else "access_tuple_delete"

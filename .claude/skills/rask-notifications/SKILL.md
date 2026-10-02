@@ -196,8 +196,9 @@ so it must read as a reason a person would accept; and `notification-center.stor
    (`catalog_register.publish_stage_output`), the catalog RESOLVES it once
    (`publication.publication_originator` — a service caller's carried claim, else a human caller's own
    verified sub, else nothing) and echoes it onto `table_published`, and the head reads `extra`
-   instead of guessing. The catalog owns that decision because `IDToken.service` — set by its own
-   service door — is the only place the estate records "this caller was a service".
+   instead of guessing. The catalog owns that decision because its door is the one that verified the
+   caller: a `ServicePrincipal` (a projected service-account token, [[LH-220]]) is a service, and an
+   IdP token is a person whatever claims it carries.
    Pinned end-to-end on delivered rows by `tests/unit/test_cascade_originator.py`.
 2. **A service token SUBSTITUTES the author.** If your emit runs behind a service bearer,
    `enforce_author` (`lineage/api/fga_deps.py:96-103`) **overwrites** the facet with that service's

@@ -21,10 +21,10 @@ from typing import Any
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import LanceNamespace
 
+from catalog.api.security import Principal
 from catalog.core.config import Settings
 from catalog.core.lineage_emit import InputPin, LineageEmitter, emit_write_event
 from catalog.services import dataplane
-from service_kit.governed.oidc import IDToken
 from service_kit.lakehouse.objectfs import StorageOptions
 
 
@@ -35,7 +35,7 @@ async def emit_measured_write(
     ns: LanceNamespace,
     so: StorageOptions,
     settings: Settings,
-    token: IDToken | None,
+    token: Principal | None,
     operation: str,
     authorization: str | None,
     pin_version: int | None = None,

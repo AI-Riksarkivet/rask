@@ -35,7 +35,7 @@ from catalog.api.dependencies import (
     get_lineage_emitter,
 )
 from catalog.api.fga_deps import require_relation
-from catalog.api.security import CurrentToken
+from catalog.api.security import CurrentToken, Principal
 from catalog.core.config import Settings
 from catalog.core.identifiers import parse_identifier
 from catalog.core.lineage_emit import is_person_subject
@@ -44,7 +44,7 @@ from catalog.schemas import PublishRequest, PublishResult
 from catalog.services import publication, warehouses
 from service_kit.control_emit import emit_control
 from service_kit.governed import fga
-from service_kit.governed.oidc import IDToken
+from service_kit.governed.machine_identity import ServicePrincipal
 
 
 #: THE MANAGEMENT SURFACE ([[LH-021]]). These are rask's own operations, not Lance namespace ones —
@@ -73,14 +73,14 @@ ProjectSourceDep = Annotated[ProjectSource, Depends(get_lineage_emitter)]
 #: door was added to eliminate (`.claude/skills/rask-notifications`, trap 1).
 
 
-def publication_originator(claimed: str, token: IDToken | None) -> str:
+def publication_originator(claimed: str, token: Principal | None) -> str:
     """The PERSON this publication is for, or `""` when it is for nobody.
 
     THE CATALOG IS THE ONLY COMPONENT THAT CAN ANSWER THIS, which is why the decision lives here
     rather than at the consumer. `table_published` is what wakes the next cascade hop, and the hop
     needs to know whether the caller was a person or a service — a question only the door that
-    authenticated them can answer. `IDToken.service` is set by `catalog/api/security.py` when a caller
-    comes through the SERVICE door, and this is its first reader.
+    authenticated them can answer: `catalog/api/security.py` answers a `ServicePrincipal` for a caller
+    the cluster vouched for, and an IdP token for a person.
 
     Precedence, and both halves are load-bearing:
 
@@ -103,12 +103,11 @@ def publication_originator(claimed: str, token: IDToken | None) -> str:
     if token is None:
         # OIDC off: nobody was authenticated, so the only identity in the request is the claim.
         return _addressable(claimed)
-    # `service` is an EXTRA claim (`IDToken` is `extra="allow"`), stamped only by the service door, so
-    # it is read by name rather than declared — a real IdP token carries no such field and a caller
-    # cannot add one, because this object is built from verified claims, never from the request body.
-    if not getattr(token, "service", False):
-        return _addressable(token.sub)
-    return _addressable(claimed)
+    # The principal's TYPE decides, never a claim: only the service-account verifier builds a
+    # `ServicePrincipal`, so a person's IdP token cannot pass for a service by carrying an extra field.
+    if isinstance(token, ServicePrincipal):
+        return _addressable(claimed)
+    return _addressable(token.sub)
 
 
 def _addressable(subject: str) -> str:

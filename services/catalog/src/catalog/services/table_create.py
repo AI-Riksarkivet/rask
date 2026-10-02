@@ -52,6 +52,7 @@ from openfga_sdk import OpenFgaClient
 from pydantic import BaseModel
 
 from catalog.api import fga_deps
+from catalog.api.security import Principal
 from catalog.core.config import Settings
 from catalog.core.formats import reject_unsupported_format
 from catalog.core.identifiers import parse_identifier, require_safe_segments
@@ -61,7 +62,6 @@ from catalog.core.modes import CreateMode
 from catalog.services import dataplane, native
 from service_kit.control_emit import ControlEmitter, emit_control
 from service_kit.governed import fga
-from service_kit.governed.oidc import IDToken
 from service_kit.lakehouse import base_registry
 from service_kit.lakehouse.objectfs import StorageOptions
 
@@ -163,7 +163,7 @@ async def create_governed_table(
     id: str,
     ns: LanceNamespace,
     settings: Settings,
-    token: IDToken | None,
+    token: Principal | None,
     client: OpenFgaClient | None,
     emitter: LineageEmitter,
     control: ControlEmitter,

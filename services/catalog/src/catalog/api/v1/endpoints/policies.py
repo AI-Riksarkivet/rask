@@ -47,14 +47,13 @@ from lance_namespace import (
 
 from catalog.api import fga_deps
 from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, NamespaceDep, SettingsDep
-from catalog.api.security import CurrentToken
+from catalog.api.security import CurrentToken, Principal
 from catalog.core.config import Settings
 from catalog.core.identifiers import parse_identifier
 from catalog.schemas import PolicyDeleteResponse, PolicyRequest, PolicyResponse, ProjectPoliciesResponse
 from catalog.services import native, warehouses
 from service_kit.control_emit import ControlEmitter, emit_control
 from service_kit.governed import fga
-from service_kit.governed.oidc import IDToken
 from service_kit.lakehouse import maintenance_policies as policies
 from service_kit.lakehouse.naming import CONTROL_ID_RE
 
@@ -130,7 +129,7 @@ async def _describe(settings: Settings, kind: str, canonical: str, missing: type
     return _response(record)
 
 
-async def _delete(settings: Settings, control: ControlEmitter, token: IDToken | None, kind: str, canonical: str) -> PolicyDeleteResponse:
+async def _delete(settings: Settings, control: ControlEmitter, token: Principal | None, kind: str, canonical: str) -> PolicyDeleteResponse:
     """Remove one policy (idempotent), log it and announce it — once for all three rungs."""
     await run_in_threadpool(policies.delete_policy, settings.registry_root, settings.storage_options(), kind, canonical)
     log.info("maintenance_policy_deleted", extra={"kind": kind, "id": canonical})

@@ -1,23 +1,14 @@
-"""A signed-in human proxied by the gateway must authenticate AS THE HUMAN.
+"""Through the gateway a signed-in human is the human, and a service token is not accepted at all.
 
 `/api/catalog/*` is the ONLY public path to the catalog, and every request the gateway proxies
-carries `dapr-caller-app-id: gateway`. `catalog.api.security.authenticate` used to refuse on that
-header BEFORE looking at the bearer, so every authenticated read and write through the public path
-403'd — and the message told the caller to "sign in and retry" when they already had.
+carries `dapr-caller-app-id: gateway`. Measured on the live cluster 2026-08-06, isolated to that one
+header (direct to svc/rask-catalog, same valid token both times): a door that refused on the header
+before looking at the bearer answered 200 without it and 403 with it, so the proxied shape — the only
+shape a real user produces — has to be the one these tests drive.
 
-Measured on the live cluster 2026-08-06, isolated to the single header (direct to svc/rask-catalog,
-same valid token both times):
-
-    valid bearer, no dapr-caller-app-id          -> 200
-    valid bearer + dapr-caller-app-id: gateway   -> 403
-
-The gap that let it ship: every existing test calls `authenticate` with no `dapr_caller_app_id`, so
-the proxied shape — the ONLY shape a real user ever produces — was never exercised. These tests fix
-that, and they fail on the pre-fix code.
-
-The security rule is unchanged and pinned below: a public front door still cannot MINT a service
-principal. Minting a service identity and verifying a human's IdP-signed bearer are different
-operations, and only the first is the laundering risk.
+A projected service-account token arriving through the public front door is refused 403
+([[LH-220]]): the gateway forwards a stranger's request through Dapr, and a service
+principal is never something it may present on their behalf.
 """
 
 from __future__ import annotations
@@ -31,163 +22,67 @@ from fastapi.security import HTTPAuthorizationCredentials
 from lance_namespace import PermissionDeniedError
 
 from catalog.api import security
+from service_kit.governed.machine_identity import ServiceAccountVerifier, ServicePrincipal
 from service_kit.governed.oidc import IDToken
 
 
 _GATEWAY = "gateway"
 _SUB = "CiQwOGE4Njg0Yi1kYjg4LTRiNzMtOTBhOS0zY2QxNjYxZjU0NjY"
+_INGEST = "system:serviceaccount:default:rask-sa-ingest"
 
 
-def _token(sub: str = _SUB) -> IDToken:
-    return IDToken(iss="https://dex.example/dex", sub=sub, aud="lance-catalog", iat=0, exp=1 << 31)
-
-
-def _request(*, oidc: object | None = None) -> Request:
-    app = SimpleNamespace(state=SimpleNamespace(oidc=oidc))
+def _request(*, oidc: object | None = None, sa_oidc: object | None = None) -> Request:
+    app = SimpleNamespace(state=SimpleNamespace(oidc=oidc, sa_oidc=sa_oidc))
     return cast(Request, SimpleNamespace(app=app))
 
 
-def _creds() -> HTTPAuthorizationCredentials:
-    return HTTPAuthorizationCredentials(scheme="Bearer", credentials="a.real.jwt")
+def _settings(sa_issuer: str | None = None) -> Any:
+    """Structural stand-in for `catalog.core.config.Settings`: the fields `authenticate` reads."""
+    return SimpleNamespace(oidc_enabled=True, oidc_audience="lance-catalog", sa_issuer=sa_issuer)
 
 
-def _settings(**over: Any) -> Any:
-    """Structural stand-in for `catalog.core.config.Settings` — every field `authenticate` reads.
-
-    THE STORE COORDINATE IS NOT OPTIONAL HERE. The resolver is BUILT before the door is called
-    (`dedicated_token_from_store(settings.dapr_secret_store)` is an argument expression), so the field
-    is read on every request that carries both service headers — not only on the privileged path.
-    Omitting it made an under-specified double raise `AttributeError` where the door should have
-    answered, which is a test-harness failure wearing a security test's name.
-
-    The subject lists are `str`, matching the real `Settings` fields (`config.py:206`, `:209`). They
-    were tuples, which survived only because no test reached the door's `.split()` — one leaked
-    `APP_API_TOKEN` in the environment and the same `AttributeError` would have appeared there.
-    """
-    base: dict[str, Any] = {
-        "oidc_enabled": True,
-        "oidc_audience": "lance-catalog",
-        "service_subjects": "",
-        "privileged_subjects": "",
-        "dapr_secret_store": "lance-secrets",
-        "dapr_secret_key": "lance",
-    }
-    base.update(over)
-    return SimpleNamespace(**base)
-
-
-def _verifier() -> object:
-    return SimpleNamespace(verify=lambda _t: _token())
-
-
-# --------------------------------------------------------------------------- #
-# THE REGRESSION — a proxied human authenticates as the human
-# --------------------------------------------------------------------------- #
+def _human_verifier() -> object:
+    return SimpleNamespace(verify=lambda _t: IDToken(iss="https://dex.example/dex", sub=_SUB, aud="lance-catalog", iat=0, exp=1 << 31))
 
 
 def test_gateway_proxied_human_with_a_valid_bearer_authenticates() -> None:
-    """The whole point. Fails on the pre-fix code with PermissionDeniedError."""
     token = security.authenticate(
-        _request(oidc=_verifier()),
+        _request(oidc=_human_verifier()),
         _settings(),
-        _creds(),
+        HTTPAuthorizationCredentials(scheme="Bearer", credentials="a.real.jwt"),
         dapr_caller_app_id=_GATEWAY,
     )
-    assert token is not None
+
+    assert isinstance(token, IDToken)
     assert token.sub == _SUB
-    # A HUMAN, not a synthetic service principal: the service door stamps `iss="rask://service-door"`
-    # and sets a `service` extra, so the real IdP issuer proves which branch answered.
-    assert token.iss == "https://dex.example/dex"
 
 
-# --------------------------------------------------------------------------- #
-# THE RULE THAT MUST NOT HAVE LOOSENED
-# --------------------------------------------------------------------------- #
+def test_a_service_token_through_the_public_front_door_is_refused(sa_issuer: Any) -> None:
+    """A valid, mapped token for ingest, forwarded by the gateway, is refused."""
+    verifier = ServiceAccountVerifier(
+        sa_issuer.issuer,
+        "rask-catalog",
+        {_INGEST: "service-ingest"},
+        cache_ttl=300,
+        leeway=60,
+        fetch_token_file=str(sa_issuer.fetch_token_file),
+        ca_file=str(sa_issuer.ca_file),
+    )
 
-
-def test_public_front_door_still_cannot_mint_a_service_principal() -> None:
-    """The laundering path stays SHUT: both service headers + a public caller is refused.
-
-    This is the case the original guard existed for, and narrowing its scope must not reopen it.
-    """
-    with pytest.raises(PermissionDeniedError):
+    with pytest.raises(PermissionDeniedError, match="public front door"):
         security.authenticate(
-            _request(oidc=_verifier()),
-            _settings(service_subjects="medallion"),
-            None,
-            dapr_api_token="the-estate-service-token",
-            x_lance_service_identity="medallion",
+            _request(oidc=_human_verifier(), sa_oidc=verifier),
+            _settings(sa_issuer.issuer),
+            HTTPAuthorizationCredentials(scheme="Bearer", credentials=sa_issuer.mint("rask-sa-ingest", audience="rask-catalog")),
             dapr_caller_app_id=_GATEWAY,
         )
 
 
-def test_public_caller_cannot_launder_even_while_holding_a_valid_bearer() -> None:
-    """A real user's token must not become a ladder into the SERVICE door.
+def test_only_a_persons_bearer_is_forwarded_to_the_object_store() -> None:
+    """`web_identity` vending re-presents the raw bearer, so a service's catalog-audience token must answer None."""
+    credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials="a.real.jwt")
+    person = IDToken(iss="https://dex.example/dex", sub=_SUB, aud="lance-catalog", iat=0, exp=1 << 31)
+    service = ServicePrincipal(subject="service-ingest", service_account=_INGEST)
 
-    Presenting both service headers is a request to be authenticated as a SERVICE; a public caller
-    is refused for that regardless of what else they carry.
-    """
-    with pytest.raises(PermissionDeniedError):
-        security.authenticate(
-            _request(oidc=_verifier()),
-            _settings(service_subjects="medallion"),
-            _creds(),
-            dapr_api_token="the-estate-service-token",
-            x_lance_service_identity="medallion",
-            dapr_caller_app_id=_GATEWAY,
-        )
-
-
-# --------------------------------------------------------------------------- #
-# §2.8 — the privileged door OPENS through catalog.authenticate itself
-# --------------------------------------------------------------------------- #
-
-
-def test_catalog_authenticate_passes_the_resolver_so_the_privileged_door_opens(monkeypatch: pytest.MonkeyPatch) -> None:
-    """the original defect was one missing kwarg at THIS call site — the shared
-    service_principal had the dedicated_token parameter and the catalog never passed it, so its
-    privileged branch hard-refused every privileged subject no matter what was seeded. The prior
-    tests all built the resolver in-test and called service_principal directly, so deleting the
-    kwarg reproduced the defect with everything green. This goes through catalog.authenticate:
-    delete `dedicated_token=` from security.py and it fails."""
-    from service_kit.governed import dapr_auth
-
-    monkeypatch.setenv("APP_API_TOKEN", "shared-token")
-    dapr_auth._secret_bundle.cache_clear()
-    monkeypatch.setattr(
-        "service_kit.governed.secrets.fetch_dapr_secret",
-        # KEY-AWARE: each credential is its own secret since [[XC-072]], so the resolver asks for
-        # `service-token-<identity>` and reads its `token` field. A key-blind double answers the same
-        # dict to every name and would pass against a resolver that no longer works.
-        lambda _store, key, **_k: {"token": "trainer-own"} if key == "service-token-service-trainer" else {"app-api-token": "the-estate-service-token"},
-    )
-    settings = _settings(
-        service_subjects="service-trainer",
-        privileged_subjects="service-trainer",
-        dapr_secret_store="lance-secrets",
-        dapr_secret_key="lance",
-    )
-
-    admitted = security.authenticate(
-        _request(oidc=_verifier()),
-        settings,
-        None,
-        dapr_api_token="trainer-own",
-        x_lance_service_identity="service-trainer",
-        dapr_caller_app_id="medallion-producer",
-    )
-    assert admitted is not None and admitted.sub == "service-trainer"
-    assert admitted.iss == "rask://service-door"
-
-    # The refusal is the shared door's 401 (fastapi.HTTPException — the shared service_principal's
-    # own type, not the catalog's problem classes; the status is what matters to the caller).
-    with pytest.raises(Exception, match="may not claim"):
-        security.authenticate(
-            _request(oidc=_verifier()),
-            settings,
-            None,
-            dapr_api_token="shared-token",
-            x_lance_service_identity="service-trainer",
-            dapr_caller_app_id="medallion-producer",
-        )
-    dapr_auth._secret_bundle.cache_clear()
+    assert security.raw_bearer(credentials, person) == "a.real.jwt"
+    assert security.raw_bearer(credentials, service) is None

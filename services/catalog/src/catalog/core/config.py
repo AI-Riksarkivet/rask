@@ -299,29 +299,11 @@ class CatalogAuthzSettings(BaseSettings):
     every one of its fields, aliases and defaults.
     """
 
-    # Bare FGA subjects (comma-separated) that may call the catalog as an in-cluster SERVICE, using
-    # the app token + `x-lance-service-identity` instead of an OIDC bearer.
-    #
-    # EMPTY BY DEFAULT — the door is SHUT, and the catalog behaves exactly as before. That default is
-    # deliberate: this is the estate's governance root, and opening a non-OIDC path into it is a
-    # decision to make on purpose, not to inherit from an upgrade.
-    #
-    # WHY IT EXISTS AT ALL: the catalog verified OIDC JWTs and nothing else, so a SERVICE had no way
-    # to authenticate to it. Measured — every ingest run died at its first activity with
-    # `catalog refused describe (401): Missing bearer token`, and the medallion's `register_gold_table`
-    # has the identical shape (a static `MEDALLION_CATALOG_TOKEN` from env that no governed deploy
-    # sets). A JWT expires, so a stored static token is the wrong shape for this door; the estate's
-    # existing answer for service-to-service is the identity door lineage already runs, which is what
-    # this reuses (`service_kit.governed.dapr_auth.service_principal`) rather than inventing a second.
-    service_subjects: str = Field(default="", alias="LANCE_SERVICE_SUBJECTS")
-    # Subjects that may NOT use the shared app token and need their own credential. Same contract as
-    # lineage's — see `service_principal`.
     #: THIS SERVICE'S OWN NAME on the estate, used to sign the lineage it emits ([[LH-064]]). Empty is
     #: the unconfigured estate and emits unsigned, which the bus door still admits — never a placeholder
-    #: signature, which it would refuse. Distinct from `privileged_subjects`, which names OTHER services
-    #: this one accepts at its door; this is the one it presents.
+    #: signature, which it would refuse. The services this catalog ACCEPTS at its door are the
+    #: `RASK_SA_SUBJECTS` map (`OidcSettings`); this is the name it presents.
     service_identity: str = Field(default="", alias="LANCE_SERVICE_IDENTITY")
-    privileged_subjects: str = Field(default="", alias="LANCE_PRIVILEGED_SUBJECTS")
     #: Service identities the CASCADE runs as, granted ``owner`` on every warehouse this catalog creates.
     #:
     #: They need it because `publish` is guarded by ``can_update_tag`` and the model defines

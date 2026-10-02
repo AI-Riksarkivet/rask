@@ -111,8 +111,6 @@ def test_a_hidden_parameter_is_still_bound_on_the_wire(client: TestClient, path:
 _RECORDED_HEADER_EXCEPTIONS = frozenset(
     {
         "authorization",
-        "dapr-api-token",
-        "x-lance-service-identity",
         "dapr-caller-app-id",
         "x-lance-originator",
         "Idempotency-Key",

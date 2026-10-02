@@ -35,7 +35,7 @@ from starlette.concurrency import run_in_threadpool
 
 from catalog.api import fga_deps
 from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, SettingsDep
-from catalog.api.security import CurrentToken
+from catalog.api.security import CurrentToken, Principal
 from catalog.core.config import Settings
 from catalog.core.identifiers import parse_identifier
 from catalog.schemas import (
@@ -56,7 +56,6 @@ from catalog.services import warehouses
 from service_kit.control_emit import ControlEmitter, emit_control
 from service_kit.governed import fga
 from service_kit.governed.audit import FAILURE, SUCCESS, audit
-from service_kit.governed.oidc import IDToken
 
 
 log = logging.getLogger(__name__)
@@ -126,7 +125,7 @@ def _can_relations(fga_type: str) -> tuple[str, ...]:
     return ()
 
 
-async def _access_list(client: OpenFgaClient | None, settings: Settings, token: IDToken | None, fga_type: str, id: str) -> AccessListResponse:
+async def _access_list(client: OpenFgaClient | None, settings: Settings, token: Principal | None, fga_type: str, id: str) -> AccessListResponse:
     client = fga_deps.require_fga(settings, client, feature="access review")
     segments = parse_identifier(id, settings.delimiter)
     obj = f"{fga_type}:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}"
@@ -176,7 +175,7 @@ async def list_namespace_access(id: str, client: FgaClientDep, settings: Setting
 async def _access_check(
     client: OpenFgaClient | None,
     settings: Settings,
-    token: IDToken | None,
+    token: Principal | None,
     fga_type: str,
     id: str,
     body: AccessCheckRequest,
@@ -222,7 +221,7 @@ async def check_namespace_access(id: str, client: FgaClientDep, settings: Settin
     return await _access_check(client, settings, token, "namespace", id, body)
 
 
-async def _my_permissions(client: OpenFgaClient | None, settings: Settings, token: IDToken | None, fga_type: str, id: str) -> MyPermissionsResponse:
+async def _my_permissions(client: OpenFgaClient | None, settings: Settings, token: Principal | None, fga_type: str, id: str) -> MyPermissionsResponse:
     """Answer every ``can_*`` on this object for the CALLER — the self-view.
 
     Reader-gated (``can_get_metadata``), NOT owner-gated like its two siblings, and the distinction is
@@ -242,7 +241,7 @@ async def _my_permissions(client: OpenFgaClient | None, settings: Settings, toke
     client = fga_deps.require_fga(settings, client, feature="permission self-view")
     # `fga_enabled` implies `oidc_enabled` (the pair is refused at boot) and OIDC 401s a bearer-less
     # request before any handler runs, so a token is guaranteed once the gate above has passed. Stated
-    # rather than assumed: `CurrentToken` is `IDToken | None`, and the alternative is `token.sub`
+    # rather than assumed: `CurrentToken` is `Principal | None`, and the alternative is `token.sub`
     # raising AttributeError on a branch that only configuration makes unreachable. The siblings can
     # fall back to "anonymous" because they use the subject for an AUDIT row; here it IS the subject
     # of every Check, and "anonymous" would silently answer the wrong question.
@@ -372,7 +371,7 @@ async def _access_mutate(
     client: OpenFgaClient | None,
     control: ControlEmitter,
     settings: Settings,
-    token: IDToken | None,
+    token: Principal | None,
     fga_type: str,
     id: str,
     body: AccessGrantRequest,
@@ -508,7 +507,7 @@ def _graph_node(node_id: str) -> GraphNode:
     return GraphNode(id=node_id, type=fga_type or "unknown", label=rest or node_id)
 
 
-async def _access_graph(client: OpenFgaClient | None, settings: Settings, token: IDToken | None, fga_type: str, id: str) -> AccessGraphResponse:
+async def _access_graph(client: OpenFgaClient | None, settings: Settings, token: Principal | None, fga_type: str, id: str) -> AccessGraphResponse:
     """The #81 authorization-graph primitive — one hop of the relationship graph around an object: the
     object, every subject directly granted a rung on it, and its ``parent``/``project`` container edge.
 
@@ -599,7 +598,7 @@ async def get_warehouse_managed_access(id: str, client: FgaClientDep, settings: 
 
 
 async def _set_managed_access(
-    client: OpenFgaClient | None, control: ControlEmitter, settings: Settings, token: IDToken | None, fga_type: str, id: str, enabled: bool
+    client: OpenFgaClient | None, control: ControlEmitter, settings: Settings, token: Principal | None, fga_type: str, id: str, enabled: bool
 ) -> ManagedAccessResponse:
     """Set or clear the flag, idempotently.
 

@@ -55,6 +55,7 @@ from notifications.api.metrics import Lane
 from notifications.api.visibility import Visibility
 from notifications.models import NotificationReason
 from notifications.proxies import TypedActorProxy
+from service_kit.governed.machine_identity import ServicePrincipal
 from service_kit.governed.oidc import IDToken
 
 
@@ -159,14 +160,14 @@ def test_a_stage_runner_with_no_human_behind_it_publishes_no_identity() -> None:
 # ── link 4: the catalog resolves the originator ONCE, where it knows who its caller is ────────────
 
 
-def _service_token(sub: str) -> IDToken:
-    """What `catalog/api/security.py` mints for a caller that came through the SERVICE door."""
-    return IDToken(iss="rask://service-door", sub=sub, aud="rask", iat=0, exp=60, service=True)
+def _service_token(sub: str) -> ServicePrincipal:
+    """What `catalog/api/security.py` answers for a caller whose projected service-account token it verified."""
+    return ServicePrincipal(subject=sub, service_account=f"system:serviceaccount:default:rask-sa-{sub}")
 
 
 def _human_token(sub: str) -> IDToken:
-    """What the OIDC verifier returns for a person — no `service` claim at all."""
-    return IDToken(iss="https://idp.example", sub=sub, aud="rask", iat=0, exp=60)
+    """What the OIDC verifier returns for a person, here carrying a `service` claim it cannot be promoted by."""
+    return IDToken(iss="https://idp.example", sub=sub, aud="rask", iat=0, exp=60, service=True)
 
 
 def test_the_catalog_prefers_the_carried_human_over_the_service_that_published() -> None:

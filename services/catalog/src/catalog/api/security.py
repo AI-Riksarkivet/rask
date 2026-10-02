@@ -1,36 +1,34 @@
-"""OIDC authentication dependency.
+"""Authentication at the catalog door: an OIDC bearer for a person, a projected service-account token for a service.
 
 When OIDC is disabled (the default) this is a no-op and all routes stay open.
 When enabled, it requires a valid bearer token on every route it guards and maps
 auth failures to ``UnauthenticatedError`` (rendered as RFC 9457 problem+json, 401).
 
-Fail-closed invariant: if OIDC is enabled in settings but the verifier was never
-wired onto ``app.state`` (e.g. discovery failed at startup, or a deployment skew),
-we raise ``ServiceUnavailableError`` (503) rather than silently letting requests
-through. A configured-but-broken auth layer must never degrade to open access.
+Fail-closed invariant: if OIDC is enabled in settings but the verifier a bearer needs was never
+wired onto ``app.state`` (e.g. discovery failed at startup, or a deployment skew), we raise
+``ServiceUnavailableError`` (503) rather than silently letting requests through. A
+configured-but-broken auth layer must never degrade to open access.
+
+A service is the Kubernetes service account its projected token names ([[LH-220]], D1). The bearer's
+unverified ``iss`` routes it: the cluster's service-account issuer goes to ``app.state.sa_oidc``, which
+verifies it offline and maps its full username to a subject; every other issuer goes to the IdP. A
+service-account token never falls through to the IdP, and no header names the caller.
 """
 
 from __future__ import annotations
 
-import time
-from typing import Annotated, Final
+from typing import Annotated
 
+import jwt
 from fastapi import Depends, Header, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from lance_namespace import PermissionDeniedError, ServiceUnavailableError, UnauthenticatedError
 
 from catalog.api.dependencies import SettingsDep
 from service_kit.governed.audit import FAILURE, SUCCESS, audit
-from service_kit.governed.dapr_auth import (
-    CredentialRejected,
-    SecretStoreUnreadable,
-    ServiceDoorClosed,
-    SubjectNotAllowed,
-    dedicated_token_from_store,
-    is_public_caller,
-    service_principal,
-)
+from service_kit.governed.dapr_auth import is_public_caller
 from service_kit.governed.deps import ANONYMOUS_SUBJECT
+from service_kit.governed.machine_identity import ServiceAccountVerifier, ServicePrincipal
 from service_kit.governed.oidc import IDToken, OIDCVerifier, ProviderUnavailableError
 
 
@@ -38,147 +36,81 @@ from service_kit.governed.oidc import IDToken, OIDCVerifier, ProviderUnavailable
 _bearer = HTTPBearer(auto_error=False, description="OIDC bearer token")
 _CredentialsDep = Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)]
 
+#: A verified caller: a person's IdP token, or a service the cluster vouched for. Authorization reads
+#: `.sub` off either; `isinstance(token, ServicePrincipal)` is the estate's one machine test.
+type Principal = IDToken | ServicePrincipal
 
-#: The issuer stamped on a principal minted by the SERVICE door, and the estate's one way to ask
-#: "is this token a machine". A synthetic principal must never look like a human login
-#: (`tests/.../test_service_door.py`), and that property is what makes this usable as a
-#: discriminator: `seed_ownership` declines to grant ownership to a machine on it. Matching a
-#: `sub` against `service_subjects` would work today and drift the moment a service is renamed or
-#: an allowlist is edited; the issuer says what the token IS rather than what it is called.
-SERVICE_DOOR_ISSUER: Final = "rask://service-door"
+
+def _claims_issuer(bearer: str, issuer: str | None) -> bool:
+    """Whether the bearer's unverified ``iss`` is ``issuer``: the routing question, for when no verifier was built."""
+    if not issuer:
+        return False
+    try:
+        claimed = jwt.decode(bearer, options={"verify_signature": False}).get("iss")
+    except jwt.PyJWTError:
+        return False
+    return isinstance(claimed, str) and claimed.rstrip("/") == issuer.rstrip("/")
+
+
+def _service_principal(verifier: ServiceAccountVerifier | None, bearer: str, caller_app_id: str | None) -> ServicePrincipal:
+    """The service a cluster-issued bearer proves, or the refusal that names why it proves none."""
+    if verifier is None:
+        # The settings name a service-account issuer and this bearer claims it, but no verifier was
+        # built: a 503 keeps a broken boot visible instead of handing the token to the IdP.
+        audit("authn", FAILURE, reason="verifier_unavailable")
+        raise ServiceUnavailableError("Authentication is enabled but unavailable")
+    if is_public_caller(caller_app_id):
+        # The public front door forwards a stranger's request through Dapr; a service principal is
+        # never something it may present on their behalf. The gateway strips the header a client
+        # could forge, which is what makes this check mean anything.
+        audit("authn", FAILURE, reason="public_caller")
+        raise PermissionDeniedError(f"{caller_app_id!r} is a public front door: a service token is not accepted through it")
+    try:
+        principal = verifier.verify(bearer)
+    except ProviderUnavailableError as exc:
+        audit("authn", FAILURE, reason="verifier_unavailable")
+        raise ServiceUnavailableError("Authentication is enabled but unavailable") from exc
+    except UnauthenticatedError:
+        audit("authn", FAILURE, reason="invalid_token")
+        raise
+    audit("authn", SUCCESS, subject=principal.sub)
+    return principal
 
 
 def authenticate(
     request: Request,
     settings: SettingsDep,
     credentials: _CredentialsDep,
-    dapr_api_token: Annotated[str | None, Header()] = None,
-    x_lance_service_identity: Annotated[str | None, Header()] = None,
     # The INVOKING Dapr app-id — what separates a service from the PUBLIC front door invoking on a
     # stranger's behalf. See `service_kit.governed.dapr_auth.is_public_caller`.
     dapr_caller_app_id: Annotated[str | None, Header()] = None,
-) -> IDToken | None:
-    """Authenticate the request: an OIDC bearer (human/external) OR the SERVICE door.
+) -> Principal | None:
+    """Authenticate the request: a projected service-account token (a service) or an OIDC bearer (a person).
 
-    THE SERVICE DOOR IS SHUT BY DEFAULT (`service_subjects` empty): with no subject allowlisted no
-    caller can pass it, and any request that does not ask for it — i.e. anything without BOTH service
-    headers, which is every request the gateway proxies, since it strips them — is answered by OIDC
-    exactly as it always was. It exists because a service had NO way to authenticate here: the
-    catalog verified OIDC JWTs and nothing else, so every ingest run died at its first activity with
-    `catalog refused describe (401): Missing bearer token` — and a JWT expires, so the static token
-    the medallion carries for the same purpose is the wrong shape for the problem.
-
-    The mechanism is the one lineage runs — the SAME BODY, not a second copy.
-    A fork lived in each service for a while and they disagreed about the unconfigured door: lineage
-    refused, this one swallowed the signal and re-asked OIDC. One door now, and both call sites give
-    the refusal; `service_kit.governed.dapr_auth.ServiceDoorClosed` carries the reasoning.
+    The service-account verifier is chosen by the token's unverified ``iss`` and then checks the
+    signature, audience, expiry and the exact full-username map; signature and audience alone accept
+    every account in the cluster that carries this door's audience (measured 2026-10-02, the P5.3 c0
+    probe), so the map is what binds a token to one subject. ``dapr-api-token`` is not read here: it
+    proves a sidecar delivered a request and names nobody.
     """
     if not settings.oidc_enabled:
         return None
 
-    # Both headers, never the token alone: with `dapr.io/app-token-secret` set the SIDECAR stamps
-    # `dapr-api-token` on every request it delivers, so gating on the token would divert a
-    # gateway-proxied HUMAN into the service door and 403 them on the missing identity.
-    #
-    # `settings.service_subjects` is NOT part of this condition, and removing it is part of the §2.8
-    # one-door fix. An empty allowlist is a question about the door, and the door answers it — here it
-    # meant a caller who explicitly asked to be a service was silently re-asked for a bearer instead,
-    # while lineage (no such pre-gate) refused the same request. Same headers, same config, two
-    # answers. The allowlist check now happens in exactly one place, for both services.
-    if dapr_api_token is not None and x_lance_service_identity is not None:
-        # THE LAUNDERING PATH, refused AT THE SERVICE DOOR — not at the top of this function.
-        #
-        # The rule is sound and unchanged: a service principal is never something the public front
-        # door should be able to mint. The gateway forwards through Dapr service invocation and the
-        # callee's daprd stamps a valid `dapr-api-token` on the way in, so an ANONYMOUS public
-        # request can arrive already holding the estate's service credential; `x-lance-service-identity`
-        # is caller-supplied. The gateway strips both at the edge, and this refuses the door even if
-        # one gets through.
-        #
-        # WHAT CHANGED, and why it had to: this check used to run BEFORE anything else, so it fired
-        # on every request carrying `dapr-caller-app-id: gateway` — which is EVERY request the
-        # gateway proxies, including a signed-in human holding a perfectly valid OIDC bearer that
-        # was never even looked at. Measured on the live cluster: the same token, same endpoint,
-        # direct to the catalog answered 200 and answered 403 with the single header added. Every
-        # authenticated read and write through `/api/catalog/*` — the only public path to the
-        # catalog — was dead, and the error told the caller to "sign in and retry" when they had.
-        #
-        # Minting a SERVICE principal and verifying a HUMAN's bearer are different operations. The
-        # bearer is verified cryptographically against the IdP; the gateway cannot forge one, and a
-        # caller presenting a valid token is simply being themselves. Refusing that bought no
-        # security and cost the entire authenticated surface. Scoping the refusal to this branch
-        # keeps the laundering path shut — a public caller cannot reach `service_principal` — while
-        # a proxied human falls through to OIDC below, which is the case the estate is FOR.
-        if is_public_caller(dapr_caller_app_id):
-            audit("authn", FAILURE, reason="public_caller")
-            raise PermissionDeniedError(
-                f"{dapr_caller_app_id!r} is a public front door: the service door authenticates a service, not a caller — sign in and retry"
-            )
-        try:
-            principal = service_principal(
-                token=dapr_api_token,
-                identity=x_lance_service_identity,
-                allowed_subjects=settings.service_subjects,
-                privileged_subjects=settings.privileged_subjects,
-                # The shared resolver: without it, this door's privileged branch
-                # could never open — every privileged subject was hard-refused with "no dedicated
-                # credential provisioned" regardless of what the store held, because the callback
-                # defaulted to None. The store read is deferred inside the resolver, so it happens only
-                # when a privileged subject is actually being verified — never on the shared-token path
-                # and never for an unlisted subject, which the door checks first.
-                dedicated_token=dedicated_token_from_store(settings.dapr_secret_store),
-            )
-        except ServiceDoorClosed as exc:
-            # No APP_API_TOKEN here: the door does not exist in this deployment. The caller asked for it
-            # by sending both service headers, so say that — this used to `pass` and re-ask OIDC, which
-            # answered a missing APP_API_TOKEN with "Missing bearer token" and sent operators to the IdP.
-            audit("authn", FAILURE, reason="service_door_unconfigured")
-            raise UnauthenticatedError(str(exc)) from exc
-        except SubjectNotAllowed as exc:
-            # The allowlist answers "may this SUBJECT use the door" — an unlisted name is barred, not
-            # unrecognised, and it never reached the credential store.
-            audit("authn", FAILURE, reason="subject_not_allowed")
-            raise PermissionDeniedError(str(exc)) from exc
-        except CredentialRejected as exc:
-            # "May THIS CALLER be that subject" answered no — including the privileged subject whose
-            # dedicated credential was never provisioned, which must never fall back to the shared token.
-            audit("authn", FAILURE, reason="service_credential")
-            raise UnauthenticatedError(str(exc)) from exc
-        except SecretStoreUnreadable as exc:
-            # An outage is an outage, never a 401: the absent-vs-unreadable rule (§2.17).
-            audit("authn", FAILURE, reason="secret_store_unreadable")
-            raise ServiceUnavailableError(str(exc)) from exc
-        else:
-            audit("authn", SUCCESS, subject=principal.sub)
-            # A SYNTHETIC token, and every field is deliberate. `IDToken` requires the conformant
-            # OIDC core claims (iss/sub/aud/exp/iat) — supplying only `sub` raised a pydantic
-            # ValidationError that surfaced to the caller as a bare catalog 500, which reads as a
-            # broken catalog rather than a malformed principal.
-            #
-            # `iss` names the SERVICE DOOR rather than the IdP, so an audit line can never be
-            # mistaken for a human login; `exp` is short because nothing re-verifies this object —
-            # it is already authenticated and exists only to carry `sub` into the authz layer, where
-            # a service is bounded by its own FGA rung exactly like a person.
-            now = int(time.time())
-            return IDToken(
-                iss=SERVICE_DOOR_ISSUER,
-                sub=principal.sub,
-                aud=settings.oidc_audience or "rask",
-                iat=now,
-                exp=now + 60,
-                service=True,
-            )
+    bearer = credentials.credentials if credentials is not None else None
+    sa_verifier: ServiceAccountVerifier | None = getattr(request.app.state, "sa_oidc", None)
+    if bearer and (sa_verifier.issued(bearer) if sa_verifier is not None else _claims_issuer(bearer, settings.sa_issuer)):
+        return _service_principal(sa_verifier, bearer, dapr_caller_app_id)
 
     verifier: OIDCVerifier | None = getattr(request.app.state, "oidc", None)
     if verifier is None:
         # OIDC is enabled but no verifier is available: fail closed, never open.
         audit("authn", FAILURE, reason="verifier_unavailable")
         raise ServiceUnavailableError("Authentication is enabled but unavailable")
-    if credentials is None or not credentials.credentials:
+    if not bearer:
         audit("authn", FAILURE, reason="missing_token")
         raise UnauthenticatedError("Missing bearer token")
     try:
-        token = verifier.verify(credentials.credentials)
+        token = verifier.verify(bearer)
     except ProviderUnavailableError as exc:
         # The IdP or this deployment's view of it failed, not the caller's bearer: the missing-verifier
         # branch's fact, so its reason and its body — the spec's `code` 17, the URL left to the log.
@@ -191,28 +123,32 @@ def authenticate(
     return token
 
 
-#: Token of the authenticated caller (``None`` when OIDC is disabled). Endpoints that
-#: need claims can depend on this; router-level use enforces authentication.
-CurrentToken = Annotated[IDToken | None, Depends(authenticate)]
+#: The authenticated caller (``None`` when OIDC is disabled). Endpoints that need claims depend on
+#: this and narrow with ``isinstance``; router-level use enforces authentication.
+CurrentToken = Annotated[Principal | None, Depends(authenticate)]
 
 
 def current_subject(token: CurrentToken) -> str:
-    """The verified caller as the estate's subject id: the token's ``sub``, or ``anon`` with OIDC off."""
+    """The verified caller as the estate's subject id: the principal's ``sub``, or ``anon`` with OIDC off."""
     return token.sub if token is not None else ANONYMOUS_SUBJECT
 
 
 CurrentSubject = Annotated[str, Depends(current_subject)]
 
 
-def raw_bearer(credentials: _CredentialsDep) -> str | None:
-    """The raw bearer JWT string (scheme-stripped), or ``None`` when no bearer is present.
+def raw_bearer(credentials: _CredentialsDep, token: CurrentToken) -> str | None:
+    """A PERSON's raw bearer JWT string (scheme-stripped), or ``None`` when there is none to forward.
 
     For routes that must FORWARD the caller's token rather than only verify it — e.g. credential vending's
     web_identity flow re-presents it to the object store (AssumeRoleWithWebIdentity). Reuses the single
     ``HTTPBearer`` seam, so parsing matches :func:`authenticate` (case-insensitive scheme — ``BEARER …`` too).
+    A service's projected token answers ``None``: it was minted for this door's audience alone, and
+    re-presenting it to the object store would hand a credential to a party it was never issued for.
     """
-    return credentials.credentials if credentials is not None else None
+    if credentials is None or isinstance(token, ServicePrincipal):
+        return None
+    return credentials.credentials
 
 
-#: The caller's raw bearer JWT (``None`` when absent) — for forwarding, not verification.
+#: The caller's raw bearer JWT (``None`` when absent or a service's) — for forwarding, not verification.
 RawBearerToken = Annotated[str | None, Depends(raw_bearer)]

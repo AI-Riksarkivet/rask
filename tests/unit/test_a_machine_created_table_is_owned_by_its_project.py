@@ -14,11 +14,9 @@ transitively. Declining to seed the service therefore leaves the table owned by 
 by nobody — which is what makes this a withdrawal rather than an orphaning, and it is asserted below
 against the real evaluator rather than argued from the model text.
 
-THE DISCRIMINATOR IS THE ISSUER, not a name pattern. The service door mints
-`iss="rask://service-door"` (`catalog/api/security.py`), and `test_service_door.py` already pins that
-"the synthetic principal must never look like a human login". Matching `sub` against
-`service_subjects` would work today and drift the moment a service is renamed or an allowlist is
-edited; the issuer says what the token IS.
+THE DISCRIMINATOR IS THE PRINCIPAL'S TYPE, not a name pattern. Only the service-account verifier
+builds a `ServicePrincipal` (`catalog/api/security.py`, [[LH-220]]), so the test asks how the caller was
+proved rather than what its subject is called, which would drift the moment a service is renamed.
 """
 
 from __future__ import annotations
@@ -28,9 +26,10 @@ from typing import TYPE_CHECKING, Any, cast
 import pytest
 
 from catalog.api import fga_deps
-from catalog.api.security import SERVICE_DOOR_ISSUER
+from catalog.api.security import Principal
 from catalog.core.config import Settings
 from service_kit.governed import fga
+from service_kit.governed.machine_identity import ServicePrincipal
 from service_kit.governed.oidc import IDToken
 
 
@@ -45,11 +44,7 @@ def _settings() -> Settings:
     )
 
 
-def _token(sub: str, iss: str) -> IDToken:
-    return IDToken.model_validate({"sub": sub, "iss": iss, "aud": "rask", "iat": 0, "exp": 1})
-
-
-async def _tuples_written(token: IDToken, monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, str, str]]:
+async def _tuples_written(token: Principal, monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, str, str]]:
     """The TUPLES one table create actually writes, as (user, relation, object).
 
     Captured at `write_tuples` rather than at `grant_on_create`, because the call still happens either
@@ -76,7 +71,9 @@ async def _tuples_written(token: IDToken, monkeypatch: pytest.MonkeyPatch) -> li
 @pytest.mark.asyncio
 async def test_a_SERVICE_creating_a_table_is_not_granted_owner(monkeypatch: pytest.MonkeyPatch) -> None:
     """The withdrawal itself: a stage runner registering its output does not become its owner."""
-    written = await _tuples_written(_token("service-silver-to-gold", SERVICE_DOOR_ISSUER), monkeypatch)
+    written = await _tuples_written(
+        ServicePrincipal(subject="service-silver-to-gold", service_account="system:serviceaccount:default:rask-sa-silver-to-gold"), monkeypatch
+    )
     assert not [t for t in written if t[1] == "owner"], f"the registering service was granted ownership of its output: {written}"
     # The hierarchy edge is still written, and that is what keeps this a withdrawal rather than an
     # orphaning: ownership descends to the table from the project's admin through this link.
@@ -88,5 +85,5 @@ async def test_a_HUMAN_creating_a_table_still_owns_it(monkeypatch: pytest.Monkey
     """The half that must not change. A person who creates a table owns it, exactly as before —
     this narrows machines, not people, and a fix that took the human's grant too would make every
     interactive create unmanageable by its own author."""
-    written = await _tuples_written(_token("alice", "https://dex"), monkeypatch)
+    written = await _tuples_written(IDToken(sub="alice", iss="https://dex", aud="rask", iat=0, exp=1), monkeypatch)
     assert ("user:alice", "owner", "table:acme-silver$features") in written, f"a human create seeded no ownership: {written}"

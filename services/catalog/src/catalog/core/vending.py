@@ -601,9 +601,9 @@ class StsVendor:
     this plug out of reach.
 
     That matters for which mode can serve which caller. ``web_identity`` requires the CALLER to present an
-    OIDC token, so it cannot serve the cascade at all: a stage runner authenticates with ``dapr-api-token`` +
-    ``x-lance-service-identity`` and never holds a bearer, so the vend returns ``None``. This plug has no
-    such requirement.
+    OIDC token, so it cannot serve the cascade at all: a stage runner authenticates with a projected
+    service-account token minted for the catalog's audience alone, which ``raw_bearer`` never forwards, so
+    the vend returns ``None``. This plug has no such requirement.
 
     ``assume_role`` defaults to a lazily-built boto3 STS client's ``assume_role`` and is injectable for
     tests.
