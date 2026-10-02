@@ -97,7 +97,7 @@ def _readable_identities(docs: list[dict], seeded: set[str]) -> dict[str, set[st
     return out
 
 
-def test_only_the_verifier_doors_may_read_more_than_their_own_credential() -> None:
+def test_only_lineage_may_read_more_than_its_own_credential() -> None:
     """The invariant the split and the scope exist to produce: a PRODUCER reads one credential, its own.
 
     A DENY-LIST, NOT DENY-BY-DEFAULT, and the gate says so rather than quietly accepting the weaker of
@@ -111,28 +111,22 @@ def test_only_the_verifier_doors_may_read_more_than_their_own_credential() -> No
     lives in `lance.identitiesForApp`; a test that repeated it would pass by agreeing with itself, going
     green on a helper that hands every app the same wrong identity so long as the test shared the error.
 
-    THE TWO DOORS ARE EXEMPT BECAUSE OF HOW THE CREDENTIAL IS STORED, not because verification requires
-    it. `service_principal` resolves the CLAIMED identity's token and compares it, so with the token in
-    PLAINTEXT a door that cannot read it cannot admit that producer. Storing a hash for the doors --
-    the house pattern for a service-to-service key, and the compare is already constant-time at
-    `dapr_auth.py:507` -- lets a door verify without being able to forge, and this exemption goes away.
+    LINEAGE ALONE IS EXEMPT, and only until [[LH-064]]: it verifies every producer's event signature, which is
+    keyed on that producer's credential, so it must read them all; per-identity signing keys in Transit end
+    that. The catalog verifies no credential since [[LH-220]] (a service is the service account its projected
+    token names), so it reads its own signing key and nothing else.
     """
     docs = _docs()
     seeded = _seeded_token_identities(docs)
     assert seeded, "the OpenBao seed writes no dedicated credential in this render: the parse moved, not the chart"
     readable = _readable_identities(docs, seeded)
-    doors = {CONFIG_FOR(app) for app in ("catalog", "lineage")}
+    verifiers = {CONFIG_FOR("lineage")}
 
-    greedy = {name: sorted(ids) for name, ids in readable.items() if name not in doors and len(ids) > 1}
-    blinded = {name: sorted(seeded - ids) for name, ids in readable.items() if name in doors and ids != seeded}
+    greedy = {name: sorted(ids) for name, ids in readable.items() if name not in verifiers and len(ids) > 1}
+    blinded = {name: sorted(seeded - ids) for name, ids in readable.items() if name in verifiers and ids != seeded}
 
     assert not greedy, (
-        f"these non-verifier app-ids may read more than one identity's credential: {greedy}. A producer "
-        "presents exactly one identity, so it needs exactly one -- anything more reopens the hole this "
-        "closes, where any producer read any other's token and a signature proved nothing."
+        f"these app-ids may read more than one identity's credential: {greedy}. A service signs with exactly "
+        "one identity, so it needs exactly one -- anything more lets it forge another's signature."
     )
-    assert not blinded, (
-        f"these verifier doors cannot read credentials they must authenticate: {blinded}. `service_principal` "
-        "resolves the CLAIMED identity's token to compare it, so denying one here refuses that producer "
-        "at the door with a message about a missing credential rather than about a missing grant."
-    )
+    assert not blinded, f"lineage cannot read credentials it verifies signatures with: {blinded}, so it refuses those producers' events as unverifiable."

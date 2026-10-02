@@ -38,6 +38,7 @@ harness leaked into the run" and "this test is exercising the enabled path".
 """
 
 import os
+import pathlib
 from collections.abc import Iterator
 from typing import Final
 
@@ -266,3 +267,143 @@ def _reset_pooled_ray_client() -> Iterator[None]:
     import asyncio
 
     asyncio.run(close_ray_client())
+
+
+class ServiceAccountIssuer:
+    """A Kubernetes service-account issuer on loopback, for the doors that verify projected SA tokens ([[LH-220]]).
+
+    It answers as the k3s API server does, measured 2026-10-02 (the LH-220 P5.3 probes): discovery and the key set
+    are served only over TLS from a private CA and only to a bearer (`--anonymous-auth=false` answers 401 to an
+    anonymous fetch), and a token names `system:serviceaccount:<namespace>:<sa>` as its `sub`. So a verifier that
+    reaches it has carried both the fetch credential and the CA, as it must in the cluster.
+    """
+
+    def __init__(self, directory: "pathlib.Path") -> None:
+        import datetime
+        import http.server
+        import ipaddress
+        import json
+        import secrets
+        import ssl
+        import threading
+
+        from cryptography import x509
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import rsa
+        from cryptography.x509.oid import NameOID
+
+        self._signing_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        self.kid = "test-sa-key"
+        numbers = self._signing_key.public_key().public_numbers()
+
+        def b64(value: int) -> str:
+            import base64
+
+            return base64.urlsafe_b64encode(value.to_bytes((value.bit_length() + 7) // 8, "big")).rstrip(b"=").decode()
+
+        jwks = {"keys": [{"kty": "RSA", "kid": self.kid, "use": "sig", "alg": "RS256", "n": b64(numbers.n), "e": b64(numbers.e)}]}
+        self.fetch_token = secrets.token_urlsafe(24)
+        self.fetch_token_file = directory / "fetch-token"
+        self.fetch_token_file.write_text(self.fetch_token)
+
+        ca_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        now = datetime.datetime.now(datetime.UTC)
+        ca_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "test-sa-issuer-ca")])
+        ca = (
+            x509.CertificateBuilder().subject_name(ca_name).issuer_name(ca_name).public_key(ca_key.public_key()).serial_number(x509.random_serial_number())
+            .not_valid_before(now - datetime.timedelta(minutes=5)).not_valid_after(now + datetime.timedelta(days=1))
+            .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+            .add_extension(x509.SubjectKeyIdentifier.from_public_key(ca_key.public_key()), critical=False)
+            .add_extension(x509.KeyUsage(digital_signature=False, content_commitment=False, key_encipherment=False, data_encipherment=False,
+                                         key_agreement=False, key_cert_sign=True, crl_sign=True, encipher_only=False, decipher_only=False), critical=True)
+            .sign(ca_key, hashes.SHA256())
+        )  # fmt: skip
+        server_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        server_cert = (
+            x509.CertificateBuilder().subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "127.0.0.1")])).issuer_name(ca_name)
+            .public_key(server_key.public_key()).serial_number(x509.random_serial_number())
+            .not_valid_before(now - datetime.timedelta(minutes=5)).not_valid_after(now + datetime.timedelta(days=1))
+            .add_extension(x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]), critical=False)
+            .add_extension(x509.AuthorityKeyIdentifier.from_issuer_public_key(ca_key.public_key()), critical=False)
+            .add_extension(x509.SubjectKeyIdentifier.from_public_key(server_key.public_key()), critical=False)
+            .add_extension(x509.ExtendedKeyUsage([x509.oid.ExtendedKeyUsageOID.SERVER_AUTH]), critical=False)
+            .sign(ca_key, hashes.SHA256())
+        )  # fmt: skip
+        self.ca_file = directory / "ca.crt"
+        self.ca_file.write_bytes(ca.public_bytes(serialization.Encoding.PEM))
+        chain = directory / "server.pem"
+        chain.write_bytes(
+            server_cert.public_bytes(serialization.Encoding.PEM)
+            + server_key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
+        )
+
+        issuer_ref: dict[str, str] = {}
+        demanded = f"Bearer {self.fetch_token}"
+        self.fetches: list[str] = []
+
+        class _Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self) -> None:
+                self_outer.fetches.append(self.path)
+                if self.headers.get("Authorization") != demanded:
+                    self.send_response(401)
+                    self.end_headers()
+                    return
+                if self.path == "/.well-known/openid-configuration":
+                    body = {
+                        "issuer": issuer_ref["issuer"],
+                        "jwks_uri": f"{issuer_ref['issuer']}/openid/v1/jwks",
+                        "id_token_signing_alg_values_supported": ["RS256"],
+                    }
+                elif self.path == "/openid/v1/jwks":
+                    body = jwks
+                else:
+                    self.send_response(404)
+                    self.end_headers()
+                    return
+                payload = json.dumps(body).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+
+        self_outer = self
+        self._server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(chain)
+        self._server.socket = context.wrap_socket(self._server.socket, server_side=True)
+        self.issuer = issuer_ref["issuer"] = f"https://127.0.0.1:{self._server.server_address[1]}"
+        self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
+        self._thread.start()
+
+    def mint(self, sa: str, *, audience: str, namespace: str = "default", ttl: int = 600, issued_at: int | None = None) -> str:
+        """A projected token for `namespace/sa`, shaped as the kubelet's are (claims measured on k3s 2026-10-02)."""
+        import time
+        import uuid
+
+        import jwt
+
+        iat = int(time.time()) if issued_at is None else issued_at
+        claims = {
+            "iss": self.issuer,
+            "sub": f"system:serviceaccount:{namespace}:{sa}",
+            "aud": [audience],
+            "iat": iat,
+            "nbf": iat,
+            "exp": iat + ttl,
+            "jti": str(uuid.uuid4()),
+            "kubernetes.io": {"namespace": namespace, "serviceaccount": {"name": sa, "uid": str(uuid.uuid4())}},
+        }
+        return jwt.encode(claims, self._signing_key, algorithm="RS256", headers={"kid": self.kid})
+
+    def close(self) -> None:
+        self._server.shutdown()
+        self._server.server_close()
+
+
+@pytest.fixture(scope="session")
+def sa_issuer(tmp_path_factory: pytest.TempPathFactory) -> Iterator[ServiceAccountIssuer]:
+    """One loopback service-account issuer per worker; read-only, so session scope holds."""
+    issuer = ServiceAccountIssuer(tmp_path_factory.mktemp("sa-issuer"))
+    yield issuer
+    issuer.close()
