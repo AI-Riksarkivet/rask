@@ -1,9 +1,9 @@
 """Integration fixtures.
 
-The backend namespace is a ``MagicMock(spec=LanceNamespace)`` injected via
-dependency override, so these tests exercise *our* layer only — routing,
-identifier parsing, request assembly, serialization, and error mapping — never
-lance's actual operations.
+``client`` injects a ``MagicMock(spec=LanceNamespace)`` via dependency override, so the tests on it
+exercise *our* layer only — routing, identifier parsing, request assembly, serialization, and error
+mapping — never lance's actual operations. ``real_ns_client`` runs the real ``dir`` namespace on
+``tmp_path``, and ``moto_url`` is an S3 endpoint the native Lance and Arrow clients can reach.
 """
 
 from __future__ import annotations
@@ -17,6 +17,17 @@ import pyarrow as pa
 import pytest
 from fastapi.testclient import TestClient
 from lance_namespace import DescribeTableResponse, LanceNamespace
+from moto.server import ThreadedMotoServer
+
+
+@pytest.fixture(scope="module")
+def moto_url() -> Iterator[str]:
+    """A moto S3 server for one test module: ``mock_aws()`` patches botocore, which pylance and pyarrow never go through."""
+    server = ThreadedMotoServer(port=0)
+    server.start()
+    host, port = server.get_host_and_port()
+    yield f"http://{host}:{port}"
+    server.stop()
 
 
 @pytest.fixture

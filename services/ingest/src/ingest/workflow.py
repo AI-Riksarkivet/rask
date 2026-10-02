@@ -204,10 +204,9 @@ class DatasetHandle(BaseModel):
     """Where this run writes, and the version it writes AGAINST — both resolved once, at `ensure`.
 
     `read_version` is here rather than re-read at `finalize`, and that is the whole of finding F12a.
-    The catalog's commit door is idempotent per run — it stamps `rask.ingest.run_id=<id>` into the
-    Lance transaction and answers a repeat with the version that run already committed — but it finds
-    that earlier commit by scanning versions AFTER the `read_version` the caller presents
-    (`catalog/services/dataplane.py::_find_run_commit`). `finalize` re-read the version per attempt,
+    The catalog's commit door is idempotent per run — it answers a repeat of fragments that already
+    landed with the version that holds them — but it finds that commit by scanning versions AFTER the
+    `read_version` the caller presents (`catalog/services/dataplane.py::_find_run_commit`). `finalize` re-read the version per attempt,
     so a replay presented the version its OWN first attempt had just produced, the scan window was
     empty, and the dedupe could never fire: commit lands -> the pod dies before Dapr records the
     activity result -> `discover_staged` still returns the same fragments -> a second Append of the

@@ -818,13 +818,10 @@ class CommitFragmentsRequest(BaseModel):
 
     fragments: list[dict[str, Any]]
     read_version: int
-    #: The caller's run identity, stamped into the commit as a transaction property. Optional and
-    #: OWNED BY THE CALLER — the catalog neither mints nor validates it beyond using it verbatim.
-    #: What it buys is IDEMPOTENT REPLAY: a retried commit carrying the same run_id is answered with
-    #: the version that run already committed instead of appending the same fragments twice. Without
-    #: it, a died-after-commit activity retry duplicated every row of the run — the loss the
-    #: lander's own docstring promised run-id-in-commit-metadata would prevent, on a code path that
-    #: never sent one.
+    #: The caller's name for the run this commit belongs to, scoped to the verified caller. What it buys is
+    #: IDEMPOTENT REPLAY: a retried commit of fragments that already landed is answered with the version
+    #: that holds them, and an EMPTY commit carrying it is answered with what the catalog recorded this
+    #: caller's run committing (refused 400 when nothing is recorded).
     run_id: str | None = None
 
 

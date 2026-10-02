@@ -6,14 +6,14 @@ empty too, and reaches the nothing-to-commit branch. That branch reported
 `committed_version: None, rows: 0, publish_reason: "nothing to commit"` for a run whose rows were
 sitting in the table.
 
-The catalog CAN recognise its own earlier commit -- `_find_run_commit` scans for the run marker --
+The catalog CAN recognise the run's earlier commit -- it records what each caller's run committed --
 but the door was unreachable from this shape: `if not fragments: raise` sat above the marker check,
 so an empty-list retry was refused 400 before the catalog ever looked.
 
 Both halves are fixed: the catalog answers an empty commit that carries a known run_id with that
 run's own `(version, rows)` and writes nothing, and this branch asks before asserting nothing landed.
 
-The dev path is deliberately unchanged: `LocalCatalog` has no `commit` and no marker, so it still
+The dev path is deliberately unchanged: `LocalCatalog` has no `commit` and keeps no record, so it still
 reports None -- honestly, because it has no way to recognise its own earlier commit either.
 """
 
@@ -33,7 +33,7 @@ SPEC = RunSpec.model_validate({"run_id": "run-purged", "kind": "s3-prefix", "pro
 
 
 class _CatalogThatRemembers(ServiceCatalogSeam):
-    """A catalog service client whose `commit` honours the run marker, as the real one now does.
+    """A catalog service client whose `commit` answers a run's earlier commit, as the real one does.
 
     Declared as the seam half it stands for: the parameter names are the ones the runtime may pass by
     keyword, so a double that drifts from the real client is a type error rather than a live TypeError.

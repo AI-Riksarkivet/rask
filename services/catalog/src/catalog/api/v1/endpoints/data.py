@@ -42,7 +42,7 @@ from catalog.api.dependencies import (
     StorageOptionsDep,
 )
 from catalog.api.rask_params import RaskDataBase, RaskSource, RaskSourceVersion
-from catalog.api.security import CurrentToken
+from catalog.api.security import CurrentSubject, CurrentToken
 from catalog.core.formats import reject_unsupported_format
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.core.lineage_emit import COMPACT_TABLE, DELETE, INSERT, MERGE_INSERT, UPDATE, merge_source_pin, parse_run_facets
@@ -61,6 +61,7 @@ from catalog.schemas import (
 )
 from catalog.services import blob_serving, changes, dataplane, native, table_create
 from service_kit.governed.audit import audit_read
+from service_kit.lakehouse.commit_runs import CommitRun
 from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE
 
 
@@ -196,6 +197,7 @@ async def commit_fragments(
     settings: SettingsDep,
     so: StorageOptionsDep,
     token: CurrentToken,
+    subject: CurrentSubject,
     emitter: LineageEmitterDep,
     body: CommitFragmentsRequest,
     authorization: Annotated[str | None, Header()] = None,
@@ -214,7 +216,11 @@ async def commit_fragments(
     described: DescribeTableResponse = await run_in_threadpool(native.call, ns, "describe_table", DescribeTableRequest(id=segments))
     if not described.location:
         raise InvalidInputError("table has no object-store location for a client-direct commit")
-    version, row_count = await run_in_threadpool(dataplane.commit_appended_fragments, described.location, so, body.fragments, body.read_version, body.run_id)
+    # A run belongs to the verified caller that names it ([[LH-280]]).
+    run = (
+        CommitRun(control_root=settings.registry_root, storage_options=settings.storage_options(), subject=subject, run_id=body.run_id) if body.run_id else None
+    )
+    version, row_count = await run_in_threadpool(dataplane.commit_appended_fragments, described.location, so, body.fragments, body.read_version, run=run)
     # Reuse the shared measured-write emitter (reopens once for version + schema), same as /insert — so the
     # WROTE edge + columnLineage-ready schema land identically whether the append was byte-proxy or direct.
     await lineage_deps.emit_measured_write(

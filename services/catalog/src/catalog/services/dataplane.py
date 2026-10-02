@@ -21,6 +21,7 @@ import itertools
 import json
 import logging
 import re
+import threading
 from collections.abc import Callable, Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager, suppress
@@ -97,7 +98,7 @@ from catalog.core.namespace import judged_native_version, open_dataset, open_dat
 from catalog.services import changes, native, table_bases, warehouse_credentials
 from catalog.services.base_credentials import compose_base_store_params
 from catalog.services.cast_size import bytes_after_cast
-from service_kit.lakehouse import base_registry
+from service_kit.lakehouse import base_registry, commit_runs
 from service_kit.lakehouse.features import VersionedDataFile, describe_foreign_data_file_versions, manifest_base_path_refs
 from service_kit.lakehouse.objectfs import StorageOptions, s3_filesystem
 from service_kit.lakehouse.schema import SchemaFields, facet_fields
@@ -750,46 +751,81 @@ def _classify_commit_error(exc: OSError, *, remedy: str = _APPEND_REMEDY) -> Exc
             return ServiceUnavailableError(f"object store unavailable during commit: {exc}")
 
 
-#: The transaction-property marker a run's commit carries, `rask.ingest.run_id=<run_id>`. Rides
-#: pylance's `commit_message` (stored as the `__lance_commit_message` transaction property —
-#: verified round-trip on pylance 9.0.0: `read_transaction(v).transaction_properties` returns it
-#: verbatim). The marker is what makes a commit REPLAY-RECOGNIZABLE: a retried commit for the same
-#: run finds its own earlier version instead of appending twice.
-_RUN_MARKER_PREFIX = "rask.ingest.run_id="
+def _fragment_signature(fragment: lance.FragmentMetadata) -> str:
+    """The fragment as a commit stores it.
 
-
-def _find_run_commit(location: str, so: StorageOptions, run_id: str, read_version: int) -> tuple[int, int] | None:
-    """Did THIS run already commit? Scan versions after ``read_version`` for the run's marker.
-
-    THE REPLAY THIS EXISTS FOR: the ingest `finalize` activity commits, then dies before Dapr records
-    its result; the retry re-reads `read_version` fresh and — without this check — re-appends the same
-    fragments as a brand-new version. Append never conflicts with Append (transaction.md), so nothing
-    in the format refuses the duplicate; only recognizing our own commit can.
-
-    Bounded by construction: the scan covers versions AFTER the retry's `read_version`, which in the
-    replay case is at most a handful (our own commit plus whatever landed concurrently). A version
-    whose transaction is ABSENT (pre-transaction-file history, GC'd) is SKIPPED, not fatal — an
-    absent stranger's version must not fail a legitimate first commit.
-
-    The transaction reads are BATCHED like the sibling `_verify_fragment_data_files` (CAT-CORE-10
-    named both loops): `read_transaction` is one object-store round trip per version and pylance has
-    no multi-version read, so a thread pool overlaps the round trips. The DECISIONS below still run
-    in the versions' original order, so which version answers — and which failure raises first — is
-    identical to the serial walk's.
-
-    IT FAILS CLOSED, and that is the difference between absent and BROKEN. Both handlers here used to
-    be blanket `except Exception`: the open said "no dataset yet -> certainly no prior commit", which
-    is true of absence and false of a reset connection, a timeout or expired credentials; the
-    per-version skip was defended for an unreadable STRANGER and silently covered a transient failure
-    reading OUR OWN marker — the one version the scan exists to find. Either one answered "no prior
-    commit" on a store that had told us nothing, and the caller then appended the rows again with
-    nothing able to refuse it (Append never conflicts with Append).
-
-    So an error that PROVES absence returns None, and any other error RAISES: the activity retries
-    under `ACTIVITY_RETRY` and a permanent fault fails the run with a reason. A guard that cannot
-    prove the run has not committed must not assume it has not.
+    Measured on pylance 12.0.0: an Append's transaction keeps each fragment exactly as sent (id, data files
+    and their bases, sizes, field ids, row count, deletion file), so equal signatures read the same rows.
+    Both sides pass through pylance's ``to_json``, so a fragment serialized on another pylance compares by
+    content rather than by spelling.
     """
-    marker = _RUN_MARKER_PREFIX + run_id
+    return json.dumps(fragment.to_json(), sort_keys=True)
+
+
+def _read_transactions(location: str, so: StorageOptions, versions: Sequence[int]) -> list[tuple[int, lance.Transaction | None, Exception | None]]:
+    """Each version's transaction in version order, with any failure carried for the caller to judge.
+
+    One handle per worker thread: measured on pylance 12.0.0, eight threads reading transactions through
+    one ``LanceDataset`` raised ``RuntimeError: Already borrowed`` in 20 of 20 rounds over 40 versions, and
+    in 0 of 20 with a handle each.
+    """
+    local = threading.local()
+
+    def _read(version: int) -> tuple[int, lance.Transaction | None, Exception | None]:
+        try:
+            handle: lance.LanceDataset | None = getattr(local, "dataset", None)
+            if handle is None:
+                handle = local.dataset = lance.dataset(location, storage_options=dict(so) if so else None, session=shared_lance_session())
+            return version, handle.read_transaction(version), None
+        except Exception as exc:
+            return version, None, exc
+
+    with ThreadPoolExecutor(max_workers=min(8, len(versions))) as pool:
+        return list(pool.map(_read, versions))
+
+
+def _held_signature(fragment: dict[str, Any]) -> str:
+    """A fragment as a version's manifest holds it: its data files and its row count.
+
+    Measured on pylance 12.0.0: a commit keeps each fragment's files and physical_rows exactly and assigns
+    id, row_id_meta and the two version metas, which are left out.
+    """
+    return json.dumps({"files": fragment.get("files"), "physical_rows": fragment.get("physical_rows")}, sort_keys=True)
+
+
+def _version_holds(location: str, so: StorageOptions, version: int, fragments: Sequence[lance.FragmentMetadata]) -> bool:
+    """Whether ``version``'s manifest holds every one of these fragments with no deletion file: what a reader of that version reads."""
+    try:
+        held = [
+            f.metadata.to_json()
+            for f in lance.dataset(location, version=version, storage_options=dict(so) if so else None, session=shared_lance_session()).get_fragments()
+        ]
+    except Exception as exc:
+        if reads_as_absent(exc):
+            return False
+        raise ServiceUnavailableError(f"cannot read version {version} of {location!r} to confirm it holds the run's fragments: {exc}") from exc
+    present = {_held_signature(fragment) for fragment in held if fragment.get("deletion_file") is None}
+    return {_held_signature(fragment.to_json()) for fragment in fragments} <= present
+
+
+def _rows_at(location: str, so: StorageOptions, version: int) -> int:
+    return lance.dataset(location, version=version, storage_options=dict(so) if so else None, session=shared_lance_session()).count_rows()
+
+
+def _find_run_commit(location: str, so: StorageOptions, fragments: Sequence[lance.FragmentMetadata], *, read_version: int, run_id: str) -> int | None:
+    """The version after ``read_version`` whose operation added every one of these fragments.
+
+    A committer whose answer was lost retries with the same fragments, and Append never conflicts with
+    Append (transaction.md), so only recognizing the earlier commit keeps its rows from landing twice. The
+    fragments are the evidence, never a run id, which any writer of the table can put on a commit
+    ([[LH-280]]): whoever committed them, the rows are in the table as sent. A version counts only when its
+    manifest holds the fragments too: the transaction record is evidence the version's writer chose, while
+    the manifest is what a reader of that version reads.
+
+    Fails closed: an error that proves absence reads as "not committed" (no table, a stranger's version
+    with no transaction file); any other error raises, because appending again on an unread store risks
+    the duplicate this exists to prevent.
+    """
     try:
         dataset = lance.dataset(location, storage_options=dict(so) if so else None, session=shared_lance_session())
     except Exception as exc:
@@ -798,26 +834,13 @@ def _find_run_commit(location: str, so: StorageOptions, run_id: str, read_versio
                 f"cannot determine whether run {run_id!r} already committed to {location!r} — the object store is unreadable, "
                 f"and proceeding would risk appending the same rows twice: {exc}"
             ) from exc
-        return None  # genuinely no dataset yet -> certainly no prior commit by this run
-    # `version_refs()`, not `versions()`: this filter reads the NUMBER and nothing else, and pylance 11
-    # answers version_refs without reading or deserializing a manifest. On a table with history that is
-    # the difference between one listing and one object read per version, on a guard that runs before
-    # every commit — and this guard's whole job is to be cheap enough that nobody is tempted to skip it.
+        return None
+    # `version_refs()`, not `versions()`: pylance answers it without reading a manifest per version.
     candidates = [version for version_info in dataset.version_refs() if (version := int(version_info["version"])) > read_version]
     if not candidates:
         return None
-
-    def _read_props(version: int) -> tuple[int, dict[str, Any] | None, BaseException | None]:
-        """One round trip; the error is CARRIED, not judged — judgement stays in version order below."""
-        try:
-            transaction = dataset.read_transaction(version)
-            return version, getattr(transaction, "transaction_properties", None) or {}, None
-        except Exception as exc:
-            return version, None, exc
-
-    with ThreadPoolExecutor(max_workers=min(8, len(candidates))) as pool:
-        results = list(pool.map(_read_props, candidates))
-    for version, props, exc in results:
+    wanted = {_fragment_signature(fragment) for fragment in fragments}
+    for version, transaction, exc in _read_transactions(location, so, candidates):
         if exc is not None:
             if not reads_as_absent(exc):
                 raise ServiceUnavailableError(
@@ -825,14 +848,64 @@ def _find_run_commit(location: str, so: StorageOptions, run_id: str, read_versio
                     f"this may be the run's own commit, and skipping it would append the rows twice: {exc}"
                 ) from exc
             continue
-        if (props or {}).get("__lance_commit_message") == marker:
-            rows = lance.dataset(location, version=version, storage_options=dict(so) if so else None, session=shared_lance_session()).count_rows()
-            return version, rows
+        if transaction is None:
+            continue
+        added = list(getattr(transaction.operation, "fragments", None) or ())
+        if wanted <= {_fragment_signature(fragment) for fragment in added} and _version_holds(location, so, version, fragments):
+            return version
     return None
 
 
+def _recorded_run_commit(location: str, so: StorageOptions, run: commit_runs.CommitRun) -> tuple[int, int] | None:
+    """The version the catalog recorded ``run`` committing and the row count there, while that version exists."""
+    try:
+        recorded = commit_runs.read_committed(run, location)
+    except OSError as exc:
+        raise ServiceUnavailableError(f"cannot read what run {run.run_id!r} committed to {location!r}: the control root is unreadable: {exc}") from exc
+    if recorded is None:
+        return None
+    try:
+        return recorded.version, _rows_at(location, so, recorded.version)
+    except Exception as exc:
+        if reads_as_absent(exc):
+            return None
+        raise ServiceUnavailableError(f"cannot read version {recorded.version}, which run {run.run_id!r} committed to {location!r}: {exc}") from exc
+
+
+def _record_run_commit(run: commit_runs.CommitRun, location: str, *, version: int) -> None:
+    try:
+        commit_runs.record_committed(run, location, version=version)
+    except OSError as exc:
+        raise ServiceUnavailableError(
+            f"run {run.run_id!r} committed version {version} to {location!r}, and the catalog could not record it: {exc}. "
+            "A retry of the same fragments is answered with that version"
+        ) from exc
+
+
+def _prior_run_commit(
+    location: str, so: StorageOptions, frags: Sequence[lance.FragmentMetadata], *, read_version: int, run: commit_runs.CommitRun
+) -> tuple[int, int] | None:
+    """What ``run`` already committed to the table, as ``(version, row_count)``, or ``None`` when this commit must land.
+
+    Fragments that already landed after ``read_version`` answer with the version holding them. Otherwise
+    the catalog's record of this caller's run answers: always for an EMPTY commit (the "what did I commit?"
+    probe), and for a commit carrying fragments only when the recorded version is newer than
+    ``read_version``, because a retry can resend a different list for a run that already committed (ingest
+    falls back to its carried list once the staged one is purged).
+    """
+    if frags:
+        landed = _find_run_commit(location, so, frags, read_version=read_version, run_id=run.run_id)
+        if landed is not None:
+            _record_run_commit(run, location, version=landed)
+            return landed, _rows_at(location, so, landed)
+    recorded = _recorded_run_commit(location, so, run)
+    if recorded is None or (frags and recorded[0] <= read_version):
+        return None
+    return recorded
+
+
 def commit_appended_fragments(
-    location: str, so: StorageOptions, fragments: list[dict[str, Any]], read_version: int, run_id: str | None = None
+    location: str, so: StorageOptions, fragments: list[dict[str, Any]], read_version: int, *, run: commit_runs.CommitRun | None = None
 ) -> tuple[int, int]:
     """Commit client-written fragments as an APPEND — the catalog as the governed commit coordinator (#2).
 
@@ -846,32 +919,37 @@ def commit_appended_fragments(
     assigns/rebases stable row ids at commit (row_id_lineage.md). CREATE and OVERWRITE stay server-side to
     centralize the 2.2 invariant and to owner-govern the destructive reset. Append auto-rebases against
     concurrent appends and conflicts only with Overwrite/Restore (transaction.md); a stale/incompatible
-    commit raises, mapped by :func:`_classify_commit_error`. Returns ``(version, row_count)``.
+    commit raises, mapped by :func:`_classify_commit_error`.
+
+    With ``run``, a retry is idempotent: fragments that already landed are answered with the version that
+    holds them (:func:`_find_run_commit`), and an EMPTY commit is answered with what the catalog recorded
+    this caller's run committing, or refused when it recorded nothing.
+
+    Returns:
+        ``(version, row_count)``: the committed version and the table's row count at it.
+
+    Raises:
+        InvalidInputError: Malformed fragments, no fragments (and no recorded run commit), a based data
+            file, a foreign file version, or a data file missing under the table.
+        ServiceUnavailableError: The object store or the control root could not be read or written.
     """
     if read_version < 0:
         raise InvalidInputError(f"read_version must be non-negative, got {read_version}")
-    # THE MARKER CHECK COMES FIRST, and the order is the whole point. It used to sit below the
-    # empty-fragments guard, which made it unreachable for the replay that needs it most: ingest's
-    # `finalize_run` purges the staged manifests immediately after committing, so a retry finds
-    # staging empty AND its carried fallback empty, and asks with nothing. Refused 400 before the
-    # catalog ever looked, it reported `committed_version: None, rows: 0` for a run whose rows had
-    # landed — false lineage for work that succeeded.
-    #
-    # Empty-plus-a-known-marker is not a meaningless commit; it is the question "what did I commit?",
-    # and this is the only thing that can answer it. Empty WITHOUT a marker still is meaningless, and
-    # is still refused below.
-    if run_id:
-        already = _find_run_commit(location, so, run_id, read_version)
-        if already is not None:
-            return already
-    if not fragments:
-        raise InvalidInputError("no fragments to commit")
     # Client-controlled input: a malformed fragment dict raises KeyError/TypeError/ValueError from
     # ``from_json`` (outside the OSError taxonomy) — translate to a 400, never a 500 (audit 2026-07-14).
     try:
         frags = [lance.FragmentMetadata.from_json(json.dumps(f)) for f in fragments]
     except (KeyError, TypeError, ValueError, AttributeError) as exc:
         raise InvalidInputError(f"malformed fragment metadata: {exc}") from exc
+    # The run checks come before the empty guard and every check of the files: a retry may arrive after
+    # maintenance compacted its files away, and an empty commit carrying a run is a question only the
+    # record can answer.
+    if run is not None:
+        prior = _prior_run_commit(location, so, frags, read_version=read_version, run=run)
+        if prior is not None:
+            return prior
+    if not frags:
+        raise InvalidInputError("no fragments to commit")
     _refuse_based_data_files(fragments)
     judged_version = _refuse_foreign_file_versions(location, so, frags, read_version)
     # HIGH (audit 2026-07-14): Lance's commit validates NEITHER data-file existence NOR the declared row
@@ -879,23 +957,16 @@ def commit_appended_fragments(
     # location (no malice required) could otherwise commit a 200-OK-but-UNREADABLE current version that
     # breaks reads for EVERY reader until an operator restores. Pre-verify the files exist under the table
     # location; a failed check leaves the table untouched (400) instead of poisoning its current version.
-    # The marker check ran at the TOP of this function — before the empty-fragments guard, and so
-    # necessarily before this file-existence verification too. That ordering also serves the reason
-    # recorded here: a replay may arrive after maintenance compacted the staged files away, and
-    # refusing it for missing files it no longer needs would fail a commit that already succeeded.
     _verify_fragment_data_files(location, so, fragments)
     op = lance.LanceOperation.Append(frags)
     try:
-        dataset = lance.LanceDataset.commit(
-            location,
-            op,
-            read_version=judged_version,
-            storage_options=so,
-            commit_message=(_RUN_MARKER_PREFIX + run_id) if run_id else None,
-        )
+        dataset = lance.LanceDataset.commit(location, op, read_version=judged_version, storage_options=so)
     except OSError as exc:
         raise _classify_commit_error(exc) from exc
-    return int(dataset.version), dataset.count_rows()
+    version = int(dataset.version)
+    if run is not None:
+        _record_run_commit(run, location, version=version)
+    return version, dataset.count_rows()
 
 
 def _refuse_based_data_files(fragments: list[dict[str, Any]]) -> None:

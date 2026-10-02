@@ -536,16 +536,14 @@ def _prior_commit_for_run(catalog: CatalogSeam, spec: RunSpec) -> tuple[int, int
     """The version THIS run already committed, or None.
 
     Asked with an EMPTY fragment list on purpose: that is the shape a post-purge replay is in, and the
-    catalog answers it from the run marker without writing anything. Any failure answers None —
+    catalog answers it from its record of what this run committed, without writing anything. Any failure answers None —
     including the deliberate refusal an unknown run gets — because "I cannot tell" and "it never
     committed" lead to the same honest report, and a status read must not raise into a terminal path.
     """
     if not isinstance(catalog, CommittingCatalog):
         return None
     try:
-        # read_version=0 so the marker scan walks EVERY version. It scans versions AFTER the floor,
-        # so a floor that is too high would hide the run's own commit — and this caller does not know
-        # which version the run based its commit on, only that it may have made one.
+        # read_version=0: the catalog answers an empty commit from its record, and reads no floor.
         # `spec.namespace`, NOT `spec.project`. They are different levels — a project selects the
         # storage root, the namespace is the medallion tier — and this was the last consumer still
         # handed the project, which `RunSpec.namespace` calls "THE ONE PLACE a project becomes a
@@ -614,7 +612,7 @@ def _fragments_to_commit(uri: str, spec: RunSpec, carried: list[str], *, fallbac
     return staged
 
 
-def _finalize_without_fragments(catalog: CatalogSeam, uri: str, spec: RunSpec, errors: dict[str, str]) -> dict[str, Any]:
+def _finalize_without_fragments(catalog: CatalogSeam, uri: str, spec: RunSpec, errors: dict[str, str], *, fallback_dropped: bool) -> dict[str, Any]:
     """The run committed nothing. Report that HONESTLY, and purge what it staged.
 
     A whole alternative terminal path, lifted out of `finalize_run` (ingest-flow-10) rather than
@@ -625,6 +623,11 @@ def _finalize_without_fragments(catalog: CatalogSeam, uri: str, spec: RunSpec, e
     units, a run whose every unit failed validation, and a RETRY of a run that already committed and
     whose staged manifests it then purged. Only the catalog can tell the third from the first two,
     which is what `_prior_commit_for_run` asks.
+
+    A FOURTH cause is a loss, not an empty run: the fan-in dropped the carried fragment list for size
+    and staging cannot be read either, so the run wrote rows that no source can name. When the catalog
+    also records no commit for the run, the run is FAILED with that reason ([[LH-280]]): reporting
+    COMPLETE would present rows that never landed as a finished run.
     """
     from ingest.lander import rows_in_dataset
     from ingest.staging import purge_staged
@@ -656,16 +659,23 @@ def _finalize_without_fragments(catalog: CatalogSeam, uri: str, spec: RunSpec, e
     # RETRY of a run that already committed — the commit path purges the staged manifests right
     # after committing, so a replay finds staging empty and its carried fallback empty too.
     #
-    # The catalog answers by the run marker, and answering is all it does: an empty commit that
-    # carries a known run_id returns that run's own `(version, rows)` and writes nothing, while an
-    # unknown one is still refused. Without this the return below reported `committed_version:
-    # None, rows: 0` for a run whose rows had landed — false lineage for work that succeeded, and
-    # unrecoverable, because the evidence it would need was the staging it had already purged.
+    # The catalog answers from its own record of what this caller's run committed, and answering is
+    # all it does: an empty commit that carries a run the catalog recorded returns that run's own
+    # `(version, rows)` and writes nothing, while a run it never recorded is refused. Without this the
+    # return below reported `committed_version: None, rows: 0` for a run whose rows had landed — false
+    # lineage for work that succeeded, and unrecoverable, because the evidence it would need was the
+    # staging it had already purged.
     #
-    # LocalCatalog has no `commit` and no marker (`lander.py` short-circuits an empty list to the
-    # dataset's CURRENT version), so the dev path keeps reporting None. That is honest: it has no
+    # LocalCatalog has no `commit` and keeps no such record (`lander.py` short-circuits an empty list to
+    # the dataset's CURRENT version), so the dev path keeps reporting None. That is honest: it has no
     # way to recognise its own earlier commit either.
     prior = _prior_commit_for_run(catalog, spec)
+    lost = fallback_dropped and prior is None
+    if lost:
+        errors = {
+            **errors,
+            "run": "the carried fragment list was dropped and staging could not be read, so the rows this run wrote cannot be named or committed",
+        }
     # STILL PURGED. A run whose staged manifests were all truncated (`staging.py` skips those)
     # arrives here with an empty list and would strand its staged bytes with nothing left to
     # collect them.
@@ -674,22 +684,21 @@ def _finalize_without_fragments(catalog: CatalogSeam, uri: str, spec: RunSpec, e
         # NOT `result.version`. That is the version the dataset ALREADY had — the previous run's,
         # or the empty v1 `ensure_dataset` created — and reporting it is the "committed_version
         # it did not produce" half of this defect. `prior` is a different fact entirely: the
-        # version THIS run committed, recognised by its own marker, or None if it never did.
+        # version THIS run committed, as the catalog recorded it, or None if it never did.
         "committed_version": prior[0] if prior else None,
         "rows": prior[1] if prior else 0,
         "dataset_rows": tier_rows,
         "errors": errors,
-        # UNCHANGED derivation, deliberately: `test_run_chain.py` drives exactly
-        # `finalize_run(spec, [], {...})` and pins COMPLETE_WITH_ERRORS under "a run that
-        # delivered 9,997 of 10,000 pages did not FAIL". Refusing a genuinely EMPTY SOURCE is a
-        # different decision at a different seam (enumeration), not this one.
-        "status": "COMPLETE_WITH_ERRORS" if errors else "COMPLETE",
+        # A run that delivered 9,997 of 10,000 pages did not FAIL (`test_run_chain.py` pins
+        # COMPLETE_WITH_ERRORS for `finalize_run(spec, [], {...})`); refusing a genuinely EMPTY SOURCE
+        # is a different decision at a different seam (enumeration). A lost run is the one FAILED here.
+        "status": "FAILED" if lost else ("COMPLETE_WITH_ERRORS" if errors else "COMPLETE"),
         # No publication: there is no version to gate, and `_publish` would move `published`
         # onto a version this run did not write.
         "published": None,
         "from_version": None,
         "to_version": None,
-        "publish_reason": "already committed by this run" if prior else "nothing to commit",
+        "publish_reason": "already committed by this run" if prior else ("rows lost before commit" if lost else "nothing to commit"),
         "publish_error": None,
     }
 
@@ -719,7 +728,7 @@ def finalize_run(spec: RunSpec, fragments: list[str], errors: dict[str, str], *,
     all_fragments = _fragments_to_commit(uri, spec, fragments, fallback_dropped=fallback_dropped)
 
     if not all_fragments:
-        return _finalize_without_fragments(catalog, uri, spec, errors)
+        return _finalize_without_fragments(catalog, uri, spec, errors, fallback_dropped=fallback_dropped)
 
     if isinstance(catalog, CommittingCatalog):
         # THE CATALOG COMMITS. A commit registered only in this process is one the cascade cannot

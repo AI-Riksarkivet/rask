@@ -431,8 +431,8 @@ class CatalogServiceClient:
             # since the seam was written — and this client recorded the id in a LOCAL list
             # (`self.registered`) that died with the process, so the deployed path had no
             # reconciliation at all: a `finalize` retry after a successful commit re-appended every
-            # row. The catalog now stamps it as a transaction property and answers a replayed commit
-            # with the version this run already committed (idempotent replay).
+            # row. The catalog answers a replayed commit with the version that holds this run's
+            # fragments, and an empty one with the version it recorded this run committing.
             "run_id": run_id,
         }
         url = f"{self._base}/management/v1/table/{self.table_id(namespace, dataset)}/commit"

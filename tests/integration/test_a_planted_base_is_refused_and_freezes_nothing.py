@@ -47,7 +47,6 @@ import pytest
 import respx
 from botocore.exceptions import ClientError
 from fastapi.testclient import TestClient
-from moto.server import ThreadedMotoServer
 
 import storage
 from lineage.api import reconcile_cron
@@ -77,15 +76,6 @@ _INVALID_INPUT = 13
 
 def _s3(url: str) -> S3Client:
     return boto3.client("s3", endpoint_url=url, aws_access_key_id="test", aws_secret_access_key="test", region_name="us-east-1")
-
-
-@pytest.fixture(scope="module")
-def moto_url() -> Iterator[str]:
-    server = ThreadedMotoServer(port=0)
-    server.start()
-    host, port = server.get_host_and_port()
-    yield f"http://{host}:{port}"
-    server.stop()
 
 
 class _Estate:

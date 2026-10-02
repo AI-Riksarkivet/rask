@@ -27,7 +27,6 @@ Measured: ~395 bytes per fragment manifest at `fragment_rows=1024`, so the budge
 
 from __future__ import annotations
 
-import contextlib
 import json
 from typing import Any, cast
 
@@ -205,36 +204,30 @@ def test_the_two_legs_are_measured_against_ONE_ceiling() -> None:
     assert FANIN_RETURN_BUDGET_BYTES == CHUNK_DISPATCH_BUDGET_BYTES
 
 
-def test_a_dropped_fallback_meeting_unreadable_staging_is_reported_not_silent(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+def test_a_dropped_fallback_meeting_unreadable_staging_is_reported_not_silent(monkeypatch: pytest.MonkeyPatch) -> None:
     """The one case the bound was allowed to introduce, and the reason it may not stay quiet.
 
     Bounding the carried list trades a fallback away for runs past the budget. That is only
-    acceptable while the trade is VISIBLE: if staging is then also unreadable, the run wrote rows and
-    neither source can name them, and `finalize_run`'s ordinary "nothing to commit" no-op would
-    present that as an empty run. An empty list means two different things now, so the flag has to
-    separate them.
+    acceptable while the trade is VISIBLE: if staging is then also unreadable and the catalog records no
+    commit for the run, the run wrote rows and neither source can name them, so it is FAILED with that
+    reason rather than presented as an empty, COMPLETE run ([[LH-280]]).
     """
-    import logging
-
     from ingest import runtime as runtime_module
     from ingest.workflow import RunSpec
 
-    # `finalize_run` imports `discover_staged` LOCALLY, so it must be patched at its source module —
-    # patching the runtime module's namespace binds nothing the function will look at.
+    # `finalize_run` imports these LOCALLY, so they are patched at their source modules; the store is not
+    # the subject, the terminal record is.
     monkeypatch.setattr(runtime_module, "_catalog", lambda: _StubCatalog())
+    monkeypatch.setattr(runtime_module, "ledger_options", lambda *_a: None)
     monkeypatch.setattr("ingest.staging.discover_staged", lambda *_a, **_k: [])
+    monkeypatch.setattr("ingest.staging.purge_staged", lambda *_a, **_k: None)
+    monkeypatch.setattr("ingest.lander.rows_in_dataset", lambda _uri: 0)
 
-    spec = RunSpec.model_validate(SPEC)
-    with caplog.at_level(logging.ERROR, logger="ingest.runtime"), contextlib.suppress(Exception):
-        # The SUBJECT is the log line. What `finalize_run` does after it is the pre-existing
-        # empty-commit path, which reaches a real object store — out of scope here and covered by
-        # `test_empty_commit.py`. Suppressed rather than stubbed so this test cannot start silently
-        # asserting something about the commit path it does not model.
-        runtime_module.finalize_run(spec, [], {}, read_version=5, fallback_dropped=True)
+    out = runtime_module.finalize_run(RunSpec.model_validate(SPEC), [], {}, read_version=5, fallback_dropped=True)
 
-    assert any(r.message == "ingest_staging_unreadable_and_fallback_dropped" for r in caplog.records), (
-        f"a dropped fallback meeting unreadable staging was reported as an ordinary empty run; records were {[r.message for r in caplog.records]}"
-    )
+    assert out["status"] == "FAILED"
+    assert out["committed_version"] is None
+    assert "cannot be named" in out["errors"]["run"]
 
 
 class _StubCatalog:

@@ -30,6 +30,7 @@ from service_kit.governed.dapr_auth import (
     is_public_caller,
     service_principal,
 )
+from service_kit.governed.deps import ANONYMOUS_SUBJECT
 from service_kit.governed.oidc import IDToken, OIDCVerifier, ProviderUnavailableError
 
 
@@ -193,6 +194,14 @@ def authenticate(
 #: Token of the authenticated caller (``None`` when OIDC is disabled). Endpoints that
 #: need claims can depend on this; router-level use enforces authentication.
 CurrentToken = Annotated[IDToken | None, Depends(authenticate)]
+
+
+def current_subject(token: CurrentToken) -> str:
+    """The verified caller as the estate's subject id: the token's ``sub``, or ``anon`` with OIDC off."""
+    return token.sub if token is not None else ANONYMOUS_SUBJECT
+
+
+CurrentSubject = Annotated[str, Depends(current_subject)]
 
 
 def raw_bearer(credentials: _CredentialsDep) -> str | None:
