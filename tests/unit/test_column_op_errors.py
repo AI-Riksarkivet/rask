@@ -5,7 +5,7 @@ backend. This file pins the other half — the failures that must NOT be reclass
 be provoked through the real store: the whole point is what happens when the OBJECT STORE fails, not the
 request.
 
-The discipline is an allowlist, not `except Exception`. `_user_sql` could key on Lance's single
+The discipline is an allowlist, not `except Exception`. `caller_sql` could key on Lance's single
 ``Invalid user input`` marker; `_column_op` cannot, because `drop_columns` reports both of its user errors
 as UNMARKED ``ValueError``s — so the match had to widen, and widening is exactly how a translator starts
 blaming callers for outages.

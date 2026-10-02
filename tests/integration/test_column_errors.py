@@ -2,7 +2,7 @@
 
 Seven distinct user errors on ``add_columns`` / ``alter_columns`` / ``drop_columns`` /
 ``update_field_metadata`` used to answer ``500 InternalError`` with detail ``"Internal Server Error"``:
-``dataplane._user_sql`` existed for exactly this class of failure and had only ever been wired to
+``dataplane.caller_sql`` existed for exactly this class of failure and had only ever been wired to
 ``update``/``delete``. The lakehouse UI renders the problem body's ``detail`` verbatim, so a user who typed
 a column name that does not exist read that the server had broken.
 

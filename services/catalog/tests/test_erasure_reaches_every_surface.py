@@ -162,11 +162,12 @@ def test_the_report_names_the_TAG_that_keeps_the_residual(pinned: str) -> None:
     Lance records the fork point in `_refs/branches/<name>.json` (`parentVersion`), so which branch
     stands on main v1 is read rather than guessed — and its head was rewritten, so it is the tag keeping
     work v2 that holds main v1, not the branch. Naming the branch would send an operator holding a legal
-    deadline to destroy a working ref that frees nothing.
+    deadline to destroy a working ref that frees nothing. Work v2 is a residual too: the subject's row sits
+    in its data file behind the deletion vector work's delete wrote.
     """
     report = _erase(pinned)
 
-    assert report.residual_versions == ["main@1"]
+    assert report.residual_versions == ["main@1", "work@2"]
     assert [(pin.ref, pin.holds) for pin in report.pinned_by] == [("tag:trained", "work@2")]
     _follow(pinned, report)
     assert _erase(pinned).complete is True
@@ -174,12 +175,12 @@ def test_the_report_names_the_TAG_that_keeps_the_residual(pinned: str) -> None:
 
 
 def test_a_tag_the_erasure_already_removed_is_not_named(pinned: str) -> None:
-    """Tags are read AFTER step 2: naming one step 2 dropped would make following `pinned_by` fail."""
+    """Tags are read AFTER step 4: naming one step 4 dropped would make following `pinned_by` fail."""
     lance.dataset(pinned).tags.create("snapshot", 1)
 
     report = _erase(pinned)
 
-    assert "snapshot" not in lance.dataset(pinned).tags.list(), "step 2 must drop the tag for this to be the right test"
+    assert "snapshot" not in lance.dataset(pinned).tags.list(), "step 4 must drop the tag for this to be the right test"
     assert [pin.ref for pin in report.pinned_by] == ["tag:trained"]
 
 
@@ -221,7 +222,7 @@ def test_a_RETAINED_tag_does_not_break_reclamation(tmp_path: Path) -> None:
 
     Keeping a tag over a clean version (the step above) made `cleanup_old_versions` refuse the ENTIRE
     call — pylance errors by default when any tagged version falls in range. So doing the right thing
-    in step 2 cost the estate every byte of reclamation in step 4, and the erasure answered
+    in step 4 cost the estate every byte of reclamation in step 5, and the erasure answered
     `history: failed` as a direct consequence of preserving model provenance. Observed live before the
     fix: `Cleanup error: 1 tagged version(s) have been marked for cleanup`.
     """
@@ -235,6 +236,43 @@ def test_a_RETAINED_tag_does_not_break_reclamation(tmp_path: Path) -> None:
     assert [s.outcome for s in report.surfaces if s.surface == "history:main"] == ["reclaimed"]
     assert "trained-on-v1" in lance.dataset(uri).tags.list(), "the clean tag had to survive for this to be the right test"
     assert report.complete is True, [(s.surface, s.outcome, s.detail) for s in report.surfaces]
+
+
+class _MovedAfterResolving:
+    """A real main handle; right after the erasure resolves the subject's row ids, another writer moves the
+    subject's row off the predicate, as a concurrent update would."""
+
+    def __init__(self, inner: Any, uri: str) -> None:
+        self._inner, self._uri, self._moved = inner, uri, False
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._inner, name)
+
+    def to_table(self, *args: Any, **kwargs: Any) -> Any:
+        resolved = self._inner.to_table(*args, **kwargs)
+        if kwargs.get("with_row_id") and "limit" not in kwargs and not self._moved:
+            self._moved = True
+            lance.dataset(self._uri).update({"pii": "'moved'"}, where="pii = 'alice'")
+        return resolved
+
+
+def test_a_row_another_writer_moves_off_the_predicate_is_not_deleted(tmp_path: Path) -> None:
+    """Under stable row ids an update keeps a row's id, and Lance's own retry re-runs a delete's ids on the
+    newer version, so a stale `_rowid IN (...)` deleted the moved row; the erasure resolves again instead."""
+    uri = str(tmp_path / "moving")
+    lance.write_dataset(pa.table({"id": [1, 2], "pii": ["alice", "bob"]}), uri, data_storage_version="2.2", enable_stable_row_ids=True)
+
+    report = erase(
+        cast("Any", _MovedAfterResolving(lance.dataset(uri), uri)),
+        storage_options={},
+        protected=None,
+        reopen=lambda: lance.dataset(uri),
+        table="t",
+        predicate="pii = 'alice'",
+        retention=_NOW,
+    )
+
+    assert (sorted(lance.dataset(uri).to_table().column("pii").to_pylist()), report.complete) == (["bob", "moved"], True)
 
 
 def test_erasure_reclaims_a_subjects_BLOB_SIDECAR_with_its_version(tmp_path: Path) -> None:

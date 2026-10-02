@@ -30,12 +30,14 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from lance_namespace import LanceNamespace
 
+import catalog.services.erasure as erasure_module
 from catalog.api.dependencies import get_namespace, get_storage_options
 from catalog.api.v1.endpoints import erasure as door
 from catalog.core.config import Settings, get_settings
 from catalog.core.namespace import open_dataset
 from catalog.services.dataplane import create_table, read_arrow_body
 from catalog.services.erasure import ErasureReport, erase
+from catalog.services.maintenance import COMPACTION_BOUND
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 
@@ -55,7 +57,7 @@ def _rows(*names: str) -> pa.Table:
 def _alone(uri: str) -> None:
     """main v1 bob, v2 the subject in its own fragment, tagged; ``work`` cut from v2.
 
-    The tag makes step 2 READ main v2 through the erasure's session before dropping it. Work's delete
+    The tag makes step 4 READ main v2 through the erasure's session before dropping it. Work's delete
     drops the subject's whole fragment, so its head is main's lone bob fragment: nothing to rewrite.
     """
     lance.write_dataset(_rows("bob"), uri)
@@ -193,11 +195,17 @@ class _UnreadableFragment(_Forwarding):
     def count_rows(self, *args: Any, **kwargs: Any) -> int:
         raise OSError("transient read failure")
 
+    def scanner(self, *args: Any, **kwargs: Any) -> Any:
+        raise OSError("transient read failure")
+
 
 class _UnreadableVersion(_Forwarding):
     """A version whose reads fail as a transient store error would, with every data file still present."""
 
     def count_rows(self, *args: Any, **kwargs: Any) -> int:
+        raise OSError("transient read failure")
+
+    def scanner(self, *args: Any, **kwargs: Any) -> Any:
         raise OSError("transient read failure")
 
     def get_fragments(self, filter: Any = None) -> list[_UnreadableFragment]:  # noqa: A002 — pylance's own keyword
@@ -309,8 +317,8 @@ def test_a_branch_list_the_verification_cannot_read_again_is_not_verified_clean(
 
 
 def _subject_in_a_fragment_no_rewrite_takes(uri: str) -> None:
-    """main's first write is two files with the subject in the first, a 1,048,576-row fragment no
-    compaction selects and whose one deleted row stays behind a deletion vector; carol lands at v2,
+    """main's first write is two files with the subject in the first, a 1,048,576-row fragment the test
+    keeps out of every rewrite, so its one deleted row stays behind a deletion vector; carol lands at v2,
     ``work`` is cut from v2 with eve, main gains dan. Both rewrites take carol's fragment, and main's
     cleanup keeps v2 for work's head, which stands on the first file: v2 stays listed, cannot be read
     whole, and its first fragment still answers."""
@@ -320,9 +328,10 @@ def _subject_in_a_fragment_no_rewrite_takes(uri: str) -> None:
     lance.write_dataset(_rows("dan"), uri, mode="append")
 
 
-def test_a_version_unreadable_whole_is_a_residual_while_one_of_its_fragments_answers(tmp_path: Path) -> None:
+def test_a_version_unreadable_whole_is_a_residual_while_one_of_its_fragments_answers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     uri = str(tmp_path / "subjects")
     _subject_in_a_fragment_no_rewrite_takes(uri)
+    monkeypatch.setattr(erasure_module, "COMPACTION_BOUND", {**COMPACTION_BOUND, "excluded_fragment_ids": [0], "max_source_bytes": 2 * 1024 * 1024})
 
     report = erase(
         lance.dataset(uri), storage_options={}, protected=None, reopen=lambda: lance.dataset(uri), table="t", predicate=_PREDICATE, retention=timedelta(0)
@@ -546,23 +555,30 @@ def test_a_verification_that_cannot_open_the_table_still_answers_with_the_report
     assert "could not open the table" in verify.detail and "nothing was verified" in verify.detail, verify.detail
     assert [(s.surface, s.outcome) for s in report.surfaces if s.surface != "verify"] == [
         ("branch:work", "deleted"),
-        ("tag:snap", "untagged"),
         ("main", "deleted"),
         ("compact:work", "rewritten"),
         ("compact:main", "rewritten"),
+        ("tag:snap", "untagged"),
         ("history:work", "reclaimed"),
         ("history:main", "reclaimed"),
     ]
     assert (report.residual_versions, report.pinned_by, report.complete) == ([], [], False)
 
 
-def _namespace(root: Path) -> LanceNamespace:
+def _table(root: Path, first: pa.Table, *more: pa.Table) -> LanceNamespace:
+    """``subjects`` through the catalog's own create path, one fragment per batch."""
     ns = lance_namespace.connect("dir", {"root": str(root)})
     sink = pa.BufferOutputStream()
-    with pa.ipc.new_stream(sink, _rows("bob").schema) as writer:
-        writer.write_table(_rows("bob"))
+    with pa.ipc.new_stream(sink, first.schema) as writer:
+        writer.write_table(first)
     create_table(ns, {}, _TABLE_ID, read_arrow_body(sink.getvalue().to_pybytes(), max_bytes=_BODY_LIMIT), mode="create", registry=None)
-    open_dataset(ns, {}, _TABLE_ID).insert(_rows(_SUBJECT))
+    for batch in more:
+        open_dataset(ns, {}, _TABLE_ID).insert(batch)
+    return ns
+
+
+def _namespace(root: Path) -> LanceNamespace:
+    ns = _table(root, _rows("bob"), _rows(_SUBJECT))
     open_dataset(ns, {}, _TABLE_ID).tags.create("snap", 2)
     open_dataset(ns, {}, _TABLE_ID).create_branch("work", 2)
     return ns
@@ -625,5 +641,89 @@ def test_a_verification_the_door_cannot_open_answers_200_with_the_report(client:
     report = response.json()
     verify = next(s for s in report["surfaces"] if s["surface"] == "verify")
     assert (verify["outcome"], "nothing was verified" in verify["detail"]) == ("failed", True), verify
-    assert [s["outcome"] for s in report["surfaces"] if s["surface"] in ("main", "branch:work", "tag:snap")] == ["deleted", "untagged", "deleted"]
+    assert [s["outcome"] for s in report["surfaces"] if s["surface"] in ("main", "branch:work", "tag:snap")] == ["deleted", "deleted", "untagged"]
     assert report["complete"] is False
+
+
+_IDENTIFIER = "alice-19700101-1234"
+_UNDER_THE_THRESHOLD = _rows(*(f"person-{i}" for i in range(19)), _IDENTIFIER)
+
+
+def _tagged_after_a_plain_delete(root: Path) -> LanceNamespace:
+    """The delete door removed the subject at v2, behind a deletion vector, and a run's tag names v2."""
+    ns = _table(root, _UNDER_THE_THRESHOLD)
+    open_dataset(ns, {}, _TABLE_ID).delete(f"pii = '{_IDENTIFIER}'")
+    open_dataset(ns, {}, _TABLE_ID).tags.create("trained", 2)
+    return ns
+
+
+@pytest.mark.parametrize(
+    ("build", "bound", "expected"),
+    [
+        pytest.param(lambda root: _table(root, _UNDER_THE_THRESHOLD), None, (True, True, []), id="under-the-rewrite-threshold"),
+        pytest.param(
+            lambda root: _table(root, _rows(*(f"person-{i}" for i in range(10))), _rows(_IDENTIFIER, _IDENTIFIER)),
+            None,
+            (True, True, []),
+            id="a-whole-fragment",
+        ),
+        pytest.param(
+            lambda root: _table(root, _rows(*(f"x-{i}" for i in range(60_000))), _rows(_IDENTIFIER, "carol")),
+            64 * 1024,
+            (True, True, []),
+            id="beside-a-fragment-over-the-bound",
+        ),
+        pytest.param(_tagged_after_a_plain_delete, None, (False, False, ["pinned_by"]), id="a-tag-over-an-earlier-plain-delete"),
+    ],
+)
+def test_no_object_under_the_table_root_holds_the_identifier_or_the_report_names_what_keeps_it(
+    tmp_path: Path, build: Callable[[Path], LanceNamespace], bound: int | None, expected: tuple[bool, bool, list[str]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Lance records a delete's filter in its transaction and the head manifest, its default rewrite threshold
+    leaves a fragment holding one subject row as it was, and the compact door's byte bound caps a whole run,
+    so a small fragment beside a large one was never rewritten ([[LH-281]]); each kept the identifier on
+    storage under `complete: true`. A tag over a version whose subject row a deletion vector hides keeps
+    those bytes: the report says so and names the tag."""
+    root = tmp_path / "data"
+    if bound is not None:
+        monkeypatch.setattr(erasure_module, "COMPACTION_BOUND", {**COMPACTION_BOUND, "max_source_bytes": bound})
+    with _door(build(root)) as client:
+        response = client.post("/management/v1/table/subjects/erasure", json={"predicate": f"pii = '{_IDENTIFIER}'"})
+
+    assert response.status_code == 200, response.text
+    report = response.json()
+    holders = sorted(str(path.relative_to(root)) for path in root.rglob("*") if path.is_file() and _IDENTIFIER.encode() in path.read_bytes())
+    assert (holders == [], report["complete"], [field for field in ("held_by_retention", "pinned_by") if report[field]]) == expected, (holders, report)
+
+
+def _history(location: str) -> tuple[dict[str, Any], list[int], list[int], int]:
+    """What an erasure can destroy: the tags, each ref's versions, and the subject's rows on main."""
+    dataset = lance.dataset(location)
+    return (
+        dict(dataset.tags.list()),
+        [entry["version"] for entry in dataset.versions()],
+        [entry["version"] for entry in dataset.checkout_version(("work", None)).versions()],
+        dataset.count_rows(filter=_PREDICATE),
+    )
+
+
+@pytest.mark.parametrize(
+    "predicate",
+    [
+        pytest.param("pii_typo = 'alice'", id="an-unknown-column"),
+        pytest.param("CAST(pii AS INT) = 1", id="a-cast-that-fails"),
+        pytest.param("count(*) > 0", id="an-aggregate"),
+    ],
+)
+def test_a_predicate_lance_refuses_answers_400_and_touches_nothing(tmp_path: Path, predicate: str) -> None:
+    """A column typed wrong made every delete fail while the erasure still dropped the tag it could not
+    probe and reclaimed history ([[LH-210]]), and a predicate Lance parses but cannot evaluate answered
+    as a store fault."""
+    ns = _namespace(tmp_path / "data")
+    location = open_dataset(ns, {}, _TABLE_ID).uri
+    before = _history(location)
+    with _door(ns) as client:
+        response = client.post("/management/v1/table/subjects/erasure", json={"predicate": predicate})
+
+    assert (response.status_code, response.json()["title"]) == (400, "InvalidInputError"), response.text
+    assert _history(location) == before

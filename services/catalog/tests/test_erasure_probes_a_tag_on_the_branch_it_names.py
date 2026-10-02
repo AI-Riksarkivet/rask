@@ -98,7 +98,8 @@ def _clean_branch_tag_beside_a_pinning_branch(tmp_path: Path) -> str:
 def test_pinned_by_names_only_the_refs_that_pin_a_residual(tmp_path: Path) -> None:
     """A retained tag names a version of ITS branch, so ``trained`` on ``clean`` v2 pins nothing on main v2.
 
-    Main v2 survives holding the subject because ``kept`` keeps work v3, which stands on its files.
+    Main v2 survives holding the subject because ``kept`` keeps work v3, which stands on its files; work v3
+    is a residual too, the subject's row behind the deletion vector work's delete wrote.
     ``trained`` names ``clean`` v2 — the same number, a different snapshot — so listing it would send an
     operator with a deadline to delete a clean reproducibility pointer that frees nothing; and work's
     head was rewritten, so naming ``work`` would destroy a working ref for nothing too.
@@ -107,7 +108,7 @@ def test_pinned_by_names_only_the_refs_that_pin_a_residual(tmp_path: Path) -> No
 
     report = _erase(uri)
 
-    assert report.residual_versions == ["main@2"], report.residual_versions
+    assert report.residual_versions == ["main@2", "work@3"], report.residual_versions
     assert [(pin.ref, pin.holds) for pin in report.pinned_by] == [("tag:kept", "work@3")]
 
 
@@ -146,7 +147,7 @@ def test_pinned_by_does_not_name_a_branch_cut_from_ANOTHER_branch(tmp_path: Path
 
 
 def test_a_tag_whose_delete_FAILED_is_named_as_the_pin_on_its_own_version(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """``kept`` names main v2, the one version holding the subject, and step 2 cannot delete it.
+    """``kept`` names main v2, the one version holding the subject, and step 4 cannot delete it.
 
     No branch stands on main v2, so the surviving tag alone keeps it from cleanup, and it is the whole
     of what an operator must delete to finish. Only ``tags.delete("kept")`` fails; the rest is real Lance.

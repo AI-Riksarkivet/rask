@@ -27,7 +27,9 @@ import pyarrow as pa
 import pyarrow.compute as pc
 import pytest
 
+import catalog.services.erasure as erasure_module
 from catalog.services.erasure import ErasureReport, erase
+from catalog.services.maintenance import COMPACTION_BOUND
 
 
 _SUBJECT = "alice"
@@ -232,14 +234,15 @@ def test_a_tag_on_a_descendant_is_named_and_no_branch_is(tmp_path: Path, names: 
 
     The branches' heads were rewritten, so neither stands on those files: deleting the tag alone lets
     the next erasure reclaim both. Naming a branch would send someone to destroy a working ref for
-    nothing ([[LH-178]]).
+    nothing ([[LH-178]]). The tagged child v4 is a residual too: the subject's row sits behind its
+    deletion vector.
     """
     uri = _pinned_chain(tmp_path, names)
 
     report = _erase(uri)
 
     assert "trained" in lance.dataset(uri).tags.list(), "the clean tag must survive the erasure itself"
-    assert report.residual_versions == ["main@2", f"{names[0]}@3"]
+    assert report.residual_versions == ["main@2", *sorted([f"{names[0]}@3", f"{names[1]}@4"])]
     assert report.model_dump()["pinned_by"] == [{"ref": "tag:trained", "holds": f"{names[1]}@4"}]
 
 
@@ -249,7 +252,7 @@ def test_a_descendant_that_holds_nothing_is_not_named(tmp_path: Path, names: tup
 
     report = _erase(uri)
 
-    assert report.residual_versions == ["main@2"]
+    assert report.residual_versions == ["main@2", f"{names[0]}@3"]
     assert report.model_dump()["pinned_by"] == [{"ref": "tag:trained", "holds": f"{names[0]}@3"}]
 
 
@@ -302,16 +305,16 @@ def test_a_residual_whose_reclaim_failed_names_no_ref(tmp_path: Path, monkeypatc
 
     verify = next(s.detail for s in report.surfaces if s.surface == "verify")
     assert [s.outcome for s in report.surfaces if s.surface.startswith("history:")] == ["failed", "failed"]
-    assert (report.residual_versions, report.pinned_by, report.held_by_retention) == (["main@2", "work@2"], [], [])
-    assert "['main@2', 'work@2'] remain because the reclaim of ['main', 'work'] did not run" in verify
+    held = ["main@2", "main@3", "main@4", "work@2", "work@3", "work@4"]
+    assert (report.residual_versions, report.pinned_by, report.held_by_retention) == (held, [], [])
+    assert f"{held} remain because the reclaim of ['main', 'work'] did not run" in verify
     assert "accounts for" not in verify
 
 
 def _heads_on_the_subjects_file(tmp_path: Path, names: tuple[str, str]) -> str:
-    """The subject is 1 row of a 20,001-row fragment, so a delete leaves it behind a deletion vector that
-    no compaction materialises (under the 10% threshold). ``parent`` and ``child`` both stand on that
-    file; the child dropped the subject itself and a clean tag keeps that version. ``<child>-rewrite``,
-    cut from it, overwrote everything, so it stands on nothing — it only blocks deleting the child."""
+    """The subject is 1 row of a 20,001-row fragment of 152 KB that ``parent`` and ``child`` both stand on;
+    the child dropped the subject itself and a clean tag keeps that version. ``<child>-rewrite``, cut from
+    it, overwrote everything, so it stands on nothing — it only blocks deleting the child."""
     parent, child = names
     uri = str(tmp_path / "heads")
     lance.write_dataset(_rows(_SUBJECT, *(f"x-{i}" for i in range(20_000))), uri)
@@ -323,24 +326,32 @@ def _heads_on_the_subjects_file(tmp_path: Path, names: tuple[str, str]) -> str:
 
 
 @_NAMES
-def test_a_branch_is_named_when_its_head_stands_on_the_residual(tmp_path: Path, names: tuple[str, str]) -> None:
-    """No cleanup takes a head, so only deleting the branches whose heads stand on main v1's file frees it —
-    after every descendant and every tag on them, deepest first, because Lance refuses to delete a branch
-    another branch is cut from or a tag names."""
+@pytest.mark.parametrize("rewrites_take_the_file", [False, True], ids=["heads-stand-on-it", "a-tag-two-branches-down"])
+def test_pinned_by_names_what_stands_on_the_residual(
+    tmp_path: Path, names: tuple[str, str], rewrites_take_the_file: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No cleanup takes a head, so when no rewrite can take main v1's file (here a byte bound below its
+    size), only deleting the branches whose heads stand on it frees it — after every descendant and every
+    tag on them, deepest first, because Lance refuses to delete a branch another branch is cut from or a
+    tag names. Main's own head then still holds the subject behind a deletion vector, since no rewrite
+    takes its fragment either, and the erasure says so rather than completing. When every rewrite takes
+    the file, ``parent``'s fork version is reclaimed and the tag on ``child``'s version, which still
+    reads main v1's file, is the one thing keeping it."""
     parent, child = names
     uri = _heads_on_the_subjects_file(tmp_path, names)
+    if not rewrites_take_the_file:
+        monkeypatch.setattr(erasure_module, "COMPACTION_BOUND", {**COMPACTION_BOUND, "max_source_bytes": 64 * 1024})
 
     report = _erase(uri)
 
-    assert report.residual_versions == ["main@1"]
-    assert [(pin.ref, pin.holds) for pin in report.pinned_by] == [
-        ("tag:kept", f"{child}@2"),
-        (f"branch:{child}-rewrite", f"{child}@2"),
-        (f"branch:{child}", f"{parent}@1"),
-        (f"branch:{parent}", "main@1"),
-    ]
+    held_by_heads = [(f"branch:{child}-rewrite", f"{child}@2"), (f"branch:{child}", f"{parent}@1"), (f"branch:{parent}", "main@1")]
+    hidden = [f"{child}@2"] if rewrites_take_the_file else ["main@2", *sorted([f"{parent}@2", f"{child}@2"])]
+    assert report.residual_versions == ["main@1", *hidden]
+    assert [(pin.ref, pin.holds) for pin in report.pinned_by] == [("tag:kept", f"{child}@2"), *([] if rewrites_take_the_file else held_by_heads)]
     _follow(uri, report)
-    assert _erase(uri).complete is True
+    again = _erase(uri)
+    unrewritten = "heads whose rewrite did not take the subject's fragments" in next(s.detail for s in again.surfaces if s.surface == "verify")
+    assert (again.residual_versions, again.complete, unrewritten) == (([], True, False) if rewrites_take_the_file else (["main@2"], False, True))
 
 
 def test_a_branch_whose_fork_point_cannot_be_read_is_still_erased(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -375,7 +386,7 @@ def test_an_unreadable_fork_point_is_named_when_something_survives(tmp_path: Pat
 
     report = _erase(uri)
 
-    assert report.residual_versions == ["main@2"], "the tag must keep main v2 for this to be the right test"
+    assert report.residual_versions == ["main@2", "work@3"], "the tag must keep main v2 for this to be the right test"
     assert "the fork point of ['work'] could not be read" in next(s.detail for s in report.surfaces if s.surface == "verify")
 
 
@@ -418,13 +429,15 @@ class _MainDeleteFails:
         raise OSError("commit conflict")
 
 
-def test_a_head_the_delete_did_not_reach_names_no_branch(tmp_path: Path) -> None:
-    """``work`` is cut from main v1 and still stands on its only file, a 20,001-row fragment no rewrite
-    materialises. Main's delete fails, so main v1 is main's own head: no cleanup takes it and deleting
-    ``work`` frees nothing, so the report must say erase again rather than name the branch."""
+def test_a_ref_whose_delete_fails_keeps_its_tags_and_history_and_names_no_branch(tmp_path: Path) -> None:
+    """``work`` is cut from main v1, which a reproducibility tag names. Main's delete fails, so main v1 is
+    main's own head: no cleanup takes it and deleting ``work`` frees nothing, so the report must say erase
+    again rather than name the branch. Dropping the tag, rewriting main or reclaiming its history would
+    each destroy something while the subject stays ([[LH-210]])."""
     uri = str(tmp_path / "head")
     lance.write_dataset(_rows(_SUBJECT, *(f"x-{i}" for i in range(20_000))), uri)
     lance.dataset(uri).create_branch("work", 1)
+    lance.dataset(uri).tags.create("snap", 1)
 
     report = erase(
         cast("Any", _MainDeleteFails(lance.dataset(uri))),
@@ -439,6 +452,8 @@ def test_a_head_the_delete_did_not_reach_names_no_branch(tmp_path: Path) -> None
     assert report.residual_versions == ["main@1"]
     assert report.pinned_by == []
     assert "['main@1'] are heads the delete did not reach: erase again" in next(s.detail for s in report.surfaces if s.surface == "verify")
+    kept = {s.surface: s.outcome for s in report.surfaces if s.surface in ("tag:snap", "compact:main", "history:main")}
+    assert (kept, "snap" in lance.dataset(uri).tags.list()) == ({"tag:snap": "skipped", "compact:main": "skipped", "history:main": "skipped"}, True)
 
 
 def test_a_rewrite_prices_only_the_files_it_wrote(tmp_path: Path) -> None:

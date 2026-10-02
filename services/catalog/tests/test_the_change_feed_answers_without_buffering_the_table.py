@@ -63,7 +63,7 @@ def client(monkeypatch: pytest.MonkeyPatch, table_uri: str) -> Iterator[TestClie
 
 
 def test_a_COLUMN_THE_TABLE_DOES_NOT_HAVE_is_a_4xx_and_not_a_truncated_200(client: TestClient) -> None:
-    """The reason the first batch is pulled inside `_user_sql` rather than inside the generator.
+    """The reason the first batch is pulled inside `caller_sql` rather than inside the generator.
 
     MEASURED on the installed pylance: `dataset.scanner(columns=["not_a_column"])` CONSTRUCTS without
     complaint and raises `ValueError: Schema error: No field named not_a_column` only when something

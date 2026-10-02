@@ -43,17 +43,48 @@ whose deletion could not finish the erasure.
 
 **THE DOORS' MANIFEST-FLAG GATES RUN PER REF**, before its rewrite and before its reclaim, and a refusal
 fails that ref's surface the same way: a flag no rewrite here has been checked against (data overlays,
-mixed file versions, anything unknown) is not compacted or reclaimed, and a shallow clone is reclaimed
-but not rewritten into its own root. The one allowance is a branch's bases inside this table, which its
-rewrite copies from on purpose (above; :func:`_compaction_refusal`).
+mixed file versions, anything unknown) is not compacted, and a shallow clone is not rewritten into its
+own root; neither is then reclaimed (below). The one allowance is a branch's bases inside this table,
+which its rewrite copies from on purpose (above; :func:`_compaction_refusal`).
 
     1. every branch          — delete on its head, because a branch is a separate dataset with its own rows
-    2. every tag pinning the SUBJECT — remove it, or the version it holds can never be reclaimed;
+    2. main                  — the same delete
+    3. rewrite every ref     — compact, so the subject's bytes leave the live data files
+    4. every tag pinning the SUBJECT — remove it, or the version it holds can never be reclaimed;
        a tag over a version the subject never appeared in is a reproducibility pointer and is KEPT
-    3. main                  — the row delete the door already performed
-    4. rewrite every ref     — compact, so the subject's bytes leave the live data files
     5. reclaim every ref     — now that nothing the erasure controls pins them
     6. verify every ref      — the evidence `complete` is computed from
+
+**THE DELETES NAME ROW IDS, NEVER THE CALLER'S PREDICATE** ([[LH-281]]). Lance records a delete's filter in
+its transaction and in the manifest of the version it commits (measured on pylance 12.0.0), so deleting by
+`pii = '<subject>'` writes the identifier being erased into the table's history, readable through any read
+vend and the history door. Each ref's matching rows are resolved to `_rowid` on a fresh head and deleted by
+`_rowid IN (...)`, so the history records ids, with Lance's own retry off: that retry re-runs the same ids
+on the newer version, and under stable row ids a row a concurrent update moved off the predicate keeps its
+id and was deleted (measured on pylance 12.0.0). A conflict re-resolves instead, and a ref's delete has gone
+through only once a resolve on a fresh head finds no matching row, which also covers a row address a
+concurrent compaction made stale on a table without stable row ids.
+
+**A REWRITE TAKES EVERY FRAGMENT HOLDING THE SUBJECT.** Compaction's default 10% threshold leaves a fragment
+holding a few of the subject's rows behind a deletion vector with their bytes still in its data file
+(measured: a 20-row fragment holding one subject row rewrote nothing), so the rewrite materialises every
+deletion. The compact door's byte bound caps a whole compaction run, not one fragment (measured: beside
+three 150 KB fragments, a 349-byte fragment holding the subject was not rewritten under a 64 KiB bound), so a
+second pass rewrites the fragments still holding the subject with every other fragment excluded, within what
+the first pass left of the bound.
+
+**THE VERIFICATION COUNTS ROWS A DELETION VECTOR HIDES.** A version whose data file still holds the subject
+behind a deletion vector reads clean to a filter (measured on pylance 12.0.0), so every probe also counts
+deleted rows: such a version is a residual. A tag over one is kept, since the data it records never held
+the subject, and is named in `pinned_by`.
+
+**AN ERASURE THAT CANNOT ERASE DESTROYS NOTHING** ([[LH-210]]). The predicate is planned on main before any
+ref is touched, so one Lance refuses or cannot evaluate (an unknown column, a syntax slip, a literal of the
+wrong type, a cast that fails, an aggregate) answers 400 with every tag and version intact. A ref whose delete
+did not go through is neither rewritten nor reclaimed, a ref whose rewrite failed or was refused is not
+reclaimed, and no tag is dropped unless every ref was deleted and rewritten: each would destroy history,
+reproducibility tags included, while the subject's rows stay. Those surfaces are `skipped`, which keeps the
+erasure incomplete.
 
 A version that survives is REPORTED with what keeps it, never deleted. `pinned_by` names the tags,
 and a branch only when its own head still stands on the version's files, since deleting a branch
@@ -66,20 +97,23 @@ invisible to it ([[LH-094]]). This reports what it reclaimed rather than asserti
 and a caller who needs that guarantee needs the floor raised first. Nor does it reclaim a file no
 version references that is younger than 7 days — an aborted write's residue — because Lance cannot
 tell it from an in-flight write's (`lance_docs/lance_sdk.md` cleanup_old_versions `delete_unverified`).
+Nor does it rewrite fragments holding the subject beyond the compact door's byte bound, one larger than
+the bound among them: the verification reports each such version as holding the subject behind a deletion
+vector ([[LH-263]]).
 """
 
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
-from typing import Any, Protocol
+from typing import Any, Final, Protocol
 
-from lance_namespace import UnsupportedOperationError
+from lance_namespace import InvalidInputError, ServiceUnavailableError, UnsupportedOperationError
 from pydantic import BaseModel, Field
 
-from catalog.services.dataplane import MAIN_BRANCH, recorded_branch
+from catalog.services.dataplane import MAIN_BRANCH, caller_sql, clean_lance_message, recorded_branch, refuse_an_unbounded_boolean_chain
 from catalog.services.maintenance import COMPACTION_BOUND, refuse_a_referring_datasets_source
 from service_kit.lakehouse.base_refs import BaseRefs, normalise
 from service_kit.lakehouse.features import (
@@ -92,6 +126,7 @@ from service_kit.lakehouse.features import (
     manifest_feature_flags,
 )
 from service_kit.lakehouse.objectfs import StorageOptions, dataset_root_probe
+from service_kit.lancekit.commit_verdict import CommitVerdict, classify_commit_failure
 
 
 log = logging.getLogger(__name__)
@@ -106,8 +141,10 @@ class SurfaceResult(BaseModel):
     )
     outcome: str = Field(
         description=(
-            "What the estate did there: `deleted`, `untagged`, `retained`, `rewritten`, `reclaimed`, `clean`, `failed`, or `dangling` — a "
-            "listed version that fails to read and is proved not to hold the subject; it stays listed until what its detail names lets go."
+            "What the estate did there: `deleted`, `untagged`, `retained`, `rewritten`, `reclaimed`, `clean`, `failed`, `skipped` — not "
+            "attempted because an earlier step on that ref did not go through, so it would destroy history while the subject stays — or "
+            "`dangling` — a listed version that fails to read and is proved not to hold the subject; it stays listed until what its detail "
+            "names lets go."
         )
     )
     detail: str = Field(default="", description="Why, in words: the error, what a rewrite cost, what a residual needs.")
@@ -142,8 +179,8 @@ class ErasureReport(BaseModel):
     residual_versions: list[str] = Field(
         default_factory=list,
         description=(
-            "Retained versions of any ref that still answer the predicate or could not be read, as `<ref>@<version>` with `main` for main. "
-            "Non-empty means the erasure is incomplete however cleanly each step reported."
+            "Retained versions of any ref that still answer the predicate, still hold its rows behind a deletion vector, or could not be "
+            "read, as `<ref>@<version>` with `main` for main. Non-empty means the erasure is incomplete however cleanly each step reported."
         ),
     )
     #: Fork points are read from `_refs/branches/<name>.json`; a branch is named only when its head stands
@@ -166,8 +203,8 @@ class ErasureReport(BaseModel):
     complete: bool = Field(
         default=False,
         description=(
-            "True only when no surface failed, `verify` among them. It can be True beside `dangling:` surfaces, which hold no subject "
-            "data but stay listed and fail to read. A caller reporting completion to a data subject reads this, never the status code."
+            "True only when no surface failed or was skipped, `verify` among them. It can be True beside `dangling:` surfaces, which hold "
+            "no subject data but stay listed and fail to read. A caller reporting completion to a data subject reads this, never the status code."
         ),
     )
 
@@ -185,10 +222,12 @@ class _Dataset(Protocol):
     def branches(self) -> Any: ...
     @property
     def tags(self) -> Any: ...
-    def delete(self, predicate: str, /) -> None: ...
+    def delete(self, predicate: str, /, *, conflict_retries: int = 10) -> Any: ...
     def checkout_version(self, version: Any, /) -> Any: ...
+    def checkout_latest(self) -> None: ...
     def versions(self) -> Any: ...
     def to_table(self, *args: Any, **kwargs: Any) -> Any: ...
+    def scanner(self, *args: Any, **kwargs: Any) -> Any: ...
     def count_rows(self, *args: Any, **kwargs: Any) -> Any: ...
     @property
     def optimize(self) -> Any: ...
@@ -223,64 +262,35 @@ def erase(
     `cleanup_old_versions` rather than forced to zero: an erasure is not a licence to destroy unrelated
     history, and a caller that means to reclaim everything says so by passing zero.
 
-    EVERY SURFACE IS ATTEMPTED even when one fails. Stopping at the first error would leave the
-    remaining surfaces both un-erased and unreported, so the caller would not know what is left — and
-    with a legal deadline attached, "we do not know" is the worst of the three outcomes.
+    EVERY SURFACE IS ATTEMPTED even when one fails, short of what would destroy history for nothing (the
+    module's `skipped`). Stopping at the first error would leave the remaining surfaces both un-erased and
+    unreported, so the caller would not know what is left — and with a legal deadline attached, "we do not
+    know" is the worst of the three outcomes.
+
+    Raises:
+        InvalidInputError: Lance refuses ``predicate``, or it joins too many conditions; nothing was touched.
+        ServiceUnavailableError: the store could not plan ``predicate`` on main; nothing was touched.
     """
+    refuse_an_unbounded_boolean_chain(predicate, field="predicate")
+    _plan(dataset, predicate)
     report = ErasureReport(table=table, predicate=predicate)
 
-    # 1. BRANCHES FIRST. Each is a separate dataset with its own rows AND it pins its parent's history
-    #    at the fork point, so a branch left alone defeats step 5 as well as retaining the rows.
+    # 1. BRANCHES FIRST, then 2. MAIN. Each branch is a separate dataset with its own rows AND it pins its
+    #    parent's history at the fork point, so a branch left alone defeats step 5 as well as retaining the rows.
     listed = _branches(dataset)
     if listed is None:
         report.surfaces.append(
             SurfaceResult(surface="branches", outcome="failed", detail="the branch list could not be read, so no branch was erased, reclaimed or verified")
         )
     branches = listed or {}
-    for name in branches:
-        try:
-            dataset.checkout_version((name, None)).delete(predicate)
-            report.surfaces.append(SurfaceResult(surface=f"branch:{name}", outcome="deleted"))
-        except Exception as exc:  # noqa: BLE001 — one surface's failure must not hide the others
-            log.warning("erasure_branch_failed", extra={"table": table, "branch": name, "error": str(exc)})
-            report.surfaces.append(SurfaceResult(surface=f"branch:{name}", outcome="failed", detail=str(exc)))
-
-    # 2. TAGS THAT PIN THE SUBJECT — and ONLY those. A tag holds a VERSION, so there is nothing to
-    #    delete from it; the row becomes unreachable once the tag stops pinning the version holding it,
-    #    and only then is that version reclaimable.
-    #
-    #    A TAG IS ALSO A REPRODUCIBILITY POINTER, which is why this is selective. A tagged version is
-    #    exempt from cleanup by design, so tagging is how a training run records the exact data it saw.
-    #    Dropping every tag would erase that record for versions the subject never appeared in —
-    #    destroying model provenance as a side effect of a request about one person. A tag whose version
-    #    cannot be READ is dropped anyway: unreadable is not evidence of absence, and an erasure resolves
-    #    that doubt against the tag.
-    #
-    #    The probe reads the tag's OWN ref. A tag names a version of the branch it records, and branch
-    #    histories are numbered independently, so judging a `work` tag by main's same-numbered version
-    #    would keep a tag pinning the subject and drop a clean one.
-    for name, reference in _tags(dataset).items():
-        if reference is not None and _answers(dataset, reference, predicate) is False:
-            report.surfaces.append(SurfaceResult(surface=f"tag:{name}", outcome="retained", detail=f"{_name(reference)} does not answer the predicate"))
-            continue
-        try:
-            dataset.tags.delete(name)
-            report.surfaces.append(SurfaceResult(surface=f"tag:{name}", outcome="untagged"))
-        except Exception as exc:  # noqa: BLE001
-            log.warning("erasure_tag_failed", extra={"table": table, "tag": name, "error": str(exc)})
-            report.surfaces.append(SurfaceResult(surface=f"tag:{name}", outcome="failed", detail=str(exc)))
-
-    # 3. MAIN — the delete the door already performs today, here so one call covers every ref.
-    try:
-        dataset.delete(predicate)
-        report.surfaces.append(SurfaceResult(surface="main", outcome="deleted"))
-    except Exception as exc:  # noqa: BLE001
-        log.warning("erasure_main_failed", extra={"table": table, "error": str(exc)})
-        report.surfaces.append(SurfaceResult(surface="main", outcome="failed", detail=str(exc)))
+    deleted: set[str | None] = set()
+    for ref in [*branches, None]:
+        if _delete_subject(report, dataset, ref, predicate=predicate):
+            deleted.add(ref)
 
     deepest_first: list[str | None] = [*sorted(branches, key=lambda name: (-_depth(name, branches), name)), None]
 
-    # 4. COMPACT EVERY REF, because a predicate delete writes a DELETION FILE and leaves the data file
+    # 3. COMPACT EVERY REF, because a delete writes a DELETION FILE and leaves the data file
     #    live for the rows that survive — so the erased subject's bytes stay on storage, and a blob
     #    column's payload sidecar with them. Measured on pylance 11.0.0 with two 5 MiB blob rows: after
     #    the delete the directory is still 10.5 MB and `cleanup_old_versions` frees 1,188 bytes;
@@ -290,17 +300,21 @@ def erase(
     #    rewrite also copies the inherited fragments it selects under `tree/<name>/` — the parent's files
     #    are untouched — which is what lets step 5 release the fork pin, and what the detail prices.
     #
-    #    Best-effort like every other surface: a ref that cannot be compacted still gets its rows deleted
-    #    and its history reclaimed, and the report says the bytes may remain rather than implying they
-    #    are gone. The #114 answer is read once: a branch handle reports the dataset root as its `uri`
-    #    (measured on pylance 12.0.0: `main.uri == branch.uri`), so it is the same answer for every ref.
+    #    Only a ref whose delete went through is rewritten, since a rewrite of rows the delete did not reach
+    #    removes nothing, and only a rewritten ref is reclaimed (step 5). The #114 answer is read once: a
+    #    branch handle reports the dataset root as its `uri` (measured on pylance 12.0.0:
+    #    `main.uri == branch.uri`), so it is the same answer for every ref.
     referred = _referred(dataset, protected)
     if referred is not None:
         log.warning("erasure_refused_referred_source", extra={"table": table, "reason": referred})
+    rewritten: set[str | None] = set()
     for ref in deepest_first:
         surface = f"compact:{_label(ref)}"
         if referred is not None:
             report.surfaces.append(SurfaceResult(surface=surface, outcome="failed", detail=f"{referred} Not rewritten, so the subject's bytes remain."))
+            continue
+        if ref not in deleted:
+            report.surfaces.append(SurfaceResult(surface=surface, outcome="skipped", detail="not rewritten: the delete on this ref did not go through"))
             continue
         try:
             handle = _head(dataset, ref)
@@ -310,10 +324,43 @@ def erase(
                     SurfaceResult(surface=surface, outcome="failed", detail=f"maintenance refused: {refused}. Not rewritten, so the subject's bytes remain.")
                 )
                 continue
-            report.surfaces.append(SurfaceResult(surface=surface, outcome="rewritten", detail=_compact(handle)))
+            report.surfaces.append(SurfaceResult(surface=surface, outcome="rewritten", detail=_compact(handle, predicate)))
+            rewritten.add(ref)
         except Exception as exc:  # noqa: BLE001
             log.warning("erasure_compact_failed", extra={"table": table, "ref": _label(ref), "error": str(exc)})
             report.surfaces.append(SurfaceResult(surface=surface, outcome="failed", detail=f"{exc} — the subject's bytes may remain in a live data file"))
+
+    # 4. TAGS THAT PIN THE SUBJECT — and ONLY those, and only once every ref was deleted and rewritten. A
+    #    tag holds a VERSION, so there is nothing to delete from it; the row becomes unreachable once the tag
+    #    stops pinning the version holding it, and only then is that version reclaimable.
+    #
+    #    A TAG IS ALSO A REPRODUCIBILITY POINTER, which is why this is selective. A tagged version is
+    #    exempt from cleanup by design, so tagging is how a training run records the exact data it saw.
+    #    Dropping every tag would erase that record for versions the subject never appeared in —
+    #    destroying model provenance as a side effect of a request about one person. A tag whose version
+    #    cannot be READ is dropped anyway: unreadable is not evidence of absence, and an erasure resolves
+    #    that doubt against the tag. While any ref kept the subject's rows or bytes, every tag is kept: a
+    #    version a tag pins can stay pinned through that ref's files too, so dropping the tag could cost the
+    #    pointer and erase nothing.
+    #
+    #    The probe reads the tag's OWN ref. A tag names a version of the branch it records, and branch
+    #    histories are numbered independently, so judging a `work` tag by main's same-numbered version
+    #    would keep a tag pinning the subject and drop a clean one.
+    every_ref_rewritten = listed is not None and rewritten == {*branches, None}
+    for name, reference in _tags(dataset).items():
+        if not every_ref_rewritten:
+            detail = "kept: not every ref was deleted and rewritten, so dropping it could destroy a reproducibility pointer while the subject stays"
+            report.surfaces.append(SurfaceResult(surface=f"tag:{name}", outcome="skipped", detail=detail))
+            continue
+        if reference is not None and _answers(dataset, reference, predicate) is False:
+            report.surfaces.append(SurfaceResult(surface=f"tag:{name}", outcome="retained", detail=f"{_name(reference)} does not hold the subject"))
+            continue
+        try:
+            dataset.tags.delete(name)
+            report.surfaces.append(SurfaceResult(surface=f"tag:{name}", outcome="untagged"))
+        except Exception as exc:  # noqa: BLE001
+            log.warning("erasure_tag_failed", extra={"table": table, "tag": name, "error": str(exc)})
+            report.surfaces.append(SurfaceResult(surface=f"tag:{name}", outcome="failed", detail=str(exc)))
 
     # 5. RECLAIM EVERY REF, last, because every step above was removing something that pinned this, and
     #    DEEPEST FIRST: cleanup through a branch handle removes only that branch's own versions and files
@@ -323,16 +370,21 @@ def erase(
     #    Each ref's cutoff is read AFTER its cleanup returns: Lance measures its own during the call
     #    (measured on pylance 12.0.0), so ours is never the earlier one, and a version newer than it was
     #    inside that cleanup's window. A ref absent from `cutoffs` was not reclaimed, so nothing but that
-    #    keeps its versions.
+    #    keeps its versions. A ref that was not rewritten is not reclaimed: its history would go while the
+    #    subject's bytes stay in its live data files ([[LH-210]]).
     cutoffs: dict[str | None, datetime] = {}
     for ref in deepest_first:
         surface = f"history:{_label(ref)}"
         if referred is not None:
             report.surfaces.append(SurfaceResult(surface=surface, outcome="failed", detail=f"{referred} Not reclaimed."))
             continue
+        if ref not in rewritten:
+            detail = "not reclaimed: this ref was not rewritten, so its history would go while the subject's bytes stay in its live data files"
+            report.surfaces.append(SurfaceResult(surface=surface, outcome="skipped", detail=detail))
+            continue
         try:
             # `error_if_tagged_old_versions=False` SKIPS a tagged version instead of failing the whole call.
-            # Found by driving the deployed door: step 2 deliberately keeps a tag over a version the subject
+            # Found by driving the deployed door: step 4 deliberately keeps a tag over a version the subject
             # never appeared in, and pylance's default then refuses the entire cleanup over that one tag —
             # so retaining a reproducibility pointer would cost the estate every byte of reclamation, and
             # the erasure would report `history:<ref>` failed for having done the right thing one step earlier.
@@ -371,8 +423,89 @@ def erase(
     else:
         _verify(report, _History(cold, cutoffs), first_listing=listed, predicate=predicate)
 
-    report.complete = all(surface.outcome != "failed" for surface in report.surfaces)
+    report.complete = all(surface.outcome not in {"failed", "skipped"} for surface in report.surfaces)
     return report
+
+
+#: Lance's words for a caller's expression it parsed but could not evaluate (a cast that fails, a division by
+#: zero) or does not support in a filter (an aggregate), measured on pylance 12.0.0. Neither is the store's.
+_UNEVALUABLE_PREDICATE: Final = ("Query Execution error", "Not supported:")
+
+
+def _plan(dataset: _Dataset, predicate: str) -> None:
+    """Ask main whether Lance can evaluate ``predicate`` before any ref is touched ([[LH-210]]).
+
+    Main is the plan's ref because the door names a table, and a subject column a branch alone carries is
+    refused here rather than half-erased. A one-row scan, not a count: Lance's count refuses a filter on
+    `_rowid` that a scan and a delete accept (measured on pylance 12.0.0).
+
+    Raises:
+        InvalidInputError: Lance refuses the predicate or cannot evaluate it: an unknown column, a syntax slip,
+            a literal of the wrong type, a cast that fails, an aggregate.
+        ServiceUnavailableError: the store could not answer, so nothing was attempted.
+    """
+    try:
+        with caller_sql("invalid erasure predicate"):
+            dataset.to_table(columns=[], filter=predicate, with_row_id=True, limit=1)
+    except (ValueError, OSError) as exc:
+        if any(marker in str(exc) for marker in _UNEVALUABLE_PREDICATE):
+            raise InvalidInputError(f"invalid erasure predicate: {clean_lance_message(str(exc))}") from exc
+        raise ServiceUnavailableError(f"the erasure could not plan its predicate on main, so nothing was touched: {exc}") from exc
+
+
+def _delete_subject(report: ErasureReport, dataset: _Dataset, ref: str | None, *, predicate: str) -> bool:
+    """Delete the subject's rows on ``ref`` by row id and record its surface; whether the delete went through."""
+    surface = f"branch:{ref}" if ref is not None else "main"
+    try:
+        removed = _delete_by_row_id(lambda: _head(dataset, ref), predicate)
+    except Exception as exc:  # noqa: BLE001 — one surface's failure must not hide the others
+        log.warning("erasure_delete_failed", extra={"table": report.table, "ref": _label(ref), "error": str(exc)})
+        report.surfaces.append(SurfaceResult(surface=surface, outcome="failed", detail=str(exc)))
+        return False
+    report.surfaces.append(SurfaceResult(surface=surface, outcome="deleted", detail=f"{removed} rows, by row id"))
+    return True
+
+
+#: How many row ids one delete names. Each slice commits its own version, so a subject with many rows
+#: never writes one transaction sized by the erasure.
+_ROW_IDS_PER_DELETE: Final = 4096
+
+#: How many times one ref's delete re-resolves the subject's rows after a concurrent writer changed them,
+#: before the ref's delete is reported failed.
+_DELETE_ATTEMPTS: Final = 5
+
+
+def _delete_by_row_id(head: Callable[[], _Dataset], predicate: str) -> int:
+    """Delete every row of the ref ``head`` opens that answers ``predicate``, by naming row ids; how many went.
+
+    Each attempt resolves the ids on a fresh head and deletes them with Lance's retry off, so a concurrent
+    writer's change makes the commit fail rather than re-run ids that may now name rows off the predicate,
+    and the next attempt resolves again. The delete has gone through only once a resolve finds nothing.
+
+    Raises:
+        OSError: the store failed, or a concurrent writer kept changing the subject's rows for every attempt.
+    """
+    removed = 0
+    for _ in range(_DELETE_ATTEMPTS):
+        handle = head()
+        ids = _row_ids(handle, predicate)
+        if not ids:
+            return removed
+        try:
+            for start in range(0, len(ids), _ROW_IDS_PER_DELETE):
+                result = handle.delete(f"_rowid IN ({', '.join(str(row_id) for row_id in ids[start : start + _ROW_IDS_PER_DELETE])})", conflict_retries=0)
+                removed += int(result.get("num_deleted_rows", 0)) if isinstance(result, Mapping) else 0
+        except OSError as exc:
+            if classify_commit_failure(exc) is not CommitVerdict.RETRYABLE_CONFLICT:
+                raise
+            log.info("erasure_delete_conflict", extra={"uri": handle.uri, "error": str(exc)})
+    if _row_ids(head(), predicate):
+        raise OSError(f"the subject's rows kept changing under a concurrent writer for {_DELETE_ATTEMPTS} attempts, so they are not all deleted")
+    return removed
+
+
+def _row_ids(handle: _Dataset, predicate: str) -> list[int]:
+    return handle.to_table(columns=[], filter=predicate, with_row_id=True).column("_rowid").to_pylist()
 
 
 def _verify(report: ErasureReport, history: _History, *, first_listing: Mapping[str, _Reference | None] | None, predicate: str) -> None:
@@ -385,7 +518,7 @@ def _verify(report: ErasureReport, history: _History, *, first_listing: Mapping[
     found.relist_failed = relisted is None
     found.late = sorted(set(current) - set(branches)) if first_listing is not None else []
     report.residual_versions = found.residual
-    # Re-listed AFTER step 2, so these are the survivors: a tag whose delete failed holds its version
+    # Re-listed AFTER step 4, so these are the survivors: a tag whose delete failed holds its version
     # exactly as hard as a branch does.
     forks = {name: fork for name, fork in current.items() if fork is not None}
     tags = _tags(history.cold)
@@ -393,7 +526,7 @@ def _verify(report: ErasureReport, history: _History, *, first_listing: Mapping[
         SurfaceResult(surface=f"dangling:{name}", outcome="dangling", detail=_dangling_detail(_holders(_parse(name), history, forks, tags)))
         for name in found.dangling
     )
-    account = _account(found.residual, history, forks, tags)
+    account = _account(found.residual, found.hidden, history, forks, tags)
     account.unforked = sorted(name for name, fork in current.items() if fork is None) if found.residual else []
     report.pinned_by, report.held_by_retention = account.pins, account.held_by_retention
     if found.residual or found.unlisted or found.relist_failed:
@@ -406,10 +539,13 @@ def _verify(report: ErasureReport, history: _History, *, first_listing: Mapping[
 class _Verification(BaseModel):
     """What step 6 found, per ref."""
 
-    #: Every retained version that answers the predicate OR could not be read, as `<ref>@<version>`.
+    #: Every retained version that answers the predicate, holds its rows behind a deletion vector, OR could
+    #: not be read, as `<ref>@<version>`.
     residual: list[str] = Field(default_factory=list)
     #: The part of `residual` that could not be read at all.
     unreadable: list[str] = Field(default_factory=list)
+    #: The part of `residual` whose only matching rows a deletion vector hides: the bytes stay in its data files.
+    hidden: list[str] = Field(default_factory=list)
     #: Listed versions that cannot be read whole, proved not to hold the subject fragment by fragment.
     dangling: list[str] = Field(default_factory=list)
     #: Refs whose versions could not be listed, so none of them was probed.
@@ -446,6 +582,7 @@ def _dangling_detail(held: _Holders) -> str:
 
 class _Verdict(StrEnum):
     ANSWERS = "answers"
+    HIDDEN = "hidden"
     CLEAN = "clean"
     DANGLING = "dangling"
     UNREADABLE = "unreadable"
@@ -478,6 +615,8 @@ def _versions_still_matching(history: _History, refs: Sequence[str | None], pred
                 found.residual.append(name)
             if verdict is _Verdict.UNREADABLE:
                 found.unreadable.append(name)
+            if verdict is _Verdict.HIDDEN:
+                found.hidden.append(name)
     return found
 
 
@@ -491,8 +630,11 @@ def _probe(reference: _Reference, cold: _Dataset, predicate: str, listing: _Stor
     try:
         # COUNTED, not materialised. The question is "does this version still hold the subject", and
         # building the matching rows to read `.num_rows` sizes the PROOF by the erasure — paid once per
-        # retained version, and worst exactly when the subject has the most rows.
-        return _Verdict.ANSWERS if handle.count_rows(filter=predicate) else _Verdict.CLEAN
+        # retained version, and worst exactly when the subject has the most rows. Rows a deletion vector
+        # hides are counted first: their bytes are still in the version's data files.
+        if not _held(handle, predicate):
+            return _Verdict.CLEAN
+        return _Verdict.ANSWERS if handle.count_rows(filter=predicate) else _Verdict.HIDDEN
     except Exception as exc:  # noqa: BLE001
         log.warning("erasure_verify_failed", extra={"reference": _name(reference), "error": str(exc)})
     try:
@@ -515,8 +657,8 @@ def _probe_fragments(handle: _Dataset, version: int, predicate: str, listing: _S
     lost = False
     for fragment in handle.get_fragments():
         try:
-            if fragment.count_rows(filter=predicate):
-                return _Verdict.ANSWERS
+            if _held(fragment, predicate):
+                return _Verdict.ANSWERS if fragment.count_rows(filter=predicate) else _Verdict.HIDDEN
             continue
         except Exception as exc:  # noqa: BLE001
             log.info("erasure_verify_fragment_unreadable", extra={"version": version, "error": str(exc)})
@@ -622,7 +764,11 @@ def _holders(
     The last is Lance's fork pin, measured on pylance 12.0.0: the parent's cleanup keeps the version a
     branch was cut from while a retained version of that branch references one of its files, and takes
     it once none does. A retained branch version is kept by the same three causes, so the walk recurses;
-    only a branch's HEAD, which no cleanup takes, makes the branch itself the holder.
+    only a branch's HEAD, which no cleanup takes, makes the branch itself the holder. A branch cut from
+    one that was cut from ``reference`` is asked too, at any depth: measured on pylance 12.0.0, `work`'s
+    cleanup took `work@1` while `deeper@2`, cut from it and tagged, still read main v1's data file and
+    kept main v1. A branch cut from another version of the same ref is not asked, because the pin is to
+    the exact version (a branch cut from main v1 sharing a file with main v2 keeps main v2 nowhere).
 
     A version whose ref was not reclaimed is kept by that alone, and nothing is attributed past it: what
     would pin it once a reclaim runs is the next erasure's to measure, and naming a tag or a branch here
@@ -638,7 +784,7 @@ def _holders(
         log.warning("erasure_holders_unread", extra={"reference": _name(reference), "error": str(exc)})
         held.unread = True
         return held
-    for child in sorted(name for name, fork in forks.items() if fork == reference):
+    for child in sorted(_with_descendants({name for name, fork in forks.items() if fork == reference}, forks)):
         try:
             retained = history.versions(child)
             standing = [step for step in retained if history.files((child, step)) & base]
@@ -662,6 +808,8 @@ class _Account(BaseModel):
     held_by_retention: list[str] = Field(default_factory=list)
     #: Residual heads: the delete did not reach that ref, and no cleanup takes a head.
     heads: list[str] = Field(default_factory=list)
+    #: Residual heads whose subject rows a deletion vector hides: the rewrite did not take their fragments.
+    unrewritten_heads: list[str] = Field(default_factory=list)
     #: Residuals kept because a ref's reclaim did not run, and those refs (see their `history:` surfaces).
     unreclaimed: list[str] = Field(default_factory=list)
     unreclaimed_refs: set[str] = Field(default_factory=set)
@@ -671,7 +819,9 @@ class _Account(BaseModel):
     unforked: list[str] = Field(default_factory=list)
 
 
-def _account(residual: Sequence[str], history: _History, forks: Mapping[str, _Reference], tags: Mapping[str, _Reference | None]) -> _Account:
+def _account(
+    residual: Sequence[str], hidden: Collection[str], history: _History, forks: Mapping[str, _Reference], tags: Mapping[str, _Reference | None]
+) -> _Account:
     """``pinned_by`` and the rest of what keeps ``residual``, in an order Lance accepts.
 
     A TAG is named when it holds a residual, directly or through a retained branch version that still
@@ -691,7 +841,7 @@ def _account(residual: Sequence[str], history: _History, forks: Mapping[str, _Re
         except Exception:  # noqa: BLE001 — an unlistable ref is already reported by the verification
             is_head = False
         if is_head:
-            account.heads.append(name)
+            (account.unrewritten_heads if name in hidden else account.heads).append(name)
             continue
         held = _holders(reference, history, forks, tags)
         named |= held.tags
@@ -722,8 +872,10 @@ def _with_descendants(branches: set[str], forks: Mapping[str, _Reference]) -> se
 
 def _verify_detail(found: _Verification, account: _Account) -> str:
     """The failed verify surface's detail: what is left, and what finishing takes."""
-    answering = [version for version in found.residual if version not in found.unreadable]
+    answering = [version for version in found.residual if version not in found.unreadable and version not in found.hidden]
     parts = [f"{answering} still answer this predicate"] if answering else []
+    if found.hidden:
+        parts.append(f"{found.hidden} still hold the subject's rows behind a deletion vector")
     if found.unreadable:
         parts.append(f"{found.unreadable} could not be read")
     if found.unlisted:
@@ -738,6 +890,8 @@ def _verify_detail(found: _Verification, account: _Account) -> str:
         parts.append(f"{account.held_by_retention} are kept by the retention window: erase again with retain_days=0, or once it has passed")
     if account.heads:
         parts.append(f"{account.heads} are heads the delete did not reach: erase again")
+    if account.unrewritten_heads:
+        parts.append(f"{account.unrewritten_heads} are heads whose rewrite did not take the subject's fragments: see their compact surfaces")
     if account.unreclaimed:
         parts.append(f"{account.unreclaimed} remain because the reclaim of {sorted(account.unreclaimed_refs)} did not run: see their history surfaces")
     if account.unexplained:
@@ -832,19 +986,33 @@ def _inside(path: str, root: str) -> bool:
     return base == table or base.startswith(f"{table}/tree/")
 
 
-def _compact(handle: _Dataset) -> str:
+def _compact(handle: _Dataset, predicate: str) -> str:
     """Rewrite ``handle``'s ref and say what it cost: the bytes of the data files the rewrite added,
     which on a branch are the inherited fragments it copied.
 
     THE SAME BOUND THE COMPACT DOOR CARRIES, imported rather than restated: this pod has more than one
     button that reaches `compact_files`, and an erasure runs over exactly the tables most likely to hold
-    a blob column — so the unbounded default is not the cheaper path here.
+    a blob column — so the unbounded default is not the cheaper path here. The bound caps a run's source
+    bytes, so the second pass, over only the fragments still holding the subject, gets what the first left
+    of it: on a branch, the 64 MiB of source per erasure the owner allowed (2026-09-26).
     """
-    before = _data_file_sizes(handle)
-    metrics = handle.optimize.compact_files(**COMPACTION_BOUND)
+    before, sources = _data_file_sizes(handle), _fragment_sizes(handle)
+    passes = [handle.optimize.compact_files(**COMPACTION_BOUND, materialize_deletions_threshold=0.0)]
+    taken = sum(size for fragment_id, size in sources.items() if fragment_id not in _fragment_sizes(handle))
+    left = COMPACTION_BOUND["max_source_bytes"] - taken
+    if left > 0 and (holding := {fragment.fragment_id for fragment in handle.get_fragments() if _held(fragment, predicate)}):
+        others = [fragment.fragment_id for fragment in handle.get_fragments() if fragment.fragment_id not in holding]
+        bound = {**COMPACTION_BOUND, "max_source_bytes": left, "excluded_fragment_ids": others}
+        passes.append(handle.optimize.compact_files(**bound, materialize_deletions_threshold=0.0))
     written = sum(size for path, size in _data_file_sizes(handle).items() if path not in before)
-    removed, added = int(getattr(metrics, "fragments_removed", 0) or 0), int(getattr(metrics, "fragments_added", 0) or 0)
+    removed = sum(int(getattr(metrics, "fragments_removed", 0) or 0) for metrics in passes)
+    added = sum(int(getattr(metrics, "fragments_added", 0) or 0) for metrics in passes)
     return f"{removed} fragments rewritten into {added}, {written} bytes written"
+
+
+def _held(source: Any, predicate: str) -> int:
+    """How many rows answering ``predicate`` a dataset version or fragment holds, those a deletion vector hides included."""
+    return source.scanner(filter=predicate, include_deleted_rows=True, with_row_id=True).count_rows()
 
 
 def _data_file_sizes(handle: _Dataset) -> dict[str, int]:
@@ -853,9 +1021,18 @@ def _data_file_sizes(handle: _Dataset) -> dict[str, int]:
     return {data_file.path: int(data_file.file_size_bytes or 0) for fragment in handle.get_fragments() for data_file in fragment.data_files()}
 
 
+def _fragment_sizes(handle: _Dataset) -> dict[int, int]:
+    """Each fragment of the version ``handle`` has open, by id, as the bytes of its data files."""
+    return {fragment.fragment_id: sum(int(data_file.file_size_bytes or 0) for data_file in fragment.data_files()) for fragment in handle.get_fragments()}
+
+
 def _head(dataset: _Dataset, ref: str | None) -> _Dataset:
-    """A handle on ``ref``'s latest version — ``dataset`` itself for main, which the erasure is opened on."""
-    return dataset if ref is None else dataset.checkout_version((ref, None))
+    """A handle on ``ref``'s latest version: ``dataset`` itself for main, refreshed in place, because the
+    erasure is opened on it and its own writes and other writers' may have moved main on."""
+    if ref is None:
+        dataset.checkout_latest()
+        return dataset
+    return dataset.checkout_version((ref, None))
 
 
 def _branches(dataset: _Dataset) -> dict[str, _Reference | None] | None:
@@ -909,7 +1086,11 @@ def _reference(meta: object, *, branch_key: str, version_key: str) -> _Reference
 
 
 def _answers(dataset: _Dataset, reference: _Reference, predicate: str) -> bool | None:
-    """Whether ``reference`` still holds a row matching ``predicate`` — `None` when it cannot be read.
+    """Whether ``reference`` still answers ``predicate`` — `None` when it cannot be read.
+
+    VISIBLE ROWS, deliberately. A tag over a version whose subject rows a deletion vector hides pins those
+    bytes, but what it records, the data a run saw, never held the subject, so it is kept and the
+    verification names it in `pinned_by` for its owner to decide.
 
     THREE-VALUED ON PURPOSE. A caller deciding whether to destroy something must distinguish "proved
     clean" from "could not tell", and only the first is a reason to keep it.

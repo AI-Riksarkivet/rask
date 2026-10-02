@@ -51,9 +51,10 @@ def _holding(uri: str) -> list[str]:
 
 
 def _erase_protected(tmp_path: Path) -> tuple[str, ErasureReport]:
-    """main v1 holds the subject, v2 adds carol; ``work`` is cut from v2; the table's root is protected."""
+    """main v1 holds the subject and a run's tag, v2 adds carol; ``work`` is cut from v2; the table's root is protected."""
     uri = str(tmp_path / "source")
     lance.write_dataset(_rows(_SUBJECT, "bob"), uri)
+    lance.dataset(uri).tags.create("snap", 1)
     lance.write_dataset(_rows("carol"), uri, mode="append")
     lance.dataset(uri).create_branch("work", 2)
     report = erase(
@@ -75,6 +76,7 @@ def test_a_protected_table_is_neither_rewritten_nor_reclaimed(tmp_path: Path) ->
     assert refused == {f"{step}:{ref}": "failed" for step in ("compact", "history") for ref in ("main", "work")}
     assert all("another dataset resolves its files through" in s.detail for s in report.surfaces if s.surface in refused)
     assert _holding(uri), "the source's data files are the clone's only copy, so none may be rewritten away"
+    assert ([s.outcome for s in report.surfaces if s.surface == "tag:snap"], "snap" in lance.dataset(uri).tags.list()) == (["skipped"], True)
     assert report.complete is False
 
 

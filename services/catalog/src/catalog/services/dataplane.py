@@ -1365,7 +1365,7 @@ _USER_INPUT_MARKER = "Invalid user input"
 _RUST_SOURCE_SUFFIX = re.compile(r",\s*/\S+\.rs:\d+:\d+\s*\.?\s*$")
 
 
-def _clean_lance_message(message: str) -> str:
+def clean_lance_message(message: str) -> str:
     """Lance's own text, minus the two things a caller must never receive.
 
     The ``Invalid user input`` prefix is replaced by our own action wording, and the Rust source location
@@ -1410,7 +1410,7 @@ def refuse_an_unbounded_boolean_chain(sql: str | None, *, field: str) -> None:
 
 
 @contextmanager
-def _user_sql(action: str) -> Iterator[None]:
+def caller_sql(action: str) -> Iterator[None]:
     """Translate Lance's expression-parse failures into a 4xx instead of letting them escape as a 500.
 
     ``updates`` and ``predicate`` are SQL fragments the CALLER wrote, and Lance validates them at execution
@@ -1435,7 +1435,7 @@ def _user_sql(action: str) -> Iterator[None]:
             raise  # a storage / IO failure: a real 5xx, and it stays one
         # Keep Lance's text — it names the columns that do exist — minus its prefix, which we replace, and
         # minus the Rust source location, which the caller can do nothing with.
-        detail = _clean_lance_message(message)
+        detail = clean_lance_message(message)
         log.info("user_sql_rejected", extra={"action": action, "error": message})
         raise InvalidInputError(f"{action}: {detail}") from exc
 
@@ -1466,7 +1466,7 @@ def _write_schema_errors() -> Iterator[None]:
     except OSError as exc:
         if _WRITE_SCHEMA_MARKER not in str(exc).lower():
             raise  # a storage / IO failure: a real 5xx, and it stays one
-        raise TableSchemaValidationError(_clean_lance_message(str(exc))) from exc
+        raise TableSchemaValidationError(clean_lance_message(str(exc))) from exc
 
 
 #: A column op names a column that is not there. Lance says it four ways across three exception classes —
@@ -1489,8 +1489,8 @@ _LISTS_FIELDS = re.compile(r"valid fields|available fields", re.IGNORECASE)
 def _column_op(action: str, fields: Sequence[str] = ()) -> Iterator[None]:
     """Translate a schema-evolution failure the CALLER caused into the spec's 4xx, not a 500.
 
-    The sibling of :func:`_user_sql` for the four column ops (add / alter / drop / update_field_metadata).
-    It is a separate translator rather than a widening of ``_user_sql`` because ``_user_sql``'s single
+    The sibling of :func:`caller_sql` for the four column ops (add / alter / drop / update_field_metadata).
+    It is a separate translator rather than a widening of ``caller_sql`` because ``caller_sql``'s single
     ``Invalid user input`` marker test is load-bearing for update/delete and would miss half of these:
     ``drop_columns`` raises an unmarked ``ValueError`` for both of its user errors. Seven distinct client
     mistakes answered 500 ``InternalError`` with detail "Internal Server Error" before this (#101) — the
@@ -1514,7 +1514,7 @@ def _column_op(action: str, fields: Sequence[str] = ()) -> Iterator[None]:
         raise
     except (ValueError, OSError) as exc:
         message = str(exc)
-        detail = _clean_lance_message(message)
+        detail = clean_lance_message(message)
         if _COLUMN_NOT_FOUND.search(message):
             if fields and not _LISTS_FIELDS.search(detail):
                 detail = f"{detail}. Valid fields are {', '.join(fields)}"
@@ -1563,7 +1563,7 @@ def update_table(ns: LanceNamespace, so: StorageOptions, req: UpdateTableRequest
     for expression in updates.values():
         refuse_an_unbounded_boolean_chain(expression, field="updates")
     dataset = open_dataset(ns, so, table_id, branch=req.branch)
-    with _user_sql("invalid update expression or predicate"):
+    with caller_sql("invalid update expression or predicate"):
         result = dataset.update(updates, where=req.predicate)
     # pylance's update() returns an UpdateResult TypedDict (a plain dict at runtime); the row count is
     # `num_rows_updated`. (The previous `getattr(result, "num_updated_rows", ...)` was wrong twice — attr
@@ -1580,7 +1580,7 @@ def delete_from_table(ns: LanceNamespace, so: StorageOptions, req: DeleteFromTab
     # never meant to be touched, and returns 200.
     refuse_an_unbounded_boolean_chain(req.predicate, field="predicate")
     dataset = open_dataset(ns, so, table_id, branch=req.branch)
-    with _user_sql("invalid delete predicate"):
+    with caller_sql("invalid delete predicate"):
         dataset.delete(req.predicate)
     return DeleteFromTableResponse(version=dataset.version)
 
@@ -1666,9 +1666,9 @@ def merge_insert_into_table(
     dataset = open_dataset(ns, so, _table_id(req), branch=req.branch)
     # THE BUILDER IS CONSTRUCTED INSIDE THE GUARD, and that placement is the fix rather than a tidy-up:
     # `merge_insert(on)` is where Lance rejects a key column that does not exist, and it sat outside
-    # `_user_sql`, so the one door whose whole job is matching on that column reported `Internal 18`
+    # `caller_sql`, so the one door whose whole job is matching on that column reported `Internal 18`
     # for naming it wrongly — while the branchless path answered 13.
-    with _write_schema_errors(), _user_sql("invalid merge_insert filter"):
+    with _write_schema_errors(), caller_sql("invalid merge_insert filter"):
         builder = dataset.merge_insert(req.on)
         if req.when_matched_update_all:
             builder.when_matched_update_all(req.when_matched_update_all_filt)
@@ -1771,7 +1771,7 @@ def count_rows(ns: LanceNamespace, so: StorageOptions, req: CountTableRowsReques
             raise TypeError(f"count_table_rows must answer a CountTableRowsResponse with a count, got {type(response).__name__}: {response!r}")
         return response.count
     dataset = open_dataset(ns, so, _table_id(req), version=req.version, branch=req.branch)
-    with _user_sql("invalid count predicate"):
+    with caller_sql("invalid count predicate"):
         return int(dataset.count_rows(filter=req.predicate) if req.predicate else dataset.count_rows())
 
 
@@ -1950,12 +1950,12 @@ def read_changes(
     """
     dataset = open_dataset(ns, so, table_id, branch=branch)
     projection = changes.feed_projection(columns, data_columns=dataset.schema.names)
-    with _user_sql("invalid change-feed predicate"):
+    with caller_sql("invalid change-feed predicate"):
         scanner = dataset.scanner(filter=predicate, columns=projection)
         # THE FIRST BATCH IS PULLED INSIDE THE GUARD, and that placement is the whole reason this is
         # not one line. `to_batches()` is lazy, so a malformed predicate does not raise until the
         # first pull — and a generator's body does not run until the response is already streaming,
-        # where a raise becomes a truncated 200 instead of the 400 `_user_sql` exists to produce.
+        # where a raise becomes a truncated 200 instead of the 400 `caller_sql` exists to produce.
         batches = scanner.to_batches()
         first = next(batches, None)
     return _arrow_file_chunks(scanner.projected_schema, first, batches)
@@ -2001,7 +2001,7 @@ def read_deleted_row_ids(
     `changes.change_filter` refuses to take by defaulting a bound it would have to read separately.
     """
     dataset = open_dataset(ns, so, table_id, branch=branch)
-    with _user_sql("invalid deleted-row window"):
+    with caller_sql("invalid deleted-row window"):
         reader = dataset.delta(begin_version=begin_version, end_version=end_version if end_version is not None else dataset.version).get_deleted_row_ids()
         # Streamed for the same reason `read_changes` is, and the count is no smaller for being one
         # column: a bulk delete names every row it removed, so `read_all()` sized this answer by the

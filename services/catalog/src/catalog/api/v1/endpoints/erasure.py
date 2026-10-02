@@ -67,7 +67,8 @@ async def erase_subject(
     is named per ref (`main@2`, `work@3`) with what keeps it: `pinned_by` the tags, and a branch only
     when its head stands on the residual's files, in an order Lance accepts; `held_by_retention` what
     the `retain_days` window keeps. A caller reporting completion to a data subject reads `complete`; a
-    caller reading the status code reports the wrong thing.
+    caller reading the status code reports the wrong thing. The one status that does answer is the refusal
+    before anything is touched: 400 for a predicate Lance refuses, 503 when the store cannot plan it.
 
     `complete` can be True beside `dangling:<ref>@<n>` surfaces. Each is a version that stays listed and
     fails to read, because a branch standing on some of its files kept its manifest when the rest were

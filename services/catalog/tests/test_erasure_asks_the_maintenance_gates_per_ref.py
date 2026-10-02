@@ -64,22 +64,26 @@ def test_a_table_mixing_file_versions_is_neither_rewritten_nor_reclaimed_on_any_
     lance.write_dataset(_rows("alice", "bob", "carol", "dan"), uri, data_storage_version="2.1", enable_stable_row_ids=True, max_rows_per_file=2)
     lance.write_dataset(_rows("eve"), uri, mode="append", data_storage_version="2.2")
     lance.dataset(uri).create_branch("work")
+    lance.dataset(uri).tags.create("snap", 1)
 
     report = _erase(uri)
 
     steps = _steps(report)
     assert {surface: outcome for surface, (outcome, _) in steps.items()} == {
-        f"{step}:{ref}": "failed" for step in ("compact", "history") for ref in ("main", "work")
+        **{f"compact:{ref}": "failed" for ref in ("main", "work")},
+        **{f"history:{ref}": "skipped" for ref in ("main", "work")},
     }
-    assert all("256 (mixed data file versions)" in detail for _, detail in steps.values()), steps
+    assert all("256 (mixed data file versions)" in steps[f"compact:{ref}"][1] for ref in ("main", "work")), steps
+    assert ([s.outcome for s in report.surfaces if s.surface == "tag:snap"], "snap" in lance.dataset(uri).tags.list()) == (["skipped"], True)
     assert report.complete is False
 
 
 @pytest.mark.parametrize("source_name", ["source", "clone-src"], ids=["apart", "named-with-the-clones-root-as-prefix"])
-def test_a_shallow_clone_is_reclaimed_but_not_rewritten_into_its_own_root(tmp_path: Path, source_name: str) -> None:
+def test_a_shallow_clone_is_neither_rewritten_nor_reclaimed(tmp_path: Path, source_name: str) -> None:
     """A clone's data files resolve through its source, so compacting it copies the source's rows into the
     clone's root — the cost the compact door refuses — and a branch of the clone names the source too.
-    Reclamation is root-scoped and the GC gate admits flag 16, so both refs are still reclaimed.
+    Its history is kept for the same reason ([[LH-210]]): reclaiming it would destroy the clone's time
+    travel while the subject's bytes stay in the source's files.
 
     A clone's location is the caller's choice, so its source may share the clone root's spelling as a
     prefix; the table's own bases are its root and `<root>/tree/`, compared as paths."""
@@ -95,8 +99,8 @@ def test_a_shallow_clone_is_reclaimed_but_not_rewritten_into_its_own_root(tmp_pa
     assert {surface: outcome for surface, (outcome, _) in steps.items()} == {
         "compact:cw": "failed",
         "compact:main": "failed",
-        "history:cw": "reclaimed",
-        "history:main": "reclaimed",
+        "history:cw": "skipped",
+        "history:main": "skipped",
     }, steps
     assert all("resolve through a base" in steps[f"compact:{ref}"][1] for ref in ("main", "cw")), steps
     assert [p.name for p in Path(clone).rglob("*.lance") if b"bob" in p.read_bytes()] == [], "the source's rows were copied into the clone"

@@ -11,7 +11,7 @@ extra column, a wholly unrelated schema — main answered 20 for all three and t
 for all three.
 
 A second one sat beside it: `dataset.merge_insert(on)` is where Lance rejects a key column that does
-not exist, and it was constructed OUTSIDE `_user_sql`'s guard — so the one door whose entire job is
+not exist, and it was constructed OUTSIDE `caller_sql`'s guard — so the one door whose entire job is
 matching on that column reported `Internal 18` for naming it wrongly, while the branchless path
 answered 13.
 
