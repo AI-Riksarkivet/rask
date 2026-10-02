@@ -9,12 +9,12 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, cast
 
 import httpx
 import pytest
 import respx
-from pydantic import SecretStr
 
 from notifications.api.ingest import DAPR_RETRY, DAPR_SUCCESS
 from notifications.api.reconciler import (
@@ -26,15 +26,16 @@ from notifications.api.reconciler import (
     LineageFeedClient,
     reconcile,
 )
+from notifications.api.settings import IngressSettings
 from notifications.api.visibility import Visibility
 from notifications.proxies import TypedActorProxy
+from service_kit.governed.machine_identity import IdentityTokenUnavailableError
 
 
 LINEAGE = "http://lineage.invalid"
 OPEN = Visibility(client=None, enabled=False)
-#: A module-level singleton, because a `SecretStr(...)` in a default argument is evaluated once at
-#: import anyway — writing it there only hides that.
-APP_TOKEN = SecretStr("app-token")
+
+pytestmark = pytest.mark.usefixtures("lineage_identity_token")
 
 
 def _event(seq: int, *, run_id: str | None = None, author: str = "alice", event_type: str = "FAIL") -> dict[str, Any]:
@@ -49,12 +50,11 @@ def _event(seq: int, *, run_id: str | None = None, author: str = "alice", event_
     }
 
 
-def _feed_client(*, token: SecretStr | None = APP_TOKEN, page_limit: int = 500) -> LineageFeedClient:
+def _feed_client(*, page_limit: int = 500) -> LineageFeedClient:
     return LineageFeedClient(
         client=httpx.AsyncClient(),
         base_url=LINEAGE,
-        identity="notifications",
-        token=token,
+        token_file=IngressSettings().lineage_identity_token_file,
         timeout_seconds=5.0,
         page_limit=page_limit,
     )
@@ -155,29 +155,35 @@ async def test_paging_older_passes_the_cursor_as_after() -> None:
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_the_service_door_is_opened_with_both_headers() -> None:
-    """lineage opens its service door on the PAIR. A request carrying only `dapr-api-token` falls
-    through to OIDC by design — the sidecar stamps that token on everything it delivers — so half the
-    credential would produce a 401 that reads like a credential problem instead of a config one."""
+async def test_each_poll_presents_the_token_the_kubelet_last_wrote_and_no_claimed_name(lineage_identity_token: Path) -> None:
+    """Lineage derives the caller from the verified service-account token, so the token is the whole
+    credential. The kubelet rewrites the projected file at ~515 s of a 600 s life (LH-220 probe d), so
+    a client holding the boot-time value is refused ten minutes in."""
     route = respx.get(f"{LINEAGE}/events").mock(return_value=httpx.Response(200, json={"events": [], "next_cursor": None}))
+    client = _feed_client()
 
-    await _feed_client().page(after=None)
+    await client.page(after=None)
+    lineage_identity_token.write_text("sa-token-two\n")
+    await client.page(after=None)
 
-    headers = route.calls.last.request.headers
-    assert headers["dapr-api-token"] == "app-token"
-    assert headers["x-lance-service-identity"] == "notifications"
+    sent = [call.request.headers for call in route.calls]
+    assert [headers.get("authorization") for headers in sent] == ["Bearer sa-token-one", "Bearer sa-token-two"]
+    assert all("x-lance-service-identity" not in headers and "dapr-api-token" not in headers for headers in sent)
 
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_without_an_app_token_neither_header_is_sent() -> None:
+@pytest.mark.usefixtures("respx_allows_unused_routes")
+async def test_an_unreadable_identity_token_fails_the_poll_and_sends_nothing(lineage_identity_token: Path) -> None:
+    """An anonymous walk would be answered with an empty governed feed, an inbox quietly incomplete;
+    the poll fails (503 at the cron route) instead."""
     route = respx.get(f"{LINEAGE}/events").mock(return_value=httpx.Response(200, json={"events": [], "next_cursor": None}))
+    lineage_identity_token.unlink()
 
-    await _feed_client(token=None).page(after=None)
+    with pytest.raises(IdentityTokenUnavailableError):
+        await _feed_client().page(after=None)
 
-    headers = route.calls.last.request.headers
-    assert "dapr-api-token" not in headers
-    assert "x-lance-service-identity" not in headers
+    assert not route.called
 
 
 @pytest.mark.asyncio

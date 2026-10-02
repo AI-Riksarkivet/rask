@@ -178,21 +178,7 @@ def test_an_unwired_deployment_refuses_rather_than_walking_cursor_less(feed: _Fa
 
 
 class TestIngressSettings:
-    """The two fields the tick needed, and the one alias that admits this service to lineage."""
-
-    def test_the_identity_is_read_from_the_var_the_chart_scans(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """`services.yaml` builds LINEAGE_SERVICE_SUBJECTS from `env.RASK_LINEAGE_SERVICE_IDENTITY`.
-
-        Reading a differently-named var here is how the door's allowlist and the caller's claim become
-        two values a deployment can set to disagree.
-        """
-        monkeypatch.setenv("RASK_LINEAGE_SERVICE_IDENTITY", "notifications-prod")
-        assert IngressSettings.model_validate({}).service_identity == "notifications-prod"
-
-    def test_the_service_prefixed_name_still_overrides_this_service_alone(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("RASK_LINEAGE_SERVICE_IDENTITY", raising=False)
-        monkeypatch.setenv("RASK_NOTIFICATIONS_SERVICE_IDENTITY", "just-me")
-        assert IngressSettings.model_validate({}).service_identity == "just-me"
+    """The tick's settings refuse a combination that cannot be satisfied."""
 
     def test_a_page_timeout_above_the_pass_budget_is_refused_at_boot(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Unsatisfiable by construction — and silent, since the timeout simply never fires."""
@@ -212,7 +198,7 @@ def _lifespan_without_the_actor_warmup(patch: pytest.MonkeyPatch) -> None:
     and died.
 
     THE ACTOR PLANE IS NOT THIS FILE'S SUBJECT. These two tests assert what the lifespan puts on
-    `app.state` for the FEED — `lineage_feed`, `lineage_cursor`, their base URL and identity. They
+    `app.state` for the FEED — `lineage_feed`, `lineage_cursor`, their base URL and token path. They
     drive the real module app precisely so a lifespan that builds those under other names fails here,
     and the warm-up is incidental to that.
     It does NOT weaken `test_a_tick_without_an_actor_plane_refuses_instead_of_hanging` below, which

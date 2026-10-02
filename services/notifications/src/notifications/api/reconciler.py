@@ -16,9 +16,9 @@ class of run.
    row carries **no `run_id` column in either mode** — the id lives only inside that payload. A
    summary row therefore cannot produce a notification id at all, so the reconciler asks for the full
    record and pays for it.
-3. The feed is GOVERNED. It is filtered by the caller's own visibility, so this service's
-   `x-lance-service-identity` sees exactly the rows its service principal is granted — and a
-   deployment that forgets those grants gets a reconciler that runs cleanly and reconciles nothing.
+3. The feed is GOVERNED. It is filtered by the caller's own visibility, so this service sees exactly
+   the rows granted to the subject lineage maps its service account to — and a deployment that
+   forgets those grants gets a reconciler that runs cleanly and reconciles nothing.
 
 **A first-ever tick primes the cursor and notifies nobody.** With no stored cursor, "everything is
 new" would mean replaying the retained feed into people's inboxes on the day the service is deployed
@@ -42,13 +42,14 @@ from datetime import UTC, datetime
 from typing import Any, Final
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from notifications.api.fanout import ChannelPush, InboxOpener, WatcherLookup
 from notifications.api.ingest import DAPR_RETRY, ingest_run_event
 from notifications.api.metrics import Lane, record_feed_gap
 from notifications.api.visibility import Visibility
 from service_kit.exceptions import ServiceUnavailableError
+from service_kit.governed.machine_identity import identity_bearer
 
 
 log = logging.getLogger(__name__)
@@ -219,31 +220,27 @@ class LineageFeedClient:
         *,
         client: httpx.AsyncClient,
         base_url: str,
-        identity: str,
-        token: SecretStr | None,
+        token_file: str,
         timeout_seconds: float,
         page_limit: int,
     ) -> None:
         self._client = client
         self._base = base_url.rstrip("/")
-        self._identity = identity
-        self._token = token
+        self._token_file = token_file
         self._timeout = timeout_seconds
         self._page_limit = page_limit
 
     def _headers(self) -> dict[str, str]:
-        """The service-door pair, or nothing at all.
+        """This pod's `rask-lineage` service-account token as a bearer, read from the file NOW.
 
-        BOTH headers or NEITHER, because lineage's door opens on the pair: a request carrying only
-        `dapr-api-token` falls through to OIDC by design (the sidecar stamps that token on every
-        request it delivers, so gating on it alone would divert proxied humans into the service door),
-        and one carrying only the identity is an unauthenticated claim. Without an `APP_API_TOKEN`
-        there is no service door in this deployment, so sending half of it would only produce a 401
-        that reads like a credential problem instead of a configuration one.
+        Per request, never once per process: the kubelet rewrites the projected token at ~515 s of its
+        600 s life (measured, LH-220 probe d). Lineage derives the caller from the verified token, so
+        nothing here names a subject. Through Dapr service invocation the sidecar forwards
+        `Authorization` unchanged (LH-220 probe e). An unreadable file raises
+        `IdentityTokenUnavailableError` (503) rather than sending an anonymous walk, which lineage
+        would answer with an empty, quietly incomplete feed.
         """
-        if self._token is None:
-            return {}
-        return {"dapr-api-token": self._token.get_secret_value(), "x-lance-service-identity": self._identity}
+        return identity_bearer(self._token_file)
 
     async def page(self, *, after: int | None) -> FeedPage:
         """One page of the feed, newest first; `after` walks OLDER (`seq < after`).

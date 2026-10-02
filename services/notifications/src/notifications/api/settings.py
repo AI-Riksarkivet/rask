@@ -3,7 +3,7 @@
 Separate from `notifications.config` by OWNER rather than by taste. `NotificationsSettings` holds what
 an inbox IS (retention, cap, page size) and the actor reads it with no sidecar in sight; this holds
 what the SURFACE talks to — a pubsub component the chart mints, a topic whose name is the
-compatibility unit, a lineage base URL and the service-door credential. Nothing in the actor plane
+compatibility unit, a lineage base URL and this pod's identity-token path. Nothing in the actor plane
 reads a field here, and nothing here means anything without a deployment behind it.
 
 Every one is a setting rather than a literal for the reason the estate keeps paying for: the
@@ -17,7 +17,7 @@ import os
 from functools import lru_cache
 from typing import Self
 
-from pydantic import AliasChoices, Field, SecretStr, model_validator
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -71,43 +71,10 @@ class IngressSettings(BaseSettings):
     #: whose invocations that door refuses by construction (`dapr_auth.is_public_caller`).
     lineage_url: str = Field(default="http://127.0.0.1:8000", alias="RASK_NOTIFICATIONS_LINEAGE_URL")
 
-    #: The subject this service claims at lineage's service door. It must appear in that deployment's
-    #: `LINEAGE_SERVICE_SUBJECTS` allowlist, and — because the feed is governed — it must also hold the
-    #: grants whose rows the reconciler is expected to see.
-    #:
-    #: `RASK_LINEAGE_SERVICE_IDENTITY` is read FIRST, and that is the whole point rather than a
-    #: courtesy alias. The chart builds lineage's allowlist by scanning every service's own
-    #: `env.RASK_LINEAGE_SERVICE_IDENTITY` (`chart/templates/services.yaml`), so reading a
-    #: differently-named var here would make the door's allowlist and the caller's claim two values
-    #: that a deployment can set to disagree — and the failure of that disagreement is a 401 that
-    #: reads like a credential fault instead of the naming drift it is. One declaration, both halves.
-    #: The `RASK_NOTIFICATIONS_`-prefixed name stays as a fallback so a deployment can still override
-    #: this service alone without moving what it claims to lineage.
-    service_identity: str = Field(
-        default="notifications",
-        validation_alias=AliasChoices("RASK_LINEAGE_SERVICE_IDENTITY", "RASK_NOTIFICATIONS_SERVICE_IDENTITY"),
-    )
-
-    #: The credential daprd injects when the pod carries `dapr.io/app-token-secret`. Read as a setting
-    #: rather than through `os.environ` at the call site so there is one declared name for it, and
-    #: `SecretStr` so it cannot land in a log line or a repr by accident.
-    app_api_token: SecretStr | None = Field(default=None, alias="APP_API_TOKEN")
-
-    #: Whether this deployment's DEDICATED credential comes from the store
-    #: (`service_identity.dedicated_token_for`). Symmetric with `MAINTENANCE_SECRETS_FROM_DAPR` and
-    #: `RASK_INGEST_SECRETS_FROM_DAPR`, and OFF by default for the same reason: a dev stack has no
-    #: store, and a service that reads one unconditionally fails closed on a configuration that works.
-    secrets_from_dapr: bool = Field(default=False, alias="RASK_NOTIFICATIONS_SECRETS_FROM_DAPR")
-    #: THE ONE STORE, NAMED ONCE. `RASK_SECRET_STORE` is the estate-wide name every governed service
-    #: already reads; the per-service alias stays FIRST so one service can be moved on its own.
-    secret_store: str = Field(
-        default="lance-secrets",
-        validation_alias=AliasChoices("RASK_NOTIFICATIONS_SECRET_STORE", "RASK_SECRET_STORE"),
-    )
-    secret_key: str = Field(
-        default="lance",
-        validation_alias=AliasChoices("RASK_NOTIFICATIONS_SECRET_KEY", "RASK_SECRET_KEY"),
-    )
+    #: This pod's projected service-account token for lineage's door (audience `rask-lineage`). Lineage
+    #: maps the verified service account to this service's subject, which must hold the grants whose
+    #: rows the reconciler is expected to see, because the feed is governed. Re-read per request.
+    lineage_identity_token_file: str = Field(default="/var/run/secrets/rask/identity/rask-lineage/token", alias="RASK_LINEAGE_IDENTITY_TOKEN_FILE")
 
     #: Rows per `GET /events` page. 500 is the server's own hard cap (`runs.py` `_EVENTS_RETURN`), so a
     #: larger value here would be silently truncated and the walk would think it had reached the floor.
@@ -166,10 +133,10 @@ class IngressSettings(BaseSettings):
         is also pointless on its own terms: the answer will not change." `lineage` is already one of
         that policy's targets.
 
-        The auth pair still completes, and differently: lineage's door opens on
-        `dapr-api-token` + `x-lance-service-identity` together, and the sidecar "stamps that token on
-        every request it delivers" (see `LineageFeedClient._headers`). So the token comes from the
-        delivering sidecar and this service supplies only the identity claim.
+        The credential crosses the sidecar intact: the feed client sends this pod's projected
+        `rask-lineage` token as `Authorization: Bearer`, and daprd forwards that header to lineage
+        byte-identical through service invocation (measured, LH-220 probe e). Lineage authenticates
+        the token itself; nothing the sidecar adds names the caller.
 
         Falls back to the direct URL when Dapr is off, which is the gateway's own shape
         (`gateway/__init__.py::_target_base`) and what keeps dev-micro and the unit tests on a plain

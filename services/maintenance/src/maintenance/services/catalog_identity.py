@@ -1,64 +1,36 @@
-"""How maintenance identifies itself to the catalog — ONE builder, for every door it calls.
+"""How maintenance identifies itself to the catalog: ONE builder, for every door it calls.
 
 There are two: the compaction plan/commit pair and credential vending. One builder serves both, because
 a credential control applied to one of them is not a control. Both doors are read alike: a 401 raises
 `MaintenanceUnauthenticated`, a 403 `MaintenanceDenied`, and a 404 naming no table or namespace
-`TableNotGoverned`, so a header this builder gets wrong stops the unit rather than being signed around.
+`TableNotGoverned`, so a credential this builder gets wrong stops the unit rather than being signed around.
 A vend door's 5xx stops the unit too (`VendUndecided`). Any other failure of the vend door to answer
 degrades to the ambient credential, with an `info` log and `compaction.credential.tier` tier=ambient.
 
-THE THIRD HALF. A privileged subject needs its token SEEDED as well as demanded and presented:
-`openbao.yaml` derives what to mint from its own list and `services.yaml` derives what to demand from
-another, and an identity on the second but not the first resolves to `None` here — correct, meaning
-"not provisioned" — falls back to the shared bearer, and is refused for being privileged. All three
-are asserted by `tests/unit/test_a_privileged_subject_can_present_its_own_credential.py`.
+THE CREDENTIAL IS THE POD'S OWN SERVICE-ACCOUNT TOKEN (D1), projected by the kubelet with audience
+`rask-catalog` and read from the file on EVERY call. The kubelet rewrites it at ~515 s of a 600 s
+lifetime (measured, LH-220 probe d), so a token held for the life of the process is refused ten minutes
+after boot. Nothing else names the caller: the catalog maps the verified service account to a subject,
+so no header this pod sends can claim to be anyone else.
+
+AN UNREADABLE TOKEN STOPS THE UNIT AS UNAUTHENTICATED. It is this service's credential, absent at every
+table alike, and the request is not sent: a call without it would be answered as anonymous, and the
+ambient key standing in for a refused vend would sign what the catalog never authorized.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
-
 from maintenance.core.config import MaintenanceSettings
-from service_kit.governed.dapr_auth import expected_app_token
-
-
-def dedicated_token_for(settings: MaintenanceSettings) -> Callable[[str], str | None] | None:
-    """The resolver maintenance uses to present its OWN credential, or ``None`` when it cannot.
-
-    ``None`` when secrets do not come from Dapr, so a dev stack with no store keeps the shared-token
-    path unchanged. An identity the store simply lacks resolves to ``None`` INSIDE the resolver and
-    the caller falls back; the door stays the single authority on whether that is acceptable. An
-    UNREADABLE store raises instead — "we could not read it" and "this identity is not privileged"
-    are different answers, and conflating them is how a credential control becomes decorative.
-    """
-    if not settings.secrets_from_dapr:
-        return None
-    from service_kit.governed.dapr_auth import dedicated_token_from_store
-
-    return dedicated_token_from_store(settings.dapr_secret_store)
+from maintenance.services.compaction_executor import MaintenanceUnauthenticated
+from service_kit.governed.machine_identity import IdentityTokenUnavailableError, identity_bearer
 
 
 def service_headers(settings: MaintenanceSettings) -> dict[str, str]:
-    """Both halves of the service identity, or the door refuses with a reason invisible from here.
+    """The `Authorization` header carrying this pod's `rask-catalog` token, read now.
 
-    Its OWN credential when the store has one; the shared bearer otherwise, which is every estate
-    that has not provisioned this identity.
-
-    THE FALLBACK RESOLVES THROUGH `expected_app_token`, not through `DaprDoorSettings().app_api_token`,
-    and the difference is a whole branch. That attribute is the ENV half alone; the resolver returns
-    the STORE's value when `app_token_from_store` is set, which is the case this estate runs — measured
-    on the deployed pod 2026-09-19, the attribute is `None` while the resolver answers a token. Its own
-    docstring is the rule: "a service door still reading env while the Dapr door reads the store is a
-    pod where half the credentials are configured and nothing says which half."
-
-    The combination that was broken is the one the line above calls common — token in the store,
-    dedicated identity absent — where this sent NO bearer and the catalog refused a call whose cause is
-    a service away. `medallion/core/config.py::outbound_app_token` is the same fix one service over.
+    Raises `MaintenanceUnauthenticated` when the projected file cannot be read or is empty.
     """
-    headers = {"x-lance-service-identity": settings.catalog_service_identity}
-    resolver = dedicated_token_for(settings)
-    if resolver is not None and (own := resolver(settings.catalog_service_identity)):
-        headers["dapr-api-token"] = own
-    elif token := expected_app_token():
-        headers["dapr-api-token"] = token
-    return headers
+    try:
+        return identity_bearer(settings.catalog_identity_token_file)
+    except IdentityTokenUnavailableError as exc:
+        raise MaintenanceUnauthenticated(f"maintenance cannot present its catalog credential: {exc}") from exc

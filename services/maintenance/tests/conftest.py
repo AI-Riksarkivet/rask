@@ -61,3 +61,13 @@ def parked_added(monkeypatch: pytest.MonkeyPatch) -> list[tuple[int, dict[str, A
     seen: list[tuple[int, dict[str, Any] | None]] = []
     monkeypatch.setattr(metrics._tables_parked, "add", lambda amount, attributes=None, **_: seen.append((amount, attributes)))
     return seen
+
+
+@pytest.fixture
+def catalog_identity_token(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """This pod's projected `rask-catalog` token as the kubelet leaves it: a file, named by the setting
+    `MaintenanceSettings` reads, that every catalog call re-reads."""
+    path = tmp_path / "rask-catalog-token"
+    path.write_text("sa-token-one\n")
+    monkeypatch.setenv("RASK_CATALOG_IDENTITY_TOKEN_FILE", str(path))
+    return path

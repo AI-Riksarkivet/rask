@@ -32,6 +32,9 @@ from maintenance.services import credentials
 from maintenance.services.compaction_executor import MaintenanceDenied, TableNotGoverned
 
 
+pytestmark = pytest.mark.usefixtures("catalog_identity_token")
+
+
 #: Distinctive values on purpose. A one-character secret is a substring of ordinary prose, so the
 #: "never logged" assertion below would fail on any message containing that letter and prove nothing.
 _SCOPED = {

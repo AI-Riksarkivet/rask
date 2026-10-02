@@ -13,6 +13,7 @@ being unwrapped (which DROPs every delivery — silently, since a DROP is an ack
 
 from collections.abc import Iterator
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, cast
 
 import httpx
@@ -20,7 +21,6 @@ import pytest
 import respx
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from pydantic import SecretStr
 
 from notifications.api import subscriptions as subscriptions_module
 from notifications.api.ingest import DAPR_SUCCESS, ingest_run_event
@@ -114,14 +114,13 @@ def test_an_envelope_with_no_event_is_dropped(bus: TestClient, plane: _Plane) ->
     assert plane.boxes == {}
 
 
-async def _feed_tick(plane: _Plane, *, seq: int, cursor: int) -> Any:
+async def _feed_tick(plane: _Plane, *, seq: int, cursor: int, token_file: Path) -> Any:
     """One reconciler pass over a feed holding exactly the run above."""
     respx.get(f"{LINEAGE}/events").mock(return_value=httpx.Response(200, json={"events": [{"seq": seq, "event": RUN_EVENT}], "next_cursor": None}))
     feed = LineageFeedClient(
         client=httpx.AsyncClient(),
         base_url=LINEAGE,
-        identity="notifications",
-        token=SecretStr("app-token"),
+        token_file=str(token_file),
         timeout_seconds=5.0,
         page_limit=500,
     )
@@ -148,14 +147,14 @@ async def _bus_delivery(plane: _Plane) -> dict[str, str]:
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_the_same_run_arriving_on_both_lanes_lands_exactly_one_pointer(plane: _Plane) -> None:
+async def test_the_same_run_arriving_on_both_lanes_lands_exactly_one_pointer(plane: _Plane, lineage_identity_token: Path) -> None:
     """The property the two-ingress design rests on. It holds because the notification id IS lineage's
     own terminal natural key — `(run_id, event_type)` — so the two lanes cannot disagree about what
     "the same notification" is, and the actor is idempotent on it."""
     assert await _bus_delivery(plane) == DAPR_SUCCESS
     assert len(plane.boxes["alice"]) == 1
 
-    result = await _feed_tick(plane, seq=12, cursor=11)
+    result = await _feed_tick(plane, seq=12, cursor=11, token_file=lineage_identity_token)
 
     assert result.scanned == 1
     assert len(plane.boxes["alice"]) == 1
@@ -180,7 +179,9 @@ async def test_the_same_run_arriving_on_both_lanes_lands_exactly_one_pointer(pla
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_the_lane_that_wrote_the_row_is_the_one_counted_as_delivered(plane: _Plane, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_the_lane_that_wrote_the_row_is_the_one_counted_as_delivered(
+    plane: _Plane, monkeypatch: pytest.MonkeyPatch, lineage_identity_token: Path
+) -> None:
     from notifications.api import metrics as metrics_module
 
     seen: list[tuple[str, str]] = []
@@ -190,7 +191,7 @@ async def test_the_lane_that_wrote_the_row_is_the_one_counted_as_delivered(plane
     monkeypatch.setattr(ingest_module, "record_ingress", lambda lane, outcome: seen.append((lane.value, outcome.value)))
 
     await _bus_delivery(plane)
-    await _feed_tick(plane, seq=12, cursor=11)
+    await _feed_tick(plane, seq=12, cursor=11, token_file=lineage_identity_token)
 
     assert seen[0] == ("bus", "delivered"), f"the winning lane was not counted as delivered: {seen}"
     assert seen[1] == ("feed", "duplicate"), (

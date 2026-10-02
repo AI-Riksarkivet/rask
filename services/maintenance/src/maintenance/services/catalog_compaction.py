@@ -6,7 +6,7 @@ out of it is what makes M3 — submitting the same tasks as a `RayJob` — a cha
 rather than a rewrite.
 
 Shaped like `credentials.py`, which is the estate's other maintenance→catalog client, and for the
-same reasons: both halves of the identity (the Dapr app token AND the claimed subject) or neither,
+same reasons: one credential builder (`catalog_identity.service_headers`, this pod's own token),
 `params` rather than a body where the door declares a query parameter, and a narrow `except` so a
 `NameError` in this module cannot be reported as "the catalog is unavailable".
 
@@ -163,7 +163,12 @@ def commit_via_catalog(table_id: str, results: list[str], *, settings: Maintenan
     """
     url = f"{settings.catalog_url.rstrip('/')}/management/v1/table/{table_id}/compaction_commit"
     try:
-        response = httpx.post(url, json={"results": results}, headers=service_headers(settings), timeout=_TIMEOUT_SECONDS)
+        headers = service_headers(settings)
+    except MaintenanceUnauthenticated as exc:
+        # The rewrites are already on the store, so this is the commit failing, not a refusal of the table.
+        raise DistributedCompactionError(f"compaction commit not sent for {table_id} — {len(results)} rewrite(s) are written and unreferenced: {exc}") from exc
+    try:
+        response = httpx.post(url, json={"results": results}, headers=headers, timeout=_TIMEOUT_SECONDS)
     except httpx.HTTPError as exc:
         raise DistributedCompactionError(
             f"compaction commit unreachable for {table_id} — {len(results)} rewrite(s) are written and unreferenced: {exc}"

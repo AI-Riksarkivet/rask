@@ -224,10 +224,7 @@ def _vend(table_id: str, settings: MaintenanceSettings) -> Vended | None:
     """One vend, or ``None``. Narrow ``except`` on purpose — see `ingest.catalog_service`, where a
     blanket catch reported a `NameError` in the vending method itself as "vending unavailable"."""
     url = f"{settings.catalog_url.rstrip('/')}/management/v1/table/{table_id}/credentials"
-    # Both halves, never one: the catalog's identity door requires the app token AND the claimed
-    # subject, and sending one is a refusal whose reason is invisible from this side. The token is read
-    # from `APP_API_TOKEN`, which daprd injects — `DaprDoorSettings` is the estate's one reader of it,
-    # replacing what used to be four bare `os.environ.get` calls.
+    # Read before the request: an unreadable token raises `MaintenanceUnauthenticated` and nothing is sent.
     headers = service_headers(settings)
     try:
         # `params`, NOT a body. The door declares `tier: Annotated[Tier, Query()] = "read"`, and

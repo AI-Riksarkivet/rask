@@ -538,10 +538,14 @@ class MaintenanceSettings(FgaSettings, BaseSettings):
     #: would be a new way to stop reclaiming disk. It does NOT fall back once a task has run: see
     #: `compaction_executor.CompactionPlaneUnavailable`.
     distributed_compaction: bool = Field(default=False, alias="MAINTENANCE_DISTRIBUTED_COMPACTION")
-    #: The subject this service claims at the catalog's identity door, paired with the Dapr app token
-    #: daprd injects. Both halves or neither — the door requires both, and sending one is a refusal
-    #: whose reason is invisible from this side.
+    #: The subject this service acts as: the author of the lineage it signs, the actor on the tuples it
+    #: repairs, and the name its refusals report. It is never sent as a claim. The catalog derives the
+    #: caller from the verified service-account token, so this must equal the subject the catalog's
+    #: `RASK_SA_SUBJECTS` maps this pod's service account to, or the two name different principals.
     catalog_service_identity: str = Field(default="service-maintenance", alias="MAINTENANCE_CATALOG_SERVICE_IDENTITY")
+    #: This pod's projected service-account token for the catalog's doors (audience `rask-catalog`),
+    #: re-read on every call because the kubelet rotates it at ~515 s of its 600 s life.
+    catalog_identity_token_file: str = Field(default="/var/run/secrets/rask/identity/rask-catalog/token", alias="RASK_CATALOG_IDENTITY_TOKEN_FILE")
     dapr_secret_s3_field: str = Field(default="minio-secret-key", alias="MAINTENANCE_DAPR_SECRET_S3_FIELD")
 
     @property

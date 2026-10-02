@@ -18,12 +18,12 @@ restart.
 """
 
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, cast
 
 import httpx
 import pytest
 import respx
-from pydantic import SecretStr
 
 from notifications.api.ingest import ingest_run_event
 from notifications.api.metrics import Lane
@@ -110,13 +110,12 @@ def plane() -> _ActorPlane:
 
 
 @pytest.fixture
-def feed() -> LineageFeedClient:
+def feed(lineage_identity_token: Path) -> LineageFeedClient:
     """A feed client over a real HTTPX transport, intercepted by respx — never a patched method."""
     return LineageFeedClient(
         client=httpx.AsyncClient(),
         base_url=LINEAGE,
-        identity="notifications",
-        token=SecretStr("app-token"),
+        token_file=str(lineage_identity_token),
         timeout_seconds=5.0,
         page_limit=500,
     )

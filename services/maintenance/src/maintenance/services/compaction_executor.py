@@ -161,9 +161,9 @@ class MaintenanceDenied(RuntimeError):
 
 
 class MaintenanceUnauthenticated(MaintenanceDenied):
-    """A door answered 401: it did not accept maintenance's own service credential.
+    """A door answered 401, or maintenance could not present its own service credential at all.
 
-    About this service, not the table: a broken or rotated token is refused at every table alike, so it is
+    About this service, not the table: a broken, unmapped or unreadable token is refused at every table alike, so it is
     never counted under a table's id. A `MaintenanceDenied` for the one property the two share: no fallback,
     because the ambient key would sign what the catalog has not authorized.
     """
@@ -173,7 +173,8 @@ def unauthenticated_remedy(*, table_id: str, identity: str) -> str:
     """The sentence a maintenance 401 carries: the table it was asked for, and the credential to repair."""
     return (
         f"the catalog did not accept the service credential of {identity!r} when asked for {table_id} (401) — this is "
-        f"maintenance's own identity, not the table: check its Dapr app token and its dedicated token."
+        f"maintenance's own identity, not the table: check its projected rask-catalog token and that the catalog's "
+        f"RASK_SA_SUBJECTS maps this pod's service account to {identity!r}."
     )
 
 

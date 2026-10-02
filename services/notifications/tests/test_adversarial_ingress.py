@@ -20,13 +20,12 @@ import httpx
 import pytest
 import respx
 from fastapi import FastAPI
-from pydantic import SecretStr
 
 from notifications.api import subscriptions as subscriptions_module
 from notifications.api.ingest import DAPR_SUCCESS, ingest_run_event
 from notifications.api.metrics import Lane
 from notifications.api.reconciler import LineageCursor, LineageCursorStore, LineageFeedBudgetExceeded, LineageFeedClient, reconcile
-from notifications.api.settings import get_ingress_settings
+from notifications.api.settings import IngressSettings, get_ingress_settings
 from notifications.api.visibility import Visibility
 from notifications.proxies import TypedActorProxy
 from service_kit.lakehouse.ns_errors import install_problem_handlers
@@ -34,7 +33,7 @@ from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 LINEAGE = "http://lineage.invalid"
 OPEN = Visibility(client=None, enabled=False)
-APP_TOKEN = "an-app-token"
+pytestmark = pytest.mark.usefixtures("lineage_identity_token")
 
 
 def _event(
@@ -153,8 +152,7 @@ def _feed_client(*, page_limit: int = 500, timeout_seconds: float = 5.0) -> Line
     return LineageFeedClient(
         client=httpx.AsyncClient(),
         base_url=LINEAGE,
-        identity="notifications",
-        token=SecretStr(APP_TOKEN),
+        token_file=IngressSettings().lineage_identity_token_file,
         timeout_seconds=timeout_seconds,
         page_limit=page_limit,
     )

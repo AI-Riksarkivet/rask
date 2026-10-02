@@ -36,6 +36,7 @@ import textwrap
 import uuid
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any, cast
 from urllib.parse import quote
 
@@ -229,21 +230,25 @@ class _ThrottledRecords:
         return getattr(self._inner, name)
 
 
-def _maintained_through(client: TestClient, estate: _Estate) -> DatasetResult:
-    """Maintenance's real unit on the attacker, its credential asked of this catalog's own vend door over HTTP."""
+def _maintained_through(client: TestClient, estate: _Estate, token_file: Path) -> DatasetResult:
+    """Maintenance's real unit on the attacker, its credential asked of this catalog's own vend door over HTTP.
+
+    ``token_file`` stands in for the pod's projected `rask-catalog` token: without one maintenance sends no request.
+    """
 
     def _forward(request: httpx.Request) -> httpx.Response:
         answer = client.post(request.url.path, params=dict(request.url.params))
         return httpx.Response(answer.status_code, content=answer.content, headers={"content-type": answer.headers.get("content-type", "")})
 
-    settings = estate.maintenance(catalog_url="http://catalog.test")
+    token_file.write_text("sa-token\n")
+    settings = estate.maintenance(catalog_url="http://catalog.test", catalog_identity_token_file=str(token_file))
     item = DatasetWorkItem(uri=estate.attacker, table_id="db$attacker", plan=DatasetPlan(older_than=timedelta(days=7)))
     with respx.mock(base_url="http://catalog.test") as catalog:
         catalog.post("/management/v1/table/db$attacker/credentials").mock(side_effect=_forward)
         return sweep.maintain_one_item(item, settings=settings, options=settings.storage_options())
 
 
-def test_the_vend_and_read_doors_refuse_the_planting_table(estate: _Estate, planted: str, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_vend_and_read_doors_refuse_the_planting_table(estate: _Estate, planted: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Closes-when (2): no credential for the planting table, and no row read through it.
 
     Nor through the deployment's ambient key: maintenance, the one consumer holding it, stops on the refusal,
@@ -256,7 +261,7 @@ def test_the_vend_and_read_doors_refuse_the_planting_table(estate: _Estate, plan
     _refused(estate.client.post("/v1/table/db$attacker/describe", params={"vend_credentials": "true"}), _INVALID_TABLE_STATE)
     _refused(estate.client.post("/v1/table/db$attacker/query", json=_QUERY), _INVALID_TABLE_STATE)
     catalog = TestClient(estate.client.app, raise_server_exceptions=False)
-    assert _maintained_through(catalog, estate).refused_by == "vend_denied", "the refusal became an ambient-key rewrite"
+    assert _maintained_through(catalog, estate, tmp_path / "rask-catalog-token").refused_by == "vend_denied", "the refusal became an ambient-key rewrite"
 
     # The table's own path in another store is not its own: a `file://` base reads the catalog pod's disk. On a
     # table declaring no other base, so nothing but that base's standing decides whether it is judged at all.
@@ -293,7 +298,7 @@ def test_the_vend_and_read_doors_refuse_the_planting_table(estate: _Estate, plan
     monkeypatch.setattr(storage, "s3_client", lambda *args, **kwargs: _ThrottledRecords(real_client(*args, **kwargs)))
     unjudged = catalog.post("/management/v1/table/db$attacker/credentials")
     assert unjudged.status_code == 503 and unjudged.json()["title"] == "ServiceUnavailableError", unjudged.text
-    stopped = _maintained_through(catalog, estate)
+    stopped = _maintained_through(catalog, estate, tmp_path / "rask-catalog-token")
     assert (ack_for(stopped), stopped.error_type) == (RETRY, "VendUndecided"), f"a door that could not decide was signed around: {stopped}"
 
 

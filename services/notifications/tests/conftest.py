@@ -26,6 +26,7 @@ env above, once so the next suite does not inherit this one's settings object.
 """
 
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 
@@ -45,3 +46,13 @@ def _notifications_env() -> Iterator[None]:
         get_notifications_settings.cache_clear()
         yield
         get_notifications_settings.cache_clear()
+
+
+@pytest.fixture
+def lineage_identity_token(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """This pod's projected `rask-lineage` token as the kubelet leaves it: a file, named by the setting
+    the lifespan reads, that the feed client re-reads on every request."""
+    path = tmp_path / "rask-lineage-token"
+    path.write_text("sa-token-one\n")
+    monkeypatch.setenv("RASK_LINEAGE_IDENTITY_TOKEN_FILE", str(path))
+    return path
