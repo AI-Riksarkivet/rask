@@ -7,6 +7,7 @@ import { makeGatewayHandleFetch } from './gateway';
 import { makeTelemetryHandle, startZoneTelemetry } from './telemetry';
 import { fetchMe } from './me';
 import { readSecretFile } from './secret-file';
+import { lineageAuthHeaders } from './runs-feed';
 
 // Re-exported from the SERVER-ONLY subpath on purpose: it reads `node:fs`, so it must never
 // reach the client-safe `.` entry. Zones' `.remote.ts` files take it from here.
@@ -157,8 +158,10 @@ const DROPPED_RESPONSE_HEADERS = new Set([
 export function makeBackendProxy(opts: {
 	backendUrl: string;
 	stripPrefix: RegExp;
-	serviceToken?: string | undefined;
-	serviceId?: string | undefined;
+	/** The file holding the READ-only service bearer (a projected ServiceAccount token), read on every
+	 *  request: the handler is built once at route-module load, and kubelet rewrites the file in place
+	 *  before the token's 600 s expiry, so a value taken at build time goes stale in a running pod. */
+	serviceTokenFile?: string | undefined;
 	/** Extra request headers (lowercase) forwarded to the backend — e.g. `['range', 'accept']` so media
 	 *  streaming keeps HTTP Range seeking through the proxy. Default: none (auth + content-type only). */
 	forwardRequestHeaders?: readonly string[] | undefined;
@@ -193,11 +196,16 @@ export function makeBackendProxy(opts: {
 			if (value !== null) headers[name] = value;
 		}
 		const session = auth.session;
-		if (session) {
+		if (isRead) {
+			Object.assign(
+				headers,
+				lineageAuthHeaders({
+					accessToken: session?.accessToken,
+					serviceToken: session ? undefined : readSecretFile(opts.serviceTokenFile),
+				}),
+			);
+		} else if (session) {
 			headers['authorization'] = `Bearer ${session.accessToken}`;
-		} else if (opts.serviceToken && isRead) {
-			headers['dapr-api-token'] = opts.serviceToken;
-			headers['x-lance-service-identity'] = opts.serviceId ?? '';
 		}
 		const init: RequestInit = isRead
 			? { method: request.method, headers }
@@ -349,8 +357,8 @@ export function makeZoneHooks(env: Env, opts: { gateway?: boolean; zone?: string
 }
 
 /**
- * `capi/**` → the CATALOG service. The catalog is OIDC-only (no service-token door), so the only
- * credential ever attached is the signed-in user's bearer. GET-only: the same confused-deputy stance as
+ * `capi/**` → the CATALOG service. A zone projects no `rask-catalog` token, so the only credential
+ * ever attached is the signed-in user's bearer. GET-only: the same confused-deputy stance as
  * rask/apps/web — no blanket write proxy. Serves the frozen `/capi/v1/me` identity pass-through in every
  * zone, plus the catch-all in the zones that read the catalog directly. Anon stays the catalog's honest
  * 401 and the navbar renders signed-out chrome.
@@ -371,13 +379,10 @@ export function makeLineageProxy(env: Env): RequestHandler {
 	return makeBackendProxy({
 		backendUrl: env.LINEAGE_API ?? DEFAULT_LINEAGE_API,
 		stripPrefix: /^\/api/,
-		// FROM A FILE, RE-READ PER REQUEST ([[XC-001]], [[LH-160]]). A zone has no Dapr sidecar, so the
-		// sanctioned path is an ESO-managed Secret taken as a mount; what rides in the environment is
-		// the PATH, which is not a secret. Reading it here rather than once at module load is what lets
-		// a rotation reach a running pod — delivered through `env` the value is fixed at exec, and the
-		// only remedy left was a watcher that restarts consumers.
-		serviceToken: readSecretFile(env.LINEAGE_SERVICE_TOKEN_FILE),
-		serviceId: env.LINEAGE_SERVICE_ID,
+		// The pod's projected `rask-lineage` ServiceAccount token (D1, LH-220): the lineage door takes
+		// the subject from the verified token, so nothing else names the caller. What rides in the
+		// environment is the PATH, which is not a secret; the proxy reads the file per request.
+		serviceTokenFile: env.LINEAGE_SERVICE_TOKEN_FILE,
 	});
 }
 

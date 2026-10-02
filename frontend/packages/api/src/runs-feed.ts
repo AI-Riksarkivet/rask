@@ -115,7 +115,7 @@ export interface LineageFeedOptions {
 	lineageApi: string;
 	/** The request-scoped fetch (SvelteKit's, so the zone's own instrumentation applies). */
 	fetch: typeof globalThis.fetch;
-	/** The credential for this caller — the user's bearer, or the read-only service identity. */
+	/** The credential for this caller — the user's bearer, or the read-only service token as a bearer. */
 	headers: () => Record<string, string>;
 }
 
@@ -213,21 +213,16 @@ export async function* lineagePulse(opts: LineageFeedOptions): AsyncGenerator<Li
 }
 
 /**
- * The credential for a lineage read, mirroring `makeLineageProxy` exactly: the signed-in user's bearer when
- * there is one, else the READ-only service credential a governed stack uses to serve reads without a
- * per-user login. Anything else (auth-off dev) sends nothing.
+ * The credential for a lineage read, and the one `makeBackendProxy` attaches to every read: the signed-in
+ * user's bearer when there is one, else the READ-only service token (the pod's projected `rask-lineage`
+ * ServiceAccount token, D1) as a bearer. The lineage door takes the subject from the verified token, so
+ * nothing else names the caller. The caller reads the token file per request (`readSecretFile`), because
+ * kubelet rotates it before its 600 s expiry. Anything else (auth-off dev) sends nothing.
  */
 export function lineageAuthHeaders(input: {
-	accessToken?: string | null;
-	serviceToken?: string;
-	serviceId?: string;
+	accessToken?: string | null | undefined;
+	serviceToken?: string | undefined;
 }): Record<string, string> {
-	if (input.accessToken) return { authorization: `Bearer ${input.accessToken}` };
-	if (input.serviceToken) {
-		return {
-			'dapr-api-token': input.serviceToken,
-			'x-lance-service-identity': input.serviceId ?? '',
-		};
-	}
-	return {};
+	const bearer = input.accessToken || input.serviceToken;
+	return bearer ? { authorization: `Bearer ${bearer}` } : {};
 }
