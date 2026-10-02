@@ -15,7 +15,7 @@
    Secret and the app compares against this field), plus one service-token-<identity> per subject listed
    in any *_PRIVILEGED_SUBJECTS, plus signing-public-<identity> (field `keys`) and then signing-key-<identity>
    (field `seed`) for every identity in lance.signingIdentities (values.yaml `signing:`; render refuses a non-dev
-   store until scripts/provision_signing_keys.sh created them and signing.provisioned says so). The devMode seed
+   store until an operator created them and signing.provisioned says so). The devMode seed
    below is the authoritative list — keep this comment and that `bao kv put` in sync.
 
    TWO CONSUMERS, ONE KEY (2026-08-09). `publisher-oidc-client-secret` now serves the publish saga AND

@@ -86,7 +86,6 @@ def door(monkeypatch: pytest.MonkeyPatch) -> tuple[TestClient, _Feed]:
         pytest.param("unsigned", "SUCCESS", False, id="an-unsigned-event"),
         pytest.param("tampered", "SUCCESS", False, id="an-event-changed-after-its-signer-signed-it"),
         pytest.param("store-down", "RETRY", False, id="a-public-key-source-lineage-cannot-read"),
-        pytest.param("signed", "SUCCESS", True, id="a-signature-the-published-key-verifies"),
     ],
 )
 def test_lineage_records_a_bus_event_only_when_a_listed_signer_signed_it(

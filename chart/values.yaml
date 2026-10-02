@@ -3272,8 +3272,9 @@ signing:
   # store and auth.enabled are on as well: lineage then refuses an unsigned or non-verifying event before it records it.
   enforce: false
   # NON-DEV STORES (openbao.devMode=false, or openbao.externalAddr) MINT NOTHING, so every signer would stay not
-  # Ready. The render fails until the operator attests here that scripts/provision_signing_keys.sh has created
-  # signing-public-<identity> then signing-key-<identity> for every identity the failure names.
+  # Ready. The render fails until the operator attests here that signing-public-<identity> and then
+  # signing-key-<identity> exist for every identity the failure names. Tooling for that, and rotation on such a
+  # store, is the production runbook, which waits for a production estate (owner, no-prod parking 2026-09-21).
   provisioned: false
   # The `mint` init container's image, the one place it is pinned. `nk` is measured working as uid 65532 with a
   # read-only root.

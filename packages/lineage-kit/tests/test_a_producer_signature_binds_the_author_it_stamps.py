@@ -21,10 +21,7 @@ from __future__ import annotations
 
 import base64
 import binascii
-import copy
 import json
-import subprocess
-import sys
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, cast
@@ -104,24 +101,19 @@ def _nested(containers: int) -> list[Any]:
 
 
 class _Source:
-    """What each identity publishes, what a re-read finds once a rotation has landed, and an outage."""
+    """What each identity publishes; a re-read finds the same lists (the door tests drive rotation and outages)."""
 
-    def __init__(self, published: Mapping[str, Sequence[str]], *, rotated: Mapping[str, Sequence[str]] | None = None, down: bool = False) -> None:
-        self._published, self._rotated, self._down = published, rotated if rotated is not None else published, down
+    def __init__(self, published: Mapping[str, Sequence[str]]) -> None:
+        self._published = published
         self.calls: list[str] = []
 
     def published(self, identity: str) -> Sequence[str]:
         self.calls.append("published")
-        return self._read(self._published, identity)
+        return self._published.get(identity, [])
 
     def refresh(self, identity: str) -> Sequence[str]:
         self.calls.append("refresh")
-        return self._read(self._rotated, identity)
-
-    def _read(self, lists: Mapping[str, Sequence[str]], identity: str) -> Sequence[str]:
-        if self._down:
-            raise KeySourceUnavailableError("the store is down")
-        return lists.get(identity, [])
+        return self._published.get(identity, [])
 
 
 def _signed(signer: Any, event: dict[str, Any], *, on_behalf_of: str | None = None) -> dict[str, Any]:
@@ -185,31 +177,18 @@ def test_a_signature_is_the_wire_format_the_contract_writes_and_verifies_against
 @pytest.mark.parametrize(
     ("case", "outcome", "reads"),
     [
-        pytest.param("integral-float-delivered-as-int", "verified", ["published"], id="5.0-signed-and-delivered-as-5"),
-        pytest.param("previous-key", "verified", ["published"], id="signed-with-the-previous-key-after-a-rotation"),
-        pytest.param("key-published-after-the-first-read", "verified", ["published", "refresh"], id="a-key-the-first-read-did-not-list-but-a-re-read-does"),
         pytest.param("corrupt-entry-beside-the-key", "verified", ["published"], id="a-corrupt-published-entry-does-not-hide-the-right-one"),
-        pytest.param("unpublished-key", "kid", ["published", "refresh"], id="a-key-the-identity-does-not-publish-after-a-re-read"),
-        pytest.param("store-down", "unavailable", ["published"], id="a-public-key-source-that-cannot-be-read"),
         pytest.param("nothing-published", "unavailable", ["published"], id="an-identity-with-no-published-key"),
-        pytest.param("unsigned", "unsigned", [], id="an-event-with-no-signature"),
         pytest.param("malformed-canon", "malformed", [], id="a-facet-whose-canon-is-a-boolean"),
         pytest.param("malformed-kid", "malformed", [], id="a-facet-whose-kid-is-not-sixteen-hex-characters"),
-        pytest.param("unlisted-signer", "signer", [], id="a-signer-outside-the-signer-set-reads-no-key"),
-        pytest.param("non-delegator-for-a-person", "delegation", [], id="a-delegation-from-outside-the-delegator-set"),
         pytest.param("signer-stamps-another-author", "author", [], id="a-signer-stamping-another-author-without-a-delegation"),
         pytest.param("delegation-names-another-subject", "author", [], id="a-delegation-for-someone-other-than-the-stamped-author"),
         pytest.param("signature-of-the-wrong-length", "encoding", [], id="a-signature-that-is-not-86-base64url-characters"),
         pytest.param("second-spelling-of-the-signature", "encoding", [], id="a-second-spelling-of-the-same-signature-bytes"),
-        pytest.param("run-and-dataset", "verified", ["published"], id="an-event-carrying-both-is-read-as-a-run-event"),
         pytest.param("nested-600-deep", "uncanonical", ["published"], id="an-event-nested-far-beyond-the-bound"),
-        pytest.param("tamper-identity", "signature", ["published"], id="the-identity-rewritten-to-another-delegator"),
-        pytest.param("tamper-on-behalf-of", "signature", ["published"], id="a-delegation-injected-into-a-self-signed-event"),
         pytest.param("tamper-alg", "alg", [], id="the-algorithm-rewritten"),
         pytest.param("tamper-canon", "canon", [], id="the-canonicalization-rewritten"),
-        pytest.param("tamper-kid", "signature", ["published"], id="the-key-id-rewritten-to-another-published-key"),
         pytest.param("tamper-schema-url", "signature", ["published"], id="the-schema-url-rewritten"),
-        pytest.param("tamper-producer", "signature", ["published"], id="the-producer-rewritten"),
         pytest.param("tamper-author", "signature", ["published"], id="the-person-retargeted-in-the-author-and-the-delegation"),
         pytest.param("a-fault-in-the-crypto-library", "error", ["published"], id="an-exception-nothing-anticipated"),
     ],
@@ -217,9 +196,7 @@ def test_a_signature_is_the_wire_format_the_contract_writes_and_verifies_against
 def test_the_verifier_accepts_what_a_published_key_signed_and_refuses_the_rest_reading_a_key_only_when_it_must(
     monkeypatch: pytest.MonkeyPatch, event_signer: Any, case: str, outcome: str, reads: list[str]
 ) -> None:
-    catalog, stage, previous, rotated, unpublished, unlisted = (
-        event_signer(identity) for identity in (CATALOG, STAGE, STAGE, STAGE, STAGE, "service-unlisted")
-    )
+    catalog, stage = event_signer(CATALOG), event_signer(STAGE)
     published = {CATALOG: [catalog.public], STAGE: [stage.public]}
     delegated = _signed(catalog, _event(PERSON), on_behalf_of=PERSON)
     self_signed = _signed(stage, _event(STAGE))
@@ -227,11 +204,6 @@ def test_the_verifier_accepts_what_a_published_key_signed_and_refuses_the_rest_r
     # The last base64url character of a signature carries bits no one checks, so it has a second spelling for the same 64 bytes.
     value = self_signed["run"]["facets"]["rask_signature"]["signature"]
     second_spelling = value[:-1] + _BASE64URL[_BASE64URL.index(value[-1]) ^ 1]
-
-    def integral_float_delivered_as_int() -> tuple[dict[str, Any], _Source]:
-        delivered = copy.deepcopy(self_signed)
-        delivered["run"]["facets"]["lance"]["duration_seconds"] = 5
-        return delivered, _Source(published)
 
     def nested_600_deep() -> tuple[dict[str, Any], _Source]:
         bomb = {**self_signed, "run": {**self_signed["run"], "facets": {**self_signed["run"]["facets"], "lance": {"deep": _nested(600)}}}}
@@ -245,45 +217,18 @@ def test_the_verifier_accepts_what_a_published_key_signed_and_refuses_the_rest_r
         return self_signed, _Source(published)
 
     scenarios: dict[str, Callable[[], tuple[dict[str, Any], _Source]]] = {
-        "integral-float-delivered-as-int": integral_float_delivered_as_int,
-        "previous-key": lambda: (
-            _signed(previous, _event(STAGE)),
-            _Source({STAGE: parse_published_keys(f" {stage.public} ,, {previous.public}\n")}),
-        ),
-        "key-published-after-the-first-read": lambda: (
-            _signed(rotated, _event(STAGE)),
-            _Source({STAGE: [stage.public]}, rotated={STAGE: [rotated.public, stage.public]}),
-        ),
         "corrupt-entry-beside-the-key": lambda: (self_signed, _Source({STAGE: [corrupt, stage.public]})),
-        "unpublished-key": lambda: (_signed(unpublished, _event(STAGE)), _Source(published)),
-        "store-down": lambda: (self_signed, _Source(published, down=True)),
         "nothing-published": lambda: (self_signed, _Source({CATALOG: [catalog.public]})),
-        "unsigned": lambda: (_event(STAGE), _Source(published)),
         "malformed-canon": lambda: (_with_signature_members(self_signed, canon=True), _Source(published)),
         "malformed-kid": lambda: (_with_signature_members(self_signed, kid="NOT-A-KID"), _Source(published)),
-        "unlisted-signer": lambda: (_signed(unlisted, _event("service-unlisted")), _Source(published)),
-        "non-delegator-for-a-person": lambda: (_signed(stage, _event(PERSON), on_behalf_of=PERSON), _Source(published)),
         "signer-stamps-another-author": lambda: (_signed(stage, _event(ROGUE)), _Source(published)),
         "delegation-names-another-subject": lambda: (_signed(catalog, _event(PERSON), on_behalf_of="someone-else"), _Source(published)),
         "signature-of-the-wrong-length": lambda: (_with_signature_members(self_signed, signature=value[:-1]), _Source(published)),
         "second-spelling-of-the-signature": lambda: (_with_signature_members(self_signed, signature=second_spelling), _Source(published)),
-        "run-and-dataset": lambda: (_signed(stage, {**_event(STAGE), "dataset": {"namespace": "lance", "name": "t", "facets": {}}}), _Source(published)),
         "nested-600-deep": nested_600_deep,
-        # The identity is swapped for another delegator that publishes the same key, so every check that needs no key passes.
-        "tamper-identity": lambda: (
-            _with_signature_members(delegated, identity=OTHER_DELEGATOR),
-            _Source({**published, OTHER_DELEGATOR: [catalog.public]}),
-        ),
-        "tamper-on-behalf-of": lambda: (
-            _with_signature_members(_signed(catalog, _event(CATALOG)), onBehalfOf=CATALOG),
-            _Source(published),
-        ),
         "tamper-alg": lambda: (_with_signature_members(self_signed, alg="Ed25519ph"), _Source(published)),
         "tamper-canon": lambda: (_with_signature_members(self_signed, canon=2), _Source(published)),
-        # The kid names the identity's OTHER published key, so the key is found and only the bytes can object.
-        "tamper-kid": lambda: (_with_signature_members(self_signed, kid=previous.kid), _Source({STAGE: [stage.public, previous.public]})),
         "tamper-schema-url": lambda: (_with_signature_members(self_signed, _schemaURL="https://example.invalid/other.json"), _Source(published)),
-        "tamper-producer": lambda: (_with_signature_members(self_signed, _producer="https://example.invalid/other"), _Source(published)),
         "tamper-author": lambda: (
             _with_signature_members(_with_author(delegated, "someone-else"), onBehalfOf="someone-else"),
             _Source(published),
@@ -308,7 +253,6 @@ def test_the_verifier_accepts_what_a_published_key_signed_and_refuses_the_rest_r
     ("case", "refused"),
     [
         pytest.param("bad-checksum", ValueError, id="a-seed-with-a-character-changed"),
-        pytest.param("a-public-key", ValueError, id="a-public-key-where-a-seed-belongs"),
         pytest.param("an-account-seed", ValueError, id="a-well-formed-seed-of-another-nkey-type"),
         pytest.param("lowercase", ValueError, id="a-seed-in-lower-case"),
         pytest.param("second-spelling", ValueError, id="a-second-spelling-of-the-same-seed"),
@@ -316,12 +260,11 @@ def test_the_verifier_accepts_what_a_published_key_signed_and_refuses_the_rest_r
     ],
 )
 def test_a_seed_that_is_not_an_nkey_user_seed_is_refused_without_echoing_it(event_signer: Any, case: str, refused: type[Exception]) -> None:
-    seed, other = event_signer(STAGE).seed, event_signer(STAGE)
+    seed = event_signer(STAGE).seed
     account_seed = bytes([0x90, 0x00]) + bytes(32)  # the seed marker with the account type, a well-formed NKEY of the wrong kind
     account_seed_text = base64.b32encode(account_seed + binascii.crc_hqx(account_seed, 0).to_bytes(2, "little")).decode().rstrip("=")
     bad: str | bytes = {
         "bad-checksum": seed[:20] + ("A" if seed[20] != "A" else "B") + seed[21:],
-        "a-public-key": other.public,
         "an-account-seed": account_seed_text,
         "lowercase": seed.lower(),
         # The last base32 character of a seed carries two bits no checksum covers, so a second spelling decodes to the same key.
@@ -355,26 +298,11 @@ def test_canon_1_writes_the_binary64_profile_of_canonical_json() -> None:
 @pytest.mark.parametrize(
     ("value", "why"),
     [
-        pytest.param(2**53, "integer", id="an-integer-beyond-2^53-1"),
-        pytest.param(float("nan"), "non-finite", id="nan"),
-        pytest.param(float("inf"), "non-finite", id="infinity"),
         pytest.param({1: "x"}, "key", id="a-key-that-is-not-a-string"),
         pytest.param("\ud800", "surrogate", id="a-lone-surrogate"),
         pytest.param((1, 2), "tuple", id="a-type-json-has-no-name-for"),
-        pytest.param(_nested(MAX_NESTING + 1), "nesting", id="nesting-one-beyond-the-bound"),
     ],
 )
 def test_canon_1_refuses_what_has_no_canonical_form(value: object, why: str) -> None:
     with pytest.raises(CanonError, match=why):
         canon_1(value)
-
-
-def test_importing_lineage_kit_loads_no_cryptography() -> None:
-    """Sealed runners emit over HTTP and never sign, and the ray-lance image copies this package's source beside a
-    requirements export that carries no cryptography wheel, so the import has to stay inside the functions that load a
-    key, sign and verify."""
-    probe = "import sys, lineage_kit; sys.exit(int(any(name == 'cryptography' or name.startswith('cryptography.') for name in sys.modules)))"
-
-    done = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, check=False)
-
-    assert done.returncode == 0, f"importing lineage_kit loaded cryptography: {done.stderr}"

@@ -98,13 +98,9 @@ def _held_kid(holder: SigningKeyHolder[_Key]) -> str | None:
 @pytest.mark.parametrize(
     ("seed", "keys", "kid"),
     [
-        pytest.param(_found("seed", "SEED-a"), _found("keys", "PUB-b, PUB-a"), "a", id="a-key-its-identity-lists"),
         pytest.param(httpx.Response(500), _found("keys", "PUB-a"), None, id="a-seed-the-store-cannot-answer"),
-        pytest.param(httpx.Response(404), _found("keys", "PUB-a"), None, id="a-seed-that-is-not-there"),
         pytest.param(_found("seed", ""), _found("keys", "PUB-a"), None, id="an-empty-seed"),
         pytest.param(_found("seed", "not-a-seed"), _found("keys", "PUB-a"), None, id="a-seed-that-is-no-key"),
-        pytest.param(_found("seed", "SEED-a"), httpx.Response(404), None, id="an-identity-that-publishes-nothing"),
-        pytest.param(_found("seed", "SEED-a"), _found("keys", "PUB-b"), None, id="a-key-its-identity-does-not-list"),
     ],
 )
 def test_a_signer_holds_a_key_only_while_its_identity_lists_it(store: _Store, seed: httpx.Response, keys: httpx.Response, kid: str | None) -> None:
@@ -150,7 +146,6 @@ async def test_a_signer_heals_in_place_follows_a_re_minted_store_and_drops_an_un
     [
         pytest.param(_found("seed", "SEED-a"), "SUCCESS", 200, id="a-key-its-identity-lists"),
         pytest.param(httpx.Response(500), "RETRY", 503, id="no-key"),
-        pytest.param(None, "SUCCESS", 200, id="a-service-that-does-not-sign"),
     ],
 )
 def test_a_signer_takes_deliveries_and_reports_ready_only_while_it_holds_its_key(

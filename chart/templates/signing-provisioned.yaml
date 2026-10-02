@@ -4,6 +4,6 @@
 {{- if $ids }}
 {{- $names := list }}
 {{- range $ids }}{{- $names = concat $names (list (printf "signing-public-%s" .) (printf "signing-key-%s" .)) }}{{- end }}
-{{- fail (printf "EVENT SIGNING KEYS NOT PROVISIONED: openbao.devMode=false or openbao.externalAddr means nothing mints them, so every signer would stay not Ready and lineage could verify nothing. Create these secrets in the store (KV v2, public list first, then the seed) with `scripts/provision_signing_keys.sh %s` (docs/OPERATORS.md, Event signing keys), then --set signing.provisioned=true:\n  - %s" (join " " $ids) (join "\n  - " $names)) }}
+{{- fail (printf "EVENT SIGNING KEYS NOT PROVISIONED: openbao.devMode=false or openbao.externalAddr means nothing mints them, so every signer would stay not Ready and lineage could verify nothing. Create these secrets in the store (KV v2; each identity's public list before its seed; docs/OPERATORS.md, Event signing keys), then --set signing.provisioned=true:\n  - %s" (join "\n  - " $names)) }}
 {{- end }}
 {{- end }}

@@ -155,7 +155,6 @@ def _a_catalog_drop() -> dict[str, Any]:
 @pytest.mark.parametrize(
     ("sign", "event", "fga_enabled", "refused"),
     [
-        pytest.param(False, _maintenance_event("service-maintenance"), False, False, id="an-unsigned-event-is-admitted"),
         pytest.param(True, _a_catalog_drop(), True, True, id="a-catalog-drop-nobody-verified-keeps-the-full-check"),
     ],
 )

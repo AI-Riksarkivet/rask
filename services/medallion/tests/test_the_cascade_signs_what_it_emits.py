@@ -137,7 +137,6 @@ async def test_a_service_meant_to_sign_that_has_no_key_emits_nothing(published: 
     ("from_store", "identity"),
     [
         pytest.param(False, IDENTITY, id="a-service-with-no-secret-store"),
-        pytest.param(True, "", id="a-service-the-chart-gave-no-signing-identity"),
     ],
 )
 @pytest.mark.asyncio

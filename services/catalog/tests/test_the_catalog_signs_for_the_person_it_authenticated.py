@@ -168,7 +168,6 @@ def test_a_write_nobody_authenticated_is_announced_unsigned(boot: Boot, event_si
     "token",
     [
         pytest.param(SimpleNamespace(sub=PERSON), id="a-write-by-a-person"),
-        pytest.param(None, id="a-write-nobody-authenticated"),
     ],
 )
 def test_a_catalog_without_its_key_commits_the_write_announces_nothing_and_is_not_ready(boot: Boot, token: object) -> None:

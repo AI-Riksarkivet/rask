@@ -205,21 +205,19 @@ pair per identity on a memory volume the server never mounts, and its `seed` con
 (the kept copy, else the store behind the Service, else the candidate), keeps it, and writes the list first. A
 rollout therefore carries every pair over; an in-place restart of either container writes the same pair again.
 
-**A sealed or external store mints nothing.** The render refuses it until you have created the secrets and said so:
-
-1. `scripts/provision_signing_keys.sh <identity>...` with `BAO_ADDR` and an operator `BAO_TOKEN` (the failing render
-   prints the exact command and every secret it expects). It runs `nk -gen user -pubout`, writes the list, then the
-   seed, never prints a seed and never replaces a pair that exists.
-2. `--set signing.provisioned=true` on every upgrade, which attests step 1 and nothing else.
-
-Until then no signer is Ready and none emits: a sidecar delivery to one is answered RETRY, not dropped.
+**A sealed or external store mints nothing.** The render refuses it until the secrets exist and
+`--set signing.provisioned=true` attests it. Each identity needs `signing-public-<identity>` (field `keys`: its public
+NKEYs, comma-separated, current first) written before `signing-key-<identity>` (field `seed`: its NKEY user seed);
+`nk -gen user -pubout` prints a pair. Tooling for this is the production runbook, which waits for a production
+estate (owner, no-prod parking 2026-09-21). Until the keys exist no signer is Ready and none emits: a sidecar
+delivery to one is answered RETRY, not dropped.
 
 **Rotation, at most once per 7 days** (the bus keeps 168 h and a retired key must stay listed until nothing signed
 with it remains to verify). On the dev OpenBao: delete `signing-key-<identity>` from the store, delete its kept copy
 (`/tmp/seed/signing-key-<identity>` in the `seed` container, so an in-place restart cannot write the old key back) and
 roll `deploy/rask-openbao`; the seed finds the list without its key, mints, prepends the new public key and keeps one
-previous. On a sealed or external store: `scripts/provision_signing_keys.sh --rotate <identity>`. Either way the
-signer re-resolves its key within 5 minutes and heals in place, and the retired key leaves the list at the next
+previous. Rotation on a sealed or external store belongs to the parked production
+runbook. The signer re-resolves its key within 5 minutes and heals in place, and the retired key leaves the list at the next
 rotation.
 
 **Loss.** A dev OpenBao replacement with no outgoing pod to carry from (a deleted pod, a drained node) mints every

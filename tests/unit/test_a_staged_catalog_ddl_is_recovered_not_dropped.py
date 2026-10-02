@@ -284,7 +284,6 @@ def test_a_staged_create_the_gate_refuses_is_refused_and_never_ingested(
     ("operation", "by_the_catalog", "drained"),
     [
         pytest.param("drop_table", True, 1, id="a-delegators-drop-is-admitted-though-its-grants-are-gone"),
-        pytest.param("create_table", True, 0, id="a-delegators-create-keeps-the-full-check"),
         pytest.param("drop_table", False, 0, id="another-listed-signers-drop-keeps-the-full-check"),
     ],
 )

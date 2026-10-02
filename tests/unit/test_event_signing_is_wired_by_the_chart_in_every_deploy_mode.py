@@ -58,7 +58,6 @@ def test_a_store_nothing_seeds_is_refused_until_the_operator_attests_its_signing
     with pytest.raises(subprocess.CalledProcessError) as refused:
         chart_render.render(*DEFAULT_ARGS, *mode)
     message = refused.value.stderr
-    assert "scripts/provision_signing_keys.sh" in message
     missing = [name for identity in identities for name in (f"signing-public-{identity}", f"signing-key-{identity}") if name not in message]
     assert not missing, f"the refusal does not name {missing}, so the operator cannot tell which secrets to create"
 
