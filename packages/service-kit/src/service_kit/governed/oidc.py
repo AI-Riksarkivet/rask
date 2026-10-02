@@ -29,6 +29,11 @@ Security posture (see CHANGELOG in the task notes):
   tokens are still validated against it. A ``jwks_uri`` under the issuer is rebased
   onto the override so the key fetch stays in-cluster; HTTPS enforcement applies to
   the override URL under the same ``allow_insecure`` knob.
+* **A credential for the fetch, when the issuer demands one.** A Kubernetes service-account issuer
+  serves discovery and its key set only to a bearer and only from a private CA (measured on k3s
+  2026-10-02: `--anonymous-auth=false` answers 401, the default trust store fails TLS). ``fetch_token_file``
+  names a projected token re-read on every fetch, because the kubelet rotates it under the process;
+  ``ca_file`` names the CA both fetches trust. ([[LH-220]])
 * **Opaque failures, charged to their author.** A failure the presented token causes is a
   generic ``UnauthenticatedError``; one the provider or this deployment's configuration of it
   causes (discovery, the key set, a non-HTTPS URL, no algorithm in common) is a
@@ -40,8 +45,10 @@ from __future__ import annotations
 import asyncio
 import http.client
 import logging
+import ssl
 import time
-from typing import Annotated, NamedTuple
+from pathlib import Path
+from typing import Annotated, Any, NamedTuple
 from urllib.parse import urlsplit
 
 import httpx
@@ -133,6 +140,46 @@ class _Provider(NamedTuple):
 log = logging.getLogger(__name__)
 
 
+class _FetchCredential:
+    """The bearer and CA an issuer's fetches carry; neither is set for a public IdP.
+
+    The token is read on every fetch, never kept: a projected token is rotated by the kubelet at 80% of its
+    lifetime, so a copy taken at construction stops working while the process runs.
+    """
+
+    def __init__(self, token_file: str | None, ca_file: str | None) -> None:
+        self._token_file = token_file
+        self.ssl_context: ssl.SSLContext | None = ssl.create_default_context(cafile=ca_file) if ca_file else None
+
+    def headers(self) -> dict[str, str]:
+        if self._token_file is None:
+            return {}
+        token = Path(self._token_file).read_text().strip()
+        if not token:
+            raise OSError(f"the fetch credential at {self._token_file} is empty")
+        return {"Authorization": f"Bearer {token}"}
+
+    def verify(self) -> ssl.SSLContext | bool:
+        return self.ssl_context if self.ssl_context is not None else True
+
+
+class _CredentialedJWKClient(jwt.PyJWKClient):
+    """PyJWT's key-set client, carrying the fetch credential read afresh on each fetch.
+
+    `PyJWKClient.fetch_data` sends the ``headers`` it was built with; refreshing them first keeps the rest of
+    its contract as shipped, including caching only a set that arrived. A token that cannot be read is an
+    ``OSError``, which `OIDCVerifier._key_set` already charges to the provider.
+    """
+
+    def __init__(self, uri: str, credential: _FetchCredential, *, max_cached_keys: int, timeout: float) -> None:
+        super().__init__(uri, cache_jwk_set=True, max_cached_keys=max_cached_keys, timeout=timeout, ssl_context=credential.ssl_context)
+        self._credential = credential
+
+    def fetch_data(self) -> Any:
+        self.headers = self._credential.headers()
+        return super().fetch_data()
+
+
 class ProviderUnavailableError(ServiceUnavailableError):
     """The provider could not be used — its documents or this deployment's configuration of it, never the token.
 
@@ -176,6 +223,8 @@ class OIDCVerifier:
         leeway: int = 60,
         allow_insecure: bool = False,
         discovery_overrides: dict[str, str] | None = None,
+        fetch_token_file: str | None = None,
+        ca_file: str | None = None,
     ) -> None:
         issuers = [issuer] if isinstance(issuer, str) else list(issuer)
         if not issuers:
@@ -189,6 +238,7 @@ class OIDCVerifier:
         self._ttl = cache_ttl
         self._leeway = leeway
         self._allow_insecure = allow_insecure
+        self._credential = _FetchCredential(fetch_token_file, ca_file)
         # Keep the configured allowlist as an ordered, de-duplicated set of upper-cased
         # algorithm names so the intersection with the provider is deterministic.
         self._allowed = list(dict.fromkeys(alg.upper() for alg in allowed_algorithms))
@@ -234,14 +284,15 @@ class OIDCVerifier:
         # reaches its try block, so they are mapped here, to `ProviderUnavailableError`: a 503, as
         # `deps.py` answers for a verifier it does not have, because it is the same fact arriving later.
         try:
-            with httpx.Client(timeout=HTTP_FETCH_TIMEOUT_SECONDS) as client:
-                response = client.get(f"{discovery_base}{_DISCOVERY_SUFFIX}")
+            with httpx.Client(timeout=HTTP_FETCH_TIMEOUT_SECONDS, verify=self._credential.verify()) as client:
+                response = client.get(f"{discovery_base}{_DISCOVERY_SUFFIX}", headers=self._credential.headers())
                 response.raise_for_status()
                 # Parsed by the model rather than by `response.json()`: a body that is not JSON at all (a
                 # proxy's sign-in page) then lands in the same `ValidationError` as one of the wrong shape,
                 # instead of a `json.JSONDecodeError` that no branch below classifies.
                 spec = _Discovery.model_validate_json(response.content)
-        except httpx.HTTPError as exc:
+        except (httpx.HTTPError, OSError) as exc:
+            # OSError is the fetch credential failing to read: still this deployment's fault, never the token's.
             # The message names the LOCATION rather than the exception: an operator reading a 503
             # needs to know which URL this deployment could not use, and a split-horizon override is
             # precisely the setting most likely to be the one that is wrong.
@@ -276,7 +327,7 @@ class OIDCVerifier:
             log.warning("oidc_no_common_algorithm", extra={"advertised": spec.id_token_signing_alg_values_supported, "allowed": self._allowed})
             raise ProviderUnavailableError("No mutually-supported OIDC signing algorithm")
 
-        jwk_client = jwt.PyJWKClient(jwks_uri, cache_jwk_set=True, max_cached_keys=16, timeout=HTTP_FETCH_TIMEOUT_SECONDS)
+        jwk_client = _CredentialedJWKClient(jwks_uri, self._credential, max_cached_keys=16, timeout=HTTP_FETCH_TIMEOUT_SECONDS)
         provider = _Provider(spec=spec, jwk_client=jwk_client, algorithms=algorithms)
         self._cache[configured_issuer] = (now, provider)
         return provider

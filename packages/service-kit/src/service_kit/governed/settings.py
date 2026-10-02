@@ -182,6 +182,25 @@ class OidcSettings:
     #: only the second is a vulnerability. `assert_authentication_configured` refuses to boot on that
     #: ambiguity alone (Q17-6 / §F2-2, Lakekeeper Plus's shape).
     insecure_allow_unauthenticated: bool = Field(default=False, alias="RASK_INSECURE_ALLOW_UNAUTHENTICATED")
+    #: The cluster's service-account issuer, the one way a service authenticates ([[LH-220]], D1). A projected token
+    #: is verified offline against its key set, and `sa_subjects` maps the token's full username
+    #: (`system:serviceaccount:<ns>:<sa>`) to the subject the grants name; an unmapped account is refused. Unset, this
+    #: door admits no service.
+    sa_issuer: str | None = Field(default=None, alias="RASK_SA_ISSUER")
+    sa_audience: str | None = Field(default=None, alias="RASK_SA_AUDIENCE")
+    sa_subjects: dict[str, str] = Field(default_factory=dict, alias="RASK_SA_SUBJECTS")
+    #: The issuer serves discovery and its keys only to a bearer from a private CA (k3s, measured 2026-10-02).
+    sa_fetch_token_file: str | None = Field(default=None, alias="RASK_SA_FETCH_TOKEN_FILE")
+    sa_ca_file: str | None = Field(default=None, alias="RASK_SA_CA_FILE")
+
+    @model_validator(mode="after")
+    def _validate_service_accounts(self) -> Self:
+        """An issuer with no audience or no subject would refuse every service and look configured."""
+        if self.sa_issuer and not (self.sa_audience and self.sa_subjects):
+            raise ValueError("RASK_SA_AUDIENCE and RASK_SA_SUBJECTS are required with RASK_SA_ISSUER")
+        if self.sa_issuer and not self.sa_issuer.startswith("https://"):
+            raise ValueError("RASK_SA_ISSUER must use HTTPS")
+        return self
 
     @model_validator(mode="after")
     def _validate_oidc(self) -> Self:

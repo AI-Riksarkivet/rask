@@ -38,6 +38,11 @@ class _Settings(BaseModel):
     oidc_cache_ttl: int = 300
     oidc_leeway: int = 30
     oidc_allow_insecure: bool = False
+    sa_issuer: str | None = None
+    sa_audience: str | None = None
+    sa_subjects: dict[str, str] = {}
+    sa_fetch_token_file: str | None = None
+    sa_ca_file: str | None = None
     fga_enabled: bool = True
     fga_api_url: str = "http://fga.test:8080"
     fga_store_id: str | None = None

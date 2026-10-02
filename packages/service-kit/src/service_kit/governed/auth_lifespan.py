@@ -96,6 +96,16 @@ class _GovernedSettings(_FgaSettings, Protocol):
     @property
     def oidc_discovery_url(self) -> str | None: ...
     @property
+    def sa_issuer(self) -> str | None: ...
+    @property
+    def sa_audience(self) -> str | None: ...
+    @property
+    def sa_subjects(self) -> dict[str, str]: ...
+    @property
+    def sa_fetch_token_file(self) -> str | None: ...
+    @property
+    def sa_ca_file(self) -> str | None: ...
+    @property
     def oidc_cache_ttl(self) -> int: ...
     @property
     def oidc_leeway(self) -> int: ...
@@ -236,6 +246,30 @@ async def attach_auth(
             if fatal:
                 raise
             log.exception("%s: OIDC verifier failed to build — governed routes will 503", service)
+
+    if settings.sa_issuer and settings.sa_audience:
+        try:
+            from service_kit.governed import machine_identity
+
+            app.state.sa_oidc = machine_identity.ServiceAccountVerifier(
+                settings.sa_issuer,
+                settings.sa_audience,
+                settings.sa_subjects,
+                cache_ttl=settings.oidc_cache_ttl,
+                leeway=settings.oidc_leeway,
+                fetch_token_file=settings.sa_fetch_token_file,
+                ca_file=settings.sa_ca_file,
+            )
+            # Proved at boot, off the loop, reported and never fatal: the Dex verifier's reasons above.
+            failures = await run_in_threadpool(app.state.sa_oidc.warm)
+            for issuer, reason in failures:
+                log.error("%s: service-account issuer unusable (issuer=%s): %s", service, issuer, reason)
+            if not failures:
+                log.info("%s: service-account verifier ready (issuer=%s, discovery reached)", service, settings.sa_issuer)
+        except Exception:
+            if fatal:
+                raise
+            log.exception("%s: service-account verifier failed to build — service callers will 503", service)
 
     client = await build_fga_client(settings, service=service, provision=provision, fatal=fatal)
     if client is not None:
