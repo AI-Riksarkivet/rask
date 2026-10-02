@@ -46,7 +46,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   Pydantic-only structured models, typed `lance_namespace` errors from catalog code, `TypeError` for a
   wrong type, no `# type: ignore` / `# ty: ignore` (narrow or cast).
 - **Finish Phase 1 first; the backlog does not grow without the owner.** The work is
-  `open_backlog_left_new2.md`, in FOCUS order. The **production short list** comes first (owner, 2026-10-02): 35 rows tagged
+  `open_backlog_left_new2.md`, in FOCUS order. The **production short list** comes first (owner, 2026-10-02): the rows tagged
   `blocks-prod`, with CP-029 and LH-226 (criterion 3) and their enablers; every other Phase 1 row waits in the
   register's PHASE 1 · AFTER LAUNCH section. Phase 1 (the lakehouse) is done when its five criteria hold
   together on the estate: (1) provenance/lineage correct, (2) catalog correct for lance-ns and

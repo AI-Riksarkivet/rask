@@ -1,6 +1,6 @@
 # open_backlog_left_new2 — what is left
 
-Dated 2026-09-25. This file supersedes `open_backlog_left.md` and `open_backlog_left_new.md`. Every carried row was re-audited against HEAD today by one auditor and one skeptic per chunk, and the new rows come from today's reconciliation, Lance, Lakekeeper and pylance-12 audits. Each row states only the defect, what is left, why it matters, how to fix it and what ends it. Ids are never renumbered and never reused: a gap in a sequence is a closed row, every id that left today is listed at the foot, and the next free ids are LH-337, XC-116, CP-055, CTL-028, FE-014, LOW-039 and LIN-005. The 2026-09-26 lakehouse map proposed LH-277 to LH-300, XC-090 to XC-103 and LOW-031 to LOW-033 (file:line citations at ea8c5ff8); by owner ruling only its HIGH rows entered, and the rest are listed under **Parked findings** at the foot, uncounted.
+Dated 2026-09-25. This file supersedes `open_backlog_left.md` and `open_backlog_left_new.md`. Every carried row was re-audited against HEAD today by one auditor and one skeptic per chunk, and the new rows come from today's reconciliation, Lance, Lakekeeper and pylance-12 audits. Each row states only the defect, what is left, why it matters, how to fix it and what ends it. Ids are never renumbered and never reused: a gap in a sequence is a closed row, every id that left today is listed at the foot, and the next free ids are LH-340, XC-116, CP-055, CTL-028, FE-014, LOW-039 and LIN-005. The 2026-09-26 lakehouse map proposed LH-277 to LH-300, XC-090 to XC-103 and LOW-031 to LOW-033 (file:line citations at ea8c5ff8); by owner ruling only its HIGH rows entered, and the rest are listed under **Parked findings** at the foot, uncounted.
 
 **Phase 1 is finished first, and it is finished when these five criteria hold together on the estate** (owner's wording, confirmed 2026-09-26; XC-090 is the scenario that proves them): (1) provenance/lineage correct; (2) catalog correct for lance-ns and authz/governance; (3) not coupled to a workflow engine or Ray; (4) events correct; (5) resilient. A row is added only with the owner's say (owner, 2026-09-26: the goal is finishing Phase 1, not growing it); a found problem goes to the parking list by default. `blocked:` appears only when no part of a row can move without a decision; a partly blocked row names its decision in *What is left* and under **Decisions still open**. `not workable now:` marks a row that waits on another row or ruling landing first; it is counted open but not workable now.
 
@@ -10,31 +10,29 @@ Dated 2026-09-25. This file supersedes `open_backlog_left.md` and `open_backlog_
 ## FOCUS NOW
 
 Scope (owner, 2026-09-29): catalog, lineage, medallion, maintenance, controlplane and notifications first; compute
-second; search, the viewer, the annotator and flows are ignored for now. Order (owner, 2026-10-02): the 35-row
+second; search, the viewer, the annotator and flows are ignored for now. Order (owner, 2026-10-02): the
 **Production short list** below and the criterion-3 rows CP-029 and LH-226 come first, with their enablers; every
 other Phase 1 row waits in **PHASE 1 · AFTER LAUNCH** and is taken earlier only as the stated enabler of a short-list
-row (XC-049, for one, only if a short-list chart fix needs release space). Items 1-5 keep the order adopted on
+row (XC-049, for one, only if a short-list chart fix needs release space). Items 1-4 keep the order adopted on
 2026-09-30 from `docs/audits/2026-09-30/lakehouse-dataflow.md`.
 
 Beside the order (owner, 2026-10-02): prune pass 2 runs in parallel.
 
-1. **LH-281**.
-   Why: criterion 2; erasure must not write the erased identifier into history.
-2. **LH-220** with **XC-076**.
+1. **LH-220** with **XC-076**.
    Why: criteria 1 and 2; every signature, FGA check and vend downstream trusts the service identity (D1), and XC-076 is its enabler.
-3. **XC-078** with **LH-064**.
+2. **XC-078** with **LH-064**.
    Why: criteria 4 and 1; the cascade heads accept unsigned events from an unauthenticated bus, so LH-064 signs and XC-078 authenticates publishers and makes the heads require the signature.
-4. **CP-029** with **LH-226**.
+3. **CP-029** with **LH-226**.
    Why: criterion 3, kept first by the owner; the default cascade learns a stage's outcome only through Dapr workflows on Ray, and CP-029's outcome door precedes LH-226's workflow half.
-5. **CTL-021**.
+4. **CTL-021**.
    Why: criterion 4; the reconciler is the only lane that carries HTTP-only runs (ingest, Ray TRAIN, external producers) to a person.
-6. The other 29 short-list rows, in four batches that can run in parallel worktrees (owner, 2026-09-29: batch and parallelize):
+5. The other 28 short-list rows, in four batches that can run in parallel worktrees (owner, 2026-09-29: batch and parallelize):
    a. Commit and change-feed integrity: **LH-211**, **LH-202**, **LH-214**, **LH-216**, **LH-213**, **LH-217**, **LH-241**.
-   b. Erasure and governance: **LH-263**, **LH-210**, **LH-245**, **LH-242**, **LH-037**, **LH-194**, **LH-208**, **LH-272**.
+   b. Erasure and governance: **LH-263**, **LH-245**, **LH-242**, **LH-037**, **LH-194**, **LH-208**, **LH-272**.
    c. Storage isolation and table identity: **LH-205**, **LH-209**, **LH-252**, **LH-273**, **LH-203**, **LH-204**.
    d. Infrastructure authentication and resilience: **XC-003**, **XC-077**, **XC-004**, **XC-075**, **LH-247**, **CP-041**, **CP-051**, **LH-243**.
    Why: each makes a criterion false on a production deployment (the production triage, second-reviewed).
-7. **XC-090** with **XC-096** and its proof legs **XC-091** to **XC-095**, its harness built now as a failing test, closing last.
+6. **XC-090** with **XC-096** and its proof legs **XC-091** to **XC-095**, its harness built now as a failing test, closing last.
    Why: all five criteria. XC-090 closes only with its proof legs, so they stay beside it as its enablers. Their own preconditions are listed in each leg; one of them, LH-282 (XC-091's branch reconcile), is a parked finding, so XC-090 cannot close until the owner admits LH-282 or narrows XC-091, and XC-092's erasure end state needs LH-178, which is blocked on D4.
 <!-- FOCUS:END -->
 
@@ -43,11 +41,13 @@ Beside the order (owner, 2026-10-02): prune pass 2 runs in parallel.
 Approved by the owner on 2026-10-02: the Phase 1 rows that, left unfixed, make a criterion false on a production deployment. Each survived a second reviewer who tried to overturn it (a deciding judge sat where they disagreed); XC-090 is the Phase 1 gate by definition. Each carries `blocks-prod` beside its severity.
 
 - Criterion 1, provenance and lineage (5): LH-064, LH-208, LH-213, LH-214, LH-272.
-- Criterion 2, catalog, authorization and governance (15): LH-202, LH-205, LH-209, LH-217, LH-220, LH-263, LH-281, LH-252, XC-004, LH-194, LH-242, LH-245, XC-003, XC-077, LH-037.
+- Criterion 2, catalog, authorization and governance (14): LH-202, LH-205, LH-209, LH-217, LH-220, LH-263, LH-252, XC-004, LH-194, LH-242, LH-245, XC-003, XC-077, LH-037.
 - Criterion 3, no coupling to an engine (1): LH-241.
 - Criterion 4, events (3): LH-216, CTL-021, XC-078.
-- Criterion 5, resilience (10): LH-203, LH-204, LH-210, LH-211, LH-247, CP-041, CP-051, LH-243, LH-273, XC-075.
+- Criterion 5, resilience (9): LH-203, LH-204, LH-211, LH-247, CP-041, CP-051, LH-243, LH-273, XC-075.
 - The gate (1): XC-090.
+
+Closed since the approval: LH-281 and LH-210 (helm rev 260).
 
 ## Owner rulings in force
 
@@ -110,7 +110,7 @@ Approved by the owner on 2026-10-02: the Phase 1 rows that, left unfixed, make a
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 30 | 30 | 17 |
+| **PHASE 1 · LAKEHOUSE** | 28 | 28 | 15 |
 | **PHASE 1 · CROSS-CUTTING** | 13 | 13 | 11 |
 | **PHASE 1 · CONTROLPLANE AND NOTIFICATIONS** | 1 | 1 | 1 |
 | **PHASE 1 · AFTER LAUNCH** | 117 | 111 | 19 |
@@ -118,7 +118,7 @@ Approved by the owner on 2026-10-02: the Phase 1 rows that, left unfixed, make a
 | **FRONTEND** | 7 | 7 | 0 |
 | **LOW PRIORITY** | 37 | 36 | 0 |
 
-**224 open items**, of which **6 are blocked on a decision**, **2 wait on another row or ruling** and **216 can be picked up today**; 52 are HIGH. 51 ids left the register on 2026-09-25 and 40 on 2026-09-29, listed at the foot so nothing vanishes silently. The three Phase 1 sections hold the 35-row production short list with CP-029, LH-226 and their enablers (44 rows); the other 117 Phase 1 rows wait in PHASE 1 · AFTER LAUNCH (owner, 2026-10-02).
+**222 open items**, of which **6 are blocked on a decision**, **2 wait on another row or ruling** and **214 can be picked up today**; 50 are HIGH. 51 ids left the register on 2026-09-25 and 42 on 2026-09-29, listed at the foot so nothing vanishes silently. The three Phase 1 sections hold the production short list (33 open rows) with CP-029, LH-226 and their enablers (42 rows); the other 117 Phase 1 rows wait in PHASE 1 · AFTER LAUNCH (owner, 2026-10-02).
 
 ## PHASE 1 · LAKEHOUSE
 
@@ -180,19 +180,11 @@ Approved by the owner on 2026-10-02: the Phase 1 rows that, left unfixed, make a
 
 **LH-263 · erase() reports complete while the subject survives in un-rewritten fragments, live index segments, external blobs, shallow clones and MemWAL shards**
 `catalog` · **HIGH** · **blocks-prod**
-- *What is left:* Verified on 12.0.0: a fragment under the 10% threshold or over the 64 MiB cap stays un-rewritten behind a deletion vector (re-measured at b2f100a9: complete=True with the bytes still in data/*.lance); BTREE/BITMAP keys and FTS tokens keep the subject; external-base payloads stay at the source; erasing a shallow-clone source breaks the clone, which still holds the subject. The fork-point pin is LH-178. `_mem_wal/`: erasure never references it and verifies by base count_rows per ref (erasure.py:484-503,911-920), so a subject written through a MemWAL shard verifies clean while its bytes sit in WAL entries and flushed generations (txn-types-memwal/m3_memwal.py). Data-base tables: compaction is refused on flag 16 and complete=False is reported (unverified-claims-a/m4.py), but the report names a maintenance refusal where it should name 'data_base:<name>' and the files. The predicate text in the Delete txn and head manifest is LH-281. The 2026-09-26 ruling (a branch's rewrite may copy what it inherits, capped at 64 MiB) is described at erasure.py:31-36 but has no DECISIONS.md entry.
+- *What is left:* Since 0c718cb (LH-281) the rewrite materialises every deletion and a second pass takes the fragments still holding the subject, and the verification counts rows a deletion vector hides; fragments holding the subject beyond the compact door's byte bound (64 MiB of source per ref) are reported rather than rewritten, and whether an erasure may exceed the bound is open. BTREE/BITMAP keys and FTS tokens keep the subject; external-base payloads stay at the source; erasing a shallow-clone source breaks the clone, which still holds the subject. The fork-point pin is LH-178. `_mem_wal/`: erasure never references it and verifies by base count_rows per ref (erasure.py:484-503,911-920), so a subject written through a MemWAL shard verifies clean while its bytes sit in WAL entries and flushed generations (txn-types-memwal/m3_memwal.py). Data-base tables: compaction is refused on flag 16 and complete=False is reported (unverified-claims-a/m4.py), but the report names a maintenance refusal where it should name 'data_base:<name>' and the files. The 2026-09-26 ruling (a branch's rewrite may copy what it inherits, capped at 64 MiB) is described at erasure.py:31-36 but has no DECISIONS.md entry.
 - *Why:* Criterion 2 (erasure): the report claims completeness the bytes contradict. No branch is deleted, so LH-178's open question does not apply.
 - *How:* Compact matched fragments with materialize_deletions_threshold=0.0 and no byte cap below their size (lance_docs/guide.md:3428-3434,3770-3772); rebuild every user index with replace=True before reclaim; verify on bytes, not visibility; report external and data-base payloads as retained surfaces with complete=False; run the shallow-clone guard (base_refs containment, as maintenance does; file_format.md:3152-3187) and treat each referring clone as a surface or refuse. Rewrite erasure.py:77-80.
 - *Closes when:* RED fixtures (branch-local subject, sub-threshold fragment, indexed column, external base, clone, `_mem_wal/`) each end with no version on any ref answering the predicate and no file holding the subject's bytes, or with complete=False naming the surface.
 - *Evidence:* services/catalog/src/catalog/services/erasure.py:77-80,161-188,199-253 · packages/service-kit/src/service_kit/lakehouse/base_refs.py:1-50 · skeptic01/probe_branch_history.py, probe_branch_bytes.py · docs/audits/2026-09-25/03-lance-docs-full-audit.md LD06, LD09 · the branch-own-history clause closed in eb07fe33 and ef9d1e8e: tags are probed on their own ref, and every ref is compacted, reclaimed and verified deepest-first (erasure.py:227-240,260-372), per-ref flag gates run (:343-346) and the shallow-clone refusal form exists (:216); 4 + 21 test functions (about 32 parametrized cases) pass in test_erasure_probes_a_tag_on_the_branch_it_names.py and test_erasure_reaches_every_branchs_history.py · unverified-claims-a/m5b.py, m4.py · txn-types-memwal/m3_memwal.py
-
-**LH-210 · erase() destroys history when it cannot erase**
-`catalog` · **HIGH** · **blocks-prod**
-- *What is left:* Measured at b2f100a9: the predicate `idd = 5` untagged 'repro' and reclaimed 4 versions, while the main delete failed and all 4 rows stayed. On a data-base table, erase() also reclaims history (history:main reclaimed 2 versions) after its compaction was refused on flag 16 (erasure.py:801-826). It destroys time travel while erasing nothing.
-- *Why:* Criteria 5 and 1: an erasure that erases nothing must not be the most destructive operation in the catalog, and reproducibility tags are provenance.
-- *How:* Plan the predicate on main first (count_rows(filter=...)) and answer 400 with nothing touched; skip tag and reclaim steps when the main delete fails, and when compaction was refused; add a distinct 'read version garbage-collected' verdict beside NO_BASE.
-- *Closes when:* A typo'd predicate answers 400 with every tag and version untouched, RED.
-- *Evidence:* services/catalog/src/catalog/services/erasure.py:131-197,305-315 · services/catalog/src/catalog/schemas.py:411-418 · packages/service-kit/src/service_kit/lancekit/commit_verdict.py:66 · docs/audits/2026-09-25/03-lance-docs-full-audit.md LD07, LD08 · the delete_unverified half closed in 8522fbdb: the per-ref reclaim no longer passes it (erasure.py:339-342), as Lance advises (lance_docs/lance_sdk.md:931; guide.md:3835-3855), and test_a_write_staged_while_the_erasure_runs_still_commits_readable[branch] pins stage → erase → commit on a branch (test_erasure_reaches_every_branchs_history.py:108-109; no test pins the main case) · verify-unverified-claims-a/v_ld07.py · unverified-claims-a/m4.py
 
 **LH-211 · The client-direct /commit door trusts client fragment metadata beyond the file version**
 `catalog` · **HIGH** · **blocks-prod**
@@ -353,14 +345,6 @@ Approved by the owner on 2026-10-02: the Phase 1 rows that, left unfixed, make a
 - *How:* Thread base_store_params through the read opens the write side already uses; RED test with a base on a second store. Build base_store_params from the manifest's base_paths plus multibase_base_credential_ref_map at every open, keyed by base URI (lance_docs/guide.md:2377).
 - *Closes when:* Reads of a multi-base table use each base's own parameters, pinned by a test, and the multibase e2e reads rows, not counts.
 - *Evidence:* docs/audits/2026-09-25/06-lakehouse-test-audit.md § Real product defects · unverified-claims-b/database_two_store.py · verify-unverified-claims-b/v_two_store.py
-
-**LH-281 · erase() writes the subject's identifier into the Delete transaction and the head manifest, and reports complete while they hold it**
-`catalog` · **HIGH** · **blocks-prod**
-- *What is left:* erase() deletes by the caller's predicate, and Lance records the predicate text in the Delete transaction and the new head manifest. Measured through erase() on 12.0.0 (retention 0, subject 'alice-19700101-1234'): (a) Single 20-row fragment, subject under the 10% rewrite threshold: complete=True, verify clean, compact rewrote 0. The identifier sits in the data file, `_transactions/1-*.txn` and the head manifest. (b) Subject rows fill a whole fragment: the delete drops that fragment, compaction has nothing to rewrite, and no Rewrite version follows. Even LH-263's How applied by hand (compact_files(materialize_deletions_threshold=0.0), then cleanup at 0) leaves the .txn and the head manifest holding the identifier. (c) The text persists for as long as the erasure's delete is the newest retained version. After one later append plus cleanup, only the data file holds it (the row behind its deletion vector). After compact plus cleanup, nothing does. The history door surfaces Delete.predicate to readers (dataplane.py:2088-2110), and the erasure door defaults retain_days=0 (schemas.py:420). LH-263 is the complementary half of the erasure-completeness claim; land them together.
-- *Why:* Criterion 2 (erasure): the identifier is the PII being erased, and complete=True is reported while it sits in the head manifest, readable through any read vend and the history door.
-- *How:* Resolve the predicate per ref to row ids with a scan (with_row_id), then delete by `_rowid IN (…)` through that ref's handle, so no identifier reaches a transaction. This was measured working on a stable-row-id table, where the txn records '_rowid IN (0)'. Apply it to the per-branch deletes. Do not rely on a trailing Rewrite to retire the delete's manifest. Verify on bytes across every object under the table root, `_transactions/` and `_versions/` included. A non-stable-row-id table, where the resolved id is a row address valid only for that snapshot, was not measured.
-- *Closes when:* Two RED fixtures end with no object under the table root holding the identifier, or with complete=False naming the survivor: a single fragment with the subject under 10%, and a subject that fills a whole fragment.
-- *Evidence:* services/catalog/src/catalog/services/erasure.py:260-372 · services/catalog/src/catalog/services/dataplane.py:2088-2110 · services/catalog/src/catalog/schemas.py:420 · unverified-claims-a/m5b.py, m5c.py · verify-unverified-claims-a/v_wholefrag.py · session-findings/probe_predicate_persists_nocompact.py · verify-session-findings/probe_predicate.py
 
 ## PHASE 1 · CROSS-CUTTING
 
@@ -1959,6 +1943,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - LH-201 — closed — fix 16c1025 (each component checks against the OpenFGA model its own image carries, written before new pods start); estate 2cdaa8f, live at helm rev 252
 - LH-265 — closed — the test prune to the audit's keep list, ee45eb2 (c01) through 265f128 (the MERGE folds), then ec58f0f for the comments that cited pruned tests (12,253 → 6,032 tests); recorded in debde3c; tests only, no helm rev
 - LH-279 — closed — fix 68a07c1 (a table resolves only through the bases the catalog recorded for it); estate 7f26839, live at helm rev 257
+- LH-281 — closed — fix 0c718cb (an erasure deletes by row id on a fresh head, so no transaction or manifest records the identifier, and rewrites every fragment holding the subject); live at helm rev 260, read back 11/11 on 2026-10-02 (a subject under the 10% threshold and one filling a whole fragment each left no object under the table holding the identifier)
+- LH-210 — closed — fix 0c718cb (a predicate Lance refuses or cannot evaluate answers 400 with nothing touched, and a ref whose delete or rewrite did not go through keeps its tags and history); live at helm rev 260, read back with LH-281 (a mistyped column and a failing cast each answered 400 and left the tags, versions and rows as they were); the 'read version garbage-collected' commit verdict in its How is parked as LH-337
 - LH-280 — closed — fix 166c48f (a run is answered only by a commit whose manifest holds its own fragments, never by a run id or a transaction record another writer chose); live at helm rev 258, read back 10/10 on 2026-10-02 (another writer's claim on the run id left the run's rows landing and its probe naming its own version)
 - LH-324 — merged into LH-218 — the root-key byte path (catalog_register.py:234-240) and the direct in-process add_columns (compute.py:366) are LH-218's clauses
 - LH-316 — dropped — `repo_tree.walked_files` has no caller left: the repo-shape gates it served were deleted by the prune (XC-089 dropped)
@@ -2147,6 +2133,12 @@ Found by the 2026-10-02 review of `lakehouse-architecture.html` and parked under
 
 - LH-336 · MEDIUM · Image-specific derivation lives in the shared cascade: medallion services/derivers.py derives a thumbnail and an embedding for image payloads only (derivers.py:9,54-89; compute.py:12-14), and leaves audio and every other kind untouched, against CLAUDE.md's rule that no data type enters a shared seam ("would this be right for audio?"). lakehouse-architecture.html and lakehouse-e2e-trace.md describe it as the cascade's only derivation; no row owns it · `medallion`
 - XC-115 · LOW · CLAUDE.md names RustFS as the object store (CLAUDE.md:314-315: "Lance datasets on RustFS S3", the RustFS operator and `rask-rustfs-io:9000`, the observability bucket on RustFS), and chart/Chart.yaml:9 lists RustFS too, while the chart deploys MinIO (chart/templates/minio.yaml:3, "MinIO rather than RustFS", LH-133) and the fixed-stack ruling names MinIO; the 2026-09-30 audit's stale-doc list misses it, and XC-043 can take it · `docs`
+
+Found by the 2026-10-02 review of the LH-281 and LH-210 erasure fix (0c718cb) and parked under the same rule (owner, 2026-09-26: LOWs parked).
+
+- LH-337 · MEDIUM · The commit verdict has no 'read version garbage-collected' answer beside NO_BASE, so a commit whose read_version an erasure or a cleanup reclaimed is told it made a client error (packages/service-kit/src/service_kit/lancekit/commit_verdict.py:66); LH-210's How, outside its closes-when · `service-kit, catalog`
+- LH-338 · LOW · The erasure test's oracle greps raw object bytes, so an identifier Lance stores compressed would pass unseen (services/catalog/tests/test_erasure_verifies_what_storage_holds.py) · `catalog tests`
+- LH-339 · LOW · The erasure's holder walk is exponential in the depth of a nested-branch chain whose intermediate versions stay retained (services/catalog/src/catalog/services/erasure.py `_holders`) · `catalog`
 
 ### No-prod parking (uncounted)
 
