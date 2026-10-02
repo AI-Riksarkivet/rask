@@ -191,9 +191,9 @@ extend-select = ["TID251", "FAST001"]
 
 # The code-shape bans. Each message names the seam a caller goes through instead; the sanctioned sites
 # are the per-file ignores above and the line-level `# noqa: TID251` at each call site.
-# Six `dataclasses.dataclass` noqa lines are DEBT against the Pydantic-only rule, not sanctioned uses:
-# lineage_kit/signing.py, service_kit/lakehouse/idempotency.py, catalog/api/idempotency.py,
-# catalog/core/lineage_emit.py, maintenance/services/credentials.py and maintenance/services/sweep.py.
+# Five `dataclasses.dataclass` noqa lines are DEBT against the Pydantic-only rule, not sanctioned uses:
+# service_kit/lakehouse/idempotency.py, catalog/api/idempotency.py, catalog/core/lineage_emit.py,
+# maintenance/services/credentials.py and maintenance/services/sweep.py.
 # services/ingest and services/viewer RESTATE this whole map in their own pyproject.toml: a nested
 # banned-api table replaces the root one rather than merging with it (measured, ruff 0.16.0), so a ban
 # added here is added to both of those too.

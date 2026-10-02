@@ -1816,6 +1816,7 @@ name = "lineage-kit"
 version = "0.1.0"
 source = { editable = "packages/lineage-kit" }
 dependencies = [
+    { name = "cryptography" },
     { name = "openlineage-python" },
     { name = "opentelemetry-api" },
     { name = "pydantic" },
@@ -1824,6 +1825,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "cryptography", specifier = ">=49" },
     { name = "openlineage-python", specifier = ">=1.52.0" },
     { name = "opentelemetry-api", specifier = ">=1.27" },
     { name = "pydantic", specifier = ">=2.13" },

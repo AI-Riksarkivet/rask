@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/AI-Riksarkivet/rask/facets-1.0.0/spec/facets/rask/RaskSignatureRunFacet.json",
+  "title": "RaskSignatureRunFacet",
+  "description": "An Ed25519 signature over an OpenLineage event, made by the identity that produced it. It rides the run facets of a RunEvent and the dataset facets of a DatasetEvent. The signed bytes are canon-1 of the whole event with exactly one member removed, <facets>.rask_signature.signature; canon-1 is the binary64 (I-JSON) profile of json.dumps(sort_keys=True, separators=(',', ':'), ensure_ascii=False, allow_nan=False) over the event with every integral float below 2^53 written as an integer. The signer is the event's author, or declares onBehalfOf equal to that author and is a delegator the verifier names.",
+  "$defs": {
+    "RaskSignatureRunFacet": {
+      "allOf": [
+        {
+          "$ref": "https://openlineage.io/spec/2-0-2/OpenLineage.json#/$defs/RunFacet"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "alg": {
+              "description": "The signature algorithm.",
+              "const": "Ed25519"
+            },
+            "canon": {
+              "description": "The canonicalization the signed bytes use. A new profile is a new number.",
+              "const": 1
+            },
+            "kid": {
+              "description": "Names the signing key: the first 16 hex characters of the sha256 of the raw 32-byte public key. It is derived from the key, so a re-minted key has a new kid and a kid is never shared by two keys.",
+              "type": "string",
+              "pattern": "^[0-9a-f]{16}$"
+            },
+            "identity": {
+              "description": "The signing identity, which selects the public keys the verifier reads. It is the signer's own claim: a verifier checks it against the identities it lists before reading any key.",
+              "type": "string",
+              "minLength": 1
+            },
+            "onBehalfOf": {
+              "description": "The subject the signer acts for, declared by a service that authenticated a person and emits on their behalf. It has to equal the author the event stamps, and only a listed delegator may declare it.",
+              "type": "string",
+              "minLength": 1
+            },
+            "signature": {
+              "description": "The 64-byte Ed25519 signature, base64url without padding.",
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{86}$"
+            }
+          },
+          "required": ["alg", "canon", "kid", "identity", "signature"]
+        }
+      ],
+      "type": "object"
+    }
+  },
+  "type": "object",
+  "properties": {
+    "rask_signature": {
+      "$ref": "#/$defs/RaskSignatureRunFacet"
+    }
+  }
+}
