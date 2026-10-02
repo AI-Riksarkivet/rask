@@ -786,66 +786,11 @@ def test_audit_read_best_effort_swallows_store_failure() -> None:
     asyncio.run(fga_deps.audit_read("a$b", _settings(read_audit_enabled=True), _token(), cast(LineageRepository, repo)))
 
 
-# --- The SERVICE door on the HTTP ingest (lineage/api/security.py ServicePrincipal) ------------------
-# The Ray TRAIN job is a sidecar-less IN-CLUSTER producer (RAY-TRAIN.md D2): it POSTs the HTTP ingest,
-# which under auth.enabled 401'd every RunEvent, silently losing ALL training provenance (live
-# 2026-07-13). It now authenticates with the shared app token + its bare FGA subject. These tests pin the
-# security properties that make that safe — above all: it must NOT become an impersonation primitive.
-
-
-def _svc_settings(subjects: str = "service-trainer") -> LineageSettings:
-    return _settings(**_FULL_AUTH, service_subjects=subjects)
-
-
-def test_service_principal_authenticates_an_allowlisted_subject(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A valid app token + an ALLOWLISTED subject → a ServicePrincipal carrying that bare FGA name."""
-    monkeypatch.setenv("APP_API_TOKEN", "s3cret")
-    principal = security.authenticate(
-        _request(),
-        _svc_settings(),
-        None,
-        dapr_api_token="s3cret",
-        x_lance_service_identity="service-trainer",
-    )
-    assert isinstance(principal, security.ServicePrincipal)
-    # The subject is the SAME bare name the rest of the estate uses (D5) — not a second identity axis.
-    assert principal.sub == "service-trainer"
-
-
-def test_service_door_rejects_a_bad_or_missing_token(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A wrong token (or a named subject with no token configured) is 401 — never a silent pass."""
-    monkeypatch.setenv("APP_API_TOKEN", "s3cret")
-    with pytest.raises(UnauthenticatedError):
-        security.authenticate(
-            _request(),
-            _svc_settings(),
-            None,
-            dapr_api_token="wrong",
-            x_lance_service_identity="service-trainer",
-        )
-    # No app token configured → the door does not exist; naming a subject must not open it.
-    monkeypatch.delenv("APP_API_TOKEN", raising=False)
-    with pytest.raises(UnauthenticatedError):
-        security.authenticate(
-            _request(),
-            _svc_settings(),
-            None,
-            dapr_api_token="s3cret",
-            x_lance_service_identity="service-trainer",
-        )
-
-
-def test_service_door_is_shut_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Empty LINEAGE_SERVICE_SUBJECTS (the default) = OIDC-only ingest: no subject is allowlisted."""
-    monkeypatch.setenv("APP_API_TOKEN", "s3cret")
-    with pytest.raises(PermissionDeniedError):
-        security.authenticate(
-            _request(),
-            _settings(**_FULL_AUTH),  # service_subjects defaults to ""
-            None,
-            dapr_api_token="s3cret",
-            x_lance_service_identity="service-trainer",
-        )
+# --- A service principal on the HTTP ingest ----------------------------------------------------------
+# The Ray TRAIN job is a sidecar-less IN-CLUSTER producer (RAY-TRAIN.md D2): it POSTs the HTTP ingest with its
+# pod's projected token, which the door maps to a `ServicePrincipal` (`service_kit.governed.machine_identity`). The
+# door itself is driven over HTTP in `services/lineage/tests/test_a_claimed_service_name_authenticates_nobody.py`;
+# this pins what the ingest gates do with the principal it hands them.
 
 
 def test_service_principal_is_attributed_and_fga_bounded() -> None:
@@ -855,7 +800,7 @@ def test_service_principal_is_attributed_and_fga_bounded() -> None:
     (`writer` on `namespace:models`) actually permits, and is *stricter* than the Dapr subscription route
     it mirrors (which trusts the producer-stamped author outright).
     """
-    principal = security.ServicePrincipal("service-trainer")
+    principal = security.ServicePrincipal(subject="service-trainer", service_account="system:serviceaccount:default:rask-sa-ray")
     event = RunEvent.model_validate(
         {
             "eventType": "COMPLETE",
@@ -885,7 +830,7 @@ def test_service_principal_is_attributed_and_fga_bounded() -> None:
                 fga_deps.enforce_output_authz(
                     event,
                     _request(fga=cast(OpenFgaClient, object())),
-                    _svc_settings(),
+                    _settings(**_FULL_AUTH),
                     principal,
                 )
             )

@@ -328,8 +328,7 @@ def enforce_signature_if_present(payload: Mapping[str, Any], resolver_for: Calla
     try:
         key = resolver_for()(found.identity)
     except SecretStoreUnreadable as exc:
-        # An outage is an outage, never a 403 — the same translation `api/security.py` makes for the
-        # service door, and for the same reason: a store blip must not answer "your signature is bad".
+        # An outage is an outage, never a 403: a store blip must not answer "your signature is bad".
         raise ServiceUnavailableError(str(exc)) from exc
     if not key or not verify_signed_event(payload, key=key):
         log.info("lineage_signature_refused", extra={"identity": found.identity, "reason": "no credential" if not key else "does not verify"})
