@@ -42,9 +42,9 @@ from lineage.api.dependencies import RepositoryDep, SettingsDep
 from lineage.api.security import CurrentToken, Principal
 from lineage.core.config import LineageSettings
 from lineage.models import MAINTENANCE_OPERATIONS, DatasetEvent, RunEvent, UnauthoredRunError, UngovernedOutputError, author_sub_from_payload
-from lineage_kit.signing import signature_of, verify_signed_event
+from lineage.services.signature import verify_arrived_event
+from lineage_kit.signing import VerifiedSignature
 from service_kit.governed import fga
-from service_kit.governed.dapr_auth import SecretStoreUnreadable, dedicated_token_from_store
 from service_kit.openlineage import lifecycle_state
 
 
@@ -276,63 +276,19 @@ def is_external_source(namespace: str, name: str) -> bool:
 class _StampedAuthor:
     """The subject a BUS producer stamped on its own event, as a :class:`Principal`.
 
-    NOT a verified identity, and the gate does not pretend otherwise — the bus door authenticates the
-    SIDECAR (a shared app token), so nothing proves the stamp. What the gate changes is that the stamp
-    becomes CONSEQUENTIAL: a forged subject must still hold the rung on every output, so a forger can
-    only claim an identity that was already authorized to write those datasets — which bounds the
-    forgery to producers that could have recorded it honestly. That is strictly stronger than the door
-    it replaces, which accepted any stamp at all.
+    WHAT AUTHENTICATES THE STAMP IS THE SIGNATURE, not the bus. The door authenticates the SIDECAR (a shared
+    app token), so on an estate that does not enforce signing nothing proves the stamp, and what the gate changes
+    is that the stamp becomes CONSEQUENTIAL: a forged subject must still hold the rung on every output, so a
+    forger can only claim an identity that was already authorized to write those datasets, which bounds the
+    forgery to producers that could have recorded it honestly. Where signing is enforced the stamp is also
+    proven: the signer IS the author, or a delegator declared acting for them (`verify_arrived_event`), and the
+    subject is then authorized exactly as below.
     """
 
     __slots__ = ("sub",)
 
     def __init__(self, sub: str) -> None:
         self.sub = sub
-
-
-def enforce_signature_if_present(payload: Mapping[str, Any], resolver_for: Callable[[], Callable[[str], str | None]]) -> None:
-    """Refuse a bus event whose carried signature does not check out ([[LH-064]]).
-
-    VERIFY-IF-PRESENT, WHICH IS THE ROLLOUT AND NOT A COMPROMISE. An unsigned event passes exactly as
-    before, because three producer paths still have to be taught to sign — the medallion's shared
-    outbox seam plus the catalog and maintenance, each publishing to its own sidecar — and refusing
-    unsigned events before they do would take the lineage bus down estate-wide. What this adds is that
-    a signature which does NOT verify becomes a refusal instead of a decoration. Nothing signs yet, so
-    nothing can fail it; the moment something does, a broken signer is caught here rather than on the
-    day unsigned events start being refused, which is the worst moment to find out.
-
-    THE KEY IS CHOSEN BY THE SIGNATURE, AND THAT IS CLARITY RATHER THAN A CONTROL — checked, because it
-    looked like one. Keying on `author.sub` instead is PROVABLY EQUIVALENT on the admit path:
-    `verify_signed_event` already requires the signing identity to equal the stamped author, so wherever
-    an event would be ADMITTED the two lookups are the same call. The mutation only changes which reason
-    a refusal carries. It is written this way because the signature should name its own signer, not
-    because the other spelling lets anything through.
-
-    THE KEY IS CHOSEN BY THE SIGNATURE, NEVER BY THE AUTHOR. `signature_of` names its own signer, and
-    `verify_signed_event` then requires that identity to equal the stamped author. Keying on
-    `author.sub` instead would ask "does the key of whoever this claims to be verify it?", which any
-    producer holding its own key can satisfy for a stamp it has no right to.
-
-    ABSENT IS A REFUSAL, UNREADABLE IS AN OUTAGE. A resolver answering `None` has READ the store and
-    found no credential for the identity the signature names — that is a 403 on the merits. A store
-    that cannot be read raises, and the raise propagates as a 503: collapsing the two would answer
-    "your signature is bad" to every honest producer during a store blip.
-    """
-    found = signature_of(payload)
-    if found is None:
-        return
-    # THE RESOLVER IS BUILT ONLY NOW, which is why it arrives as a factory. Every event on this bus is
-    # unsigned today, and reaching for a secret store to check a signature that is not there would make
-    # the store a dependency of the whole ingest path — and would force every caller's test double to
-    # configure one for a code path it never reaches.
-    try:
-        key = resolver_for()(found.identity)
-    except SecretStoreUnreadable as exc:
-        # An outage is an outage, never a 403: a store blip must not answer "your signature is bad".
-        raise ServiceUnavailableError(str(exc)) from exc
-    if not key or not verify_signed_event(payload, key=key):
-        log.info("lineage_signature_refused", extra={"identity": found.identity, "reason": "no credential" if not key else "does not verify"})
-        raise PermissionDeniedError(f"the event's signature does not verify for {found.identity!r}")
 
 
 async def enforce_bus_authz(event: RunEvent | DatasetEvent, request: Request, settings: LineageSettings, arrived: Mapping[str, Any]) -> None:
@@ -357,6 +313,12 @@ async def enforce_bus_authz(event: RunEvent | DatasetEvent, request: Request, se
     that roll. `author_sub_from_payload` is the reader — `sub` only, never the `name` or `ownership`
     facets, because those are for attribution on a board and would let a producer authorize itself
     under someone else's display name.
+
+    WHERE SIGNING IS ENFORCED THE EVENT MUST VERIFY FIRST ([[LH-064]]): `verify_arrived_event` refuses an event no
+    listed signer's published key verifies (`UnverifiedEventError`) and answers an unreadable key list as an outage
+    (`ServiceUnavailableError`). Every door that records a bus or staged event passes through here, so all four
+    apply the one rule: the bus subscription, the outbox drain, the operator's DLQ replay and the parking route's
+    re-ingest.
     """
     # OVER `arrived`, NEVER over a re-serialisation of the parsed model, and BEFORE `fga_enabled` is
     # consulted. Two separate rules, both load-bearing:
@@ -364,15 +326,14 @@ async def enforce_bus_authz(event: RunEvent | DatasetEvent, request: Request, se
     # THE BYTES THAT WERE SIGNED are the only document a signature covers. `model_dump` materialises
     # every field the model defaults — `RunEvent`'s three facet bags are `default_factory=dict`, so a
     # dump grows `job.facets = {}` and `outputs[].facets = {}` the producer never sent. The canonical
-    # body then differs from the signed one and the honest producer is refused: a `_DROP` onto the
-    # dead-letter topic on the bus, and on the outbox drain the deletion of the event's only durable
-    # copy. Reproduced against the real emitter and the real model before this argument existed.
+    # body then differs from the signed one and the honest producer is refused: an ack that discards the
+    # event on the bus, and on the outbox drain the deletion of the event's only durable copy.
     #
     # A SIGNATURE IS AUTHENTICATION. `fga_enabled` decides whether OpenFGA is consulted about what a
     # subject may write; it says nothing about whether the producer is who it claims to be, so gating
     # the one on the other would let an estate with auth on and FGA off verify nothing at all.
-    enforce_signature_if_present(arrived, lambda: dedicated_token_from_store(settings.dapr_secret_store))
-    if _is_the_catalogs_own_drop(event, arrived, settings):
+    verified = await verify_arrived_event(arrived, request, settings)
+    if _is_a_delegators_drop(event, verified, settings):
         log.info("lineage_catalog_drop_admitted", extra={"dataset": event.dataset.name, "operation": event.operation})
         return
     if not settings.fga_enabled:
@@ -391,7 +352,7 @@ async def enforce_bus_authz(event: RunEvent | DatasetEvent, request: Request, se
         log.info("lineage_replay_not_reauthorized", extra={"run": event.run_id, "event_type": event.feed_event_type})
 
 
-def _is_the_catalogs_own_drop(event: RunEvent | DatasetEvent, arrived: Mapping[str, Any], settings: LineageSettings) -> TypeGuard[DatasetEvent]:
+def _is_a_delegators_drop(event: RunEvent | DatasetEvent, verified: VerifiedSignature | None, settings: LineageSettings) -> TypeGuard[DatasetEvent]:
     """A DROP the catalog signed — admitted on that signature, never on the author's grants (owner ruling 2026-09-26).
 
     THE GRANTS ARE GONE BY DESIGN. The catalog emits `drop_table` / `deregister_table` and then revokes the
@@ -400,15 +361,17 @@ def _is_the_catalogs_own_drop(event: RunEvent | DatasetEvent, arrived: Mapping[s
     The catalog enforced `can_drop` before it mutated anything; its verified signature is that
     attestation, the way Lakekeeper treats the catalog's own events as facts rather than re-asking a grant.
 
-    ONLY WHEN THE SIGNATURE VERIFIED, which `enforce_signature_if_present` has just established for any
-    signature present; an unsigned drop, or one signed by any other identity, keeps the full check. The
-    signing key's reach bounds this attestation (XC-076: until then every lakehouse pod can read it).
+    ONLY A SIGNATURE THIS CALL VERIFIED, AND ONLY AS ONE OF THE CHART'S DELEGATORS. The catalog is the delegator
+    set (`LINEAGE_DELEGATORS`, derived from the identities the chart mints keys for), so the name the shortcut
+    trusts cannot differ from the name the catalog signs under. A `rask_signature` merely PRESENT proves nothing
+    and is not read here: where signing is not enforced `verified` is None and the shortcut is off, and an unsigned
+    drop, or one signed by any other identity, keeps the full check. The signing key's reach bounds this
+    attestation: custody of the keys is the Dapr-scope claim until XC-079.
     """
-    signature = signature_of(arrived)
     return (
         isinstance(event, DatasetEvent)
-        and signature is not None
-        and signature.identity == settings.catalog_service_identity
+        and verified is not None
+        and verified.identity in settings.signing.delegators
         and lifecycle_state(event.operation or "") == "DROP"
     )
 

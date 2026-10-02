@@ -190,6 +190,23 @@ groups:
             malformed payload and a question about the producer's schema rather than its permissions.
             Runbook: docs/runbooks/RUNBOOK-oncall.md#dlq-parking--a-delivery-gave-up
 
+      # [[LH-064]] A refused signature is ACKED, so this counter is the only trace. `unsigned` and `signer` cannot be a listed
+      # signer's genuine event and are not counted; `!=` twice because `!~` appears nowhere else in this file. What each reason
+      # means: docs/runbooks/RUNBOOK-oncall.md#lineage-refusing-a-signers-events
+      - alert: LineageSignatureRefusedForAListedSigner
+        expr: sum by (lance_lineage_reason) (rate(lineage_signature_refused_total{lance_lineage_reason!="unsigned", lance_lineage_reason!="signer"}[5m])) > 0
+        for: 2m
+        labels:
+          severity: critical
+          service: lineage
+        annotations:
+          summary: "Lineage is REFUSING events that claim a listed signer ({{ $labels.lance_lineage_reason }}) — their provenance is dropped"
+          description: >-
+            An event naming a chart-listed signer failed signature verification and was ACKED, so it is neither retried nor
+            parked and only this alert and the `lineage_signature_refused` log line (identity, run id, reason) record it. A
+            signer is broken or someone is forging a listed identity.
+            Runbook: docs/runbooks/RUNBOOK-oncall.md#lineage-refusing-a-signers-events
+
       # [[LH-004]]. `docs/DECISIONS.md:766-812` accepts the Lance-commit -> lineage-publish window in
       # writing, and the acceptance rests entirely on one clause: "the goal is not atomicity; it is NO
       # SILENT LOSS: every gap either closes itself or announces itself". These three rules ARE the

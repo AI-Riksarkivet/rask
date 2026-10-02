@@ -70,6 +70,38 @@ tests:
         alertname: LineageOutboxNotDraining
         exp_alerts: []
 
+  # 1d. [[LH-064]] A listed signer's events refused for a key the store does not publish: the refusal is ACKED, so this
+  #     series is the only trace, and the alert must fire on a steady dribble and name the reason.
+  - interval: 1m
+    input_series:
+      - series: 'lineage_signature_refused_total{lance_lineage_reason="kid"}'
+        values: "0+1x14"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: LineageSignatureRefusedForAListedSigner
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: lineage
+              lance_lineage_reason: kid
+            exp_annotations:
+              summary: "Lineage is REFUSING events that claim a listed signer (kid) — their provenance is dropped"
+              description: "An event naming a chart-listed signer failed signature verification and was ACKED, so it is neither retried nor parked and only this alert and the `lineage_signature_refused` log line (identity, run id, reason) record it. A signer is broken or someone is forging a listed identity. Runbook: docs/runbooks/RUNBOOK-oncall.md#lineage-refusing-a-signers-events"
+
+  # 1e. [[LH-064]] An unsigned event and an unlisted signer are what a forger or a stale producer sends, never a listed signer's
+  #     genuine event, so neither pages here: the rule would otherwise fire on every event published before a signer was
+  #     taught to sign.
+  - interval: 1m
+    input_series:
+      - series: 'lineage_signature_refused_total{lance_lineage_reason="unsigned"}'
+        values: "0+1x14"
+      - series: 'lineage_signature_refused_total{lance_lineage_reason="signer"}'
+        values: "0+1x14"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: LineageSignatureRefusedForAListedSigner
+        exp_alerts: []
+
   # 2. Outbox healthy (depth 0) → NO alert. A gauge that falls back must not page forever.
   - interval: 1m
     input_series:

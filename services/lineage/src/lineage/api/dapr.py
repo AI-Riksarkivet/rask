@@ -53,7 +53,7 @@ async def on_lineage_event(event: dict[str, Any], request: Request, _: Annotated
     async def authorize(parsed: RunEvent | DatasetEvent, arrived: Mapping[str, Any]) -> None:
         await enforce_bus_authz(parsed, request, get_settings(), arrived)
 
-    return await handle_cloud_event(request.app.state.repository, event, authorize)
+    return await handle_cloud_event(request.app.state.repository, event, authorize, door=Door.SUBSCRIBER)
 
 
 async def _graph_already_holds(request: Request, run_id: str | None) -> bool:
@@ -89,10 +89,12 @@ async def _reingest_from_the_park(event: dict[str, Any], request: Request, run_i
     twice (Messages 1,659 -> 1,585).
 
     THE SAME FUNCTION THE LIVE SUBSCRIPTION USES, deliberately: `handle_cloud_event` carries the same
-    authorization (`enforce_bus_authz` — may the stamped subject record THIS) and the same idempotence
-    (`ingest_event` MERGEs on a deterministic run id). So this is a re-PRESENTATION, not a second ingest
-    path with its own policy, and a role-literal author is refused here exactly as it was on the bus —
-    which is why this does not pre-empt the open ruling on that population.
+    authorization (`enforce_bus_authz` — may the stamped subject record THIS, and where signing is enforced
+    does a listed signer's key verify it) and the same idempotence (`ingest_event` MERGEs on a deterministic
+    run id). So this is a re-PRESENTATION, not a second ingest path with its own policy, and a role-literal
+    author is refused here exactly as it was on the bus — which is why this does not pre-empt the open ruling
+    on that population. It names its own door, so a refusal here is counted as the parking route's and not as
+    a second arrival on the subscription.
 
     IT PUBLISHES NOTHING. The write goes to the repository directly, so a recovered event never lands
     back on `lineage.events.v1`. That is what separates this from the reconcile relay's drain, which
@@ -105,7 +107,7 @@ async def _reingest_from_the_park(event: dict[str, Any], request: Request, run_i
     if repository is None or not run_id:
         return False
     try:
-        await handle_cloud_event(repository, event, lambda parsed, arrived: enforce_bus_authz(parsed, request, get_settings(), arrived))
+        await handle_cloud_event(repository, event, lambda parsed, arrived: enforce_bus_authz(parsed, request, get_settings(), arrived), door=Door.DEAD_LETTER)
     except Exception as exc:  # noqa: BLE001 — a replay must never turn a park into a 500 or a retry loop
         log.info("dapr_dead_letter_replay_failed", extra={"run_id": run_id, "error": str(exc)})
         return False

@@ -27,6 +27,32 @@ from service_kit.governed.settings import GovernedAuthSettings
 from service_kit.lakehouse.objectfs import lance_storage_options
 
 
+class Signing(BaseSettings):
+    """WHO MAY SIGN WHAT LINEAGE RECORDS, as ONE object ([[LH-064]]): the chart-derived signer and delegator sets.
+
+    `signers` are the identities whose Ed25519 keys sign events put on the bus or into the outbox; `delegators`
+    are the ones among them that may stamp a PERSON as the author (the catalog, which authenticated that
+    person). Both are rendered by the chart from the identities it mints keys for (`LINEAGE_SIGNERS`,
+    `LINEAGE_DELEGATORS`, JSON lists), so what lineage trusts and what the estate provisions cannot drift.
+
+    EMPTY SIGNERS MEAN NOTHING IS VERIFIED. An estate that does not enforce signing (the store off, auth off, or
+    `signing.enforce` false) renders both empty: a `rask_signature` an event carries is then ignored, and nothing
+    a signature would attest is admitted on it. One object rather than two attributes so that a settings double
+    carries the whole verifier configuration or none of it: a double without it fails on the missing attribute
+    instead of silently skipping the check.
+    """
+
+    model_config = SettingsConfigDict(frozen=True, extra="ignore", populate_by_name=True)
+
+    signers: frozenset[str] = Field(default=frozenset(), alias="LINEAGE_SIGNERS")
+    delegators: frozenset[str] = Field(default=frozenset(), alias="LINEAGE_DELEGATORS")
+
+    @property
+    def enforced(self) -> bool:
+        """Whether lineage refuses an event no listed signer's key verifies."""
+        return bool(self.signers)
+
+
 class LineageSettings(GovernedAuthSettings, BaseSettings):
     """Config for the lineage service, its Apache AGE graph store, and its auth gate."""
 
@@ -59,12 +85,9 @@ class LineageSettings(GovernedAuthSettings, BaseSettings):
     # The FGA object type a Lance dataset maps to. A lineage Dataset node's ``name`` is the
     # catalog ``table:<id>``, so a read is gated on ``can_get_metadata`` of ``table:<name>``.
     fga_object_type: str = Field(default="table", alias="LINEAGE_FGA_OBJECT_TYPE")
-    # WHO THE CATALOG IS when it signs what it emits — the name its signature carries (the chart's
-    # `catalog.serviceIdentity`, which the catalog reads as LANCE_SERVICE_IDENTITY). The bus gate admits a
-    # DROP it verifies as this signer without re-deriving the author's grants (`fga_deps.enforce_bus_authz`),
-    # so the two readers must name the same identity; pinned by
-    # `tests/unit/test_a_catalog_drop_is_admitted_on_the_catalogs_signature.py`.
-    catalog_service_identity: str = Field(default="service-catalog", alias="LINEAGE_CATALOG_SERVICE_IDENTITY")
+    #: Who may sign what the bus and the outbox carry; see `Signing`. Built by its own env aliases
+    #: (`LINEAGE_SIGNERS`, `LINEAGE_DELEGATORS`), so a settings object made by `model_validate` reads them too.
+    signing: Signing = Field(default_factory=Signing)
 
     # --- Dapr pub/sub durable ingest (opt-in) — the catalog publishes to the Dapr pubsub.jetstream
     # component and the sidecar delivers each event to this service's subscription handler over HTTP, so

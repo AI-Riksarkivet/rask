@@ -5,8 +5,10 @@ signals you'd actually alert on — how many lineage events we ingest vs. drop v
 ingest takes. They go out via the OTel SDK (activated by ``opentelemetry-instrument``) **OTLP-direct to
 GreptimeDB** (no Collector — mirrors rask), queryable in PromQL / Perses.
 
-Cardinality is bounded on purpose (the otel skill's #1 cost driver): the only attribute is the bounded,
-namespaced ``lance.lineage.outcome`` and the equally bounded ``lance.lineage.door`` — per-run /
+Cardinality is bounded on purpose (the otel skill's #1 cost driver): the processed-events counter carries only the bounded,
+namespaced ``lance.lineage.outcome`` and the equally bounded ``lance.lineage.door``, and the signature counters carry the
+signing identity (a member of the chart's signer set, so as many series as the estate has signers) or a refusal reason (a
+closed set) — per-run /
 per-table identifiers belong on spans and logs, never on metric attributes. (Custom attributes use the project's dot-namespaced `lance.*` convention —
 deliberately NOT the otel skill's reverse-DNS letter, pinned in todo_fable; in PromQL the dots become
 underscores → ``lance_lineage_outcome``.)
@@ -38,6 +40,31 @@ _ingest_duration = _meter.create_histogram(
     # 2026-07-13). The advisory is honoured by the SDK when no View overrides the instrument.
     explicit_bucket_boundaries_advisory=[0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0],
 )
+
+
+_signature_verified = _meter.create_counter(
+    "lineage.signature.verified",
+    unit="{event}",
+    description="Events whose rask_signature a listed signer's published Ed25519 key verified, by the signing identity.",
+)
+_signature_refused = _meter.create_counter(
+    "lineage.signature.refused",
+    unit="{event}",
+    description=(
+        "Events refused because no listed signer's published key verifies their signature, by reason. A refusal is acked, "
+        "so this count is the only trace it leaves."
+    ),
+)
+
+
+def record_signature_verified(identity: str) -> None:
+    """Count one event verified for ``identity``. Bounded: only an identity the chart lists is ever verified."""
+    _signature_verified.add(1, {"lance.lineage.identity": identity})
+
+
+def record_signature_refused(reason: str) -> None:
+    """Count one refused event. ``reason`` is `lineage_kit.signing.RefusalReason`, a closed set, never the event's own text."""
+    _signature_refused.add(1, {"lance.lineage.reason": reason})
 
 
 _provenance_missing = _meter.create_gauge(
@@ -136,6 +163,13 @@ class Outcome(StrEnum):
     # write and for an unrepairable discard, so the route asks the graph a second time instead: a run it
     # lacked and now holds was recovered. Anything else stays `DEAD_LETTERED`.
     RECOVERED = "recovered"
+    # AN EVENT NO LISTED SIGNER'S PUBLISHED KEY VERIFIES ([[LH-064]]): unsigned, forged, or signed by an
+    # identity the chart does not list. ACKED rather than parked, like `UNREPAIRABLE` and for the same
+    # reason: a redelivery cannot add a signature to bytes already published, so a DROP would write a
+    # dead-letter copy per restart about an event that can never be recorded. Its own value because the
+    # question it sends an operator to answer is different (who is publishing to the topic without a key
+    # the estate provisions?) and `lineage.signature.refused` carries the reason that count cannot.
+    SIGNATURE_REFUSED = "signature_refused"
 
 
 class Door(StrEnum):

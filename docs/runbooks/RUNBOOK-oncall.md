@@ -31,6 +31,7 @@ these are found by watching the Perses dashboards (`make dashboards`) or a user 
 | `/readyz` = 503 `{"database":"unavailable"}`, pod `NotReady` | [readyz degraded](#readyz-degraded--pool-or-graph) |
 | Cascade stops mid-way (bronze but no silver, etc.) | [Cascade stalled](#cascade-stalled) |
 | `medallion_dlq_parked` rising / `dapr_dead_letter_parked` ERROR logs | [DLQ parking](#dlq-parking--a-delivery-gave-up) |
+| `LineageSignatureRefusedForAListedSigner` firing, `lineage_signature_refused` WARN logs | [Lineage refusing a signer's events](#lineage-refusing-a-signers-events) |
 | `outbox_depth` sustained > 0, `outbox_oldest_age_seconds` climbing | [Outbox not draining](#outbox-not-draining) |
 | Catalog reads/writes fail, Lance data unreachable | [RustFS down](#rustfs-down--data-plane) |
 | No lineage, `/runs` empty or erroring, FGA also failing | [AGE down](#age-postgres-down--lineage--fga) |
@@ -179,6 +180,31 @@ logs to the root failure (a bad payload, a persistent downstream outage).
 
 **Act.** Fix the root cause, then **replay** from the retained JetStream stream (or re-trigger the stage).
 Deliberately no auto-requeue — re-firing a poison message blind would loop the cascade.
+
+## Lineage refusing a signer's events
+
+**Symptom.** `LineageSignatureRefusedForAListedSigner` fires, with `lineage_signature_refused_total{lance_lineage_reason}`
+rising for a reason other than `unsigned` or `signer`, and `lineage_signature_refused` WARN lines on the lineage pod.
+
+**Cause.** Where `LINEAGE_SIGNERS` is rendered, lineage records a bus or staged event only when a listed signer's
+published Ed25519 key verifies its `rask_signature`. A refusal is **acked**: it is not retried, not parked in the DLQ and
+never recorded, so the counter and the log line are the only trace. By reason: `kid` — the signer signed with a key its
+`signing-public-<identity>` secret does not list (a store that was re-minted under signers that kept the old key, or an
+identity that never published); `signature` — the bytes that arrived differ from the bytes signed; `author` / `delegation`
+— stamped as a subject the signer may not act for; `uncanonical` / `encoding` / `error` — the event cannot be put in its
+canonical form or its signature is not canonical base64url. `unsigned` and `signer` are counted but do not page: no
+genuine signer produces either.
+
+**Diagnose.** The log line carries `run_id` (or `dataset` for a catalog change), the claimed `identity` and the `reason`.
+Compare the signer's key id with the keys its identity publishes: `GET /v1.0/secrets/lance-secrets/signing-public-<identity>`
+through any sidecar allowed to read it, field `keys`, current key first. An outage reads differently: the key list could not
+be read, so lineage answers RETRY (`lineage_signature_keys_unavailable`) and refuses nothing.
+
+**Act.** A signer whose key is not listed: restart it so it re-resolves its key, and after a store re-mint restart every
+signer. Do not add a public key to a list to make events pass unless you know whose key it is; an identity that is being
+forged is an incident, and the response is to rotate that identity's key. An event already refused was acked and is not
+presented again; it stays on the retained stream (168 h), so a rebuild that re-reads the stream verifies it afresh against
+the keys published by then.
 
 ## Outbox not draining
 

@@ -32,7 +32,7 @@ from lance_namespace import PermissionDeniedError
 from pydantic import ValidationError
 
 from lineage.core.metrics import Door, Outcome, record_ingest_duration, record_outcome
-from lineage.models import DatasetEvent, RunEvent, UnauthoredRunError, UngovernedOutputError, parse_event
+from lineage.models import DatasetEvent, RunEvent, UnauthoredRunError, UngovernedOutputError, UnverifiedEventError, parse_event
 from lineage.services.repository import LineageRepository
 
 
@@ -45,15 +45,29 @@ _DROP = {"status": "DROP"}
 
 
 async def handle_cloud_event(
-    repository: LineageRepository, body: Any, authorize: Callable[[RunEvent | DatasetEvent, Mapping[str, Any]], Awaitable[None]] | None = None
+    repository: LineageRepository,
+    body: Any,
+    authorize: Callable[[RunEvent | DatasetEvent, Mapping[str, Any]], Awaitable[None]] | None = None,
+    *,
+    door: Door,
 ) -> dict[str, str]:
     """Ingest one Dapr-delivered CloudEvent. ``body["data"]`` is the OpenLineage event (Dapr parses it
     since we publish with ``datacontenttype=application/json``). ``body`` is an untrusted external
     envelope, hence ``Any`` + the ``isinstance`` guard. Returns the Dapr ack status.
 
+    ``door`` is the ingress the delivery arrived through, with no default: every outcome below is counted under
+    it, and the parking route re-presents a parked delivery here, where a hard-coded subscriber label would count
+    one refusal as an arrival and then again as a park.
+
     ``authorize`` runs after the parse and before any write. It is injected rather than imported so this
     module stays free of FGA — the door owns the policy, this owns the ack contract — and it splits the
     two failure kinds the way the sidecar needs them:
+
+    * **AN EVENT NO LISTED SIGNER'S KEY VERIFIES IS ACKED** ([[LH-064]], `UnverifiedEventError`). Unsigned, forged
+      or signed by an identity the chart does not list: no redelivery can add a signature to published bytes, so a
+      DROP would only park a copy per restart. It is counted (`Outcome.SIGNATURE_REFUSED`, and the reason on
+      `lineage.signature.refused`) and never recorded. A key list that cannot be read is the other kind, an
+      outage, and falls to the RETRY arm below: refusing on it would destroy honest events during a store blip.
 
     * **DENIED, AND THE ACK DEPENDS ON WHETHER ANYTHING COULD EVER CHANGE THE ANSWER.** A named PERSON
       who lacks a grant keeps the DROP: a tuple can be written and the same event then succeeds on its
@@ -91,7 +105,7 @@ async def handle_cloud_event(
         event: RunEvent | DatasetEvent = parse_event(data)
     except (ValidationError, TypeError, ValueError) as exc:
         log.error("lineage_event_invalid", extra={"error": str(exc)})
-        record_outcome(Outcome.UNREPAIRABLE, door=Door.SUBSCRIBER)
+        record_outcome(Outcome.UNREPAIRABLE, door=door)
         # ACKED, not DROPped. A DROP on a subscription carrying a `deadLetterTopic` PARKS, and bytes
         # that do not parse cannot be repaired by a redelivery, a grant or a restart — so parking them
         # writes a dead-letter copy no reader can act on, once per restart, forever. The count is the
@@ -104,12 +118,18 @@ async def handle_cloud_event(
             # field the schema defaults. `data` is what Dapr delivered; the parse above is for everything
             # else.
             await authorize(event, data if isinstance(data, dict) else {})
+        except UnverifiedEventError as exc:
+            # AHEAD OF THE GENERIC `PermissionDeniedError` ARM below, which would route it to the dead-letter topic.
+            # The gate has already logged and counted the reason; the ack is the outcome label.
+            log.warning("lineage_event_unverified", extra={"run": event.run_id, "reason": exc.reason})
+            record_outcome(Outcome.SIGNATURE_REFUSED, door=door)
+            return _SUCCESS
         except UnauthoredRunError as exc:
             # UNREPAIRABLE, so it is consumed rather than parked — see `UnauthoredRunError`. Measured on
             # the deployed estate 2026-09-18: 37 of 44 refusals in one hour, all one run id, one burst
             # per roll, each appending a NEW dead-letter message about an event the DLQ already held.
             log.warning("lineage_event_unauthored", extra={"run": event.run_id, "reason": str(exc)})
-            record_outcome(Outcome.UNREPAIRABLE, door=Door.SUBSCRIBER)
+            record_outcome(Outcome.UNREPAIRABLE, door=door)
             return _SUCCESS
         except UngovernedOutputError as exc:
             # UNREPAIRABLE, so it is consumed rather than parked — a grant needs an OBJECT, and every
@@ -117,15 +137,15 @@ async def handle_cloud_event(
             # parks in a six-hour window were this, four distinct outputs, none with a tuple and one
             # answering 404 from the catalog. Parked, they came back on every roll forever.
             log.warning("lineage_event_ungoverned_output", extra={"run": event.run_id, "reason": str(exc)})
-            record_outcome(Outcome.UNREPAIRABLE, door=Door.SUBSCRIBER)
+            record_outcome(Outcome.UNREPAIRABLE, door=door)
             return _SUCCESS
         except PermissionDeniedError as exc:
             log.warning("lineage_event_unauthorized", extra={"run": event.run_id, "reason": str(exc)})
-            record_outcome(Outcome.REFUSED, door=Door.SUBSCRIBER)
+            record_outcome(Outcome.REFUSED, door=door)
             return _DROP
         except Exception as exc:
             log.warning("lineage_authz_unavailable", extra={"run": event.run_id, "error": str(exc)})
-            record_outcome(Outcome.RETRIED, door=Door.SUBSCRIBER)
+            record_outcome(Outcome.RETRIED, door=door)
             return _RETRY
     started = time.perf_counter()
     try:
@@ -141,8 +161,8 @@ async def handle_cloud_event(
             await repository.ingest_event(event)
     except Exception as exc:
         log.warning("lineage_ingest_failed", extra={"run": event.run_id, "error": str(exc)})
-        record_outcome(Outcome.RETRIED, door=Door.SUBSCRIBER)
+        record_outcome(Outcome.RETRIED, door=door)
         return _RETRY
     record_ingest_duration(time.perf_counter() - started)
-    record_outcome(Outcome.INGESTED, door=Door.SUBSCRIBER)
+    record_outcome(Outcome.INGESTED, door=door)
     return _SUCCESS

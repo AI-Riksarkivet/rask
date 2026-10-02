@@ -8,6 +8,7 @@ import time
 from types import SimpleNamespace
 from typing import Any, cast
 
+from lineage.core.config import Signing
 from service_kit.lakehouse import outbox
 
 
@@ -117,6 +118,9 @@ class _Settings:
         # have failed as an AttributeError the tick's error boundary swallows into `stranded` — the exact
         # failure this class's comment above warns about, met on the first change that read a new field.
         self.fga_enabled = False
+        # The verifier configuration the gate reads before it reads `fga_enabled`: no signer listed, so the
+        # relay verifies nothing here. Explicit, so the double does not take a signer set from the environment.
+        self.signing = Signing(signers=frozenset(), delegators=frozenset())
 
 
 # --------------------------------------------------------------------------- #

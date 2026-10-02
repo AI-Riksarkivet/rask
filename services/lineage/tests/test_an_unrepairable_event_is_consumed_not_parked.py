@@ -29,6 +29,7 @@ from typing import Any, cast
 
 import pytest
 
+from lineage.core.metrics import Door
 from lineage.models import DatasetEvent, RunEvent, UnauthoredRunError
 from lineage.services.consumer import handle_cloud_event
 
@@ -65,7 +66,7 @@ async def test_a_MALFORMED_payload_is_acked_not_parked() -> None:
     """It cannot be repaired by anything, so a dead-letter copy is a duplicate with no reader."""
     repo = _Repo()
 
-    assert await handle_cloud_event(cast(Any, repo), {"data": {"not": "an event"}}) == {"status": "SUCCESS"}
+    assert await handle_cloud_event(cast(Any, repo), {"data": {"not": "an event"}}, door=Door.SUBSCRIBER) == {"status": "SUCCESS"}
     assert repo.ingested == []
 
 
@@ -80,5 +81,5 @@ async def test_an_UNAUTHORED_run_is_acked_not_parked() -> None:
 
     repo = _Repo()
 
-    assert await handle_cloud_event(cast(Any, repo), _event(), refuse_unauthored) == {"status": "SUCCESS"}
+    assert await handle_cloud_event(cast(Any, repo), _event(), refuse_unauthored, door=Door.SUBSCRIBER) == {"status": "SUCCESS"}
     assert repo.ingested == []

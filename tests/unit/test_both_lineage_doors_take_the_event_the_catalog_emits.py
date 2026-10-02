@@ -40,6 +40,7 @@ from starlette.testclient import TestClient
 
 from catalog.core.lineage_emit import build_write_event
 from lineage.api.v1.router import api_router
+from lineage.core.metrics import Door
 from lineage.models import DatasetEvent, RunEvent
 from lineage.services.consumer import handle_cloud_event
 from lineage.services.repository import LineageRepository
@@ -99,11 +100,20 @@ def unauthenticated_app(monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[FastA
 
 
 @pytest.mark.parametrize("operation,door", [("create_table", "datasets"), ("insert", "runs")])
-def test_the_http_door_accepts_it(unauthenticated_app: tuple[FastAPI, _Repo], operation: str, door: str) -> None:
+def test_the_http_door_accepts_it_and_records_no_signature_with_it(
+    unauthenticated_app: tuple[FastAPI, _Repo], operation: str, door: str, event_signer: Any
+) -> None:
+    """The event arrives carrying a `rask_signature` a client wrote for itself. This door holds a bearer token and no signing key,
+    so the facet is a claim and not a signature: the event is recorded without it, from whichever bag it sat on."""
     app, repo = unauthenticated_app
-    response = TestClient(app).post("/api/v1/lineage", json=_emitted(operation))
+    claimed = event_signer("service-catalog").sign(_emitted(operation), on_behalf_of=_AUTHOR)
+
+    response = TestClient(app).post("/api/v1/lineage", json=claimed)
+
     assert response.status_code == 201, f"{operation} -> {response.status_code}: {response.text[:400]}"
-    assert len(getattr(repo, door)) == 1, f"{operation} reached neither door: runs={repo.runs} datasets={repo.datasets}"
+    [recorded] = getattr(repo, door)
+    facets = recorded.dataset.facets if door == "datasets" else recorded.run.facets
+    assert "rask_signature" not in facets, f"a signature nobody verified was recorded with the event: {sorted(facets)}"
 
 
 @pytest.mark.parametrize("operation,door", [("create_table", "datasets"), ("insert", "runs")])
@@ -113,6 +123,6 @@ def test_the_bus_door_accepts_it(operation: str, door: str) -> None:
 
     # CAST, not a subclass: the fake records which door was taken, which is the whole assertion, and
     # inheriting the real repository would drag its pool in for a test that touches no database.
-    status = asyncio.run(handle_cloud_event(cast(LineageRepository, repo), {"data": _emitted(operation)}))
+    status = asyncio.run(handle_cloud_event(cast(LineageRepository, repo), {"data": _emitted(operation)}, door=Door.SUBSCRIBER))
     assert status == {"status": "SUCCESS"}, f"{operation} -> {status}"
     assert len(getattr(repo, door)) == 1, f"{operation} reached neither door: runs={repo.runs} datasets={repo.datasets}"
