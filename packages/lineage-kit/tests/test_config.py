@@ -1,11 +1,20 @@
-"""Env-driven transport config: RASK_* first, official OpenLineage names as aliases."""
+"""Env-driven transport config (RASK_* first, official OpenLineage names as aliases), and the credential
+the HTTP transport presents at the lineage door."""
 
 from __future__ import annotations
 
-import pytest
-from openlineage.client.transport.http import HttpTransport
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import TYPE_CHECKING, override
 
-from lineage_kit import ClientEmitter, Emitter, LineageSettings, NoopEmitter, build_emitter
+import pytest
+
+from lineage_kit import ClientEmitter, Job, LineageSettings, NoopEmitter, Run, RunEvent, RunState, build_emitter
+
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+    from pathlib import Path
 
 
 def test_rask_env_vars_configure_the_transport(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -43,100 +52,111 @@ def test_auto_transport_with_endpoint_is_http(monkeypatch: pytest.MonkeyPatch) -
     assert isinstance(build_emitter(), ClientEmitter)
 
 
-def _headers(emitter: object) -> dict[str, str]:
-    """The custom headers the built transport will actually send."""
-    return dict(emitter._client.transport.config.custom_headers)  # ty: ignore[unresolved-attribute]
+@pytest.fixture
+def lineage_door() -> Iterator[tuple[str, list[dict[str, str]]]]:
+    """A local HTTP endpoint standing in for the lineage door: it records each POST's headers and answers 201."""
+    received: list[dict[str, str]] = []
+
+    class _Door(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            self.rfile.read(int(self.headers["Content-Length"]))
+            received.append({key.lower(): value for key, value in self.headers.items()})
+            self.send_response(201)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        @override
+        def log_message(self, format: str, *args: object) -> None:
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _Door)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}", received
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
 
 
-def test_service_door_credentials_are_sent_as_headers(monkeypatch: pytest.MonkeyPatch) -> None:
-    """rask's ingest authenticates a service by TWO HEADERS, not by a bearer.
+def _event() -> RunEvent:
+    return RunEvent(
+        eventType=RunState.START,
+        eventTime="2026-10-02T00:00:00Z",
+        run=Run(runId="6f2b1a5e-1f3d-5a0e-9c4b-2f9f0a7d1c33"),
+        job=Job(namespace="ray-jobs", name="train.demo"),
+    )
 
-    ``lineage.api.security.authenticate`` opens the service door only when both ``dapr-api-token`` and
-    ``x-lance-service-identity`` are present, and otherwise falls through to OIDC. A transport that can
-    only set ``Authorization: Bearer`` therefore 401s against a governed deployment — and since
-    ``ClientEmitter.emit`` catches transport errors, the events disappear behind one log line. That is
-    the recorded 2026-07-13 incident ("every training RunEvent 401'd, silently losing all training
-    provenance"), which this makes structurally impossible to repeat.
+
+def test_each_emit_presents_the_identity_token_the_file_holds_at_that_moment(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, lineage_door: tuple[str, list[dict[str, str]]]
+) -> None:
+    """The kubelet rewrites the projected token at about 515 s of its 600 s life, so an emitter built once
+    (the process-wide default) must present whatever the file holds when each event is sent.
+
+    The endpoint is named by ``LINEAGE_URL``, the Ray train lane's spelling, because that lane is the
+    long-lived emitter this matters for.
     """
-    monkeypatch.setenv("RASK_LINEAGE_ENDPOINT", "http://lineage:8000")
-    monkeypatch.setenv("LINEAGE_SERVICE_TOKEN", "shared-app-token")
-    monkeypatch.setenv("LINEAGE_SERVICE_ID", "service-trainer")
+    url, received = lineage_door
+    token_file = tmp_path / "token"
+    token_file.write_text("first.projected.jwt\n")
+    monkeypatch.setenv("LINEAGE_URL", url)
+    monkeypatch.setenv("RASK_LINEAGE_IDENTITY_TOKEN_FILE", str(token_file))
+    emitter = build_emitter()
 
-    headers = _headers(build_emitter())
-    assert headers["dapr-api-token"] == "shared-app-token"
-    assert headers["x-lance-service-identity"] == "service-trainer"
+    delivered = [emitter.emit(_event())]
+    token_file.write_text("rotated.projected.jwt\n")
+    delivered.append(emitter.emit(_event()))
 
-
-def test_app_api_token_is_accepted_as_the_token_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Every fleet pod already mounts APP_API_TOKEN from the Dapr app-token secret; reading it means a
-    deployment does not carry the same secret twice under two names."""
-    monkeypatch.setenv("RASK_LINEAGE_ENDPOINT", "http://lineage:8000")
-    monkeypatch.setenv("APP_API_TOKEN", "from-the-dapr-secret")
-    monkeypatch.setenv("LINEAGE_SERVICE_ID", "service-trainer")
-    assert _headers(build_emitter())["dapr-api-token"] == "from-the-dapr-secret"
+    assert delivered == [True, True]
+    assert [headers.get("authorization") for headers in received] == ["Bearer first.projected.jwt", "Bearer rotated.projected.jwt"]
 
 
-def _wire_headers(emitter: Emitter) -> dict[str, str]:
-    """Every header one emit puts on the wire: the custom headers plus the auth provider's bearer.
+@pytest.mark.parametrize("content", [pytest.param(None, id="absent"), pytest.param("\n", id="empty")])
+def test_an_unreadable_identity_token_leaves_the_event_unsent(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, lineage_door: tuple[str, list[dict[str, str]]], content: str | None
+) -> None:
+    """A credential that cannot be read is not sent as an anonymous request: the event stays unsent and
+    ``emit`` answers False, so the caller knows it needs recovery."""
+    url, received = lineage_door
+    token_file = tmp_path / "token"
+    if content is not None:
+        token_file.write_text(content)
+    monkeypatch.setenv("RASK_LINEAGE_ENDPOINT", url)
+    monkeypatch.setenv("RASK_LINEAGE_IDENTITY_TOKEN_FILE", str(token_file))
 
-    The bearer lives on the transport's auth provider rather than in `custom_headers`, so it is folded in
-    under ``authorization``, the header the transport sends it as.
-    """
-    assert isinstance(emitter, ClientEmitter), f"expected an HTTP emitter, got {type(emitter).__name__}"
-    transport = emitter._client.transport
-    assert isinstance(transport, HttpTransport), f"expected the HTTP transport, got {type(transport).__name__}"
-    headers = dict(transport.config.custom_headers)
-    if (bearer := transport.config.auth.get_bearer()) is not None:
-        headers["authorization"] = bearer
-    return headers
+    delivered = build_emitter().emit(_event())
 
-
-def test_an_absent_service_id_never_becomes_an_empty_one(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A present-but-empty `x-lance-service-identity` is worse than an absent one, because the
-    receiving door forks on PRESENCE.
-
-    `services/lineage/src/lineage/api/security.py:164` reads
-    `if dapr_api_token is not None and x_lance_service_identity is not None`, and `""` is not None —
-    so an empty identity ASKS FOR the service door, and that branch is final: its own comment says
-    "a refusal inside this branch is final and never re-asks OIDC". An emitter that set the header
-    whenever `LINEAGE_SERVICE_TOKEN` is present, defaulting the id to `""`, would take that door with no
-    subject, and a perfectly good `LINEAGE_TOKEN` bearer would never be tried.
-
-    The result is a job that does its work and loses its provenance: the run's rows land and its
-    terminal event 403s, which is invisible from the job and from the graph alike.
-    """
-    # The env below is what keeps this from being a tautology: these are the RAY TRAIN LANE's own
-    # variable spellings, not `lineage-kit`'s canonical `RASK_LINEAGE_*` ones. The package accepts them
-    # only through `AliasChoices`; with `LINEAGE_URL` unaccepted the credential resolves and the endpoint
-    # does not, and the lane degrades to a silent no-op.
-    name = "lineage-kit, driven with the Ray train lane's env"
-    for key in ("LINEAGE_URL", "LINEAGE_SERVICE_TOKEN", "LINEAGE_SERVICE_ID", "LINEAGE_TOKEN", "RASK_LINEAGE_TOKEN_SERVICE_BRONZE_TO_SILVER"):
-        monkeypatch.delenv(key, raising=False)
-    for key, value in {"LINEAGE_URL": "http://lineage:8000", "LINEAGE_SERVICE_TOKEN": "app-token", "LINEAGE_TOKEN": "a.valid.bearer"}.items():
-        monkeypatch.setenv(key, value)
-
-    headers = _wire_headers(build_emitter())
-
-    assert headers.get("x-lance-service-identity") != "", f"{name} sends an EMPTY service identity, which takes the service door with no subject and 403s"
-    assert "authorization" in headers, f"{name} discarded a valid LINEAGE_TOKEN bearer while presenting no usable service identity"
+    assert (delivered, received) == (False, [])
 
 
 @pytest.mark.parametrize(
-    ("env", "value"),
-    [("LINEAGE_SERVICE_TOKEN", "tok"), ("LINEAGE_SERVICE_ID", "service-trainer")],
-    ids=["token-only", "identity-only"],
+    ("env", "authorization"),
+    [
+        pytest.param({"RASK_LINEAGE_IDENTITY_TOKEN_FILE": ""}, None, id="blank-file-sends-no-credential"),
+        pytest.param({"OPENLINEAGE_API_KEY": "static.bearer"}, "Bearer static.bearer", id="static-bearer-wins-over-the-file"),
+    ],
 )
-def test_half_configured_service_door_sends_neither_header(monkeypatch: pytest.MonkeyPatch, env: str, value: str) -> None:
-    """Half-configured must send NOTHING, not half.
+def test_the_door_receives_only_the_configured_credential(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    lineage_door: tuple[str, list[dict[str, str]]],
+    env: dict[str, str],
+    authorization: str | None,
+) -> None:
+    url, received = lineage_door
+    token_file = tmp_path / "token"
+    token_file.write_text("projected.jwt\n")
+    monkeypatch.setenv("RASK_LINEAGE_ENDPOINT", url)
+    monkeypatch.setenv("RASK_LINEAGE_IDENTITY_TOKEN_FILE", str(token_file))
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
 
-    The ingest deliberately treats a token-only request as a human request and falls through to OIDC (so
-    a gateway-proxied user carrying a sidecar-stamped token is not diverted into the service door and
-    403'd on the missing identity — the 2026-07-15 audit). Sending one header would therefore be worse
-    than sending none: it changes which branch the ingest takes without being able to satisfy it.
-    """
-    monkeypatch.setenv("RASK_LINEAGE_ENDPOINT", "http://lineage:8000")
-    monkeypatch.setenv(env, value)
-    assert _headers(build_emitter()) == {}
+    delivered = build_emitter().emit(_event())
+
+    assert delivered is True
+    assert [headers.get("authorization") for headers in received] == [authorization]
 
 
 def test_forced_noop_overrides_a_configured_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:

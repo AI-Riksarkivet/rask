@@ -13,12 +13,16 @@ pipeline runs unlineaged rather than crashing.
 
 from __future__ import annotations
 
-import os
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 
-from pydantic import AliasChoices, Field, model_validator
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+#: Where the chart projects the pod's ``rask-lineage`` ServiceAccount token.
+DEFAULT_IDENTITY_TOKEN_FILE = Path("/var/run/secrets/rask/identity/rask-lineage/token")
 
 
 class LineageSettings(BaseSettings):
@@ -28,35 +32,22 @@ class LineageSettings(BaseSettings):
 
     #: The OpenLineage HTTP endpoint base URL (e.g. ``http://localhost:5000``). Unset → no-op emitter.
     #:
-    #: ``LINEAGE_URL`` is the THIRD of a trio this model already accepted two thirds of: the Ray lane
-    #: sets ``LINEAGE_URL`` / ``LINEAGE_SERVICE_TOKEN`` / ``LINEAGE_SERVICE_ID`` together, and the
-    #: latter two are aliased below. Accepting two and not the first is the worst of both — the
-    #: credential resolves, the endpoint does not, and `build_emitter` degrades to the no-op that
-    #: never raises, so a lane loses its provenance while reporting success.
+    #: ``LINEAGE_URL`` is the Ray lane's spelling (``ray_submit`` sets it on the train job). Accepting
+    #: it matters because the failure is silent: an unaccepted endpoint makes `build_emitter` degrade
+    #: to the no-op that never raises, so the lane loses its provenance while reporting success.
     endpoint: str | None = Field(default=None, validation_alias=AliasChoices("RASK_LINEAGE_ENDPOINT", "OPENLINEAGE_URL", "LINEAGE_URL"))
-    #: Bearer api key for the HTTP transport (optional) — the token a producer presents when it holds
-    #: a USER bearer rather than the service pair, which is the Ray lane's ``LINEAGE_TOKEN``.
+    #: A static bearer, the OpenLineage client's own ``api_key`` convention: for a producer OUTSIDE the
+    #: cluster that holds a bearer the door's OIDC issuer verifies. When set it is the credential, and
+    #: the identity token file below is not read.
     api_key: str | None = Field(default=None, validation_alias=AliasChoices("RASK_LINEAGE_API_KEY", "OPENLINEAGE_API_KEY", "LINEAGE_TOKEN"))
-    #: The shared app token for rask's own **service door** on the lineage ingest.
+    #: The pod's projected ServiceAccount token for audience ``rask-lineage``: an in-cluster producer's
+    #: whole identity at the lineage door (`lineage_kit.identity`). Re-read on every emit, because the
+    #: kubelet rotates it before its 600 s expiry. The default is where the chart projects it.
     #:
-    #: rask's ingest does not authenticate in-cluster producers with a bearer: ``lineage.api.security``
-    #: opens the service door only when BOTH ``dapr-api-token`` and ``x-lance-service-identity`` are
-    #: present, and otherwise falls through to OIDC. A bearer api key therefore does not authenticate a
-    #: service at all — it 401s, and ``ClientEmitter`` catches transport errors, so the events vanish
-    #: with one log line. That is not hypothetical: it is the 2026-07-13 incident recorded in
-    #: ``ServicePrincipal``'s docstring, where "every training RunEvent 401'd, silently losing all
-    #: training provenance in a governed deployment".
-    #:
-    #: ``LINEAGE_SERVICE_TOKEN`` is the estate's EXISTING name for this, not a new one: the Ray train
-    #: job passes it through the job's runtime_env (``ray_submit.py``) and the frontend zones get it from
-    #: ``lance.frontendEnv``. Reading that name means every producer already provisioned with the service
-    #: door authenticates through this transport with no additional wiring — and a producer without it
-    #: keeps working on the open (auth-off) path.
-    app_token: str | None = Field(default=None, validation_alias=AliasChoices("RASK_LINEAGE_APP_TOKEN", "LINEAGE_SERVICE_TOKEN", "APP_API_TOKEN"))
-    #: The subject this producer claims at the service door — the estate's ``LINEAGE_SERVICE_ID``. Must be
-    #: in the ingest's ``LINEAGE_SERVICE_SUBJECTS`` allowlist (chart: services.yaml), which fails CLOSED on
-    #: anything unlisted, so this is a claim the ingest verifies rather than trusts.
-    service_identity: str | None = Field(default=None, validation_alias=AliasChoices("RASK_LINEAGE_SERVICE_IDENTITY", "LINEAGE_SERVICE_ID"))
+    #: An empty value presents no credential, for a lineage door running with auth off. A configured
+    #: file that cannot be read is not that: the event is left unsent and counted as a transport drop,
+    #: never sent anonymously.
+    identity_token_file: Path | None = Field(default=DEFAULT_IDENTITY_TOKEN_FILE, validation_alias=AliasChoices("RASK_LINEAGE_IDENTITY_TOKEN_FILE"))
     #: Path under the endpoint events are POSTed to (the client's default).
     endpoint_path: str = Field(default="api/v1/lineage", validation_alias=AliasChoices("RASK_LINEAGE_ENDPOINT_PATH", "OPENLINEAGE_ENDPOINT"))
     #: Default job namespace stamped on runs when a caller does not name one.
@@ -67,48 +58,11 @@ class LineageSettings(BaseSettings):
     #: through the official ConsoleTransport (debugging); ``noop`` forces lineage off.
     transport: Literal["auto", "http", "console", "noop"] = Field(default="auto", validation_alias=AliasChoices("RASK_LINEAGE_TRANSPORT"))
 
-    @model_validator(mode="after")
-    def _prefer_the_token_for_the_identity_claimed(self) -> LineageSettings:
-        """Use the credential belonging to ``service_identity`` when the environment carries one.
-
-        A PRIVILEGED subject must present its OWN credential — `dapr_auth.service_principal` refuses
-        the shared token from a privileged name and will not fall back — so a producer that claims one
-        subject while holding another's key is refused, every time, silently.
-
-        ONE POD, SEVERAL IDENTITIES is why a single env var cannot answer it. The standing example is
-        the Ray head, which runs the train lane (claiming `service-trainer`) and every stage lane
-        (each claiming its submitting stage runner's own subject) from one pod carrying one token.
-        Measured against the live door 2026-09-08, replaying one POST twice from inside that pod:
-        `service-trainer` answered 201 and a second subject answered `401 the presented credential may
-        not claim '<subject>'` — while the job writes its data and exits SUCCEEDED, which is how the
-        2026-07-13 incident in `ServicePrincipal`'s docstring lost all training provenance without
-        anything reporting it.
-
-        LATENT ON THIS ESTATE RATHER THAN FIRING, and worth stating so the pin is not read as a
-        post-mortem: `stage_lineage_url` is empty by default and unwired here, so the stage lanes emit
-        nothing and the only identity emitting is the one whose token is mounted. The credential
-        arrives before the lane is wired, not after it silently loses its provenance.
-
-        So the identity selects the credential — `RASK_LINEAGE_TOKEN_<IDENTITY>`, upper-cased with `-`
-        as `_`. The estate's own prefix, NOT a variant of the legacy `LINEAGE_SERVICE_TOKEN` spelling:
-        this selector is a new rule, and naming it after the thing it replaces would read as a
-        compatibility shim for something that never existed. The token never travels in a job's
-        `runtime_env`; `ray_submit` records that as a P0 leak because Ray echoes it back on the job.
-        Only the IDENTITY rides there, and it is not a secret.
-
-        The two job emitters (`scripts/ray_train_job.py`, `runners/dummy/.../lineage.py`) build their
-        emitter through this package, so this is the rule's one home, pinned by
-        `packages/lineage-kit/tests/test_the_identity_selects_its_own_credential.py`.
-
-        Falls through silently when no such variable exists, so every producer that already works —
-        one identity, one token, the auth-off path — is unchanged.
-        """
-        if not self.service_identity:
-            return self
-        scoped = os.environ.get(f"RASK_LINEAGE_TOKEN_{self.service_identity.upper().replace('-', '_')}")
-        if scoped:
-            self.app_token = scoped
-        return self
+    @field_validator("identity_token_file", mode="before")
+    @classmethod
+    def _blank_presents_no_credential(cls, value: object) -> object:
+        """``""`` is the explicit "no credential"; as a ``Path`` it would be ``.``, a directory, and every emit would fail."""
+        return None if value == "" else value
 
 
 @lru_cache(maxsize=1)
@@ -116,7 +70,7 @@ def lineage_settings() -> LineageSettings:
     """The process's transport configuration, read from the environment ONCE.
 
     Every run open used to construct `LineageSettings()` afresh — a full pydantic-settings
-    environment read and validation of nine fields — and a ``@stage`` callable is invoked per batch
+    environment read and validation of every field — and a ``@stage`` callable is invoked per batch
     inside a Ray Data pipeline, so that was per unit of work for a value that cannot change within a
     process.
 

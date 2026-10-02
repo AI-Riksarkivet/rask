@@ -4,8 +4,8 @@ This package makes one hard promise — emission never crashes compute — and p
 every failure. Until this module the whole price of that promise was a `log.warning`: a deployment
 whose lineage endpoint had been 401ing for an hour looked, to every dashboard and every alerting
 rule, exactly like a deployment that simply had no runs. That is not hypothetical, it is the
-2026-07-13 incident recorded in ``LineageSettings.app_token``: every training RunEvent 401'd and the
-training provenance vanished, one warning at a time.
+2026-07-13 incident: every training RunEvent 401'd and the training provenance vanished, one warning
+at a time.
 
 CARDINALITY. Two closed label keys and nothing else: ``lance.lineage.reason`` (author | transport)
 and ``lance.lineage.state`` (the six OpenLineage run states). A job name, a namespace or an exception

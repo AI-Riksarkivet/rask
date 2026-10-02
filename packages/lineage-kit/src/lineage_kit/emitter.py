@@ -14,9 +14,10 @@ from typing import TYPE_CHECKING, Protocol
 
 from openlineage.client import OpenLineageClient
 from openlineage.client.transport.console import ConsoleConfig, ConsoleTransport
-from openlineage.client.transport.http import HttpConfig, HttpTransport, create_token_provider
+from openlineage.client.transport.http import HttpConfig, HttpTransport, TokenProvider, create_token_provider
 
 from lineage_kit.config import LineageSettings
+from lineage_kit.identity import ProjectedTokenProvider
 from lineage_kit.metrics import DropReason, record_drop
 
 
@@ -99,6 +100,19 @@ class ClientEmitter:
         return True
 
 
+def _credential(s: LineageSettings) -> TokenProvider:
+    """The one credential the transport presents: a configured static bearer, else the pod's identity token.
+
+    One, never a combination: the door authenticates the ``Authorization`` bearer and nothing else
+    names the caller, so a second credential beside it would carry no meaning.
+    """
+    if s.api_key:
+        return create_token_provider({"type": "api_key", "apiKey": s.api_key})
+    if s.identity_token_file is not None:
+        return ProjectedTokenProvider(s.identity_token_file)
+    return create_token_provider({})
+
+
 def build_emitter(settings: LineageSettings | None = None) -> Emitter:
     """Construct the emitter the environment asks for (see :class:`LineageSettings`)."""
     s = settings or LineageSettings()
@@ -111,29 +125,7 @@ def build_emitter(settings: LineageSettings | None = None) -> Emitter:
         if not s.endpoint:
             log.warning("lineage_http_without_endpoint — set RASK_LINEAGE_ENDPOINT; degrading to no-op")
             return NoopEmitter()
-        # rask's SERVICE DOOR (lineage.api.security.authenticate): an in-cluster producer authenticates
-        # with the shared app token PLUS an allowlisted subject, both as headers — not with a bearer.
-        # Sent together or not at all: the door opens on `dapr_api_token is not None and
-        # x_lance_service_identity is not None`, and a request carrying only the token deliberately
-        # falls through to OIDC (so a gateway-proxied human is not diverted into the service door and
-        # 403'd on the missing identity — the 2026-07-15 audit). Half-configuring is therefore worse
-        # than not configuring: it 401s instead of failing loudly.
-        headers: dict[str, str] = {}
-        if s.app_token and s.service_identity:
-            headers["dapr-api-token"] = s.app_token
-            headers["x-lance-service-identity"] = s.service_identity
-        elif s.app_token or s.service_identity:
-            log.warning(
-                "lineage_service_door_half_configured — need BOTH RASK_LINEAGE_APP_TOKEN (or APP_API_TOKEN) "
-                "and RASK_LINEAGE_SERVICE_IDENTITY; sending neither, so an authenticated ingest will 401"
-            )
-        config = HttpConfig(
-            url=s.endpoint,
-            endpoint=s.endpoint_path,
-            timeout=s.timeout,
-            auth=create_token_provider({"type": "api_key", "apiKey": s.api_key}) if s.api_key else create_token_provider({}),
-            custom_headers=headers,
-        )
+        config = HttpConfig(url=s.endpoint, endpoint=s.endpoint_path, timeout=s.timeout, auth=_credential(s))
         return ClientEmitter(OpenLineageClient(transport=HttpTransport(config)))
     log.debug("lineage_disabled (transport=%s, endpoint=%s)", s.transport, s.endpoint)
     return NoopEmitter()
