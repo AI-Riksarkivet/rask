@@ -227,5 +227,9 @@ after any non-surge OpenBao replacement rather than waiting for that interval.
 
 **Reading it back.** From an app's own sidecar, `GET /v1.0/secrets/lance-secrets/signing-key-<its identity>` answers
 200 with a `seed` field, every other identity's key is refused, and every `signing-public-<identity>` answers 200.
-Lineage's sidecar is refused every key. Each pod carries `checksum/dapr-config`, the hash of its own Configuration,
-so a deny-list edit restarts exactly the pods whose list changed (HotReload is off).
+Lineage's sidecar is refused every key. Each app's Dapr Configuration is named by the hash of its spec
+(`lance-config-<app>-<hash>`) and its pods name it in `dapr.io/config`, so a deny-list edit renames the object and rolls
+exactly the pods whose list changed. HotReload is off and Helm applies a Deployment before the Configuration it names:
+a pod that boots first finds no such object, its daprd exits and the kubelet restarts it until Helm has applied it, so
+no pod boots against the old list. During such an upgrade a rolled pod may show one daprd restart: that is the wait,
+not a fault. Read a pod's Configuration from its `dapr.io/config`, not from the app-id.

@@ -10,7 +10,9 @@ The residual the ruling names, and this gate cannot see: a pod that holds OpenBa
 directly, reads the store without asking a sidecar (XC-079).
 
 Which identity a Deployment signs as is read from the `RASK_SIGNING_IDENTITY` the chart renders on it, never from a
-helper's restatement, so an app that signs as one identity and may read another fails here.
+helper's restatement, so an app that signs as one identity and may read another fails here. The Configuration a sidecar
+loads is the one its pod's `dapr.io/config` names, never a name this gate builds: Configurations are named by the hash
+of their spec, and a pod that names one the render does not contain has a daprd that never boots.
 """
 
 from __future__ import annotations
@@ -32,15 +34,20 @@ def _readable(scope: dict, names: set[str]) -> set[str]:
 
 def test_each_sidecar_may_read_only_its_own_signing_key_and_lineage_none() -> None:
     docs = render(*DEFAULT_ARGS, "--set", "explorer.enabled=true")
+    configurations = {doc["metadata"]["name"]: doc for doc in docs if doc.get("kind") == "Configuration"}
     signs_as: dict[str, set[str]] = defaultdict(set)
+    loads: dict[str, set[str]] = defaultdict(set)
     for doc in docs:
         if doc.get("kind") != "Deployment":
             continue
         template = doc["spec"]["template"]
-        app_id = ((template.get("metadata") or {}).get("annotations") or {}).get("dapr.io/app-id")
+        annotations = (template.get("metadata") or {}).get("annotations") or {}
+        app_id = annotations.get("dapr.io/app-id") or doc["metadata"]["name"]
+        if name := annotations.get("dapr.io/config"):
+            loads[app_id].add(name)
         for container in template["spec"]["containers"]:
             if identity := env_of(container).get("RASK_SIGNING_IDENTITY"):
-                signs_as[app_id or doc["metadata"]["name"]].add(identity)
+                signs_as[app_id].add(identity)
     signers = set().union(*signs_as.values()) if signs_as else set()
     assert signers, "no Deployment renders RASK_SIGNING_IDENTITY: nothing in this render signs, so the gate measures nothing"
     private = {f"signing-key-{identity}" for identity in signers}
@@ -48,19 +55,20 @@ def test_each_sidecar_may_read_only_its_own_signing_key_and_lineage_none() -> No
 
     problems: dict[str, object] = {}
     checked: set[str] = set()
-    for doc in docs:
-        if doc.get("kind") != "Configuration":
-            continue
-        app_id = doc["metadata"]["name"].removeprefix("lance-config-")
-        for scope in ((doc.get("spec") or {}).get("secrets") or {}).get("scopes") or []:
-            if scope.get("storeName") != STORE:
+    for app_id, names in loads.items():
+        for name in names:
+            if name not in configurations:
+                problems[app_id] = f"its sidecar loads Configuration {name}, which the render does not contain"
                 continue
-            checked.add(app_id)
-            own = {f"signing-key-{identity}" for identity in signs_as.get(app_id, set())}
-            if (readable := _readable(scope, private)) != own:
-                problems[app_id] = {"may read": sorted(readable), "signs with": sorted(own)}
-            if hidden := public - _readable(scope, public):
-                problems[f"{app_id} (public lists)"] = sorted(hidden)
+            for scope in ((configurations[name].get("spec") or {}).get("secrets") or {}).get("scopes") or []:
+                if scope.get("storeName") != STORE:
+                    continue
+                checked.add(app_id)
+                own = {f"signing-key-{identity}" for identity in signs_as.get(app_id, set())}
+                if (readable := _readable(scope, private)) != own:
+                    problems[app_id] = {"may read": sorted(readable), "signs with": sorted(own)}
+                if hidden := public - _readable(scope, public):
+                    problems[f"{app_id} (public lists)"] = sorted(hidden)
 
     assert "lineage" in checked and set(signs_as) <= checked, f"apps whose sidecar no Configuration scopes: {sorted(set(signs_as) - checked)}"
     assert not problems, f"a sidecar may read a private signing key it does not sign with, or not read a public list: {problems}"

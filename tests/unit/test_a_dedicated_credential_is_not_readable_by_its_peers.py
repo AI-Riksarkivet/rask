@@ -43,8 +43,18 @@ TOKEN_SECRET = re.compile(r"secret/service-token-(\S+)")
 #: A credential the seed mints rather than renders ([[LH-304]]), still its own secret.
 TOKEN_MINTED = re.compile(r"put_minted service-token-(\S+)")
 
-#: The Configuration a scoped app-id must carry, by app-id.
-CONFIG_FOR = "lance-config-{}".format
+
+def _config_loaded_by(docs: list[dict], app_id: str) -> str:
+    """The Configuration an app-id's sidecar is started with: its pods' `dapr.io/config`, because a Configuration is named by the hash of its spec."""
+    names: set[str] = set()
+    for doc in docs:
+        if doc.get("kind") != "Deployment":
+            continue
+        annotations = (doc["spec"]["template"].get("metadata") or {}).get("annotations") or {}
+        if annotations.get("dapr.io/app-id") == app_id and "dapr.io/config" in annotations:
+            names.add(annotations["dapr.io/config"])
+    assert len(names) == 1, f"app-id {app_id} must load exactly one Configuration, found {sorted(names)}"
+    return names.pop()
 
 
 def _docs() -> list[dict]:
@@ -120,7 +130,7 @@ def test_only_lineage_may_read_more_than_its_own_credential() -> None:
     seeded = _seeded_token_identities(docs)
     assert seeded, "the OpenBao seed writes no dedicated credential in this render: the parse moved, not the chart"
     readable = _readable_identities(docs, seeded)
-    verifiers = {CONFIG_FOR("lineage")}
+    verifiers = {_config_loaded_by(docs, "lineage")}
 
     greedy = {name: sorted(ids) for name, ids in readable.items() if name not in verifiers and len(ids) > 1}
     blinded = {name: sorted(seeded - ids) for name, ids in readable.items() if name in verifiers and ids != seeded}

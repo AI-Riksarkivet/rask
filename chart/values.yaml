@@ -3263,6 +3263,21 @@ openbao:
 # keys go with the old store, so an event signed before the loss is refused once enforcement is on (acked and
 # counted); every signer re-resolves within 5 minutes and heals in place.
 #
+# THE DENY LISTS REACH A SIDECAR THROUGH THE NAME OF ITS CONFIGURATION. daprd reads its Configuration once, at boot
+# (HotReload is off), and Helm applies a Deployment before the dapr.io Configuration it names, so an edit made under an
+# unchanged name is loaded stale by any pod that boots in the gap, for the life of the pod, with every probe green.
+# Each per-app Configuration is therefore named `lance-config-<app>-<first 10 hex of the sha256 of its spec>`
+# (`lance.daprAppConfigName`; the object and the pod's `dapr.io/config` both take it from there) and no checksum
+# annotation exists: the rename is what rolls exactly the pods whose list changed. A pod that boots before Helm has
+# applied the renamed object names one that does not exist yet, so daprd exits and the kubelet restarts it until it
+# does. Measured in the Dapr v1.18.1 source: pkg/runtime/config.go:252-254 returns the load error, and the default
+# configuration at :256-260 is reached only when no --config was given; cmd/daprd/app/app.go:119-121 is a
+# log.Fatalf; the operator answers a missing object with an error (pkg/operator/api/configurations.go:43-45, a gRPC
+# Unknown that go-grpc-middleware v1.4.0 does not retry, retry/options.go:19, so the exit is immediate); the injector
+# passes the annotation through as `--config <name>` and reads no Configuration but `daprsystem`
+# (pkg/injector/patcher/sidecar_container.go:102-104, pkg/injector/service/pod_patch.go:133-148). Reference a
+# Configuration through the pod's `dapr.io/config`, never by a name built from the app-id.
+#
 # RESIDUAL (owner, 2026-10-02): this is the Dapr-scope claim. A pod that holds OpenBao's root token or reaches :8200
 # reads the store without a sidecar until XC-079.
 signing:

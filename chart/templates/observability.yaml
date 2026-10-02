@@ -108,7 +108,7 @@ spec:
 apiVersion: dapr.io/v1alpha1
 kind: Configuration
 metadata:
-  name: lance-config-{{ $app }}
+  name: {{ include "lance.daprAppConfigName" (list $cfgRoot $app) }}
   labels: {{- include "lance.labels" $cfgRoot | nindent 4 }}
 spec:
 {{- include "lance.daprAppSpec" (list $cfgRoot $app) }}

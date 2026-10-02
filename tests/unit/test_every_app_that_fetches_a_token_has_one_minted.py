@@ -61,14 +61,15 @@ def rendered() -> list[dict]:
     return [doc for doc in yaml.safe_load_all(done.stdout) if isinstance(doc, dict)]
 
 
-def _token_fetchers(docs: list[dict]) -> list[tuple[str, str]]:
-    """`(dapr app id, declared identity)` for every Deployment that fetches its token from the store."""
-    out: list[tuple[str, str]] = []
+def _token_fetchers(docs: list[dict]) -> list[tuple[str, str, str]]:
+    """`(dapr app id, declared identity, the Configuration its sidecar loads)` for every Deployment that fetches its token from the store."""
+    out: list[tuple[str, str, str]] = []
     for doc in docs:
         if doc.get("kind") != "Deployment":
             continue
         template = doc["spec"]["template"]
-        app = (template["metadata"].get("annotations") or {}).get("dapr.io/app-id")
+        annotations = template["metadata"].get("annotations") or {}
+        app = annotations.get("dapr.io/app-id")
         for container in template["spec"].get("containers") or []:
             if container["name"] == "daprd":
                 continue
@@ -78,7 +79,7 @@ def _token_fetchers(docs: list[dict]) -> list[tuple[str, str]]:
             declared = sorted({v for k, v in env.items() if k.endswith(_IDENTITY_SUFFIX) and v})
             for identity in declared:
                 if app:
-                    out.append((app, identity))
+                    out.append((app, identity, annotations.get("dapr.io/config", "")))
     return out
 
 
@@ -91,7 +92,7 @@ def test_every_declared_identity_has_a_token_minted(rendered: list[dict]) -> Non
     )
     assert "bao kv put secret/service-token-" in seeded, "no token seeding found in the OpenBao pod — the parse moved, not the chart"
 
-    missing = sorted({f"{app} -> service-token-{identity}" for app, identity in _token_fetchers(rendered) if f"service-token-{identity}" not in seeded})
+    missing = sorted({f"{app} -> service-token-{identity}" for app, identity, _ in _token_fetchers(rendered) if f"service-token-{identity}" not in seeded})
     assert not missing, (
         f"these apps are told to fetch a service token the estate never mints, so they call every governed door with no bearer and take 401: {missing}"
     )
@@ -102,10 +103,9 @@ def test_no_app_is_denied_the_token_it_was_minted(rendered: list[dict]) -> None:
     configs = {d["metadata"]["name"]: d for d in rendered if d.get("kind") == "Configuration"}
 
     refused = []
-    for app, identity in _token_fetchers(rendered):
-        config = configs.get(f"lance-config-{app}")
-        if config is None:
-            continue
+    for app, identity, name in _token_fetchers(rendered):
+        config = configs.get(name)
+        assert config is not None, f"{app} loads Configuration {name!r}, which the render does not contain, so its sidecar never boots"
         denied = ((config["spec"].get("secrets") or {}).get("scopes") or [{}])[0].get("deniedSecrets") or []
         if f"service-token-{identity}" in denied:
             refused.append(f"{app} -> service-token-{identity}")
