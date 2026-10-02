@@ -20,7 +20,6 @@ if TYPE_CHECKING:
     # Type-only: `lance` is heavy and this module is read at boot.
     import lance
 
-from collections.abc import Callable
 from functools import lru_cache
 from typing import Self
 
@@ -468,6 +467,11 @@ class MedallionSettings(OidcSettings, FgaSettings, BaseSettings):
     dapr_secret_store: str = Field(default="lance-secrets", validation_alias=AliasChoices("MEDALLION_DAPR_SECRET_STORE", "RASK_SECRET_STORE"))
     dapr_secret_key: str = Field(default="lance", alias="MEDALLION_DAPR_SECRET_KEY")
     dapr_secret_s3_field: str = Field(default="minio-secret-key", alias="MEDALLION_DAPR_SECRET_S3_FIELD")
+    #: THE IDENTITY THIS SERVICE SIGNS ITS LINEAGE EVENTS AS ([[LH-064]]), one variable on every signer
+    #: (`RASK_SIGNING_IDENTITY`). With `secrets_from_dapr` it decides whether the service signs at all: its private
+    #: key is `signing-key-<this>` in the store. It must be the subject the events stamp as their author
+    #: (`fga_service_identity`), because a verifier refuses an event whose signer is not its author.
+    signing_identity: str = Field(default="", alias="RASK_SIGNING_IDENTITY")
     s3_region: str = Field(default="us-east-1", alias="MEDALLION_S3_REGION")
 
     @property
@@ -601,30 +605,6 @@ class MedallionSettings(OidcSettings, FgaSettings, BaseSettings):
 def get_settings() -> MedallionSettings:
     """The process-wide medallion settings (read once from env)."""
     return MedallionSettings()
-
-
-@lru_cache(maxsize=1)
-def _dedicated_token_resolver(store: str) -> Callable[[str], str | None]:
-    """Cached so a resolver is built once per process, not once per signed event."""
-    from service_kit.governed.dapr_auth import dedicated_token_from_store
-
-    return dedicated_token_from_store(store)
-
-
-def dedicated_token_for(settings: MedallionSettings) -> Callable[[str], str | None] | None:
-    """The resolver for this service's `service-token-<identity>`, the key it SIGNS its bus events with.
-
-    Signing only: no door accepts this value as a credential any more, a service authenticates with its
-    projected service-account token ([[LH-220]]). The key keeps a second reader, lineage's signature check,
-    until per-identity signing moves to Transit ([[LH-064]]), which is why it stays readable here.
-
-    Returns ``None`` when secrets do not come from Dapr — a dev stack with no secret store signs nothing.
-    An unreadable store raises out of the resolver; `core/lineage_publish.py` decides what an outage means
-    for a signature.
-    """
-    if not settings.secrets_from_dapr:
-        return None
-    return _dedicated_token_resolver(settings.dapr_secret_store)
 
 
 def shared_lance_session() -> lance.Session:

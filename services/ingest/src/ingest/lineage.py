@@ -221,11 +221,21 @@ def _stage_undelivered(event: RunEvent) -> None:
     outbox = settings().lineage_outbox_uri
     if not outbox:
         return
+    from ingest.signing import signed_for_recovery
+    from service_kit.governed.signing_key import SigningKeyUnavailableError
     from service_kit.lakehouse.outbox import stage_event
 
     # `to_wire` and not `model_dump_json`: the outbox holds what the DOOR would have received, so the
     # relay re-ingests the identical bytes rather than a second serialization of the same object.
-    stage_event(outbox, _outbox_storage_options(), event.run.run_id, json.dumps(event.to_wire()))
+    try:
+        # AUTHORED AND SIGNED AS THIS SERVICE ([[LH-064]]): the drain re-ingests the staged copy as a bus event, where
+        # there is no caller to authenticate, and it refuses one that is unsigned.
+        staged = signed_for_recovery(event.to_wire())
+    except SigningKeyUnavailableError as exc:
+        # Staged unsigned it would be deleted unread by the drain: nothing is the honest answer.
+        logger.error("lineage event not staged: %s", exc, extra={"run_id": event.run.run_id})
+        return
+    stage_event(outbox, _outbox_storage_options(), event.run.run_id, json.dumps(staged))
 
 
 def _outbox_storage_options() -> dict[str, str]:

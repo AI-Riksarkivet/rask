@@ -19,6 +19,7 @@ from medallion.core.config import get_settings
 from medallion.services.transform import handle_stage
 from service_kit.draining import retry_when_draining
 from service_kit.governed.dapr_auth import require_dapr_token
+from service_kit.governed.signing_key import retry_until_signed
 
 
 def register_stage_route(app: FastAPI) -> DaprApp:
@@ -56,12 +57,19 @@ def register_stage_route(app: FastAPI) -> DaprApp:
         catalog_http: CatalogHttpDep,
         _: Annotated[None, Depends(require_dapr_token)],
         drain: Annotated[dict[str, str] | None, Depends(retry_when_draining)] = None,
+        signing: Annotated[dict[str, str] | None, Depends(retry_until_signed)] = None,
     ) -> dict[str, str]:
         """The Dapr subscription route — thin wrapper over the testable :func:`handle_stage`. ``event``
         is typed ``dict`` so FastAPI parses the CloudEvent JSON body (an ``Any`` param → query param →
-        422). Authenticated by the Dapr app-api-token so a forged stage trigger can't drive the cascade."""
+        422). Authenticated by the Dapr app-api-token so a forged stage trigger can't drive the cascade.
+
+        RETRY while this stage runner's signing key is unresolved, before the trigger is read at all: every event
+        the stage emits is signed, an unsigned one is refused and lost, and a DROP of a trigger this stage runner
+        could not yet serve would lose the work itself."""
         if drain is not None:
             return drain
+        if signing is not None:
+            return signing
         return await handle_stage(dapr, config, event, fga_client=fga_client, catalog_http=catalog_http)
 
     return dapr_app

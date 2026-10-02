@@ -31,6 +31,7 @@ from maintenance.services.sweep import DatasetWorkItem, emit_sweep_lineage, exec
 from maintenance.services.work_queue import RETRY, SUCCESS, ack_for
 from service_kit.draining import retry_when_draining
 from service_kit.governed.dapr_auth import require_dapr_token
+from service_kit.governed.signing_key import retry_until_signed
 from service_kit.lakehouse import base_refs, base_registry
 
 
@@ -158,6 +159,7 @@ def register_work_route(app: FastAPI, settings: MaintenanceSettings) -> DaprApp 
         emitter: LineageEmitterDep,
         _: Annotated[None, Depends(require_dapr_token)],
         drain: Annotated[dict[str, str] | None, Depends(retry_when_draining)] = None,
+        signing: Annotated[dict[str, str] | None, Depends(retry_until_signed)] = None,
     ) -> dict[str, str]:
         """``event`` is typed ``dict`` so FastAPI parses the CloudEvent body — an ``Any`` param becomes a
         query param and 422s.
@@ -166,9 +168,14 @@ def register_work_route(app: FastAPI, settings: MaintenanceSettings) -> DaprApp 
         does not consult a readiness probe, so without this a pod mid-shutdown would begin a compaction
         it cannot finish — and an interrupted compaction is not merely lost work, it leaves the rewritten
         fragments uncommitted for the next GC to reclaim.
+
+        The same answer while this worker's signing key is unresolved: the unit's lineage event could not be signed,
+        and an unsigned one is refused and lost, so the unit is left for a worker that can.
         """
         if drain is not None:
             return drain
+        if signing is not None:
+            return signing
         return await handle_unit(event, config, emitter)
 
     return dapr_app

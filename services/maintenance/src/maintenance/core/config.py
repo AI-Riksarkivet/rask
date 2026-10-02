@@ -543,6 +543,10 @@ class MaintenanceSettings(FgaSettings, BaseSettings):
     #: caller from the verified service-account token, so this must equal the subject the catalog's
     #: `RASK_SA_SUBJECTS` maps this pod's service account to, or the two name different principals.
     catalog_service_identity: str = Field(default="service-maintenance", alias="MAINTENANCE_CATALOG_SERVICE_IDENTITY")
+    #: THE IDENTITY THIS SERVICE SIGNS ITS LINEAGE EVENTS AS ([[LH-064]]), one variable on every signer
+    #: (`RASK_SIGNING_IDENTITY`). With `secrets_from_dapr` it decides whether the service signs at all: its private
+    #: key is `signing-key-<this>` in the store. When it signs, it is also the author the events stamp.
+    signing_identity: str = Field(default="", alias="RASK_SIGNING_IDENTITY")
     #: This pod's projected service-account token for the catalog's doors (audience `rask-catalog`),
     #: re-read on every call because the kubelet rotates it at ~515 s of its 600 s life.
     catalog_identity_token_file: str = Field(default="/var/run/secrets/rask/identity/rask-catalog/token", alias="RASK_CATALOG_IDENTITY_TOKEN_FILE")

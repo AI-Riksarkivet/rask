@@ -42,8 +42,9 @@ from opentelemetry import metrics
 from pydantic import BaseModel
 
 from catalog.core.identifiers import parse_identifier
-from lineage_kit.signing import attach_signature, author_of
+from lineage_kit import CanonError, SigningKey, attach_signature, author_of, canon_1
 from service_kit.governed import fga
+from service_kit.governed.signing_key import SigningKeyHolder, SigningKeyUnavailableError
 from service_kit.lakehouse import outbox
 from service_kit.lakehouse.schema import SchemaFields
 from service_kit.lakehouse.subjects import is_person_subject
@@ -467,8 +468,14 @@ def parse_run_facets(raw_json: str | None) -> dict[str, Any] | None:
     if not isinstance(parsed, dict):
         raise InvalidInputError("X-Lance-Run-Facets must be a JSON object of {facet: {payload}}")
     try:
-        return shape_run_facets(parsed)
-    except (ValueError, TypeError) as exc:  # TypeError: belt-and-suspenders for a payload kwarg collision
+        shaped = shape_run_facets(parsed)
+        # THE CATALOG SIGNS WHAT IT EMITS, and a signature is over the canonical form of the event: a number that has
+        # none (NaN and Infinity, which `json.loads` accepts, or an integer past 2^53-1) would make the event
+        # unsignable AFTER the write committed. Refused here, with the other malformed headers, so no write commits
+        # on a header whose announcement cannot be signed.
+        canon_1(shaped)
+        return shaped
+    except (ValueError, TypeError) as exc:  # CanonError is a ValueError; TypeError: belt-and-suspenders for a payload kwarg collision
         raise InvalidInputError(str(exc)) from exc
 
 
@@ -760,8 +767,7 @@ class DaprEmitter(_BaseLineageEmitter):
         timeout_seconds: float,
         outbox_uri: str = "",
         storage_options: dict[str, str] | None = None,
-        service_identity: str = "",
-        token_resolver: Callable[[str], str | None] | None = None,
+        signing: SigningKeyHolder[SigningKey] | None = None,
     ) -> None:
         self._client = client
         self._pubsub = pubsub
@@ -770,47 +776,42 @@ class DaprEmitter(_BaseLineageEmitter):
         self._timeout_seconds = timeout_seconds
         self._outbox_uri = outbox_uri
         self._storage_options = storage_options or {}
-        #: THIS SERVICE'S OWN NAME, and the resolver that turns it into a credential ([[LH-064]]).
-        #: Both empty is the unconfigured estate, which emits unsigned — the state the bus door still
-        #: admits, and never a placeholder signature the door would refuse.
-        self._service_identity = service_identity
-        self._token_resolver = token_resolver
-        self._signing_key: str | None = None
-
-    def _key(self) -> str:
-        """This service's credential, resolved once. Empty when unconfigured or unreadable."""
-        if self._signing_key is None:
-            self._signing_key = ""
-            if self._service_identity and self._token_resolver is not None:
-                try:
-                    self._signing_key = self._token_resolver(self._service_identity) or ""
-                except Exception:  # noqa: BLE001 — a store blip must not stop a write's provenance
-                    log.warning("catalog_signing_key_unreadable", extra={"identity": self._service_identity})
-        return self._signing_key
+        #: THIS CATALOG'S OWN SIGNING KEY ([[LH-064]]). None is a catalog with no store to sign from, which emits
+        #: unsigned as it always did. A holder without a key emits nothing at all, never an unsigned event.
+        self._signing = signing
 
     def _signed(self, event: dict[str, Any]) -> dict[str, Any]:
-        """The event as it goes on the wire: signed when this service can, unchanged when it cannot.
+        """The event as it goes on the wire: signed by this catalog, or unchanged when it does not sign.
 
         THE AUTHOR DECIDES THE SHAPE. A catalog event is authored by the signed-in PERSON, and this
         service holds no credential of theirs — so it signs as ITSELF and DECLARES the subject it is
         acting for. That is an attestation ("the catalog authenticated this person and says so"), not
-        a claim that the person signed; only their own credential could make the second.
+        a claim that the person signed; only their own credential could make the second. A RunEvent and a
+        DatasetEvent are signed alike: the author rides the dataset's facets on the second shape.
 
-        AN UNAUTHORED EVENT IS LEFT ALONE, and this is the leg that would be easy to get backwards:
-        `verify_signed_event` refuses an event with no author, so attaching a signature to one would
-        take it OFF the graph. The catalog emits those — a static metadata change carries no run
-        author — and unsigned is what the door still admits.
+        AN UNAUTHORED EVENT IS LEFT UNSIGNED, and this is the leg that would be easy to get backwards: a verifier
+        refuses a signer that is not its event's author, so a signature on an event with none could never verify.
+        The catalog stamps no author when it authenticated nobody, and that estate does not enforce signatures.
+        The key is asked for first, so a signer without one emits nothing, whatever the event.
+
+        Raises:
+            SigningKeyUnavailableError: this catalog signs and has no key.
+            CanonError: the event has no canonical form.
         """
-        key = self._key()
-        author = author_of(event)
-        if not key or author is None:
+        if self._signing is None:
             return event
-        on_behalf_of = None if author == self._service_identity else author
-        return attach_signature(event, key=key, identity=self._service_identity, on_behalf_of=on_behalf_of)
+        key = self._signing.key()
+        author = author_of(event)
+        if author is None:
+            return event
+        on_behalf_of = None if author == self._signing.identity else author
+        return attach_signature(event, key=key, identity=self._signing.identity, on_behalf_of=on_behalf_of)
 
     async def _send(self, event: dict[str, Any], *, operation: str, table_id: str, authorization: str | None) -> None:
-        event = self._signed(event)
         try:
+            # SIGNED INSIDE THE TRY, like everything else about an emit: this runs AFTER the Lance write committed, so a
+            # signature that cannot be made is a lost announcement, counted and logged, and never a failed request.
+            event = self._signed(event)
             # STAGED, then published, then dropped on ack (#4). The emit is inline-awaited and
             # best-effort AFTER the Lance write commits, so an unstaged event is lost outright to a crash
             # between the write and the publish: the data exists on storage and the graph never learns of
@@ -833,6 +834,9 @@ class DaprEmitter(_BaseLineageEmitter):
                 topic_name=self._topic,
                 timeout_seconds=self._timeout_seconds,
             )
+        except (SigningKeyUnavailableError, CanonError) as exc:
+            _emit_failed.add(1, {"lance.catalog.transport": "dapr"})
+            log.warning("lineage_emit_withheld_unsigned", extra={"operation": operation, "table": table_id, "error": str(exc)})
         except Exception as exc:
             _emit_failed.add(1, {"lance.catalog.transport": "dapr"})
             log.warning("lineage_publish_failed", extra={"operation": operation, "table": table_id, "error": str(exc)})
@@ -854,8 +858,7 @@ def make_emitter(
     storage_options: dict[str, str] | None = None,
     catalog_impl: str = "",
     warehouse_uri: str = "",
-    service_identity: str = "",
-    token_resolver: Callable[[str], str | None] | None = None,
+    signing: SigningKeyHolder[SigningKey] | None = None,
 ) -> LineageEmitter:
     """Select the lineage transport: ``dapr`` (durable pub/sub via the sidecar) or ``http`` (direct POST);
     no-op when disabled or unwired (a half-configured transport must never silently become the other)."""
@@ -873,8 +876,7 @@ def make_emitter(
             # ONLY THE DAPR TRANSPORT SIGNS, and that is the whole surface that needs it: the HTTP
             # emitter posts to lineage's own door, which runs `enforce_author` against a real bearer —
             # a principal the bus door does not have and the signature exists to supply.
-            service_identity=service_identity,
-            token_resolver=token_resolver,
+            signing=signing,
         )
         emitter._project_resolver = project_resolver
         emitter._catalog_impl = catalog_impl

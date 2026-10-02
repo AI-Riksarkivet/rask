@@ -31,6 +31,7 @@ from maintenance.services.sweep import plan_one
 from maintenance.services.work_queue import RETRY, SUCCESS, enqueue_units
 from service_kit.draining import retry_when_draining
 from service_kit.governed.dapr_auth import require_dapr_token
+from service_kit.governed.signing_key import retry_until_signed
 from service_kit.lakehouse import maintenance_policies
 
 
@@ -92,16 +93,20 @@ def register_arrival_route(app: FastAPI, settings: MaintenanceSettings, dapr_app
         dapr: DaprClientDep,
         _: Annotated[None, Depends(require_dapr_token)],
         drain: Annotated[dict[str, str] | None, Depends(retry_when_draining)] = None,
+        signing: Annotated[dict[str, str] | None, Depends(retry_until_signed)] = None,
     ) -> dict[str, str]:
         """``event`` is typed ``dict`` so FastAPI parses the CloudEvent body — an ``Any`` param becomes
         a query param and 422s. Authenticated by the Dapr app-api-token: a forged write event could
         otherwise name any URI in any bucket and have this service plan a rewrite of it.
 
         While draining, ask for REDELIVERY rather than planning — Dapr's delivery does not consult a
-        readiness probe, and the plan this would produce could outlive the pod that published it.
+        readiness probe, and the plan this would produce could outlive the pod that published it. The same answer
+        while this service's signing key is unresolved: the work this plans emits signed events.
         """
         if drain is not None:
             return drain
+        if signing is not None:
+            return signing
         return await handle_arrival(event, config, dapr)
 
     return wrapper

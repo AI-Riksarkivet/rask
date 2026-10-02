@@ -31,6 +31,7 @@ from dapr.aio.clients import DaprClient
 from fastapi import FastAPI
 from fastapi.concurrency import run_in_threadpool
 
+from lineage_kit import SigningKey, parse_published_keys
 from maintenance.api.arrival import register_arrival_route
 from maintenance.api.index_work import register_index_route
 from maintenance.api.routes import build_router
@@ -40,9 +41,10 @@ from maintenance.core.lineage_emit import make_emitter
 from service_kit.control_emit import make_control_emitter
 from service_kit.draining import arm_drain_on_sigterm
 from service_kit.governed.auth_lifespan import build_fga_client
-from service_kit.governed.dapr_auth import SecretStoreUnreadable, assert_app_token_configured, dedicated_token_from_store
+from service_kit.governed.dapr_auth import assert_app_token_configured
 from service_kit.governed.fga import dispose as fga_dispose
 from service_kit.governed.secrets import apply_dapr_secrets
+from service_kit.governed.signing_key import attach_signing, make_signing_holder, signing_ready_check
 from service_kit.lakehouse.lance_metrics import instrument_lance_if_available
 from service_kit.lance_app import build_lance_service_app
 from service_kit.obs import configure_app_logging
@@ -150,6 +152,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # The work queue publishes through this same client, so a configured work topic keeps it alive
     # even with both emitters off — otherwise the tick would plan units it has no way to send.
     dapr_client = DaprClient() if (settings.lineage_emit_enabled or settings.control_emit_enabled or settings.work_topic) else None
+    # THIS SERVICE'S OWN SIGNING KEY ([[LH-064]]), or None for a stack with no store or no identity. The planner and
+    # every worker run this module and sign as it. It is also the author every event stamps, which the emitter checks
+    # at construction: a verifier refuses a signer that is not its event's author.
+    signing = make_signing_holder(
+        secrets_from_dapr=settings.secrets_from_dapr,
+        identity=settings.signing_identity,
+        store=settings.dapr_secret_store,
+        load_key=SigningKey.from_seed,
+        parse_published=parse_published_keys,
+    )
+    attach_signing(app, signing)
     app.state.lineage_emitter = make_emitter(
         enabled=settings.lineage_emit_enabled,
         dapr=dapr_client,
@@ -160,14 +173,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         outbox_uri=settings.lineage_outbox_uri,
         storage_options=settings.storage_options(),
         # The SAME identity this service presents at the catalog's service door, so the graph and the
-        # catalog cannot disagree about who compacted a dataset.
+        # catalog cannot disagree about who compacted a dataset. A signer must sign as it: the emitter refuses to
+        # be built with a key for any other identity.
         author=settings.catalog_service_identity,
-        # ITS OWN CREDENTIAL, resolved once at startup ([[LH-064]]). Read here rather than per-emit so
-        # a sweep tick never waits on the secret store, and ABSENT rather than fatal: an estate that has
-        # not provisioned this identity keeps emitting unsigned, which the bus door still accepts. An
-        # unreadable store is the same answer for the same reason — the sweep must not fail to start
-        # because a signature it is not yet required to produce cannot be made.
-        signing_key=_signing_key(settings),
+        signing=signing,
     )
     # #79: the expired-trash purge announces each reclamation on the catalog's control topic. A no-op
     # when off — never a half-configured transport that looks like it publishes.
@@ -184,12 +193,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.dapr_client = dapr_client
     app.state.fga_client = await _make_fga_client(settings)
     app.state.s3_client = _make_s3_client(settings)
+    # RESOLVED LAST, so the probes and the retry answers are served from the moment the app boots whether or not the
+    # key resolved: a service that is waiting for its key takes no delivery (`retry_until_signed` on its routes),
+    # reports itself not ready, and heals in place when the key is published.
+    if signing is not None:
+        await signing.start()
     app.state.startup_complete = True
     try:
         yield
     finally:
         _disarm_drain()
         app.state.shutting_down = True
+        if signing is not None:
+            await signing.stop()
         # Same disposal as every sibling. Maintenance stores it as `app.state.fga_client` rather than
         # `fga`; the shared disposer covers both names so the difference stops mattering.
         await fga_dispose(app)
@@ -207,6 +223,7 @@ app = build_lance_service_app(
     audit_enabled=get_settings().audit_enabled,
     lifespan=lifespan,
     log=log,
+    ready_check=signing_ready_check(),
 )
 
 # The Dapr cron route (POST /<binding-name>) + its OPTIONS discovery ack, with the require_dapr_token gate.
@@ -227,18 +244,3 @@ _work_app = register_arrival_route(app, get_settings(), _work_app) or _work_app
 # one ackWait cannot serve both a minutes-long compaction and a vector index over a large table —
 # but the SAME DaprApp, for the reason the line above states.
 register_index_route(app, get_settings(), _work_app)
-
-
-def _signing_key(settings: MaintenanceSettings) -> str:
-    """This identity's own credential, or empty when there is none to be had.
-
-    Empty is a real answer here and not a failure: the bus door accepts unsigned events for as long as
-    the rollout needs, so a missing or unreadable credential degrades to today's behaviour instead of
-    stopping a sweep. It never substitutes a placeholder — a signature that verifies for nobody is
-    worse than none, because the door refuses it.
-    """
-    try:
-        return dedicated_token_from_store(settings.dapr_secret_store)(settings.catalog_service_identity) or ""
-    except SecretStoreUnreadable:
-        log.warning("maintenance_signing_key_unreadable", extra={"identity": settings.catalog_service_identity})
-        return ""

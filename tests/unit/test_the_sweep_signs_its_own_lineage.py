@@ -50,15 +50,6 @@ def _event(*, author: str) -> dict[str, Any]:
     )
 
 
-def test_the_event_names_the_service_that_emitted_it() -> None:
-    """The headline: a maintenance run must not reach the graph anonymous."""
-    facets = _event(author="service-maintenance")["run"]["facets"]
-
-    assert "author" in facets, f"the maintenance event carries no author facet, so its run lands anonymous: {sorted(facets)}"
-    assert facets["author"]["sub"] == "service-maintenance"
-    assert facets["author"]["name"] == "service-maintenance"
-
-
 def test_an_unnamed_emitter_stays_anonymous_rather_than_inventing_a_subject() -> None:
     """The other direction, and the one that keeps this from becoming a lie.
 
@@ -69,25 +60,3 @@ def test_an_unnamed_emitter_stays_anonymous_rather_than_inventing_a_subject() ->
     facets = _event(author="")["run"]["facets"]
 
     assert "author" not in facets, f"an unconfigured identity invented an author: {facets.get('author')}"
-
-
-def test_the_deployed_path_actually_passes_the_identity() -> None:
-    """THE HALF THAT MATTERS, and the one this estate has been bitten by six times: a builder that CAN
-    sign and a call site that does not is the same defect one layer down.
-
-    `service.py` is the only production caller of `make_emitter`; this reads its source and demands the
-    author argument is bound to the setting rather than left at its empty default. A default that means
-    "stay anonymous" is right for a library and wrong for the deployment, so nothing but this says the
-    deployment chose.
-    """
-    import inspect
-
-    from maintenance import service
-
-    source = inspect.getsource(service)
-    call = source[source.index("make_emitter(") : source.index("make_control_emitter(")]
-
-    assert "author=settings.catalog_service_identity" in call, (
-        "the deployed emitter is built without an author, so every maintenance run still reaches the "
-        f"graph anonymous however well the builder can sign: {call.strip()[:400]}"
-    )

@@ -30,12 +30,14 @@ from catalog.core.lineage_emit import make_emitter
 from catalog.core.namespace import build_namespace
 from catalog.core.vending import EncryptionAtRest, make_vendor
 from catalog.services import warehouses
+from lineage_kit import SigningKey, parse_published_keys
 from service_kit.body_limit import BodySizeLimitMiddleware
 from service_kit.control_emit import make_control_emitter
 from service_kit.governed.auth_lifespan import attach_auth
-from service_kit.governed.dapr_auth import assert_app_token_configured, dedicated_token_from_store
+from service_kit.governed.dapr_auth import assert_app_token_configured
 from service_kit.governed.secrets import apply_dapr_secrets
 from service_kit.governed.settings import assert_authentication_configured
+from service_kit.governed.signing_key import attach_signing, make_signing_holder, signing_ready_check
 from service_kit.governed.user_state import UserStateStore
 from service_kit.lakehouse.lance_metrics import instrument_lance_if_available
 from service_kit.lance_app import build_lance_service_app
@@ -202,6 +204,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             cache.setdefault(top_ns, {})["project"] = project
         return project
 
+    signing = make_signing_holder(
+        secrets_from_dapr=settings.secrets_from_dapr,
+        identity=settings.signing_identity,
+        store=settings.dapr_secret_store,
+        load_key=SigningKey.from_seed,
+        parse_published=parse_published_keys,
+    )
+    attach_signing(app, signing)
     app.state.lineage_emitter = make_emitter(
         enabled=settings.lineage_emit_enabled,
         transport=settings.lineage_transport,
@@ -221,11 +231,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # describe a catalog other than the one answering.
         catalog_impl=settings.impl,
         warehouse_uri=settings.root,
-        # WHO THIS SERVICE IS, and how it gets its own credential ([[LH-064]]). The resolver is passed
-        # rather than called here: an estate that emits no lineage, or one with no identity configured,
-        # must never reach for a secret store for a signature it will not make.
-        service_identity=settings.service_identity,
-        token_resolver=dedicated_token_from_store(settings.dapr_secret_store) if settings.secrets_from_dapr else None,
+        # THIS CATALOG'S OWN SIGNING KEY ([[LH-064]]), or None for an estate with no store or no identity. The holder
+        # is built here and started with the app below: an emitter never reaches for the store itself.
+        signing=signing,
     )
     # Control-plane change-events (opt-in, best-effort — the governance/metadata stream). Publishes through
     # the same local sidecar (reuse/lazily build the Dapr client). The per-replica ring buffer is ALWAYS
@@ -257,6 +265,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         dapr_http_port=settings.dapr_http_port,
         timeout_seconds=settings.user_state_timeout_seconds,
     )
+    # RESOLVED LAST, so the probes and the app are up whether or not the key resolved: a catalog that is waiting for
+    # its key reports itself not ready and heals in place when the key is published, and a write it has already
+    # committed is never failed by an emit that cannot be signed.
+    if signing is not None:
+        await signing.start()
     app.state.startup_complete = True
     # Re-assert the cascade's grants over warehouses that already exist. BACKGROUND and non-fatal, and
     # both of those are the design rather than caution:
@@ -283,6 +296,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.shutting_down = True
         base_judge.install(None)
         backfill_task.cancel()
+        if signing is not None:
+            await signing.stop()
         fga_client = getattr(app.state, "fga", None)
         # Each close is isolated so one failing teardown can't strand the other resource.
         if fga_client is not None:
@@ -328,7 +343,7 @@ app = build_lance_service_app(
     lifespan=lifespan,
     log=log,
     routers=[api_router],
-    ready_check=_namespace_ready,
+    ready_check=signing_ready_check(_namespace_ready),
     inner_middleware=[maintenance_middleware],
 )
 # Wire the broadcast control-plane-event subscription that fills each replica's ring buffer. DaprApp always

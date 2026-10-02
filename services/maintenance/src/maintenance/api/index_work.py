@@ -36,6 +36,7 @@ from maintenance.services.sweep import memory_readings
 from maintenance.services.work_queue import SUCCESS
 from service_kit.draining import retry_when_draining
 from service_kit.governed.dapr_auth import require_dapr_token
+from service_kit.governed.signing_key import retry_until_signed
 from service_kit.lakehouse.work_items import IndexWorkItem
 
 
@@ -139,16 +140,20 @@ def register_index_route(app: FastAPI, settings: MaintenanceSettings, dapr_app: 
         emitter: LineageEmitterDep,
         _: Annotated[None, Depends(require_dapr_token)],
         drain: Annotated[dict[str, str] | None, Depends(retry_when_draining)] = None,
+        signing: Annotated[dict[str, str] | None, Depends(retry_until_signed)] = None,
     ) -> dict[str, str]:
         """``event`` is typed ``dict`` so FastAPI parses the CloudEvent body — an ``Any`` param becomes
         a query param and 422s.
 
         A draining replica asks for REDELIVERY rather than starting a build. Dapr's delivery does not
         consult a readiness probe, so without this a pod mid-shutdown would begin an index it cannot
-        finish and leave its partial segments for the next GC.
+        finish and leave its partial segments for the next GC. The same answer while this worker's signing key is
+        unresolved: the build's lineage event could not be signed, so the unit is left for a worker that can.
         """
         if drain is not None:
             return drain
+        if signing is not None:
+            return signing
         return await handle_index_unit(event, config, emitter)
 
     return wrapper

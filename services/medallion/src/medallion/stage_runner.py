@@ -28,6 +28,7 @@ from fastapi.concurrency import run_in_threadpool
 from medallion.api.events import register_stage_route
 from medallion.api.stage_ops import router as stage_ops_router
 from medallion.core.config import get_settings
+from medallion.core.lineage_publish import start_signing, stop_signing
 from medallion.services.ray_submit import close_ray_client
 from service_kit.activity_loop import run_activity, stop_worker_loop
 from service_kit.draining import arm_drain_on_sigterm
@@ -35,6 +36,7 @@ from service_kit.governed.actor_state_store import probe_actor_state_store
 from service_kit.governed.auth_lifespan import attach_auth
 from service_kit.governed.dapr_auth import assert_app_token_configured
 from service_kit.governed.secrets import apply_dapr_secrets
+from service_kit.governed.signing_key import signing_ready_check
 from service_kit.lakehouse.lance_metrics import instrument_lance_if_available
 from service_kit.lance_app import build_lance_service_app
 from service_kit.obs import configure_app_logging
@@ -118,6 +120,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # to one hosting them. The lane is coherently off — `transform.py` gates dispatch on the same
         # flag — but "off" and "broken" have to be distinguishable without reading the chart.
         log.info("dapr workflow runtime NOT started — the ray lane is off (MEDALLION_RAY_ENABLED unset)")
+    # THIS STAGE RUNNER'S OWN SIGNING KEY, resolved through its own sidecar. Started here and not earlier so the
+    # probes and the retry answers below are served from the moment the app boots, whether or not the key resolved:
+    # a stage runner that is waiting for its key takes no delivery (`retry_until_signed` on its route) and reports
+    # itself not ready, and heals in place when the key is published.
+    signing = await start_signing(app, settings)
     app.state.startup_complete = True
     try:
         # ARMED AT SIGTERM, not at lifespan shutdown. The flag below flips in the `finally`,
@@ -130,6 +137,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     finally:
         _disarm_drain()
         app.state.shutting_down = True
+        await stop_signing(signing)
         if app.state.workflow_runtime is not None:
             with suppress(Exception):
                 app.state.workflow_runtime.shutdown()
@@ -172,6 +180,7 @@ app = build_lance_service_app(
     audit_enabled=_settings.audit_enabled,
     lifespan=lifespan,
     log=log,
+    ready_check=signing_ready_check(),
 )
 # The DaprApp wrapper serves GET /dapr/subscribe (read by the sidecar at startup) and routes deliveries
 # of `sub_topic` to /medallion-event. Each stage runner has its own app-id + sub_topic, so no consumer clash.

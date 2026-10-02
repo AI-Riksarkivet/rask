@@ -1,108 +1,197 @@
-"""A service's signing key is read from the secret store once, and an unreadable store is never read as absent.
+"""A signer holds its own key only while its identity lists it, and heals in place ([[LH-064]]).
 
-`dedicated_token_from_store` resolves `service-token-<identity>`, the key a service signs its lineage events with and
-lineage verifies them with until [[LH-064]] moves signing to per-identity keys. No door authenticates with it: a
-service is the service account its projected token names ([[LH-220]]). What lives here is the resolver's half of the
-absent-vs-unreadable split (§2.17): a store outage is never reported as a missing credential.
+A verifier refuses an event signed with a key its identity does not publish and acknowledges the refusal, so a signer
+that kept signing with an unlisted key would destroy every event it emits while every probe stayed green. The holder
+therefore reads the seed and the published list through its own sidecar, is ready only while the derived key is listed,
+holds no key at all otherwise, and keeps re-resolving so a store that is re-minted or seeded late is followed without a
+restart.
+
+DRIVEN AGAINST THE SIDECAR'S SECRET API, which respx answers over the real `fetch_dapr_secret`: the claim is what the
+holder does with each answer the sidecar can give (a value, a 500, a 404, an empty field), so the answers are the inputs.
+The two callables the holder takes from lineage-kit are plain stand-ins here, because this package cannot import it.
 """
 
 from __future__ import annotations
 
+import asyncio
+import time
 from collections.abc import Iterator
+from typing import Annotated
 
+import httpx
 import pytest
+import respx
+from fastapi import Depends, FastAPI
+from fastapi.testclient import TestClient
+from pydantic import BaseModel, ConfigDict
 
-from service_kit.governed import dapr_auth
-from service_kit.governed.dapr_auth import SecretStoreUnreadable, dedicated_token_from_store
-
-
-SHARED = "the-shared-dapr-app-token"
-TRAINER_OWN = "the-trainers-own-credential"
-
-
-@pytest.fixture(autouse=True)
-def _clean_bundle_cache() -> Iterator[None]:
-    """`_secret_bundle` is an `lru_cache` on the module, so one test's seeded store would otherwise
-    answer the next one's fetch."""
-    dapr_auth._secret_bundle.cache_clear()
-    yield
-    dapr_auth._secret_bundle.cache_clear()
+from service_kit.governed.signing_key import SigningKeyHolder, SigningKeyUnavailableError, attach_signing, retry_until_signed, signing_ready_check
+from service_kit.lifecycle import mark_started
+from service_kit.probes import make_probes_router
 
 
-# --------------------------------------------------------------------------- #
-# absent vs unreadable (§2.17) — the resolver's half
-# --------------------------------------------------------------------------- #
+IDENTITY = "service-test"
+SIDECAR = "http://localhost:3500/v1.0/secrets/lance-secrets"
 
 
-def test_the_bundle_is_fetched_once_and_with_the_REQUEST_retry_budget(monkeypatch: pytest.MonkeyPatch) -> None:
-    """This runs inside a SYNC request dependency (the AnyIO threadpool), not a boot lifespan — the
-    boot budget of 10 exponential-backoff attempts stalled a worker for minutes per cold call
-    (§2.17). One fetch, cached; retries=1, the viewer's precedent."""
-    calls: list[dict[str, object]] = []
+class _Key(BaseModel):
+    """What the holder needs of a key: the text a verifier lists and the id that names it."""
 
-    def _fetch(store: str, key: str, **kwargs: object) -> dict[str, str]:
-        calls.append(kwargs)
-        return {"token": TRAINER_OWN} if key == "service-token-service-trainer" else {"app-api-token": SHARED}
+    model_config = ConfigDict(frozen=True)
 
-    monkeypatch.setattr("service_kit.governed.secrets.fetch_dapr_secret", _fetch)
-    resolve = dedicated_token_from_store("lance-secrets")
-
-    assert resolve("service-trainer") == TRAINER_OWN
-    assert resolve("service-trainer") == TRAINER_OWN
-
-    assert len(calls) == 1, "the bundle must be fetched once, not per request"
-    assert calls[0].get("retries") == 1, "a request-path fetch must not burn the boot retry budget"
+    public_nkey: str
+    kid: str
 
 
-def test_an_unreadable_store_is_NOT_cached_as_a_failure(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`lru_cache` never caches exceptions, and that is load-bearing: a store that was down at the
-    first privileged request must be retried on the next one, not remembered as unreadable until the
-    pod restarts."""
-    # A FLAG, NOT A FETCH COUNTER. A failed resolve now makes TWO reads -- the identity's own secret and
-    # the shared bundle it uses as a reachability control -- so counting fetches would flip this double
-    # to "healthy" midway through the first resolve and it would answer None instead of raising.
-    down = [True]
-
-    def _fetch(store: str, key: str, **kwargs: object) -> dict[str, str]:
-        if down[0]:
-            return {}
-        return {"token": TRAINER_OWN} if key == "service-token-service-trainer" else {"app-api-token": SHARED}
-
-    monkeypatch.setattr("service_kit.governed.secrets.fetch_dapr_secret", _fetch)
-    resolve = dedicated_token_from_store("lance-secrets")
-
-    with pytest.raises(SecretStoreUnreadable):
-        resolve("service-trainer")
-    down[0] = False
-    assert resolve("service-trainer") == TRAINER_OWN
+def _load_key(seed: str) -> _Key:
+    if not seed.startswith("SEED-"):
+        raise ValueError("not a seed")
+    name = seed.removeprefix("SEED-")
+    return _Key(public_nkey=f"PUB-{name}", kid=name)
 
 
-def test_an_absent_identity_answers_None_while_an_unreadable_store_still_raises(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The absent-vs-unreadable split, preserved across the per-identity split ([[XC-072]]).
+def _parse_published(field: str) -> list[str]:
+    return [entry.strip() for entry in field.split(",") if entry.strip()]
 
-    Before each credential became its own secret, a subject with none was a missing FIELD of a bundle
-    that still answered, so the two cases were already distinct. Addressing one secret per identity
-    collapses them -- both look like a fetch that returned nothing -- and the difference decides the
-    caller's status: `None` refuses this subject on its merits (401), raising fails the door closed
-    (503). Collapsed the wrong way, an unreachable store 401s every privileged producer, which reads as
-    a credential problem and sends the operator to the wrong system entirely.
 
-    The shared bundle is the control: same store, same sidecar, so if it answers the store is up.
-    """
-    from service_kit.governed import dapr_auth
+def _holder(*, refresh_seconds: float = 300.0, retry_seconds: float = 15.0) -> SigningKeyHolder[_Key]:
+    return SigningKeyHolder(
+        identity=IDENTITY,
+        store="lance-secrets",
+        load_key=_load_key,
+        parse_published=_parse_published,
+        refresh_seconds=refresh_seconds,
+        retry_seconds=retry_seconds,
+    )
 
-    dapr_auth._secret_bundle.cache_clear()
 
-    # STORE UP, IDENTITY GENUINELY ABSENT -> None.
-    def _up(_store: str, key: str, **_kw: object) -> dict[str, str]:
-        return {} if key.startswith("service-token-") else {"app-api-token": SHARED}
+def _found(field: str, value: str) -> httpx.Response:
+    return httpx.Response(200, json={field: value})
 
-    monkeypatch.setattr("service_kit.governed.secrets.fetch_dapr_secret", _up)
-    assert dedicated_token_from_store("lance-secrets")("service-trainer") is None
 
-    # STORE DOWN -> raise, so the door fails closed rather than blaming the credential.
-    dapr_auth._secret_bundle.cache_clear()
-    monkeypatch.setattr("service_kit.governed.secrets.fetch_dapr_secret", lambda *_a, **_k: {})
-    with pytest.raises(SecretStoreUnreadable):
-        dedicated_token_from_store("lance-secrets")("service-trainer")
-    dapr_auth._secret_bundle.cache_clear()
+class _Store:
+    """The sidecar's two answers for this identity, changeable between reads."""
+
+    def __init__(self) -> None:
+        self.seed = respx.get(f"{SIDECAR}/signing-key-{IDENTITY}")
+        self.keys = respx.get(f"{SIDECAR}/signing-public-{IDENTITY}")
+
+    def serve(self, seed: httpx.Response, keys: httpx.Response) -> None:
+        self.seed.mock(return_value=seed)
+        self.keys.mock(return_value=keys)
+
+
+@pytest.fixture
+def store(monkeypatch: pytest.MonkeyPatch, respx_allows_unused_routes: None) -> Iterator[_Store]:
+    monkeypatch.setenv("DAPR_HTTP_PORT", "3500")
+    with respx.mock:
+        yield _Store()
+
+
+def _held_kid(holder: SigningKeyHolder[_Key]) -> str | None:
+    try:
+        return holder.key().kid
+    except SigningKeyUnavailableError:
+        return None
+
+
+@pytest.mark.parametrize(
+    ("seed", "keys", "kid"),
+    [
+        pytest.param(_found("seed", "SEED-a"), _found("keys", "PUB-b, PUB-a"), "a", id="a-key-its-identity-lists"),
+        pytest.param(httpx.Response(500), _found("keys", "PUB-a"), None, id="a-seed-the-store-cannot-answer"),
+        pytest.param(httpx.Response(404), _found("keys", "PUB-a"), None, id="a-seed-that-is-not-there"),
+        pytest.param(_found("seed", ""), _found("keys", "PUB-a"), None, id="an-empty-seed"),
+        pytest.param(_found("seed", "not-a-seed"), _found("keys", "PUB-a"), None, id="a-seed-that-is-no-key"),
+        pytest.param(_found("seed", "SEED-a"), httpx.Response(404), None, id="an-identity-that-publishes-nothing"),
+        pytest.param(_found("seed", "SEED-a"), _found("keys", "PUB-b"), None, id="a-key-its-identity-does-not-list"),
+    ],
+)
+def test_a_signer_holds_a_key_only_while_its_identity_lists_it(store: _Store, seed: httpx.Response, keys: httpx.Response, kid: str | None) -> None:
+    store.serve(seed, keys)
+    holder = _holder()
+
+    ready = holder.resolve()
+
+    assert (ready, holder.ready, _held_kid(holder)) == (kid is not None, kid is not None, kid)
+
+
+@pytest.mark.asyncio
+async def test_a_signer_heals_in_place_follows_a_re_minted_store_and_drops_an_unlisted_key(store: _Store) -> None:
+    """Driven through the background loop, with a poll for each state it must reach: the loop is the claim."""
+
+    store.serve(httpx.Response(500), _found("keys", "PUB-a"))
+    holder = _holder(refresh_seconds=0.05, retry_seconds=0.01)
+
+    async def reaches(kid: str | None, state: str) -> None:
+        deadline = time.monotonic() + 5.0
+        while _held_kid(holder) != kid:
+            assert time.monotonic() < deadline, f"the signer never reached {state}: it holds {_held_kid(holder)!r}, wanted {kid!r}"
+            await asyncio.sleep(0.01)
+
+    await holder.start()
+    try:
+        assert _held_kid(holder) is None, "the signer held a key the store would not give it"
+
+        store.serve(_found("seed", "SEED-a"), _found("keys", "PUB-a"))
+        await reaches("a", "the key the store later answered")
+
+        store.serve(_found("seed", "SEED-b"), _found("keys", "PUB-b"))
+        await reaches("b", "the key a re-minted store published")
+
+        store.serve(_found("seed", "SEED-b"), _found("keys", "PUB-c"))
+        await reaches(None, "no key once its identity stopped listing it")
+    finally:
+        await holder.stop()
+
+
+@pytest.mark.parametrize(
+    ("seed", "delivery", "readiness"),
+    [
+        pytest.param(_found("seed", "SEED-a"), "SUCCESS", 200, id="a-key-its-identity-lists"),
+        pytest.param(httpx.Response(500), "RETRY", 503, id="no-key"),
+        pytest.param(None, "SUCCESS", 200, id="a-service-that-does-not-sign"),
+    ],
+)
+def test_a_signer_takes_deliveries_and_reports_ready_only_while_it_holds_its_key(
+    store: _Store, seed: httpx.Response | None, delivery: str, readiness: int
+) -> None:
+    holder: SigningKeyHolder[_Key] | None = None
+    if seed is not None:
+        store.serve(seed, _found("keys", "PUB-a"))
+        holder = _holder()
+        holder.resolve()
+    app = FastAPI()
+    app.include_router(make_probes_router(signing_ready_check()))
+    mark_started(app)
+    attach_signing(app, holder)
+
+    @app.post("/delivery")
+    async def deliver(signing: Annotated[dict[str, str] | None, Depends(retry_until_signed)] = None) -> dict[str, str]:
+        return signing if signing is not None else {"status": "SUCCESS"}
+
+    client = TestClient(app)
+    answered, probed = client.post("/delivery"), client.get("/readyz")
+
+    assert (answered.json()["status"], probed.status_code) == (delivery, readiness)
+
+
+@pytest.mark.parametrize(
+    ("identity", "refresh_seconds", "retry_seconds"),
+    [
+        pytest.param("../lance", 300.0, 15.0, id="an-identity-that-escapes-its-secret-name"),
+        pytest.param("Service-Test", 300.0, 15.0, id="an-identity-the-chart-never-renders"),
+        pytest.param(IDENTITY, 301.0, 15.0, id="a-refresh-longer-than-five-minutes"),
+        pytest.param(IDENTITY, 10.0, 15.0, id="a-retry-slower-than-the-refresh"),
+    ],
+)
+def test_a_holder_refuses_an_identity_and_intervals_it_could_not_honour(identity: str, refresh_seconds: float, retry_seconds: float) -> None:
+    with pytest.raises(ValueError, match=r"signing identity|intervals"):
+        SigningKeyHolder(
+            identity=identity,
+            store="lance-secrets",
+            load_key=_load_key,
+            parse_published=_parse_published,
+            refresh_seconds=refresh_seconds,
+            retry_seconds=retry_seconds,
+        )

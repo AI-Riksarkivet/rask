@@ -14,10 +14,16 @@ event: it cannot fail the run either, and what is staged is drained later by lin
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
+import respx
+from fastapi import FastAPI
+
+from lineage_kit import verify_signature
 
 
 class _Refusing:
@@ -97,3 +103,75 @@ def test_the_staging_options_carry_a_VENDED_credential(monkeypatch) -> None:
     options = lineage_mod._outbox_storage_options()
     assert options.get("aws_access_key_id") == "K", f"the staged write is unsigned: {sorted(options)}"
     assert options.get("aws_session_token") == "T", "a vended STS credential is a triple; the token carries the scoping"
+
+
+IDENTITY = "service-ingest"
+SECRETS = "http://localhost:3500/v1.0/secrets/lance-secrets"
+
+
+class _Published:
+    """One identity's public keys, as lineage would read them."""
+
+    def __init__(self, *keys: str) -> None:
+        self._keys = keys
+
+    def published(self, identity: str) -> Sequence[str]:
+        return self._keys
+
+    def refresh(self, identity: str) -> Sequence[str]:
+        return self._keys
+
+
+@pytest.fixture
+def signer(monkeypatch: pytest.MonkeyPatch, respx_allows_unused_routes: None) -> Iterator[None]:
+    """Ingest as the chart renders it with signing on: the store flag, the identity, and a sidecar to read through."""
+    monkeypatch.setenv("RASK_INGEST_SECRETS_FROM_DAPR", "true")
+    monkeypatch.setenv("RASK_SIGNING_IDENTITY", IDENTITY)
+    monkeypatch.setenv("DAPR_HTTP_PORT", "3500")
+    with respx.mock:
+        yield
+
+
+@pytest.mark.asyncio
+async def test_a_staged_event_is_authored_and_signed_as_this_service(signer: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, event_signer: Any) -> None:
+    """The drain re-ingests a staged copy as a bus event, with no caller to authenticate: the author and the signature
+    have to be on the object, or a verifier refuses it and the recovery path only looks like one."""
+    from ingest import lineage as ingest_lineage
+    from ingest.signing import start_signing, stop_signing
+
+    pair = event_signer(IDENTITY)
+    respx.get(f"{SECRETS}/signing-key-{IDENTITY}").mock(return_value=httpx.Response(200, json={"seed": pair.seed}))
+    respx.get(f"{SECRETS}/signing-public-{IDENTITY}").mock(return_value=httpx.Response(200, json={"keys": pair.public}))
+    _refuse_everything(monkeypatch)
+    outbox = tmp_path / "_lineage_outbox"
+    monkeypatch.setenv("RASK_INGEST_LINEAGE_OUTBOX_URI", str(outbox))
+    holder = await start_signing(FastAPI())
+    try:
+        ingest_lineage.LineageRecorder().start("run-e1d", "proj", "ds", "s3", {}, originator="user:alice")
+    finally:
+        await stop_signing(holder)
+
+    staged = [json.loads(path.read_text()) for path in outbox.glob("*.json")]
+    assert len(staged) == 1, "the door refused and nothing was staged"
+    verified = verify_signature(staged[0], source=_Published(pair.public), signers=frozenset({IDENTITY}), delegators=frozenset())
+    assert (verified.identity, staged[0]["run"]["facets"]["author"]["sub"]) == (IDENTITY, IDENTITY)
+
+
+@pytest.mark.asyncio
+async def test_a_service_without_its_key_stages_nothing(signer: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Staged unsigned it would be refused by the drain and deleted unread, so nothing is the honest answer."""
+    from ingest import lineage as ingest_lineage
+    from ingest.signing import start_signing, stop_signing
+
+    respx.get(f"{SECRETS}/signing-key-{IDENTITY}").mock(return_value=httpx.Response(500))
+    respx.get(f"{SECRETS}/signing-public-{IDENTITY}").mock(return_value=httpx.Response(404))
+    _refuse_everything(monkeypatch)
+    outbox = tmp_path / "_lineage_outbox"
+    monkeypatch.setenv("RASK_INGEST_LINEAGE_OUTBOX_URI", str(outbox))
+    holder = await start_signing(FastAPI())
+    try:
+        ingest_lineage.LineageRecorder().start("run-e1e", "proj", "ds", "s3", {})
+    finally:
+        await stop_signing(holder)
+
+    assert list(outbox.glob("*.json")) == [], "an event this service could not sign was staged"

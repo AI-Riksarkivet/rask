@@ -21,6 +21,7 @@ from medallion.services.ingest_trigger import handle_bronze_arrival
 from medallion.services.publication_trigger import handle_publication
 from service_kit.draining import retry_when_draining
 from service_kit.governed.dapr_auth import require_dapr_token
+from service_kit.governed.signing_key import retry_until_signed
 
 
 def register_bronze_arrival_route(app: FastAPI) -> DaprApp:
@@ -47,6 +48,7 @@ def register_bronze_arrival_route(app: FastAPI) -> DaprApp:
         config: SettingsDep,
         _: Annotated[None, Depends(require_dapr_token)],
         drain: Annotated[dict[str, str] | None, Depends(retry_when_draining)] = None,
+        signing: Annotated[dict[str, str] | None, Depends(retry_until_signed)] = None,
     ) -> dict[str, str]:
         """The Dapr subscription route — thin wrapper over the testable :func:`handle_bronze_arrival`.
         ``event`` is typed ``dict`` so FastAPI parses the CloudEvent JSON body (an ``Any`` param → query
@@ -56,9 +58,14 @@ def register_bronze_arrival_route(app: FastAPI) -> DaprApp:
         B6: while this replica is draining it asks for REDELIVERY rather than handling the event. Dapr's
         delivery does not consult a readiness probe, so without this a pod that had begun shutting down
         kept firing cascades it could not finish. RETRY and never DROP — these topics carry no DLQ, so a
-        drop here silently cancels the whole bronze→silver→gold run."""
+        drop here silently cancels the whole bronze→silver→gold run.
+
+        The same answer while this producer's signing key is unresolved: the cascade this head wakes is signed
+        from its first event, and a producer that cannot sign is not yet one that may start it."""
         if drain is not None:
             return drain
+        if signing is not None:
+            return signing
         return await handle_bronze_arrival(dapr, config, event)
 
     # THE PUBLICATION HEAD (§ D2 B8). Separate subscription, separate topic, separate signal: this one
@@ -105,10 +112,13 @@ def register_bronze_arrival_route(app: FastAPI) -> DaprApp:
             config: SettingsDep,
             _: Annotated[None, Depends(require_dapr_token)],
             drain: Annotated[dict[str, str] | None, Depends(retry_when_draining)] = None,
+            signing: Annotated[dict[str, str] | None, Depends(retry_until_signed)] = None,
         ) -> dict[str, str]:
             """A publication became consumable — wake the cascade for exactly the rows it added."""
             if drain is not None:
                 return drain
+            if signing is not None:
+                return signing
             return await handle_publication(dapr, config, event)
 
     return dapr_app
