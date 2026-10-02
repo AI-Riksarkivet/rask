@@ -424,3 +424,92 @@ def sa_issuer(tmp_path_factory: pytest.TempPathFactory) -> Iterator[ServiceAccou
     issuer = ServiceAccountIssuer(tmp_path_factory.mktemp("sa-issuer"))
     yield issuer
     issuer.close()
+
+
+def _crc16_xmodem(data: bytes) -> int:
+    crc = 0
+    for byte in data:
+        crc ^= byte << 8
+        for _ in range(8):
+            crc = ((crc << 1) ^ 0x1021) & 0xFFFF if crc & 0x8000 else (crc << 1) & 0xFFFF
+    return crc
+
+
+def _nkey(prefix: bytes, raw: bytes) -> str:
+    import base64
+
+    body = prefix + raw
+    return base64.b32encode(body + _crc16_xmodem(body).to_bytes(2, "little")).decode().rstrip("=")
+
+
+def canon_1(value: object) -> bytes:
+    """The LH-064 contract's canonical bytes, written from the contract and not imported from lineage-kit."""
+    import json
+    import math
+
+    def normal(v: object) -> object:
+        if v is None or isinstance(v, str) or type(v) is bool:
+            return v
+        if type(v) is int:
+            if abs(v) > 2**53 - 1:
+                raise ValueError("an int beyond 2^53-1 has no canonical form")
+            return v
+        if type(v) is float:
+            if not math.isfinite(v):
+                raise ValueError("a non-finite float has no canonical form")
+            return int(v) if v.is_integer() and abs(v) < 2**53 else v
+        if isinstance(v, dict):
+            return {str(k): normal(x) for k, x in v.items()}
+        if isinstance(v, list):
+            return [normal(x) for x in v]
+        raise ValueError(f"no canonical form for {type(v).__name__}")
+
+    return json.dumps(normal(value), sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False).encode()
+
+
+class EventSigner:
+    """An Ed25519 signing identity in the LH-064 wire format, for tests of the doors that verify it ([[LH-064]]).
+
+    Built from the contract alone (NKEY-encoded keys, canon-1, a 16-hex kid, the `rask_signature` facet with only its
+    `signature` member left out of the signed bytes), never from lineage-kit, so a door test checks conformance to the
+    wire format instead of agreeing with the code it tests.
+    """
+
+    def __init__(self, identity: str) -> None:
+        import hashlib
+
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+        self.identity = identity
+        self._key = Ed25519PrivateKey.generate()
+        raw_public = self._key.public_key().public_bytes_raw()
+        self.seed = _nkey(bytes([(18 << 3) | ((20 << 3) >> 5), ((20 << 3) & 31) << 3]), self._key.private_bytes_raw())
+        self.public = _nkey(bytes([20 << 3]), raw_public)
+        self.kid = hashlib.sha256(raw_public).hexdigest()[:16]
+
+    def sign(self, event: dict, *, on_behalf_of: str | None = None, identity: str | None = None) -> dict:
+        """The event with a `rask_signature` facet on its run facets (a RunEvent) or dataset facets (a DatasetEvent)."""
+        import base64
+        import copy
+
+        signed = copy.deepcopy(event)
+        bag = signed["run"] if "run" in signed else signed["dataset"]
+        facet: dict[str, object] = {
+            "_producer": "https://github.com/AI-Riksarkivet/rask/tree/main/packages/lineage-kit",
+            "_schemaURL": "https://raw.githubusercontent.com/AI-Riksarkivet/rask/facets-1.0.0/spec/facets/rask/RaskSignatureRunFacet.json",
+            "alg": "Ed25519",
+            "canon": 1,
+            "kid": self.kid,
+            "identity": identity or self.identity,
+        }
+        if on_behalf_of is not None:
+            facet["onBehalfOf"] = on_behalf_of
+        bag.setdefault("facets", {})["rask_signature"] = facet
+        facet["signature"] = base64.urlsafe_b64encode(self._key.sign(canon_1(signed))).decode().rstrip("=")
+        return signed
+
+
+@pytest.fixture
+def event_signer() -> type[EventSigner]:
+    """The signing-identity factory: `event_signer("service-catalog")` mints a fresh Ed25519 identity."""
+    return EventSigner

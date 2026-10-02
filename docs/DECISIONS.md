@@ -2701,3 +2701,19 @@ Read back live on helm rev 262: the claimed name answers 401. The producer's own
 while an unlisted account and a wrong-audience token are refused. The catalog may read only its own signing key.
 A service token cannot terminate another tenant's stage. The cascade ran to gold with every hop authenticated by
 token.
+
+## Lineage events are signed with Ed25519, the keys in the store (LH-064, owner 2026-10-02)
+
+This supersedes the 2026-09-24 entry above that accepted symmetric event signatures, and LH-064's earlier OpenBao
+Transit wording. XC-078 makes the cascade heads and notifications verify events too, and an HMAC verifier holds the
+very key that forges what it verifies, so each new verifier would have been a new forger. Transit keeps the private key
+inside OpenBao, but it needs a per-service OpenBao login, an HTTP client and a durable store that no row owns, and the
+dev OpenBao is in memory. Keys in the store reuse the delivery path that works live, through each sidecar's secret API,
+and the seed's carry-over across rollouts. Verifiers read public keys only.
+
+Two scope rulings came with it. Only the signature facet takes the `rask_` prefix now (`rask_signature`), because its
+shape changes anyway and an unknown facet is order-independent during a roll. The author, lance and model facets keep
+their keys until a separate flag day (LH-360). The OpenLineage spec requires the prefix of every custom facet, but
+renaming the facets a cascade head reads, across separately tagged images, makes it skip triggers mid-roll. Key custody
+(C6) is the Dapr-scope claim: no app's sidecar can read another identity's private key, and lineage reads none. A pod
+holding OpenBao's root token, or reaching :8200 directly, still reads the store until XC-079.

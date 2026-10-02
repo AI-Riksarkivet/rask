@@ -1,0 +1,66 @@
+"""Each app's sidecar may read only the private signing keys its own Deployments sign with, and no verifier reads one.
+
+[[LH-064]] C6, as the owner ruled it on 2026-10-02 (the Dapr-scope claim): a signing identity's private key is its
+own secret, `signing-key-<identity>`, in the store every sidecar reads, and every public key list,
+`signing-public-<identity>`, is readable by all. Dapr scopes secrets by NAME, and each app's Configuration is
+default-allow with a deny list, so a private key no deny list covers is readable by every sidecar'd app: the deny
+lists are what this reads. Lineage verifies every signer's events and signs none, so it reads no private key at all.
+
+The residual the ruling names, and this gate cannot see: a pod that holds OpenBao's root token, or reaches :8200
+directly, reads the store without asking a sidecar (XC-079).
+
+Which identity a Deployment signs as is read from the `RASK_SIGNING_IDENTITY` the chart renders on it, never from a
+helper's restatement, so an app that signs as one identity and may read another fails here.
+"""
+
+from __future__ import annotations
+
+from collections import defaultdict
+
+from tests.unit.chart_render import DEFAULT_ARGS, env_of, render
+
+
+STORE = "lance-secrets"
+
+
+def _readable(scope: dict, names: set[str]) -> set[str]:
+    readable = names - set(scope.get("deniedSecrets") or [])
+    if (scope.get("defaultAccess") or "allow").lower() == "deny":
+        readable &= set(scope.get("allowedSecrets") or [])
+    return readable
+
+
+def test_each_sidecar_may_read_only_its_own_signing_key_and_lineage_none() -> None:
+    docs = render(*DEFAULT_ARGS, "--set", "explorer.enabled=true")
+    signs_as: dict[str, set[str]] = defaultdict(set)
+    for doc in docs:
+        if doc.get("kind") != "Deployment":
+            continue
+        template = doc["spec"]["template"]
+        app_id = ((template.get("metadata") or {}).get("annotations") or {}).get("dapr.io/app-id")
+        for container in template["spec"]["containers"]:
+            if identity := env_of(container).get("RASK_SIGNING_IDENTITY"):
+                signs_as[app_id or doc["metadata"]["name"]].add(identity)
+    signers = set().union(*signs_as.values()) if signs_as else set()
+    assert signers, "no Deployment renders RASK_SIGNING_IDENTITY: nothing in this render signs, so the gate measures nothing"
+    private = {f"signing-key-{identity}" for identity in signers}
+    public = {f"signing-public-{identity}" for identity in signers}
+
+    problems: dict[str, object] = {}
+    checked: set[str] = set()
+    for doc in docs:
+        if doc.get("kind") != "Configuration":
+            continue
+        app_id = doc["metadata"]["name"].removeprefix("lance-config-")
+        for scope in ((doc.get("spec") or {}).get("secrets") or {}).get("scopes") or []:
+            if scope.get("storeName") != STORE:
+                continue
+            checked.add(app_id)
+            own = {f"signing-key-{identity}" for identity in signs_as.get(app_id, set())}
+            if (readable := _readable(scope, private)) != own:
+                problems[app_id] = {"may read": sorted(readable), "signs with": sorted(own)}
+            if hidden := public - _readable(scope, public):
+                problems[f"{app_id} (public lists)"] = sorted(hidden)
+
+    assert "lineage" in checked and set(signs_as) <= checked, f"apps whose sidecar no Configuration scopes: {sorted(set(signs_as) - checked)}"
+    assert not problems, f"a sidecar may read a private signing key it does not sign with, or not read a public list: {problems}"
