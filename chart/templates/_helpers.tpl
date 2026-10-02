@@ -237,6 +237,8 @@ dapr.io/block-shutdown-duration: {{ printf "%ds" (int $root.Values.lifecycle.sid
        a new consumer added there gets its Configuration without a second edit here. */}}
 {{- if has $appId (splitList "," (include "lance.secretScopes" $root)) }}
 dapr.io/config: "lance-config-{{ $appId }}"
+{{- /* HotReload is off, so a deny-list edit reaches a sidecar only when its pod restarts: this hash rolls exactly the pods whose Configuration changed. */}}
+checksum/dapr-config: {{ include "lance.daprAppSpec" (list $root $appId) | sha256sum }}
 {{- else }}
 dapr.io/config: "lance-tracing"
 {{- end }}
@@ -1741,7 +1743,7 @@ measured decision, and a second copy would drift without anything saying so. */}
 Call: include "lance.identitiesForApp" (list $root $appId) -> space-separated identities.
 
 LINEAGE ALONE reads the whole set: it verifies every producer's event signature, keyed on that
-producer's credential, until per-identity signing keys move to Transit ([[LH-064]]). The catalog verifies
+producer's credential, until the Ed25519 signing keys replace that credential ([[LH-064]]). The catalog verifies
 no credential since a service is the service account its projected token names ([[LH-220]]), so it
 reads its own signing key, like every other app.
 
@@ -1818,6 +1820,107 @@ set and the Secret's `service-token-*` entries drift.
 {{- end -}}
 {{- join " " (compact $mine | uniq | sortAlpha) -}}
 {{- end -}}
+{{- end -}}
+
+{{- /* One app-id's Dapr Configuration spec: the Configuration object and the checksum in `rask.daprAnnotations` both render THIS. */ -}}
+{{- define "lance.daprAppSpec" -}}
+{{- $cfgRoot := index . 0 -}}{{- $app := index . 1 -}}
+{{- include "lance.daprConfigSpecBody" $cfgRoot }}
+  secrets:
+    scopes:
+      - storeName: lance-secrets
+        {{- /* A DENY-LIST, NOT DENY-BY-DEFAULT, and the reason is measured rather than preferred.
+               Two readers fetch a secret by a name only known at RUNTIME: `viewer/api/v1/endpoints/
+               objects.py:102` and `ingest/objectstore.py:183` both resolve a per-STORE credential whose
+               name comes from the store registry, so a store added after deploy names a secret no
+               rendered allowlist can contain. `defaultAccess: deny` would refuse it and the object
+               browser would 503 on exactly the external stores the mechanism exists for.
+               So this closes the hole that was MEASURED -- a producer reading its peers' identity
+               credentials -- by naming those credentials and nothing else. Deny-by-default is the
+               stronger posture and stays the goal; it needs the registry-driven readers enumerated
+               first, which is a different change from this one. */}}
+        defaultAccess: allow
+        {{- /* BUILT FIRST, EMITTED ONLY IF NON-EMPTY. An app that owns every identity in the estate
+               denies nothing, and a bare `deniedSecrets:` over an empty range is YAML null, not an
+               empty list -- which the Dapr CRD refuses outright:
+                 Configuration.dapr.io "lance-config-catalog" is invalid:
+                 spec.secrets.scopes[0].deniedSecrets: Invalid value: "null": must be of type array
+               Measured 2026-09-24: that refusal failed `e2e-stack` on the server-side apply, for
+               BOTH verifiers at once, so no chart change landed in CI at all while it stood. An
+               absent deny-list and an empty one mean the same thing to Dapr; only one of them
+               parses. */}}
+        {{- $mine := include "lance.identitiesForApp" (list $cfgRoot $app) | splitList " " }}
+        {{- $denied := list }}
+        {{- range (include "lance.allServiceIdentities" $cfgRoot | splitList " ") }}
+        {{- if and . (not (has . $mine)) }}
+        {{- $denied = append $denied (printf "service-token-%s" .) }}
+        {{- end }}
+        {{- end }}
+        {{- $signs := include "lance.signingIdentitiesForApp" (list $cfgRoot $app) | splitList " " }}
+        {{- range (include "lance.signingIdentities" $cfgRoot | splitList " ") }}
+        {{- if and . (not (has . $signs)) }}
+        {{- $denied = append $denied (printf "signing-key-%s" .) }}
+        {{- end }}
+        {{- end }}
+        {{- if $denied }}
+        deniedSecrets:
+          {{- range $denied }}
+          - {{ . }}
+          {{- end }}
+        {{- end }}
+{{- end -}}
+
+{{- /* EVENT SIGNING ([[LH-064]]; values.yaml `signing:`). `lance.signers` is the ONE declaration, an (identity, app-id) pair per
+       signer: the mint and seed loops, the deny lists, RASK_SIGNING_IDENTITY and LINEAGE_SIGNERS are views of it. */ -}}
+{{- define "lance.signers" -}}
+{{- $v := .Values -}}{{- $s := list -}}
+{{- with $v.catalog.serviceIdentity }}{{- $s = append $s (dict "id" . "app" $v.services.catalog.daprAppId) }}{{- end -}}
+{{- if $v.maintenance.enabled }}{{- $s = append $s (dict "id" $v.maintenance.catalogServiceIdentity "app" $v.maintenance.daprAppId) }}{{- end -}}
+{{- if $v.medallion.enabled }}
+{{- $s = append $s (dict "id" $v.medallion.producer.serviceIdentity "app" $v.medallion.producer.daprAppId) }}
+{{- range $v.medallion.stageRunners }}{{- $s = append $s (dict "id" .serviceIdentity "app" .daprAppId) }}{{- end }}
+{{- end -}}
+{{- with (get (($v.services.ingest).env | default dict) "RASK_LINEAGE_SERVICE_IDENTITY") }}
+{{- if or ($v.services.ingest).frontDoor $v.singleTenant.enabled }}{{- $s = append $s (dict "id" . "app" "ingest") }}{{- end }}
+{{- end -}}
+{{- toJson $s -}}
+{{- end -}}
+
+{{- define "lance.signingIdentities" -}}
+{{- $ids := list -}}
+{{- range (include "lance.signers" . | fromJsonArray) }}
+{{- if .id }}
+{{- if not (regexMatch "^[a-z0-9][a-z0-9-]*$" .id) }}{{- fail (printf "signing identity %q must match ^[a-z0-9][a-z0-9-]*$: it becomes a shell word, an OpenBao path and a Dapr URL segment" .id) }}{{- end }}
+{{- $ids = append $ids .id }}
+{{- end }}
+{{- end -}}
+{{- join " " ($ids | uniq | sortAlpha) -}}
+{{- end -}}
+
+{{- /* Who may sign for a person: the catalog, which authenticated that person. */ -}}
+{{- define "lance.delegatorIdentities" -}}{{- .Values.catalog.serviceIdentity -}}{{- end -}}
+
+{{- /* The identities one app-id signs as (list $root $appId): what its deny list leaves readable. */ -}}
+{{- define "lance.signingIdentitiesForApp" -}}
+{{- $app := index . 1 -}}{{- $mine := list -}}
+{{- range (include "lance.signers" (index . 0) | fromJsonArray) }}{{- if and .id (eq .app $app) }}{{- $mine = append $mine .id }}{{- end }}{{- end -}}
+{{- join " " ($mine | uniq | sortAlpha) -}}
+{{- end -}}
+
+{{- /* RASK_SIGNING_IDENTITY for one Deployment (list $root $appId): one env row when the store is on and that app-id signs. */ -}}
+{{- define "lance.signingEnv" -}}
+{{- if include "lance.secretsViaDapr" (index . 0) }}
+{{- range (include "lance.signingIdentitiesForApp" . | splitList " " | compact) }}- { name: RASK_SIGNING_IDENTITY, value: {{ . | quote }} }{{- end }}
+{{- end }}
+{{- end -}}
+
+{{- /* The shape checks the mint and seed scripts share: an NKEY user seed is SU + 56 and a public key U + 55 base32 characters. */ -}}
+{{- define "lance.signingShapes" -}}
+B32=ABCDEFGHIJKLMNOPQRSTUVWXYZ234567
+nkey_shaped() { case "$1" in "$2"*) ;; *) return 1 ;; esac; case "$1" in *[!$B32]*) return 1 ;; esac; [ "${#1}" -eq "$3" ]; }
+seed_shaped() { nkey_shaped "$1" SU 58; }
+pub_shaped() { nkey_shaped "$1" U 56; }
+keys_shaped() { case "$1" in *,) return 1 ;; *,*) pub_shaped "${1%%,*}" && pub_shaped "${1#*,}" ;; *) pub_shaped "$1" ;; esac; }
 {{- end -}}
 
 {{- /* The PLATFORM buckets, comma-joined: `minio.buckets` plus each enabled feature's own. The bucket-init

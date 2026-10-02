@@ -173,12 +173,14 @@ func (m *Rask) Charts(
 // Supplying them is what a real deployment does, and it changes nothing the gate is testing: the
 // guard is about the SHAPE of the reference, and these values are never resolved by a render. If this
 // list stops covering a value the guard compares against a published literal, the guard fails this
-// render and names the value.
+// render and names the value. `signing.provisioned` is the same kind of input: the operator's attestation
+// that the event-signing keys exist, without which `templates/signing-provisioned.yaml` refuses a sealed store.
 const renderArgs = "--set image.repository=ghcr.io/example/rask " +
 	"--set-string frontend.oidc.sessionSecret=test-session-secret-32-chars-minimum " +
 	"--set-string frontend.oidc.publicIssuer=http://localhost:8080/dex " +
 	"--set-string frontend.oidc.publicOrigin=http://localhost:8080 " +
 	"--set openbao.devMode=false " +
+	"--set signing.provisioned=true " +
 	"--set-string dapr.appToken=render-gate-app-token-not-a-real-credential " +
 	"--set-string age.password=render-gate-age-password-not-a-real-credential " +
 	"--set-string minio.secretKey=render-gate-store-key-not-a-real-credential " +

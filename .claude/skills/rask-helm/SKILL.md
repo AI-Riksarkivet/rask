@@ -199,7 +199,14 @@ catalog, lineage, maintenance, the medallion, OpenBao and Dex ran as `default` w
   key it writes last, and a rollout surges first so the seed can carry the minted tokens over from the
   outgoing pod (`test_the_dev_openbao_is_seeded_by_its_own_pod.py`). A replacement with no outgoing pod
   (a deleted pod, a drained node) mints them afresh, and every pod that cached the old ones needs a
-  restart (XC-005).
+  restart (XC-005). The same seed carries each signing identity's Ed25519 pair (`signing-public-<id>`,
+  then `signing-key-<id>`), minted by a `mint` init container on a memory volume; values.yaml `signing:`
+  holds the tiers, the rotation and the store-loss cases, and a sealed or external store is refused at
+  render until `signing.provisioned` attests that `scripts/provision_signing_keys.sh` created them.
+- **A Dapr Configuration edit reaches a sidecar only when its pod restarts** (HotReload is off), so every
+  pod whose `dapr.io/config` is a per-app `lance-config-<app>` carries `checksum/dapr-config`, the hash of
+  that Configuration (`lance.daprAppSpec`), and a deny-list edit rolls exactly the pods it changed. The
+  gate for who may read which secret is `tests/unit/test_only_the_owner_may_read_its_signing_key.py`.
 - **The gate is the render, judged by what each role grants**, so a new subchart that binds a
   secret-reading or token-reviewing role to `default` fails without anyone listing it:
   `tests/unit/test_a_first_party_pod_cannot_read_a_secret_through_the_kube_api.py`. A `User` subject

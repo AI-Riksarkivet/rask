@@ -42,6 +42,7 @@ _REAL = (
     "dapr.appToken=a-real-app-token",
     "age.password=a-real-age-password",
     "minio.secretKey=a-real-rustfs-secret",
+    "signing.provisioned=true",
 )
 
 

@@ -109,7 +109,7 @@ spec:
         - podSelector: {}
 ---
 # (3b) openbao:8200 — THE crown jewel (the audit's headline: "reachable by any pod"). Only the
-# secret-consuming app pods' daprd sidecars may connect: catalog, lineage, compaction, the
+# secret-consuming app pods' daprd sidecars may connect: catalog, lineage, maintenance (planner and worker), the
 # medallion producer (medallion-producer), every stage runner, and (DAPRIFY 2026-07-27) the state-store-scoped
 # apps — their daprd resolves the state store's connectionString through the lance-secrets
 # component at boot (dapr-component.yaml derives the secret-store scope from stateStore.scopes the
@@ -135,7 +135,7 @@ spec:
                 {{- /* stateStore.scopes is APPENDED + uniq'd (app-id == component label for these
                      pods — media.yaml keys them identically), so this list and the secret-store
                      component's scope (dapr-component.yaml) cannot drift. */}}
-                {{- $openbaoClients := list "catalog" "lineage" "compaction" "medallion-producer" }}
+                {{- $openbaoClients := list "catalog" "lineage" "maintenance" "maintenance-worker" "medallion-producer" }}
                 {{- range .Values.medallion.stageRunners }}
                 {{- $openbaoClients = append $openbaoClients .name }}
                 {{- end }}

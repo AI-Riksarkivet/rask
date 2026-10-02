@@ -24,11 +24,13 @@ CHART="${CHART:-chart}"
 # step 6 of .dagger/charts.go's chain and step 2 had been failing on the SAME guard since the same
 # commit: the gate never reached the script that would have reported it. values-prod.yaml deliberately
 # does NOT pin a registry (the deployer supplies theirs), so the check must, exactly as it does for the
-# appToken and the age/minio credentials.
+# appToken and the age/minio credentials. signing.provisioned is the operator's attestation that the event-signing
+# keys exist in the sealed store (templates/signing-provisioned.yaml refuses a non-dev store without it).
 COMMON=(--set frontend.oidc.sessionSecret=ci-dummy-session-secret-at-least-32-chars
         --set frontend.oidc.publicIssuer=https://auth.example.com/dex
         --set frontend.oidc.publicOrigin=https://lance.example.com
-        --set image.repository=ghcr.io/example/rask)
+        --set image.repository=ghcr.io/example/rask
+        --set signing.provisioned=true)
 OUT="$(mktemp)"
 trap 'rm -f "$OUT"' EXIT
 

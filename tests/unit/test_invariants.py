@@ -423,6 +423,7 @@ _REAL_REGISTRY = (
     "age.password=a-real-secret-value-32-chars-long",
     "minio.secretKey=a-real-secret-value-32-chars-long",
     "dapr.appToken=a-real-secret-value-32-chars-long",
+    "signing.provisioned=true",
 )
 
 
