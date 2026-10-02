@@ -177,7 +177,7 @@ minio:
 # one later upgrade reverts the setting silently, and a credential path that reverts silently is
 # worse than one that was never enabled.
 #
-# Turning it on also makes the OpenBao seed Job provision ESO's AUTH half — the kubernetes auth
+# Turning it on also makes the OpenBao seed provision ESO's AUTH half — the kubernetes auth
 # backend, a policy granting READ on exactly `<kvMount>/data/<secretPath>`, and the role bound to the
 # operator's ServiceAccount. Measured 2026-09-08: with only the KV half seeded the operator ran 3/3
 # with ZERO SecretStores and every ExternalSecret would have sat in SecretSyncedError, so the toggle

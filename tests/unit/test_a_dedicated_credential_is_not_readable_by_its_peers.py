@@ -60,10 +60,10 @@ def _docs() -> list[dict]:
 
 
 def _seeded_token_identities(docs: list[dict]) -> set[str]:
-    """The identities the seed Job writes a dedicated credential for, read off the rendered command."""
+    """The identities the OpenBao seed writes a dedicated credential for, read off the rendered command."""
     identities: set[str] = set()
     for doc in docs:
-        if doc.get("kind") != "Job":
+        if (doc.get("kind"), (doc.get("metadata") or {}).get("name")) != ("Deployment", "rask-openbao"):
             continue
         pod = (doc.get("spec") or {}).get("template", {}).get("spec", {})
         for container in (pod.get("containers") or []) + (pod.get("initContainers") or []):

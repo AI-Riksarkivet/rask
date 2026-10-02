@@ -13,12 +13,18 @@ grants, so a new subchart that binds a secret-reading role to `default` fails he
 having listed it.
 
 ONE TEST PER CLOSES-WHEN CLAUSE a render can see: the grants, and one SA per service. The third,
-every sidecar still loading lance-secrets, is read back on the deployed estate.
+every sidecar still loading lance-secrets, is read back on the deployed estate; that the dev store a
+sidecar reads is seeded before it serves is `test_the_dev_openbao_is_seeded_by_its_own_pod.py`.
 
 MUTATION-CHECKED 2026-10-02. With `dapr.dapr_rbac.secretReader.enabled: true` (the subchart's own
 default) in chart/values.yaml, the grants test fails in all three overlays on
 `RoleBinding/dapr-secret-reader grants ['secrets'] to SA default` and the identity test passes. With
-`openfga-model` on `rask-sa-jobs`, only the identity test fails, on that pre-upgrade hook.
+`openfga-model` on `rask-sa-jobs`, only the identity test fails, on that pre-upgrade hook. A `secrets: get`
+RoleBinding to `kind: User, name: system:serviceaccount:default:rask-sa-catalog` fails the grants test in
+all three. Dropping `post-upgrade` from `rask-sa-hooks`, putting the ordinary `nats-stream` Job on it,
+removing `disable-builtin-k8s-secret-store` from `lance.daprSidecarResources`, or removing the RayCluster's
+`upgradeStrategy` each fails only the identity test, the last in the deployed overlay, the one that
+renders a RayCluster.
 """
 
 from __future__ import annotations
@@ -70,6 +76,9 @@ _BUILTIN_GRANTS: dict[tuple[str, str], frozenset[str]] = {
 #: Group subjects that contain every ServiceAccount, so a grant to one is a grant to all of ours.
 _EVERY_SERVICE_ACCOUNT = re.compile(r"^system:(serviceaccounts(:.*)?|authenticated)$")
 
+#: A User subject RBAC matches against that SA's own token, so it binds the SA as surely as its own kind.
+_SERVICE_ACCOUNT_USER = re.compile(r"^system:serviceaccount:(?P<namespace>[^:]+):(?P<name>[^:]+)$")
+
 #: SAs more than one long-running workload may share, each because the sharers are ONE identity.
 _SHARED_IDENTITIES: dict[str, str] = {
     "rask-sa-web": "every zone calls the backends as the one frontend.serviceIdentity",
@@ -84,6 +93,9 @@ _ISSUER_VERIFIERS = ("Deployment/rask-catalog", "Deployment/rask-lineage")
 #: is itself a hook of that phase, created at a lower weight.
 _BEFORE_THE_MANIFEST = frozenset({"pre-install", "pre-upgrade"})
 
+_DAPR_ENABLED = "dapr.io/enabled"
+_DAPR_BUILTIN_STORE_OFF = "dapr.io/disable-builtin-k8s-secret-store"
+
 
 class _Pod(BaseModel):
     """One pod template the release runs, reduced to the identity it runs as."""
@@ -97,6 +109,8 @@ class _Pod(BaseModel):
     long_running: bool
     hook_phases: frozenset[str]
     hook_weight: int
+    dapr_injected: bool
+    builtin_secret_store_off: bool
 
 
 class _Binding(BaseModel):
@@ -156,6 +170,7 @@ def _pods(*args: str) -> tuple[_Pod, ...]:
         for template in _templates(doc):
             spec = template.get("spec") or {}
             account = spec.get("serviceAccountName") or "default"
+            annotations = (template.get("metadata") or {}).get("annotations") or {}
             automount = spec.get("automountServiceAccountToken", (service_accounts.get(account) or {}).get("automountServiceAccountToken", True))
             pods.append(
                 _Pod(
@@ -166,6 +181,8 @@ def _pods(*args: str) -> tuple[_Pod, ...]:
                     long_running=doc["kind"] in {"Deployment", "StatefulSet", "DaemonSet", "RayCluster", "RayService"},
                     hook_phases=phases,
                     hook_weight=weight,
+                    dapr_injected=str(annotations.get(_DAPR_ENABLED)).lower() == "true",
+                    builtin_secret_store_off=str(annotations.get(_DAPR_BUILTIN_STORE_OFF)).lower() == "true",
                 )
             )
     return tuple(pods)
@@ -197,16 +214,30 @@ def _bindings(*args: str) -> tuple[_Binding, ...]:
         else:
             pytest.fail(f"{doc['kind']}/{doc['metadata']['name']} binds {ref}, which neither the render nor _BUILTIN_GRANTS describes")
         subjects = doc.get("subjects") or []
+        accounts = [s["name"] for s in subjects if s.get("kind") == "ServiceAccount" and s.get("namespace", "default") == "default"]
+        users = (_SERVICE_ACCOUNT_USER.match(s.get("name", "")) for s in subjects if s.get("kind") == "User")
+        accounts += [user["name"] for user in users if user and user["namespace"] == "default"]
         found.append(
             _Binding(
                 name=f"{doc['kind']}/{doc['metadata']['name']}",
                 role=ref,
                 grants=grants,
-                service_accounts=tuple(s["name"] for s in subjects if s.get("kind") == "ServiceAccount" and s.get("namespace", "default") == "default"),
+                service_accounts=tuple(accounts),
                 groups=tuple(s["name"] for s in subjects if s.get("kind") == "Group"),
             )
         )
     return tuple(found)
+
+
+def _absent_when_it_starts(pod: _Pod, accounts: dict[str, tuple[frozenset[str], int]]) -> list[str]:
+    """Where the SA a pod names does not exist when the pod starts: a hook-only SA exists only during its
+    own phases, from its weight on, and an ordinary one arrives with the manifest, after the pre-* hooks."""
+    phases, weight = accounts[pod.service_account]
+    if not phases:
+        return sorted(pod.hook_phases & _BEFORE_THE_MANIFEST)
+    if not pod.hook_phases:
+        return ["the release manifest"]
+    return [phase for phase in sorted(pod.hook_phases) if not (phase in phases and weight < pod.hook_weight)]
 
 
 def _pod(args: tuple[str, ...], workload: str) -> _Pod:
@@ -276,11 +307,13 @@ def test_every_first_party_service_runs_as_its_own_service_account(overlay: str)
 
     No pod the release runs, a subchart's included, is on `default`, the identity every unnamed pod
     shares. Every SA a pod names exists when the pod is created: a pod naming an absent SA is refused at
-    admission and its workload never starts, and a hook that runs before the manifest holds the whole
-    upgrade until its timeout. A one-shot Job never borrows a service's identity, and a first-party pod
-    mounts an API token only when a binding gives its SA something to do with it, since an idle token
-    is only a credential to steal. The D1 verifiers (LH-220) validate SA tokens offline against the
-    issuer's JWKS, which the API server serves only to a grant.
+    admission and its workload never starts, and a hook holds the whole upgrade until its timeout. A
+    one-shot Job never borrows a service's identity, and a first-party pod mounts an API token only when a
+    binding gives its SA something to do with it, since an idle token is only a credential to steal. A
+    tokenless daprd starts only with its built-in Kubernetes secret store off, whose init is fatal without a
+    token. KubeRay applies a RayCluster's new pod spec, its SA included, only under the Recreate upgrade
+    strategy. The D1 verifiers (LH-220) validate SA tokens offline against the issuer's JWKS, which the API
+    server serves only to a grant.
     """
     args = _OVERLAYS[overlay]
     pods, bindings = _pods(*args), _bindings(*args)
@@ -294,15 +327,20 @@ def test_every_first_party_service_runs_as_its_own_service_account(overlay: str)
     granted = {account for binding in bindings for account in binding.service_accounts}
     issuer_readers = {a for b in bindings if b.role == ("ClusterRole", "system:service-account-issuer-discovery") for a in b.service_accounts}
     verifiers = {_pod(args, workload).service_account for workload in _ISSUER_VERIFIERS}
+    ray_clusters = {
+        doc["metadata"]["name"]: (doc["spec"].get("upgradeStrategy") or {}).get("type")
+        for source, doc in _documents(*args)
+        if doc.get("kind") == "RayCluster" and source.startswith(_FIRST_PARTY_SOURCE)
+    }
 
     problems = {
         "on `default`": sorted(pod.workload for pod in pods if pod.service_account == "default"),
         "naming an SA the release does not render": sorted({f"{pod.workload} -> {pod.service_account}" for pod in pods if pod.service_account not in rendered}),
-        "hooks that start before their SA exists": sorted(
-            f"{pod.workload} ({phase}) -> {pod.service_account}"
+        "pods that start before their SA exists": sorted(
+            f"{pod.workload} ({where}) -> {pod.service_account}"
             for pod in pods
-            for phase in sorted(pod.hook_phases & _BEFORE_THE_MANIFEST)
-            if pod.service_account in accounts and not (phase in accounts[pod.service_account][0] and accounts[pod.service_account][1] < pod.hook_weight)
+            if pod.service_account in accounts
+            for where in _absent_when_it_starts(pod, accounts)
         ),
         "services sharing an SA": {sa: sorted(ws) for sa, ws in services.items() if len(ws) > 1 and sa not in _SHARED_IDENTITIES},
         "one-shot pods on a service's SA": sorted(
@@ -311,6 +349,8 @@ def test_every_first_party_service_runs_as_its_own_service_account(overlay: str)
         "an API token no grant uses": sorted(
             f"{pod.workload} ({pod.service_account})" for pod in first_party if pod.token_mounted and pod.service_account not in granted
         ),
+        "daprd that needs a token to start": sorted(pod.workload for pod in pods if pod.dapr_injected and not pod.builtin_secret_store_off),
+        "Ray clusters that keep the pod spec they started with": sorted(name for name, strategy in ray_clusters.items() if strategy != "Recreate"),
         "D1 verifiers that cannot read the SA issuer": sorted(verifiers - issuer_readers),
         "issuer discovery granted to `default`": sorted(issuer_readers & {"default"}),
     }

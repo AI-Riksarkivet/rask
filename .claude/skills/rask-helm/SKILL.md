@@ -183,8 +183,25 @@ catalog, lineage, maintenance, the medallion, OpenBao and Dex ran as `default` w
   the hook's pod is refused at admission and the upgrade waits out its whole timeout. Measured
   2026-10-02 on rev 259: `openfga-model` (`pre-upgrade`) on `rask-sa-jobs` held the release in
   `pending-upgrade` with `serviceaccount "rask-sa-jobs" not found`. `rask-sa-hooks` is a hook at weight
-  -10 in every phase those hooks run in, as `kueue-queues.yaml`'s setup SA already was.
+  -10 in every phase those hooks run in, as `kueue-queues.yaml`'s setup SA already was. A hook SA with
+  `hook-succeeded` exists only during its own phases, so a post-* hook needs that phase listed too, and
+  no ordinary release resource may name it.
+- **A tokenless daprd needs `dapr.io/disable-builtin-k8s-secret-store`.** daprd initialises its built-in
+  Kubernetes secret store at boot from the pod's token and treats a failure as fatal, so dropping the
+  annotation from `lance.daprSidecarResources` crash-loops every injected pod (live 2026-07-13).
+- **A RayCluster applies a new pod spec only under `upgradeStrategy: Recreate`** (KubeRay 1.6.2,
+  `shouldRecreatePodsForUpgrade`): without it the head keeps the spec it started with, its SA included,
+  until someone deletes the pod. The hash leaves out replicas, so autoscaling recreates nothing, and the
+  cost is that a change to the cluster's spec ends the jobs running on it, as any singleton's rollout
+  does. KubeRay refuses the field on a cluster a RayService creates, so it sits in `raycluster.yaml`.
+- **Changing the dev OpenBao's pod spec empties its store**, because `server -dev` keeps it in memory.
+  The `seed` container in that pod writes only to its own server and gates the pod's readiness on a
+  key it writes last, and a rollout surges first so the seed can carry the minted tokens over from the
+  outgoing pod (`test_the_dev_openbao_is_seeded_by_its_own_pod.py`). A replacement with no outgoing pod
+  (a deleted pod, a drained node) mints them afresh, and every pod that cached the old ones needs a
+  restart (XC-005).
 - **The gate is the render, judged by what each role grants**, so a new subchart that binds a
   secret-reading or token-reviewing role to `default` fails without anyone listing it:
-  `tests/unit/test_a_first_party_pod_cannot_read_a_secret_through_the_kube_api.py`. It carries its own
-  mutation check: re-enabling `secretReader` must fail it.
+  `tests/unit/test_a_first_party_pod_cannot_read_a_secret_through_the_kube_api.py`. A `User` subject
+  named `system:serviceaccount:<ns>:<sa>` counts as that SA. The gate carries its own mutation check:
+  re-enabling `secretReader` must fail it.

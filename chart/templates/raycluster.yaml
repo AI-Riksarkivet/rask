@@ -36,6 +36,12 @@ metadata:
   labels:
     {{- include "rask.componentLabels" (list . "ray") | nindent 4 }}
 spec:
+{{- /* A CHART CHANGE TO THE POD SPEC REACHES THE RUNNING PODS. KubeRay 1.6.2 recreates a RayCluster's
+       pods on a spec change only under `Recreate` (raycluster_controller.go shouldRecreatePodsForUpgrade);
+       otherwise the head keeps the spec it started with, its ServiceAccount included. The hash leaves out
+       replicas, so autoscaling recreates nothing. Here and not in rask.rayClusterConfig: KubeRay refuses the
+       field on a cluster a RayService creates (validation.go ValidateRayClusterUpgradeOptions). */}}
+    upgradeStrategy: { type: Recreate }
 {{- include "rask.rayClusterConfig" . }}
 {{- if .Values.ray.cluster.gcsFaultTolerance.enabled }}
 ---

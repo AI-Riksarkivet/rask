@@ -3244,7 +3244,7 @@ openbao:
 # SecretStore (→ vaultAddr) + an ExternalSecret that OWNS <release>-infra-credentials, and the static
 # Secret in infra-credentials.yaml is skipped. Complements openbao.externalAddr (the app tier's Dapr path).
 externalSecrets:
-  # WHEN THIS IS TURNED ON, THE OPENBAO SEED JOB ALSO PROVISIONS THE AUTH HALF — the kubernetes auth
+  # WHEN THIS IS TURNED ON, THE OPENBAO SEED ALSO PROVISIONS THE AUTH HALF — the kubernetes auth
   # backend, a policy granting READ on exactly `<kvMount>/data/<secretPath>`, and the role below bound
   # to the operator's ServiceAccount. Measured 2026-09-08: without those, the operator ran 3/3 with ZERO
   # SecretStores and every ExternalSecret would have sat in SecretSyncedError — the KV half of what ESO

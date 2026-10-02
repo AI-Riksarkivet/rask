@@ -83,8 +83,13 @@ def _token_fetchers(docs: list[dict]) -> list[tuple[str, str]]:
 
 
 def test_every_declared_identity_has_a_token_minted(rendered: list[dict]) -> None:
-    seeded = "\n".join(yaml.safe_dump(d) for d in rendered if d.get("kind") == "Job")
-    assert "bao kv put secret/service-token-" in seeded, "no token seeding found in any Job — the parse moved, not the chart"
+    seeded = "\n".join(
+        " ".join(container.get("command") or [])
+        for d in rendered
+        if (d.get("kind"), d["metadata"]["name"]) == ("Deployment", "rask-openbao")
+        for container in d["spec"]["template"]["spec"]["containers"]
+    )
+    assert "bao kv put secret/service-token-" in seeded, "no token seeding found in the OpenBao pod — the parse moved, not the chart"
 
     missing = sorted({f"{app} -> service-token-{identity}" for app, identity in _token_fetchers(rendered) if f"service-token-{identity}" not in seeded})
     assert not missing, (

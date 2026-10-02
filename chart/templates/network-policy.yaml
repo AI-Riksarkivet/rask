@@ -142,6 +142,10 @@ spec:
                 {{- if and .Values.dapr.sidecars .Values.stateStore.enabled }}
                 {{- $openbaoClients = concat $openbaoClients .Values.stateStore.scopes }}
                 {{- end }}
+                {{- /* the dev seed reads the minted tokens from the outgoing OpenBao pod (openbao.yaml) */}}
+                {{- if .Values.openbao.devMode }}
+                {{- $openbaoClients = append $openbaoClients "openbao" }}
+                {{- end }}
                 values:
                   {{- range ($openbaoClients | uniq) }}
                   - {{ . }}

@@ -73,7 +73,7 @@ def _mounted(rendered: str) -> dict[str, str]:
 
 
 def _seeded(rendered: str) -> dict[str, str]:
-    """Each identity's credential from the OpenBao seed Job — the copy the DOOR reads.
+    """Each identity's credential from the OpenBao seed — the copy the DOOR reads.
 
     ONE SECRET PER IDENTITY since [[XC-072]] (`bao kv put secret/service-token-<id> token=<value>`),
     not a field of the shared `lance` bundle. Dapr grants by secret NAME and never by field, so the

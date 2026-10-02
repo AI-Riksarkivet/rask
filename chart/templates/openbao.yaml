@@ -72,6 +72,11 @@ metadata:
   labels: {{- include "lance.labels" . | nindent 4 }}
 spec:
   replicas: 1
+  {{- if .Values.openbao.devMode }}
+  {{- /* SURGE BEFORE REMOVING: the seed carries the minted tokens over from the pod the Service still
+         routes to, which exists only while the outgoing pod serves until its replacement is Ready. */}}
+  strategy: { type: RollingUpdate, rollingUpdate: { maxSurge: 1, maxUnavailable: 0 } }
+  {{- end }}
   selector:
     matchLabels:
       app.kubernetes.io/component: openbao
@@ -116,71 +121,84 @@ spec:
             - { name: data, mountPath: /openbao/data }
           {{- end }}
           readinessProbe:
+            {{- if .Values.openbao.devMode }}
+            {{- /* READY ONCE SEEDED: the seed container writes this key last, so the Service routes a sidecar
+                   only to a store holding the whole seed, and a server restarted in place leaves the
+                   endpoints until it is seeded again. */}}
+            httpGet:
+              path: /v1/secret/data/openbao-seeded
+              port: 8200
+              httpHeaders: [{ name: X-Vault-Token, value: {{ .Values.openbao.devToken | quote }} }]
+            periodSeconds: 3
+            {{- else }}
             # sealed/uninitialized return 200 so the pod is Ready once the server is UP — a prod (sealed)
             # server still needs an operator to `bao operator init` + unseal before it serves secrets.
             httpGet: { path: "/v1/sys/health?standbyok=true&sealedcode=200&uninitcode=200", port: 8200 }
             initialDelaySeconds: 4
             periodSeconds: 10
+            {{- end }}
           resources: {{- include "lance.resources" (dict "root" . "comp" "openbao") | nindent 12 }}
-      {{- if not .Values.openbao.devMode }}
-      volumes:
-        - { name: config, configMap: { name: {{ include "lance.openbaoHost" . }}-config } }
-        - { name: data, persistentVolumeClaim: { claimName: {{ include "lance.openbaoHost" . }}-data } }
-      {{- end }}
----
-{{- if .Values.openbao.devMode }}
-# Seed a demo secret so the Dapr secret store has something to serve (proves the wiring end-to-end).
-#
-# NOT a hook — see "BOOTSTRAP JOBS" in _helpers.tpl. The medallion stage runners resolve their S3 credentials
-# through the Dapr secret store at boot, so an unseeded OpenBao keeps them un-Ready (secret 500 →
-# "waiting on port 8000"); as a post-install hook the seed ran only AFTER --wait had already given up
-# on exactly those pods. In the ordinary wave it races them instead, and the stage runners' own retry wins.
-apiVersion: batch/v1
-kind: Job
-metadata:
-  name: {{ include "lance.openbaoHost" . }}-seed-{{ include "rask.bootstrapRev" . }}
-  labels: {{- include "lance.labels" . | nindent 4 }}
-spec:
-  # Reap the finished pod. Each revision's job carries a -r<revision> name, so Helm's
-  # before-hook-creation delete policy never matches the previous one — without a TTL every
-  # `helm upgrade` left another Completed husk behind (14 were sitting in `kubectl get pods`).
-  ttlSecondsAfterFinished: 3600
-  {{- include "lance.bootstrapJobDeadline" . | nindent 2 }}
-  backoffLimit: 20
-  template:
-    metadata:
-      # The explicit component label (the P4 landmine, see bootstrap-admin.yaml): devMode-only Job, so it
-      # never meets the prod NetworkPolicy — the label is for release inventory + consistency with every
-      # other bootstrap pod (and would be the admission handle if a dev cluster ever enforced policies).
-      labels:
-        {{- include "lance.labels" . | nindent 8 }}
-        app.kubernetes.io/component: openbao-seed
-    spec:
-      restartPolicy: OnFailure
-      serviceAccountName: {{ include "lance.fullname" . }}-sa-jobs
-      volumes:
-        {{- include "lance.tmpVolume" . | nindent 8 }}
-      containers:
+        {{- if .Values.openbao.devMode }}
+        {{- /* THE POD SEEDS ITS OWN STORE. A seed that reaches the store through the Service writes to
+               whichever pod the Service routes to, and during a rollout that is the outgoing pod, whose
+               in-memory store is deleted with it. This container writes only to the server beside it,
+               writes last the key that server's readiness reads, and stays running: a server restarted in
+               place comes back empty, and the loop at the end seeds it again with the same values. */}}
         - name: seed
           image: {{ .Values.openbao.image }}
           {{- include "lance.rootlessSecurityContext" 65532 | nindent 10 }}
           {{- /* the bao CLI writes a token file under $HOME, which a read-only rootfs turns into a failure. HOME on the tmp
-                 emptyDir is the pair every app container in this chart already uses. */}}
+                 emptyDir is the pair every app container in this chart already uses, and the minted tokens the
+                 seed keeps there outlive a restart of either container. */}}
           volumeMounts:
             {{- include "lance.tmpMount" . | nindent 12 }}
           resources:
             requests: { cpu: "10m", memory: "32Mi" }
             limits: { cpu: "200m", memory: "128Mi" }
           env:
-            - { name: BAO_ADDR, value: "http://{{ include "lance.openbaoHost" . }}:{{ .Values.openbao.port }}" }
+            - { name: BAO_ADDR, value: "http://127.0.0.1:8200" }
             - { name: BAO_TOKEN, value: {{ .Values.openbao.devToken | quote }} }
-            {{- /* HOME on the tmp emptyDir: this container now runs with a read-only rootfs, and the CLI writes under $HOME. */}}
             - { name: HOME, value: /tmp }
           command:
             - sh
             - -c
             - |
-              until bao status >/dev/null 2>&1; do echo wait-openbao; sleep 3; done
+              {{- /* ERREXIT FOR THE WHOLE SCRIPT, never inside `seed`: POSIX ignores -e for every command of an
+                     AND-OR list but the last, so `seed || exit 1` would run a failed write straight on to the
+                     readiness key. Each check that may fail on purpose sits in an `if`, `until` or `&&`. */}}
+              set -e
+              mkdir -p "$HOME/seed"
+              {{- /* MINTED HERE, ONCE, when nothing else holds the value ([[LH-304]]). A token the operator
+                     supplied, or one a daprd-less pod mounts from `infra-credentials`, has a stable
+                     source and is written as rendered. Any other would be `randAlphaNum` again on every
+                     render — nothing it could be looked up from — so each upgrade rotated it under the
+                     signers it did not restart: measured 2026-09-26, lineage refused the catalog's
+                     events "signature does not verify" after a chart-only upgrade. So it is never
+                     rendered: the seed takes the value it wrote before (kept under $HOME through a restart
+                     of either container), else the one the store behind the Service holds (another pod,
+                     Ready so seeded, which a rollout keeps serving until this one is Ready), and mints
+                     only into a clean absence: that store answering "No value found", or no pod serving,
+                     which the Service answers "connection refused" (both measured on OpenBao 2.2.0,
+                     2026-10-02). Any other read failure stops the seed rather than rotating a credential
+                     it could not see. */}}
+              put_minted() {
+                if [ ! -s "$HOME/seed/$1" ]; then
+                  if out=$(BAO_ADDR=http://{{ include "lance.openbaoHost" . }}:{{ .Values.openbao.port }} BAO_CLIENT_TIMEOUT=5s bao kv get -field=token "secret/$1" 2>&1); then
+                    printf '%s' "$out" > "$HOME/seed/$1"
+                  else
+                    case "$out" in
+                      "No value found at"*|*"connect: connection refused") ;;
+                      *) echo "cannot read secret/$1 behind the Service, refusing to mint over it: $out" >&2; return 1 ;;
+                    esac
+                    dd if=/dev/urandom bs=96 count=1 2>/dev/null | base64 | tr -dc 'A-Za-z0-9' | cut -c1-40 > "$HOME/seed/$1"
+                    echo "minted secret/$1"
+                  fi
+                fi
+                tok=$(cat "$HOME/seed/$1")
+                [ "${#tok}" -eq 40 ] || { echo "secret/$1 is not a 40-character token" >&2; return 1; }
+                bao kv put "secret/$1" token="$tok" >/dev/null
+              }
+              seed() {
               bao kv put secret/lance minio-secret-key={{ .Values.minio.secretKey }} \
                 minio-access-key={{ .Values.minio.accessKey }} postgres-password={{ .Values.age.password }} \
                 publisher-oidc-password={{ .Values.dex.publisher.password }} \
@@ -311,31 +329,12 @@ spec:
                      token is alphanumeric and safe bare, but a credential from a secret manager carries
                      `+/=` and can carry `$`, which this `sh -c` would expand — seeding a DIFFERENT value
                      than the mounted half and 401ing that identity with no error anywhere. */}}
-              {{- /* MINTED HERE, ONCE, when nothing else holds the value ([[LH-304]]). A token the operator
-                     supplied, or one a daprd-less pod mounts from `infra-credentials`, has a stable
-                     source and is written as rendered. Any other would be `randAlphaNum` again on every
-                     render — nothing it could be looked up from — so each upgrade rotated it under the
-                     signers it did not restart: measured 2026-09-26, lineage refused the catalog's
-                     events "signature does not verify" after a chart-only upgrade. So it is minted in
-                     this Job, only on a clean "No value found", and never rendered at all. Any other
-                     read failure stops the Job rather than rotating a credential it could not see. */}}
-              seed_absent() {
-                if out=$(bao kv get -field=token "secret/$1" 2>&1); then return 0; fi
-                case "$out" in
-                  "No value found at"*) ;;
-                  *) echo "cannot read secret/$1, refusing to mint over it: $out" >&2; exit 1 ;;
-                esac
-                tok=$(dd if=/dev/urandom bs=96 count=1 2>/dev/null | base64 | tr -dc 'A-Za-z0-9' | cut -c1-40)
-                [ "${#tok}" -eq 40 ] || { echo "could not mint a 40-character token for $1" >&2; exit 1; }
-                bao kv put "secret/$1" token="$tok" >/dev/null || { echo "could not write secret/$1" >&2; exit 1; }
-                echo "minted secret/$1"
-              }
               {{- $mounted := include "lance.mountedServiceIdentities" $ | splitList " " }}
               {{- range (compact $privileged | uniq | sortAlpha) }}
               {{- if or (get (default dict $.Values.auth.serviceTokens) .) (has . $mounted) }}
               bao kv put secret/service-token-{{ . }} token={{ include "lance.dedicatedServiceToken" (list $ .) | squote }}
               {{- else }}
-              seed_absent service-token-{{ . }}
+              put_minted service-token-{{ . }}
               {{- end }}
               {{- end }}
               echo "seeded the per-identity service credentials into OpenBao"
@@ -365,7 +364,7 @@ spec:
                      `externalSecrets.enabled` alone leaves every ExternalSecret in SecretSyncedError,
                      which reads as a broken deploy rather than a missing prerequisite.
 
-                     IT BELONGS IN THIS JOB because this is the one place that already holds the root
+                     IT BELONGS IN THE SEED because this is the one place that already holds the root
                      token and already writes the exact path the role must be allowed to read; a
                      separate bootstrap would need a second copy of both.
 
@@ -413,5 +412,23 @@ spec:
                 policies={{ $.Values.externalSecrets.role }} ttl=1h
               echo "provisioned kubernetes auth + role {{ $.Values.externalSecrets.role }} for ESO"
               {{- end }}
-{{- end }}{{/* devMode seed */}}
+              bao kv put secret/openbao-seeded pod="$HOSTNAME" >/dev/null
+              echo "seeded this pod's store"
+              }
+              until bao status >/dev/null 2>&1; do echo wait-openbao; sleep 1; done
+              seed
+              while sleep 5; do
+                out=$(bao kv get -field=pod secret/openbao-seeded 2>&1) && continue
+                case "$out" in
+                  "No value found at"*) echo "this pod's store lost its seed; seeding it again"; seed ;;
+                esac
+              done
+        {{- end }}
+      volumes:
+        {{- if .Values.openbao.devMode }}
+        {{- include "lance.tmpVolume" . | nindent 8 }}
+        {{- else }}
+        - { name: config, configMap: { name: {{ include "lance.openbaoHost" . }}-config } }
+        - { name: data, persistentVolumeClaim: { claimName: {{ include "lance.openbaoHost" . }}-data } }
+        {{- end }}
 {{- end }}{{/* openbao.enabled */}}
