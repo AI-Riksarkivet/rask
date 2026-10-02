@@ -1,6 +1,6 @@
 # open_backlog_left_new2 — what is left
 
-Dated 2026-09-25. This file supersedes `open_backlog_left.md` and `open_backlog_left_new.md`. Every carried row was re-audited against HEAD today by one auditor and one skeptic per chunk, and the new rows come from today's reconciliation, Lance, Lakekeeper and pylance-12 audits. Each row states only the defect, what is left, why it matters, how to fix it and what ends it. Ids are never renumbered and never reused: a gap in a sequence is a closed row, every id that left today is listed at the foot, and the next free ids are LH-336, XC-115, CP-055, CTL-028, FE-014, LOW-039 and LIN-005. The 2026-09-26 lakehouse map proposed LH-277 to LH-300, XC-090 to XC-103 and LOW-031 to LOW-033 (file:line citations at ea8c5ff8); by owner ruling only its HIGH rows entered, and the rest are listed under **Parked findings** at the foot, uncounted.
+Dated 2026-09-25. This file supersedes `open_backlog_left.md` and `open_backlog_left_new.md`. Every carried row was re-audited against HEAD today by one auditor and one skeptic per chunk, and the new rows come from today's reconciliation, Lance, Lakekeeper and pylance-12 audits. Each row states only the defect, what is left, why it matters, how to fix it and what ends it. Ids are never renumbered and never reused: a gap in a sequence is a closed row, every id that left today is listed at the foot, and the next free ids are LH-337, XC-116, CP-055, CTL-028, FE-014, LOW-039 and LIN-005. The 2026-09-26 lakehouse map proposed LH-277 to LH-300, XC-090 to XC-103 and LOW-031 to LOW-033 (file:line citations at ea8c5ff8); by owner ruling only its HIGH rows entered, and the rest are listed under **Parked findings** at the foot, uncounted.
 
 **Phase 1 is finished first, and it is finished when these five criteria hold together on the estate** (owner's wording, confirmed 2026-09-26; XC-090 is the scenario that proves them): (1) provenance/lineage correct; (2) catalog correct for lance-ns and authz/governance; (3) not coupled to a workflow engine or Ray; (4) events correct; (5) resilient. A row is added only with the owner's say (owner, 2026-09-26: the goal is finishing Phase 1, not growing it); a found problem goes to the parking list by default. `blocked:` appears only when no part of a row can move without a decision; a partly blocked row names its decision in *What is left* and under **Decisions still open**. `not workable now:` marks a row that waits on another row or ruling landing first; it is counted open but not workable now.
 
@@ -14,6 +14,8 @@ second; search, the viewer, the annotator and flows are ignored for now. Order a
 `docs/audits/2026-09-30/lakehouse-dataflow.md`: it adds a fix for each criterion the previous order only proved (criterion 3,
 the bus half of criterion 4, notifications), and XC-090 closes last because its proofs XC-091 and XC-094 depend on
 LH-064, XC-078 and CTL-021 among items 1-6, and on LH-214, LH-225, CP-037, LH-148 and the parked LH-282 outside FOCUS.
+
+Beside the order (owner, 2026-10-02): prune pass 2 and the production triage's blocker check run in parallel.
 
 1. **LH-280**, **LH-281**.
    Why: criteria 1 and 2; the catalog's own provenance and erasure holes, unchanged from FOCUS.
@@ -58,6 +60,9 @@ LH-064, XC-078 and CTL-021 among items 1-6, and on LH-214, LH-225, CP-037, LH-14
 - **Dataflow audit rows admitted (2026-09-30)** — LH-329 (/ingest-media starts its own cascade) and LH-330 (the catalog is not the sole committer and announcer of tier writes) are counted PHASE 1 · LAKEHOUSE rows, from `docs/audits/2026-09-30/lakehouse-dataflow.md` (weak points 8 and 9).
 - **FOCUS order (2026-09-30)** — the order in FOCUS NOW, adopted from the dataflow audit's recommendation.
 - **Ingest is a Phase 1 component (2026-09-30)** — services/ingest is a lakehouse bronze head beside the producer's doors; CLAUDE.md's "three doors are the whole ingest surface" is corrected under XC-043, and ingest_run moves behind the saga port under XC-109.
+- **Prune pass 2 (2026-09-29; timing 2026-10-02)** — every remaining test, in every tier, must be the only test that catches at least one real mutation of production code, or it is deleted; a test kept with a REWRITE verdict is rewritten at the door or deleted, which carries the work LH-266..269 named; a test that does ruff's or ty's job is deleted. It runs now, beside FOCUS (owner, 2026-10-02).
+- **Production triage (2026-09-29; scope 2026-10-02)** — every Phase 1 row is classed as blocking production or as hardening after launch, against the five criteria; the owner approves the short list, and nothing is deleted. On 2026-10-02: a second reviewer checks every blocking verdict and the rows that joined Phase 1 after the first pass, and the after-launch verdicts stay first-pass.
+- **Batch and parallelize (2026-09-29)** — independent rows are fixed in parallel worktrees and share one image build, one deploy and one combined live proof; the full adversarial review is for HIGH security rows, and a MEDIUM row gets one reviewer.
 - **Fixed stack (2026-09-30)** — Lance with lance-namespace, MinIO, OpenBao, OpenTelemetry, OpenLineage, KubeRay, Kueue, Kyverno, Dapr (service invocation, state, pub/sub, actors, bindings, the secret store and, for now, Workflow), NATS JetStream, OpenFGA and Dex. Work uses them better and never swaps a part. Kueue and Kyverno are cluster-level services installed once per cluster, outside rask's release, and D11 stands for Kueue. Kueue belongs to the compute plane with KubeRay, and the lakehouse never references it. rask ships its own Kyverno policies; the controls they enforce are XC-030 (parked under the no-prod ruling), XC-076, XC-061 and XC-009.
 - **Workflow engine (2026-09-30)** — Dapr Workflow stays for now. Flyte is the intended later engine, adopted after CP-029's outcome door and LH-226's port; the lakehouse then references no workflow engine.
 
@@ -91,14 +96,14 @@ LH-064, XC-078 and CTL-021 among items 1-6, and on LH-214, LH-225, CP-037, LH-14
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 111 | 108 | 27 |
+| **PHASE 1 · LAKEHOUSE** | 110 | 107 | 27 |
 | **PHASE 1 · CROSS-CUTTING** | 42 | 41 | 21 |
 | **PHASE 1 · CONTROLPLANE AND NOTIFICATIONS** | 9 | 7 | 1 |
 | **PHASE 2 · COMPUTE** | 19 | 18 | 4 |
 | **FRONTEND** | 7 | 7 | 0 |
 | **LOW PRIORITY** | 37 | 36 | 0 |
 
-**225 open items**, of which **6 are blocked on a decision**, **2 wait on another row or ruling** and **217 can be picked up today**; 53 are HIGH. 51 ids left the register on 2026-09-25 and 39 on 2026-09-29, listed at the foot so nothing vanishes silently.
+**224 open items**, of which **6 are blocked on a decision**, **2 wait on another row or ruling** and **216 can be picked up today**; 53 are HIGH. 51 ids left the register on 2026-09-25 and 39 on 2026-09-29, listed at the foot so nothing vanishes silently.
 
 ## PHASE 1 · LAKEHOUSE
 
@@ -1941,10 +1946,10 @@ LH-064, XC-078 and CTL-021 among items 1-6, and on LH-214, LH-225, CP-037, LH-14
 - LH-316 — dropped — `repo_tree.walked_files` has no caller left: the repo-shape gates it served were deleted by the prune (XC-089 dropped)
 - LH-275 — closed — the preview_maintenance docstring (services/catalog/src/catalog/api/v1/endpoints/maintenance.py:101-111) and the regenerated docs/catalog-openapi.json (:17532) no longer say /run and /compact stay refused; the one surviving false comment, dataplane.py:1127, is folded into LH-256
 
-- LH-266 — superseded — by the 2026-09-29 test prune: ee45eb2 (c01-catalog-service) and 290cb28 (c02-catalog-unit) re-decided every catalog test file, so the 2026-09-25 per-file rewrite and trim lists no longer describe the tree; the surviving source-reading files are parked as XC-108
-- LH-267 — superseded — by the test prune: 034ef31 (c03-medallion-service) and 9afb34b (c04-medallion-unit-flows); test_promotion_review_has_a_live_path.py is deleted, and the residue (four `ty: ignore` in test_promotion_read_is_gated.py, a scratchpad path, a source-reading file) is XC-108
-- LH-268 — superseded — by the test prune: c226900 (c09-maintenance); the skip-attribution question stays under Decisions still open against test_a_skip_says_which_kind_it_was.py
-- LH-269 — superseded — by the test prune: db5bdef (c11-lineage)
+- LH-266 — superseded — by the 2026-09-29 test prune: ee45eb2 (c01-catalog-service) and 290cb28 (c02-catalog-unit) re-decided every catalog test file, so the 2026-09-25 per-file rewrite and trim lists no longer describe the tree; the surviving source-reading files are parked as XC-108 The rewrite work it named, for tests kept with a REWRITE verdict, moves to prune pass 2 (owner rulings, 2026-10-02).
+- LH-267 — superseded — by the test prune: 034ef31 (c03-medallion-service) and 9afb34b (c04-medallion-unit-flows); test_promotion_review_has_a_live_path.py is deleted, and the residue (four `ty: ignore` in test_promotion_read_is_gated.py, a scratchpad path, a source-reading file) is XC-108 The rewrite work it named, for tests kept with a REWRITE verdict, moves to prune pass 2 (owner rulings, 2026-10-02).
+- LH-268 — superseded — by the test prune: c226900 (c09-maintenance); the skip-attribution question stays under Decisions still open against test_a_skip_says_which_kind_it_was.py The rewrite work it named, for tests kept with a REWRITE verdict, moves to prune pass 2 (owner rulings, 2026-10-02).
+- LH-269 — superseded — by the test prune: db5bdef (c11-lineage) The rewrite work it named, for tests kept with a REWRITE verdict, moves to prune pass 2 (owner rulings, 2026-10-02).
 - XC-087 — superseded — by the test prune: 332a3c5 (c05-service-kit-package), 4dd5750 (c06-service-kit-unit-gateway), then 2cf255e and 265f128 folded the MERGE rows; the py.typed question stays under Decisions still open
 - XC-088 — superseded — by the test prune: 4bf9969 (c07-chart-1), 7f03ac4 (c08-chart-2-estate), 5cb7ec5 (c14-integration-e2e) and 265f128; test_invariants.py is down to 28 tests, test_create_lineage_pin.py's cited lines are gone, and test_the_running_catalog_carries_the_current_authorization_model.py is deleted
 - XC-089 — dropped — the gates it fixed are gone: test_the_repo_shape_gates_run_without_git.py was deleted by the prune and 9f8aa71 moved code-shape rules to ruff and import-linter; tests/unit/repo_tree.py has no importer left
@@ -2119,6 +2124,11 @@ Found by the 2026-09-30 best-practice, Ray/lance-namespace idiom and governance 
 - LH-335 · MEDIUM · The stage lanes' lineage-index rebuild commits a `CreateIndex` version of its own under the stage identity that no event names (medallion services/compute.py:180-186, the event carries the data version captured before it), while XC-091 clause (b) expects an index version to carry the maintenance identity · `medallion, lineage`
 - XC-114 · LOW · Audit records carry no actor type (person, service, system) and no privilege source, and a refused event signature is only logged (lineage api/fga_deps.py:335, `log.info`), never audited; Lakekeeper records both on every audit record and audits signature refusals (docs/audits/2026-09-25/lakekeeper-deep-read/provenance-audit.md T5, T7). XC-098 (bearer refusals) and LH-231 (format and vocabulary) do not cover either · `service-kit, lineage, catalog`
 - CP-054 · LOW · Owner question, not a defect: the Ray engine adapters (services/engine_registry.py, rayjobs_api_executor.py) and the Dapr Workflow runtime that runs stage_run and train_run (medallion stage_runner.py:83-114) are hosted in the medallion deployable, so compute-plane code ships with the lakehouse and only the import contracts separate them. A compute-plane app-id could host them (the compute service, which no lakehouse service calls), taking CP-022's second Jobs client with it; under Flyte the workflow and compute seams merge, because Flyte's Ray plugin launches its own RayJob (flyte ray.go:285) · `medallion, compute`
+
+Found by the 2026-10-02 review of `lakehouse-architecture.html` and parked under the same rule.
+
+- LH-336 · MEDIUM · Image-specific derivation lives in the shared cascade: medallion services/derivers.py derives a thumbnail and an embedding for image payloads only (derivers.py:9,54-89; compute.py:12-14), and leaves audio and every other kind untouched, against CLAUDE.md's rule that no data type enters a shared seam ("would this be right for audio?"). lakehouse-architecture.html and lakehouse-e2e-trace.md describe it as the cascade's only derivation; no row owns it · `medallion`
+- XC-115 · LOW · CLAUDE.md names RustFS as the object store (CLAUDE.md:314-315: "Lance datasets on RustFS S3", the RustFS operator and `rask-rustfs-io:9000`, the observability bucket on RustFS), and chart/Chart.yaml:9 lists RustFS too, while the chart deploys MinIO (chart/templates/minio.yaml:3, "MinIO rather than RustFS", LH-133) and the fixed-stack ruling names MinIO; the 2026-09-30 audit's stale-doc list misses it, and XC-043 can take it · `docs`
 
 ### No-prod parking (uncounted)
 
