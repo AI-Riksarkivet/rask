@@ -1,15 +1,18 @@
-"""A key id the cached list does not hold is retried until the list is fresh, and a cached list expires.
+"""A key id the cached list lacks is retried until a list read since it was first met decides it, and a cached list expires.
 
 [[LH-064]]. A rotation publishes the identity's new key first, so a lineage that cached the list a moment earlier has not seen it.
-Refusing the first event signed with the new key would ack and discard honest provenance on a stale cache. Reading the store again
-for every unknown key id would hand a forger the store. So a key id missing from a list read BEFORE the event arrived is answered
-RETRY while that read is younger than the refresh interval (a rate limit delays a verdict and never decides one), and the
-sidecar's redelivery lands after the interval, on a list read afresh. The list is also the trust anchor, so a cached copy is served
-only until its TTL: a key the store has since removed stops verifying once the copy expires.
+Refusing the first event signed with the new key would ack and discard honest provenance on a stale cache, and reading the store again
+for every unknown key id would hand a forger the store. So a key id missing from the cached list is answered RETRY while no read has
+begun since the key id was FIRST met and the last read is younger than the refresh interval (a rate limit delays a verdict and never
+decides one). Any read that begins after that first sighting decides it, whichever event caused the read, so the sidecar's redelivery
+120 s later always ends in a verdict: a key id the list does not hold is refused, which is acked and never recorded. The list is also
+the trust anchor, so a cached copy is served only until its TTL: a key the store has since removed stops verifying once the copy
+expires.
 
-Driven through the registered `/lineage-events` route, with the key reader's clock injected so the interval and the TTL are
-crossed without waiting. The sidecar's secret API is stood in for by respx, and the signatures are built by the root conftest's
-`EventSigner` from the wire format alone.
+Driven through the registered `/lineage-events` route, with the key reader's clock injected so the interval, the TTL and the
+redelivery are crossed without waiting. One event is built per signing key, so delivering a key's event again is the sidecar's
+redelivery of it. The sidecar's secret API is stood in for by respx, and the signatures are built by the root conftest's `EventSigner`
+from the wire format alone.
 """
 
 from __future__ import annotations
@@ -30,6 +33,19 @@ from lineage.services.signature import KEY_REFRESH_INTERVAL_SECONDS, KEY_TTL_SEC
 SIGNER = "service-maintenance"
 STORE = "lance-secrets"
 SECRETS = f"http://localhost:3500/v1.0/secrets/{STORE}"
+
+#: What the door did with one delivery: asked for it again, acked it as refused with nothing recorded, or recorded it.
+RETRIED, REFUSED, RECORDED = "retried", "refused", "recorded"
+
+#: The chart's `pubsubDeliveryRetry` is a constant 120 s.
+REDELIVERY_SECONDS = 120.0
+
+PRIMER = "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5e"
+RUN_IDS = {
+    "old": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5f",
+    "new": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a60",
+    "unpublished": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a61",
+}
 
 
 class _Feed:
@@ -66,40 +82,45 @@ def _event(run_id: str) -> dict[str, Any]:
     }
 
 
+def _outcome(answered: dict[str, Any], newly_recorded: bool) -> str:
+    if answered == {"status": "RETRY"}:
+        return RETRIED
+    if answered == {"status": "SUCCESS"}:
+        return RECORDED if newly_recorded else REFUSED
+    return f"unexpected answer {answered}"
+
+
 @respx.mock
 @pytest.mark.parametrize(
-    ("signed_with", "published_now", "seconds_since_the_list_was_read", "status", "reads_of_the_store", "recorded"),
+    ("published_now", "deliveries", "reads_of_the_store"),
     [
         pytest.param(
-            "new",
             "new,old",
-            KEY_REFRESH_INTERVAL_SECONDS / 2,
-            "RETRY",
+            [(KEY_REFRESH_INTERVAL_SECONDS / 2, "new", RETRIED)],
             1,
-            False,
             id="inside-the-interval-a-new-key-is-retried-and-the-store-is-not-asked-again",
         ),
         pytest.param(
-            "new",
             "new,old",
-            (KEY_REFRESH_INTERVAL_SECONDS + KEY_TTL_SECONDS) / 2,
-            "SUCCESS",
+            [((KEY_REFRESH_INTERVAL_SECONDS + KEY_TTL_SECONDS) / 2, "new", RECORDED)],
             2,
-            True,
             id="past-the-interval-the-list-is-read-afresh-and-the-new-key-verifies",
         ),
-        pytest.param("old", "new", KEY_TTL_SECONDS + 10, "SUCCESS", 2, False, id="past-the-ttl-a-key-the-store-no-longer-lists-stops-verifying"),
+        pytest.param("new", [(KEY_TTL_SECONDS + 10, "old", REFUSED)], 2, id="past-the-ttl-a-key-the-store-no-longer-lists-stops-verifying"),
+        pytest.param(
+            "old",
+            [(10, "unpublished", RETRIED), (110, "old", RECORDED), (10 + REDELIVERY_SECONDS, "unpublished", REFUSED)],
+            2,
+            id="a-read-another-event-causes-before-the-redelivery-does-not-defer-its-verdict",
+        ),
     ],
 )
-def test_an_unknown_key_id_is_retried_until_the_list_is_fresh_and_a_cached_list_expires(  # noqa: PLR0913 - parametrized
+def test_an_unknown_key_id_is_retried_until_the_list_is_fresh_and_a_cached_list_expires(
     monkeypatch: pytest.MonkeyPatch,
     event_signer: Any,
-    signed_with: str,
     published_now: str,
-    seconds_since_the_list_was_read: float,
-    status: str,
+    deliveries: list[tuple[float, str, str]],
     reads_of_the_store: int,
-    recorded: bool,
 ) -> None:
     for key, value in {
         "APP_API_TOKEN": "the-estate-app-token",
@@ -121,17 +142,21 @@ def test_an_unknown_key_id_is_retried_until_the_list_is_fresh_and_a_cached_list_
     app.state.repository = feed
     clock = _Clock()
     app.state.published_keys = PublishedKeys(store=STORE, clock=clock)
-    signers = {"old": event_signer(SIGNER), "new": event_signer(SIGNER)}
+    signers = {name: event_signer(SIGNER) for name in RUN_IDS}
+    events = {name: signer.sign(_event(RUN_IDS[name])) for name, signer in signers.items()}
     published = respx.get(f"{SECRETS}/signing-public-{SIGNER}").mock(return_value=httpx.Response(200, json={"keys": signers["old"].public}))
     client = TestClient(app)
     headers = {"dapr-api-token": "the-estate-app-token"}
-    primed = client.post("/lineage-events", json={"data": signers["old"].sign(_event("0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5e"))}, headers=headers)
+    primed = client.post("/lineage-events", json={"data": signers["old"].sign(_event(PRIMER))}, headers=headers)
     assert (primed.json(), published.call_count) == ({"status": "SUCCESS"}, 1), "the list was not cached by a verified event, so this tests nothing"
     published.mock(return_value=httpx.Response(200, json={"keys": ",".join(signers[name].public for name in published_now.split(","))}))
-    clock.now = seconds_since_the_list_was_read
 
-    answered = client.post("/lineage-events", json={"data": signers[signed_with].sign(_event("0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5f"))}, headers=headers)
+    outcomes: list[str] = []
+    for at, signed_with, _ in deliveries:
+        clock.now = at
+        recorded_before = len(feed.recorded)
+        answered = client.post("/lineage-events", json={"data": events[signed_with]}, headers=headers)
+        outcomes.append(_outcome(answered.json(), len(feed.recorded) > recorded_before))
 
-    assert answered.json() == {"status": status}, f"the door answered {answered.json()}"
+    assert outcomes == [expected for _, _, expected in deliveries], f"the door answered {outcomes}"
     assert published.call_count == reads_of_the_store, f"the store was read {published.call_count} times"
-    assert (len(feed.recorded) == 2) is recorded, f"recorded {feed.recorded}"
