@@ -456,14 +456,26 @@ def test_create_denies_when_source_not_readable(client: TestClient, fake_ns: Mag
     assert writes == [], "denied after the write"
 
 
-def test_merge_insert_rejects_malformed_or_reserved_run_facets(client: TestClient, fake_ns: MagicMock) -> None:
+def test_merge_insert_rejects_malformed_or_reserved_run_facets(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
     # A malformed / reserved-name / reserved-key X-Lance-Run-Facets header is a fail-fast 400 (never a 500),
     # before the merge — the run-facet forgery + 500-from-header findings. The last two are the re-audit
     # catch: json.loads raises a bare ValueError past the 4300-digit int limit, and RecursionError on deep
     # nesting; neither is a JSONDecodeError, so the original narrow except missed them (→ 500).
     #
-    # The last three are numbers that have no canonical form, so the event this header rides on could not be signed
-    # after the write committed: NaN and Infinity (which `json.loads` accepts) and an integer past 2^53-1.
+    # The last four have no canonical form where they sit in the event, so the event could not be signed after the write
+    # committed: NaN and Infinity (which `json.loads` accepts), an integer past 2^53-1, and a payload nested one level past
+    # what the signer takes. canon-1 refuses a container at depth MAX_NESTING, and a facet sits at depth 3 of its event
+    # (event 0, run 1, facets 2, facet 3) against depth 1 in the bag the door parses, so MAX_NESTING - 3 dicts under the facet
+    # is the first nesting the signer refuses and a check made on the bag alone admits (it holds until MAX_NESTING - 1).
+    from lineage_kit.signing import MAX_NESTING
+
+    levels = MAX_NESTING - 3
+    too_deep_to_sign = '{"params": {"x": ' + '{"a": ' * (levels - 1) + '{"leaf": 1}' + "}" * (levels - 1) + "}}"
+    # A header the door wrongly admits commits cleanly, so the status assertion below names it: an unstubbed namespace
+    # answers a response its own model refuses, which surfaces as an exception that says nothing about the header.
+    fake_ns.merge_insert_into_table.return_value = MergeInsertIntoTableResponse(version=2)
+    monkeypatch.setattr("catalog.services.dataplane.read_version_and_schema", lambda *a, **k: (2, [], "s3://bucket/abc12345_db$t"))
+    monkeypatch.setattr("catalog.services.dataplane.ensure_merge_key_index", lambda *a, **k: None)
     bad_headers = [
         "{not json",
         '"a string"',
@@ -474,6 +486,7 @@ def test_merge_insert_rejects_malformed_or_reserved_run_facets(client: TestClien
         '{"params": {"loss": NaN}}',
         '{"params": {"lr": -Infinity}}',
         '{"params": {"seed": 9007199254740993}}',
+        too_deep_to_sign,
     ]
     for bad in bad_headers:
         resp = client.post(
