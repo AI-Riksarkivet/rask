@@ -189,3 +189,45 @@ stuck pod under a watchdog; fixed by re-running the seed (the chart's own hook) 
 re-seed, so dev-mode's in-memory loss only bites on an *out-of-band* restart. That is rare in a quiet
 demo and routine in prod (node drains, OOM, rollouts) — which is precisely why it belongs on the
 operator wave and not in the "never build" bucket.
+
+## 6 · Event signing keys: provisioning, rotation and loss (LH-064)
+
+Every signing identity (`lance.signingIdentities` in `chart/templates/_helpers.tpl`: the catalog, maintenance, the
+medallion producer, each stage runner and ingest) signs the lineage it emits with its own Ed25519 key. The store
+holds two secrets per identity: `signing-public-<identity>` (field `keys`: comma-separated public NKEYs, current
+first, at most one previous) and `signing-key-<identity>` (field `seed`: the NKEY user seed). A signer is Ready only
+while the kid of its own seed is in its list, so the list is always written before the seed it belongs to. Lineage
+reads lists only. The residual stays named: a pod that holds OpenBao's root token or reaches :8200 reads the store
+without a sidecar until XC-079.
+
+**The dev OpenBao (`openbao.devMode=true`) needs nothing from you.** Its `mint` init container generates a candidate
+pair per identity on a memory volume the server never mounts, and its `seed` container chooses one pair per identity
+(the kept copy, else the store behind the Service, else the candidate), keeps it, and writes the list first. A
+rollout therefore carries every pair over; an in-place restart of either container writes the same pair again.
+
+**A sealed or external store mints nothing.** The render refuses it until you have created the secrets and said so:
+
+1. `scripts/provision_signing_keys.sh <identity>...` with `BAO_ADDR` and an operator `BAO_TOKEN` (the failing render
+   prints the exact command and every secret it expects). It runs `nk -gen user -pubout`, writes the list, then the
+   seed, never prints a seed and never replaces a pair that exists.
+2. `--set signing.provisioned=true` on every upgrade, which attests step 1 and nothing else.
+
+Until then no signer is Ready and none emits: a sidecar delivery to one is answered RETRY, not dropped.
+
+**Rotation, at most once per 7 days** (the bus keeps 168 h and a retired key must stay listed until nothing signed
+with it remains to verify). On the dev OpenBao: delete `signing-key-<identity>` from the store, delete its kept copy
+(`/tmp/seed/signing-key-<identity>` in the `seed` container, so an in-place restart cannot write the old key back) and
+roll `deploy/rask-openbao`; the seed finds the list without its key, mints, prepends the new public key and keeps one
+previous. On a sealed or external store: `scripts/provision_signing_keys.sh --rotate <identity>`. Either way the
+signer re-resolves its key within 5 minutes and heals in place, and the retired key leaves the list at the next
+rotation.
+
+**Loss.** A dev OpenBao replacement with no outgoing pod to carry from (a deleted pod, a drained node) mints every
+identity afresh and the old public keys go with the old store. Events signed before the loss are refused once
+enforcement is on (acked and counted); every signer re-resolves within 5 minutes. Restart every signer and lineage
+after any non-surge OpenBao replacement rather than waiting for that interval.
+
+**Reading it back.** From an app's own sidecar, `GET /v1.0/secrets/lance-secrets/signing-key-<its identity>` answers
+200 with a `seed` field, every other identity's key is refused, and every `signing-public-<identity>` answers 200.
+Lineage's sidecar is refused every key. Each pod carries `checksum/dapr-config`, the hash of its own Configuration,
+so a deny-list edit restarts exactly the pods whose list changed (HotReload is off).

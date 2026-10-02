@@ -111,43 +111,7 @@ metadata:
   name: lance-config-{{ $app }}
   labels: {{- include "lance.labels" $cfgRoot | nindent 4 }}
 spec:
-{{- include "lance.daprConfigSpecBody" $cfgRoot }}
-  secrets:
-    scopes:
-      - storeName: lance-secrets
-        {{- /* A DENY-LIST, NOT DENY-BY-DEFAULT, and the reason is measured rather than preferred.
-               Two readers fetch a secret by a name only known at RUNTIME: `viewer/api/v1/endpoints/
-               objects.py:102` and `ingest/objectstore.py:183` both resolve a per-STORE credential whose
-               name comes from the store registry, so a store added after deploy names a secret no
-               rendered allowlist can contain. `defaultAccess: deny` would refuse it and the object
-               browser would 503 on exactly the external stores the mechanism exists for.
-               So this closes the hole that was MEASURED -- a producer reading its peers' identity
-               credentials -- by naming those credentials and nothing else. Deny-by-default is the
-               stronger posture and stays the goal; it needs the registry-driven readers enumerated
-               first, which is a different change from this one. */}}
-        defaultAccess: allow
-        {{- /* BUILT FIRST, EMITTED ONLY IF NON-EMPTY. An app that owns every identity in the estate
-               denies nothing, and a bare `deniedSecrets:` over an empty range is YAML null, not an
-               empty list -- which the Dapr CRD refuses outright:
-                 Configuration.dapr.io "lance-config-catalog" is invalid:
-                 spec.secrets.scopes[0].deniedSecrets: Invalid value: "null": must be of type array
-               Measured 2026-09-24: that refusal failed `e2e-stack` on the server-side apply, for
-               BOTH verifiers at once, so no chart change landed in CI at all while it stood. An
-               absent deny-list and an empty one mean the same thing to Dapr; only one of them
-               parses. */}}
-        {{- $mine := include "lance.identitiesForApp" (list $cfgRoot $app) | splitList " " }}
-        {{- $denied := list }}
-        {{- range (include "lance.allServiceIdentities" $cfgRoot | splitList " ") }}
-        {{- if and . (not (has . $mine)) }}
-        {{- $denied = append $denied (printf "service-token-%s" .) }}
-        {{- end }}
-        {{- end }}
-        {{- if $denied }}
-        deniedSecrets:
-          {{- range $denied }}
-          - {{ . }}
-          {{- end }}
-        {{- end }}
+{{- include "lance.daprAppSpec" (list $cfgRoot $app) }}
 {{- end }}
 {{- end }}
 ---

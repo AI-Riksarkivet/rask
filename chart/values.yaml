@@ -1059,14 +1059,15 @@ vending:
 
 # --- Catalog request limits -----------------------------------------------------------------------
 catalog:
-  # THE CATALOG'S OWN NAME ON THE ESTATE, used to sign the lineage it emits ([[LH-064]]). Every other
-  # emitting service already had one and this one did not, which is why it was the last producer that
-  # could not sign: an identity is what a credential is seeded against.
+  # THE CATALOG'S OWN NAME ON THE ESTATE, the identity it signs the lineage it emits as ([[LH-064]]): its
+  # Ed25519 key pair is minted against this name (`signing:`), and it is the one delegator, because the
+  # catalog authenticated the person it signs for.
   #
   # It is the identity this service PRESENTS, never one it accepts: `lance.saSubjects` does not map
   # `-sa-catalog` at the catalog's door, because the catalog does not call itself.
   #
-  # Empty disables signing and emits unsigned, which the lineage bus door still admits.
+  # Empty makes the catalog no signer: it emits unsigned, which lineage admits only while
+  # `signing.enforce` is false.
   serviceIdentity: service-catalog
   # Max request-body bytes accepted on any catalog route. The Arrow-IPC write endpoints buffer the whole
   # body in memory, so an unbounded POST (e.g. a multi-GB media blob pushed through the catalog instead of
@@ -3231,6 +3232,52 @@ openbao:
   # in-cluster server — pair with openbao.enabled=false to use an external Vault. The apps still consume
   # via Dapr (no plaintext fallback) because secretsViaDapr keys off this too.
   externalAddr: "" # e.g. https://vault.internal:8200
+
+# --- Event signing keys ([[LH-064]]) ----------------------------------------------------------------------
+# Every identity in `lance.signingIdentities` (the catalog, maintenance, the medallion producer, each stage runner
+# and ingest) signs the lineage it emits with its own Ed25519 key, so lineage holds public keys only and cannot
+# forge what it verifies. The store holds two secrets per identity, never two fields of one, because Dapr scopes a
+# secret by NAME and a per-app deny list can only name a whole secret:
+#   signing-public-<identity>   field `keys`  comma-separated public NKEYs, current first, at most one previous
+#   signing-key-<identity>      field `seed`  the NKEY user seed, readable only by the sidecars of the identity's own app-id
+# The field names stay disjoint from the fields a runtime-named reader requires (access_key, secret_key, token,
+# aws_access_key_id), so a warehouse record that names signing-key-<identity> returns nothing.
+#
+# THE DEV OPENBAO MINTS AND CARRIES THEM (templates/openbao.yaml). A `mint` init container runs
+# `nk -gen user -pubout` once per identity and leaves each candidate pair on a memory emptyDir that the openbao
+# container does not mount; it prints names only and always exits 0, so a failed mint costs that one signer its key
+# (the signer stays not Ready) and never the baseline seed or the `openbao-seeded` readiness key. The `seed`
+# container then chooses ONE pair per identity, in this order:
+#   1. the kept copy under $HOME/seed (the tmp emptyDir, where the kept service tokens live: it outlives a restart of
+#      either container and is deleted with the pod). Both files present and well-formed, else ignored.
+#   2. the store behind the Service (the outgoing pod during a rollout). A private key with no public list refuses
+#      the seed; a public list with no private key is a ROTATION.
+#   3. the mint candidate.
+# The chosen pair is persisted to the kept copy before the first write and every re-seed writes exactly it, public
+# list first ("publish before use": a signer is Ready only while its kid is listed).
+#
+# ROTATION. Delete `signing-key-<identity>` from the store and roll `deploy/rask-openbao`: the seed finds the list but
+# no key, takes the mint candidate and PREPENDS its public key, keeping one previous. Rotate at most once per 7 days:
+# the bus keeps 168 h and a retired key must stay listed until nothing signed with it is left to verify.
+# STORE LOSS. A replacement pod with no outgoing pod to carry from mints every identity afresh and the old public
+# keys go with the old store, so an event signed before the loss is refused once enforcement is on (acked and
+# counted); every signer re-resolves within 5 minutes and heals in place.
+#
+# RESIDUAL (owner, 2026-10-02): this is the Dapr-scope claim. A pod that holds OpenBao's root token or reaches :8200
+# reads the store without a sidecar until XC-079.
+signing:
+  # THE ONE SWITCH between helm revisions A/B (false) and C (true). False renders neither LINEAGE_SIGNERS nor
+  # LINEAGE_DELEGATORS, so lineage verifies nothing, ignores a present `rask_signature` and keeps its catalog-DROP
+  # shortcut off. True renders both (lance.signingIdentities, lance.delegatorIdentities), and only when the secret
+  # store and auth.enabled are on as well: lineage then refuses an unsigned or non-verifying event before it records it.
+  enforce: false
+  # NON-DEV STORES (openbao.devMode=false, or openbao.externalAddr) MINT NOTHING, so every signer would stay not
+  # Ready. The render fails until the operator attests here that scripts/provision_signing_keys.sh has created
+  # signing-public-<identity> then signing-key-<identity> for every identity the failure names.
+  provisioned: false
+  # The `mint` init container's image, the one place it is pinned. `nk` is measured working as uid 65532 with a
+  # read-only root.
+  mintImage: natsio/nats-box:0.19.7
 
 # --- external-secrets.io — sync the infra-tier Secret FROM Vault so NO plaintext secret ships in the chart.
 # Requires the external-secrets operator in-cluster. When on, templates/external-secrets.yaml creates a

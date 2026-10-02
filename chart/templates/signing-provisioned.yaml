@@ -1,0 +1,9 @@
+{{- /* Renders no object, like `auth-consistency.yaml`: a store nothing seeds must be told the signing keys exist (values.yaml `signing:`). */ -}}
+{{- if and (include "lance.secretsViaDapr" .) (or (not .Values.openbao.devMode) .Values.openbao.externalAddr) (not (.Values.signing).provisioned) }}
+{{- $ids := include "lance.signingIdentities" . | splitList " " | compact }}
+{{- if $ids }}
+{{- $names := list }}
+{{- range $ids }}{{- $names = concat $names (list (printf "signing-public-%s" .) (printf "signing-key-%s" .)) }}{{- end }}
+{{- fail (printf "EVENT SIGNING KEYS NOT PROVISIONED: openbao.devMode=false or openbao.externalAddr means nothing mints them, so every signer would stay not Ready and lineage could verify nothing. Create these secrets in the store (KV v2, public list first, then the seed) with `scripts/provision_signing_keys.sh %s` (docs/OPERATORS.md, Event signing keys), then --set signing.provisioned=true:\n  - %s" (join " " $ids) (join "\n  - " $names)) }}
+{{- end }}
+{{- end }}

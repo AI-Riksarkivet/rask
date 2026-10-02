@@ -297,6 +297,7 @@ spec:
                  the request answers 202: measured 2026-09-10, every `/produce` emitted `sub='ray'`, every one
                  was refused, and the provenance of every cascade head was discarded with nothing red. */}}
             - { name: MEDALLION_FGA_SERVICE_IDENTITY, value: {{ .Values.medallion.producer.serviceIdentity | quote }} }
+            {{- with include "lance.signingEnv" (list $root .Values.medallion.producer.daprAppId) }}{{ . | nindent 12 }}{{- end }}
             {{- if .Values.medallion.qualityReview }}
             {{- /*
                S3/S4 — this app HOSTS `promotion_review` and serves the door that answers it. The
@@ -687,6 +688,7 @@ spec:
                  refused it while the job exited SUCCEEDED. Only the required action above belongs to the
                  authorization toggle. */}}
             - { name: MEDALLION_FGA_SERVICE_IDENTITY, value: {{ .serviceIdentity | quote }} }
+            {{- with include "lance.signingEnv" (list $root .daprAppId) }}{{ . | nindent 12 }}{{- end }}
             {{- include "lance.saVerifier" (list $root "env" "stage") | nindent 12 }}
           {{- include "lance.appProbes" $root | nindent 10 }}
           resources: {{- include "lance.resources" (dict "root" $root "comp" .name) | nindent 12 }}

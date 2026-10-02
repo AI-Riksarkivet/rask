@@ -1,28 +1,33 @@
 {{- if .Values.openbao.enabled }}
-# OpenBao (the open-source Vault fork) — the secret store, fronted by a Dapr secretstores.hashicorp.vault
-# component (OpenBao is Vault-API compatible). openbao.devMode gates two paths:
-#   devMode=true  → `server -dev`: in-memory, auto-unsealed, fixed root token (DEMO ONLY).
-#   devMode=false → `server -config`: sealed, file-backed on a PVC; an operator must init + unseal it and
-#                   set up real auth (no fixed root token, no auto-seed). This is the prod path.
-#
-# THE FIELDS `secret/lance` MUST HOLD (prod / externalAddr — nothing auto-seeds them, and the chart
-# omits every plaintext env row behind the secretsViaDapr guard, so an unseeded field is a fail-closed
-# outage at first use, not a fallback): minio-secret-key, postgres-password, publisher-oidc-password,
-# publisher-oidc-client-secret (the Dex client secret — added 2026-08-08 when the last plaintext env
-# credential moved behind the guard; "the last" was wrong, see below), dapr-state-connection-string,
-# dapr-app-token (the app-API token, for any pod whose doors read it from here rather than from env —
-# it must equal the value the `dapr-app-token` Secret holds, since daprd stamps the header from that
-# Secret and the app compares against this field), plus one service-token-<identity> per subject listed
-# in any *_PRIVILEGED_SUBJECTS. The devMode seed below is the authoritative list — keep this comment and
-# that `bao kv put` in sync.
-#
-# TWO CONSUMERS, ONE KEY (2026-08-09). `publisher-oidc-client-secret` now serves the publish saga AND
-# the MinIO StatefulSet's STS AssumeRoleWithWebIdentity config — there is one Dex client (`dex.clientId`),
-# so there is one secret. The Tenant reaches it by a different ROUTE, not a different key: it is a
-# third-party operator-managed CR with no daprd sidecar, so it cannot read the Dapr secret store, and
-# it consumes the value as a `secretKeyRef` into the infra-credentials Secret (external-secrets syncs
-# that key FROM this one). Do NOT seed a second `dex-client-secret` field to tidy the naming: a
-# rotation that updates one copy and not the other breaks STS-assume on a path nothing tests.
+{{- /*
+   OpenBao (the open-source Vault fork) — the secret store, fronted by a Dapr secretstores.hashicorp.vault
+   component (OpenBao is Vault-API compatible). openbao.devMode gates two paths:
+     devMode=true  → `server -dev`: in-memory, auto-unsealed, fixed root token (DEMO ONLY).
+     devMode=false → `server -config`: sealed, file-backed on a PVC; an operator must init + unseal it and
+                     set up real auth (no fixed root token, no auto-seed). This is the prod path.
+
+   THE FIELDS `secret/lance` MUST HOLD (prod / externalAddr — nothing auto-seeds them, and the chart
+   omits every plaintext env row behind the secretsViaDapr guard, so an unseeded field is a fail-closed
+   outage at first use, not a fallback): minio-secret-key, postgres-password, publisher-oidc-password,
+   publisher-oidc-client-secret (the Dex client secret), dapr-state-connection-string,
+   dapr-app-token (the app-API token, for any pod whose doors read it from here rather than from env —
+   it must equal the value the `dapr-app-token` Secret holds, since daprd stamps the header from that
+   Secret and the app compares against this field), plus one service-token-<identity> per subject listed
+   in any *_PRIVILEGED_SUBJECTS, plus signing-public-<identity> (field `keys`) and then signing-key-<identity>
+   (field `seed`) for every identity in lance.signingIdentities (values.yaml `signing:`; render refuses a non-dev
+   store until scripts/provision_signing_keys.sh created them and signing.provisioned says so). The devMode seed
+   below is the authoritative list — keep this comment and that `bao kv put` in sync.
+
+   TWO CONSUMERS, ONE KEY (2026-08-09). `publisher-oidc-client-secret` now serves the publish saga AND
+   the MinIO StatefulSet's STS AssumeRoleWithWebIdentity config — there is one Dex client (`dex.clientId`),
+   so there is one secret. The Tenant reaches it by a different ROUTE, not a different key: it is a
+   third-party operator-managed CR with no daprd sidecar, so it cannot read the Dapr secret store, and
+   it consumes the value as a `secretKeyRef` into the infra-credentials Secret (external-secrets syncs
+   that key FROM this one). Do NOT seed a second `dex-client-secret` field to tidy the naming: a
+   rotation that updates one copy and not the other breaks STS-assume on a path nothing tests.
+*/}}
+{{- $signers := include "lance.signingIdentities" . | splitList " " | compact }}
+{{- $mint := and .Values.openbao.devMode (not .Values.openbao.externalAddr) $signers }}
 {{- if not .Values.openbao.devMode }}
 apiVersion: v1
 kind: ConfigMap
@@ -103,6 +108,43 @@ spec:
         {{- end }}
         seccompProfile: { type: RuntimeDefault }
       {{- end }}
+      {{- if $mint }}
+      initContainers:
+        {{- /* MINT: a candidate pair per signing identity on a memory volume the server never mounts. Prints names only and always exits 0
+               (values.yaml `signing:`). */}}
+        - name: mint
+          image: {{ required "signing.mintImage is unset — upgrade with --reset-then-reuse-values, not --reuse-values" (.Values.signing).mintImage }}
+          {{- include "lance.rootlessSecurityContext" 65532 | nindent 10 }}
+          resources:
+            requests: { cpu: "10m", memory: "16Mi" }
+            limits: { cpu: "100m", memory: "64Mi" }
+          env:
+            - { name: SIGNING_DIR, value: /signing }
+          volumeMounts:
+            - { name: signing, mountPath: /signing }
+          command:
+            - sh
+            - -c
+            - |
+              set -f
+              umask 077
+              {{- include "lance.signingShapes" . | nindent 14 }}
+              for id in {{ join " " $signers }}; do
+                out=$(nk -gen user -pubout 2>/dev/null) || { echo "mint: nk failed for $id"; continue; }
+                s=; p=
+                for w in $out; do
+                  if seed_shaped "$w"; then s=$w; elif pub_shaped "$w"; then p=$w; fi
+                done
+                if [ -z "$s" ] || [ -z "$p" ]; then echo "mint: no key pair for $id"; continue; fi
+                printf '%s' "$s" > "$SIGNING_DIR/$id.seed.new"
+                printf '%s' "$p" > "$SIGNING_DIR/$id.pub.new"
+                mv "$SIGNING_DIR/$id.seed.new" "$SIGNING_DIR/$id.seed"
+                mv "$SIGNING_DIR/$id.pub.new" "$SIGNING_DIR/$id.pub"
+                chmod 0400 "$SIGNING_DIR/$id.seed" "$SIGNING_DIR/$id.pub"
+                echo "mint: key pair for $id"
+              done
+              exit 0
+      {{- end }}
       containers:
         - name: openbao
           image: {{ .Values.openbao.image }}
@@ -152,6 +194,9 @@ spec:
                  seed keeps there outlive a restart of either container. */}}
           volumeMounts:
             {{- include "lance.tmpMount" . | nindent 12 }}
+            {{- if $mint }}
+            - { name: signing, mountPath: /signing }
+            {{- end }}
           resources:
             requests: { cpu: "10m", memory: "32Mi" }
             limits: { cpu: "200m", memory: "128Mi" }
@@ -159,6 +204,9 @@ spec:
             - { name: BAO_ADDR, value: "http://127.0.0.1:8200" }
             - { name: BAO_TOKEN, value: {{ .Values.openbao.devToken | quote }} }
             - { name: HOME, value: /tmp }
+            {{- if $mint }}
+            - { name: SIGNING_DIR, value: /signing }
+            {{- end }}
           command:
             - sh
             - -c
@@ -203,6 +251,51 @@ spec:
                 fi
                 bao kv put "secret/$1" token="$tok" >/dev/null
               }
+              {{- if $mint }}
+              {{- /* ONE PAIR PER SIGNING IDENTITY, chosen from the kept copy, the store behind the Service, then the mint candidate
+                     (values.yaml `signing:`). A value travels through shell variables, files and `@file` arguments, never argv or output. */}}
+              {{- include "lance.signingShapes" . | nindent 14 }}
+              svc_get() {
+                if got=$(BAO_ADDR=http://{{ include "lance.openbaoHost" . }}:{{ .Values.openbao.port }} BAO_CLIENT_TIMEOUT=5s bao kv get -field="$2" "secret/$1" 2>&1); then return 0; fi
+                case "$got" in
+                  "No value found at"*|*"connect: connection refused") got=; return 3 ;;
+                esac
+                echo "cannot read secret/$1 behind the Service, refusing to write over it: $got" >&2
+                exit 1
+              }
+              put_pair() {
+                k="$HOME/seed/signing-key-$1"; p="$HOME/seed/signing-public-$1"
+                if [ -f "$k" ] && [ -f "$p" ] && seed_shaped "$(cat "$k")" && keys_shaped "$(cat "$p")"; then
+                  how=kept
+                else
+                  rm -f "$k" "$p" "$k.new" "$p.new"
+                  if svc_get "signing-key-$1" seed; then cs=$got; hs=1; else cs=; hs=0; fi
+                  if svc_get "signing-public-$1" keys; then ol=$got; hk=1; else ol=; hk=0; fi
+                  if [ $hs = 1 ] && [ $hk = 1 ]; then
+                    seed_shaped "$cs" && keys_shaped "$ol" || { echo "the signing pair for $1 behind the Service is malformed, refusing to replace it" >&2; exit 1; }
+                    ck=$ol; how=carried
+                  elif [ $hs = 1 ]; then
+                    echo "signing-key-$1 is served without signing-public-$1, refusing to publish another list for it" >&2; exit 1
+                  else
+                    cs=$(cat "$SIGNING_DIR/$1.seed" 2>/dev/null || true); cand=$(cat "$SIGNING_DIR/$1.pub" 2>/dev/null || true)
+                    if ! { seed_shaped "$cs" && pub_shaped "$cand"; }; then echo "no signing key pair was minted for $1: its signer stays not Ready" >&2; return 0; fi
+                    ck=$cand; how=minted
+                    if [ $hk = 1 ]; then
+                      keys_shaped "$ol" || { echo "signing-public-$1 behind the Service is malformed, refusing to replace it" >&2; exit 1; }
+                      ck="$cand,${ol%%,*}"; how=rotated
+                    fi
+                  fi
+                  (umask 077; printf '%s' "$cs" > "$k.new")
+                  (umask 077; printf '%s' "$ck" > "$p.new")
+                  mv "$k.new" "$k"
+                  mv "$p.new" "$p"
+                fi
+                rm -f "$SIGNING_DIR/$1.seed" "$SIGNING_DIR/$1.pub"
+                bao kv put "secret/signing-public-$1" keys=@"$p" >/dev/null
+                bao kv put "secret/signing-key-$1" seed=@"$k" >/dev/null
+                echo "signing pair for $1: $how"
+              }
+              {{- end }}
               seed() {
               bao kv put secret/lance minio-secret-key={{ .Values.minio.secretKey }} \
                 minio-access-key={{ .Values.minio.accessKey }} postgres-password={{ .Values.age.password }} \
@@ -343,6 +436,11 @@ spec:
               {{- end }}
               {{- end }}
               echo "seeded the per-identity service credentials into OpenBao"
+              {{- if $mint }}
+              {{- range $signers }}
+              put_pair {{ . }}
+              {{- end }}
+              {{- end }}
               {{- if $.Values.minio.viewerAccessKey }}
 
               {{- /* THE OBJECT BROWSER'S CREDENTIALS, as their OWN secret rather than two more keys on
@@ -432,6 +530,9 @@ spec:
       volumes:
         {{- if .Values.openbao.devMode }}
         {{- include "lance.tmpVolume" . | nindent 8 }}
+        {{- if $mint }}
+        - { name: signing, emptyDir: { medium: Memory, sizeLimit: 1Mi } }
+        {{- end }}
         {{- else }}
         - { name: config, configMap: { name: {{ include "lance.openbaoHost" . }}-config } }
         - { name: data, persistentVolumeClaim: { claimName: {{ include "lance.openbaoHost" . }}-data } }

@@ -153,6 +153,7 @@ spec:
             {{- with .Values.catalog.serviceIdentity }}
             - { name: LANCE_SERVICE_IDENTITY, value: {{ . | quote }} }
             {{- end }}
+            {{- with include "lance.signingEnv" (list $root .Values.services.catalog.daprAppId) }}{{ . | nindent 12 }}{{- end }}
             - { name: LANCE_S3_REGION, value: "us-east-1" }
             - { name: LANCE_S3_VIRTUAL_HOSTED, value: "false" }
             {{- /*
@@ -645,6 +646,13 @@ spec:
                  renders "" on a `--reuse-values` upgrade, which is a bool_parsing crash at boot. */}}
             - { name: LANCE_AUDIT_ENABLED, value: {{ hasKey .Values.auth "audit" | ternary .Values.auth.audit true | quote }} }
             {{- include "lance.saVerifier" (list $root "env" "lineage") | nindent 12 }}
+            {{- /* ENFORCEMENT (values.yaml `signing:`): both sets or neither, and never an empty signer list. */}}
+            {{- if and (.Values.signing).enforce (include "lance.secretsViaDapr" .) }}
+            {{- $signers := include "lance.signingIdentities" . | splitList " " | compact }}
+            {{- if not $signers }}{{ fail "signing.enforce=true but no identity signs: lineage would verify nothing" }}{{- end }}
+            - { name: LINEAGE_SIGNERS, value: {{ $signers | toJson | quote }} }
+            - { name: LINEAGE_DELEGATORS, value: {{ include "lance.delegatorIdentities" . | splitList " " | compact | toJson | quote }} }
+            {{- end }}
             {{- end }}
           {{- include "lance.appProbes" . | nindent 10 }}
           resources: {{- include "lance.resources" (dict "root" . "comp" "lineage") | nindent 12 }}
