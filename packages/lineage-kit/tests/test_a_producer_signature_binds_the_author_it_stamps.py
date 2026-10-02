@@ -1,189 +1,380 @@
-"""A bus producer's signature must make its stamped author unforgeable.
+"""A producer's Ed25519 signature binds the event it signs, author included, to a key its identity publishes.
 
-[[LH-064]]. The lineage bus door authenticates the SIDECAR — a shared app token — and then reads the
-author off the payload. `_StampedAuthor` says so plainly: "NOT a verified identity … nothing proves the
-stamp". The gate bounds the forgery (a forged subject must still hold the rung on every output) but it
-cannot stop one producer recording provenance as another.
+[[LH-064]] C3. The lineage bus door authenticates the sidecar, not the producer, so the author stamped on an event
+is a claim. The signature turns it into one a listed signer's published key vouches for, and `lineage_kit.signing`
+is the one implementation every signer and verifier imports.
 
-WHY THIS BECAME POSSIBLE ONLY NOW. A signature needs a key that DISTINGUISHES a producer, and until
-2026-09-23 no such key existed in a usable form: ZT-001 made `service-token-<identity>` unguessable
-(`randAlphaNum 40` rather than `sha256("<identity>-<dapr.appToken>")[:40]`), and [[XC-072]] made it
-unreadable by peers (its own secret, per-app Dapr scope; measured 8 credentials -> 1 for
-`medallion-producer`). Before both, an HMAC keyed on this material would have refused an
-unauthenticated forger and refused NONE of the producer pods — "non-repudiation without being it", in
-the row's own words.
+WHAT PINS THE WIRE FORMAT IS NOT THIS PACKAGE. The root conftest's `EventSigner` writes the contract's NKEY keys,
+canon-1 and `rask_signature` facet from the contract alone, so the signatures here are compared with an
+independent writer's rather than checked against the code that made them, and an RFC 8032 vector anchors the key
+text and the Ed25519 itself. The doors that call the verifier (lineage's four) have their own tests; this file
+pins the function: what it accepts, the order in which it refuses, and when it reads a key at all.
 
-THE SIGNATURE COVERS THE AUTHOR, which is the whole point and the one property a naive implementation
-drops. Signing an event body that excludes `author.sub` would verify perfectly while leaving exactly
-the substitution this exists to prevent.
-
-IT LIVES IN `lineage-kit`, NOT IN A SERVICE, because the row requires it to survive a Dapr retreat: the
-transport is what carries the envelope, and a seam bolted to the sidecar would have to be rewritten
-when that changes.
+THE TAMPER ROWS ARE CHOSEN SO ONLY THE SIGNATURE CAN OBJECT, wherever the structural checks would not already
+catch it. An identity swapped to another delegator, a delegation injected into a catalog event, and a person
+retargeted in the author and the delegation together all pass every check that needs no key, so each is refused
+only if the member is inside the signed bytes. Leaving the whole facet out of the signed bytes, instead of only its
+signature value, turns those rows green: that is the mutation they exist to catch.
 """
 
 from __future__ import annotations
 
-from typing import Any
+import base64
+import binascii
+import copy
+import json
+import subprocess
+import sys
+from collections.abc import Callable, Mapping, Sequence
+from pathlib import Path
+from typing import Any, cast
 
 import pytest
+from cryptography.hazmat.primitives.asymmetric import ed25519
+from jsonschema import Draft202012Validator, FormatChecker
+from referencing import Registry, Resource
+from referencing.jsonschema import DRAFT202012
 
-from lineage_kit.signing import sign_event, verify_event
+from lineage_kit import (
+    CanonError,
+    KeySourceUnavailableError,
+    SignatureError,
+    SigningKey,
+    VerifiedSignature,
+    attach_signature,
+    canon_1,
+    parse_published_keys,
+    signature_of,
+    verify_signature,
+)
+from lineage_kit.signing import MAX_NESTING
 
 
-KEY = "AhaS3VaDMfKnpj82CKQTvmIGP200Nl85NKvug7Wm"
+STAGE, CATALOG, OTHER_DELEGATOR, ROGUE = "service-bronze-to-silver", "service-catalog", "service-other-delegator", "service-trainer"
+PERSON = "CgVhbGljZRIFbG9jYWw"
+SIGNERS = frozenset({STAGE, CATALOG, OTHER_DELEGATOR})
+DELEGATORS = frozenset({CATALOG, OTHER_DELEGATOR})
+
+_REPO = Path(__file__).resolve().parents[3]
+_FACET_SCHEMA = _REPO / "spec" / "facets" / "rask" / "RaskSignatureRunFacet.json"
+_OPENLINEAGE_SCHEMA = _REPO / "tests" / "data" / "openlineage-2-0-2.json"
+
+_BASE32 = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
+_BASE64URL = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
 
 
-def _event(sub: str = "service-bronze-to-silver") -> dict[str, Any]:
+def _event(author: str = STAGE) -> dict[str, Any]:
+    """A medallion COMPLETE: its `lance` facet carries a float that happens to be integral."""
     return {
-        "eventTime": "2026-09-23T19:00:00Z",
+        "eventType": "COMPLETE",
+        "eventTime": "2026-10-02T12:00:00+00:00",
         "producer": "https://example.invalid/producer",
-        "run": {"runId": "0198e0f2-1b2c-7a3d-8e4f-5a6b7c8d9e0f", "facets": {"author": {"sub": sub, "name": sub}}},
+        "run": {
+            "runId": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b",
+            "facets": {"author": {"sub": author, "name": author}, "lance": {"duration_seconds": 5.0, "rows": 12}},
+        },
         "job": {"namespace": "lance", "name": "stage.silver"},
-        "outputs": [{"namespace": "lance", "name": "silver$features"}],
+        "outputs": [{"namespace": "silver", "name": "acme-silver$events"}],
     }
 
 
-def test_SUBSTITUTING_THE_AUTHOR_BREAKS_THE_SIGNATURE() -> None:
-    """The defect this row exists to close, stated as a test.
+def _dataset_event(author: str) -> dict[str, Any]:
+    return {
+        "eventTime": "2026-10-02T12:00:00+00:00",
+        "dataset": {"namespace": "lance", "name": "acme-bronze$dropped", "facets": {"lance": {"operation": "drop_table"}, "author": {"sub": author}}},
+    }
 
-    IF THIS IS RED the signature covers a body that excludes the stamp, which verifies cleanly and
-    prevents nothing — a producer could still record provenance as any subject it liked.
+
+def _with_signature_members(signed: dict[str, Any], **members: Any) -> dict[str, Any]:
+    """The event with members of its `rask_signature` facet replaced and nothing else touched."""
+    bag = signed["run"]["facets"]
+    return {**signed, "run": {**signed["run"], "facets": {**bag, "rask_signature": {**bag["rask_signature"], **members}}}}
+
+
+def _with_author(signed: dict[str, Any], sub: str) -> dict[str, Any]:
+    bag = signed["run"]["facets"]
+    return {**signed, "run": {**signed["run"], "facets": {**bag, "author": {**bag["author"], "sub": sub}}}}
+
+
+def _nested(containers: int) -> list[Any]:
+    value: list[Any] = []
+    for _ in range(containers - 1):
+        value = [value]
+    return value
+
+
+class _Source:
+    """What each identity publishes, what a re-read finds once a rotation has landed, and an outage."""
+
+    def __init__(self, published: Mapping[str, Sequence[str]], *, rotated: Mapping[str, Sequence[str]] | None = None, down: bool = False) -> None:
+        self._published, self._rotated, self._down = published, rotated if rotated is not None else published, down
+        self.calls: list[str] = []
+
+    def published(self, identity: str) -> Sequence[str]:
+        self.calls.append("published")
+        return self._read(self._published, identity)
+
+    def refresh(self, identity: str) -> Sequence[str]:
+        self.calls.append("refresh")
+        return self._read(self._rotated, identity)
+
+    def _read(self, lists: Mapping[str, Sequence[str]], identity: str) -> Sequence[str]:
+        if self._down:
+            raise KeySourceUnavailableError("the store is down")
+        return lists.get(identity, [])
+
+
+def _signed(signer: Any, event: dict[str, Any], *, on_behalf_of: str | None = None) -> dict[str, Any]:
+    """The event signed by the code under test with an independent writer's key.
+
+    The conformance test anchors that code to the independent writer once. The verifier rows sign with it, so a
+    mutation of how the bytes are built moves the signer and the verifier together, which is the failure an
+    independent signer would hide: every row would fail alike and the tamper rows would still read as refused.
     """
-    signed = sign_event(_event(sub="service-bronze-to-silver"), key=KEY)
-    forged = _event(sub="service-trainer")
-    assert not verify_event(forged, signed, key=KEY), "the author was swapped and the signature still verified"
+    return attach_signature(event, key=SigningKey.from_seed(signer.seed), identity=signer.identity, on_behalf_of=on_behalf_of)
 
 
-def test_KEY_ORDER_DOES_NOT_CHANGE_THE_SIGNATURE() -> None:
-    """A transport may re-serialise the envelope, so the input has to be canonical, not textual.
-
-    Without this, a signature is valid only for the exact byte order one JSON encoder happened to emit
-    and every honest producer starts failing the moment anything re-encodes.
-    """
-    a = dict(_event())
-    b = {k: a[k] for k in reversed(list(a))}
-    assert sign_event(a, key=KEY) == sign_event(b, key=KEY)
+def _facet_schema_errors(facets: dict[str, Any]) -> list[str]:
+    openlineage = json.loads(_OPENLINEAGE_SCHEMA.read_text())
+    registry: Registry[Any] = Registry().with_resource(openlineage["$id"], Resource.from_contents(openlineage, default_specification=DRAFT202012))
+    validator = Draft202012Validator(json.loads(_FACET_SCHEMA.read_text()), registry=registry, format_checker=FormatChecker())
+    return [error.message for error in validator.iter_errors(facets)]
 
 
-def test_A_MALFORMED_SIGNATURE_IS_FALSE_NOT_AN_EXCEPTION() -> None:
-    """The door must answer 403, not 500. A verifier that raises on junk is a DoS on the ingest path."""
-    for junk in ("", "not-hex", "ab", "z" * 64):
-        assert verify_event(_event(), junk, key=KEY) is False
+def test_a_signature_is_the_wire_format_the_contract_writes_and_verifies_against_the_published_key(event_signer: Any) -> None:
+    # RFC 8032 section 7.1 test 1 as an NKEY user seed: the key text, the kid and plain Ed25519 against an outside reference.
+    rfc = SigningKey.from_seed("SUAJ2YNRTXX72WTAXKCEV5ES5QWMIRCJYVUXWMTJDFYDXLADDSXH6YALCA")
+    assert (rfc.public_nkey, rfc.kid) == ("UDLVVGABQKYQVN6VJP7NHSLEA45A5YLS6PNKMIZFV4BBU2HXA5IRUVAL", "21fe31dfa154a261")
+    assert rfc.sign(b"").hex() == (
+        "e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e065224901555fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b"
+    )
+
+    catalog = event_signer(CATALOG)
+    key = SigningKey.from_seed(f" {catalog.seed}\n")  # a seed read from a store carries whatever whitespace its writer left
+    assert (key.public_nkey, key.kid) == (catalog.public, catalog.kid)
+    assert catalog.seed not in f"{key!r} {key.model_dump()}", "a key shown in a log line or an exception carries its seed"
+
+    # The independent writer produces the same event byte for byte, on a RunEvent's run facets and a DatasetEvent's dataset facets.
+    run = attach_signature(_event(PERSON), key=key, identity=CATALOG, on_behalf_of=PERSON)
+    dataset = attach_signature(_dataset_event(PERSON), key=key, identity=CATALOG, on_behalf_of=PERSON)
+    assert run == catalog.sign(_event(PERSON), on_behalf_of=PERSON)
+    assert dataset == catalog.sign(_dataset_event(PERSON), on_behalf_of=PERSON)
+    assert _facet_schema_errors(run["run"]["facets"]) == [], "the facet is not what spec/facets/rask/RaskSignatureRunFacet.json describes"
+
+    expected = VerifiedSignature(identity=CATALOG, kid=catalog.kid, on_behalf_of=PERSON)
+    source = _Source({CATALOG: [catalog.public]})
+    assert verify_signature(run, source=source, signers=SIGNERS, delegators=DELEGATORS) == expected
+    assert verify_signature(dataset, source=source, signers=SIGNERS, delegators=DELEGATORS) == expected
+
+    # Signing a signed event again changes nothing: a relay republish and an outbox drain both re-handle a signed event, and
+    # Ed25519 is deterministic.
+    original = _event(PERSON)
+    again = attach_signature(original, key=key, identity=CATALOG, on_behalf_of=PERSON)
+    assert attach_signature(again, key=key, identity=CATALOG, on_behalf_of=PERSON) == again
+    found = signature_of(again)
+    assert found is not None
+    assert (found.identity, found.kid, found.on_behalf_of) == (CATALOG, catalog.kid, PERSON)
+    assert signature_of(_event()) is None
+    assert parse_published_keys(f" {catalog.public} ,, {rfc.public_nkey}\n") == [catalog.public, rfc.public_nkey]
+
+    # The signed event is a copy: changing it leaves the event it was made from alone.
+    again["run"]["facets"]["lance"]["rows"] = 99
+    assert original == _event(PERSON)
 
 
-def test_AN_EMPTY_KEY_IS_REFUSED_RATHER_THAN_SIGNING_WITH_NOTHING() -> None:
-    """An unconfigured identity must not produce a signature every other holder of "" can reproduce."""
-    with pytest.raises(ValueError, match="key"):
-        sign_event(_event(), key="")
+@pytest.mark.parametrize(
+    ("case", "outcome", "reads"),
+    [
+        pytest.param("integral-float-delivered-as-int", "verified", ["published"], id="5.0-signed-and-delivered-as-5"),
+        pytest.param("previous-key", "verified", ["published"], id="signed-with-the-previous-key-after-a-rotation"),
+        pytest.param("key-published-after-the-first-read", "verified", ["published", "refresh"], id="a-key-the-first-read-did-not-list-but-a-re-read-does"),
+        pytest.param("corrupt-entry-beside-the-key", "verified", ["published"], id="a-corrupt-published-entry-does-not-hide-the-right-one"),
+        pytest.param("unpublished-key", "kid", ["published", "refresh"], id="a-key-the-identity-does-not-publish-after-a-re-read"),
+        pytest.param("store-down", "unavailable", ["published"], id="a-public-key-source-that-cannot-be-read"),
+        pytest.param("nothing-published", "unavailable", ["published"], id="an-identity-with-no-published-key"),
+        pytest.param("unsigned", "unsigned", [], id="an-event-with-no-signature"),
+        pytest.param("malformed-canon", "malformed", [], id="a-facet-whose-canon-is-a-boolean"),
+        pytest.param("malformed-kid", "malformed", [], id="a-facet-whose-kid-is-not-sixteen-hex-characters"),
+        pytest.param("unlisted-signer", "signer", [], id="a-signer-outside-the-signer-set-reads-no-key"),
+        pytest.param("non-delegator-for-a-person", "delegation", [], id="a-delegation-from-outside-the-delegator-set"),
+        pytest.param("signer-stamps-another-author", "author", [], id="a-signer-stamping-another-author-without-a-delegation"),
+        pytest.param("delegation-names-another-subject", "author", [], id="a-delegation-for-someone-other-than-the-stamped-author"),
+        pytest.param("signature-of-the-wrong-length", "encoding", [], id="a-signature-that-is-not-86-base64url-characters"),
+        pytest.param("second-spelling-of-the-signature", "encoding", [], id="a-second-spelling-of-the-same-signature-bytes"),
+        pytest.param("run-and-dataset", "verified", ["published"], id="an-event-carrying-both-is-read-as-a-run-event"),
+        pytest.param("nested-600-deep", "uncanonical", ["published"], id="an-event-nested-far-beyond-the-bound"),
+        pytest.param("tamper-identity", "signature", ["published"], id="the-identity-rewritten-to-another-delegator"),
+        pytest.param("tamper-on-behalf-of", "signature", ["published"], id="a-delegation-injected-into-a-self-signed-event"),
+        pytest.param("tamper-alg", "alg", [], id="the-algorithm-rewritten"),
+        pytest.param("tamper-canon", "canon", [], id="the-canonicalization-rewritten"),
+        pytest.param("tamper-kid", "signature", ["published"], id="the-key-id-rewritten-to-another-published-key"),
+        pytest.param("tamper-schema-url", "signature", ["published"], id="the-schema-url-rewritten"),
+        pytest.param("tamper-producer", "signature", ["published"], id="the-producer-rewritten"),
+        pytest.param("tamper-author", "signature", ["published"], id="the-person-retargeted-in-the-author-and-the-delegation"),
+        pytest.param("a-fault-in-the-crypto-library", "error", ["published"], id="an-exception-nothing-anticipated"),
+    ],
+)
+def test_the_verifier_accepts_what_a_published_key_signed_and_refuses_the_rest_reading_a_key_only_when_it_must(
+    monkeypatch: pytest.MonkeyPatch, event_signer: Any, case: str, outcome: str, reads: list[str]
+) -> None:
+    catalog, stage, previous, rotated, unpublished, unlisted = (
+        event_signer(identity) for identity in (CATALOG, STAGE, STAGE, STAGE, STAGE, "service-unlisted")
+    )
+    published = {CATALOG: [catalog.public], STAGE: [stage.public]}
+    delegated = _signed(catalog, _event(PERSON), on_behalf_of=PERSON)
+    self_signed = _signed(stage, _event(STAGE))
+    corrupt = stage.public[:10] + ("A" if stage.public[10] != "A" else "B") + stage.public[11:]
+    # The last base64url character of a signature carries bits no one checks, so it has a second spelling for the same 64 bytes.
+    value = self_signed["run"]["facets"]["rask_signature"]["signature"]
+    second_spelling = value[:-1] + _BASE64URL[_BASE64URL.index(value[-1]) ^ 1]
+
+    def integral_float_delivered_as_int() -> tuple[dict[str, Any], _Source]:
+        delivered = copy.deepcopy(self_signed)
+        delivered["run"]["facets"]["lance"]["duration_seconds"] = 5
+        return delivered, _Source(published)
+
+    def nested_600_deep() -> tuple[dict[str, Any], _Source]:
+        bomb = {**self_signed, "run": {**self_signed["run"], "facets": {**self_signed["run"]["facets"], "lance": {"deep": _nested(600)}}}}
+        return bomb, _Source(published)
+
+    def a_fault_in_the_crypto_library() -> tuple[dict[str, Any], _Source]:
+        def fail(_raw: bytes) -> None:
+            raise RuntimeError("the library failed in a way nothing anticipated")
+
+        monkeypatch.setattr(ed25519.Ed25519PublicKey, "from_public_bytes", fail)
+        return self_signed, _Source(published)
+
+    scenarios: dict[str, Callable[[], tuple[dict[str, Any], _Source]]] = {
+        "integral-float-delivered-as-int": integral_float_delivered_as_int,
+        "previous-key": lambda: (
+            _signed(previous, _event(STAGE)),
+            _Source({STAGE: parse_published_keys(f" {stage.public} ,, {previous.public}\n")}),
+        ),
+        "key-published-after-the-first-read": lambda: (
+            _signed(rotated, _event(STAGE)),
+            _Source({STAGE: [stage.public]}, rotated={STAGE: [rotated.public, stage.public]}),
+        ),
+        "corrupt-entry-beside-the-key": lambda: (self_signed, _Source({STAGE: [corrupt, stage.public]})),
+        "unpublished-key": lambda: (_signed(unpublished, _event(STAGE)), _Source(published)),
+        "store-down": lambda: (self_signed, _Source(published, down=True)),
+        "nothing-published": lambda: (self_signed, _Source({CATALOG: [catalog.public]})),
+        "unsigned": lambda: (_event(STAGE), _Source(published)),
+        "malformed-canon": lambda: (_with_signature_members(self_signed, canon=True), _Source(published)),
+        "malformed-kid": lambda: (_with_signature_members(self_signed, kid="NOT-A-KID"), _Source(published)),
+        "unlisted-signer": lambda: (_signed(unlisted, _event("service-unlisted")), _Source(published)),
+        "non-delegator-for-a-person": lambda: (_signed(stage, _event(PERSON), on_behalf_of=PERSON), _Source(published)),
+        "signer-stamps-another-author": lambda: (_signed(stage, _event(ROGUE)), _Source(published)),
+        "delegation-names-another-subject": lambda: (_signed(catalog, _event(PERSON), on_behalf_of="someone-else"), _Source(published)),
+        "signature-of-the-wrong-length": lambda: (_with_signature_members(self_signed, signature=value[:-1]), _Source(published)),
+        "second-spelling-of-the-signature": lambda: (_with_signature_members(self_signed, signature=second_spelling), _Source(published)),
+        "run-and-dataset": lambda: (_signed(stage, {**_event(STAGE), "dataset": {"namespace": "lance", "name": "t", "facets": {}}}), _Source(published)),
+        "nested-600-deep": nested_600_deep,
+        # The identity is swapped for another delegator that publishes the same key, so every check that needs no key passes.
+        "tamper-identity": lambda: (
+            _with_signature_members(delegated, identity=OTHER_DELEGATOR),
+            _Source({**published, OTHER_DELEGATOR: [catalog.public]}),
+        ),
+        "tamper-on-behalf-of": lambda: (
+            _with_signature_members(_signed(catalog, _event(CATALOG)), onBehalfOf=CATALOG),
+            _Source(published),
+        ),
+        "tamper-alg": lambda: (_with_signature_members(self_signed, alg="Ed25519ph"), _Source(published)),
+        "tamper-canon": lambda: (_with_signature_members(self_signed, canon=2), _Source(published)),
+        # The kid names the identity's OTHER published key, so the key is found and only the bytes can object.
+        "tamper-kid": lambda: (_with_signature_members(self_signed, kid=previous.kid), _Source({STAGE: [stage.public, previous.public]})),
+        "tamper-schema-url": lambda: (_with_signature_members(self_signed, _schemaURL="https://example.invalid/other.json"), _Source(published)),
+        "tamper-producer": lambda: (_with_signature_members(self_signed, _producer="https://example.invalid/other"), _Source(published)),
+        "tamper-author": lambda: (
+            _with_signature_members(_with_author(delegated, "someone-else"), onBehalfOf="someone-else"),
+            _Source(published),
+        ),
+        "a-fault-in-the-crypto-library": a_fault_in_the_crypto_library,
+    }
+    event, source = scenarios[case]()
+
+    try:
+        verify_signature(event, source=source, signers=SIGNERS, delegators=DELEGATORS)
+        decided = "verified"
+    except SignatureError as exc:
+        decided = exc.reason
+    except KeySourceUnavailableError:
+        decided = "unavailable"
+
+    assert decided == outcome, f"{case}: decided {decided}"
+    assert source.calls == reads, f"{case}: read {source.calls}"
 
 
-# --------------------------------------------------------------------------- #
-# Carrying the signature IN the event, which is what makes it transport-independent.
-# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize(
+    ("case", "refused"),
+    [
+        pytest.param("bad-checksum", ValueError, id="a-seed-with-a-character-changed"),
+        pytest.param("a-public-key", ValueError, id="a-public-key-where-a-seed-belongs"),
+        pytest.param("an-account-seed", ValueError, id="a-well-formed-seed-of-another-nkey-type"),
+        pytest.param("lowercase", ValueError, id="a-seed-in-lower-case"),
+        pytest.param("second-spelling", ValueError, id="a-second-spelling-of-the-same-seed"),
+        pytest.param("bytes", TypeError, id="a-seed-that-is-not-text"),
+    ],
+)
+def test_a_seed_that_is_not_an_nkey_user_seed_is_refused_without_echoing_it(event_signer: Any, case: str, refused: type[Exception]) -> None:
+    seed, other = event_signer(STAGE).seed, event_signer(STAGE)
+    account_seed = bytes([0x90, 0x00]) + bytes(32)  # the seed marker with the account type, a well-formed NKEY of the wrong kind
+    account_seed_text = base64.b32encode(account_seed + binascii.crc_hqx(account_seed, 0).to_bytes(2, "little")).decode().rstrip("=")
+    bad: str | bytes = {
+        "bad-checksum": seed[:20] + ("A" if seed[20] != "A" else "B") + seed[21:],
+        "a-public-key": other.public,
+        "an-account-seed": account_seed_text,
+        "lowercase": seed.lower(),
+        # The last base32 character of a seed carries two bits no checksum covers, so a second spelling decodes to the same key.
+        "second-spelling": seed[:-1] + _BASE32[_BASE32.index(seed[-1]) ^ 1],
+        "bytes": seed.encode(),
+    }[case]
+
+    with pytest.raises(refused, match="NKEY user seed") as raised:
+        SigningKey.from_seed(cast("str", bad))  # the bytes row hands over what the annotation forbids, on purpose
+
+    shown = str(raised.value)
+    assert seed not in shown and (bad if isinstance(bad, str) else seed) not in shown, "an error message carries the seed it refused"
 
 
-def test_AN_UNSIGNED_EVENT_DOES_NOT_VERIFY() -> None:
-    """Absence of a signature is a refusal, never a pass. A door that treats "no signature" as "fine"
-    is the door we already have."""
-    from lineage_kit.signing import verify_signed_event
-
-    assert not verify_signed_event(_event(), key=KEY)
-
-
-def test_TAMPERING_WITH_THE_AUTHOR_OF_A_SIGNED_EVENT_IS_CAUGHT() -> None:
-    """The end-to-end form of the property, through the carrying API rather than the primitive."""
-    from lineage_kit.signing import attach_signature, verify_signed_event
-
-    signed = attach_signature(_event(sub="service-bronze-to-silver"), key=KEY, identity="service-bronze-to-silver")
-    signed["run"]["facets"]["author"]["sub"] = "service-trainer"
-    assert not verify_signed_event(signed, key=KEY)
-
-
-def test_AN_EVENT_WITH_NO_AUTHOR_AT_ALL_DOES_NOT_VERIFY() -> None:
-    """An unstamped event has nothing to bind to, and admitting it would make the binding optional —
-    a forger would simply omit the author facet."""
-    from lineage_kit.signing import attach_signature, verify_signed_event
-
-    bare: dict[str, Any] = {"eventTime": "2026-09-23T19:00:00Z", "run": {"runId": "r", "facets": {}}, "outputs": []}
-    assert not verify_signed_event(attach_signature(bare, key=KEY, identity="service-bronze-to-silver"), key=KEY)
+def test_canon_1_writes_the_binary64_profile_of_canonical_json() -> None:
+    value = {
+        "z": [True, None, "é<&>\u2028"],
+        "a": {"integral": 5.0, "negative_zero": -0.0, "largest_safe": 2**53 - 1, "float_2_60": 2.0**60, "1e16": 1e16, "1e22": 1e22, "fraction": 0.1},
+        "b": 12,
+    }
+    assert (
+        canon_1(value)
+        == (
+            '{"a":{"1e16":1e+16,"1e22":1e+22,"float_2_60":1.152921504606847e+18,"fraction":0.1,"integral":5,"largest_safe":9007199254740991,"negative_zero":0},'
+            '"b":12,"z":[true,null,"é<&>\u2028"]}'
+        ).encode()
+    )
+    assert canon_1(_nested(MAX_NESTING)) == b"[" * MAX_NESTING + b"]" * MAX_NESTING, "the deepest permitted nesting is refused"
 
 
-# --------------------------------------------------------------------------- #
-# A service signs for a person only by SAYING SO, and the saying is covered by the signature.
-# --------------------------------------------------------------------------- #
-# The catalog stamps `author.sub = token.sub`, the signed-in person's subject, while holding a service
-# credential. Relaxing the binding to "signer need not equal author" would make a producer that stamps the
-# wrong author indistinguishable from one that meant to act for someone, so a delegation is DECLARED
-# (`on_behalf_of`) and verified: a signature verifies when its signer is the author, or when it declares an
-# `on_behalf_of` equal to the author, and nothing else. `_unsigned` strips only the signature VALUE, so
-# the signer, the algorithm and the delegation are all inside the HMAC.
-
-CATALOG = "service-catalog"
-PERSON = "CiQwOGE4Njg0Yi1kYjg4LTRiNzMtOTBhOS0zY2QxNjYxZjU0NjY"
-
-
-def test_a_delegation_for_SOMEONE_ELSE_is_refused() -> None:
-    """Declaring a delegation does not make the author free. The declaration and the stamp must agree,
-    or a producer could vouch for one subject while recording another."""
-    from lineage_kit.signing import attach_signature, verify_signed_event
-
-    mismatched = attach_signature(_event(PERSON), key=KEY, identity=CATALOG, on_behalf_of="someone-else")
-
-    assert not verify_signed_event(mismatched, key=KEY)
+@pytest.mark.parametrize(
+    ("value", "why"),
+    [
+        pytest.param(2**53, "integer", id="an-integer-beyond-2^53-1"),
+        pytest.param(float("nan"), "non-finite", id="nan"),
+        pytest.param(float("inf"), "non-finite", id="infinity"),
+        pytest.param({1: "x"}, "key", id="a-key-that-is-not-a-string"),
+        pytest.param("\ud800", "surrogate", id="a-lone-surrogate"),
+        pytest.param((1, 2), "tuple", id="a-type-json-has-no-name-for"),
+        pytest.param(_nested(MAX_NESTING + 1), "nesting", id="nesting-one-beyond-the-bound"),
+    ],
+)
+def test_canon_1_refuses_what_has_no_canonical_form(value: object, why: str) -> None:
+    with pytest.raises(CanonError, match=why):
+        canon_1(value)
 
 
-def test_the_DECLARATION_IS_COVERED_BY_THE_SIGNATURE() -> None:
-    """The reason it lives inside what is signed. Rewriting `on_behalf_of` in flight must break the
-    HMAC — otherwise the delegation is a claim any hop can edit, and declaring it buys nothing.
+def test_importing_lineage_kit_loads_no_cryptography() -> None:
+    """Sealed runners emit over HTTP and never sign, and the ray-lance image copies this package's source beside a
+    requirements export that carries no cryptography wheel, so the import has to stay inside the functions that load a
+    key, sign and verify."""
+    probe = "import sys, lineage_kit; sys.exit(int(any(name == 'cryptography' or name.startswith('cryptography.') for name in sys.modules)))"
 
-    THE TAMPER IS ONE THE VOUCHING RULE WOULD ACCEPT, and it has to be. Injecting a delegation naming
-    somebody else is refused by the author comparison whether or not the field is signed, so a test
-    built on that would pass on an implementation that covers nothing. This adds `onBehalfOf` equal to
-    the author of a SELF-SIGNED event: the rule is satisfied either way, and only the HMAC can object.
-    """
-    from lineage_kit.signing import attach_signature, verify_signed_event
+    done = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, check=False)
 
-    signed = attach_signature(_event(CATALOG), key=KEY, identity=CATALOG)
-    assert verify_signed_event(signed, key=KEY), "the fixture does not verify before it is tampered with"
-
-    tampered = {**signed}
-    tampered["run"] = {**signed["run"], "facets": {**signed["run"]["facets"]}}
-    tampered["run"]["facets"]["signature"] = {**signed["run"]["facets"]["signature"], "onBehalfOf": CATALOG}
-
-    assert not verify_signed_event(tampered, key=KEY), "a delegation can be injected in flight and the signature still verifies"
-
-
-def test_the_SIGNER_NAME_is_covered_too() -> None:
-    """Same argument, the other field. A signer name outside the HMAC could be swapped to point the
-    verifier at a different key."""
-    from lineage_kit.signing import attach_signature, verify_signed_event
-
-    signed = attach_signature(_event(CATALOG), key=KEY, identity=CATALOG)
-    tampered = {**signed}
-    tampered["run"] = {**signed["run"], "facets": {**signed["run"]["facets"]}}
-    tampered["run"]["facets"]["signature"] = {**signed["run"]["facets"]["signature"], "alg": "HMAC-SHA1"}
-
-    assert not verify_signed_event(tampered, key=KEY), "the signature's own metadata is outside what it covers"
-
-
-def test_signing_is_still_IDEMPOTENT_over_an_already_signed_event() -> None:
-    """A relay republish and an outbox drain both re-handle a signed event. If signing moved the value,
-    a producer and a verifier would disagree about an event neither had touched."""
-    from lineage_kit.signing import attach_signature, signature_of, verify_signed_event
-
-    once = attach_signature(_event(PERSON), key=KEY, identity=CATALOG, on_behalf_of=PERSON)
-    twice = attach_signature(once, key=KEY, identity=CATALOG, on_behalf_of=PERSON)
-
-    assert signature_of(once) == signature_of(twice)
-    assert verify_signed_event(twice, key=KEY)
-
-
-def test_an_EMPTY_delegation_is_not_a_delegation() -> None:
-    """`on_behalf_of=""` must not read as "signed for the empty subject" and must not silently become a
-    self-signed event either — it is a caller error, and a caller error that produced a valid signature
-    would be the worst of the three outcomes."""
-    from lineage_kit.signing import attach_signature
-
-    with pytest.raises(ValueError, match="on_behalf_of"):
-        attach_signature(_event(PERSON), key=KEY, identity=CATALOG, on_behalf_of="")
+    assert done.returncode == 0, f"importing lineage_kit loaded cryptography: {done.stderr}"
