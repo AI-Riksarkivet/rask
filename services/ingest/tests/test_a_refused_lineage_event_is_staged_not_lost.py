@@ -14,12 +14,13 @@ event: it cannot fail the run either, and what is staged is drained later by lin
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator, Sequence
+from collections.abc import AsyncIterator, Iterator, Sequence
 from pathlib import Path
 from typing import Any
 
 import httpx
 import pytest
+import pytest_asyncio
 import respx
 from fastapi import FastAPI
 
@@ -46,7 +47,22 @@ def _refuse_everything(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ingest_lineage, "_emitter", lambda: _Refusing())
 
 
-def test_a_refused_event_is_written_to_the_outbox(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest_asyncio.fixture
+async def non_signer() -> AsyncIterator[None]:
+    """Ingest on a stack with no secret store, once its lifespan has run: it has said it does not sign.
+
+    The stager refuses until the lifespan has answered, so a test of staging itself starts from the answer the
+    lifespan gives a service that does not sign.
+    """
+    from ingest.signing import start_signing, stop_signing
+
+    holder = await start_signing(FastAPI())
+    yield
+    await stop_signing(holder)
+
+
+@pytest.mark.asyncio
+async def test_a_refused_event_is_written_to_the_outbox(non_signer: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The bytes must be there afterwards — a local filesystem outbox, so this asserts on real IO
     rather than on a mock having been called."""
     from ingest import lineage as ingest_lineage
@@ -62,7 +78,8 @@ def test_a_refused_event_is_written_to_the_outbox(tmp_path: Path, monkeypatch: p
     assert body.get("eventType"), f"what was staged is not a RunEvent the relay can re-ingest: {sorted(body)}"
 
 
-def test_an_UNREACHABLE_outbox_never_fails_the_run(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.asyncio
+async def test_an_UNREACHABLE_outbox_never_fails_the_run(non_signer: None, monkeypatch: pytest.MonkeyPatch) -> None:
     """I8 at the recovery layer. A stager that cannot reach the object store is the same outage one
     level down, and must not turn a run whose data landed into a failed one."""
     from ingest import lineage as ingest_lineage

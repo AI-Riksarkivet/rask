@@ -83,6 +83,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     app.state.fga = None
     await attach_auth(app, settings, service="medallion-stage-runner", fatal=True)
+    # THIS STAGE RUNNER'S OWN SIGNING KEY, resolved through its own sidecar, and installed BEFORE the workflow runtime
+    # starts and withdrawn AFTER it has shut down. The worker pulls recovered activities the moment it starts and joins the
+    # ones in flight when it stops, and an activity that emits outside the key's lifetime cannot sign. `start_signing`
+    # makes one bounded attempt to resolve the key and does not wait for it to be published, so the probes and the retry
+    # answers are served from the moment the app boots whether or not the key resolved: a stage runner that is waiting for
+    # its key takes no delivery (`retry_until_signed` on its route), reports itself not ready, and heals in place when the
+    # key is published.
+    signing = await start_signing(app, settings)
     # THE WORKFLOW WORKER (S1). Without this the stage runner can SCHEDULE `stage_run` and nothing will ever
     # execute it: `DaprWorkflowClient` only enqueues, and the runtime is what registers the definitions
     # and pulls work. Ingest's first in-cluster deploy had the engine running in the sidecar and still
@@ -120,11 +128,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # to one hosting them. The lane is coherently off — `transform.py` gates dispatch on the same
         # flag — but "off" and "broken" have to be distinguishable without reading the chart.
         log.info("dapr workflow runtime NOT started — the ray lane is off (MEDALLION_RAY_ENABLED unset)")
-    # THIS STAGE RUNNER'S OWN SIGNING KEY, resolved through its own sidecar. Started here and not earlier so the
-    # probes and the retry answers below are served from the moment the app boots, whether or not the key resolved:
-    # a stage runner that is waiting for its key takes no delivery (`retry_until_signed` on its route) and reports
-    # itself not ready, and heals in place when the key is published.
-    signing = await start_signing(app, settings)
     app.state.startup_complete = True
     try:
         # ARMED AT SIGTERM, not at lifespan shutdown. The flag below flips in the `finally`,
@@ -137,10 +140,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     finally:
         _disarm_drain()
         app.state.shutting_down = True
-        await stop_signing(signing)
         if app.state.workflow_runtime is not None:
             with suppress(Exception):
                 app.state.workflow_runtime.shutdown()
+        await stop_signing(signing)
         with suppress(Exception):
             await app.state.dapr.close()
         # Dispose the catalog client beside the sidecar's: built once in this lifespan, so it is this

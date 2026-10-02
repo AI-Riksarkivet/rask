@@ -163,48 +163,54 @@ def _lifespan(settings: Any) -> Any:  # noqa: ANN401 — service_kit's LifespanF
         from ingest.auth import get_auth_settings
 
         await attach_auth(app, get_auth_settings(), service="ingest", provision=False)
-        runtime = None
-        try:
-            import dapr.ext.workflow as wf
-
-            from ingest.workflow import register
-
-            runtime = wf.WorkflowRuntime()
-            register(runtime)
-            # start() spawns the worker's own threads; it does not block the event loop.
-            runtime.start()
-            app.state.workflow_runtime = runtime
-            logger.info("dapr workflow runtime started")
-            # The line above is TRUE and INSUFFICIENT: the runtime starts whether or not this
-            # app-id can reach an actor state store, and without one the first call fails (and,
-            # on dapr 1.18.1, panics the sidecar). Ask the sidecar what it can actually see.
-            await probe_actor_state_store(capability="no ingest run can start")
-        except Exception:
-            # Deliberately non-fatal. The health probe answers process liveness (see health.py), and
-            # a service that refuses to start because its sidecar is not up yet turns an ordering
-            # blip into a CrashLoopBackOff. Runs will fail loudly at schedule time instead, which is
-            # where the operator can actually see them.
-            logger.warning("dapr workflow runtime unavailable — runs cannot execute", exc_info=True)
-            app.state.workflow_runtime = None
-        # THIS SERVICE'S OWN SIGNING KEY ([[LH-064]]), resolved through its own sidecar. Started last so the probes
-        # are served from the moment the app boots whether or not the key resolved: ingest waits for its key, reports
-        # itself not ready, and heals in place when the key is published.
+        # THIS SERVICE'S OWN SIGNING KEY ([[LH-064]]), resolved through its own sidecar, and installed BEFORE the workflow
+        # runtime starts and withdrawn AFTER it has shut down. The worker pulls recovered activities the moment it
+        # starts and joins the ones in flight when it stops, and an activity that stages a lineage event outside the
+        # key's lifetime cannot sign it, so staging nothing loses the event. `start_signing` makes one bounded attempt
+        # to resolve the key and does not wait for it to be published, so an absent key does not hold the boot: the
+        # probes are served from the moment this lifespan yields, ingest reports itself not ready, and it heals in
+        # place when the key is published.
         signing = await start_signing(app)
         try:
-            yield
+            runtime = None
+            try:
+                import dapr.ext.workflow as wf
+
+                from ingest.workflow import register
+
+                runtime = wf.WorkflowRuntime()
+                register(runtime)
+                # start() spawns the worker's own threads; it does not block the event loop.
+                runtime.start()
+                app.state.workflow_runtime = runtime
+                logger.info("dapr workflow runtime started")
+                # The line above is TRUE and INSUFFICIENT: the runtime starts whether or not this
+                # app-id can reach an actor state store, and without one the first call fails (and,
+                # on dapr 1.18.1, panics the sidecar). Ask the sidecar what it can actually see.
+                await probe_actor_state_store(capability="no ingest run can start")
+            except Exception:
+                # Deliberately non-fatal. The health probe answers process liveness (see health.py), and
+                # a service that refuses to start because its sidecar is not up yet turns an ordering
+                # blip into a CrashLoopBackOff. Runs will fail loudly at schedule time instead, which is
+                # where the operator can actually see them.
+                logger.warning("dapr workflow runtime unavailable — runs cannot execute", exc_info=True)
+                app.state.workflow_runtime = None
+            try:
+                yield
+            finally:
+                # Close the OpenFGA client `attach_auth` opened. The SDK is aiohttp-backed, so an unclosed
+                # client leaks one half-open connection per replica (plus an "Unclosed client session" on
+                # the way out); `fga.dispose` is None-safe and suppress-wrapped, so it is safe whether or
+                # not auth was wired.
+                from service_kit.governed import fga
+
+                await fga.dispose(app)
+                if runtime is not None:
+                    with_suppressed = getattr(runtime, "shutdown", None)
+                    if callable(with_suppressed):
+                        with_suppressed()
         finally:
             await stop_signing(signing)
-            # Close the OpenFGA client `attach_auth` opened. The SDK is aiohttp-backed, so an unclosed
-            # client leaks one half-open connection per replica (plus an "Unclosed client session" on
-            # the way out); `fga.dispose` is None-safe and suppress-wrapped, so it is safe whether or
-            # not auth was wired.
-            from service_kit.governed import fga
-
-            await fga.dispose(app)
-            if runtime is not None:
-                with_suppressed = getattr(runtime, "shutdown", None)
-                if callable(with_suppressed):
-                    with_suppressed()
 
     return lifespan
 
