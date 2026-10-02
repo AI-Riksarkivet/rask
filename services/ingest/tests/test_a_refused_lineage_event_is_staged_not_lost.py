@@ -157,9 +157,21 @@ async def test_a_staged_event_is_authored_and_signed_as_this_service(signer: Non
     assert (verified.identity, staged[0]["run"]["facets"]["author"]["sub"]) == (IDENTITY, IDENTITY)
 
 
+@pytest.mark.parametrize(
+    "lifespan_ran",
+    [
+        pytest.param(True, id="a-key-the-store-will-not-give"),
+        pytest.param(False, id="a-holder-the-lifespan-has-not-installed"),
+    ],
+)
 @pytest.mark.asyncio
-async def test_a_service_without_its_key_stages_nothing(signer: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Staged unsigned it would be refused by the drain and deleted unread, so nothing is the honest answer."""
+async def test_a_service_without_its_key_stages_nothing(signer: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, lifespan_ran: bool) -> None:
+    """Staged unsigned it would be refused by the drain and deleted unread, so nothing is the honest answer.
+
+    A service configured to sign that has no holder installed has no key either: the workflow worker recovers
+    deliveries the moment it starts and while it drains, and a holder that is not there says nothing about whether
+    this service signs.
+    """
     from ingest import lineage as ingest_lineage
     from ingest.signing import start_signing, stop_signing
 
@@ -168,7 +180,7 @@ async def test_a_service_without_its_key_stages_nothing(signer: None, tmp_path: 
     _refuse_everything(monkeypatch)
     outbox = tmp_path / "_lineage_outbox"
     monkeypatch.setenv("RASK_INGEST_LINEAGE_OUTBOX_URI", str(outbox))
-    holder = await start_signing(FastAPI())
+    holder = await start_signing(FastAPI()) if lifespan_ran else None
     try:
         ingest_lineage.LineageRecorder().start("run-e1e", "proj", "ds", "s3", {})
     finally:
