@@ -7,12 +7,13 @@ begun since the key id was FIRST met and the last read is younger than the refre
 decides one). Any read that begins after that first sighting decides it, whichever event caused the read, so the sidecar's redelivery
 120 s later always ends in a verdict: a key id the list does not hold is refused, which is acked and never recorded. The list is also
 the trust anchor, so a cached copy is served only until its TTL: a key the store has since removed stops verifying once the copy
-expires.
+expires. The memory of first sightings is bounded: a key id pushed out of it is met afresh, which is one more retry cycle for its
+event, while a key id still in it keeps its verdict.
 
 Driven through the registered `/lineage-events` route, with the key reader's clock injected so the interval, the TTL and the
-redelivery are crossed without waiting. One event is built per signing key, so delivering a key's event again is the sidecar's
-redelivery of it. The sidecar's secret API is stood in for by respx, and the signatures are built by the root conftest's `EventSigner`
-from the wire format alone.
+redelivery are crossed without waiting, and the bound shrunk to one key id so a second one pushes the first out. One event is built
+per signing key, so delivering a key's event again is the sidecar's redelivery of it. The sidecar's secret API is stood in for by
+respx, and the signatures are built by the root conftest's `EventSigner` from the wire format alone.
 """
 
 from __future__ import annotations
@@ -45,6 +46,7 @@ RUN_IDS = {
     "old": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5f",
     "new": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a60",
     "unpublished": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a61",
+    "unpublished-too": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a62",
 }
 
 
@@ -113,6 +115,20 @@ def _outcome(answered: dict[str, Any], newly_recorded: bool) -> str:
             2,
             id="a-read-another-event-causes-before-the-redelivery-does-not-defer-its-verdict",
         ),
+        pytest.param(
+            "old",
+            # A verified event re-reads the list at TTL + 10 s, so the two redeliveries 25 s and 26 s later fall inside the interval that
+            # follows that read: the key id still remembered is judged on it, and the one pushed out is met afresh and asked for again.
+            [
+                (1, "unpublished", RETRIED),
+                (2, "unpublished-too", RETRIED),
+                (KEY_TTL_SECONDS + 10, "old", RECORDED),
+                (KEY_TTL_SECONDS + 35, "unpublished-too", REFUSED),
+                (KEY_TTL_SECONDS + 36, "unpublished", RETRIED),
+            ],
+            2,
+            id="at-the-bound-the-key-id-met-least-recently-is-forgotten-and-met-afresh",
+        ),
     ],
 )
 def test_an_unknown_key_id_is_retried_until_the_list_is_fresh_and_a_cached_list_expires(
@@ -130,6 +146,9 @@ def test_an_unknown_key_id_is_retried_until_the_list_is_fresh_and_a_cached_list_
         "LINEAGE_DELEGATORS": json.dumps([]),
     }.items():
         monkeypatch.setenv(key, value)
+    # One key id remembered: the second distinct unknown one pushes the first out. `raising=False` lets the test run against a reader
+    # with no bound at all (the red check); if the patch ever fails to take effect the eviction case fails, so it cannot pass unnoticed.
+    monkeypatch.setattr("lineage.services.signature.MAX_UNKNOWN_KEY_IDS", 1, raising=False)
     from lineage.api.dapr import register_dapr
     from lineage.core.config import get_settings
     from service_kit.lakehouse.ns_errors import install_problem_handlers
