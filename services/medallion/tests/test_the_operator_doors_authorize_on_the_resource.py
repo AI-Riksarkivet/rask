@@ -40,6 +40,7 @@ from medallion.services.trigger_guards import StageTrigger
 from medallion.workflow import StageJobSpec, TrainJobSpec
 from service_kit.exceptions import register_handlers
 from service_kit.governed.audit import AUDIT_LOGGER, configure_audit
+from service_kit.governed.machine_identity import ServiceAccountVerifier
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 from service_kit.lakehouse.saga import SagaHandle, SagaStart
 
@@ -47,9 +48,15 @@ from service_kit.lakehouse.saga import SagaHandle, SagaStart
 APP_TOKEN = "the-estate-app-token"
 CONFIGURED = "acme"
 RUNNER = "silver-to-gold"
-#: alice administers `mine` only, bob the configured `acme` only, carol nothing. `other` is a tenant
-#: none of them administers.
-GRANTS = frozenset({("alice", "project:mine"), ("bob", "project:acme")})
+#: alice administers `mine` only, bob the configured `acme` only, carol nothing; the ingest service's
+#: subject administers `mine` only. `other` is a tenant none of them administers.
+GRANTS = frozenset({("alice", "project:mine"), ("bob", "project:acme"), ("service-ingest", "project:mine")})
+
+#: The service accounts, as `security-sa.yaml` names them, and the audience of the medallion's own doors.
+NAMESPACE = "rask"
+PRODUCER_SA = "rask-sa-medallion-producer"
+INGEST_SA = "rask-sa-ingest"
+MEDALLION_AUDIENCE = "rask-medallion"
 
 
 def _bearer(sub: str) -> dict[str, str]:
@@ -197,7 +204,7 @@ def _stage_runner(stages: dict[str, _State]) -> FastAPI:
 _WIRED = object()
 
 
-def _producer(stage_runner: Any, *, fga_client: object | None = _WIRED) -> FastAPI:
+def _producer(stage_runner: Any, *, fga_client: object | None = _WIRED, settings_update: dict[str, object] | None = None) -> FastAPI:
     """The producer's operator routers, assembled in the order `build_lance_service_app` uses."""
     app = FastAPI()
     register_handlers(app)
@@ -206,7 +213,13 @@ def _producer(stage_runner: Any, *, fga_client: object | None = _WIRED) -> FastA
     app.include_router(cascade_lag_read.router)
     app.include_router(train_api.router)
     settings = MedallionSettings().model_copy(
-        update={"oidc_enabled": True, "produce_admin_project": CONFIGURED, "app_api_token": APP_TOKEN, "stage_runner_urls": {RUNNER: "http://sr:8000"}}
+        update={
+            "oidc_enabled": True,
+            "produce_admin_project": CONFIGURED,
+            "app_api_token": APP_TOKEN,
+            "stage_runner_urls": {RUNNER: "http://sr:8000"},
+            **(settings_update or {}),
+        }
     )
     app.dependency_overrides[get_settings] = lambda: settings
     app.state.oidc = _Verifier()
@@ -415,6 +428,66 @@ def test_a_stage_whose_recorded_project_is_UNSAFE_is_refused_to_a_person(fga: _F
     assert refused.status_code == 503, refused.text
     assert _terminated(app) == []
     assert fga.calls == []
+
+
+# ── a service is held to its own tenant ─────────────────────────────────────────────────────────────
+
+
+def _account(sa: str) -> str:
+    return f"system:serviceaccount:{NAMESPACE}:{sa}"
+
+
+def _sa_verifier(issuer: Any, subjects: dict[str, str]) -> ServiceAccountVerifier:
+    """A door's verifier against the loopback issuer, with the fetch credential and CA the cluster demands."""
+    return ServiceAccountVerifier(
+        issuer.issuer, MEDALLION_AUDIENCE, subjects, cache_ttl=60, leeway=60, fetch_token_file=str(issuer.fetch_token_file), ca_file=str(issuer.ca_file)
+    )
+
+
+@pytest.fixture
+def held(sa_issuer: Any, fga: _Fga, ticks: _Ticks, tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[TestClient, TestClient, FastAPI]]:
+    """The producer admitting the ingest service, and a stage runner admitting the producer alone.
+
+    Each door maps only the accounts the chart names for it, and the producer forwards with its own
+    projected `rask-medallion` token, read from the file the kubelet would project.
+    """
+    monkeypatch.setenv("APP_API_TOKEN", APP_TOKEN)
+    runner = _stage_runner(dict(STAGES))
+    runner.state.sa_oidc = _sa_verifier(sa_issuer, {_account(PRODUCER_SA): "service-medallion-producer"})
+    token_file = tmp_path / "rask-medallion-token"
+    token_file.write_text(sa_issuer.mint(PRODUCER_SA, audience=MEDALLION_AUDIENCE, namespace=NAMESPACE))
+    producer = _producer(runner, settings_update={"medallion_identity_token_file": str(token_file)})
+    producer.state.sa_oidc = _sa_verifier(sa_issuer, {_account(INGEST_SA): "service-ingest"})
+    with TestClient(producer, raise_server_exceptions=False) as producer_client, TestClient(runner, raise_server_exceptions=False) as runner_client:
+        yield producer_client, runner_client, runner
+
+
+@pytest.mark.parametrize(
+    ("door", "path", "status", "terminated"),
+    [
+        pytest.param("producer", _stop("stage-mine"), 202, ["stage-mine"], id="producer-stops-a-run-of-a-project-it-administers"),
+        pytest.param("producer", _stop("stage-other"), 403, [], id="producer-refuses-a-run-of-another-project"),
+        pytest.param("stage-runner", "/stages/stage-other/terminate", 401, [], id="stage-runner-refuses-a-caller-that-is-not-the-producer"),
+    ],
+)
+def test_a_service_token_stops_only_its_own_tenants_stage(
+    held: tuple[TestClient, TestClient, FastAPI], sa_issuer: Any, door: str, path: str, status: int, terminated: list[str]
+) -> None:
+    """A service is authorized as the subject its account maps to, exactly like a person ([[LH-220]] clause 5).
+
+    The request carries what a service invocation carries: the app token daprd stamps, which names
+    nobody, beside the service's own projected token. The ingest service's subject administers `mine`
+    only. Going round the producer to the stage runner's ClusterIP does not escape the check, because
+    the stage runner admits the producer's account and no other.
+    """
+    producer, runner_client, runner = held
+    client = producer if door == "producer" else runner_client
+    headers = {**SERVICE, **_bearer(sa_issuer.mint(INGEST_SA, audience=MEDALLION_AUDIENCE, namespace=NAMESPACE))}
+
+    response = client.post(path, headers=headers)
+
+    assert response.status_code == status, response.text
+    assert _terminated(runner) == terminated
 
 
 # ── the deployment's stage-runner list ──────────────────────────────────────────────────────────────
