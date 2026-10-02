@@ -1,6 +1,6 @@
 # open_backlog_left_new2 — what is left
 
-Dated 2026-09-25. This file supersedes `open_backlog_left.md` and `open_backlog_left_new.md`. Every carried row was re-audited against HEAD today by one auditor and one skeptic per chunk, and the new rows come from today's reconciliation, Lance, Lakekeeper and pylance-12 audits. Each row states only the defect, what is left, why it matters, how to fix it and what ends it. Ids are never renumbered and never reused: a gap in a sequence is a closed row, every id that left today is listed at the foot, and the next free ids are LH-350, XC-116, CP-055, CTL-028, FE-014, LOW-039 and LIN-005. The 2026-09-26 lakehouse map proposed LH-277 to LH-300, XC-090 to XC-103 and LOW-031 to LOW-033 (file:line citations at ea8c5ff8); by owner ruling only its HIGH rows entered, and the rest are listed under **Parked findings** at the foot, uncounted.
+Dated 2026-09-25. This file supersedes `open_backlog_left.md` and `open_backlog_left_new.md`. Every carried row was re-audited against HEAD today by one auditor and one skeptic per chunk, and the new rows come from today's reconciliation, Lance, Lakekeeper and pylance-12 audits. Each row states only the defect, what is left, why it matters, how to fix it and what ends it. Ids are never renumbered and never reused: a gap in a sequence is a closed row, every id that left today is listed at the foot, and the next free ids are LH-360, XC-116, CP-055, CTL-028, FE-014, LOW-039 and LIN-005. The 2026-09-26 lakehouse map proposed LH-277 to LH-300, XC-090 to XC-103 and LOW-031 to LOW-033 (file:line citations at ea8c5ff8); by owner ruling only its HIGH rows entered, and the rest are listed under **Parked findings** at the foot, uncounted.
 
 **Phase 1 is finished first, and it is finished when these five criteria hold together on the estate** (owner's wording, confirmed 2026-09-26; XC-090 is the scenario that proves them): (1) provenance/lineage correct; (2) catalog correct for lance-ns and authz/governance; (3) not coupled to a workflow engine or Ray; (4) events correct; (5) resilient. A row is added only with the owner's say (owner, 2026-09-26: the goal is finishing Phase 1, not growing it); a found problem goes to the parking list by default. `blocked:` appears only when no part of a row can move without a decision; a partly blocked row names its decision in *What is left* and under **Decisions still open**. `not workable now:` marks a row that waits on another row or ruling landing first; it is counted open but not workable now.
 
@@ -18,21 +18,19 @@ row (XC-049, for one, only if a short-list chart fix needs release space). Items
 
 Beside the order (owner, 2026-10-02): prune pass 2 runs in parallel.
 
-1. **LH-220**.
-   Why: criteria 1 and 2; every signature, FGA check and vend downstream trusts the service identity (D1).
-2. **XC-078** with **LH-064**.
+1. **XC-078** with **LH-064**.
    Why: criteria 4 and 1; the cascade heads accept unsigned events from an unauthenticated bus, so LH-064 signs and XC-078 authenticates publishers and makes the heads require the signature.
-3. **CP-029** with **LH-226**.
+2. **CP-029** with **LH-226**.
    Why: criterion 3, kept first by the owner; the default cascade learns a stage's outcome only through Dapr workflows on Ray, and CP-029's outcome door precedes LH-226's workflow half.
-4. **CTL-021**.
+3. **CTL-021**.
    Why: criterion 4; the reconciler is the only lane that carries HTTP-only runs (ingest, Ray TRAIN, external producers) to a person.
-5. The other 28 short-list rows, in four batches that can run in parallel worktrees (owner, 2026-09-29: batch and parallelize):
+4. The other 28 short-list rows, in four batches that can run in parallel worktrees (owner, 2026-09-29: batch and parallelize):
    a. Commit and change-feed integrity: **LH-211**, **LH-202**, **LH-214**, **LH-216**, **LH-213**, **LH-217**, **LH-241**.
    b. Erasure and governance: **LH-263**, **LH-245**, **LH-242**, **LH-037**, **LH-194**, **LH-208**, **LH-272**.
    c. Storage isolation and table identity: **LH-205**, **LH-209**, **LH-252**, **LH-273**, **LH-203**, **LH-204**.
    d. Infrastructure authentication and resilience: **XC-003**, **XC-077**, **XC-004**, **XC-075**, **LH-247**, **CP-041**, **CP-051**, **LH-243**.
    Why: each makes a criterion false on a production deployment (the production triage, second-reviewed).
-6. **XC-090** with **XC-096** and its proof legs **XC-091** to **XC-095**, its harness built now as a failing test, closing last.
+5. **XC-090** with **XC-096** and its proof legs **XC-091** to **XC-095**, its harness built now as a failing test, closing last.
    Why: all five criteria. XC-090 closes only with its proof legs, so they stay beside it as its enablers. Their own preconditions are listed in each leg; one of them, LH-282 (XC-091's branch reconcile), is a parked finding, so XC-090 cannot close until the owner admits LH-282 or narrows XC-091, and XC-092's erasure end state needs LH-178, which is blocked on D4.
 <!-- FOCUS:END -->
 
@@ -41,13 +39,13 @@ Beside the order (owner, 2026-10-02): prune pass 2 runs in parallel.
 Approved by the owner on 2026-10-02: the Phase 1 rows that, left unfixed, make a criterion false on a production deployment. Each survived a second reviewer who tried to overturn it (a deciding judge sat where they disagreed); XC-090 is the Phase 1 gate by definition. Each carries `blocks-prod` beside its severity.
 
 - Criterion 1, provenance and lineage (5): LH-064, LH-208, LH-213, LH-214, LH-272.
-- Criterion 2, catalog, authorization and governance (14): LH-202, LH-205, LH-209, LH-217, LH-220, LH-263, LH-252, XC-004, LH-194, LH-242, LH-245, XC-003, XC-077, LH-037.
+- Criterion 2, catalog, authorization and governance (13): LH-202, LH-205, LH-209, LH-217, LH-263, LH-252, XC-004, LH-194, LH-242, LH-245, XC-003, XC-077, LH-037.
 - Criterion 3, no coupling to an engine (1): LH-241.
 - Criterion 4, events (3): LH-216, CTL-021, XC-078.
 - Criterion 5, resilience (9): LH-203, LH-204, LH-211, LH-247, CP-041, CP-051, LH-243, LH-273, XC-075.
 - The gate (1): XC-090.
 
-Closed since the approval: LH-281 and LH-210 (helm rev 260), and XC-076, LH-220's enabler (helm rev 261).
+Closed since the approval: LH-281 and LH-210 (helm rev 260), XC-076, LH-220's enabler (helm rev 261), and LH-220 (helm rev 262).
 
 ## Owner rulings in force
 
@@ -110,7 +108,7 @@ Closed since the approval: LH-281 and LH-210 (helm rev 260), and XC-076, LH-220'
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 28 | 28 | 15 |
+| **PHASE 1 · LAKEHOUSE** | 27 | 27 | 14 |
 | **PHASE 1 · CROSS-CUTTING** | 12 | 12 | 10 |
 | **PHASE 1 · CONTROLPLANE AND NOTIFICATIONS** | 1 | 1 | 1 |
 | **PHASE 1 · AFTER LAUNCH** | 117 | 111 | 19 |
@@ -118,13 +116,13 @@ Closed since the approval: LH-281 and LH-210 (helm rev 260), and XC-076, LH-220'
 | **FRONTEND** | 7 | 7 | 0 |
 | **LOW PRIORITY** | 37 | 36 | 0 |
 
-**221 open items**, of which **6 are blocked on a decision**, **2 wait on another row or ruling** and **213 can be picked up today**; 49 are HIGH. 51 ids left the register on 2026-09-25 and 42 on 2026-09-29, listed at the foot so nothing vanishes silently. The three Phase 1 sections hold the production short list (33 open rows) with CP-029, LH-226 and their enablers (41 rows); the other 117 Phase 1 rows wait in PHASE 1 · AFTER LAUNCH (owner, 2026-10-02).
+**220 open items**, of which **6 are blocked on a decision**, **2 wait on another row or ruling** and **212 can be picked up today**; 48 are HIGH. 51 ids left the register on 2026-09-25 and 42 on 2026-09-29, listed at the foot so nothing vanishes silently. The three Phase 1 sections hold the production short list (32 open rows) with CP-029, LH-226 and their enablers (40 rows); the other 117 Phase 1 rows wait in PHASE 1 · AFTER LAUNCH (owner, 2026-10-02).
 
 ## PHASE 1 · LAKEHOUSE
 
 **LH-064 · The lineage bus still admits unsigned events; the require-a-signature flip and its preconditions remain**
 `lineage, lineage-kit, catalog, medallion, maintenance, chart` · **HIGH** · **blocks-prod**
-- *What is left:* In order: (1) is done: the outbox relay no longer deletes DatasetEvents (LH-199, closed at helm rev 245); (2) medallion and maintenance signed events observed live; (3) `kid`, `canon: 1` and a versioned `_schemaURL` inside the signed facet, with a previous-key verification window, and a versioned JSON Schema per rask facet (author, lance, signature); (4) the catalog stops reading peers' signing keys (LH-220); (5) the unused stage-runner keys come off the Ray head; (6) a chart-derived delegator allowlist in `enforce_signature_if_present`; (7) flip to require-a-signature, where an unsigned event is counted and acked, never parked. Signing the control lane and verifying at the cascade heads is XC-078.
+- *What is left:* In order: (1) is done: the outbox relay no longer deletes DatasetEvents (LH-199, closed at helm rev 245); (2) medallion and maintenance signed events observed live; (3) `kid`, `canon: 1` and a versioned `_schemaURL` inside the signed facet, with a previous-key verification window, and a versioned JSON Schema per rask facet (author, lance, signature); (4) is done: the catalog reads only its own signing key (LH-220, helm rev 262); (5) the stage-runner keys the Ray head no longer mounts come off the store and infra-credentials (LH-350); (6) a chart-derived delegator allowlist in `enforce_signature_if_present`; (7) flip to require-a-signature, where an unsigned event is counted and acked, never parked. Signing the control lane and verifying at the cascade heads is XC-078.
 - *Why:* Criteria 1 and 4, zero trust. Any holder of the shared app token can post an unsigned event naming any author, and any key rotation today refuses every in-flight and staged event.
 - *How:* The signature facet stays inside the payload, built through service_kit custom_facet so it carries `_schemaURL`; the resolver returns the current key plus the previous one during a rotation window. Do not import Lakekeeper's sequence numbers: the per-table Lance version already orders events (put-if-not-exists commit, lance_docs/file_format.md:4770,4791). Under D1 the bearer becomes a projected SA token; each identity's private signing key stays inside OpenBao Transit. Lakekeeper signs no events (docs/audits/2026-09-25/lakekeeper-deep-read/events.md). The signature is asymmetric, not the shared HMAC (2026-09-30 best-practice review): an HMAC verifier holds the key that forges what it verifies (lineage_kit/signing.py:20-24,45-57), and that key is the identity's service-door token (`service-token-<identity>`, service_kit governed/dapr_auth.py:436-438,503-509), so the verifier can also authenticate as the producer; in the target lineage, both cascade heads, the stage runners and notifications all verify. Sign with a per-identity Ed25519 key in OpenBao Transit (the transit engine lists `ed25519` for signing and verification, openbao website/content/docs/secrets/transit/index.mdx:73), each service's policy allowing `sign` on its own key only; each service authenticates to OpenBao by Kubernetes auth as its own ServiceAccount (XC-076, XC-079); the Transit key is a signing key only and is never a door credential; carry `alg` and `kid` (the Transit key version) in the facet; verifiers hold public keys only; step (3)'s previous-key window is the previous Transit key version after a `rotate`. The emit signs before staging (medallion core/lineage_publish.py:84-100) and lineage republishes staged events (lineage services/staged.py:38) without being able to sign for a producer, so once step (7) lands a Transit outage fails and retries the emit instead of degrading to unsigned (today lineage_publish.py:71-76). Custom facet keys take the project prefix the OpenLineage spec requires of custom facets (`rask_signature`, `rask_author`, `rask_lance`, `rask_model`; OpenLineage spec, Custom Facet Naming; today unprefixed, service_kit/openlineage.py:30-35,70-78), moved with every consumer in the same commit. Not measured: the deployed OpenBao 2.2.0 (values.yaml:3212) Transit round trip on the emit path.
 - *Closes when:* An unsigned or non-verifying event is refused at `/lineage-events` and in the outbox drain; delegation is accepted only from the chart-derived signer set; an event signed with the previous key verifies inside the window; a lineage restart parks nothing in `dlq.lineage.events`; one forged unsigned event is observed refused live. No verifying pod can read any producer's private signing key. A Transit outage during an emit stages nothing unsigned.
@@ -225,14 +223,6 @@ Closed since the approval: LH-281 and LH-210 (helm rev 260), and XC-076, LH-220'
 - *How:* Blob thresholds and classification ride per-column field metadata (lance_docs/guide.md:321-329): build every downstream blob field from the upstream field's metadata in both lanes, and carry bytes for non-kind-3 rows or take the managed path when any exists.
 - *Closes when:* A mixed bronze reaches silver with every managed payload intact, and silver's blob field carries bronze's classification and thresholds, on the in-process lane, RED.
 - *Evidence:* services/medallion/src/medallion/services/compute.py:509-511,535,596-599 · packages/service-kit/src/service_kit/lakehouse/blobs.py:139-161 · scripts/ray_stage_job.py:332 · docs/audits/2026-09-25/03-lance-docs-full-audit.md LD25
-
-**LH-220 · The service door's machine identity is a static bearer plus a caller-asserted name header, and the catalog reads every producer's signing key to verify it**
-`catalog, lineage, service-kit, chart` · **HIGH** · **blocks-prod**
-- *What is left:* Implement D1. Non-privileged subjects share one estate-wide APP_API_TOKEN, so any holder can claim any non-privileged name through `x-lance-service-identity`; privileged subjects present a static per-identity `service-token-<id>`; the door mints a synthetic 60 s IDToken. To verify, the catalog reads every peer's raw signing key. Under the 2026-09-26 ruling the shared service token stays tenant-blind on the producer's existing-resource doors (stage show and terminate, the train watch, /cascade/stalled) until D1 lands: require_project_admin passes any service caller (produce_auth.py:198-200), whereas ingest holds its token to one project (ingest/auth.py authorize_ingest_projects). The P5.3 probes ran 2026-10-02 with pre-registered rules: c0 EXPECTED (signature and audience accept any SA's token carrying the audience, so the exact full-username map is the only binder), (a) PASS (from a tokenless pod an API-audience projected token plus kube-root-ca.crt fetches discovery and JWKS, where the shipped verifier cannot), (d) PASS (TTL 600 s, rotation at age 515 s, revocation window 660 s under offline JWKS), (e) PASS (daprd forwards Authorization through service invocation). Started on branch lh220: RED 30ee946, service-kit verifier 5fd3980.
-- *Why:* Criteria 1 and 2: author.sub on every catalog write and lineage event is only as trustworthy as this door.
-- *How:* Run the P5.3 probes first with pre-registered reading rules (MinIO and OpenFGA can fetch the k3s SA issuer's discovery and JWKS; a different SA's token with the same audience is refused when bound by sub). Each caller mounts a projected serviceAccountToken (audience rask-catalog or rask-lineage, 600 s) re-read per request; Lance REST clients set Authorization per call through DynamicContextProvider. The catalog adds the SA issuer to OIDCVerifier and validates offline by JWKS; map `system:serviceaccount:<ns>:<sa>` through the allowlist; delete x-lance-service-identity; dapr-api-token stays only as proof of sidecar arrival. The spec's schemes are OAuth2/Bearer/x-api-key (spec.yaml:6729-6742). Lakekeeper validates the cluster's SA issuer as one more OIDC provider, offline by its JWKS, with the subject from the token (lakekeeper docs/docs/authentication.md:457-483).
-- *Closes when:* The shared token plus a claimed name answers 401, pod A's projected token cannot authenticate as B, nothing reads x-lance-service-identity, and the catalog can read no peer's service-token-*, and a service token cannot act on another tenant's run.
-- *Evidence:* services/catalog/src/catalog/api/security.py:87-170 · packages/service-kit/src/service_kit/governed/dapr_auth.py:457-512 · packages/service-kit/src/service_kit/governed/oidc.py:144-165 · chart/templates/services.yaml:354-398 · chart/templates/_helpers.tpl:1462-1480
 
 **LH-037 · drop_namespace Skip skips the cleanup trailer, and create_namespace refuses the spec's Overwrite**
 `catalog` · **MEDIUM** · **blocks-prod**
@@ -448,7 +438,7 @@ Closed since the approval: LH-281 and LH-210 (helm rev 260), and XC-076, LH-220'
 
 **CTL-021 · The notifications reconciler never reconciles: the live pod runs a pre-fix image, and the walk reads the per-dataset-governed feed as an asserted identity**
 `notifications, lineage, chart` · **HIGH** · **blocks-prod**
-- *What is left:* (1) values-live-pins.yaml now pins notifications `lakehouse-661140a4` (2026-09-28, after the fc1b8bfd feed_token fix; service_identity.py:50 feed_token is wired at lifespan.py:110); what is left is reading the live pod image and its logs back (on 2026-09-25 it logged 192 lines of 401 in an hour and 0 lineage_feed_reconciled). (2) The walk reads `/events` (filtered per dataset by can_get_metadata) with a `reader` grant on the default warehouse only, so tenant-warehouse runs are invisible, and `/events/projection`, built for it, is unused. (3) It asserts identity with `x-lance-service-identity` (reconciler.py:246), which goes with LH-220.
+- *What is left:* (1) values-live-pins.yaml now pins notifications `lakehouse-661140a4` (2026-09-28, after the fc1b8bfd feed_token fix; service_identity.py:50 feed_token is wired at lifespan.py:110); what is left is reading the live pod image and its logs back (on 2026-09-25 it logged 192 lines of 401 in an hour and 0 lineage_feed_reconciled). (2) The walk reads `/events` (filtered per dataset by can_get_metadata) with a `reader` grant on the default warehouse only, so tenant-warehouse runs are invisible, and `/events/projection`, built for it, is unused. (3) is done: the reconciler presents its pod's projected `rask-lineage` token and names nobody (LH-220, helm rev 262).
 - *Why:* Criterion 4: the walk is the only lane for runs the bus never carries (ingest, Ray TRAIN, external producers), dead live and blind to tenants once alive.
 - *How:* Read back the pod image against the pin before the behaviour. Move LineageFeedClient.page to `/events/projection`, gated on a new narrow estate rung (`estate.event_reader: [user]`, `can_read_event_feed: owner or event_reader`, the event_stager precedent at model.fga:140,248), not can_observe_events; grant it and drop the warehouse reader. Present the projected SA token as a bearer under D1 (LH-220), subject `kubernetes~system:serviceaccount:<ns>:<sa>`; measure first whether Authorization survives Dapr invocation. Lakekeeper keeps machines on narrow per-purpose relations (docs/audits/2026-09-25/lakekeeper-deep-read/authz.md §8 items 2 and 4).
 - *Closes when:* The pod runs an image containing fc1b8bfd named by the pins file, every tick answers 200 and logs lineage_feed_reconciled, a tenant-warehouse run is scanned, and the reconciler holds no rung that creates projects or edits tuples.
@@ -2145,6 +2135,19 @@ Found by the 2026-10-02 reviews of the XC-076 chart change and its fix round, pa
 - LH-347 · MEDIUM, verdict split 1-1 · The dev seed reads "connection refused" from the Service as no pod holding a minted token; an outgoing pod that is alive but NotReady answers the same, so a rollout started then mints afresh and rotates the token under its callers (chart/templates/openbao.yaml put_minted; XC-005's root) · `chart`
 - LH-348 · LOW · Any exit of the seed container takes a seeded OpenBao out of the Service until it restarts, and its sh runs as PID 1 with no TERM trap, so each OpenBao termination waits the full grace period (chart/templates/openbao.yaml) · `chart`
 - LH-349 · LOW · The seed test cannot fail on a Service-read timeout read as absence; it is the branch its 403 case takes (tests/unit/test_the_dev_openbao_is_seeded_by_its_own_pod.py) · `chart tests`
+
+Found by the 2026-10-02 review of the LH-220 conversion and its readback, parked under the same rule (owner, 2026-09-26: LOWs parked).
+
+- LH-350 · LOW · The door-only `service-token-*` credentials (service-web, service-trainer, service-ingest, notifications) and the stage-runner copies in infra-credentials and ESO are still minted, synced and stored though no door reads them since LH-220; the prose beside them describes the deleted door (chart/templates/infra-credentials.yaml, external-secrets.yaml, openbao.yaml seed, _helpers.tpl allServiceIdentities) · `chart`
+- LH-351 · LOW · A sealed runner's job on the shared Ray head reports lineage as the head's account, `service-trainer`, which holds no rung on a stage namespace; the dummy-lane e2e still sends `LINEAGE_SERVICE_ID` and expects `service-bronze-to-silver`, and deploy/ray-lance-demo.yaml and Makefile:491 still export lineage tokens lineage-kit no longer reads (tests/e2e-py/test_dummy_lane_e2e.py) · `runners, e2e`
+- LH-352 · LOW · The verifier's settings accept an unbounded leeway, an absent CA pin and fetch credential, and a blank subject; the chart now refuses a blank identity, the app does not (packages/service-kit/src/service_kit/governed/settings.py) · `service-kit`
+- LH-353 · LOW · The producer's and ingest's doors verify a service-account bearer before refusing a public caller, so an anonymous request costs a JWKS refetch and learns whether a token is valid; the catalog and lineage refuse first (medallion/api/service_door.py:72, ingest/auth.py:188) · `medallion, ingest`
+- LH-354 · LOW · With auth off the stage runners render no RASK_SA_* and no acknowledgement, and the producer's forward reads an identity file the auth-off render does not project, so stage show and terminate refuse (chart/templates/medallion.yaml, medallion/api/stage_runner_ops.py) · `chart, medallion`
+- LH-355 · LOW · The governed-union and ray-train e2e lanes and scripts/verify_produce_door.sh post the producer's write doors with the retired shared token, so each fails at its first POST with a 403 that reads as an auth defect (tests/e2e-py/test_governed_union_e2e.py:526) · `e2e, scripts`
+- LH-356 · LOW · Dead env and falsified prose the cutover left: RASK_INGEST_SECRETS_FROM_DAPR and the identity declarations rendered into the ingest and notifications pods, the gateway's strip comment, the FGA model comment, the sweep test docstring (chart/values.yaml:234, services/gateway/src/gateway/__init__.py:81) · `chart, docs`
+- LH-357 · LOW · The catalog's http-transport lineage emitter forwards a service principal's catalog-audience token to the lineage URL; the chart pins the dapr transport (services/catalog/src/catalog/core/lineage_emit.py:731) · `catalog`
+- LH-358 · LOW · The verifier's warm() reports ready without fetching the key set, nothing serves stale keys or throttles refetches (each unknown kid costs a synchronous fetch), an unmapped account is refused with nothing naming it, the per-fetch re-read and the iss check are pinned by no test, no chart gate pins the projected-token contract, auth.serviceAccountIssuer has no required guard, and /cascade/stalled answers 200 empty on an unreadable identity token (service_kit/governed/oidc.py, machine_identity.py) · `service-kit, chart, medallion`
+- LH-359 · LOW · The seven zone images were not rebuilt with LH-220 (owner, 2026-10-02: frontend out of scope for now), so a signed-out zone's lineage read answers 401 until they are · `frontend`
 
 ### No-prod parking (uncounted)
 
