@@ -12,10 +12,21 @@ silver->gold. The medallion's cascade-lag cron re-reads the ``published`` tag si
 tier has fallen behind and advances nothing, so a lost publish is still a cascade that stops. A dropped one ends the cascade with the tag advanced, the data consumable, the
 route 200, every pod green, and nothing red.
 
-**IT SIGNS WHAT IT DELIVERS** ([[XC-078]]). A signing catalog stages an event it cannot sign yet, its key unresolved,
-unsigned and unpublished, and a door refuses an unsigned event and acknowledges the refusal. So the relay signs every
-staged event with the key the catalog holds NOW before it publishes, and while that key is unresolved it publishes
-nothing: the backlog waits, staged, for the key.
+**IT DELIVERS ONLY WHAT THIS CATALOG SIGNED, AND SIGNS NOTHING** ([[XC-078]]). A staged object proves nothing about who
+wrote it: anything that can write under the prefix can stage an object that parses as a control event. A relay that signed
+what it found would sign that object as the catalog, declaring whatever person it named as the one the catalog
+authenticated, and every enforcing door would admit it. So the catalog's emitter signs each event before it stages it and
+withholds what it cannot sign (`service_kit.control_emit`), and the relay verifies each staged object as a control event
+signed by THIS catalog's own identity, against the keys that identity publishes, and republishes the staged bytes as they
+are:
+
+* verified: republished verbatim, then dropped on ack;
+* not a control event, or not signed by this catalog (unsigned, signed by another identity, altered, an unknown key, a
+  bad encoding): POISON, retired unpublished and counted, and the pass goes on;
+* the published keys cannot be read: no verdict on any signature, so the pass stops and everything stays staged.
+
+A catalog that does not sign has no key to verify against and adds nothing to what it forwards: it delivers what parses,
+which is no more than any publisher on the topic could put there itself.
 
 **WHY HERE, IN THE CATALOG.** The lineage relay lives in the lineage service because its drain is an
 INGEST — it writes each recovered event into the AGE graph and the durable feed, work only that service
@@ -42,7 +53,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import Annotated
+from collections.abc import Callable, Mapping
+from typing import Annotated, Any, Final
 
 from fastapi import APIRouter, Depends, FastAPI, Request
 from fastapi.concurrency import run_in_threadpool
@@ -50,17 +62,25 @@ from pydantic import BaseModel, ValidationError
 
 from catalog.api.dependencies import SettingsDep
 from catalog.core.config import Settings
-from catalog.core.control_signing import control_sign
-from lineage_kit import CanonError, SigningKey
+from lineage_kit import SigningKey
+from lineage_kit.keys import PublishedKeys
+from lineage_kit.signing import KeySourceUnavailableError, SignatureError, VerifiedSignature, control_signature_of, verify_control_signature
 from service_kit import dapr_publish
-from service_kit.control_emit import ControlSign
 from service_kit.control_events import CONTROL_TOPIC, CatalogControlEvent
 from service_kit.governed.dapr_auth import require_dapr_token
-from service_kit.governed.signing_key import SIGNING_STATE, SigningKeyHolder, SigningKeyUnavailableError
+from service_kit.governed.signing_key import SIGNING_STATE, SigningKeyHolder, published_key_fetch
 from service_kit.lakehouse import outbox, outbox_metrics
 
 
 log = logging.getLogger(__name__)
+
+#: Checks one staged control event as THIS catalog's: answers what its signature established, and raises
+#: `SignatureError` for an event this catalog did not sign and `KeySourceUnavailableError` while the keys it publishes
+#: cannot be read. Blocking, since a key read is a call to the sidecar.
+type StagedVerifier = Callable[[Mapping[str, Any]], VerifiedSignature]
+
+#: Bounds what a staged object's own text puts on a log line: its key and its action are whatever its writer chose.
+_MAX_LOGGED_CHARS: Final = 300
 
 #: How many staged events one tick drains. The lineage drain learned this the hard way (DECISIONS.md
 #: P1.2): materialising a whole prefix inside the tick makes the relay fail hardest exactly when a
@@ -91,11 +111,12 @@ class ControlRelayReport(BaseModel):
     oldest_age_seconds: float = 0.0
     #: Events re-published onto the control topic and then dropped.
     republished: int = 0
-    #: Unparseable or unsignable objects discarded so they cannot wedge the drain. Non-zero is a producer bug.
+    #: Objects retired unpublished so they cannot wedge the drain: one that is not a control event, or, on a catalog that
+    #: signs, one this catalog did not sign. Non-zero is a producer bug or a forgery.
     poison_dropped: int = 0
-    #: The pass stopped because this catalog signs and its key is unresolved: everything still staged waits for the
-    #: key, because the relay publishes nothing unsigned.
-    waiting_for_signing_key: bool = False
+    #: The pass stopped because the keys this catalog publishes could not be read, or a key id could not be decided yet:
+    #: everything still staged waits, because the relay publishes only what it verified.
+    keys_unavailable: bool = False
     #: A tick that found another pass already running on this replica.
     skipped: bool = False
     reason: str = ""
@@ -116,25 +137,66 @@ def get_control_publisher(request: Request) -> object | None:
 ControlPublisherDep = Annotated[object | None, Depends(get_control_publisher)]
 
 
-def get_control_sign(request: Request) -> ControlSign | None:
-    """The catalog's control signer over the holder its lifespan attached, or ``None`` for a catalog that does not sign.
+def _published_keys(request: Request, settings: Settings) -> PublishedKeys:
+    """This app's key reader, built on first use and kept on the app so its cache outlives one tick, as the doors keep theirs."""
+    state = request.app.state
+    keys: PublishedKeys | None = getattr(state, "published_keys", None)
+    if keys is None:
+        keys = state.published_keys = PublishedKeys(published_key_fetch(settings.dapr_secret_store))
+    return keys
 
-    The same holder, through the same `control_sign`, that the lifespan built the control emitter with, so an event is
-    signed alike whether it left at emit or waited here for the key.
+
+async def get_staged_verifier(request: Request, settings: SettingsDep) -> StagedVerifier | None:
+    """The check a staged object passes before it goes out, or ``None`` for a catalog that does not sign.
+
+    Signed by THIS catalog and nobody else: the identity of the holder the lifespan attached is the only signer and the
+    only delegator, so a person actor verifies only under the delegation this catalog declares for the person it
+    authenticated. Checked against the keys that identity publishes, through this pod's sidecar and the catalog's secret
+    store. Whether the holder has resolved its own private key does not matter here, since the relay signs nothing.
+
+    `async def` although it awaits nothing, so the key reader is built on the event loop and two first ticks share one.
     """
     holder: SigningKeyHolder[SigningKey] | None = getattr(request.app.state, SIGNING_STATE, None)
-    return None if holder is None else control_sign(holder)
+    if holder is None:
+        return None
+    keys = _published_keys(request, settings)
+    own = frozenset({holder.identity})
+
+    def verify(envelope: Mapping[str, Any]) -> VerifiedSignature:
+        claim = control_signature_of(envelope)
+        return verify_control_signature(envelope, source=keys.for_event(claim.kid if claim else None), signers=own, delegators=own)
+
+    return verify
 
 
-ControlSignDep = Annotated[ControlSign | None, Depends(get_control_sign)]
+StagedVerifierDep = Annotated[StagedVerifier | None, Depends(get_staged_verifier)]
+
+
+def _bounded(text: str) -> str:
+    return text if len(text) <= _MAX_LOGGED_CHARS else f"{text[:_MAX_LOGGED_CHARS]}..."
+
+
+def _action_of(event_json: str) -> str | None:
+    """The action a staged object names, for its log line, or None when it names none that can be read.
+
+    Read off the RAW text, because the object is poison exactly when the model may not parse it. Total over whatever
+    was staged: a document nested past the interpreter's recursion limit, or one that is not an object, must not raise
+    here, since this runs where the object is retired and a raise would leave it to wedge every tick.
+    """
+    try:
+        parsed = json.loads(event_json)
+    except (ValueError, RecursionError):
+        return None
+    action = parsed.get("action") if isinstance(parsed, dict) else None
+    return _bounded(action) if isinstance(action, str) and action else None
 
 
 async def _republish(publisher: object, settings: Settings, event_json: str) -> None:
-    """Deliver ONE staged event onto the control topic: its members as staged, with the signature the drain made when this catalog signs.
+    """Deliver ONE staged event onto the control topic, as the staged text.
 
-    Never ``event.model_dump_json()``. Round-tripping through the model re-serializes ``occurred_at``
-    and re-orders ``extra``, and the point of the redelivery is that subscribers see exactly what they
-    would have seen the first time.
+    Never ``event.model_dump_json()``. Round-tripping through the model re-serializes ``occurred_at``,
+    re-orders ``extra`` and drops the ``rask_signature`` the model ignores, and the point of the
+    redelivery is that subscribers see exactly what they would have seen the first time.
 
     The staged ``event_id`` is also what makes the redelivery IDEMPOTENT, and the chain is worth stating
     because it is the whole answer to "does this drive the cascade twice?":
@@ -164,19 +226,19 @@ async def _republish(publisher: object, settings: Settings, event_json: str) -> 
     )
 
 
-async def _drain(settings: Settings, publisher: object | None, sign: ControlSign | None) -> ControlRelayReport:
-    """Re-publish and drop every staged control event, oldest first, up to :data:`DRAIN_LIMIT`.
+async def _drain(settings: Settings, publisher: object | None, verify: StagedVerifier | None) -> ControlRelayReport:
+    """Re-publish and drop every staged control event this catalog may deliver, oldest first, up to :data:`DRAIN_LIMIT`.
 
     PUBLISH BEFORE DROP, never the other way round: a publish that fails must leave the object for the
     next tick, which is the entire point of staging. A redelivery costs a duplicate the lane already
     tolerates; a premature drop costs the cascade.
 
-    SIGNED AGAIN BEFORE IT GOES, whether or not it was staged signed, when this catalog signs (``sign``):
-    an event staged while the key was unresolved gets its first signature, and one signed before a
-    rotation is signed with a key its identity still lists. An unchanged key reproduces the staged
-    signature, because Ed25519 is deterministic.
+    VERIFIED BEFORE IT GOES when this catalog signs (``verify``), and never signed here: the staged text
+    goes out as it is or not at all. An object that is not a control event, or that this catalog did not
+    sign, is retired as poison and never published. Keys that cannot be read stop the pass with every
+    object still staged, because they say nothing about any signature.
 
-    Blocking object-store IO runs in the threadpool so a slow prefix never stalls the event loop.
+    Blocking object-store IO and the key reads run in the threadpool so a slow prefix never stalls the event loop.
     """
     options = settings.storage_options()
     depth, oldest_age = await run_in_threadpool(outbox.backlog, settings.control_outbox_uri, options)
@@ -200,34 +262,31 @@ async def _drain(settings: Settings, publisher: object | None, sign: ControlSign
     staged = await run_in_threadpool(lambda: list(outbox.list_events(settings.control_outbox_uri, options, limit=DRAIN_LIMIT)))
     for key, event_json in staged:
         try:
-            # VALIDATE ONLY — the parsed model is deliberately discarded. This asks one question, "could
-            # a subscriber read this?", and the answer decides poison-drop vs relay; the members on the
-            # wire are the staged ones, never a re-serialization of what was parsed here.
+            # VALIDATE, THEN VERIFY; the parsed model is deliberately discarded. Validation asks "could a
+            # subscriber read this?" and verification "did this catalog write it?", and the answers decide
+            # poison vs relay. What goes on the wire is the staged text, never a re-serialization of what was
+            # parsed here, and never a signature made here.
             CatalogControlEvent.model_validate_json(event_json)
-            outgoing = event_json if sign is None else json.dumps(sign(json.loads(event_json)))
-        except SigningKeyUnavailableError as exc:
-            # The key is unresolved, so nothing staged may go out: stop the pass like a bus still down, and
-            # every object stays staged for the next tick to retry from the oldest.
-            log.warning("control_relay_waiting_for_signing_key", extra={"key": key, "depth": depth, "error": str(exc)})
-            report.waiting_for_signing_key = True
+            if verify is not None:
+                await run_in_threadpool(verify, json.loads(event_json))
+        except KeySourceUnavailableError as exc:
+            # No verdict on any signature: nothing may go out and nothing may be retired. Stop the pass like
+            # a bus still down, and every object stays staged for the next tick to retry from the oldest.
+            log.warning("control_relay_keys_unavailable", extra={"key": _bounded(key), "depth": depth, "error": _bounded(str(exc))})
+            report.keys_unavailable = True
             break
-        except (ValidationError, CanonError) as exc:
-            # NARROW on purpose — only an object no subscriber can read, or no key can sign, is poison. A broad
-            # `except` here would delete a staged event on any transient failure, i.e. destroy the one durable
-            # copy this module exists to deliver. The action rides the RAW json because the model is
-            # unavailable exactly where the answer is wanted.
-            action: str | None = None
-            try:
-                action = str((json.loads(event_json) or {}).get("action") or "") or None
-            except (ValueError, TypeError):
-                action = None
-            log.warning("control_outbox_poison_dropped", extra={"key": key, "action": action, "error": str(exc)})
+        except (ValidationError, SignatureError) as exc:
+            # NARROW on purpose: only an object no subscriber can read, or one this catalog did not sign, is
+            # poison. A broad `except` here would retire a staged event on any transient failure, i.e. destroy
+            # the one durable copy this module exists to deliver.
+            reason = exc.reason if isinstance(exc, SignatureError) else "invalid"
+            log.warning("control_outbox_unverifiable", extra={"key": _bounded(key), "action": _action_of(event_json), "reason": reason})
             outbox_metrics.record_poison_dropped()
             await run_in_threadpool(outbox.drop_event, settings.control_outbox_uri, options, key)
             report.poison_dropped += 1
             continue
         try:
-            await _republish(publisher, settings, outgoing)
+            await _republish(publisher, settings, event_json)
         except Exception as exc:
             # The bus is still down. Stop the pass rather than grinding the whole backlog against it:
             # every remaining object stays staged and the next tick retries from the oldest.
@@ -243,7 +302,7 @@ async def _drain(settings: Settings, publisher: object | None, sign: ControlSign
 async def _on_cron(
     settings: SettingsDep,
     publisher: ControlPublisherDep,
-    sign: ControlSignDep,
+    verify: StagedVerifierDep,
     _: Annotated[None, Depends(require_dapr_token)],
 ) -> ControlRelayReport:
     """One relay tick, driven by the Dapr cron binding.
@@ -255,7 +314,7 @@ async def _on_cron(
         log.info("control_relay_skipped_overlap")
         return ControlRelayReport(skipped=True, reason="another control relay pass is in progress")
     async with _relay_lock:
-        report = await _drain(settings, publisher, sign)
+        report = await _drain(settings, publisher, verify)
     if report.poison_dropped:
         log.warning("control_outbox_poison", extra={"dropped": report.poison_dropped})
     log.info(
@@ -265,7 +324,7 @@ async def _on_cron(
             "oldest_age_seconds": report.oldest_age_seconds,
             "republished": report.republished,
             "poison_dropped": report.poison_dropped,
-            "waiting_for_signing_key": report.waiting_for_signing_key,
+            "keys_unavailable": report.keys_unavailable,
         },
     )
     return report

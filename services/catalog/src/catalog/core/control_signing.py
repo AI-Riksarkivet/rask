@@ -1,7 +1,7 @@
 """How the catalog signs a control event: as itself, declaring the person it authenticated ([[XC-078]]).
 
-The control emitter signs each event at emit and the control relay signs what waited in the outbox for the key, and both
-take their signer from here, so an event is signed the same way whichever of the two puts it on the bus.
+The control emitter is the one signer: it signs each event before it stages and publishes it, and withholds an event it
+cannot sign. The control relay signs nothing; it delivers only staged events that verify as signed by this catalog.
 """
 
 from __future__ import annotations
