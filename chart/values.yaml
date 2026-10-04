@@ -2821,8 +2821,10 @@ nats:
   # catalog.control.v1 is published by the catalog, by the medallion PRODUCER (promotion_review's request_approval runs in the
   # workflow engine the producer hosts), by maintenance under maintenance.controlEmit and by the annotator under
   # explorer.controlEmit: never by a stage runner, which also never publishes its downstream topic (MEDALLION_PUB_TOPIC only
-  # gates promotion; the catalog's table_published wakes the next tier). The table is static, so a grant a disabled flag does
-  # not use stays in it. A missing allowance fails closed and silently (a refused subscribe retries forever while the pod stays
+  # gates promotion; the catalog's table_published wakes the next tier). A grant that only a flag's component uses sits under
+  # `flagged`, keyed by that flag's value path, and is issued only while the flag is on (lance.natsTable), so with every flag
+  # at its default no user holds a grant no call site uses (the broker lane fails a table broader than its call sites). A
+  # user's publish and subscribe lists must not be empty: nsc issues an empty list as unrestricted. A missing allowance fails closed and silently (a refused subscribe retries forever while the pod stays
   # Ready), so a changed component, durable or topic changes this table in the same commit: tests/unit/test_a_dapr_component_
   # names_a_secret_something_can_resolve.py fails a render whose components or configured topics a user does not cover.
   #
@@ -2864,12 +2866,17 @@ nats:
   auth:
     server: false
     provisioned: false
+    flagged:
+      maintenance.controlEmit:
+        maintenance:
+          publish: [catalog.control.v1]
+      explorer.controlEmit:
+        annotator:
+          publish: [catalog.control.v1]
+          subscribe: [_INBOX.>]
     users:
       admin:
         publish: [$JS.API.INFO, $JS.API.STREAM.LIST, $JS.API.STREAM.NAMES, $JS.API.STREAM.INFO.*, $JS.API.STREAM.CREATE.*, $JS.API.CONSUMER.NAMES.*, $JS.API.CONSUMER.INFO.*.*, $JS.API.CONSUMER.CREATE.*.>, $JS.API.CONSUMER.DELETE.*.*]
-        subscribe: [_INBOX.>]
-      annotator:
-        publish: [catalog.control.v1]
         subscribe: [_INBOX.>]
       bronze-to-silver:
         publish:
@@ -2928,7 +2935,6 @@ nats:
         publish:
           - lineage.events.v1
           - maintenance.work.v1
-          - catalog.control.v1 # maintenance.controlEmit
           - dlq.maintenance.work
           - dlq.maintenance.index
           - $JS.API.STREAM.NAMES

@@ -106,18 +106,6 @@ class Permissions(BaseModel):
     subscribe: tuple[str, ...] = ()
 
 
-def permission_table(values: Path) -> dict[str, Permissions]:
-    """`nats.auth.users` from a values file.
-
-    Raises:
-        LookupError: the file declares no table.
-    """
-    users = (((yaml.safe_load(values.read_text()) or {}).get("nats") or {}).get("auth") or {}).get("users")
-    if not users:
-        raise LookupError(f"{values} declares no nats.auth.users table")
-    return {name: Permissions.model_validate(row) for name, row in users.items()}
-
-
 class Credential(BaseModel):
     """One user's JWT and NKEY seed, as nsc wrote them into the user's creds file."""
 

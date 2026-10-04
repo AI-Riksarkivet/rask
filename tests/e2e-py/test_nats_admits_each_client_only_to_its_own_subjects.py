@@ -3,8 +3,8 @@
 Closes-when clause 1 ("a publish from a pod without its app's credential is refused on every cascade, control and
 lineage subject") and the ingest clause ("ingest drains a run through its own NATS user, and a pod without that
 user cannot publish on `ingest.tasks.>`"), proved offline: the chart's nats-server in operator mode with a MEMORY
-resolver and JetStream, test-only keys minted with nsc, and one user per row of the chart's permission table
-(`nats.auth.users`).
+resolver and JetStream, test-only keys minted with nsc, and one user per row of the permission table the chart's dev
+seed issues (read off the render, so a values.yaml `nats.auth.flagged` grant counts only while its flag is on).
 
 The table is held to two declarations below, written independently of it, because a table checked only against
 itself can never be too broad. `PUBLISHERS` is who may publish each data subject, read off every Dapr publish call
@@ -32,6 +32,7 @@ from typing import Any
 
 import nats
 import pytest
+import yaml
 from nats_auth_rig import (
     VALUES_ENV,
     Broker,
@@ -47,7 +48,6 @@ from nats_auth_rig import (
     dapr_consumer_config,
     ignore_refusal,
     mint,
-    permission_table,
     run_cli,
     run_stream_job,
     sidecar_component,
@@ -58,7 +58,7 @@ from ingest.lander import create_empty
 from ingest.queue import UnitTask, WorkQueue
 from ingest.runtime import BRONZE_SCHEMA
 from ingest.worker import Worker
-from tests.unit.chart_render import DEFAULT_ARGS, containers, render
+from tests.unit.chart_render import DEFAULT_ARGS, containers, nats_users, render
 
 
 pytestmark = pytest.mark.nats_auth
@@ -71,6 +71,7 @@ RUNNERS = ("bronze-to-silver", "silver-to-gold", "media-to-silver")
 #: call set carries the test's bookkeeping. It is minted beside the table and is not a row of it.
 RIG = "rask-test-rig"
 
+
 #: Who may publish each data subject; every other table user must be refused on it.
 #:
 #: lineage: catalog/core/lineage_emit.py, lineage/services/staged.py (recovered signed bytes), maintenance/core/
@@ -81,9 +82,25 @@ RIG = "rask-test-rig"
 #: runner's re-wake of its own topic (workflow.py); a stage runner never publishes downstream, promotion goes through
 #: the catalog (transform.py). medallion.promotion: promotion_hold.py in the stage runners. refused.<app>:
 #: transform.py. dlq.<app>: the `deadLetterTopic` of that app's subscriptions. ingest: queue.py.
+def _values() -> Path:
+    return Path(os.environ.get(VALUES_ENV) or REPO / "chart" / "values.yaml")
+
+
+def _control_emitters(values: Path) -> frozenset[str]:
+    """Maintenance and the annotator announce on catalog.control.v1 only while the flag that renders their control
+    component is on (maintenance.controlEmit, explorer.controlEmit; both false in the chart's values)."""
+    chart = yaml.safe_load((REPO / "chart" / "values.yaml").read_text()) or {}
+    given = yaml.safe_load(values.read_text()) or {}
+
+    def on(section: str) -> bool:
+        return bool((given.get(section) or {}).get("controlEmit", (chart.get(section) or {}).get("controlEmit")))
+
+    return frozenset(app for app, section in (("maintenance", "maintenance"), ("annotator", "explorer")) if on(section))
+
+
 PUBLISHERS: dict[str, frozenset[str]] = {
     "lineage.events.v1": frozenset({"catalog", "lineage", "maintenance", "medallion-producer", *RUNNERS}),
-    "catalog.control.v1": frozenset({"catalog", "medallion-producer"}),
+    "catalog.control.v1": frozenset({"catalog", "medallion-producer", *_control_emitters(_values())}),
     "maintenance.work.v1": frozenset({"catalog", "maintenance"}),
     "maintenance.index.v1": frozenset({"catalog"}),
     "medallion.bronze": frozenset({"medallion-producer", "bronze-to-silver"}),
@@ -141,7 +158,9 @@ def _probe_of(subject: str) -> str:
 
 
 def _is_data_subject(subject: str) -> bool:
-    return not subject.startswith(("$JS.", "_INBOX."))
+    """A subject that carries an application's data: not the JetStream API, not a reply inbox, and not $SYS.REQ.USER.INFO,
+    the request in which a client asks the server who it is (monitor's `nats account info`)."""
+    return not subject.startswith(("$JS.", "_INBOX.")) and subject != "$SYS.REQ.USER.INFO"
 
 
 def _pubsub_components(docs: tuple[dict, ...]) -> list[dict[str, Any]]:
@@ -496,9 +515,10 @@ def _daprd_calls_the_replay_misses(log_text: str, mint_: Mint, components: list[
 @pytest.mark.asyncio
 async def test_nats_admits_each_client_only_to_its_own_subjects(tmp_path: Path) -> None:
     tools = Tools.from_env(os.environ)
-    values = Path(os.environ.get(VALUES_ENV) or REPO / "chart" / "values.yaml")
-    table = permission_table(values)
+    values = _values()
     docs = render(*DEFAULT_ARGS, "-f", str(values), "--set", "nats.streamReplicas=1")
+    table = {user: Permissions(publish=tuple(sorted(pub)), subscribe=tuple(sorted(sub))) for user, (pub, sub) in nats_users(docs).items()}
+    assert table, f"the render with {values} issues no NATS user (the dev seed is absent)"
     components = _pubsub_components(docs)
     findings = [*_lane_runs_the_charts_images(tools, docs), *_table_names_every_client(table, components)]
     assert findings == [], "\n".join(findings)

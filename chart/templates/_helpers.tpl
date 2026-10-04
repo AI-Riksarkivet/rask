@@ -686,11 +686,28 @@ component (dapr-component.yaml) and the app's *_PUBSUB env must agree on this na
 {{- $root.Values.pubsub.name }}-{{ index . 1 -}}
 {{- end -}}
 
-{{- /* The NATS users of values.yaml `nats.auth.users`, sorted and validated: a name becomes a secret name and a shell word, a subject a single-quoted shell word. */ -}}
+{{- /* The NATS permission table as issued (values.yaml `nats.auth`): `users`, plus each `flagged` grant whose value path is true. */ -}}
+{{- define "lance.natsTable" -}}
+{{- $t := deepCopy (.Values.nats.auth.users | default dict) -}}
+{{- range $path, $grants := (.Values.nats.auth.flagged | default dict) -}}
+{{- $v := $.Values -}}
+{{- range $k := splitList "." $path }}{{- if kindIs "map" $v }}{{- $v = get $v $k }}{{- else }}{{- $v = false }}{{- end }}{{- end -}}
+{{- if $v -}}
+{{- range $u, $g := $grants -}}
+{{- $row := get $t $u | default dict -}}
+{{- $_ := set $t $u (dict "publish" (concat ($row.publish | default list) ($g.publish | default list) | uniq) "subscribe" (concat ($row.subscribe | default list) ($g.subscribe | default list) | uniq)) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- toJson $t -}}
+{{- end -}}
+
+{{- /* The NATS users of lance.natsTable, sorted and validated: a name becomes a secret name and a shell word, a subject a single-quoted shell word. */ -}}
 {{- define "lance.natsUsers" -}}
 {{- $names := list -}}
-{{- range $u, $p := .Values.nats.auth.users -}}
+{{- range $u, $p := (include "lance.natsTable" . | fromJson) -}}
 {{- if not (regexMatch "^[a-z0-9][a-z0-9-]*$" $u) }}{{- fail (printf "nats.auth.users.%s: a user name must match ^[a-z0-9][a-z0-9-]*$" $u) }}{{- end -}}
+{{- if or (not $p.publish) (not $p.subscribe) }}{{- fail (printf "nats.auth.users.%s: an empty publish or subscribe list is issued by nsc as unrestricted" $u) }}{{- end -}}
 {{- range (concat ($p.publish | default list) ($p.subscribe | default list)) }}{{- if not (regexMatch "^[A-Za-z0-9_$.*>-]+$" .) }}{{- fail (printf "nats.auth.users.%s: %q is not a NATS subject this chart can pass to nsc" $u .) }}{{- end }}{{- end -}}
 {{- $names = append $names $u -}}
 {{- end -}}

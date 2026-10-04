@@ -31,6 +31,7 @@
 {{- $mint := and .Values.openbao.devMode (not .Values.openbao.externalAddr) $signers }}
 {{- $nats := include "lance.natsMints" . }}
 {{- $natsUsers := include "lance.natsUsers" . | splitList " " | compact }}
+{{- $natsTable := include "lance.natsTable" . | fromJson }}
 {{- if not .Values.openbao.devMode }}
 apiVersion: v1
 kind: ConfigMap
@@ -314,7 +315,7 @@ spec:
                   if svc_get nats-route password; then printf '%s' "$got" > "$B/route.password"; else head -c 18 /dev/urandom | base64 | tr '+/' '-_' | tr -d '\n' > "$B/route.password"; fi
                   printf route > "$B/route.user"
                   {{- range $natsUsers }}
-                  {{- $p := index $.Values.nats.auth.users . }}
+                  {{- $p := index $natsTable . }}
                   nats_user {{ . }} '{{ join "," $p.publish }}' '{{ join "," $p.subscribe }}'
                   {{- end }}
                   jwt=$(nsc describe operator --raw); printf '%s' "$jwt" > "$B/operator"
