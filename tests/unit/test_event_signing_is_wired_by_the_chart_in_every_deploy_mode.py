@@ -1,4 +1,4 @@
-"""The chart wires event signing the same way in every deploy mode, enforces it on one switch, and restarts the pods whose key access changed.
+"""The chart wires event signing the same way in every deploy mode, enforces it on one switch, and names each Dapr Configuration by its spec.
 
 [[LH-064]] (values.yaml `signing:`). Three things the chart decides, each of which fails silently if it is wrong:
 
@@ -8,8 +8,10 @@
 - `signing.enforce` is the one switch between the revisions that sign and the revision that requires a signature. Off, lineage
   carries neither set. On, it carries the signer set and the delegator set the chart derives, and only when the store and auth
   are on; an enforced render with no signer at all is refused rather than rendered as a lineage that requires nothing.
-- daprd loads its Configuration at boot and HotReload is off, so a deny-list edit reaches a sidecar only when its pod restarts.
-  Each pod carries the hash of its own app-id's Configuration: an edit rolls the pods it changed and no others.
+- daprd loads its Configuration once, at boot (HotReload is off), and Helm applies a Deployment before the Configuration it names. A
+  deny-list edit under an unchanged name is therefore loaded stale, for the life of the pod, by any pod that boots in between, with every
+  probe green. A Configuration is named by the hash of its spec instead: a pod that boots before Helm applies the new object finds none
+  and daprd exits (Dapr v1.18.1 pkg/runtime/config.go:252-254) until it exists, and an edit rolls exactly the pods whose list changed.
 """
 
 from __future__ import annotations
@@ -106,26 +108,35 @@ def test_an_enforced_render_with_no_signer_is_refused_rather_than_rendered_as_a_
     assert "no identity signs" in refused.value.stderr
 
 
-def _config_checksums(docs: tuple[dict, ...]) -> dict[str, str]:
-    """`Deployment/name` -> the `checksum/dapr-config` of every pod whose sidecar loads a per-app Configuration."""
-    found: dict[str, str] = {}
+def _loaded_configurations(docs: tuple[dict, ...]) -> dict[str, tuple[str, dict]]:
+    """`Deployment/name` -> (the Configuration its sidecar is started with, that object's spec), for every pod that names one."""
+    objects = {doc["metadata"]["name"]: doc["spec"] for doc in docs if doc.get("kind") == "Configuration"}
+    loaded: dict[str, tuple[str, dict]] = {}
     for doc in docs:
         if doc.get("kind") != "Deployment":
             continue
-        annotations = (doc["spec"]["template"].get("metadata") or {}).get("annotations") or {}
-        if str(annotations.get("dapr.io/config", "")).startswith("lance-config-"):
-            assert "checksum/dapr-config" in annotations, (
-                f"{doc['metadata']['name']} loads {annotations['dapr.io/config']} and has no checksum of it, so an edit never restarts it"
-            )
-            found[doc["metadata"]["name"]] = annotations["checksum/dapr-config"]
-    return found
+        pod = doc["metadata"]["name"]
+        name = ((doc["spec"]["template"].get("metadata") or {}).get("annotations") or {}).get("dapr.io/config")
+        if name:
+            assert name in objects, f"{pod} starts its sidecar with Configuration {name}, which the render does not contain, so its daprd never boots"
+            loaded[pod] = (name, objects[name])
+    return loaded
 
 
-def test_a_pod_restarts_when_its_own_dapr_configuration_changes_and_only_then() -> None:
-    before = _config_checksums(chart_render.render(*DEFAULT_ARGS))
-    after = _config_checksums(chart_render.render(*DEFAULT_ARGS, "--set", "maintenance.catalogServiceIdentity=service-maintenance-renamed"))
+def test_a_configuration_is_renamed_when_and_only_when_its_spec_changes_so_a_pod_cannot_load_a_stale_one() -> None:
+    before = _loaded_configurations(chart_render.render(*DEFAULT_ARGS))
+    after = _loaded_configurations(chart_render.render(*DEFAULT_ARGS, "--set", "maintenance.catalogServiceIdentity=service-maintenance-renamed"))
 
-    assert before.keys() == after.keys() and len(before) > 5, f"the pods with their own Configuration are {sorted(before)}"
-    # Maintenance denies every signing key but its own whichever name that is, so its Configuration is the one that did not change.
-    unchanged = sorted(name for name in before if before[name] == after[name])
-    assert unchanged == ["rask-maintenance", "rask-maintenance-worker"], f"pods whose Configuration did not change are {unchanged}"
+    assert before.keys() == after.keys() and len(before) > 5, f"the pods that name a Configuration are {sorted(before)}"
+    edited = {pod for pod in before if before[pod][1] != after[pod][1]}
+    renamed = {pod for pod in before if before[pod][0] != after[pod][0]}
+    # Maintenance denies every signing key but its own whichever name that is, so its Configuration is the one that does not change.
+    assert edited and edited != before.keys(), (
+        f"the overlay must edit some Configurations and leave others, or one direction below measures nothing: {sorted(edited)}"
+    )
+    # Helm applies a Deployment before the Configuration it names and daprd reads that Configuration once, at boot: a pod that boots in
+    # between loads whatever already sits under its name. Under a new name there is nothing to load, and daprd exits until Helm applies it.
+    assert not edited - renamed, (
+        f"these pods' Configuration was edited under the name the old one had, so a pod that boots first loads the stale spec: {sorted(edited - renamed)}"
+    )
+    assert not renamed - edited, f"these pods are rolled onto a Configuration whose spec did not change: {sorted(renamed - edited)}"

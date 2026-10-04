@@ -236,9 +236,7 @@ dapr.io/block-shutdown-duration: {{ printf "%ds" (int $root.Values.lifecycle.sid
        DERIVED FROM `lance.secretScopes`, the same list that decides the Component's own `scopes:`, so
        a new consumer added there gets its Configuration without a second edit here. */}}
 {{- if has $appId (splitList "," (include "lance.secretScopes" $root)) }}
-dapr.io/config: "lance-config-{{ $appId }}"
-{{- /* HotReload is off, so a deny-list edit reaches a sidecar only when its pod restarts: this hash rolls exactly the pods whose Configuration changed. */}}
-checksum/dapr-config: {{ include "lance.daprAppSpec" (list $root $appId) | sha256sum }}
+dapr.io/config: {{ include "lance.daprAppConfigName" (list $root $appId) | quote }}
 {{- else }}
 dapr.io/config: "lance-tracing"
 {{- end }}
@@ -1559,7 +1557,7 @@ Pinned by `tests/unit/test_the_lakehouse_bounds_its_allocator_arenas.py`.
 {{- end -}}
 
 {{/* The Dapr Configuration spec body, rendered identically into `lance-tracing` and into every
-per-app-id `lance-config-<app>` ([[XC-072]]). Extracted rather than copied: each stanza is a
+per-app-id `lance-config-<app>-<hash>` ([[XC-072]]). Extracted rather than copied: each stanza is a
 measured decision, and a second copy would drift without anything saying so. */}}
 {{- define "lance.daprConfigSpecBody" -}}
   {{- /*
@@ -1822,7 +1820,7 @@ set and the Secret's `service-token-*` entries drift.
 {{- end -}}
 {{- end -}}
 
-{{- /* One app-id's Dapr Configuration spec: the Configuration object and the checksum in `rask.daprAnnotations` both render THIS. */ -}}
+{{- /* One app-id's Dapr Configuration spec: the Configuration object and its name (`lance.daprAppConfigName`) both derive from THIS. */ -}}
 {{- define "lance.daprAppSpec" -}}
 {{- $cfgRoot := index . 0 -}}{{- $app := index . 1 -}}
 {{- include "lance.daprConfigSpecBody" $cfgRoot }}
@@ -1868,6 +1866,11 @@ set and the Secret's `service-token-*` entries drift.
           - {{ . }}
           {{- end }}
         {{- end }}
+{{- end -}}
+
+{{- /* Named by the hash of its spec, so an edit renames it; the object and the pod's `dapr.io/config` both use this ([[LH-064]], values.yaml `signing:`). */ -}}
+{{- define "lance.daprAppConfigName" -}}
+{{- printf "lance-config-%s-%s" (index . 1) (include "lance.daprAppSpec" . | sha256sum | trunc 10) -}}
 {{- end -}}
 
 {{- /* EVENT SIGNING ([[LH-064]]; values.yaml `signing:`). `lance.signers` is the ONE declaration, an (identity, app-id) pair per
