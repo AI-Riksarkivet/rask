@@ -62,6 +62,11 @@ def _lineage_env(docs: tuple[dict, ...]) -> dict[str, str]:
 #: `register_arrival_route` registers on every pod whose MAINTENANCE_WORK_TOPIC is set.
 _DOOR_APPS = {"medallion.producer:app": True, "notifications:app": True, "maintenance.service:app": False}
 _DOOR_ENV = ("RASK_SIGNATURE_DOORS", "RASK_EVENT_SIGNERS", "RASK_EVENT_DELEGATORS", "RASK_CONTROL_SIGNER_ROLES")
+#: The door hosts each case names, so a values change that stops rendering one fails the case rather than shrinking it. Both
+#: maintenance Deployments register /maintenance-arrival and share one queue group, so an arrival reaches the planner's pod or a
+#: worker's: a setting on the planner alone would leave most deliveries unchecked.
+_CONTROL_HOSTS = frozenset({"Deployment/rask-medallion-producer", "Deployment/rask-notifications"})
+_ALL_HOSTS = _CONTROL_HOSTS | {"Deployment/rask-maintenance", "Deployment/rask-maintenance-worker"}
 
 
 def _app(container: dict) -> str:
@@ -115,21 +120,24 @@ def test_a_store_nothing_seeds_is_refused_until_the_operator_attests_its_signing
 
 
 @pytest.mark.parametrize(
-    ("overlay", "enforced", "doors"),
+    ("overlay", "enforced", "doors", "door_hosts"),
     [
-        pytest.param((), True, "off", id="lineage-on-and-the-doors-off-by-default-with-the-store-and-auth"),
+        pytest.param((), True, "off", _ALL_HOSTS, id="lineage-on-and-the-doors-off-by-default-with-the-store-and-auth"),
         # maintenance off is the e2e-stack lane's overlay: a control-event service that is not deployed holds an empty role, which
         # blocks no mode because nothing it would sign can arrive.
-        pytest.param(("--set", "signing.doors=enforce", "--set", "maintenance.enabled=false"), True, "enforce", id="the-mode-asked-with-maintenance-off"),
-        pytest.param(("--set", "signing.enforce=false"), False, "off", id="lineage-off-when-asked"),
-        pytest.param(("--set", "auth.enabled=false"), False, None, id="not-without-auth"),
-        pytest.param(("--set", "openbao.enabled=false"), False, None, id="not-without-a-store"),
+        pytest.param(
+            ("--set", "signing.doors=enforce", "--set", "maintenance.enabled=false"), True, "enforce", _CONTROL_HOSTS, id="the-mode-asked-with-maintenance-off"
+        ),
+        pytest.param(("--set", "signing.enforce=false"), False, "off", _ALL_HOSTS, id="lineage-off-when-asked"),
+        pytest.param(("--set", "auth.enabled=false"), False, None, _ALL_HOSTS, id="not-without-auth"),
+        pytest.param(("--set", "openbao.enabled=false"), False, None, _ALL_HOSTS, id="not-without-a-store"),
     ],
 )
 def test_lineage_and_every_bus_door_verify_against_exactly_the_rendered_signers_wherever_the_store_and_auth_are_on(
     overlay: tuple[str, ...],
     enforced: bool,  # noqa: FBT001
     doors: str | None,
+    door_hosts: frozenset[str],
 ) -> None:
     docs = chart_render.render(*DEFAULT_ARGS, *overlay)
     env = _lineage_env(docs)
@@ -144,7 +152,7 @@ def test_lineage_and_every_bus_door_verify_against_exactly_the_rendered_signers_
         assert json.loads(env["LINEAGE_DELEGATORS"]) == ["service-catalog"], "only the catalog, which authenticated the person, may sign for one"
 
     hosts = _door_hosts(docs)
-    assert {"medallion.producer:app", "notifications:app"} <= set(hosts.values()), f"the overlay must render both control-event doors' apps: {hosts}"
+    assert hosts.keys() == door_hosts, f"the pods whose app hosts a door are not the ones this case names: {sorted(hosts)}"
     # Each service that emits control events (service_kit.control_events.ControlSigner), mapped to the identities its pods sign as.
     roles = {
         "catalog": _identities_running(docs, "catalog.main:app"),
