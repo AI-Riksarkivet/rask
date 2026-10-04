@@ -21,7 +21,7 @@ from fastapi import Depends, FastAPI, Request
 
 from lineage.api.fga_deps import enforce_bus_authz
 from lineage.core.config import get_settings
-from lineage.core.metrics import Door, Outcome, record_outcome
+from lineage.core.metrics import Door, Outcome, create_signature_refused_series, record_outcome
 from lineage.models import DatasetEvent, RunEvent, author_sub_from_payload, run_id_from_payload
 from lineage.services.consumer import handle_cloud_event
 from service_kit.governed.dapr_auth import require_dapr_token
@@ -171,8 +171,12 @@ def register_dapr(app: FastAPI) -> None:
     route. Combined with the token guard above, the pubsub component's publisher scopes, and the gateway
     blocking this route, a forged external event cannot reach the graph. When ``dapr_dlq_topic`` is set
     (chart: ``dapr.resiliency.enabled``), the subscription declares a Dapr ``deadLetterTopic`` and the
-    parking route is registered — exhausted deliveries become visible instead of vanishing."""
+    parking route is registered — exhausted deliveries become visible instead of vanishing.
+
+    It also creates every reason series of the signature refusal counter at 0, which the doors that verify a bus or
+    staged event share (`create_signature_refused_series`)."""
     settings = get_settings()
+    create_signature_refused_series()
     dapr_app = DaprApp(app)
     if settings.dapr_enabled:
         dapr_app.subscribe(

@@ -6,9 +6,11 @@ service."""
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Literal, get_args
 
 from opentelemetry import metrics
+
+from lineage_kit.signing import RefusalReason
 
 
 #: The refusals the catalog gives for a TABLE ID, and the closed `refused_by` set of
@@ -223,6 +225,19 @@ _signature_would_refuse = _meter.create_counter(
     unit="{event}",
     description="Events a door in observe mode acted on although enforcing would have refused them, or could not read the keys to decide, by door and reason.",
 )
+
+
+def create_signature_refused_series() -> None:
+    """Create every door and reason series of `maintenance.signature.refused` at 0.
+
+    The alert over this counter is `rate(...) > 0`, and a cumulative counter exports nothing for a series before its first
+    add: a series born at 1 has no 0 before it, so `rate()` sees no increase and the first refusal never pages. Called
+    when the door is registered, at import, after `opentelemetry-instrument` installed the MeterProvider at interpreter
+    start: an add through the proxy meter before then is dropped. Both measured on opentelemetry-sdk 1.44.0.
+    """
+    for door in get_args(SignatureDoor.__value__):
+        for reason in get_args(RefusalReason.__value__):
+            _signature_refused.add(0, {"door": door, "reason": reason})
 
 
 def record_signature_refused(*, door: SignatureDoor, reason: str) -> None:

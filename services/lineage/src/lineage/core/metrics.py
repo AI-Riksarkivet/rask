@@ -19,8 +19,11 @@ underscores → ``lance_lineage_outcome``.)
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import get_args
 
 from opentelemetry import metrics
+
+from lineage_kit.signing import RefusalReason
 
 
 _meter = metrics.get_meter("lance.lineage")
@@ -60,6 +63,18 @@ _signature_refused = _meter.create_counter(
 def record_signature_verified(identity: str) -> None:
     """Count one event verified for ``identity``. Bounded: only an identity the chart lists is ever verified."""
     _signature_verified.add(1, {"lance.lineage.identity": identity})
+
+
+def create_signature_refused_series() -> None:
+    """Create every reason series of `lineage.signature.refused` at 0.
+
+    The alert over this counter is `rate(...) > 0`, and a cumulative counter exports nothing for a series before its first
+    add: a series born at 1 has no 0 before it, so `rate()` sees no increase and the first refusal never pages. Called
+    when the bus door is registered, at import, after `opentelemetry-instrument` installed the MeterProvider at
+    interpreter start: an add through the proxy meter before then is dropped. Both measured on opentelemetry-sdk 1.44.0.
+    """
+    for reason in get_args(RefusalReason.__value__):
+        _signature_refused.add(0, {"lance.lineage.reason": reason})
 
 
 def record_signature_refused(reason: str) -> None:

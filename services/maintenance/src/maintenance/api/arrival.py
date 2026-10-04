@@ -40,7 +40,7 @@ from lineage_kit.keys import PublishedKeys
 from lineage_kit.signing import signature_of, verify_signature
 from maintenance.api.dependencies import DaprClientDep, SettingsDep
 from maintenance.core.config import MaintenanceSettings
-from maintenance.core.metrics import SignatureDoor, record_signature_refused, record_signature_would_refuse
+from maintenance.core.metrics import SignatureDoor, create_signature_refused_series, record_signature_refused, record_signature_would_refuse
 from maintenance.services.arrival import plannable_write, should_replan
 from maintenance.services.sweep import plan_one
 from maintenance.services.work_queue import RETRY, SUCCESS, enqueue_units
@@ -147,13 +147,14 @@ async def handle_arrival(event: dict[str, Any], settings: MaintenanceSettings, d
 
 
 def register_arrival_route(app: FastAPI, settings: MaintenanceSettings, dapr_app: DaprApp | None = None) -> DaprApp | None:
-    """Register the write-event subscription, or nothing when this deployment has no queue.
+    """Register the write-event subscription and create its door's refusal series at 0, or nothing when this deployment has no queue.
 
     Takes an existing :class:`DaprApp` when one was already built for another subscription — a second
     ``DaprApp(app)`` would re-register ``/dapr/subscribe`` and the sidecar would read only one of them.
     """
     if not settings.work_topic:
         return None
+    create_signature_refused_series()
     wrapper = dapr_app or DaprApp(app)
 
     @wrapper.subscribe(
