@@ -1,4 +1,4 @@
-"""Ed25519 signatures over a lineage event, so the author a producer stamps cannot be forged ([[LH-064]]).
+"""Ed25519 signatures over a lineage event or a control event, so the author a producer stamps cannot be forged ([[LH-064]], [[XC-078]]).
 
 A bus door authenticates the sidecar that delivered an event, not the producer that wrote it, so the author
 stamped inside is a claim until something proves it. A producer signs its event with its own key and a
@@ -20,6 +20,11 @@ WIRE FORMAT. `rask_signature` sits on the facet bag the event already carries: `
 signed bytes are canon-1 of the whole OpenLineage event object, the CloudEvent's data or the staged object and
 never an envelope or a model dump, with exactly one member removed: `<bag>.rask_signature.signature`.
 
+A CONTROL EVENT (the flat `CatalogControlEvent` object) has no facet bag, so the same facet rides as a TOP-LEVEL member
+`rask_signature` with the same members, and the signed bytes are canon-1 of the whole control event object with exactly
+`rask_signature.signature` removed. It is signed as the JSON the bus carries (`model_dump_json`, read back), because that
+is the text a consumer verifies; a model that ignores the member (`extra="ignore"`) parses the same event with or without it.
+
 ONLY THE VALUE IS LEFT OUT, and that is the part worth stating. A signature cannot cover itself, but every
 other member is a claim a hop could rewrite if it sat outside the bytes: `kid` and `canon` choose the key and the
 canonicalization, so an editable one is a downgrade surface, and `onBehalfOf` is the delegation that separates an
@@ -30,6 +35,11 @@ body stamped `author.sub = "service-trainer"` is valid, and the event still reco
 else; covering the author in the bytes does not stop that. So the identity that signed has to equal the author
 it stamped, or it has to declare `onBehalfOf` equal to that author and be one of the delegators the verifier is
 configured with. An event with no author binds to nothing and does not verify.
+
+A CONTROL EVENT'S `actor` PLAYS THE AUTHOR'S ROLE, with one difference: a service names no author. An actor `user:<sub>` is a
+person the catalog authenticated, so only a delegator may sign for it, declaring `onBehalfOf` equal to the whole `user:<sub>`
+string. An absent actor, or one that is not a `user:` principal (`system:annotator`), is a service acting for itself, so any
+listed signer signs it with no delegation declared.
 """
 
 from __future__ import annotations
@@ -85,6 +95,10 @@ _NKEY_ALPHABET = re.compile(r"[A-Z2-7]+")
 #: An Ed25519 signature is 64 bytes: 86 base64url characters without padding.
 _SIGNATURE_TEXT = re.compile(r"[A-Za-z0-9_-]{86}")
 _KID_TEXT = r"^[0-9a-f]{16}$"
+
+#: How a control event names a PERSON as its actor: `user:<sub>`, what the catalog stamps from the verified OIDC subject.
+#: Any other actor, or none, is a service acting for itself.
+_PERSON_ACTOR_PREFIX = "user:"
 
 #: Why a signature was not accepted, as a bounded label: a counter keyed on it stays a handful of series.
 type RefusalReason = Literal[
@@ -341,21 +355,29 @@ def author_of(event: Mapping[str, Any]) -> str | None:
     return sub if isinstance(sub, str) and sub else None
 
 
-def _read_signature(event: Mapping[str, Any]) -> tuple[Signature, str]:
-    """The event's signature facet and the member holding its bag. Absent is unsigned, present but wrong is malformed.
+def _parse_signature(facet: object) -> Signature:
+    """The facet read strictly. A malformed one is refused naming the members that are wrong and never their values, which come from whoever sent the event."""
+    try:
+        return Signature.model_validate(facet)
+    except ValidationError as exc:
+        wrong = sorted({".".join(str(part) for part in problem["loc"]) or "facet" for problem in exc.errors()})
+        raise SignatureRefusedError(f"the signature facet is malformed at: {', '.join(wrong)}", "malformed") from None
 
-    A malformed facet is refused naming the members that are wrong and never their values, which come from whoever
-    sent the event.
-    """
+
+def _read_signature(event: Mapping[str, Any]) -> tuple[Signature, str]:
+    """The event's signature facet and the member holding its bag. Absent is unsigned, present but wrong is malformed."""
     located = _located_bag(event)
     if located is None or SIGNATURE_FACET not in located[1]:
         raise UnsignedEventError("the event carries no signature")
     holder, bag = located
-    try:
-        return Signature.model_validate(bag[SIGNATURE_FACET]), holder
-    except ValidationError as exc:
-        wrong = sorted({".".join(str(part) for part in problem["loc"]) or "facet" for problem in exc.errors()})
-        raise SignatureRefusedError(f"the signature facet is malformed at: {', '.join(wrong)}", "malformed") from None
+    return _parse_signature(bag[SIGNATURE_FACET]), holder
+
+
+def _read_control_signature(envelope: Mapping[str, Any]) -> Signature:
+    """A control event's signature facet. Absent is unsigned, present but wrong is malformed."""
+    if SIGNATURE_FACET not in envelope:
+        raise UnsignedEventError("the event carries no signature")
+    return _parse_signature(envelope[SIGNATURE_FACET])
 
 
 def signature_of(event: Mapping[str, Any]) -> Signature | None:
@@ -364,6 +386,27 @@ def signature_of(event: Mapping[str, Any]) -> Signature | None:
         return _read_signature(event)[0]
     except SignatureError:
         return None
+
+
+def control_signature_of(envelope: Mapping[str, Any]) -> Signature | None:
+    """The signature a control event carries, or None when it carries none or carries a malformed one.
+
+    A door reads the key id here to build the `PublishedKeys.for_event` source that verifies the event.
+    """
+    try:
+        return _read_control_signature(envelope)
+    except SignatureError:
+        return None
+
+
+def _person_actor(envelope: Mapping[str, Any]) -> str | None:
+    """The whole `user:<sub>` a control event names as its actor, or None for a service: no actor, or one that is not a person."""
+    actor = envelope.get("actor")
+    return actor if isinstance(actor, str) and actor.startswith(_PERSON_ACTOR_PREFIX) else None
+
+
+def _facet_without_value(facet: Mapping[str, Any]) -> dict[str, Any]:
+    return {member: value for member, value in facet.items() if member != "signature"}
 
 
 def _without_signature_value(event: Mapping[str, Any], holder: str) -> dict[str, Any]:
@@ -376,8 +419,48 @@ def _without_signature_value(event: Mapping[str, Any], holder: str) -> dict[str,
     """
     section = event[holder]
     facets = section["facets"]
-    unsigned = {member: value for member, value in facets[SIGNATURE_FACET].items() if member != "signature"}
-    return {**event, holder: {**section, "facets": {**facets, SIGNATURE_FACET: unsigned}}}
+    return {**event, holder: {**section, "facets": {**facets, SIGNATURE_FACET: _facet_without_value(facets[SIGNATURE_FACET])}}}
+
+
+def _control_without_signature_value(envelope: Mapping[str, Any]) -> dict[str, Any]:
+    """A control event as it was signed: everything except its facet's own VALUE, for the reason `_without_signature_value` gives."""
+    return {**envelope, SIGNATURE_FACET: _facet_without_value(envelope[SIGNATURE_FACET])}
+
+
+def _signature_facet(key: SigningKey, identity: str, on_behalf_of: str | None) -> dict[str, Any]:
+    """The facet an event carries before its value is computed: the signer, the key id, the canonicalization and the delegation.
+
+    Raises:
+        TypeError: `key` is not a `SigningKey`.
+        ValueError: an empty `identity` or `on_behalf_of`.
+    """
+    if not isinstance(key, SigningKey):
+        raise TypeError(f"a signature is made with a SigningKey, not {type(key).__name__}")
+    if not identity:
+        raise ValueError("a signature must name the identity that made it, or a verifier cannot choose a key")
+    if on_behalf_of is not None and not on_behalf_of:
+        raise ValueError("an empty on_behalf_of is a caller error: pass the subject being acted for, or omit it entirely")
+    facet: dict[str, Any] = {
+        "_producer": PRODUCER,
+        "_schemaURL": SIGNATURE_FACET_SCHEMA_URL,
+        "alg": SIGNATURE_ALG,
+        "canon": CANON_VERSION,
+        "kid": key.kid,
+        "identity": identity,
+    }
+    if on_behalf_of is not None:
+        facet["onBehalfOf"] = on_behalf_of
+    return facet
+
+
+def _signed_copy(signed: dict[str, Any], facet: dict[str, Any], key: SigningKey) -> dict[str, Any]:
+    """A copy of ``signed``, which holds ``facet`` without its value, carrying the value computed over exactly those bytes.
+
+    ``signed`` shares ``facet`` and the assignment evaluates its right side first, so the bytes signed are the ones
+    that leave the value out, which is what a verifier rebuilds.
+    """
+    facet["signature"] = base64.urlsafe_b64encode(key.sign(canon_1(signed))).decode("ascii").rstrip("=")
+    return copy.deepcopy(signed)
 
 
 def attach_signature(payload: Mapping[str, Any], *, key: SigningKey, identity: str, on_behalf_of: str | None = None) -> dict[str, Any]:
@@ -402,51 +485,75 @@ def attach_signature(payload: Mapping[str, Any], *, key: SigningKey, identity: s
         ValueError: an empty `identity` or `on_behalf_of`, or an event with no run or dataset to carry the facet.
         CanonError: the event has no canon-1 form (a non-finite number, an integer beyond 2^53-1, nesting beyond 64).
     """
-    if not isinstance(key, SigningKey):
-        raise TypeError(f"a signature is made with a SigningKey, not {type(key).__name__}")
-    if not identity:
-        raise ValueError("a signature must name the identity that made it, or a verifier cannot choose a key")
-    if on_behalf_of is not None and not on_behalf_of:
-        raise ValueError("an empty on_behalf_of is a caller error: pass the subject being acted for, or omit it entirely")
+    facet = _signature_facet(key, identity, on_behalf_of)
     holder = _holder_key(payload)
     if holder is None:
         raise ValueError("this event carries no run or dataset, so a signature has nowhere to ride")
-    facet: dict[str, Any] = {
-        "_producer": PRODUCER,
-        "_schemaURL": SIGNATURE_FACET_SCHEMA_URL,
-        "alg": SIGNATURE_ALG,
-        "canon": CANON_VERSION,
-        "kid": key.kid,
-        "identity": identity,
-    }
-    if on_behalf_of is not None:
-        facet["onBehalfOf"] = on_behalf_of
     section = payload[holder]
     signed = {**payload, holder: {**section, "facets": {**(section.get("facets") or {}), SIGNATURE_FACET: facet}}}
-    facet["signature"] = base64.urlsafe_b64encode(key.sign(canon_1(signed))).decode("ascii").rstrip("=")
-    return copy.deepcopy(signed)
+    return _signed_copy(signed, facet, key)
+
+
+def attach_control_signature(envelope: Mapping[str, Any], *, key: SigningKey, identity: str, on_behalf_of: str | None = None) -> dict[str, Any]:
+    """Return a copy of a control event carrying its own signature, as a top-level `rask_signature` member.
+
+    ``envelope`` is the JSON the bus will carry (`CatalogControlEvent.model_dump_json()` read back), never a model dump
+    holding a datetime: a consumer verifies the arrived JSON, so that is the document signed.
+
+    `identity`, `on_behalf_of` and the order in which the facet and its value are written are `attach_signature`'s. The
+    envelope's `actor` plays the author: a PERSON actor (`user:<sub>`) is signed for only by a delegator that declares
+    `on_behalf_of` equal to the whole actor string, and a service actor (none, or any other principal) declares no
+    delegation. A person's event signed with no delegation could never verify, and a door acknowledges a refusal, so the
+    event would be lost; it is refused here, where the producer still sees it.
+
+    Raises:
+        TypeError: `key` is not a `SigningKey`.
+        ValueError: an empty `identity` or `on_behalf_of`, or a person actor with no `on_behalf_of`.
+        CanonError: the event has no canon-1 form (a datetime, a non-finite number, an integer beyond 2^53-1, nesting beyond 64).
+    """
+    facet = _signature_facet(key, identity, on_behalf_of)
+    if on_behalf_of is None and _person_actor(envelope) is not None:
+        raise ValueError("a control event for a person verifies only under a declared delegation: sign it as a delegator with on_behalf_of set to its actor")
+    return _signed_copy({**envelope, SIGNATURE_FACET: facet}, facet, key)
 
 
 def _refused(reason: RefusalReason, message: str) -> SignatureRefusedError:
     return SignatureRefusedError(message, reason)
 
 
-def _check_claim(claim: Signature, event: Mapping[str, Any], *, signers: frozenset[str], delegators: frozenset[str]) -> None:
-    """The checks that need no key, in the order they are reported, so a refusal names the first thing wrong."""
+def _check_claimed_signer(claim: Signature, *, signers: frozenset[str]) -> None:
+    """The first checks, which need neither a key nor the event's author: the algorithm, the canonicalization and whether the signer may sign at all."""
     if claim.alg != SIGNATURE_ALG:
         raise _refused("alg", f"the signature names algorithm {claim.alg!r}, not {SIGNATURE_ALG}")
     if claim.canon != CANON_VERSION:
         raise _refused("canon", f"the signature names canonicalization {claim.canon}, not {CANON_VERSION}")
     if claim.identity not in signers:
         raise _refused("signer", f"{claim.identity!r} is not an identity that may sign")
-    author = author_of(event)
+
+
+def _check_authorship(claim: Signature, author: str | None, *, signs_unaided: bool, delegators: frozenset[str]) -> None:
+    """Whether the signer may vouch for ``author``: with no delegation only when ``signs_unaided``, else under a declared one from a delegator."""
     if claim.on_behalf_of is None:
-        if claim.identity != author:
+        if not signs_unaided:
             raise _refused("author", f"{claim.identity!r} signed an event stamped for {author!r} and declared no delegation")
     elif claim.identity not in delegators:
         raise _refused("delegation", f"{claim.identity!r} is not an identity that may sign for another subject")
     elif claim.on_behalf_of != author:
         raise _refused("author", f"{claim.identity!r} declared a delegation for {claim.on_behalf_of!r} on an event stamped for {author!r}")
+
+
+def _check_claim(claim: Signature, event: Mapping[str, Any], *, signers: frozenset[str], delegators: frozenset[str]) -> None:
+    """The checks that need no key, in the order they are reported, so a refusal names the first thing wrong."""
+    _check_claimed_signer(claim, signers=signers)
+    author = author_of(event)
+    _check_authorship(claim, author, signs_unaided=claim.identity == author, delegators=delegators)
+
+
+def _check_control_claim(claim: Signature, envelope: Mapping[str, Any], *, signers: frozenset[str], delegators: frozenset[str]) -> None:
+    """`_check_claim` for a control event, whose person actor plays the author and whose service actor names none to sign for."""
+    _check_claimed_signer(claim, signers=signers)
+    person = _person_actor(envelope)
+    _check_authorship(claim, person, signs_unaided=person is None, delegators=delegators)
 
 
 def _raw_signature(text: str) -> bytes:
@@ -521,9 +628,10 @@ def _ed25519_verifies(raw_public: bytes, signature: bytes, message: bytes) -> bo
     return True
 
 
-def _check_signature(event: Mapping[str, Any], holder: str, raw_public: bytes, signature: bytes) -> None:
+def _check_signature(unsigned: Mapping[str, Any], raw_public: bytes, signature: bytes) -> None:
+    """Check ``signature`` over the canon-1 bytes of ``unsigned``, the event as it was signed (its facet without the value)."""
     try:
-        message = canon_1(_without_signature_value(event, holder))
+        message = canon_1(unsigned)
     except CanonError as exc:
         raise _refused("uncanonical", f"the event has no canonical form: {exc}") from exc
     if not _ed25519_verifies(raw_public, signature, message):
@@ -562,5 +670,36 @@ def verify_signature(event: Mapping[str, Any], *, source: PublicKeySource, signe
         raw_signature = _raw_signature(claim.value)
     raw_public = _published_raw_key(claim, source)
     with _unexpected_is_a_refusal():
-        _check_signature(event, holder, raw_public, raw_signature)
+        _check_signature(_without_signature_value(event, holder), raw_public, raw_signature)
+    return VerifiedSignature(identity=claim.identity, kid=claim.kid, on_behalf_of=claim.on_behalf_of)
+
+
+def verify_control_signature(envelope: Mapping[str, Any], *, source: PublicKeySource, signers: frozenset[str], delegators: frozenset[str]) -> VerifiedSignature:
+    """Verify a control event's top-level `rask_signature` against the keys its signer publishes, or raise why it cannot be accepted.
+
+    THE CHECKS, THEIR ORDER AND THEIR OUTCOMES ARE `verify_signature`'S: unsigned, then the refusals that need no key, then the
+    published keys (never a refusal when unreadable), then the bytes. What differs is whom the signer vouches for. The
+    envelope's `actor` plays the author:
+
+    * ``user:<sub>``, a person: the signer is a delegator and declares `onBehalfOf` equal to the whole actor string. A signer
+      that is listed but no delegator is refused as `delegation`; no declared delegation, or one naming another subject, as
+      `author`.
+    * none, ``system:<...>`` or any other principal, a service: the signer is listed and declares no delegation.
+
+    ``signers`` are the identities that may sign THIS event (a door passes the ones its action allows) and ``delegators`` the
+    ones among them that may also speak for a person. A delegator that is not in ``signers`` may sign nothing: the estate-wide
+    delegator set must not widen what one action accepts. Neither is empty-checked here, as in `verify_signature`.
+
+    Raises:
+        UnsignedEventError: the event carries no signature.
+        SignatureRefusedError: `reason` names why; a refusal is final.
+        KeySourceUnavailableError: the keys could not be read; retry rather than refuse.
+    """
+    with _unexpected_is_a_refusal():
+        claim = _read_control_signature(envelope)
+        _check_control_claim(claim, envelope, signers=signers, delegators=delegators)
+        raw_signature = _raw_signature(claim.value)
+    raw_public = _published_raw_key(claim, source)
+    with _unexpected_is_a_refusal():
+        _check_signature(_control_without_signature_value(envelope), raw_public, raw_signature)
     return VerifiedSignature(identity=claim.identity, kid=claim.kid, on_behalf_of=claim.on_behalf_of)

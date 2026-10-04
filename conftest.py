@@ -472,7 +472,8 @@ class EventSigner:
 
     Built from the contract alone (NKEY-encoded keys, canon-1, a 16-hex kid, the `rask_signature` facet with only its
     `signature` member left out of the signed bytes), never from lineage-kit, so a door test checks conformance to the
-    wire format instead of agreeing with the code it tests.
+    wire format instead of agreeing with the code it tests. A control event ([[XC-078]]) has no facet bag: `sign_control`
+    puts the same facet at the top level of the flat envelope.
     """
 
     def __init__(self, identity: str) -> None:
@@ -489,11 +490,23 @@ class EventSigner:
 
     def sign(self, event: dict, *, on_behalf_of: str | None = None, identity: str | None = None) -> dict:
         """The event with a `rask_signature` facet on its run facets (a RunEvent) or dataset facets (a DatasetEvent)."""
-        import base64
         import copy
 
         signed = copy.deepcopy(event)
         bag = signed["run"] if "run" in signed else signed["dataset"]
+        return self._attach(signed, bag.setdefault("facets", {}), on_behalf_of=on_behalf_of, identity=identity)
+
+    def sign_control(self, envelope: dict, *, on_behalf_of: str | None = None, identity: str | None = None) -> dict:
+        """The control event with a top-level `rask_signature` member, whatever its actor: a test may sign what the kit refuses to."""
+        import copy
+
+        signed = copy.deepcopy(envelope)
+        return self._attach(signed, signed, on_behalf_of=on_behalf_of, identity=identity)
+
+    def _attach(self, signed: dict, holder: dict, *, on_behalf_of: str | None, identity: str | None) -> dict:
+        """Write the facet into ``holder`` (a member of ``signed``) and compute its value over ``signed`` without that value."""
+        import base64
+
         facet: dict[str, object] = {
             "_producer": "https://github.com/AI-Riksarkivet/rask/tree/main/packages/lineage-kit",
             "_schemaURL": "https://raw.githubusercontent.com/AI-Riksarkivet/rask/facets-1.0.0/spec/facets/rask/RaskSignatureRunFacet.json",
@@ -504,7 +517,7 @@ class EventSigner:
         }
         if on_behalf_of is not None:
             facet["onBehalfOf"] = on_behalf_of
-        bag.setdefault("facets", {})["rask_signature"] = facet
+        holder["rask_signature"] = facet
         facet["signature"] = base64.urlsafe_b64encode(self._key.sign(canon_1(signed))).decode().rstrip("=")
         return signed
 

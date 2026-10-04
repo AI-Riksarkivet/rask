@@ -4,6 +4,10 @@
 is a claim. The signature turns it into one a listed signer's published key vouches for, and `lineage_kit.signing`
 is the one implementation every signer and verifier imports.
 
+[[XC-078]]. A control event is the same claim in another layout: a flat object whose `actor` plays the author and whose
+facet is a top-level member. The `control-` rows drive `verify_control_signature` through the same outcome table, so what
+differs is only whom a signer may vouch for: a delegator for a `user:` actor, any listed signer for a service.
+
 WHAT PINS THE WIRE FORMAT IS NOT THIS PACKAGE. The root conftest's `EventSigner` writes the contract's NKEY keys,
 canon-1 and `rask_signature` facet from the contract alone, so the signatures here are compared with an
 independent writer's rather than checked against the code that made them, and an RFC 8032 vector anchors the key
@@ -38,10 +42,13 @@ from lineage_kit import (
     SignatureError,
     SigningKey,
     VerifiedSignature,
+    attach_control_signature,
     attach_signature,
     canon_1,
+    control_signature_of,
     parse_published_keys,
     signature_of,
+    verify_control_signature,
     verify_signature,
 )
 from lineage_kit.signing import MAX_NESTING
@@ -49,6 +56,7 @@ from lineage_kit.signing import MAX_NESTING
 
 STAGE, CATALOG, OTHER_DELEGATOR, ROGUE = "service-bronze-to-silver", "service-catalog", "service-other-delegator", "service-trainer"
 PERSON = "CgVhbGljZRIFbG9jYWw"
+PERSON_ACTOR = f"user:{PERSON}"
 SIGNERS = frozenset({STAGE, CATALOG, OTHER_DELEGATOR})
 DELEGATORS = frozenset({CATALOG, OTHER_DELEGATOR})
 
@@ -82,10 +90,28 @@ def _dataset_event(author: str) -> dict[str, Any]:
     }
 
 
+def _control_event(actor: str | None = PERSON_ACTOR) -> dict[str, Any]:
+    """A `grant_added` control event as the bus carries it (`CatalogControlEvent.model_dump_json()` read back): a flat object with no facet bag."""
+    return {
+        "event_id": "0199a1b2c3d47e5f8a9b0c1d2e3f4a5b",
+        "occurred_at": "2026-10-04T12:00:00.123456Z",
+        "action": "grant_added",
+        "object_type": "grant",
+        "object_id": "table:acme-silver$events",
+        "actor": actor,
+        "extra": {"relation": "can_read", "subject": "user:bob"},
+    }
+
+
 def _with_signature_members(signed: dict[str, Any], **members: Any) -> dict[str, Any]:
     """The event with members of its `rask_signature` facet replaced and nothing else touched."""
     bag = signed["run"]["facets"]
     return {**signed, "run": {**signed["run"], "facets": {**bag, "rask_signature": {**bag["rask_signature"], **members}}}}
+
+
+def _with_control_signature_members(signed: dict[str, Any], **members: Any) -> dict[str, Any]:
+    """The control event with members of its top-level `rask_signature` replaced and nothing else touched."""
+    return {**signed, "rask_signature": {**signed["rask_signature"], **members}}
 
 
 def _with_author(signed: dict[str, Any], sub: str) -> dict[str, Any]:
@@ -124,6 +150,11 @@ def _signed(signer: Any, event: dict[str, Any], *, on_behalf_of: str | None = No
     independent signer would hide: every row would fail alike and the tamper rows would still read as refused.
     """
     return attach_signature(event, key=SigningKey.from_seed(signer.seed), identity=signer.identity, on_behalf_of=on_behalf_of)
+
+
+def _signed_control(signer: Any, envelope: dict[str, Any], *, on_behalf_of: str | None = None) -> dict[str, Any]:
+    """`_signed` for a control event, by the same argument."""
+    return attach_control_signature(envelope, key=SigningKey.from_seed(signer.seed), identity=signer.identity, on_behalf_of=on_behalf_of)
 
 
 def _facet_schema_errors(facets: dict[str, Any]) -> list[str]:
@@ -173,6 +204,23 @@ def test_a_signature_is_the_wire_format_the_contract_writes_and_verifies_against
     again["run"]["facets"]["lance"]["rows"] = 99
     assert original == _event(PERSON)
 
+    # A control event has no facet bag: the same facet rides as a top-level member, and the independent writer produces it byte for byte.
+    control = attach_control_signature(_control_event(), key=key, identity=CATALOG, on_behalf_of=PERSON_ACTOR)
+    assert control == catalog.sign_control(_control_event(), on_behalf_of=PERSON_ACTOR)
+    assert _facet_schema_errors({"rask_signature": control["rask_signature"]}) == [], "the control facet is not what the facet schema describes"
+    delegated = VerifiedSignature(identity=CATALOG, kid=catalog.kid, on_behalf_of=PERSON_ACTOR)
+    assert verify_control_signature(control, source=source, signers=SIGNERS, delegators=DELEGATORS) == delegated
+    assert attach_control_signature(control, key=key, identity=CATALOG, on_behalf_of=PERSON_ACTOR) == control, "a re-signed control event changed"
+    claimed = control_signature_of(control)
+    assert claimed is not None
+    assert (claimed.identity, claimed.kid, claimed.on_behalf_of) == (CATALOG, catalog.kid, PERSON_ACTOR)
+    assert control_signature_of(_control_event()) is None
+    # What could never verify is refused where the producer still sees it: a person's event with no delegation, and a signer with no name.
+    with pytest.raises(ValueError, match="declared delegation"):
+        attach_control_signature(_control_event(), key=key, identity=CATALOG)
+    with pytest.raises(ValueError, match="name the identity"):
+        attach_control_signature(_control_event(None), key=key, identity="")
+
 
 @pytest.mark.parametrize(
     ("case", "outcome", "reads"),
@@ -191,6 +239,15 @@ def test_a_signature_is_the_wire_format_the_contract_writes_and_verifies_against
         pytest.param("tamper-schema-url", "signature", ["published"], id="the-schema-url-rewritten"),
         pytest.param("tamper-author", "signature", ["published"], id="the-person-retargeted-in-the-author-and-the-delegation"),
         pytest.param("a-fault-in-the-crypto-library", "error", ["published"], id="an-exception-nothing-anticipated"),
+        pytest.param("control-delegator-for-a-person", "verified", ["published"], id="a-delegator-signs-a-control-event-for-the-person-it-names"),
+        pytest.param("control-service-actor", "verified", ["published"], id="a-listed-signer-signs-a-control-event-of-a-service"),
+        pytest.param("control-person-by-a-non-delegator", "delegation", [], id="a-control-event-for-a-person-signed-by-a-signer-that-is-no-delegator"),
+        pytest.param("control-person-without-a-delegation", "author", [], id="a-control-event-for-a-person-signed-with-no-delegation-declared"),
+        pytest.param("control-delegation-for-another-actor", "author", [], id="a-control-delegation-for-someone-other-than-the-actor"),
+        pytest.param("control-signer-outside-both-sets", "signer", [], id="a-control-event-signed-by-an-identity-nothing-lists"),
+        pytest.param("control-unsigned", "unsigned", [], id="a-control-event-with-no-signature"),
+        pytest.param("control-tamper-body", "signature", ["published"], id="a-control-event-whose-audience-was-changed-after-signing"),
+        pytest.param("control-tamper-facet", "signature", ["published"], id="a-control-signature-whose-schema-url-was-rewritten"),
     ],
 )
 def test_the_verifier_accepts_what_a_published_key_signed_and_refuses_the_rest_reading_a_key_only_when_it_must(
@@ -200,6 +257,8 @@ def test_the_verifier_accepts_what_a_published_key_signed_and_refuses_the_rest_r
     published = {CATALOG: [catalog.public], STAGE: [stage.public]}
     delegated = _signed(catalog, _event(PERSON), on_behalf_of=PERSON)
     self_signed = _signed(stage, _event(STAGE))
+    control_delegated = _signed_control(catalog, _control_event(), on_behalf_of=PERSON_ACTOR)
+    control_no_actor = _signed_control(stage, _control_event(None))
     corrupt = stage.public[:10] + ("A" if stage.public[10] != "A" else "B") + stage.public[11:]
     # The last base64url character of a signature carries bits no one checks, so it has a second spelling for the same 64 bytes.
     value = self_signed["run"]["facets"]["rask_signature"]["signature"]
@@ -234,11 +293,25 @@ def test_the_verifier_accepts_what_a_published_key_signed_and_refuses_the_rest_r
             _Source(published),
         ),
         "a-fault-in-the-crypto-library": a_fault_in_the_crypto_library,
+        "control-delegator-for-a-person": lambda: (control_delegated, _Source(published)),
+        "control-service-actor": lambda: (_signed_control(stage, _control_event("system:maintenance")), _Source(published)),
+        "control-person-by-a-non-delegator": lambda: (_signed_control(stage, _control_event(), on_behalf_of=PERSON_ACTOR), _Source(published)),
+        # The kit refuses to sign this, so the independent writer does: a verifier must not rely on every signer being the kit.
+        "control-person-without-a-delegation": lambda: (stage.sign_control(_control_event()), _Source(published)),
+        "control-delegation-for-another-actor": lambda: (_signed_control(catalog, _control_event(), on_behalf_of="user:someone-else"), _Source(published)),
+        "control-signer-outside-both-sets": lambda: (_signed_control(event_signer(ROGUE), _control_event(None)), _Source(published)),
+        "control-unsigned": lambda: (_control_event(), _Source(published)),
+        "control-tamper-body": lambda: ({**control_no_actor, "extra": {**control_no_actor["extra"], "subject": "user:eve"}}, _Source(published)),
+        "control-tamper-facet": lambda: (
+            _with_control_signature_members(control_delegated, _schemaURL="https://example.invalid/other.json"),
+            _Source(published),
+        ),
     }
     event, source = scenarios[case]()
+    verify = verify_control_signature if case.startswith("control-") else verify_signature
 
     try:
-        verify_signature(event, source=source, signers=SIGNERS, delegators=DELEGATORS)
+        verify(event, source=source, signers=SIGNERS, delegators=DELEGATORS)
         decided = "verified"
     except SignatureError as exc:
         decided = exc.reason
