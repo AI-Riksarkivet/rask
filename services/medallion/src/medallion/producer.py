@@ -101,6 +101,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.fga = None
     app.state.oidc = None
     await attach_auth(app, get_settings(), service="medallion-producer", fatal=True)
+    settings = get_settings()
+    # THE PRODUCER'S OWN SIGNING KEY, resolved through its own sidecar, and installed BEFORE the workflow runtime starts and
+    # withdrawn AFTER it has shut down. The worker pulls recovered activities the moment it starts and joins the ones in
+    # flight when it stops, and an activity that emits outside the key's lifetime cannot sign. `start_signing` makes one
+    # bounded attempt to resolve the key and does not wait for it to be published, so the probes and the retry answers are
+    # served from the moment the app boots whether or not the key resolved: a producer that is waiting for its key takes no
+    # delivery (`retry_until_signed` on its routes), reports itself not ready, and heals in place when the key is published.
+    signing = await start_signing(app, settings)
     # THE WORKFLOW WORKER for `promotion_review` — and the reason this app hosts it at all.
     # `raise_workflow_event` resolves the instance through the CALLING app's app-id, so the approve
     # route and the instance must share a process. The gate that holds a promotion runs in a stage runner,
@@ -119,7 +127,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # running), so nobody was ever told: no terminal event, no outcome report, no notification to the
     # originator. Owner ruling 2026-08-25. NOT "always": with neither feature on, this app hosts no
     # workflow and should run no engine.
-    settings = get_settings()
     if settings.quality_review_enabled or settings.ray_enabled:
         try:
             import dapr.ext.workflow as wf
@@ -145,11 +152,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # The operator doors' forward to the stage runner that hosts a run (`stage_runner_ops._forward`): one
     # pooled client for the app, bounded so a stage runner that hangs answers 502 rather than holding the door.
     app.state.http = httpx.AsyncClient(timeout=httpx.Timeout(10.0))
-    # THE PRODUCER'S OWN SIGNING KEY, resolved through its own sidecar. Started last so the probes and the retry
-    # answers are served from the moment the app boots whether or not the key resolved: a producer that is waiting
-    # for its key takes no delivery (`retry_until_signed` on its routes), reports itself not ready, and heals in
-    # place when the key is published.
-    signing = await start_signing(app, settings)
     app.state.startup_complete = True
     try:
         # ARMED AT SIGTERM, not at lifespan shutdown. The flag below flips in the `finally`,
@@ -162,10 +164,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     finally:
         _disarm_drain()
         app.state.shutting_down = True
-        await stop_signing(signing)
         if app.state.workflow_runtime is not None:
             with suppress(Exception):
                 app.state.workflow_runtime.shutdown()
+        await stop_signing(signing)
         with suppress(Exception):
             await app.state.dapr.close()
         with suppress(Exception):
