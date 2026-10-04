@@ -12,7 +12,8 @@ authenticates the sidecar that delivered the event, never the producer that wrot
 bronze write a listed lineage signer signed, and `/publication-arrival` only on a `table_published` the catalog signed.
 Enforcing, a refusal is acknowledged, counted and drives nothing (a DROP would park it, and park it again on every replay),
 and a key list the store cannot serve is retried; observing, the head acts as before and counts what it would have
-refused. An event the head ignores is never verified, so it is counted nowhere.
+refused. An event the head ignores is never verified, so it is counted nowhere. Every refusal series is exported at zero
+from the moment the routes are registered, so a first refusal is a rate the page can see.
 
 DECIDING COSTS ONE LISTING AT MOST. Whether the bronze head acts on a write it does not recognise is a question for the
 declared lanes, and reading them is one LIST and one GET per stored declaration: the head lists them at most once per
@@ -30,7 +31,7 @@ import asyncio
 import importlib
 import json
 from collections.abc import Callable, Iterator, Sequence
-from typing import Any, Final, Literal, cast
+from typing import Any, Final, Literal, cast, get_args
 from unittest import mock
 
 import httpx
@@ -43,7 +44,7 @@ from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader, NumberDataPoint
 from pydantic import BaseModel, ConfigDict, Field
 
-from lineage_kit import SigningKey, parse_published_keys
+from lineage_kit import RefusalReason, SigningKey, parse_published_keys
 from medallion.api.bronze_arrival import register_bronze_arrival_route
 from medallion.api.promotions import register_promotion_route
 from medallion.api.train import register_train_trigger_route
@@ -69,6 +70,9 @@ ROLES: Final = {"catalog": [CATALOG], "medallion_producer": [PRODUCER]}
 
 REFUSED: Final = "medallion.signature.refused"
 WOULD_REFUSE: Final = "medallion.signature.would_refuse"
+#: The refusal series both heads export at zero from the start, one per door and refusal reason: the page reads their rate,
+#: and a series born at one by the first refusal has none.
+ZERO_REFUSALS: Final = {(REFUSED, door, reason): 0 for door in ("bronze-arrival", "publication-arrival") for reason in get_args(RefusalReason.__value__)}
 
 type Signers = dict[str, Any]
 
@@ -396,7 +400,7 @@ def test_every_producer_delivery_is_decided_before_its_handler_reads_it(
 
     assert (answered.status_code, answered.json()) == (200, {"status": case.answer})
     assert sidecar.topics == case.published, f"the head published triggers on {sidecar.topics}"
-    assert _signature_counts(metric_reader) == case.counted
+    assert _signature_counts(metric_reader) == {**ZERO_REFUSALS, **case.counted}
     assert registry.listings == ["in a worker thread"] * case.listed
 
 
