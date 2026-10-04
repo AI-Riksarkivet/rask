@@ -9,7 +9,8 @@ Every binary is the one the chart deploys: `.dagger/nats_auth.go` copies them ou
 The keys are generated in the run's temp directory and nothing here prints a seed: a `Credential` holds its seed
 privately, and its `repr` carries the user name, the public key, the JWT and the creds path, all but the last public.
 The broker's trace log carries each client's CONNECT, which holds the user JWT and a signature over that run's nonce,
-never the seed. The seed reaches disk only in nsc's own creds files and the sidecars' resources directories.
+never the seed. Seeds reach disk only under the run's temp directory: nsc's keystore and creds files, and the
+sidecars' resources directories.
 """
 
 from __future__ import annotations
