@@ -20,15 +20,17 @@ Three refusals, and they answer different questions:
   signed it, and a control event only when the role its action names signed it; the annotator's task
   actions and the grants on its own projects need no signature (owner rulings R3 and R5). A refusal is
   acknowledged and counted, keys the sidecar cannot serve are retried, and `observe` delivers what
-  `enforce` would refuse and counts it. The public keys are read through the sidecar's secret API, stood
-  in for by respx; the signatures are built by the root conftest's `EventSigner` from the wire format alone.
+  `enforce` would refuse and counts it. Every door and reason series of the refusal counter exists at 0 from
+  the moment the doors are registered, so the alert's `rate()` sees the first refusal as an increase. The
+  public keys are read through the sidecar's secret API, stood in for by respx; the signatures are built by
+  the root conftest's `EventSigner` from the wire format alone.
 """
 
-import importlib
+import importlib.util
 import json
 import logging
 from collections.abc import Callable, Iterator, Sequence
-from typing import Any, cast
+from typing import Any, cast, get_args
 
 import httpx
 import pytest
@@ -36,8 +38,10 @@ import respx
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from lineage_kit.signing import RefusalReason
 from notifications.api import metrics as metrics_module
 from notifications.api import subscriptions as subscriptions_module
+from notifications.api.metrics import Door
 from notifications.api.settings import get_ingress_settings
 from notifications.config import get_notifications_settings
 from notifications.proxies import TypedActorProxy
@@ -53,6 +57,11 @@ PRODUCER = "service-medallion-producer"
 
 #: What the signature counters hold: metric name -> (door, reason) -> count.
 type Counts = dict[str, dict[tuple[str, str], int]]
+
+REFUSED = "notifications.signature.refused"
+
+#: Every series of the refusal counter, at the 0 it is created with: both doors, every reason the kit can refuse for.
+ZERO_REFUSALS: dict[tuple[str, str], int] = {(door.value, reason): 0 for door in Door for reason in get_args(RefusalReason.__value__)}
 
 RUN_EVENT: dict[str, Any] = {
     "eventType": "FAIL",
@@ -201,8 +210,13 @@ def token_door(plane: _Plane, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestC
 
 
 @pytest.fixture
-def signing_door(request: pytest.FixtureRequest, plane: _Plane, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
-    """The token door with signature doors in the mode the case names, and the signer sets the chart renders for this app."""
+def signing_door(
+    request: pytest.FixtureRequest, plane: _Plane, monkeypatch: pytest.MonkeyPatch, signature_counts: Callable[[], Counts]
+) -> Iterator[TestClient]:
+    """The token door with signature doors in the mode the case names, and the signer sets the chart renders for this app.
+
+    Built after `signature_counts`, as a pod registers its doors after its MeterProvider is installed: the series the
+    registration creates are recorded where the test reads them."""
     for key, value in {
         "APP_API_TOKEN": TOKEN,
         "DAPR_HTTP_PORT": "3500",
@@ -216,11 +230,13 @@ def signing_door(request: pytest.FixtureRequest, plane: _Plane, monkeypatch: pyt
 
 
 @pytest.fixture
-def signature_counts() -> Iterator[Callable[[], Counts]]:
+def signature_counts(monkeypatch: pytest.MonkeyPatch) -> Iterator[Callable[[], Counts]]:
     """What the signature counters hold, read through a real in-memory reader.
 
-    The counters are created at import against the global meter, so the metrics module is reloaded under a meter
-    this test reads, and reloaded again afterwards so every later test records against the global one.
+    The counters are made when `notifications.api.metrics` is imported. Its code is run again into a module object of its
+    own under a meter of this reader's provider, and only the two signature counters are swapped onto the imported
+    module, so their names stay the module's own and nothing else is replaced. A reload would replace the module's enums
+    as well, and `reconcile_cron` compares the `PassOutcome` members it imported by identity.
     """
     import opentelemetry.metrics as otel_metrics
     from opentelemetry.sdk.metrics import MeterProvider
@@ -228,6 +244,14 @@ def signature_counts() -> Iterator[Callable[[], Counts]]:
 
     reader = InMemoryMetricReader()
     provider = MeterProvider(metric_readers=[reader])
+    spec = importlib.util.find_spec(metrics_module.__name__)
+    assert spec is not None and spec.loader is not None, "the metrics module has no loader to run it again with"
+    measured = importlib.util.module_from_spec(spec)
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(otel_metrics, "get_meter", lambda name, *_args, **_kwargs: provider.get_meter(name))
+        spec.loader.exec_module(measured)
+    for counter in ("_signature_refused", "_signature_would_refuse"):
+        monkeypatch.setattr(metrics_module, counter, getattr(measured, counter))
 
     def counts() -> Counts:
         found: Counts = {}
@@ -245,11 +269,16 @@ def signature_counts() -> Iterator[Callable[[], Counts]]:
                         found.setdefault(metric.name, {})[key] = int(point.value)
         return found
 
-    with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(otel_metrics, "get_meter", lambda *_args, **_kwargs: provider.get_meter("lance.notifications"))
-        importlib.reload(metrics_module)
-        yield counts
-    importlib.reload(metrics_module)
+    yield counts
+    provider.shutdown()
+
+
+def _after_one_delivery(door: str, counted: tuple[str, str] | None) -> Counts:
+    """The counters after one delivery at ``door``: every refusal series at its 0, plus the one this delivery counted."""
+    expected: Counts = {REFUSED: dict(ZERO_REFUSALS)}
+    if counted is not None:
+        expected.setdefault(counted[0], {})[(door, counted[1])] = 1
+    return expected
 
 
 @respx.mock
@@ -282,13 +311,14 @@ def test_a_delivery_carrying_the_sidecars_token_reaches_an_inbox_only_when_a_lis
     published = respx.get(f"{SECRETS}/signing-public-{CATALOG}")
     published.mock(return_value=httpx.Response(500) if case == "store-down" else httpx.Response(200, json={"keys": catalog.public}))
     event = _run_event(case, catalog=catalog, intruder=event_signer("service-intruder"))
+    assert signature_counts() == {REFUSED: ZERO_REFUSALS}, "registering the doors must create every refusal series at 0, or a first refusal is no increase"
 
     answered = signing_door.post("/lineage-events", headers={"dapr-api-token": TOKEN}, json=_cloud_event(event))
 
     assert answered.status_code == 200, answered.text
     assert answered.json() == {"status": answer}
     assert {subject: len(rows) for subject, rows in plane.boxes.items()} == boxes
-    assert signature_counts() == ({} if counted is None else {counted[0]: {("lineage-events", counted[1]): 1}})
+    assert signature_counts() == _after_one_delivery("lineage-events", counted)
 
 
 @respx.mock
@@ -328,7 +358,7 @@ def test_a_control_event_reaches_an_inbox_only_when_the_role_its_action_names_si
     assert answered.status_code == 200, answered.text
     assert answered.json() == {"status": "SUCCESS"}
     assert {subject: len(rows) for subject, rows in plane.boxes.items()} == boxes
-    assert signature_counts() == ({} if counted is None else {counted[0]: {("control-events", counted[1]): 1}})
+    assert signature_counts() == _after_one_delivery("control-events", counted)
 
 
 @pytest.mark.parametrize("headers", [{}, {"dapr-api-token": "a-guess"}, {"dapr-api-token": ""}], ids=["no-token", "wrong-token", "empty-token"])

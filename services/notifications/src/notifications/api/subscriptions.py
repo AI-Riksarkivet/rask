@@ -35,7 +35,7 @@ from fastapi import Depends, FastAPI, Request
 from notifications.api.control_events import UsersetExpander, ingest_control_event
 from notifications.api.dlq import register_dlq_route
 from notifications.api.ingest import ingest_run_event
-from notifications.api.metrics import Lane
+from notifications.api.metrics import Lane, create_signature_refused_series
 from notifications.api.security import VisibilityDep
 from notifications.api.settings import get_ingress_settings
 from notifications.api.signature_door import screen_control_event, screen_lineage_event
@@ -51,7 +51,7 @@ from service_kit.governed.dapr_auth import require_dapr_token
 
 
 def register_subscriptions(app: FastAPI) -> None:
-    """Wire this service's Dapr-delivered routes onto `app`."""
+    """Wire this service's Dapr-delivered routes onto `app`, and create their signature doors' refusal series at 0."""
     settings = get_ingress_settings()
     # THE FAIL-CLOSED CHECK IS IN THE LIFESPAN, NOT HERE, and this module's siblings are why. With the
     # app token taken from the Dapr secret store, `assert_app_token_configured` performs a SIDECAR READ
@@ -151,3 +151,7 @@ def register_subscriptions(app: FastAPI) -> None:
             open_inbox=inbox_for,
             expand=_make_expander(getattr(request.app.state, "fga", None)),
         )
+
+    # The doors' refusal series, at 0 from the moment the doors exist. `notifications/__init__.py` calls this function
+    # after `make_service_app`, which installed the MeterProvider these zeros must reach.
+    create_signature_refused_series()

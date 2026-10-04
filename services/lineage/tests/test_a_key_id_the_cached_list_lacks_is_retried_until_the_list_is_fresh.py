@@ -8,12 +8,16 @@ decides one). Any read that begins after that first sighting decides it, whichev
 120 s later always ends in a verdict: a key id the list does not hold is refused, which is acked and never recorded. The list is also
 the trust anchor, so a cached copy is served only until its TTL: a key the store has since removed stops verifying once the copy
 expires. The memory of first sightings is bounded: a key id pushed out of it is met afresh, which is one more retry cycle for its
-event, while a key id still in it keeps its verdict.
+event, while a key id still in it keeps its verdict. A read that fails is shared like one that succeeds: every verification that
+began before it ended takes its failure, a retry, rather than reading again, which would cost N verifications queued behind a
+hung store N reads of its timeout each, every one of them holding a worker; a verification that begins after it ended reads afresh.
 
 Driven through the registered `/lineage-events` route, with the key reader's clock injected so the interval, the TTL and the
 redelivery are crossed without waiting, and the bound shrunk to one key id so a second one pushes the first out. One event is built
-per signing key, so delivering a key's event again is the sidecar's redelivery of it. The sidecar's secret API is stood in for by
-respx, and the signatures are built by the root conftest's `EventSigner` from the wire format alone.
+per signing key, so delivering a key's event again is the sidecar's redelivery of it. A delivery's clock time is when its
+verification began, so deliveries at one instant are verifications that overlap, and a store that hangs moves the clock on by the
+read's timeout. The sidecar's secret API is stood in for by respx, and the signatures are built by the root conftest's
+`EventSigner` from the wire format alone.
 """
 
 from __future__ import annotations
@@ -30,6 +34,7 @@ from starlette.testclient import TestClient
 
 from lineage.services.signature import dapr_published_keys
 from lineage_kit.keys import KEY_REFRESH_INTERVAL_SECONDS, KEY_TTL_SECONDS
+from service_kit.governed.signing_key import KEY_READ_TIMEOUT_SECONDS
 
 
 SIGNER = "service-maintenance"
@@ -130,15 +135,30 @@ def _outcome(answered: dict[str, Any], newly_recorded: bool) -> str:
             2,
             id="at-the-bound-the-key-id-met-least-recently-is-forgotten-and-met-afresh",
         ),
+        pytest.param(
+            None,
+            # The stale list is read again at TTL + 10 s and the read fails at TTL + 12 s: the two deliveries that began at
+            # TTL + 10 s, behind it, take its failure, and the one that begins a second after it ended reads afresh.
+            [
+                (KEY_TTL_SECONDS + 10, "old", RETRIED),
+                (KEY_TTL_SECONDS + 10, "old", RETRIED),
+                (KEY_TTL_SECONDS + 10, "old", RETRIED),
+                (KEY_TTL_SECONDS + 10 + KEY_READ_TIMEOUT_SECONDS + 1, "old", RETRIED),
+            ],
+            3,
+            id="verifications-that-began-during-a-failed-read-share-it-and-a-later-one-reads-afresh",
+        ),
     ],
 )
 def test_an_unknown_key_id_is_retried_until_the_list_is_fresh_and_a_cached_list_expires(
     monkeypatch: pytest.MonkeyPatch,
     event_signer: Any,
-    published_now: str,
+    published_now: str | None,
     deliveries: list[tuple[float, str, str]],
     reads_of_the_store: int,
 ) -> None:
+    """``published_now`` is the list the store serves after the priming read, or None for a store that hangs for the read's
+    whole timeout and then fails."""
     for key, value in {
         "APP_API_TOKEN": "the-estate-app-token",
         "LINEAGE_DAPR_ENABLED": "true",
@@ -169,7 +189,15 @@ def test_an_unknown_key_id_is_retried_until_the_list_is_fresh_and_a_cached_list_
     headers = {"dapr-api-token": "the-estate-app-token"}
     primed = client.post("/lineage-events", json={"data": signers["old"].sign(_event(PRIMER))}, headers=headers)
     assert (primed.json(), published.call_count) == ({"status": "SUCCESS"}, 1), "the list was not cached by a verified event, so this tests nothing"
-    published.mock(return_value=httpx.Response(200, json={"keys": ",".join(signers[name].public for name in published_now.split(","))}))
+    if published_now is None:
+
+        def _hangs_then_fails(request: httpx.Request) -> httpx.Response:
+            clock.now += KEY_READ_TIMEOUT_SECONDS
+            raise httpx.ReadTimeout("the store did not answer within the read's timeout", request=request)
+
+        published.mock(side_effect=_hangs_then_fails)
+    else:
+        published.mock(return_value=httpx.Response(200, json={"keys": ",".join(signers[name].public for name in published_now.split(","))}))
 
     outcomes: list[str] = []
     for at, signed_with, _ in deliveries:

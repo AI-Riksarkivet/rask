@@ -40,6 +40,19 @@ OIDC_ARGS: tuple[str, ...] = (
 DEFAULT_ARGS: tuple[str, ...] = ("--set", "image.localImages=true", "--set", "minio.enabled=true")
 
 
+def render_chart_text(chart: pathlib.Path, *extra: str) -> str:
+    """Helm's raw stdout for the chart at ``chart`` under `OIDC_ARGS` plus ``extra``, uncached.
+
+    For a gate that renders a modified COPY of the chart: no `--set` reaches a file the chart reads with `.Files.Get`,
+    and no other gate can share a copy's render.
+    """
+    helm = shutil.which("helm") or str(REPO / ".localbin/helm")
+    if not pathlib.Path(helm).exists():
+        pytest.skip("helm not available")
+    argv = [helm, "template", "rask", str(chart), *OIDC_ARGS, *extra]
+    return subprocess.run(argv, capture_output=True, text=True, check=True).stdout  # noqa: S603
+
+
 @functools.cache
 def render_text(*extra: str) -> str:
     """Helm's RAW stdout for this overlay — the bytes Helm itself stores in the release Secret.
@@ -49,11 +62,7 @@ def render_text(*extra: str) -> str:
     manifest that does not exist and can never fail. Measured 2026-09-21, that mistake made the gate
     pass with three un-converted templates restored.
     """
-    helm = shutil.which("helm") or str(REPO / ".localbin/helm")
-    if not pathlib.Path(helm).exists():
-        pytest.skip("helm not available")
-    argv = [helm, "template", "rask", str(REPO / "chart"), *OIDC_ARGS, *extra]
-    return subprocess.run(argv, capture_output=True, text=True, check=True).stdout  # noqa: S603
+    return render_chart_text(REPO / "chart", *extra)
 
 
 @functools.cache

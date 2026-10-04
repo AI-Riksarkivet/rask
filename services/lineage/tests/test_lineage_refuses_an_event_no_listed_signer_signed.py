@@ -7,14 +7,18 @@ A public-key source lineage cannot read is an outage, so the delivery is retried
 
 Driven through the registered `/lineage-events` route with the production wiring, FGA off so only the signature decides.
 The signer's public keys are read through the sidecar's secret API, stood in for by respx at the address the Dapr
-sidecar serves; the signatures are built by the root conftest's `EventSigner` from the wire format alone.
+sidecar serves; the signatures are built by the root conftest's `EventSigner` from the wire format alone. Every reason
+series of the refusal counter exists at 0 from the moment the door is registered, so the alert's `rate()` sees the first
+refusal as an increase; the counter is read through a real in-memory reader.
 """
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import logging
-from typing import Any
+from collections.abc import Callable, Iterator, Sequence
+from typing import Any, cast, get_args
 
 import httpx
 import pytest
@@ -22,9 +26,53 @@ import respx
 from fastapi import FastAPI
 from starlette.testclient import TestClient
 
+from lineage_kit.signing import RefusalReason
+
 
 SIGNER = "service-bronze-to-silver"
 SECRETS = "http://localhost:3500/v1.0/secrets/lance-secrets"
+
+
+@pytest.fixture
+def refusals(monkeypatch: pytest.MonkeyPatch) -> Iterator[Callable[[], dict[str, int]]]:
+    """`lineage.signature.refused` by reason, read through a real in-memory reader.
+
+    The counter is made when `lineage.core.metrics` is imported. Its code is run again into a module object of its own
+    under a meter of this reader's provider, and only the refusal counter is swapped onto the imported module, so its name
+    is the module's own and nothing else is replaced: a reload would replace the module's enums, which every importer
+    holds as it imported them.
+    """
+    from opentelemetry import metrics as otel_metrics
+    from opentelemetry.sdk.metrics import MeterProvider
+    from opentelemetry.sdk.metrics.export import InMemoryMetricReader, NumberDataPoint
+
+    from lineage.core import metrics
+
+    reader = InMemoryMetricReader()
+    provider = MeterProvider(metric_readers=[reader])
+    spec = importlib.util.find_spec(metrics.__name__)
+    assert spec is not None and spec.loader is not None, "the metrics module has no loader to run it again with"
+    measured = importlib.util.module_from_spec(spec)
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(otel_metrics, "get_meter", lambda name, *_args, **_kwargs: provider.get_meter(name))
+        spec.loader.exec_module(measured)
+    monkeypatch.setattr(metrics, "_signature_refused", measured._signature_refused)
+
+    def counts() -> dict[str, int]:
+        found: dict[str, int] = {}
+        data = reader.get_metrics_data()
+        for resource in data.resource_metrics if data is not None else ():
+            for scope in resource.scope_metrics:
+                for metric in scope.metrics:
+                    if metric.name != "lineage.signature.refused":
+                        continue
+                    # A counter only ever yields `NumberDataPoint`, the member of the reader's point union that has a value.
+                    for point in cast(Sequence[NumberDataPoint], metric.data.data_points):
+                        found[str((point.attributes or {}).get("lance.lineage.reason"))] = int(point.value)
+        return found
+
+    yield counts
+    provider.shutdown()
 
 
 class _Feed:
@@ -56,7 +104,8 @@ def _event() -> dict[str, Any]:
 
 
 @pytest.fixture
-def door(monkeypatch: pytest.MonkeyPatch) -> tuple[TestClient, _Feed]:
+def door(monkeypatch: pytest.MonkeyPatch, refusals: Callable[[], dict[str, int]]) -> tuple[TestClient, _Feed]:
+    """The registered route, built after `refusals` as a pod registers its door after its MeterProvider is installed."""
     for key, value in {
         "APP_API_TOKEN": "the-estate-app-token",
         "LINEAGE_DAPR_ENABLED": "true",
@@ -89,7 +138,13 @@ def door(monkeypatch: pytest.MonkeyPatch) -> tuple[TestClient, _Feed]:
     ],
 )
 def test_lineage_records_a_bus_event_only_when_a_listed_signer_signed_it(
-    door: tuple[TestClient, _Feed], event_signer: Any, respx_allows_unused_routes: None, case: str, status: str, recorded: bool
+    door: tuple[TestClient, _Feed],
+    refusals: Callable[[], dict[str, int]],
+    event_signer: Any,
+    respx_allows_unused_routes: None,
+    case: str,
+    status: str,
+    recorded: bool,
 ) -> None:
     client, feed = door
     signer = event_signer(SIGNER)
@@ -98,6 +153,9 @@ def test_lineage_records_a_bus_event_only_when_a_listed_signer_signed_it(
     event = _event() if case == "unsigned" else signer.sign(_event())
     if case == "tampered":
         event["outputs"] = [{"namespace": "gold", "name": "acme-gold$events"}]
+    assert refusals() == dict.fromkeys(get_args(RefusalReason.__value__), 0), (
+        "registering the door must create every refusal series at 0, or a first refusal is no increase"
+    )
 
     answered = client.post("/lineage-events", json={"data": event}, headers={"dapr-api-token": "the-estate-app-token"})
 

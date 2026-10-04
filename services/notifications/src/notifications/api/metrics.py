@@ -16,8 +16,11 @@ the precedent); in PromQL the dots become underscores.
 """
 
 from enum import StrEnum
+from typing import get_args
 
 from opentelemetry import metrics
+
+from lineage_kit.signing import RefusalReason
 
 
 class Lane(StrEnum):
@@ -189,6 +192,19 @@ def record_feed_gap(count: int = 1) -> None:
     store's `information_schema.tables` before this changed.
     """
     _feed_gaps.add(count)
+
+
+def create_signature_refused_series() -> None:
+    """Create every door and reason series of `notifications.signature.refused` at 0.
+
+    The alert over this counter is `rate(...) > 0`, and a cumulative counter exports nothing for a series before its first
+    add: a series born at 1 has no 0 before it, so `rate()` sees no increase and the first refusal never pages. Called
+    when the doors are registered, after `service_kit.setup_otel` installed the MeterProvider: an add through the proxy
+    meter before then is dropped. Both measured on opentelemetry-sdk 1.44.0.
+    """
+    for door in Door:
+        for reason in get_args(RefusalReason.__value__):
+            _signature_refused.add(0, {"lance.notifications.door": door.value, "lance.notifications.reason": reason})
 
 
 def record_signature_refused(door: Door, reason: str) -> None:

@@ -61,13 +61,15 @@ class _Read(NamedTuple):
 class PublishedKeys:
     """What each listed signer publishes, read through the injected `fetch` and cached by what the store said.
 
-    Successes only: a list that could not be read is never cached, so an outage is answered afresh on the next call
-    and a half-seeded store cannot pin a missing list for a TTL. Reads of one identity are SINGLE-FLIGHT, each
-    behind its own lock: concurrent callers share the read in progress rather than each asking the store.
+    Reads of one identity are SINGLE-FLIGHT, each behind its own lock, and a verification shares the read in progress
+    whatever it answers. A success is cached. A failure answers every verification that began before it ended, so N
+    verifications queued behind a hung store cost one read of its timeout, not N in turn with a worker held by each.
+    A failure is kept no longer than that: a verification that begins after it ended reads afresh, and a half-seeded
+    store cannot pin a missing list for a TTL.
 
-    The locks and the cache are keyed only by identities the caller configured: the kit reads an identity only after
-    checking it against the signer set, so they are bounded by that set. The one thing keyed by the event's own text,
-    the key ids it names, is a bounded memory under each identity (`MAX_UNKNOWN_KEY_IDS`).
+    The locks, the cache and the failures are keyed only by identities the caller configured: the kit reads an identity
+    only after checking it against the signer set, so they are bounded by that set. The one thing keyed by the event's
+    own text, the key ids it names, is a bounded memory under each identity (`MAX_UNKNOWN_KEY_IDS`).
 
     `fetch` BLOCKS (a sidecar's secret API is a blocking HTTP call), so an async door verifies in a worker thread.
     """
@@ -76,6 +78,9 @@ class PublishedKeys:
         self._fetch = fetch
         self._clock = clock
         self._reads: dict[str, _Read] = {}
+        #: Per identity, when its latest read ended in failure, cleared by a read that succeeds. Touched only with that
+        #: identity's lock held.
+        self._failed: dict[str, float] = {}
         #: Per identity, the key ids met unknown, least recently met first, each with when it was FIRST met. Touched
         #: only with that identity's lock held.
         self._sightings: dict[str, OrderedDict[str, float]] = {}
@@ -90,13 +95,16 @@ class PublishedKeys:
         """
         return _KeysForOneEvent(self, arrived=self._clock(), kid=kid)
 
-    def cached(self, identity: str) -> Sequence[str]:
-        """The identity's list from the cache while it is younger than the TTL, else from a fresh read."""
+    def cached(self, identity: str, *, arrived: float) -> Sequence[str]:
+        """The identity's list from the cache while it is younger than the TTL, else from a fresh read.
+
+        ``arrived`` is when the verification asking began: a read that failed since then answers it (`_read`).
+        """
         with self._lock_for(identity):
             held = self._reads.get(identity)
             if held is not None and self._clock() - held.finished < KEY_TTL_SECONDS:
                 return held.keys
-            return self._read(identity).keys
+            return self._read(identity, arrived=arrived).keys
 
     def read_for_unknown_key_id(self, identity: str, kid: str | None, *, arrived: float) -> Sequence[str]:
         """The identity's list as read AFTER ``kid`` was first met unknown for it, which is what an unknown key id is judged on.
@@ -110,7 +118,8 @@ class PublishedKeys:
         A read that began after the first sighting is returned as it is. A list read earlier cannot decide the key id,
         and reading again for every such event would hand a forger the store: while the last read ended less than
         `KEY_REFRESH_INTERVAL_SECONDS` ago that is declined with `KeySourceUnavailableError`, which the door answers
-        RETRY, and past it the store is read afresh. A rate limit delays a verdict and never decides one.
+        RETRY, and past it the store is read afresh unless a read that failed since this delivery arrived answers it
+        (`_read`). A rate limit delays a verdict and never decides one.
         """
         with self._lock_for(identity):
             first_met = self._record_sighting(identity, kid, arrived)
@@ -122,7 +131,7 @@ class PublishedKeys:
                     f"no read of the public keys {identity!r} publishes has begun since this key id was first met, "
                     "and the last one ended moments ago; retry after the interval"
                 )
-            return self._read(identity).keys
+            return self._read(identity, arrived=arrived).keys
 
     def _record_sighting(self, identity: str, kid: str | None, arrived: float) -> float:
         """Record that ``kid`` was met unknown for ``identity`` at ``arrived``, and return when it was FIRST met.
@@ -150,15 +159,26 @@ class PublishedKeys:
                 lock = self._locks[identity] = threading.Lock()
             return lock
 
-    def _read(self, identity: str) -> _Read:
-        """One read through the injected fetch. Unreadable and absent are one answer: either way nothing is known about the signature."""
+    def _read(self, identity: str, *, arrived: float) -> _Read:
+        """One read through the injected fetch, called with the identity's lock held. Unreadable and absent are one answer:
+        either way nothing is known about the signature.
+
+        When the latest read failed at or after ``arrived``, the moment the verification asking began, that failure is the
+        verification's answer: it is the read the verification waited behind, or one that began since, and another read
+        would only queue behind a store that has just failed.
+        """
+        failed = self._failed.get(identity)
+        if failed is not None and failed >= arrived:
+            raise KeySourceUnavailableError(f"the public keys {identity!r} publishes could not be read by the read this verification waited for")
         started = self._clock()
         bundle = self._fetch(f"{_PUBLISHED_LIST_PREFIX}{identity}")
         keys = tuple(parse_published_keys(bundle.get(_KEYS_FIELD, "")))
         if not keys:
+            self._failed[identity] = self._clock()
             raise KeySourceUnavailableError(f"the public keys {identity!r} publishes could not be read")
         read = _Read(keys=keys, started=started, finished=self._clock())
         self._reads[identity] = read
+        self._failed.pop(identity, None)
         return read
 
 
@@ -171,7 +191,7 @@ class _KeysForOneEvent:
         self._kid = kid
 
     def published(self, identity: str) -> Sequence[str]:
-        return self._keys.cached(identity)
+        return self._keys.cached(identity, arrived=self._arrived)
 
     def refresh(self, identity: str) -> Sequence[str]:
         return self._keys.read_for_unknown_key_id(identity, self._kid, arrived=self._arrived)
