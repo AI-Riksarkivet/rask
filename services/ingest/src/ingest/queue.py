@@ -25,6 +25,7 @@ redeliver forever — hence `max_deliver` and the dlq.ingest.tasks parking subje
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import json
 import logging
@@ -36,6 +37,7 @@ from nats.js import errors as jserrors
 from pydantic import BaseModel, Field
 
 from ingest.config import settings
+from ingest.nats_user import held_nats_user
 
 
 logger = logging.getLogger(__name__)
@@ -186,6 +188,24 @@ def _dedupe_id(task: UnitTask) -> str:
 CONNECT_TIMEOUT_SECONDS = 5.0
 
 
+def _user_options() -> dict[str, Any]:
+    """The `nats.connect` options that present ingest's own NATS user (`ingest.nats_user`), or none while it holds none.
+
+    The client calls both on every connect and reconnect, and only once the server's INFO requires authentication and
+    carries a nonce: a server that does not authenticate is presented nothing.
+    """
+    user = held_nats_user()
+    if user is None:
+        return {}
+    jwt, key = user.jwt.encode(), user.key
+
+    def signed_nonce(nonce: str) -> bytes:
+        # Standard base64, as nats-py's own credentials-file path sends it; nats-server reads it and unpadded URL-safe alike.
+        return base64.b64encode(key.sign(nonce.encode()))
+
+    return {"user_jwt_cb": lambda: jwt, "signature_cb": signed_nonce}
+
+
 class BrokerUnreachable(RuntimeError):
     """The broker did not complete a connection inside the bound.
 
@@ -228,10 +248,13 @@ class WorkQueue:
         left at the client's default: the drain holds this connection for the length of a chunk, and
         disabling reconnect to make the initial connect fail faster would trade a bounded startup for
         a broker blip killing a live drain.
+
+        Ingest's own NATS user is presented here for the reason the bound lives here: every caller
+        inherits it.
         """
         bound = CONNECT_TIMEOUT_SECONDS if timeout is None else timeout
         try:
-            nc = await asyncio.wait_for(nats.connect(servers, **{"connect_timeout": bound, **options}), timeout=bound)
+            nc = await asyncio.wait_for(nats.connect(servers, **{"connect_timeout": bound, **_user_options(), **options}), timeout=bound)
         except TimeoutError as exc:
             raise BrokerUnreachable(f"no connection to the broker at {servers} within {bound}s") from exc
         return cls(nc, nc.jetstream())
@@ -398,10 +421,14 @@ class WorkQueue:
         message to exactly one puller, so scaling is adding pods and nothing has to partition the
         work. Durable and named per RUN, so a restarted worker re-attaches to the run's position
         rather than replaying it from the beginning.
+
+        The stream is NAMED rather than looked up by subject, so ingest's NATS user needs no right to
+        the lookup, `$JS.API.STREAM.NAMES`.
         """
         return await self._js.pull_subscribe(
             unit_subject(run_id),
             durable=f"ingest-{run_id}".replace(".", "-")[:64],
+            stream=STREAM,
             config=jsapi.ConsumerConfig(
                 ack_wait=ACK_WAIT_SECONDS,
                 max_ack_pending=max_ack_pending(),
@@ -565,7 +592,7 @@ async def inspect_queue(url: str, timeout: float = 3.0) -> QueueSnapshot:
 
     nc = None
     try:
-        nc = await nats.connect(url, connect_timeout=timeout, allow_reconnect=False, max_reconnect_attempts=0)
+        nc = await nats.connect(url, connect_timeout=timeout, allow_reconnect=False, max_reconnect_attempts=0, **_user_options())
         js = nc.jetstream()
         out = QueueSnapshot(reachable=True, stream_present=False, messages=None, consumers=None, dlq_present=False, retention="")
         try:
