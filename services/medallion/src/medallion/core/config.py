@@ -27,7 +27,7 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field, SecretStr, mode
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from service_kit.control_events import CONTROL_TOPIC
-from service_kit.governed.settings import FgaSettings, OidcSettings
+from service_kit.governed.settings import FgaSettings, OidcSettings, SignatureDoorSettings
 from service_kit.lakehouse.naming import CATALOG_DELIMITER
 from service_kit.lakehouse.objectfs import lance_storage_options
 
@@ -82,7 +82,7 @@ class StageRunnerGate(BaseModel):
     required_action: str = Field(min_length=1)
 
 
-class MedallionSettings(OidcSettings, FgaSettings, BaseSettings):
+class MedallionSettings(OidcSettings, FgaSettings, SignatureDoorSettings, BaseSettings):
     """Config for one medallion service (a stage runner, or the medallion-producer producer).
 
     Mixes the two auth halves DIRECTLY rather than the composed `GovernedAuthSettings`, because this
@@ -90,6 +90,9 @@ class MedallionSettings(OidcSettings, FgaSettings, BaseSettings):
     trigger (OIDC bearer + `can_administer`); a STAGE RUNNER authorizes as its own `fga_service_identity` and
     the chart renders it FGA with no OIDC at all — which `GovernedAuthSettings`' authz-needs-authn
     coupling would refuse at boot. The field-set is still declared exactly once, in the mixins.
+
+    `SignatureDoorSettings` is what the producer's two cascade heads verify an arrived event against ([[XC-078]]):
+    the door mode and the signer sets the chart renders for it (`medallion.api.signature_door`).
     """
 
     # `populate_by_name` also teaches the env source the bare FIELD NAME as a second lookup, so

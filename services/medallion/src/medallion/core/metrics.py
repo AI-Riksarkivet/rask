@@ -105,6 +105,21 @@ _stage_refused = _meter.create_counter(
     description="Stage triggers REFUSED before any read or write, by reason (malformed|unconfined_uri|bad_project|routing_disabled|unresolvable_lane).",
 )
 
+#: What a cascade head's signature door refused ([[XC-078]]), by door and reason. A refusal is acknowledged and drives
+#: nothing, so this count and the `medallion_signature_refused` log line are the only trace it leaves.
+_signature_refused = _meter.create_counter(
+    "medallion.signature.refused",
+    unit="{event}",
+    description="Events a cascade head refused because no signer its door allows signed them verifiably, by door and reason.",
+)
+#: What an OBSERVING door would have refused while it acted as before: the soak's reading, under its own name so a
+#: dashboard never adds what was refused to what only would have been.
+_signature_would_refuse = _meter.create_counter(
+    "medallion.signature.would_refuse",
+    unit="{event}",
+    description="Events an observing cascade head acted on that an enforcing one would have refused, by door and reason (or keys_unavailable).",
+)
+
 
 #: SECOND-scale boundaries, set explicitly because the SDK's default advisory is tuned for
 #: MILLISECOND web latency (its top bucket is 10s) and a medallion stage runs for minutes to hours —
@@ -338,6 +353,20 @@ def record_refused(transition: str, reason: str) -> None:
     unbounded series and, here, would also publish attacker-chosen strings into the metrics store.
     """
     _stage_refused.add(1, {"lance.medallion.transition": transition, "lance.medallion.reason": reason})
+
+
+def record_signature_refused(door: str, reason: str) -> None:
+    """Count one event a cascade head's door refused.
+
+    ``door`` names the route from this service's closed set and ``reason`` is `lineage_kit.signing.RefusalReason`, a
+    closed set: never the event's own text, which belongs on the log line.
+    """
+    _signature_refused.add(1, {"lance.medallion.door": door, "lance.medallion.reason": reason})
+
+
+def record_signature_would_refuse(door: str, reason: str) -> None:
+    """Count one event an observing door acted on and would have refused: a `RefusalReason`, or `keys_unavailable`."""
+    _signature_would_refuse.add(1, {"lance.medallion.door": door, "lance.medallion.reason": reason})
 
 
 def record_dead_letter(app_label: str) -> None:

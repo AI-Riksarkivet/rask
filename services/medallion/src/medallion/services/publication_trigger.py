@@ -27,7 +27,9 @@ cascade "ran" and moved nothing.
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Final, Literal
+
+from pydantic import BaseModel, ConfigDict
 
 from service_kit import dapr_publish
 from service_kit.lakehouse.naming import CATALOG_DELIMITER
@@ -40,7 +42,7 @@ _RETRY = {"status": "RETRY"}
 
 #: The action this head fires on. Anything else on the control topic — grants, warehouses, table
 #: creates — is a governance notice, not a readiness one, and must drive nothing.
-PUBLISHED_ACTION = "table_published"
+PUBLISHED_ACTION: Final[Literal["table_published"]] = "table_published"
 
 #: The catalog's identifier delimiter — the estate-wide `CATALOG_DELIMITER`, not a medallion knob.
 #: The value belongs to the CATALOG's identifier grammar; a medallion-side knob for it would be a
@@ -166,41 +168,73 @@ def build_stage_trigger(*, object_id: str, event_id: str, extra: dict[str, Any])
     return trigger
 
 
-async def handle_publication(dapr: Any, settings: Any, event: dict[str, Any]) -> dict[str, str]:  # noqa: ANN401 — the Dapr client + settings seams
-    """Turn a `table_published` control event into a stage trigger carrying the RANGE.
+class PublicationArrival(BaseModel):
+    """A delivery the head acts on: the control event as it arrived, and the trigger it wakes a lane with.
 
-    Acks (`SUCCESS`) anything it does not act on, so an unrelated control event is not redelivered
-    forever — a head that retries on events it will never handle turns one unparseable message into
-    a permanent hot loop. Only a publish OUTAGE returns RETRY, because that is the one failure a
-    redelivery can fix.
+    ``event`` is the CloudEvent's data with its members unchanged, never a re-serialisation or a model dump, because it
+    is the document a door verifies the catalog's signature over ([[XC-078]]).
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    event: dict[str, Any]
+    object_id: str
+    trigger: dict[str, Any]
+    topic: str
+
+
+def publication_arrival_of(event: Any, settings: Any) -> PublicationArrival | None:
+    """What the head acts on in this delivery, or ``None`` for a delivery it acknowledges and ignores.
+
+    Only a `table_published` whose table maps to a declared lane is acted on. Anything else is acknowledged, so an
+    unrelated control event is not redelivered forever: a head that retries on events it will never handle turns one
+    unparseable message into a permanent hot loop.
     """
     data = event.get("data") if isinstance(event, dict) else None
     if not isinstance(data, dict):
-        return _SUCCESS  # not a parseable control event
+        return None  # not a parseable control event
 
     if data.get("action") != PUBLISHED_ACTION:
-        return _SUCCESS  # a governance notice, not a readiness one
+        return None  # a governance notice, not a readiness one
 
+    object_id = str(data.get("object_id") or "")
     extra = data.get("extra") if isinstance(data.get("extra"), dict) else {}
-    trigger = build_stage_trigger(object_id=str(data.get("object_id") or ""), event_id=str(data.get("event_id") or ""), extra=extra)
+    trigger = build_stage_trigger(object_id=object_id, event_id=str(data.get("event_id") or ""), extra=extra)
     if trigger is None:
         log.debug("medallion_publication_not_a_lane", extra={"object_id": data.get("object_id")})
-        return _SUCCESS
+        return None
     topic = settings.transform_routes.get(str(trigger["namespace"]))
     if not topic:
         log.debug("medallion_publication_not_a_lane", extra={"object_id": data.get("object_id"), "source": trigger["namespace"]})
-        return _SUCCESS
+        return None
+    return PublicationArrival(event=data, object_id=object_id, trigger=trigger, topic=topic)
 
+
+async def handle_publication(dapr: Any, settings: Any, event: dict[str, Any]) -> dict[str, str]:  # noqa: ANN401 — the Dapr client + settings seams
+    """Turn a `table_published` control event into a stage trigger carrying the RANGE.
+
+    The route runs the two halves with the signature door between them (`medallion.api.bronze_arrival`):
+    :func:`publication_arrival_of` decides whether the head acts on the delivery, and :func:`fire_publication` acts.
+    """
+    arrival = publication_arrival_of(event, settings)
+    if arrival is None:
+        return _SUCCESS
+    return await fire_publication(dapr, settings, arrival)
+
+
+async def fire_publication(dapr: Any, settings: Any, arrival: PublicationArrival) -> dict[str, str]:
+    """Publish the stage trigger for one publication. Only a publish OUTAGE returns RETRY: the one failure a redelivery can fix."""
+    trigger = arrival.trigger
     landed = await dapr_publish.publish_json(
         dapr,
         pubsub_name=settings.pubsub,
-        topic_name=topic,
+        topic_name=arrival.topic,
         payload=trigger,
         timeout_seconds=settings.publish_timeout_seconds,
         failure_event="medallion_publication_trigger_failed",
-        # The TOKEN, which this site used to omit: `object_id` names the catalog object and cannot be
-        # used to find the run, so a failed publication trigger could not be joined to its cascade.
-        context={"token": trigger["token"], "object_id": data.get("object_id")},
+        # The TOKEN beside the object: `object_id` names the catalog object and cannot find the run, so the token is
+        # what joins a failed publication trigger to its cascade.
+        context={"token": trigger["token"], "object_id": arrival.object_id},
     )
     if not landed:  # a publish outage is retryable; nothing else here is
         return _RETRY
