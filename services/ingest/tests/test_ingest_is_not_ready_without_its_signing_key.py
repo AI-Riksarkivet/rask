@@ -24,30 +24,13 @@ IDENTITY = "service-ingest"
 SECRETS = "http://localhost:3500/v1.0/secrets/lance-secrets"
 
 
-class _StubRuntime:
-    """Stand-in for the Dapr WorkflowRuntime so the lifespan neither reaches a sidecar nor hangs."""
-
-    def start(self) -> None: ...
-
-    def shutdown(self) -> None: ...
-
-
 @pytest.fixture
-def ingest_app(monkeypatch: pytest.MonkeyPatch, respx_allows_unused_routes: None) -> Iterator[Any]:
-    async def _no_auth(app: Any, _settings: object, *, service: str, provision: bool) -> None:
-        app.state.fga = None
-        app.state.oidc = None
-
-    async def _no_probe(*, capability: str) -> None: ...
-
-    monkeypatch.setattr("ingest.attach_auth", _no_auth)
-    monkeypatch.setattr("ingest.probe_actor_state_store", _no_probe)
-    monkeypatch.setattr("dapr.ext.workflow.WorkflowRuntime", lambda: _StubRuntime())
-    monkeypatch.setattr("ingest.workflow.register", lambda _runtime: None)
-    monkeypatch.setenv("RASK_INGEST_SECRETS_FROM_DAPR", "true")
+def ingest_app(secret_store_lifespan: None, monkeypatch: pytest.MonkeyPatch, respx_allows_unused_routes: None, event_signer: Any) -> Iterator[Any]:
     monkeypatch.setenv("RASK_SIGNING_IDENTITY", IDENTITY)
-    monkeypatch.setenv("DAPR_HTTP_PORT", "3500")
     with respx.mock:
+        # The same lifespan reads ingest's NATS user from the store ([[XC-078]]); the claim here is the signing key.
+        nats_user = {"jwt": "ingest-user-jwt", "seed": event_signer("nats-user-ingest").seed}
+        respx.get(f"{SECRETS}/nats-user-ingest").mock(return_value=httpx.Response(200, json=nats_user))
         yield ingest.create_app()
 
 
