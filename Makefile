@@ -1,4 +1,4 @@
-.PHONY: fga-store-check fga-estate-migrate sbom zone-sbom backlog registry-gc dagger-gc dev-gc help install build test test-slow lint lint-imports fmt clean storybook typecheck knip comment-gate check coverage fga-test ci dev-micro dev-frontends dev-frontends-k3s dev-zone home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge k9s bootstrap dev-registry e2e frontend-images prod-render-check alert-rules-check alert-rules-drill notifications-lanes notifications-rig audit smoke-rustfs rustfs-lifecycle auth-chain governance-chain medallion-demo go-fmt scan-config scan-secrets scan-image scan-zone-image seed-corpus e2e-isolation e2e-container-deletes e2e-fga-model e2e-open-run
+.PHONY: fga-store-check fga-estate-migrate sbom zone-sbom backlog registry-gc dagger-gc dev-gc help install build test test-slow lint lint-imports fmt clean storybook typecheck knip comment-gate check coverage fga-test ci dev-micro dev-frontends dev-frontends-k3s dev-zone home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge k9s bootstrap dev-registry e2e frontend-images prod-render-check alert-rules-check alert-rules-drill notifications-lanes notifications-rig audit smoke-rustfs rustfs-lifecycle auth-chain governance-chain nats-auth medallion-demo go-fmt scan-config scan-secrets scan-image scan-zone-image seed-corpus e2e-isolation e2e-container-deletes e2e-fga-model e2e-open-run
 
 help:
 	@echo "Targets:"
@@ -622,6 +622,13 @@ auth-chain: ## Dex + OpenFGA authorization chain e2e (app-side tuple seeding)
 # what the tests prove.
 governance-chain: ## Governance e2e — authz + provenance authorship + lineage (add --demo for the walkthrough)
 	dagger call governance-chain
+
+# The NATS permission table (`nats.auth.users`) on a real broker: the chart's nats-server in operator mode
+# with test-only keys, every bus client driven as its own user and refused on every subject it does not
+# own, and real daprd running the chart's Components against it ([[XC-078]]). `dagger call nats-auth
+# --values=<file>` reads the table from another values file, e.g. a copy with one allowance deleted.
+nats-auth: ## NATS auth e2e — each bus client admitted only to its own subjects (operator-mode broker + daprd)
+	dagger call nats-auth
 
 # The live medallion walkthrough: real Lance datasets on RustFS, a real OpenLineage event per step,
 # and the DAG building in front of you. Ctrl-C stops it.

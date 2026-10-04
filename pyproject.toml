@@ -337,6 +337,7 @@ markers = [
     "gateway: Dapr service-invocation gateway e2e",
     "governed_union: full governed-union e2e",
     "media_catalog: annotator/catalog live-mode e2e",
+    "nats_auth: operator-mode NATS admits each bus client only to its own subjects (run by `dagger call nats-auth`, which provides the broker, nsc and daprd)",
     "observability: observability (OTLP/Greptime) e2e",
     "ray_train: Ray train-path e2e",
     "track_a: Track A acceptance e2e (tier contract, gate/publish symmetry, branch isolation) against a live catalog",
