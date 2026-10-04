@@ -2862,7 +2862,10 @@ nats:
   # Job with `admin` and every subscriber restarts after them.
   #
   # RESIDUALS, named: _INBOX.> is shared within the APP account (a client could read another's replies; Dapr exposes no inbox
-  # prefix), 8222 monitoring is unauthenticated by design, and anything holding OpenBao's dev root token reads the store (XC-079).
+  # prefix); the catalog's ack on CATALOG_CONTROL is stream-wide, because its broadcast consumer's name is the server's, so a
+  # compromised catalog could ack or terminate the producer's and notifications' control deliveries (a lesser power than the
+  # one it already holds: it signs every control event; ackPolicy none does not stop daprd 1.18.1 acking, measured);
+  # 8222 monitoring is unauthenticated by design; and anything holding OpenBao's dev root token reads the store (XC-079).
   auth:
     server: false
     provisioned: false
