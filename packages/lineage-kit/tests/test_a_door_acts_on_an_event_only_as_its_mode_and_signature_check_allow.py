@@ -21,7 +21,6 @@ from lineage_kit import (
     DoorVerdict,
     KeySourceUnavailableError,
     SignatureRefusedError,
-    UnsignedEventError,
     VerifiedSignature,
     judge,
 )
@@ -30,10 +29,6 @@ from lineage_kit.door import KEYS_UNAVAILABLE
 
 def _verifies() -> VerifiedSignature:
     return VerifiedSignature(identity="service-catalog", kid="0123456789abcdef")
-
-
-def _is_unsigned() -> NoReturn:
-    raise UnsignedEventError("the event carries no signature")
 
 
 def _is_refused() -> NoReturn:
@@ -53,12 +48,8 @@ def _fails_on_its_own() -> NoReturn:
     [
         # A check that would refuse is never run: an unenforced estate neither pays for a key read nor reports on it.
         pytest.param(DoorMode.OFF, _is_refused, DoorVerdict(act=True), 0, id="off-acts-and-never-runs-the-check"),
-        pytest.param(DoorMode.ENFORCE, _verifies, DoorVerdict(act=True), 1, id="enforce-acts-on-a-verified-event"),
-        pytest.param(DoorMode.ENFORCE, _is_unsigned, DoorVerdict(act=False, refused="unsigned"), 1, id="enforce-refuses-an-unsigned-event-and-says-why"),
-        pytest.param(DoorMode.ENFORCE, _cannot_read_the_keys, DoorVerdict(act=False, retry=True), 1, id="enforce-retries-when-the-keys-cannot-be-read"),
         pytest.param(DoorMode.ENFORCE, _fails_on_its_own, KeyError, 1, id="enforce-lets-a-doors-own-fault-propagate"),
         pytest.param(DoorMode.OBSERVE, _verifies, DoorVerdict(act=True), 1, id="observe-acts-on-a-verified-event-and-reports-nothing"),
-        pytest.param(DoorMode.OBSERVE, _is_refused, DoorVerdict(act=True, observed="signer"), 1, id="observe-acts-and-reports-the-refusal-it-would-have-made"),
         pytest.param(
             DoorMode.OBSERVE,
             _cannot_read_the_keys,

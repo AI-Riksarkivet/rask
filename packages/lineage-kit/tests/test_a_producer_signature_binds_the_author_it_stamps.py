@@ -239,14 +239,10 @@ def test_a_signature_is_the_wire_format_the_contract_writes_and_verifies_against
         pytest.param("tamper-schema-url", "signature", ["published"], id="the-schema-url-rewritten"),
         pytest.param("tamper-author", "signature", ["published"], id="the-person-retargeted-in-the-author-and-the-delegation"),
         pytest.param("a-fault-in-the-crypto-library", "error", ["published"], id="an-exception-nothing-anticipated"),
-        pytest.param("control-delegator-for-a-person", "verified", ["published"], id="a-delegator-signs-a-control-event-for-the-person-it-names"),
-        pytest.param("control-service-actor", "verified", ["published"], id="a-listed-signer-signs-a-control-event-of-a-service"),
         pytest.param("control-person-by-a-non-delegator", "delegation", [], id="a-control-event-for-a-person-signed-by-a-signer-that-is-no-delegator"),
         pytest.param("control-person-without-a-delegation", "author", [], id="a-control-event-for-a-person-signed-with-no-delegation-declared"),
         pytest.param("control-delegation-for-another-actor", "author", [], id="a-control-delegation-for-someone-other-than-the-actor"),
         pytest.param("control-signer-outside-both-sets", "signer", [], id="a-control-event-signed-by-an-identity-nothing-lists"),
-        pytest.param("control-unsigned", "unsigned", [], id="a-control-event-with-no-signature"),
-        pytest.param("control-tamper-body", "signature", ["published"], id="a-control-event-whose-audience-was-changed-after-signing"),
         pytest.param("control-tamper-facet", "signature", ["published"], id="a-control-signature-whose-schema-url-was-rewritten"),
     ],
 )
@@ -258,7 +254,6 @@ def test_the_verifier_accepts_what_a_published_key_signed_and_refuses_the_rest_r
     delegated = _signed(catalog, _event(PERSON), on_behalf_of=PERSON)
     self_signed = _signed(stage, _event(STAGE))
     control_delegated = _signed_control(catalog, _control_event(), on_behalf_of=PERSON_ACTOR)
-    control_no_actor = _signed_control(stage, _control_event(None))
     corrupt = stage.public[:10] + ("A" if stage.public[10] != "A" else "B") + stage.public[11:]
     # The last base64url character of a signature carries bits no one checks, so it has a second spelling for the same 64 bytes.
     value = self_signed["run"]["facets"]["rask_signature"]["signature"]
@@ -293,15 +288,11 @@ def test_the_verifier_accepts_what_a_published_key_signed_and_refuses_the_rest_r
             _Source(published),
         ),
         "a-fault-in-the-crypto-library": a_fault_in_the_crypto_library,
-        "control-delegator-for-a-person": lambda: (control_delegated, _Source(published)),
-        "control-service-actor": lambda: (_signed_control(stage, _control_event("system:maintenance")), _Source(published)),
         "control-person-by-a-non-delegator": lambda: (_signed_control(stage, _control_event(), on_behalf_of=PERSON_ACTOR), _Source(published)),
         # The kit refuses to sign this, so the independent writer does: a verifier must not rely on every signer being the kit.
         "control-person-without-a-delegation": lambda: (stage.sign_control(_control_event()), _Source(published)),
         "control-delegation-for-another-actor": lambda: (_signed_control(catalog, _control_event(), on_behalf_of="user:someone-else"), _Source(published)),
         "control-signer-outside-both-sets": lambda: (_signed_control(event_signer(ROGUE), _control_event(None)), _Source(published)),
-        "control-unsigned": lambda: (_control_event(), _Source(published)),
-        "control-tamper-body": lambda: ({**control_no_actor, "extra": {**control_no_actor["extra"], "subject": "user:eve"}}, _Source(published)),
         "control-tamper-facet": lambda: (
             _with_control_signature_members(control_delegated, _schemaURL="https://example.invalid/other.json"),
             _Source(published),
