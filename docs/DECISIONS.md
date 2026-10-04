@@ -2698,7 +2698,7 @@ and names nobody. The header, the shared-token door and the privileged lists are
 Accepted with it: offline verification accepts a deleted pod's token for up to 660 s, because TokenReview would
 need auth-delegator on every door, which XC-076 withholds. One pod is one identity, so a job on the shared Ray
 head reports as the head's account, `service-trainer` (LH-351). The door-only credentials the old door used are
-still minted and stored (LH-350).
+still minted and stored (LH-350). LH-064 deleted the whole service-token-* family at helm rev 265.
 
 Read back live on helm rev 262: the claimed name answers 401. The producer's own token is admitted at the catalog,
 while an unlisted account and a wrong-audience token are refused. The catalog may read only its own signing key.
@@ -2720,3 +2720,23 @@ their keys until a separate flag day (LH-360). The OpenLineage spec requires the
 renaming the facets a cascade head reads, across separately tagged images, makes it skip triggers mid-roll. Key custody
 (C6) is the Dapr-scope claim: no app's sidecar can read another identity's private key, and lineage reads none. A pod
 holding OpenBao's root token, or reaching :8200 directly, still reads the store until XC-079.
+
+Deployed in three helm revisions and read back live on 2026-10-04. Rev A (263) minted the seven pairs under the old
+images: each of the 13 lance-secrets sidecars reads exactly its own signing key, and every kid survived an OpenBao
+restart through the seed's carry-over. Rev B (264) rolled the signing images with enforcement off: seven canary events,
+one per hop of a cascade to gold plus the catalog's, verified offline from the raw bytes in the LINEAGE stream, among
+them an integral float of 1e16 that crossed a real daprd, so the sidecar keeps a number's text and canon-1's float rule
+stands. Rev C (265) deleted the service-token-* family and turned enforcement on. A forged unsigned event published from
+the notifications sidecar was refused within seconds, acknowledged and never recorded. Every signer had a verified event
+recorded under enforcement, ingest's through its staged outbox path while lineage was scaled to zero (owner-approved).
+service-maintenance's key was rotated live (owner-approved): an event signed with the previous key was recorded, and so
+was the next one under the new kid. A lineage restart left the DLQ unchanged.
+
+Kept from the readback. A Dapr Configuration is named by its content (`lance-config-<app>-<hash>`): Helm applies custom
+resources after every Deployment, so a pod rolled by a checksum could boot against the previous deny list, while a pod
+naming a Configuration Helm has not applied yet fails to start until it exists. A rotation takes
+`bao kv metadata delete`: after a soft `bao kv delete` the CLI prints "No data found", which the seed refuses as an
+unreadable store, and the replacement OpenBao never becomes Ready. From Rev A until Rev C the catalog's DROP events had
+no admitting signature (the rev-262 catalog signed under an identity env commit 1 no longer renders, and the contract
+kept the shortcut off at Rev B); no table was dropped in that window: the LINEAGE stream holds only canary events and
+two table creates between Rev A and Rev C (seq 16188 to 16197).
