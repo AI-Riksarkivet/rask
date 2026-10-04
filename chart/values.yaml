@@ -3240,11 +3240,40 @@ openbao:
 # RESIDUAL (owner, 2026-10-02): this is the Dapr-scope claim. A pod that holds OpenBao's root token or reaches :8200
 # reads the store without a sidecar until XC-079.
 signing:
-  # THE ONE SWITCH. True renders LINEAGE_SIGNERS and LINEAGE_DELEGATORS (lance.signingIdentities, lance.delegatorIdentities),
+  # LINEAGE'S SWITCH. True renders LINEAGE_SIGNERS and LINEAGE_DELEGATORS (lance.signingIdentities, lance.delegatorIdentities),
   # and only when the secret store and auth.enabled are on as well: lineage then refuses an unsigned or non-verifying event
   # before it records it. False renders neither, so lineage verifies nothing, ignores a present `rask_signature` and keeps
-  # its catalog-DROP shortcut off.
+  # its catalog-DROP shortcut off. The bus doors have their own switch, `doors` below.
   enforce: true
+  # THE BUS DOORS' MODE ([[XC-078]]): "off", "observe" or "enforce", always quoted, because YAML reads a bare off as false and
+  # the render refuses anything but the three strings (as it refuses an unset value under `--reuse-values`).
+  #
+  # A door is a subscription that ACTS on what the bus delivers, so a forged event there does more than lie in the graph:
+  # the medallion producer's /bronze-arrival (a bronze write starts a cascade) and /publication-arrival (table_published wakes
+  # the next tier), notifications' /lineage-events and /control-events (a named person's bell), and /maintenance-arrival (a
+  # write plans compaction). maintenance registers that route on EVERY pod whose `maintenance.workTopic` is set, the planner
+  # and each dedicated worker alike (register_arrival_route reads only the topic), so both Deployments carry the settings.
+  #
+  # Wherever the store and auth are on (where lineage can verify), each door's Deployment carries RASK_SIGNATURE_DOORS and
+  # the two sets lineage verifies with, from the same helpers: RASK_EVENT_SIGNERS (lance.signingIdentities) and
+  # RASK_EVENT_DELEGATORS (lance.delegatorIdentities), so a door and lineage cannot disagree about who signs. The two apps
+  # whose doors take control events (the producer and notifications) also carry RASK_CONTROL_SIGNER_ROLES, a JSON object
+  # from each service that emits control events to the identities it signs as (lance.signers' `role`): catalog -> the
+  # catalog, maintenance -> maintenance (its purge, under maintenance.controlEmit), medallion_producer -> the producer (it
+  # hosts the promotion_review workflow that asks for a review; no stage runner emits a control action). The keys are
+  # exactly service_kit.control_events.ControlSigner, which the services type, so a key they do not know fails their boot;
+  # every key is present, and a role whose service is not deployed is an empty list. A door's per-action policy
+  # (control_signer_role) resolves an action's allowed signers from it; task_* actions and grants on an annotation project
+  # are exempt there, since the annotator signs nothing. Without the store or auth nothing is rendered and the doors
+  # verify nothing, as lineage does.
+  #
+  # off verifies nothing. observe acts exactly as off and counts what it would refuse
+  # (<service>_signature_would_refuse_total). enforce acknowledges a refused event (never a DROP, which parks and re-parks on
+  # replay), counts it (<service>_signature_refused_total) and acts on nothing; keys it cannot read are a RETRY. Independent
+  # of `enforce`, which is lineage's. observe and enforce fail the render with no signer at all (the services refuse to boot
+  # on an empty signer set rather than verify against it), and when a deployed control-event service has no identity: its
+  # role would hold nobody, and the doors would refuse every event it signs.
+  doors: "off"
   # NON-DEV STORES (openbao.devMode=false, or openbao.externalAddr) MINT NOTHING, so every signer would stay not
   # Ready. The render fails until the operator attests here that signing-public-<identity> and then
   # signing-key-<identity> exist for every identity the failure names. Tooling for that, and rotation on such a

@@ -1718,14 +1718,13 @@ measured decision, and a second copy would drift without anything saying so. */}
 {{- printf "lance-config-%s-%s" (index . 1) (include "lance.daprAppSpec" . | sha256sum | trunc 10) -}}
 {{- end -}}
 
-{{- /* EVENT SIGNING ([[LH-064]]; values.yaml `signing:`). `lance.signers` is the ONE declaration, an (identity, app-id) pair per
-       signer: the mint and seed loops, the deny lists, RASK_SIGNING_IDENTITY and LINEAGE_SIGNERS are views of it. */ -}}
+{{- /* EVENT SIGNING ([[LH-064]]; values.yaml `signing:`). `lance.signers` is the ONE declaration, an (identity, app-id, control-event
+       role) per signer: the mint and seed loops, the deny lists, RASK_SIGNING_IDENTITY, LINEAGE_SIGNERS and the doors' env are views of it. */ -}}
 {{- define "lance.signers" -}}
-{{- $v := .Values -}}{{- $s := list -}}
-{{- with $v.catalog.serviceIdentity }}{{- $s = append $s (dict "id" . "app" $v.services.catalog.daprAppId) }}{{- end -}}
-{{- if $v.maintenance.enabled }}{{- $s = append $s (dict "id" $v.maintenance.catalogServiceIdentity "app" $v.maintenance.daprAppId) }}{{- end -}}
+{{- $v := .Values -}}{{- $s := list (dict "id" $v.catalog.serviceIdentity "app" $v.services.catalog.daprAppId "role" "catalog") -}}
+{{- if $v.maintenance.enabled }}{{- $s = append $s (dict "id" $v.maintenance.catalogServiceIdentity "app" $v.maintenance.daprAppId "role" "maintenance") }}{{- end -}}
 {{- if $v.medallion.enabled }}
-{{- $s = append $s (dict "id" $v.medallion.producer.serviceIdentity "app" $v.medallion.producer.daprAppId) }}
+{{- $s = append $s (dict "id" $v.medallion.producer.serviceIdentity "app" $v.medallion.producer.daprAppId "role" "medallion_producer") }}
 {{- range $v.medallion.stageRunners }}{{- $s = append $s (dict "id" .serviceIdentity "app" .daprAppId) }}{{- end }}
 {{- end -}}
 {{- with (get (($v.services.ingest).env | default dict) "RASK_LINEAGE_SERVICE_IDENTITY") }}
@@ -1759,6 +1758,30 @@ measured decision, and a second copy would drift without anything saying so. */}
 {{- define "lance.signingEnv" -}}
 {{- if include "lance.secretsViaDapr" (index . 0) }}
 {{- range (include "lance.signingIdentitiesForApp" . | splitList " " | compact) }}- { name: RASK_SIGNING_IDENTITY, value: {{ . | quote }} }{{- end }}
+{{- end }}
+{{- end -}}
+
+{{- /* Every control-event role -> its identities (values.yaml `signing.doors`). */ -}}
+{{- define "lance.controlSignerRoles" -}}
+{{- $m := dict "catalog" (list) "maintenance" (list) "medallion_producer" (list) -}}
+{{- range (include "lance.signers" . | fromJsonArray) }}{{- if and .id .role }}{{- $_ := set $m .role (append (get $m .role) .id | uniq | sortAlpha) }}{{- end }}{{- end -}}
+{{- toJson $m -}}
+{{- end -}}
+
+{{- /* A door host's env (list $root $takesControlEvents); values.yaml `signing.doors`. */ -}}
+{{- define "lance.doorEnv" -}}
+{{- $r := index . 0 -}}{{- $mode := ($r.Values.signing).doors -}}
+{{- if not (has $mode (list "off" "observe" "enforce")) }}{{- fail (printf "signing.doors is %v, not the string off, observe or enforce" $mode) }}{{- end }}
+{{- if and $r.Values.auth.enabled (include "lance.secretsViaDapr" $r) }}
+{{- $signers := include "lance.signingIdentities" $r | splitList " " | compact }}
+{{- if and (ne $mode "off") (not $signers) }}{{- fail (printf "signing.doors=%s but no identity signs: the doors would verify nothing" $mode) }}{{- end }}
+{{- range (include "lance.signers" $r | fromJsonArray) }}{{- if and .role (not .id) (ne $mode "off") }}{{- fail (printf "signing.doors=%s but no identity holds the control-event role %s: the doors would refuse all its events" $mode .role) }}{{- end }}{{- end -}}
+- { name: RASK_SIGNATURE_DOORS, value: {{ $mode | quote }} }
+- { name: RASK_EVENT_SIGNERS, value: {{ $signers | toJson | quote }} }
+- { name: RASK_EVENT_DELEGATORS, value: {{ include "lance.delegatorIdentities" $r | splitList " " | compact | toJson | quote }} }
+{{- if index . 1 }}
+- { name: RASK_CONTROL_SIGNER_ROLES, value: {{ include "lance.controlSignerRoles" $r | quote }} }
+{{- end }}
 {{- end }}
 {{- end -}}
 

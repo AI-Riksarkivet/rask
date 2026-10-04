@@ -293,6 +293,7 @@ spec:
             - { name: {{ $k }}, value: {{ $v | quote }} }
             {{- end }}
             {{- with include "lance.signingEnv" (list $root $name) }}{{ . | nindent 12 }}{{- end }}
+            {{- if eq $name "notifications" }}{{- with include "lance.doorEnv" (list $root true) }}{{ . | nindent 12 }}{{- end }}{{- end }}
             {{- /* THE EXTERNAL-BLOB DECISION HOLDS AT BOTH DOORS, from ONE value.
 
                  `services.yaml` renders this onto the catalog; without it here the ingest pod's

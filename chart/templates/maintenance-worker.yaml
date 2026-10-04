@@ -74,6 +74,7 @@ spec:
             # symmetric with the lineage service (the audit's consistency fix).
             - { name: MAINTENANCE_DAPR_ENABLED, value: {{ .Values.dapr.sidecars | quote }} }
             {{- with include "lance.signingEnv" (list $root .Values.maintenance.daprAppId) }}{{ . | nindent 12 }}{{- end }}
+            {{- with include "lance.doorEnv" (list $root false) }}{{ . | nindent 12 }}{{- end }}
             {{- if .Values.dapr.sidecars }}
             # Gated on the sidecar because that is what it VERIFIES — the token exists to check the
             # `dapr-api-token` header Dapr stamps on delivery, so without a sidecar there is no header
