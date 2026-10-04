@@ -21,10 +21,14 @@ tuples by the time it emits, and raising there would fail a reclamation that irr
 that wrote it, so the actor an event names is a claim until its signature proves which service stamped it. The
 emitter signs each event with its service's own key through the injected ``sign`` (this package cannot import
 lineage-kit, which owns the wire format) BEFORE the event is staged, so an outbox holds the bytes the bus will
-carry. Nothing unsigned leaves a signer: while its key is unresolved an event is staged unsigned and NOT published,
-for the producer's relay to sign once the key resolves (the catalog's ``control_relay``), and with no outbox it is
-withheld and counted. A service with no signing identity passes ``sign=None`` and publishes unsigned, which a door
-accepts only for an action :func:`service_kit.control_events.control_signer_role` exempts.
+carry and a relay republishes them as they are, verifying and never signing (the catalog's ``control_relay``).
+Nothing unsigned leaves a signer, and a signer stages nothing unsigned: an event it cannot sign, its key unresolved
+or the event without a canonical form, is WITHHELD (neither staged nor published) and counted, as the catalog
+withholds a lineage event it cannot sign, while the signer reports itself not ready. Staged bytes are authenticated
+by nothing but the signature they carry, so nothing may sign them later: a relay that signed what it found staged
+would sign whatever any other writer of the prefix put there. A service with no signing identity passes
+``sign=None`` and publishes unsigned, which a door accepts only for an action
+:func:`service_kit.control_events.control_signer_role` exempts.
 
 **No broker client in app code.** Publishing goes through the local Dapr sidecar
 (:func:`service_kit.dapr_publish.publish_event`), which owns retry, backoff and DLQ as component
@@ -47,7 +51,6 @@ from collections.abc import Callable
 from typing import Any, Literal, Protocol, runtime_checkable
 
 from dapr.aio.clients import DaprClient
-from fastapi.concurrency import run_in_threadpool
 from opentelemetry import metrics
 
 from service_kit.control_events import (
@@ -56,8 +59,7 @@ from service_kit.control_events import (
     ControlAction,
     ControlObjectType,
 )
-from service_kit.governed.signing_key import SigningKeyUnavailableError
-from service_kit.lakehouse import outbox, outbox_metrics
+from service_kit.lakehouse import outbox
 
 
 log = logging.getLogger(__name__)
@@ -122,7 +124,7 @@ class DaprControlEmitter:
         self._sign = sign
         #: The control lane's OWN outbox prefix — never the lineage one. Each prefix is drained by a
         #: lane-specific relay that re-ingests what it finds, so sharing would feed each the other's
-        #: events. Empty means unstaged: a failed publish, or an event waiting for its key, is lost.
+        #: events. Empty means unstaged: a failed publish is lost.
         self._outbox_uri = outbox_uri
         self._storage_options = dict(storage_options or {})
         # What this description SAYS is load-bearing: an operator reads it to decide whether a rising
@@ -137,8 +139,9 @@ class DaprControlEmitter:
                 "lost depends on the consumer: a console ring buffer or a tag-polling reader loses only a refresh "
                 "hint, but under medallion.cascadeViaPublish the downstream cascade rides `table_published` and "
                 "does NOT poll — a dropped event there cancels the next hop outright. When an outbox is "
-                "configured a failed publish, or an event waiting for its key, stays STAGED and its relay "
-                "delivers it; without one this counter rising means cascades were silently abandoned."
+                "configured a failed publish stays STAGED and its relay delivers it. An `unsigned` event is never "
+                "staged, whatever the configuration, and the service reports itself not ready meanwhile; so a rising "
+                "`unsigned` count, or a rising `publish` count with no outbox, means cascades were silently abandoned."
             ),
         )
 
@@ -151,21 +154,18 @@ class DaprControlEmitter:
         it, and `event_id` is the client-side dedupe key, so a re-published event is recognised rather than
         double-applied.
 
-        SIGNED BEFORE IT IS STAGED, so the staged copy is the signed bytes. An event this service cannot
-        sign yet, its key unresolved, is staged unsigned and NOT published: a door refuses an unsigned event
-        and acknowledges the refusal, so publishing it would lose it, while the relay signs what it finds
-        staged. With no outbox there is nothing to sign it later, and it is withheld.
+        SIGNED BEFORE IT IS STAGED, so the staged copy is the signed bytes and a relay republishes them as
+        they are. An event this service cannot sign, its key unresolved or the event without a canonical
+        form, is WITHHELD: neither staged nor published, counted under `reason="unsigned"` and logged with
+        its action and `event_id`. Published, a door would refuse it and acknowledge the refusal; staged,
+        it could leave the outbox only if something signed it there, and nothing may sign what it finds
+        staged, because staged bytes prove nothing about who wrote them.
         """
         event_json = event.model_dump_json()
         if self._sign is not None:
             try:
                 event_json = json.dumps(self._sign(json.loads(event_json)))
-            except SigningKeyUnavailableError as exc:
-                await self._hold_unsigned(event, event_json, exc)
-                return
             except Exception as exc:
-                # This signer cannot sign the event at all (no canonical form, or an actor it may not vouch
-                # for): staged, it would only fail the same way at the relay.
                 self._record_undelivered(event, exc, reason="unsigned", staged=False)
                 return
         try:
@@ -182,26 +182,13 @@ class DaprControlEmitter:
         except Exception as exc:
             self._record_undelivered(event, exc, reason="publish", staged=bool(self._outbox_uri))
 
-    async def _hold_unsigned(self, event: CatalogControlEvent, event_json: str, error: Exception) -> None:
-        """Stage an event this service cannot sign yet, unpublished, where its relay signs it; with no outbox, withhold it."""
-        staged = False
-        if self._outbox_uri:
-            try:
-                await run_in_threadpool(outbox.stage_event, self._outbox_uri, self._storage_options, event.event_id, event_json)
-            except Exception as exc:
-                outbox_metrics.record_stage_failed()
-                error = exc
-            else:
-                outbox_metrics.record_staged()
-                staged = True
-        self._record_undelivered(event, error, reason="unsigned", staged=staged)
-
     def _record_undelivered(self, event: CatalogControlEvent, error: Exception, *, reason: _Undelivered, staged: bool) -> None:
         self._emit_failed.add(1, {f"lance.{self._service}.action": event.action, f"lance.{self._service}.reason": reason})
         log.warning(
             "control_publish_failed" if reason == "publish" else "control_emit_withheld_unsigned",
             extra={
                 "action": event.action,
+                "event_id": event.event_id,
                 "object_id": event.object_id,
                 "error": str(error),
                 # Whether this is recoverable at all, said in the line itself — an operator

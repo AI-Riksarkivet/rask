@@ -255,8 +255,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         timeout_seconds=settings.control_emit_timeout_seconds,
         service="catalog",
         # SIGNED AS THIS CATALOG ([[XC-078]]), with the holder the lineage emitter signs with, for the person each
-        # event names; None for a catalog with no store or no identity. The relay signs what waited for the key with
-        # the same holder, which `attach_signing` above published for it.
+        # event names, BEFORE it is staged; None for a catalog with no store or no identity. An event it cannot sign is
+        # withheld, never staged. The relay signs nothing: it delivers only staged bytes that verify as signed by the
+        # identity of the holder `attach_signing` above published, against the keys that identity publishes.
         sign=control_sign(signing) if signing is not None else None,
         # Staged when configured, plain publish when not — opt-in, exactly like the lineage outbox.
         outbox_uri=settings.control_outbox_uri,
@@ -273,7 +274,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     # RESOLVED LAST, so the probes and the app are up whether or not the key resolved: a catalog that is waiting for
     # its key reports itself not ready and heals in place when the key is published, and a write it has already
-    # committed is never failed by an emit that cannot be signed.
+    # committed is never failed by an emit that cannot be signed; that emit is withheld, lineage and control alike.
     if signing is not None:
         await signing.start()
     app.state.startup_complete = True

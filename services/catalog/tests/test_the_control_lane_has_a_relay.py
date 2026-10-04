@@ -15,15 +15,18 @@ So the staged copy was a copy nothing read. Two ways that lands, both silent:
   `RunEvent.model_validate_json` in that drain, is classified POISON and is DELETED
   (`reconcile_cron.py` `_drain_outbox`) — the staged copy is destroyed by the thing meant to save it.
 
-These tests drive the relay that closes it. A signing catalog's relay also SIGNS what it delivers ([[XC-078]]): an event
-staged while the catalog's key was unresolved waits unsigned, and the relay publishes it only with the catalog's signature,
-because a door refuses an unsigned event and acknowledges the refusal.
+These tests drive the relay that closes it. A signing catalog's relay DELIVERS ONLY WHAT THIS CATALOG SIGNED
+([[XC-078]]): a staged object proves nothing about who wrote it, since anything with write access to the prefix can put one
+there, so the relay verifies each one against the keys the catalog publishes and republishes the staged bytes as they are.
+It signs nothing, so it cannot vouch for an actor nobody authenticated.
 """
 
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+import os
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, cast
 
@@ -34,7 +37,8 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from catalog.core.config import Settings
-from lineage_kit import RefusalReason, SignatureError, SigningKey, parse_published_keys, verify_control_signature
+from catalog.core.control_signing import control_sign
+from lineage_kit import SigningKey, parse_published_keys
 from service_kit.control_emit import DaprControlEmitter
 from service_kit.control_events import CONTROL_TOPIC, CatalogControlEvent
 from service_kit.governed.signing_key import SigningKeyHolder, attach_signing
@@ -44,6 +48,27 @@ from service_kit.lakehouse import outbox
 BINDING = "catalog-control-relay-cron"
 CATALOG = "service-catalog"
 SECRETS = "http://localhost:3500/v1.0/secrets/lance-secrets"
+
+#: Written by something that is NOT the catalog: `user:admin` granting alice `owner` on a table, which rings alice's bell.
+FORGED_GRANT: dict[str, Any] = {
+    "event_id": "forged-grant",
+    "occurred_at": "2026-10-04T12:00:00+00:00",
+    "action": "grant_added",
+    "object_type": "grant",
+    "object_id": "table:acme$gold",
+    "actor": "user:admin",
+    "extra": {"relation": "owner", "subject": "user:alice"},
+}
+#: Written by something that is NOT the catalog: a publication of acme's silver table that never happened, which wakes gold.
+FORGED_PUBLICATION: dict[str, Any] = {
+    "event_id": "forged-publication",
+    "occurred_at": "2026-10-04T12:00:00+00:00",
+    "action": "table_published",
+    "object_type": "table",
+    "object_id": "table:acme-silver$features",
+    "actor": None,
+    "extra": {"project": "acme", "from_version": 0, "to_version": 999},
+}
 
 
 class _Blip:
@@ -76,19 +101,6 @@ def _settings(control_uri: str, *, lineage_uri: str = "") -> Settings:
     )
 
 
-class _Published:
-    """The catalog's public keys, as a verifying door reads them."""
-
-    def __init__(self, *keys: str) -> None:
-        self._keys = keys
-
-    def published(self, identity: str) -> Sequence[str]:
-        return self._keys
-
-    def refresh(self, identity: str) -> Sequence[str]:
-        return self._keys
-
-
 def _relay_app(settings: Settings, publisher: object, *, signing: SigningKeyHolder[SigningKey] | None = None) -> FastAPI:
     """A bare app carrying ONLY the relay router, so the route's own path is what is under test.
 
@@ -118,20 +130,56 @@ def _catalog_key(pair: Any | None) -> SigningKeyHolder[SigningKey]:
     return holder
 
 
-def _signed_by(event: dict[str, Any], public: str) -> tuple[str, str | None] | RefusalReason:
-    """Who a door holding the catalog's published key finds signed a control event, or the reason it refuses it."""
-    try:
-        verified = verify_control_signature(event, source=_Published(public), signers=frozenset({CATALOG}), delegators=frozenset({CATALOG}))
-    except SignatureError as exc:
-        return exc.reason
-    return verified.identity, verified.on_behalf_of
+@contextmanager
+def _sidecar_serving_the_catalogs_keys(status: int | None, pair: Any | None = None) -> Iterator[None]:
+    """The catalog's sidecar answering a read of `signing-public-<catalog>` with `status`, listing `pair`'s key on a 200.
+
+    None is a catalog that does not sign, which reads no keys.
+    """
+    if status is None:
+        yield
+        return
+    with respx.mock:
+        body = {"keys": pair.public} if pair is not None else None
+        respx.get(f"{SECRETS}/signing-public-{CATALOG}").mock(return_value=httpx.Response(status, json=body))
+        yield
 
 
-async def _stage(uri: str, event: CatalogControlEvent) -> None:
-    """Stage one unsigned control event through the real emitter: what a NATS blip leaves behind when the catalog does not
-    sign, and the same bytes a signing catalog stages while its key is unresolved."""
-    emitter = DaprControlEmitter(cast("Any", _Blip()), pubsub="p", topic=CONTROL_TOPIC, timeout_seconds=1.0, service="catalog", sign=None, outbox_uri=uri)
+async def _stage(uri: str, event: CatalogControlEvent, *, signing: SigningKeyHolder[SigningKey] | None = None) -> str:
+    """Stage one control event through the real emitter as a NATS blip leaves it, and answer the staged bytes.
+
+    Signed as the catalog's emitter signs it when `signing` is the catalog's holder; unsigned for a catalog that does not sign.
+    """
+    sign = None if signing is None else control_sign(signing)
+    emitter = DaprControlEmitter(cast("Any", _Blip()), pubsub="p", topic=CONTROL_TOPIC, timeout_seconds=1.0, service="catalog", sign=sign, outbox_uri=uri)
     await emitter.emit(event)
+    staged = outbox.read_event(uri, {}, event.event_id)
+    assert staged is not None, "precondition: the blip must leave the event staged"
+    return staged
+
+
+def _staged_before_everything_else(tmp_path: Path, key: str) -> None:
+    """Make the object staged under `key` the oldest, so the bounded oldest-first drain meets it first."""
+    path = tmp_path / "control-outbox" / f"{key}.json"
+    stat = path.stat()
+    os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns - 60 * 10**9))
+
+
+def _unsigned(_catalog: Any, _mint: Any) -> dict[str, Any]:
+    return FORGED_PUBLICATION
+
+
+def _unsigned_naming_a_person(_catalog: Any, _mint: Any) -> dict[str, Any]:
+    return FORGED_GRANT
+
+
+def _signed_by_another_listed_identity(_catalog: Any, mint: Any) -> dict[str, Any]:
+    return mint("service-maintenance").sign_control(FORGED_PUBLICATION)
+
+
+def _altered_after_the_catalog_signed_it(catalog: Any, _mint: Any) -> dict[str, Any]:
+    signed = catalog.sign_control(FORGED_GRANT, on_behalf_of=FORGED_GRANT["actor"])
+    return {**signed, "extra": {**signed["extra"], "subject": "user:mallory"}}
 
 
 def _published_event() -> CatalogControlEvent:
@@ -165,49 +213,65 @@ async def test_the_relay_REPUBLISHES_a_staged_table_published(tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
-async def test_the_relay_signs_the_staged_event_and_keeps_its_id_so_the_cascade_dedupes(
-    tmp_path: Path, event_signer: Any, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    "forge",
+    [
+        pytest.param(_unsigned, id="unsigned"),
+        pytest.param(_unsigned_naming_a_person, id="unsigned-naming-a-person-as-its-actor"),
+        pytest.param(_signed_by_another_listed_identity, id="signed-by-another-listed-identity"),
+        pytest.param(_altered_after_the_catalog_signed_it, id="altered-after-the-catalog-signed-it"),
+    ],
+)
+async def test_the_relay_delivers_only_what_this_catalog_signed_and_that_byte_for_byte(
+    tmp_path: Path, event_signer: Any, monkeypatch: pytest.MonkeyPatch, forge: Callable[[Any, Any], dict[str, Any]]
 ) -> None:
-    """An event staged unsigned reaches the bus signed by the catalog, for the person it authenticated, so the door that
-    wakes the next hop admits it. `event_id` is the cascade's idempotency key: `/publication-arrival` mints its stage token
-    from it and `stage_submission_id` hashes that into the deterministic workflow instance id. Re-minting the event, or
-    round-tripping it through the model, would produce a NEW id and drive the hop twice."""
+    """An object staged by anything but this catalog is retired unpublished; what the catalog staged goes out as staged.
+
+    A relay that signed what it found staged would sign a forgery as the catalog and declare whatever person it names,
+    and every enforcing door would then admit it. The forgery is met first and must not stop the drain: the event the
+    catalog staged behind it still goes out on the same tick, byte for byte, so it keeps its signature and its `event_id`,
+    the cascade's idempotency key (`/publication-arrival` mints its stage token from it and `stage_submission_id` hashes
+    that into the deterministic workflow instance id, so a re-minted id would drive the hop twice).
+    """
     monkeypatch.setenv("DAPR_HTTP_PORT", "3500")
     uri = f"file://{tmp_path}/control-outbox"
-    event = _published_event()
-    await _stage(uri, event)
     pair = event_signer(CATALOG)
-
+    signing = _catalog_key(pair)
+    outbox.stage_event(uri, {}, "forged", json.dumps(forge(pair, event_signer)))
+    _staged_before_everything_else(tmp_path, "forged")
+    genuine = await _stage(uri, _published_event(), signing=signing)
     recorder = _Recorder()
-    with TestClient(_relay_app(_settings(uri), recorder, signing=_catalog_key(pair))) as client:
-        client.post(f"/{BINDING}")
 
-    delivered = json.loads(recorder.published[0]["data"])
-    assert _signed_by(delivered, pair.public) == (CATALOG, "user:alice"), "the relay put a control event on the bus that no door would admit"
-    assert delivered["event_id"] == event.event_id, "the re-published event carries a different id — the cascade cannot dedupe it"
-    assert delivered["extra"] == {"project": "acme", "from_version": 3, "to_version": 4}, "the range the stage runner reads did not survive the relay"
+    with _sidecar_serving_the_catalogs_keys(200, pair), TestClient(_relay_app(_settings(uri), recorder, signing=signing)) as client:
+        report = client.post(f"/{BINDING}").json()
+        assert [published["data"] for published in recorder.published] == [genuine], "the relay published an object this catalog never signed"
+        assert (report["republished"], report["poison_dropped"], list(outbox.list_events(uri, {}))) == (1, 1, []), report
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("bus", "keyless"),
+    ("bus", "keys"),
     [
-        pytest.param(_Blip, False, id="a-bus-that-accepts-nothing"),
-        pytest.param(_Recorder, True, id="a-signing-catalog-whose-key-is-unresolved"),
+        pytest.param(_Blip, None, id="a-bus-that-accepts-nothing"),
+        pytest.param(_Recorder, 500, id="a-signing-catalog-whose-published-keys-cannot-be-read"),
     ],
 )
-async def test_an_event_the_relay_may_not_deliver_yet_stays_staged(tmp_path: Path, bus: type[_Blip] | type[_Recorder], keyless: bool) -> None:
-    """Publish BEFORE drop: dropping first would destroy the only durable copy on a bus still down. And never unsigned: a
-    door refuses an unsigned event and acknowledges the refusal, so a signing catalog holds what it cannot sign yet."""
+async def test_an_event_the_relay_may_not_deliver_yet_stays_staged(
+    tmp_path: Path, event_signer: Any, monkeypatch: pytest.MonkeyPatch, bus: type[_Blip] | type[_Recorder], keys: int | None
+) -> None:
+    """Publish BEFORE drop: dropping first would destroy the only durable copy on a bus still down. And verify before
+    publish: a key list the sidecar cannot serve says nothing about a signature, so the event neither goes out unverified
+    nor is retired as a forgery; it waits, staged, for a tick that can read the keys."""
+    monkeypatch.setenv("DAPR_HTTP_PORT", "3500")
     uri = f"file://{tmp_path}/control-outbox"
-    await _stage(uri, _published_event())
+    signing = None if keys is None else _catalog_key(event_signer(CATALOG))
+    await _stage(uri, _published_event(), signing=signing)
     publisher = bus()
 
-    with TestClient(_relay_app(_settings(uri), publisher, signing=_catalog_key(None) if keyless else None)) as client:
+    with _sidecar_serving_the_catalogs_keys(keys), TestClient(_relay_app(_settings(uri), publisher, signing=signing)) as client:
         response = client.post(f"/{BINDING}")
-
-    assert (response.json()["republished"], publisher.published) == (0, []), "the relay delivered an event it may not deliver yet"
-    assert list(outbox.list_events(uri, {})), "the relay dropped a staged event it never delivered"
+        assert (response.json()["republished"], publisher.published) == (0, []), "the relay delivered an event it may not deliver yet"
+        assert list(outbox.list_events(uri, {})), "the relay dropped a staged event it never delivered"
 
 
 @pytest.mark.asyncio
