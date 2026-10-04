@@ -130,7 +130,7 @@ def _signed_by(event: dict[str, Any], public: str) -> tuple[str, str | None] | R
 async def _stage(uri: str, event: CatalogControlEvent) -> None:
     """Stage one unsigned control event through the real emitter: what a NATS blip leaves behind when the catalog does not
     sign, and the same bytes a signing catalog stages while its key is unresolved."""
-    emitter = DaprControlEmitter(cast("Any", _Blip()), pubsub="p", topic=CONTROL_TOPIC, timeout_seconds=1.0, service="catalog", outbox_uri=uri)
+    emitter = DaprControlEmitter(cast("Any", _Blip()), pubsub="p", topic=CONTROL_TOPIC, timeout_seconds=1.0, service="catalog", sign=None, outbox_uri=uri)
     await emitter.emit(event)
 
 

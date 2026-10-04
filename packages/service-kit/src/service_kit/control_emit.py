@@ -1,4 +1,4 @@
-"""Best-effort control-plane change-event emission onto the Dapr/NATS bus.
+"""Best-effort control-plane change-event emission onto the Dapr/NATS bus, signed by the service that emits.
 
 The publish half of :mod:`service_kit.control_events`, which owns the wire model. Every producer of a
 governance mutation notice uses THIS module — the catalog (grants, warehouses, policies, namespaces,
@@ -17,6 +17,15 @@ swallowed and counted, so the bus being down can never fail the mutation. The fa
 most where the caller cannot undo its work: maintenance's purge has already deleted bytes and revoked
 tuples by the time it emits, and raising there would fail a reclamation that irreversibly happened.
 
+**Signed at emit** ([[XC-078]]). A bus door authenticates the sidecar that delivered an event, not the service
+that wrote it, so the actor an event names is a claim until its signature proves which service stamped it. The
+emitter signs each event with its service's own key through the injected ``sign`` (this package cannot import
+lineage-kit, which owns the wire format) BEFORE the event is staged, so an outbox holds the bytes the bus will
+carry. Nothing unsigned leaves a signer: while its key is unresolved an event is staged unsigned and NOT published,
+for the producer's relay to sign once the key resolves (the catalog's ``control_relay``), and with no outbox it is
+withheld and counted. A service with no signing identity passes ``sign=None`` and publishes unsigned, which a door
+accepts only for an action :func:`service_kit.control_events.control_signer_role` exempts.
+
 **No broker client in app code.** Publishing goes through the local Dapr sidecar
 (:func:`service_kit.dapr_publish.publish_event`), which owns retry, backoff and DLQ as component
 config. Subscribers take the topic WITHOUT a ``queueGroupName``, so every replica receives every event
@@ -32,10 +41,13 @@ Two ways this fails SILENTLY in-cluster, named because "best-effort" hides them:
 
 from __future__ import annotations
 
+import json
 import logging
-from typing import Any, Protocol, runtime_checkable
+from collections.abc import Callable
+from typing import Any, Literal, Protocol, runtime_checkable
 
 from dapr.aio.clients import DaprClient
+from fastapi.concurrency import run_in_threadpool
 from opentelemetry import metrics
 
 from service_kit.control_events import (
@@ -44,10 +56,19 @@ from service_kit.control_events import (
     ControlAction,
     ControlObjectType,
 )
-from service_kit.lakehouse import outbox
+from service_kit.governed.signing_key import SigningKeyUnavailableError
+from service_kit.lakehouse import outbox, outbox_metrics
 
 
 log = logging.getLogger(__name__)
+
+#: Signs one control event as the emitting service: given the JSON the bus will carry, read back, it returns a copy
+#: carrying `rask_signature` (`lineage_kit.signing.attach_control_signature` over the service's own key), and raises
+#: `SigningKeyUnavailableError` while that key is unresolved. A callable because this package cannot import lineage-kit.
+type ControlSign = Callable[[dict[str, Any]], dict[str, Any]]
+
+#: Why an emit did not reach the bus: the publish failed, or the event could not be signed.
+type _Undelivered = Literal["publish", "unsigned"]
 
 
 @runtime_checkable
@@ -67,12 +88,12 @@ class NoopControlEmitter:
 
 
 class DaprControlEmitter:
-    """Publish the event to the Dapr ``pubsub.jetstream`` component via the local sidecar.
+    """Publish the event to the Dapr ``pubsub.jetstream`` component via the local sidecar, signed by ``sign``.
 
     Bounded by a tight per-publish timeout (a hung sidecar must not pin the inline-awaited emit on a
-    mutation request path) and fully best-effort — every error swallowed, counted and logged.
-    ``authorization`` is irrelevant: the topic is an internal channel, so the subscriber trusts the
-    verified ``actor`` the producer stamped.
+    mutation request path) and fully best-effort — every error swallowed, counted and logged. The
+    publish carries no ``authorization``: a subscriber learns which service stamped an event from its
+    signature, because the transport authenticates only the sidecar that delivered it.
 
     ``service`` names the emitting service for telemetry ONLY. It is the single thing that differed
     between the two copies this module replaced, so it is a parameter rather than a reason to fork:
@@ -88,6 +109,7 @@ class DaprControlEmitter:
         topic: str,
         timeout_seconds: float,
         service: str,
+        sign: ControlSign | None,
         outbox_uri: str = "",
         storage_options: dict[str, str] | None = None,
     ) -> None:
@@ -96,63 +118,97 @@ class DaprControlEmitter:
         self._topic = topic
         self._timeout_seconds = timeout_seconds
         self._service = service
+        #: This service's signer, or None for a service with no signing identity, which publishes unsigned.
+        self._sign = sign
         #: The control lane's OWN outbox prefix — never the lineage one. Each prefix is drained by a
         #: lane-specific relay that re-ingests what it finds, so sharing would feed each the other's
-        #: events. Empty means unstaged, which is the pre-existing fail-open behaviour.
+        #: events. Empty means unstaged: a failed publish, or an event waiting for its key, is lost.
         self._outbox_uri = outbox_uri
         self._storage_options = dict(storage_options or {})
-        #: Held as a real attribute, not read back off the OTel `Counter` (whose description lives in a
-        #: private field). What this string SAYS is load-bearing — the previous wording told operators
-        #: a dropped control event costs nothing, which is how this went unnoticed — so it is asserted
-        #: by a test, and a test should not have to reach into another library's internals to do it.
-        self.failure_description = (
-            f"{service} control-plane emits that failed to reach the bus. The change ITSELF still "
-            "happened and is audited. Whether anything is lost depends on the consumer: a console "
-            "ring buffer or a tag-polling reader loses only a refresh hint, but under "
-            "medallion.cascadeViaPublish the downstream cascade rides `table_published` and does "
-            "NOT poll — a dropped event there cancels the next hop outright. When an outbox is "
-            "configured the event stays STAGED and its relay re-publishes it; without one this "
-            "counter rising means cascades were silently abandoned."
-        )
+        # What this description SAYS is load-bearing: an operator reads it to decide whether a rising
+        # count lost anything, and the answer depends on the consumer and on whether an outbox stages.
         self._emit_failed = metrics.get_meter(f"lance.{service}").create_counter(
             f"{service}.control_emit.failed",
             unit="{event}",
-            description=self.failure_description,
+            description=(
+                f"{service} control-plane emits that did not reach the bus, by `reason`: `publish` (the bus "
+                "refused or timed out) or `unsigned` (this service's signing key is unresolved, or it cannot sign "
+                "the event at all). The change ITSELF still happened and is audited. Whether anything is "
+                "lost depends on the consumer: a console ring buffer or a tag-polling reader loses only a refresh "
+                "hint, but under medallion.cascadeViaPublish the downstream cascade rides `table_published` and "
+                "does NOT poll — a dropped event there cancels the next hop outright. When an outbox is "
+                "configured a failed publish, or an event waiting for its key, stays STAGED and its relay "
+                "delivers it; without one this counter rising means cascades were silently abandoned."
+            ),
         )
 
     async def emit(self, event: CatalogControlEvent) -> None:
-        """Publish one control event, STAGED when an outbox is configured.
+        """Publish one control event, signed when this service signs, STAGED when an outbox is configured.
 
-        Still swallows the failure, and that part is deliberate: this is called after the change has
-        already happened and been audited, so raising here would turn a delivered mutation into a 500
-        the caller retries. What changed is that the event is no longer GONE — it is staged before the
-        publish and dropped only on ack, so a relay can re-publish it. `event_id` is the key: it is
-        the client-side dedupe key, so a re-published event is recognised rather than double-applied.
+        Swallows every failure, and that part is deliberate: this is called after the change has already
+        happened and been audited, so raising here would turn a delivered mutation into a 500 the caller
+        retries. The event is staged before the publish and dropped only on ack, so a relay can re-publish
+        it, and `event_id` is the client-side dedupe key, so a re-published event is recognised rather than
+        double-applied.
+
+        SIGNED BEFORE IT IS STAGED, so the staged copy is the signed bytes. An event this service cannot
+        sign yet, its key unresolved, is staged unsigned and NOT published: a door refuses an unsigned event
+        and acknowledges the refusal, so publishing it would lose it, while the relay signs what it finds
+        staged. With no outbox there is nothing to sign it later, and it is withheld.
         """
+        event_json = event.model_dump_json()
+        if self._sign is not None:
+            try:
+                event_json = json.dumps(self._sign(json.loads(event_json)))
+            except SigningKeyUnavailableError as exc:
+                await self._hold_unsigned(event, event_json, exc)
+                return
+            except Exception as exc:
+                # This signer cannot sign the event at all (no canonical form, or an actor it may not vouch
+                # for): staged, it would only fail the same way at the relay.
+                self._record_undelivered(event, exc, reason="unsigned", staged=False)
+                return
         try:
             await outbox.publish_with_outbox(
                 self._client,
                 outbox_uri=self._outbox_uri,
                 storage_options=self._storage_options,
                 key=event.event_id,
-                event_json=event.model_dump_json(),
+                event_json=event_json,
                 pubsub_name=self._pubsub,
                 topic_name=self._topic,
                 timeout_seconds=self._timeout_seconds,
             )
         except Exception as exc:
-            self._emit_failed.add(1, {f"lance.{self._service}.action": event.action})
-            log.warning(
-                "control_publish_failed",
-                extra={
-                    "action": event.action,
-                    "object_id": event.object_id,
-                    "error": str(exc),
-                    # Whether this is recoverable at all, said in the line itself — an operator
-                    # reading it should not have to go and check how the service was configured.
-                    "staged": bool(self._outbox_uri),
-                },
-            )
+            self._record_undelivered(event, exc, reason="publish", staged=bool(self._outbox_uri))
+
+    async def _hold_unsigned(self, event: CatalogControlEvent, event_json: str, error: Exception) -> None:
+        """Stage an event this service cannot sign yet, unpublished, where its relay signs it; with no outbox, withhold it."""
+        staged = False
+        if self._outbox_uri:
+            try:
+                await run_in_threadpool(outbox.stage_event, self._outbox_uri, self._storage_options, event.event_id, event_json)
+            except Exception as exc:
+                outbox_metrics.record_stage_failed()
+                error = exc
+            else:
+                outbox_metrics.record_staged()
+                staged = True
+        self._record_undelivered(event, error, reason="unsigned", staged=staged)
+
+    def _record_undelivered(self, event: CatalogControlEvent, error: Exception, *, reason: _Undelivered, staged: bool) -> None:
+        self._emit_failed.add(1, {f"lance.{self._service}.action": event.action, f"lance.{self._service}.reason": reason})
+        log.warning(
+            "control_publish_failed" if reason == "publish" else "control_emit_withheld_unsigned",
+            extra={
+                "action": event.action,
+                "object_id": event.object_id,
+                "error": str(error),
+                # Whether this is recoverable at all, said in the line itself — an operator
+                # reading it should not have to go and check how the service was configured.
+                "staged": staged,
+            },
+        )
 
 
 def make_control_emitter(
@@ -161,6 +217,7 @@ def make_control_emitter(
     dapr: DaprClient | None,
     pubsub: str,
     service: str,
+    sign: ControlSign | None,
     topic: str = CONTROL_TOPIC,
     timeout_seconds: float,
     outbox_uri: str = "",
@@ -168,7 +225,10 @@ def make_control_emitter(
 ) -> ControlEmitter:
     """The chosen control emitter: a Dapr publisher when enabled and a sidecar client is present, else
     the no-op (dev/off, like lineage). Built once in the service's lifespan onto
-    ``app.state.control_emitter``."""
+    ``app.state.control_emitter``.
+
+    ``sign`` has no default, so every producer states whether it signs: None publishes unsigned, which a
+    door accepts only for an action ``control_signer_role`` exempts."""
     if enabled and dapr is not None:
         return DaprControlEmitter(
             dapr,
@@ -176,6 +236,7 @@ def make_control_emitter(
             topic=topic,
             timeout_seconds=timeout_seconds,
             service=service,
+            sign=sign,
             outbox_uri=outbox_uri,
             storage_options=storage_options,
         )

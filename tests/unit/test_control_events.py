@@ -82,7 +82,7 @@ def test_buffer_overflow_signals_reset() -> None:
 
 def test_dapr_emitter_publishes_control_topic() -> None:
     fake = _FakeDapr()
-    em = DaprControlEmitter(cast(Any, fake), pubsub="catalog-control-pubsub", topic=CONTROL_TOPIC, timeout_seconds=5, service="catalog")
+    em = DaprControlEmitter(cast(Any, fake), pubsub="catalog-control-pubsub", topic=CONTROL_TOPIC, timeout_seconds=5, service="catalog", sign=None)
     e = _evt()
     asyncio.run(em.emit(e))
     assert len(fake.calls) == 1
@@ -95,16 +95,16 @@ def test_dapr_emitter_publishes_control_topic() -> None:
 
 def test_make_control_emitter_selection() -> None:
     assert isinstance(
-        make_control_emitter(enabled=True, dapr=cast(Any, _FakeDapr()), pubsub="p", timeout_seconds=5, service="catalog"),
+        make_control_emitter(enabled=True, dapr=cast(Any, _FakeDapr()), pubsub="p", timeout_seconds=5, service="catalog", sign=None),
         DaprControlEmitter,
     )
     # Off, or no sidecar client → the no-op.
     assert isinstance(
-        make_control_emitter(enabled=False, dapr=cast(Any, _FakeDapr()), pubsub="p", timeout_seconds=5, service="catalog"),
+        make_control_emitter(enabled=False, dapr=cast(Any, _FakeDapr()), pubsub="p", timeout_seconds=5, service="catalog", sign=None),
         NoopControlEmitter,
     )
     assert isinstance(
-        make_control_emitter(enabled=True, dapr=None, pubsub="p", timeout_seconds=5, service="catalog"),
+        make_control_emitter(enabled=True, dapr=None, pubsub="p", timeout_seconds=5, service="catalog", sign=None),
         NoopControlEmitter,
     )
 
@@ -114,7 +114,7 @@ def test_make_control_emitter_selection() -> None:
 
 def test_emit_control_builds_and_emits() -> None:
     fake = _FakeDapr()
-    em = DaprControlEmitter(cast(Any, fake), pubsub="p", topic=CONTROL_TOPIC, timeout_seconds=5, service="catalog")
+    em = DaprControlEmitter(cast(Any, fake), pubsub="p", topic=CONTROL_TOPIC, timeout_seconds=5, service="catalog", sign=None)
     asyncio.run(
         emit_control(
             em,
