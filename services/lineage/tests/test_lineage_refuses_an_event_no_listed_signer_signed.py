@@ -14,7 +14,7 @@ refusal as an increase; the counter is read through a real in-memory reader.
 
 from __future__ import annotations
 
-import importlib
+import importlib.util
 import json
 import logging
 from collections.abc import Callable, Iterator, Sequence
@@ -34,11 +34,13 @@ SECRETS = "http://localhost:3500/v1.0/secrets/lance-secrets"
 
 
 @pytest.fixture
-def refusals() -> Iterator[Callable[[], dict[str, int]]]:
+def refusals(monkeypatch: pytest.MonkeyPatch) -> Iterator[Callable[[], dict[str, int]]]:
     """`lineage.signature.refused` by reason, read through a real in-memory reader.
 
-    The counter is made when `lineage.core.metrics` is imported, so the module is imported again under a meter of this
-    reader's provider, and again afterwards so every later test records against the process's provider.
+    The counter is made when `lineage.core.metrics` is imported. Its code is run again into a module object of its own
+    under a meter of this reader's provider, and only the refusal counter is swapped onto the imported module, so its name
+    is the module's own and nothing else is replaced: a reload would replace the module's enums, which every importer
+    holds as it imported them.
     """
     from opentelemetry import metrics as otel_metrics
     from opentelemetry.sdk.metrics import MeterProvider
@@ -48,6 +50,13 @@ def refusals() -> Iterator[Callable[[], dict[str, int]]]:
 
     reader = InMemoryMetricReader()
     provider = MeterProvider(metric_readers=[reader])
+    spec = importlib.util.find_spec(metrics.__name__)
+    assert spec is not None and spec.loader is not None, "the metrics module has no loader to run it again with"
+    measured = importlib.util.module_from_spec(spec)
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(otel_metrics, "get_meter", lambda name, *_args, **_kwargs: provider.get_meter(name))
+        spec.loader.exec_module(measured)
+    monkeypatch.setattr(metrics, "_signature_refused", measured._signature_refused)
 
     def counts() -> dict[str, int]:
         found: dict[str, int] = {}
@@ -62,11 +71,7 @@ def refusals() -> Iterator[Callable[[], dict[str, int]]]:
                         found[str((point.attributes or {}).get("lance.lineage.reason"))] = int(point.value)
         return found
 
-    with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(otel_metrics, "get_meter", lambda name, *_args, **_kwargs: provider.get_meter(name))
-        importlib.reload(metrics)
     yield counts
-    importlib.reload(metrics)
     provider.shutdown()
 
 

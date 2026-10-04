@@ -26,7 +26,7 @@ Three refusals, and they answer different questions:
   the root conftest's `EventSigner` from the wire format alone.
 """
 
-import importlib
+import importlib.util
 import json
 import logging
 from collections.abc import Callable, Iterator, Sequence
@@ -230,11 +230,13 @@ def signing_door(
 
 
 @pytest.fixture
-def signature_counts() -> Iterator[Callable[[], Counts]]:
+def signature_counts(monkeypatch: pytest.MonkeyPatch) -> Iterator[Callable[[], Counts]]:
     """What the signature counters hold, read through a real in-memory reader.
 
-    The counters are created at import against the global meter, so the metrics module is reloaded under a meter
-    this test reads, and reloaded again afterwards so every later test records against the global one.
+    The counters are made when `notifications.api.metrics` is imported. Its code is run again into a module object of its
+    own under a meter of this reader's provider, and only the two signature counters are swapped onto the imported
+    module, so their names stay the module's own and nothing else is replaced. A reload would replace the module's enums
+    as well, and `reconcile_cron` compares the `PassOutcome` members it imported by identity.
     """
     import opentelemetry.metrics as otel_metrics
     from opentelemetry.sdk.metrics import MeterProvider
@@ -242,6 +244,14 @@ def signature_counts() -> Iterator[Callable[[], Counts]]:
 
     reader = InMemoryMetricReader()
     provider = MeterProvider(metric_readers=[reader])
+    spec = importlib.util.find_spec(metrics_module.__name__)
+    assert spec is not None and spec.loader is not None, "the metrics module has no loader to run it again with"
+    measured = importlib.util.module_from_spec(spec)
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(otel_metrics, "get_meter", lambda name, *_args, **_kwargs: provider.get_meter(name))
+        spec.loader.exec_module(measured)
+    for counter in ("_signature_refused", "_signature_would_refuse"):
+        monkeypatch.setattr(metrics_module, counter, getattr(measured, counter))
 
     def counts() -> Counts:
         found: Counts = {}
@@ -259,11 +269,8 @@ def signature_counts() -> Iterator[Callable[[], Counts]]:
                         found.setdefault(metric.name, {})[key] = int(point.value)
         return found
 
-    with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(otel_metrics, "get_meter", lambda *_args, **_kwargs: provider.get_meter("lance.notifications"))
-        importlib.reload(metrics_module)
-        yield counts
-    importlib.reload(metrics_module)
+    yield counts
+    provider.shutdown()
 
 
 def _after_one_delivery(door: str, counted: tuple[str, str] | None) -> Counts:
