@@ -59,6 +59,8 @@ spec:
       labels:
         {{- include "lance.labels" . | nindent 8 }}
         app.kubernetes.io/component: vmalert
+      annotations:
+        checksum/rules: {{ .Files.Get "alerting/rules.yml" | sha256sum }}
     spec:
       serviceAccountName: {{ $fullname }}-sa-vmalert
       securityContext: { runAsNonRoot: true, runAsUser: 65534, fsGroup: 65534 }
