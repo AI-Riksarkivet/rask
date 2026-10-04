@@ -3274,8 +3274,9 @@ signing:
   # through its doors. Ingest never publishes to the lineage topic (it emits over HTTP, ingest/lineage.py `_emitter`, and the
   # catalog announces its writes), and the head ignores a maintenance pass (compaction, compact_table, create_index) before
   # verifying it, so a signature from any other identity on an event the head acts on is a forgery to this door. A stage
-  # runner's own write reaches the head only when a declared lane names that table as its input, and the head refuses it as
-  # a signer it does not list. The producer's RASK_EVENT_DELEGATORS stays lineage's (the catalog); /publication-arrival
+  # runner's own write reaches the head only when a declared lane names that table as its input: enforcing, the head
+  # refuses it as a signer it does not list (counted); observing, it acts and counts it. Such a lane is meant to be woken
+  # by /publication-arrival. The producer's RASK_EVENT_DELEGATORS stays lineage's (the catalog); /publication-arrival
   # reads it too. Notifications and both maintenance Deployments keep lineage's full sets: every signer's events reach them.
   #
   # off verifies nothing. observe acts exactly as off and counts what it would refuse
