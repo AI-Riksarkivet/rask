@@ -97,6 +97,20 @@ def _holder(settings: MedallionSettings) -> SigningKeyHolder[SigningKey] | None:
     return holder
 
 
+def require_signing_key(settings: MedallionSettings) -> None:
+    """Raise unless this service can sign right now: it does not sign, or its holder holds a key.
+
+    For an emit that must not count or announce what it then cannot send: the check comes first, and the emit signs with
+    the same holder.
+
+    Raises:
+        SigningKeyUnavailableError: this service signs and holds no key.
+    """
+    holder = _holder(settings)
+    if holder is not None:
+        holder.key()
+
+
 def _signed(settings: MedallionSettings, event: dict[str, Any]) -> dict[str, Any]:
     """The event as it leaves: signed as this service's identity, or unchanged when this service does not sign.
 

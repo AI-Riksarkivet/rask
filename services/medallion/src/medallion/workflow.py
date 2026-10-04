@@ -57,10 +57,11 @@ from opentelemetry.trace import Status, StatusCode
 from pydantic import BaseModel, Field
 
 from medallion.core.best_effort import best_effort
-from medallion.core.lineage_publish import emit_lineage, signed_control_event
+from medallion.core.lineage_publish import emit_lineage, require_signing_key, signed_control_event
 from medallion.core.metrics import record_promotion_outcome, record_stage_outcome, record_train_outcome
 from medallion.schemas.promotion import PromotionSpec
 from service_kit.activity_loop import run_activity
+from service_kit.governed.signing_key import MAX_REFRESH_SECONDS
 from service_kit.lakehouse.executor import RunState
 
 
@@ -81,6 +82,22 @@ ACTIVITY_RETRY: Final = wf.RetryPolicy(
     max_number_of_attempts=5,
     backoff_coefficient=2.0,
     max_retry_interval=timedelta(seconds=60),
+)
+
+#: How often the producer's key holder re-reads a key it has not resolved: `SigningKeyHolder`'s `retry_seconds`, which
+#: `make_signing_holder` leaves at its default.
+_KEY_HOLDER_RETRY_SECONDS: Final = 15
+
+#: Retry for an activity that SIGNS what it sends: `request_approval` and `emit_promotion_outcome` ([[XC-078]]). Their
+#: failure to plan for is a key miss, which is the producer's holder still resolving and heals in place, so the budget is
+#: sized from the holder rather than from a blip. Attempts run at the holder's own cadence for the window in which every
+#: signer is expected to have healed: one `MAX_REFRESH_SECONDS` (values.yaml `signing:`, STORE LOSS) plus one re-read.
+#: That is 2 + 300 // 15 = 22 attempts, the last starting 21 x 15 s = 315 s after the first. `ACTIVITY_RETRY` stops after
+#: 2 + 4 + 8 + 16 = 30 s, which a store outage across a restart outlasts.
+SIGNING_ACTIVITY_RETRY: Final = wf.RetryPolicy(
+    first_retry_interval=timedelta(seconds=_KEY_HOLDER_RETRY_SECONDS),
+    max_number_of_attempts=2 + int(MAX_REFRESH_SECONDS) // _KEY_HOLDER_RETRY_SECONDS,
+    backoff_coefficient=1.0,
 )
 
 #: Seconds between status reads. A stage transform is minutes-to-hours work, so a tight interval buys
@@ -1161,36 +1178,31 @@ def promotion_review(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Gener
     verdict = policy.get("verdict", "block")
 
     if verdict == "block":
-        yield ctx.call_activity(
-            emit_promotion_outcome,
-            input=PromotionReport(spec=spec, outcome=PromotionOutcome(status="BLOCKED", reasons=spec.reasons)),
-            retry_policy=ACTIVITY_RETRY,
-        )
+        yield from _record_outcome(ctx, PromotionReport(spec=spec, outcome=PromotionOutcome(status="BLOCKED", reasons=spec.reasons)))
         return {"status": "BLOCKED", "decided_by": None, "reasons": spec.reasons}
 
     decided_by: str | None = None
     if verdict == "review":
         # ASK BEFORE WAITING, and treat an unsendable ask as a refusal: parking on an event nobody was
-        # told about is an outage wearing a pause.
-        asked = yield ctx.call_activity(request_approval, input=spec, retry_policy=ACTIVITY_RETRY)
+        # told about is an outage wearing a pause. An ask the producer could not sign within its budget is one too, so
+        # this boundary records it BLOCKED with the reason, where the raise would end the instance FAILED with the hold
+        # acknowledged and nobody told.
+        reasons = [*spec.reasons, "no reachable approver"]
+        try:
+            asked = yield ctx.call_activity(request_approval, input=spec, retry_policy=SIGNING_ACTIVITY_RETRY)
+        except Exception as exc:  # noqa: BLE001 — the boundary is the point; an ask that never left must still reach lineage
+            asked = False
+            reasons.append(str(exc) or exc.__class__.__name__)
         if not asked:
-            yield ctx.call_activity(
-                emit_promotion_outcome,
-                input=PromotionReport(spec=spec, outcome=PromotionOutcome(status="BLOCKED", reasons=[*spec.reasons, "no reachable approver"])),
-                retry_policy=ACTIVITY_RETRY,
-            )
-            return {"status": "BLOCKED", "decided_by": None, "reasons": [*spec.reasons, "no reachable approver"]}
+            yield from _record_outcome(ctx, PromotionReport(spec=spec, outcome=PromotionOutcome(status="BLOCKED", reasons=reasons)))
+            return {"status": "BLOCKED", "decided_by": None, "reasons": reasons}
 
         approval = ctx.wait_for_external_event("promotion_decision")
         deadline = ctx.create_timer(timedelta(hours=spec.approval_hours))
         winner = yield wf.when_any([approval, deadline])
 
         if winner is deadline:
-            yield ctx.call_activity(
-                emit_promotion_outcome,
-                input=PromotionReport(spec=spec, outcome=PromotionOutcome(status="EXPIRED", reasons=spec.reasons)),
-                retry_policy=ACTIVITY_RETRY,
-            )
+            yield from _record_outcome(ctx, PromotionReport(spec=spec, outcome=PromotionOutcome(status="EXPIRED", reasons=spec.reasons)))
             return {"status": "EXPIRED", "decided_by": None, "reasons": spec.reasons}
 
         decision = approval.get_result() or {}
@@ -1199,11 +1211,7 @@ def promotion_review(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Gener
         # is the producing service approving its own output.
         if not decided_by or decided_by == settings_author_marker(spec) or not decision.get("approved"):
             status = "REJECTED" if decided_by and decision.get("approved") is False else "BLOCKED"
-            yield ctx.call_activity(
-                emit_promotion_outcome,
-                input=PromotionReport(spec=spec, outcome=PromotionOutcome(status=status, decided_by=decided_by, reasons=spec.reasons)),
-                retry_policy=ACTIVITY_RETRY,
-            )
+            yield from _record_outcome(ctx, PromotionReport(spec=spec, outcome=PromotionOutcome(status=status, decided_by=decided_by, reasons=spec.reasons)))
             return {"status": status, "decided_by": decided_by, "reasons": spec.reasons}
 
     # UNCONDITIONAL: every approval resumes through the catalog, because the tag move IS the
@@ -1229,19 +1237,29 @@ def promotion_review(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Gener
 
     if promotion_failure is not None:
         reasons = [*spec.reasons, promotion_failure]
-        yield ctx.call_activity(
-            emit_promotion_outcome,
-            input=PromotionReport(spec=spec, outcome=PromotionOutcome(status="PROMOTION_FAILED", decided_by=decided_by, reasons=reasons)),
-            retry_policy=ACTIVITY_RETRY,
-        )
+        yield from _record_outcome(ctx, PromotionReport(spec=spec, outcome=PromotionOutcome(status="PROMOTION_FAILED", decided_by=decided_by, reasons=reasons)))
         return {"status": "PROMOTION_FAILED", "decided_by": decided_by, "reasons": reasons}
 
-    yield ctx.call_activity(
-        emit_promotion_outcome,
-        input=PromotionReport(spec=spec, outcome=PromotionOutcome(status="PROMOTED", decided_by=decided_by)),
-        retry_policy=ACTIVITY_RETRY,
-    )
+    yield from _record_outcome(ctx, PromotionReport(spec=spec, outcome=PromotionOutcome(status="PROMOTED", decided_by=decided_by)))
     return {"status": "PROMOTED", "decided_by": decided_by, "reasons": spec.reasons}
+
+
+def _record_outcome(ctx: DaprWorkflowContext, report: PromotionReport) -> Generator[Any, Any]:
+    """Record one decision in lineage, and never fail the review over the record.
+
+    `emit_promotion_outcome` signs, so it runs under `SIGNING_ACTIVITY_RETRY`. The decision is already made and the review
+    returns it whatever happens here, so a record the producer could not sign within the budget is logged, the one trace
+    of the decision outside workflow history, rather than raised: a raise would end the instance FAILED with the decision
+    unreported. The log is skipped on replay, which would repeat it.
+    """
+    try:
+        yield ctx.call_activity(emit_promotion_outcome, input=report, retry_policy=SIGNING_ACTIVITY_RETRY)
+    except Exception as exc:  # noqa: BLE001 — the boundary is the point; the review's outcome stands without its record
+        if not ctx.is_replaying:
+            log.error(
+                "medallion_promotion_outcome_unrecorded",
+                extra={"token": report.spec.token, "dataset": report.spec.to_dataset, "status": report.outcome.status, "error": str(exc)},
+            )
 
 
 def settings_author_marker(spec: PromotionSpec) -> str:
@@ -1319,7 +1337,7 @@ def request_approval(ctx: WorkflowActivityContext, spec: PromotionSpec) -> bool:
     )
     # SIGNED BEFORE THE PUBLISH IS TRIED, and outside the `try` below that turns a failed publish into a refusal
     # ([[XC-078]]). An enforcing door drops an unsigned ask, so a producer without its key sends nothing: the raise
-    # reaches `ACTIVITY_RETRY`, which runs the activity again once the key may have resolved, where returning False
+    # reaches `SIGNING_ACTIVITY_RETRY`, which runs the activity again once the key may have resolved, where returning False
     # would BLOCK the promotion on an ask that never left.
     data = json.dumps(signed_control_event(settings, json.loads(event.model_dump_json())))
 
@@ -1423,6 +1441,10 @@ def emit_promotion_outcome(ctx: WorkflowActivityContext, payload: PromotionRepor
     spec = payload.spec
     outcome = payload.outcome
     settings = get_settings()
+    # A KEY MISS RAISES, before anything is counted or sent ([[XC-078]]). Nothing leaves unsigned, so the best-effort
+    # publish below would drop the record on the first attempt, where the raise hands it to `SIGNING_ACTIVITY_RETRY`, and
+    # a count taken first would be taken again on every attempt.
+    require_signing_key(settings)
     # PROMOTED | REJECTED | BLOCKED | EXPIRED | PROMOTION_FAILED — a closed set decided by the review
     # body, never caller input. PROMOTION_FAILED means the person APPROVED and the publish was
     # refused: the decision is real, the tag did not move, and only a distinct status can say both.
