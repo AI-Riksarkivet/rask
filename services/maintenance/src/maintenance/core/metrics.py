@@ -204,6 +204,37 @@ _credential_tier = _meter.create_counter(
 )
 
 
+#: The bus doors that check an event's signature ([[XC-078]]), as the closed `door` label of the two series below.
+type SignatureDoor = Literal["maintenance-arrival"]
+
+#: Events a door refused because no listed signer's published key verifies them. A refusal is acknowledged and acts on
+#: nothing, so this count and one log line are all it leaves. `reason` is lineage-kit's closed `RefusalReason`, never the
+#: event's own text, so the series stays a handful.
+_signature_refused = _meter.create_counter(
+    "maintenance.signature.refused",
+    unit="{event}",
+    description="Events a door refused because no listed signer's published key verifies their signature, by door and reason. A refusal is acked and acts on nothing.",
+)
+#: What a door in observe mode acted on and enforcing would have refused, or could not decide because the keys were
+#: unreadable (`keys_unavailable`). Its own series, so the soak that decides whether enforcing is safe is never read as
+#: refusals that happened.
+_signature_would_refuse = _meter.create_counter(
+    "maintenance.signature.would_refuse",
+    unit="{event}",
+    description="Events a door in observe mode acted on although enforcing would have refused them, or could not read the keys to decide, by door and reason.",
+)
+
+
+def record_signature_refused(*, door: SignatureDoor, reason: str) -> None:
+    """Count one event ``door`` refused. Keyword-only: both are strings, and a swapped pair would put a reason in the door label."""
+    _signature_refused.add(1, {"door": door, "reason": reason})
+
+
+def record_signature_would_refuse(*, door: SignatureDoor, reason: str) -> None:
+    """Count one event ``door`` acted on in observe mode that enforcing would have refused for ``reason``."""
+    _signature_would_refuse.add(1, {"door": door, "reason": reason})
+
+
 def record_run_started() -> None:
     _runs_started.add(1)
 
