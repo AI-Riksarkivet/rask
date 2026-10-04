@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from functools import partial
+from functools import cache, partial
 from typing import Any
 
 from dapr.aio.clients import DaprClient
@@ -133,6 +133,9 @@ def _bronze_write(event: dict[str, Any], settings: MedallionSettings, project: s
         return None
     expected_namespace = project_namespace(project, settings.bronze_namespace)
     expected = {project_namespace(project, settings.bronze_dataset): settings.bronze_dataset}
+    # AT MOST ONE LISTING PER DELIVERY, and only once an output is not the configured pair: a listing is one LIST and one
+    # GET per stored declaration, and an event names as many outputs as its sender likes.
+    declared_inputs = cache(partial(_declared_inputs, settings, project=project))
     outputs = event.get("outputs") or []
     for output in outputs:
         if not isinstance(output, dict):
@@ -161,7 +164,7 @@ def _bronze_write(event: dict[str, Any], settings: MedallionSettings, project: s
         # this branch never followed. The result was ONE function returning two different kinds of
         # thing depending on which branch fired, so a lane declared through the door was reachable
         # from this head and not from the publication head.
-        if name and _has_declared_lane(settings, project=project, table_id=name):
+        if name and name in declared_inputs():
             return BronzeWrite(lane=lane_key(project, name), table_id=name)
     return None
 
@@ -177,22 +180,22 @@ def _bronze_write_dataset(event: dict[str, Any], settings: MedallionSettings, pr
     return write.lane if write is not None else None
 
 
-def _has_declared_lane(settings: MedallionSettings, *, project: str, table_id: str) -> bool:
-    """Whether any lane in this project declares ``table_id`` as its input.
+def _declared_inputs(settings: MedallionSettings, *, project: str) -> frozenset[str]:
+    """The tables this project's lanes declare as their input, from one listing of the control root.
 
-    Never raises: a control root that cannot be read must not stop the CONFIGURED dataset from
-    cascading, so an unreadable registry degrades to "nothing extra is declared" rather than taking
-    the head down. Logged, because a registry that cannot be read is a real fault.
+    Blocking, so the route decides in a worker thread. Never raises: a control root that cannot be read must not stop
+    the CONFIGURED dataset from cascading, so an unreadable registry degrades to "nothing extra is declared" rather
+    than taking the head down. Logged, because a registry that cannot be read is a real fault.
     """
     control_root = getattr(settings, "control_root", "")
     if not project or not control_root:
-        return False
+        return frozenset()
     try:
         specs = transform_specs.list_specs(control_root, settings.storage_options(), project)
     except Exception:  # noqa: BLE001 — a registry read must not break the cascade head
-        log.exception("cascade_head_lane_lookup_failed", extra={"project": project, "table_id": table_id})
-        return False
-    return any(spec.from_id == table_id for spec in specs)
+        log.exception("cascade_head_lane_lookup_failed", extra={"project": project})
+        return frozenset()
+    return frozenset(spec.from_id for spec in specs)
 
 
 def _cascade_token(event: dict[str, Any]) -> str:
@@ -247,7 +250,7 @@ async def _vended_upstream(settings: MedallionSettings, table_id: str) -> str:
     THE ANSWER IS ADVISORY, and every way of not getting one degrades to ``""`` — the composed-path
     fallback, which is the CORRECT upstream for a produce-first estate (the chart renders
     `MEDALLION_BRONZE_URI` and the stage runner's `MEDALLION_FROM_URI` from one expression, so the composed
-    path is where those bytes are). The same shape and the same reasoning as `_has_declared_lane`
+    path is where those bytes are). The same shape and the same reasoning as `_declared_inputs`
     above: a catalog that cannot be read must not stop the head from firing, and a head that answered
     RETRY to a describe outage would halt a cascade that works. Logged, because an unreachable catalog
     is a real fault.

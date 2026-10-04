@@ -18,6 +18,7 @@ from typing import Annotated, Any
 
 from dapr.ext.fastapi import DaprApp
 from fastapi import Depends, FastAPI, Request
+from fastapi.concurrency import run_in_threadpool
 
 from medallion.api import signature_door
 from medallion.api.dependencies import DaprClientDep, SettingsDep
@@ -78,7 +79,9 @@ def register_bronze_arrival_route(app: FastAPI) -> DaprApp:
             return drain
         if signing is not None:
             return signing
-        arrival = bronze_arrival_of(event, config)
+        # In a worker thread: deciding may list the declared lanes, a blocking read of the control root, and a read held
+        # on the event loop stalls every other delivery and the liveness probe with it.
+        arrival = await run_in_threadpool(bronze_arrival_of, event, config)
         if arrival is None:
             return _SUCCESS  # not a bronze write: ack so Dapr doesn't redeliver, but drive nothing
         withheld = await signature_door.withhold_lineage_event(request, config, door="bronze-arrival", arrived=arrival.event)
