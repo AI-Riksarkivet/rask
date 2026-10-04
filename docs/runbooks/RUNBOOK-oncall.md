@@ -206,6 +206,33 @@ forged is an incident, and the response is to rotate that identity's key. An eve
 presented again; it stays on the retained stream (168 h), so a rebuild that re-reads the stream verifies it afresh against
 the keys published by then.
 
+## A bus door refusing events
+
+**Symptom.** `MedallionHeadRefusingEvents`, `NotificationsDoorRefusingEvents` or `MaintenanceArrivalRefusingEvents`
+fires, with `<service>_signature_refused_total` rising for a door and a reason, and `<service>_signature_refused` WARN
+lines on that service's pods naming the door, the claimed identity, the event and the reason.
+
+**Cause.** With `RASK_SIGNATURE_DOORS=enforce`, the cascade heads (`/bronze-arrival`, `/publication-arrival`),
+notifications (`/lineage-events`, `/control-events`) and maintenance's `/maintenance-arrival` act on a bus event only when
+a signer that door allows verifiably signed it: a lineage event against `RASK_EVENT_SIGNERS` and `RASK_EVENT_DELEGATORS`,
+a control event against the identities `RASK_CONTROL_SIGNER_ROLES` lists for the role
+`service_kit.control_events.control_signer_role` names for its action. A refusal is **acked**: the event drove nothing,
+is not retried and is not parked. The reasons read as in § Lineage refusing a signer's events, with two differences. At a
+control door, `signer` also means a listed identity signed an action its role does not emit. And here `unsigned` and
+`signer` page: every bus publisher signs, and the annotator's exempt actions (its task actions and its grants on an
+annotation project) are never verified, so an unsigned or unlisted event on the bus is a forgery or a producer that
+stopped signing.
+
+**Diagnose.** Read the claimed identity off the log line and compare it with the door's lists in the pod's environment.
+An identity a list lacks after a chart change is a render defect. `kid` or `signature` from a listed identity reads as
+§ Lineage refusing a signer's events. A key list that could not be read is not a refusal: the door answers RETRY and logs
+`<service>_signature_keys_unavailable`.
+
+**Act.** A forged event is an incident: find the pod that published it, and rotate any identity whose key it presented.
+A signer that broke: restart it so it re-resolves its key. A refused event is not presented again. A cascade a head
+refused to start is re-driven with `POST /stage-runners/stages/rerun` for its edge, and a write maintenance refused to
+plan is compacted by the hourly sweep.
+
 ## Outbox not draining
 
 **Symptom.** `outbox_depth` sustained > 0 and `outbox_oldest_age_seconds` climbing (the "alertable pair" panel).

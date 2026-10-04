@@ -102,6 +102,51 @@ tests:
         alertname: LineageSignatureRefusedForAListedSigner
         exp_alerts: []
 
+  # 1f. [[XC-078]] A bus door's refusal pages for EVERY reason, unsigned and unlisted included: no bus publisher sends
+  #     either, so one refused event on any door fires that door's rule.
+  - interval: 1m
+    input_series:
+      - series: 'medallion_signature_refused_total{lance_medallion_door="bronze-arrival", lance_medallion_reason="unsigned"}'
+        values: "0+1x14"
+      - series: 'notifications_signature_refused_total{lance_notifications_door="control-events", lance_notifications_reason="signer"}'
+        values: "0+1x14"
+      - series: 'maintenance_signature_refused_total{door="maintenance-arrival", reason="kid"}'
+        values: "0+1x14"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: MedallionHeadRefusingEvents
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: medallion
+              lance_medallion_door: bronze-arrival
+              lance_medallion_reason: unsigned
+            exp_annotations:
+              summary: "A cascade head is REFUSING events (bronze-arrival, unsigned) — they start nothing"
+              description: "An event no signer this head allows has verifiably signed was ACKED and started nothing, so only this alert and the `medallion_signature_refused` log line (door, claimed identity, event id, reason) record it. Forged triggers are reaching the bus, or a signer broke and its genuine writes no longer cascade. Runbook: docs/runbooks/RUNBOOK-oncall.md#a-bus-door-refusing-events"
+      - eval_time: 10m
+        alertname: NotificationsDoorRefusingEvents
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: notifications
+              lance_notifications_door: control-events
+              lance_notifications_reason: signer
+            exp_annotations:
+              summary: "Notifications is REFUSING bus events (control-events, signer) — nobody is told"
+              description: "An event its emitter's signature does not verify was ACKED and told nobody, so only this alert and the `notifications_signature_refused` log line record it. Forged events are reaching the bus, or a signer broke and the people its events name are no longer told. Runbook: docs/runbooks/RUNBOOK-oncall.md#a-bus-door-refusing-events"
+      - eval_time: 10m
+        alertname: MaintenanceArrivalRefusingEvents
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: maintenance
+              door: maintenance-arrival
+              reason: kid
+            exp_annotations:
+              summary: "Maintenance is REFUSING write events (maintenance-arrival, kid) — their writes wait for the sweep"
+              description: "A write event no listed signer's key verifies was ACKED and planned nothing, so only this alert and the `maintenance_signature_refused` log line record it; the sweep still compacts the table on its next pass. Forged events are reaching the bus, or a signer broke. Runbook: docs/runbooks/RUNBOOK-oncall.md#a-bus-door-refusing-events"
+
   # 2. Outbox healthy (depth 0) → NO alert. A gauge that falls back must not page forever.
   - interval: 1m
     input_series:

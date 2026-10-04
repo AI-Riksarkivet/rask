@@ -207,6 +207,49 @@ groups:
             signer is broken or someone is forging a listed identity.
             Runbook: docs/runbooks/RUNBOOK-oncall.md#lineage-refusing-a-signers-events
 
+      # [[XC-078]] A bus door's refusal is ACKED, so its counter is the only trace. Every reason pages, unlike lineage's door:
+      # every bus publisher signs and the annotator's exempt actions are never verified, so any refusal is a forgery or a
+      # signer that broke. Runbook: docs/runbooks/RUNBOOK-oncall.md#a-bus-door-refusing-events
+      - alert: MedallionHeadRefusingEvents
+        expr: sum by (lance_medallion_door, lance_medallion_reason) (rate(medallion_signature_refused_total[5m])) > 0
+        for: 2m
+        labels:
+          severity: critical
+          service: medallion
+        annotations:
+          summary: "A cascade head is REFUSING events ({{ $labels.lance_medallion_door }}, {{ $labels.lance_medallion_reason }}) — they start nothing"
+          description: >-
+            An event no signer this head allows has verifiably signed was ACKED and started nothing, so only this alert and
+            the `medallion_signature_refused` log line (door, claimed identity, event id, reason) record it. Forged triggers
+            are reaching the bus, or a signer broke and its genuine writes no longer cascade.
+            Runbook: docs/runbooks/RUNBOOK-oncall.md#a-bus-door-refusing-events
+      - alert: NotificationsDoorRefusingEvents
+        expr: sum by (lance_notifications_door, lance_notifications_reason) (rate(notifications_signature_refused_total[5m])) > 0
+        for: 2m
+        labels:
+          severity: critical
+          service: notifications
+        annotations:
+          summary: "Notifications is REFUSING bus events ({{ $labels.lance_notifications_door }}, {{ $labels.lance_notifications_reason }}) — nobody is told"
+          description: >-
+            An event its emitter's signature does not verify was ACKED and told nobody, so only this alert and the
+            `notifications_signature_refused` log line record it. Forged events are reaching the bus, or a signer broke and
+            the people its events name are no longer told.
+            Runbook: docs/runbooks/RUNBOOK-oncall.md#a-bus-door-refusing-events
+      - alert: MaintenanceArrivalRefusingEvents
+        expr: sum by (door, reason) (rate(maintenance_signature_refused_total[5m])) > 0
+        for: 2m
+        labels:
+          severity: warning
+          service: maintenance
+        annotations:
+          summary: "Maintenance is REFUSING write events ({{ $labels.door }}, {{ $labels.reason }}) — their writes wait for the sweep"
+          description: >-
+            A write event no listed signer's key verifies was ACKED and planned nothing, so only this alert and the
+            `maintenance_signature_refused` log line record it; the sweep still compacts the table on its next pass. Forged
+            events are reaching the bus, or a signer broke.
+            Runbook: docs/runbooks/RUNBOOK-oncall.md#a-bus-door-refusing-events
+
       # [[LH-004]]. `docs/DECISIONS.md:766-812` accepts the Lance-commit -> lineage-publish window in
       # writing, and the acceptance rests entirely on one clause: "the goal is not atomicity; it is NO
       # SILENT LOSS: every gap either closes itself or announces itself". These three rules ARE the
