@@ -7,8 +7,9 @@ Every binary is the one the chart deploys: `.dagger/nats_auth.go` copies them ou
 `RASK_NATS_AUTH_TOOLS` and names each image in `images.json`, which the test compares with the render.
 
 The keys are generated in the run's temp directory and nothing here prints a seed: a `Credential` holds its seed
-privately and its `repr` carries the user name and public key only. The broker's trace log does carry each
-client's CONNECT, which holds the user JWT (public) and a signature over that run's nonce, never the seed.
+privately, and its `repr` carries the user name, the public key, the JWT and the creds path, all but the last public.
+The broker's trace log carries each client's CONNECT, which holds the user JWT and a signature over that run's nonce,
+never the seed. The seed reaches disk only in nsc's own creds files and the sidecars' resources directories.
 """
 
 from __future__ import annotations
@@ -110,7 +111,7 @@ def permission_table(values: Path) -> dict[str, Permissions]:
     Raises:
         LookupError: the file declares no table.
     """
-    users = ((yaml.safe_load(values.read_text()) or {}).get("nats") or {}).get("auth", {}).get("users")
+    users = (((yaml.safe_load(values.read_text()) or {}).get("nats") or {}).get("auth") or {}).get("users")
     if not users:
         raise LookupError(f"{values} declares no nats.auth.users table")
     return {name: Permissions.model_validate(row) for name, row in users.items()}
