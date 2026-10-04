@@ -1768,7 +1768,7 @@ measured decision, and a second copy would drift without anything saying so. */}
 {{- toJson $m -}}
 {{- end -}}
 
-{{- /* A door host's env (list $root $takesControlEvents); values.yaml `signing.doors`. */ -}}
+{{- /* A door host's env (list $root $takesControlEvents [$signerRoles]); values.yaml `signing.doors`. */ -}}
 {{- define "lance.doorEnv" -}}
 {{- $r := index . 0 -}}{{- $mode := ($r.Values.signing).doors -}}
 {{- if not (has $mode (list "off" "observe" "enforce")) }}{{- fail (printf "signing.doors is %v, not the string off, observe or enforce" $mode) }}{{- end }}
@@ -1776,6 +1776,7 @@ measured decision, and a second copy would drift without anything saying so. */}
 {{- $signers := include "lance.signingIdentities" $r | splitList " " | compact }}
 {{- if and (ne $mode "off") (not $signers) }}{{- fail (printf "signing.doors=%s but no identity signs: the doors would verify nothing" $mode) }}{{- end }}
 {{- range (include "lance.signers" $r | fromJsonArray) }}{{- if and .role (not .id) (ne $mode "off") }}{{- fail (printf "signing.doors=%s but no identity holds the control-event role %s: the doors would refuse all its events" $mode .role) }}{{- end }}{{- end -}}
+{{- if gt (len .) 2 }}{{- $roles := include "lance.controlSignerRoles" $r | fromJson }}{{- $signers = list }}{{- range (index . 2) }}{{- $signers = concat $signers (get $roles .) }}{{- end }}{{- $signers = $signers | uniq | sortAlpha }}{{- end }}
 - { name: RASK_SIGNATURE_DOORS, value: {{ $mode | quote }} }
 - { name: RASK_EVENT_SIGNERS, value: {{ $signers | toJson | quote }} }
 - { name: RASK_EVENT_DELEGATORS, value: {{ include "lance.delegatorIdentities" $r | splitList " " | compact | toJson | quote }} }

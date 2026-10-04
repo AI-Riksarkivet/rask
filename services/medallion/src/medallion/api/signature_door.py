@@ -7,8 +7,9 @@ event, and any identity the bus lets publish on the topic can put an event there
 
 WHAT IS VERIFIED, AND WHEN. The event exactly as it arrived, at the route, once the head has decided it would act on it
 and before it acts. An event the head acknowledges and ignores is never verified, so the rest of the topic's traffic
-costs no key read. The bronze head admits what lineage admits: an event signed by its own author from
-`RASK_EVENT_SIGNERS`, or by a delegator from `RASK_EVENT_DELEGATORS` declaring the person it stamped. The publication head
+costs no key read. The bronze head admits an event signed by its own author from `RASK_EVENT_SIGNERS`, which the chart
+renders as the producer and the catalog (the only identities that sign an event this head acts on), or by a delegator from
+`RASK_EVENT_DELEGATORS` declaring the person it stamped. The publication head
 admits only the identities of the role `service_kit.control_events.control_signer_role` names for `table_published`
 (`RASK_CONTROL_SIGNER_ROLES`), so a valid signature from another service is no authority over a publication; a role the
 chart does not render admits nobody.

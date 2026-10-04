@@ -11,7 +11,9 @@ already run.
 ignored (their output namespace isn't bronze), so publishing the trigger can never re-fire the head. The
 second guard is by OPERATION rather than by namespace: the catalog publishes its own markers here, and an
 attach/detach/declare names the bronze table on a ``COMPLETE`` event without a byte having moved — so
-registering the head's tier would otherwise fire a second, batch-less cascade over the same data.
+registering the head's tier would otherwise fire a second, batch-less cascade over the same data. A
+maintenance pass (a compaction or an index build, by the catalog or by maintenance) is guarded the same
+way: it names the table it rewrote, and it lands no batch.
 Best-effort with ``RETRY`` so a sidecar/broker outage is redelivered rather than dropped.
 
 **The trigger NAMES the upstream** (I2), resolved through the catalog rather than composed — see
@@ -61,6 +63,19 @@ _RETRY = {"status": "RETRY"}
 #: bus, it does not import the catalog.
 _BYTE_FREE_CATALOG_OPERATIONS = frozenset({"register_table", "deregister_table", "declare_table"})
 
+#: Operations that MAINTAIN a table rather than write it: a compaction or an index build lands no batch and changes no row.
+#:
+#: Their emitters stamp them on this topic as ``COMPLETE`` events naming the table they maintained, and the catalog
+#: resolves the tenant on every write it announces, so its ``compact_table`` or ``create_index`` on a project's bronze
+#: table names exactly the pair this head fires on, under a signature that verifies. Firing on one would start a cascade
+#: no batch brought. Ignored before the signature door, so a maintenance pass is never verified either, whoever signed it.
+#:
+#: The emitters' own spelling: maintenance's ``COMPACTION`` and ``CREATE_INDEX`` (`maintenance.core.lineage_emit`) and
+#: the catalog's ``COMPACT_TABLE`` and ``CREATE_INDEX`` (`catalog.core.lineage_emit`), the set lineage keys its
+#: maintenance rung on (`lineage.models.MAINTENANCE_OPERATIONS`). Copied rather than imported, as maintenance copies its
+#: own loop guard: the medallion and maintenance are sibling deployables, and they share wire strings, not code.
+_MAINTENANCE_OPERATIONS = frozenset({"compaction", "compact_table", "create_index"})
+
 
 def _lance_facet(event: dict[str, Any]) -> dict[str, Any]:
     """The event's ``lance`` run facet, or an empty mapping — the untrusted-envelope guards in one place."""
@@ -100,7 +115,8 @@ def _bronze_write(event: dict[str, Any], settings: MedallionSettings, project: s
     Filters on ``eventType == COMPLETE``: a START or FAIL bronze event announces intent / failure, not a
     landed batch, so firing the cascade off one would kick the pipeline over data that isn't there (yet).
     Only a terminal-success bronze write is a real arrival — and an ATTACH is not a write, which is what
-    :data:`_BYTE_FREE_CATALOG_OPERATIONS` excludes. TWO ingest lanes share the head: the events
+    :data:`_BYTE_FREE_CATALOG_OPERATIONS` excludes, nor is a maintenance pass (:data:`_MAINTENANCE_OPERATIONS`).
+    TWO ingest lanes share the head: the events
     lane (``bronze_dataset``) — the returned name is
     the one actually written, so the trigger tells the stage runner which lane fired.
 
@@ -112,7 +128,8 @@ def _bronze_write(event: dict[str, Any], settings: MedallionSettings, project: s
     """
     if str(event.get("eventType", "")).upper() != "COMPLETE":
         return None
-    if str(_lance_facet(event).get("operation") or "") in _BYTE_FREE_CATALOG_OPERATIONS:
+    operation = str(_lance_facet(event).get("operation") or "")
+    if operation in _BYTE_FREE_CATALOG_OPERATIONS or operation in _MAINTENANCE_OPERATIONS:
         return None
     expected_namespace = project_namespace(project, settings.bronze_namespace)
     expected = {project_namespace(project, settings.bronze_dataset): settings.bronze_dataset}
@@ -279,7 +296,7 @@ def bronze_arrival_of(event: Any, settings: MedallionSettings) -> BronzeArrival 
     ``event`` is the untrusted Dapr CloudEvent envelope (hence ``Any`` + the ``isinstance`` guards); its ``data`` is the
     OpenLineage run event. Only a COMPLETE write to ``bronze_namespace``/``bronze_dataset``, or to a table a lane
     declares, is acted on; a downstream stage runner's event (silver/gold) is ignored, so the head never self-triggers
-    (loop guard).
+    (loop guard), and so is a maintenance pass on any table.
     """
     data = event.get("data") if isinstance(event, dict) else None
     if not isinstance(data, dict):
