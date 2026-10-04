@@ -309,6 +309,8 @@ spec:
                  mirrors services.yaml's for the same reason. */}}
             {{- if eq $name "ingest" }}
             - { name: LANCE_EXTERNAL_BLOB_BASES, value: {{ include "lance.externalBlobBases" $root | quote }} }
+            {{- /* The work queue's broker: the one every NATS client in the release names, nats.externalUrl included. */}}
+            - { name: RASK_NATS_URL, value: {{ include "lance.natsUrl" $root | quote }} }
             {{- end }}
             {{- /* WHICH CHANNELS THIS DEPLOYMENT MAY SEND, derived from the SAME `channels.*.enabled`
                    flags that render the Components in notifications-channels.yaml.

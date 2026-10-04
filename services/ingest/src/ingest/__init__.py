@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 from ingest.api import router as ingest_router
 from ingest.health import router as health_router
+from ingest.nats_user import install_nats_user, withdraw_nats_user
 from ingest.provenance import LineageProvenanceReader
 from ingest.queue_health import router as queue_health_router
 from ingest.runs import SCHEDULE_TIMEOUT_SECONDS, InMemoryRunStore, ScheduleUnavailable
@@ -163,6 +164,11 @@ def _lifespan(settings: Any) -> Any:  # noqa: ANN401 — service_kit's LifespanF
         from ingest.auth import get_auth_settings
 
         await attach_auth(app, get_auth_settings(), service="ingest", provision=False)
+        # INGEST'S OWN NATS USER ([[XC-078]]), read through its own sidecar and installed BEFORE the workflow runtime starts,
+        # because the worker resumes recovered activities the moment it starts and each of them connects to the broker;
+        # withdrawn after the runtime has stopped. A store without the user leaves ingest connecting without one, and a
+        # user the store holds that cannot be used refuses the boot.
+        await install_nats_user()
         # THIS SERVICE'S OWN SIGNING KEY ([[LH-064]]), resolved through its own sidecar, and installed BEFORE the workflow
         # runtime starts and withdrawn AFTER it has shut down. The worker pulls recovered activities the moment it
         # starts and joins the ones in flight when it stops, and an activity that stages a lineage event outside the
@@ -211,6 +217,7 @@ def _lifespan(settings: Any) -> Any:  # noqa: ANN401 — service_kit's LifespanF
                         with_suppressed()
         finally:
             await stop_signing(signing)
+            withdraw_nats_user()
 
     return lifespan
 

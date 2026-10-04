@@ -90,6 +90,8 @@ class IngestSettings(BaseSettings):
     fetch_concurrency: int = Field(default=8, gt=0, validation_alias="RASK_INGEST_FETCH_CONCURRENCY")
 
     # ── the work queue (`queue.py`, `runtime.py`) ─────────────────────────────────────
+    #: Rendered by the chart from `lance.natsUrl`, so it follows the release name and `nats.externalUrl` as every other
+    #: NATS client in the release does; the default serves a run outside the chart.
     nats_url: str = Field(default="nats://rask-nats:4222", validation_alias="RASK_NATS_URL")
     #: JetStream stops delivering past this many unacked messages, which is why `sizing.resolve`
     #: REFUSES a `fragment_rows` at or above it rather than accepting a number that deadlocks a drain.

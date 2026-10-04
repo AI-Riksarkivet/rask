@@ -9,6 +9,38 @@ import pytest
 
 if TYPE_CHECKING:
     from dapr.ext.workflow import WorkflowActivityContext
+    from fastapi import FastAPI
+
+
+class _WorkflowRuntimeStub:
+    """Stands in for the Dapr WorkflowRuntime so the lifespan neither reaches a sidecar nor hangs."""
+
+    def start(self) -> None: ...
+
+    def shutdown(self) -> None: ...
+
+
+@pytest.fixture
+def secret_store_lifespan(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Let `ingest.create_app()`'s real lifespan run with its secrets in the Dapr store and no cluster behind it.
+
+    The workflow runtime, the actor-state-store probe and the authorization wiring each reach past the sidecar's secret
+    API, so they are stood in; the secret API itself is the test's to answer (respx), since what the lifespan reads from
+    the store is the claim.
+    """
+
+    async def _no_auth(app: FastAPI, _settings: object, *, service: str, provision: bool) -> None:
+        app.state.fga = None
+        app.state.oidc = None
+
+    async def _no_probe(*, capability: str) -> None: ...
+
+    monkeypatch.setattr("ingest.attach_auth", _no_auth)
+    monkeypatch.setattr("ingest.probe_actor_state_store", _no_probe)
+    monkeypatch.setattr("dapr.ext.workflow.WorkflowRuntime", lambda: _WorkflowRuntimeStub())
+    monkeypatch.setattr("ingest.workflow.register", lambda _runtime: None)
+    monkeypatch.setenv("RASK_INGEST_SECRETS_FROM_DAPR", "true")
+    monkeypatch.setenv("DAPR_HTTP_PORT", "3500")
 
 
 @pytest.fixture(autouse=True)
