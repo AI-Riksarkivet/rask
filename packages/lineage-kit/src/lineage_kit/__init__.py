@@ -37,6 +37,7 @@ from lineage_kit.consume import (
     parse_doc,
 )
 from lineage_kit.context import CONTEXT_ENV_VAR, LineageContext, coerce_context, current_context, resolve_context, use_context
+from lineage_kit.door import DoorMode, DoorVerdict, judge
 from lineage_kit.emitter import (
     ClientEmitter,
     Emitter,
@@ -129,6 +130,8 @@ __all__ = [
     "DatasetRef",
     "DatasetVersionFacet",
     "DatasourceFacet",
+    "DoorMode",
+    "DoorVerdict",
     "Emitter",
     "ErrorMessageRunFacet",
     "Job",
@@ -173,6 +176,7 @@ __all__ = [
     "custom_facet",
     "default_emitter",
     "job_run",
+    "judge",
     "parse_doc",
     "parse_published_keys",
     "resolve_context",
