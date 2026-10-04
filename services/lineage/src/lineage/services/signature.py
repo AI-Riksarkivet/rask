@@ -5,8 +5,9 @@ stamped inside is a claim until a signature proves it. A producer signs with an 
 read; lineage holds PUBLIC keys only, so a compromised lineage can admit or refuse events and cannot forge one.
 
 WHAT THIS MODULE OWNS is the part the kit cannot: this pod's Dapr sidecar as the place each identity's published list is
-read from (`lineage_kit.keys.PublishedKeys` caches and paces the reads), and turning the kit's outcomes into the three
-answers a door needs. `lineage_kit.signing.verify_signature` owns what a valid signature is.
+read from (`lineage_kit.keys.PublishedKeys` caches and paces the reads, through service-kit's `published_key_fetch`, the
+read every verifying door shares), and turning the kit's outcomes into the three answers a door needs.
+`lineage_kit.signing.verify_signature` owns what a valid signature is.
 
 * VERIFIED: the event's signer and the key that signed it are known. The caller may act on what the signature attests.
 * REFUSED (`UnverifiedEventError`, a `PermissionDeniedError`): no listed signer's published key verifies the event.
@@ -33,15 +34,10 @@ from lineage.core.metrics import record_signature_refused, record_signature_veri
 from lineage.models import UnverifiedEventError, run_id_from_payload
 from lineage_kit.keys import PublishedKeys
 from lineage_kit.signing import KeySourceUnavailableError, SignatureError, VerifiedSignature, signature_of, verify_signature
-from service_kit.governed.secrets import fetch_dapr_secret
+from service_kit.governed.signing_key import published_key_fetch
 
 
 log = logging.getLogger(__name__)
-
-#: ONE attempt, and short. Verification sits on the delivery path of every signed event, and the boot-time retry
-#: `fetch_dapr_secret` defaults to (about two minutes) would hold a worker that long per event through a store
-#: blip. An outage is answered RETRY instead, and the sidecar's redelivery is the retry.
-KEY_READ_TIMEOUT_SECONDS: Final = 2.0
 
 #: Bounds what an event's own text can put into a log line or a recorded refusal: the kit's messages quote the
 #: identity and algorithm the event claims.
@@ -50,11 +46,7 @@ _MAX_REASON_CHARS: Final = 300
 
 def dapr_published_keys(store: str, *, clock: Callable[[], float] = time.monotonic) -> PublishedKeys:
     """The kit's key reader, reading each identity's list through THIS pod's Dapr sidecar from secret store ``store``."""
-
-    def fetch(secret: str) -> dict[str, str]:
-        return fetch_dapr_secret(store, secret, timeout=KEY_READ_TIMEOUT_SECONDS, retries=1)
-
-    return PublishedKeys(fetch, clock=clock)
+    return PublishedKeys(published_key_fetch(store), clock=clock)
 
 
 def _published_keys(request: Request, settings: LineageSettings) -> PublishedKeys:

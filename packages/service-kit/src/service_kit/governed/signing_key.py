@@ -20,6 +20,9 @@ untouched: a signer that is waiting for its key is alive.
 THE KEY AND ITS PARSING ARE CALLABLES because this package cannot import lineage-kit, which owns the wire format: the
 caller passes `SigningKey.from_seed` and `parse_published_keys`, and a key is listed exactly when its public NKEY is in
 the list the second returns.
+
+THE VERIFIERS' READ LIVES HERE TOO ([[XC-078]]). `published_key_fetch` is the secret read every verifying door hands
+`lineage_kit.keys.PublishedKeys`, so the timeout and retry policy of a read on the delivery path is written once.
 """
 
 from __future__ import annotations
@@ -27,7 +30,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
 from typing import Final, Protocol
 
@@ -55,6 +58,12 @@ MAX_REFRESH_SECONDS: Final = 300.0
 
 #: A signing identity becomes part of a secret name and so of a sidecar URL path: only a DNS-label-like name is read.
 _IDENTITY: Final = re.compile(r"[a-z0-9][a-z0-9-]*")
+
+#: The bound on one verifier's read of a published key list. ONE attempt, and short: verification sits on the delivery
+#: path of every signed event, and the boot-time retry `fetch_dapr_secret` defaults to (about two minutes) would hold a
+#: worker that long per event through a store blip. An outage is answered RETRY instead, and the sidecar's redelivery is
+#: the retry.
+KEY_READ_TIMEOUT_SECONDS: Final = 2.0
 
 
 class SigningKeyUnavailableError(RuntimeError):
@@ -94,6 +103,22 @@ def signing_key_secret(identity: str) -> str:
 def signing_public_secret(identity: str) -> str:
     """The secret holding `identity`'s published public keys. Never denied to any sidecar."""
     return f"signing-public-{identity}"
+
+
+def published_key_fetch(store: str) -> Callable[[str], Mapping[str, str]]:
+    """The secret read a verifier's `lineage_kit.keys.PublishedKeys` takes: a secret's fields through THIS pod's sidecar.
+
+    One attempt bounded by `KEY_READ_TIMEOUT_SECONDS`. A secret the sidecar cannot serve answers ``{}``, which the
+    reader turns into `KeySourceUnavailableError`, so the door answers RETRY rather than refusing an honest event.
+
+    Args:
+        store: The Dapr secret store holding every identity's `signing-public-<identity>`.
+    """
+
+    def fetch(secret: str) -> dict[str, str]:
+        return fetch_dapr_secret(store, secret, timeout=KEY_READ_TIMEOUT_SECONDS, retries=1)
+
+    return fetch
 
 
 class SigningKeyHolder[KeyT: SigningKeyLike]:

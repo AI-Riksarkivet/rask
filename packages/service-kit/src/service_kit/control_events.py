@@ -9,7 +9,7 @@ the same).
 
 Shared here (`service_kit`) so producers (the catalog) and consumers import ONE model. The event is a
 plain pointer payload (claim-check invariant — no data), published onto the existing Dapr/NATS bus by
-`catalog/core/control_emit.py`; Dapr wraps it in a CloudEvent envelope at the sidecar (the same envelope the
+`service_kit.control_emit`; Dapr wraps it in a CloudEvent envelope at the sidecar (the same envelope the
 lineage subscriber already speaks). An event is a **refresh hint**, never authoritative data: a consumer
 re-reads state through the normal FGA-governed path, so a dropped/duplicated/late event only costs a
 redundant re-read. `event_id` is the client-side dedupe key.
@@ -18,7 +18,7 @@ redundant re-read. `event_id` is the client-side dedupe key.
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import Any, Literal, assert_never
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
@@ -165,10 +165,14 @@ ORIGINATOR_MAX_LENGTH = 256
 
 
 class CatalogControlEvent(BaseModel):
-    """One control-plane mutation notice. Published AFTER the backend/FGA mutation succeeds; the `actor` is
-    the VERIFIED principal from the OIDC token in scope (never self-asserted — the pub/sub topic is an
-    internal catalog-only channel, so the subscriber trusts the catalog's stamp, exactly like lineage's
-    trusted `author`)."""
+    """One control-plane mutation notice, published AFTER the mutation it announces succeeds.
+
+    `actor` is the person the emitting service authenticated (`user:<sub>`), or a service principal or None when a
+    service acts for itself. Several services publish on this topic (`control_signer_role` names the one that signs
+    each action), so to a consumer the actor is a claim until the envelope's `rask_signature` proves who stamped it
+    (`lineage_kit.signing.verify_control_signature`). The model ignores that member, so a signed and an unsigned
+    envelope parse alike.
+    """
 
     #: Client-side dedupe key (a redelivery carries the same id).
     event_id: str = Field(default_factory=lambda: uuid4().hex)
@@ -185,3 +189,76 @@ class CatalogControlEvent(BaseModel):
     #: Action-specific detail — kept small (claim-check: pointers, never data). E.g. a grant's
     #: `{relation, subject}`, a rename's `{from, to}`, a warehouse bind's `{namespace}`.
     extra: dict[str, Any] = Field(default_factory=dict)
+
+
+#: A service whose own signing identity signs the control actions it emits ([[XC-078]]), and so a key of
+#: `RASK_CONTROL_SIGNER_ROLES`, which the chart renders as each role's signing identities.
+type ControlSigner = Literal["catalog", "maintenance", "medallion_producer"]
+
+#: Whose signature an action needs before a door acts on it: a `ControlSigner`, or "exempt" for none.
+type ControlSignerRole = ControlSigner | Literal["exempt"]
+
+
+def control_signer_role(action: ControlAction) -> ControlSignerRole:
+    """The role whose signature ``action`` needs before a door acts on it, or "exempt" when it needs none.
+
+    The role is the service whose code emits the action, so a door verifies against that role's identities in
+    `RASK_CONTROL_SIGNER_ROLES` and never against every signer the estate lists: a valid signature from another
+    service is no authority over the action. Total under ty: an action added to `ControlAction` without a case
+    here fails the `assert_never`.
+    """
+    match action:
+        case (
+            "grant_added"
+            | "grant_revoked"
+            | "project_created"
+            | "project_deleted"
+            | "warehouse_created"
+            | "warehouse_activated"
+            | "warehouse_deactivated"
+            | "warehouse_bound"
+            | "warehouse_unbound"
+            | "warehouse_deleted"
+            | "policy_set"
+            | "policy_deleted"
+            | "transform_set"
+            | "transform_deleted"
+            | "gate_set"
+            | "gate_deleted"
+            | "namespace_created"
+            | "namespace_dropped"
+            | "table_created"
+            | "table_dropped"
+            | "table_renamed"
+            | "table_registered"
+            | "table_deregistered"
+            | "table_declared"
+            | "table_protected"
+            | "table_unprotected"
+            | "namespace_protected"
+            | "namespace_unprotected"
+            | "table_undropped"
+            | "namespace_undropped"
+            | "table_published"
+            | "table_branch_created"
+            | "table_branch_deleted"
+            | "table_tag_created"
+            | "table_tag_updated"
+            | "table_tag_deleted"
+        ):
+            # The annotator's member door emits the grant pair too, and it holds no signing identity, so its grant
+            # events verify under no role.
+            return "catalog"
+        case "table_purged" | "namespace_purged":
+            # The expiry purge: maintenance's sweep emits both under `maintenance.controlEmit`.
+            return "maintenance"
+        case "promotion_review_requested":
+            # Asked by the `promotion_review` workflow, which the medallion producer hosts beside the door that answers
+            # it (`medallion.api.promotions`). The stage runner that held the promotion publishes only the hold.
+            return "medallion_producer"
+        case "task_assigned" | "task_unassigned" | "task_changes_requested" | "task_dropped" | "task_lease_expired":
+            # EXEMPT by owner ruling R3 (2026-10-04): the annotator emits these and has no signing identity, so a door
+            # acts on them unverified. The residual is named: any identity the bus lets publish here can forge them.
+            return "exempt"
+        case _:
+            assert_never(action)
