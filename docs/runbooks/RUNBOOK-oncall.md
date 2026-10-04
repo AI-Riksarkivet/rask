@@ -210,7 +210,9 @@ the keys published by then.
 
 **Symptom.** `MedallionHeadRefusingEvents`, `NotificationsDoorRefusingEvents` or `MaintenanceArrivalRefusingEvents`
 fires, with `<service>_signature_refused_total` rising for a door and a reason, and `<service>_signature_refused` WARN
-lines on that service's pods naming the door, the claimed identity, the event and the reason.
+lines on that service's pods naming the door, the claimed identity, the event and the reason. Every door x reason
+series exists at 0 from the pod's start, so one refusal fires its alert about two minutes later, and the alert resolves
+about three minutes after that unless another refusal follows.
 
 **Cause.** With `RASK_SIGNATURE_DOORS=enforce`, the cascade heads (`/bronze-arrival`, `/publication-arrival`),
 notifications (`/lineage-events`, `/control-events`) and maintenance's `/maintenance-arrival` act on a bus event only when
@@ -224,7 +226,9 @@ annotation project) are never verified, so an unsigned or unlisted event on the 
 stopped signing.
 
 **Diagnose.** Read the claimed identity off the log line and compare it with the door's lists in the pod's environment.
-An identity a list lacks after a chart change is a render defect. `kid` or `signature` from a listed identity reads as
+An identity a list lacks after a chart change is a render defect, except at `/bronze-arrival`, whose list is the producer
+and the catalog alone by design: a stage runner refused there with `signer` means a declared lane names that runner's
+output as its input, and that lane belongs on `/publication-arrival`. `kid` or `signature` from a listed identity reads as
 § Lineage refusing a signer's events. A key list that could not be read is not a refusal: the door answers RETRY and logs
 `<service>_signature_keys_unavailable`.
 

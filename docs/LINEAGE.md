@@ -259,11 +259,16 @@ or refuse an event and cannot forge one (`packages/lineage-kit/src/lineage_kit/s
 - **The doors that act on the bus.** The cascade heads (`/bronze-arrival`, `/publication-arrival`), notifications
   (`/lineage-events`, `/control-events`) and maintenance's `/maintenance-arrival` verify the same signatures before they
   act, in the mode `RASK_SIGNATURE_DOORS` names (chart `signing.doors`: off, observe or enforce). A lineage event verifies
-  against `RASK_EVENT_SIGNERS` and `RASK_EVENT_DELEGATORS`, lineage's own sets; a control event against the identities
-  `RASK_CONTROL_SIGNER_ROLES` lists for the role its action names. Only an event the door would act on is verified.
-  Enforcing, a refusal is acknowledged and drives nothing, counted in `<service>_signature_refused_total` by door and
-  reason, and every reason pages ([RUNBOOK-oncall.md](runbooks/RUNBOOK-oncall.md#a-bus-door-refusing-events)); a key
-  list that cannot be read is retried. Observing, the door acts as before and counts what enforcing would refuse in
+  against `RASK_EVENT_SIGNERS` and `RASK_EVENT_DELEGATORS`: lineage's own sets at notifications and maintenance, and at
+  the bronze head the producer and the catalog alone, the only identities that sign an event it acts on (the producer's
+  own `/produce` and `/ingest-media` writes and the catalog's write announcements; ingest emits over HTTP, and the head
+  ignores a maintenance pass, `compaction`, `compact_table` or `create_index`, before verifying anything). A control
+  event verifies against the identities `RASK_CONTROL_SIGNER_ROLES` lists for the role its action names. Only an event
+  the door would act on is verified. Enforcing, a refusal is acknowledged and drives nothing, counted in
+  `<service>_signature_refused_total` by door and reason; every one of those series exists at 0 from the door's
+  registration, so a flat 0 is the healthy reading and a single refusal pages
+  ([RUNBOOK-oncall.md](runbooks/RUNBOOK-oncall.md#a-bus-door-refusing-events)). A key list that cannot be read is
+  retried. Observing, the door acts as before and counts what enforcing would refuse in
   `<service>_signature_would_refuse_total`.
 - **The previous-key window.** Each identity publishes `signing-public-<identity>` with its current key first and at
   most one previous key. An event signed just before a rotation verifies while the previous key is listed, and lineage
