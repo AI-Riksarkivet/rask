@@ -24,22 +24,24 @@ THE SIGNATURE DECIDES TOO ([[XC-078]], owner ruling R4). The app token proves on
 an event, so the location a write names is the publisher's claim. The route checks the signature of a write it would plan
 before planning it, driven here through the registered `/maintenance-arrival` with the configuration the chart sets: the
 signer's public keys come through the sidecar's secret API (respx), and the root conftest's `EventSigner` builds the
-signatures from the wire format alone.
+signatures from the wire format alone. Every reason series of the door's refusal counter exists at 0 from the moment the
+door is registered, so the alert's `rate()` sees the first refusal as an increase.
 """
 
 from __future__ import annotations
 
+import importlib
 import json
-from collections.abc import Callable, Iterator, Mapping
-from typing import Any
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from typing import Any, cast, get_args
 
 import httpx
 import pytest
 import respx
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from opentelemetry.context import Context
 
+from lineage_kit.signing import RefusalReason
 from maintenance.services.arrival import triggering_write
 
 
@@ -196,7 +198,11 @@ SECRETS = "http://localhost:3500/v1.0/secrets/lance-secrets"
 REFUSED = "maintenance.signature.refused"
 WOULD_REFUSE = "maintenance.signature.would_refuse"
 
-type Counted = list[tuple[str, int | float, dict[str, Any]]]
+#: What the signature counters hold: metric name -> (door, reason) -> count.
+type Counts = dict[str, dict[tuple[str, str], int]]
+
+#: Every series of the refusal counter, at the 0 it is created with: the door, every reason the kit can refuse for.
+ZERO_REFUSALS: dict[tuple[str, str], int] = {("maintenance-arrival", reason): 0 for reason in get_args(RefusalReason.__value__)}
 
 
 class _Sidecar:
@@ -217,26 +223,54 @@ class _Sidecar:
         self.units.append(json.loads(data))
 
 
-class _Counter:
-    """One OpenTelemetry counter: what the door asks it to add, and under which attributes."""
-
-    def __init__(self, name: str, seen: Counted) -> None:
-        self._name = name
-        self._seen = seen
-
-    def add(self, amount: int | float, attributes: Mapping[str, Any] | None = None, context: Context | None = None) -> None:
-        self._seen.append((self._name, amount, dict(attributes or {})))
-
-
 type Door = Callable[[str], tuple[TestClient, _Sidecar]]
 
 
 @pytest.fixture
-def arrival_door(monkeypatch: pytest.MonkeyPatch) -> Iterator[Door]:
+def signature_counts() -> Iterator[Callable[[], Counts]]:
+    """What the door's signature counters hold, read through a real in-memory reader.
+
+    The counters are made when `maintenance.core.metrics` is imported, so the module is imported again under a meter of this
+    reader's provider, and again afterwards so every later test records against the process's provider.
+    """
+    from opentelemetry import metrics as otel_metrics
+    from opentelemetry.sdk.metrics import MeterProvider
+    from opentelemetry.sdk.metrics.export import InMemoryMetricReader, NumberDataPoint
+
+    from maintenance.core import metrics
+
+    reader = InMemoryMetricReader()
+    provider = MeterProvider(metric_readers=[reader])
+
+    def counts() -> Counts:
+        found: Counts = {}
+        data = reader.get_metrics_data()
+        for resource in data.resource_metrics if data is not None else ():
+            for scope in resource.scope_metrics:
+                for metric in scope.metrics:
+                    if not metric.name.startswith("maintenance.signature."):
+                        continue
+                    # A counter only ever yields `NumberDataPoint`, the member of the reader's point union that has a value.
+                    for point in cast(Sequence[NumberDataPoint], metric.data.data_points):
+                        attributes = point.attributes or {}
+                        found.setdefault(metric.name, {})[(str(attributes.get("door")), str(attributes.get("reason")))] = int(point.value)
+        return found
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(otel_metrics, "get_meter", lambda name, *_args, **_kwargs: provider.get_meter(name))
+        importlib.reload(metrics)
+    yield counts
+    importlib.reload(metrics)
+    provider.shutdown()
+
+
+@pytest.fixture
+def arrival_door(monkeypatch: pytest.MonkeyPatch, signature_counts: Callable[[], Counts]) -> Iterator[Door]:
     """`arrival_door(mode)`: the registered route, configured through the environment as the chart configures it.
 
     The planner's reads are stubbed as in the handler tests above: what a plan contains is not this test's claim, whether
     the door lets the lane reach the planner is. The sidecar's publish is recorded, so the real work-queue publish runs.
+    Built after `signature_counts`, as a pod registers its door after its MeterProvider is installed.
     """
     from maintenance.api import arrival as route
     from maintenance.core.config import get_settings
@@ -288,9 +322,9 @@ def _arrived_write() -> dict[str, Any]:
 )
 def test_a_write_is_planned_only_when_the_door_admits_its_signature(
     arrival_door: Door,
+    signature_counts: Callable[[], Counts],
     event_signer: Any,
     respx_allows_unused_routes: None,
-    monkeypatch: pytest.MonkeyPatch,
     mode: str,
     signed_by: str | None,
     tampered: bool,
@@ -298,13 +332,7 @@ def test_a_write_is_planned_only_when_the_door_admits_its_signature(
     counted: list[tuple[str, str]],
 ) -> None:
     """ENFORCE acks a refusal and plans nothing, since no redelivery can sign published bytes; OBSERVE plans as before
-    and counts what enforcing would refuse. The counters are stood in at the module attributes the door reads, with
-    `raising=False` so that a module lacking one fails on the counts this asserts and never on the test's own setup."""
-    from maintenance.core import metrics
-
-    seen: Counted = []
-    monkeypatch.setattr(metrics, "_signature_refused", _Counter(REFUSED, seen), raising=False)
-    monkeypatch.setattr(metrics, "_signature_would_refuse", _Counter(WOULD_REFUSE, seen), raising=False)
+    and counts what enforcing would refuse."""
     delegator = event_signer(SIGNER)
     respx.get(f"{SECRETS}/signing-public-{SIGNER}").mock(return_value=httpx.Response(200, json={"keys": delegator.public}))
     arrived = _arrived_write()
@@ -313,6 +341,7 @@ def test_a_write_is_planned_only_when_the_door_admits_its_signature(
     if tampered:
         arrived["outputs"][0]["facets"]["dataSource"]["uri"] = "s3://another-tenant/abc12345_db$t"
     client, sidecar = arrival_door(mode)
+    assert signature_counts() == {REFUSED: ZERO_REFUSALS}, "registering the door must create every refusal series at 0, or a first refusal is no increase"
 
     answered = client.post(
         "/maintenance-arrival",
@@ -320,9 +349,12 @@ def test_a_write_is_planned_only_when_the_door_admits_its_signature(
         headers={"dapr-api-token": TOKEN},
     )
 
-    assert (answered.status_code, answered.json(), [unit["uri"] for unit in sidecar.units], seen) == (
+    expected: Counts = {REFUSED: dict(ZERO_REFUSALS)}
+    for name, reason in counted:
+        expected.setdefault(name, {})[("maintenance-arrival", reason)] = 1
+    assert (answered.status_code, answered.json(), [unit["uri"] for unit in sidecar.units], signature_counts()) == (
         200,
         {"status": "SUCCESS"},
         planned,
-        [(name, 1, {"door": "maintenance-arrival", "reason": reason}) for name, reason in counted],
+        expected,
     )
