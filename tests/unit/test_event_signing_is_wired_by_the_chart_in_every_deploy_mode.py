@@ -5,9 +5,9 @@
 - A store nothing seeds (`openbao.devMode=false`, or `openbao.externalAddr`) mints no key, so every signer would stay not Ready
   and lineage could verify nothing. The render refuses it, naming every secret and the script that creates them, until the
   operator attests with `signing.provisioned`.
-- `signing.enforce` is the one switch between the revisions that sign and the revision that requires a signature. Off, lineage
-  carries neither set. On, it carries the signer set and the delegator set the chart derives, and only when the store and auth
-  are on; an enforced render with no signer at all is refused rather than rendered as a lineage that requires nothing.
+- `signing.enforce` is the one switch, on by default. On, lineage carries the signer set and the delegator set the chart derives,
+  and only when the store and auth are on; off, it carries neither. An enforced render with no signer at all is refused rather
+  than rendered as a lineage that requires nothing.
 - daprd loads its Configuration once, at boot (HotReload is off), and Helm applies a Deployment before the Configuration it names. A
   deny-list edit under an unchanged name is therefore loaded stale, for the life of the pod, by any pod that boots in between, with every
   probe green. A Configuration is named by the hash of its spec instead: a pod that boots before Helm applies the new object finds none
@@ -71,13 +71,13 @@ def test_a_store_nothing_seeds_is_refused_until_the_operator_attests_its_signing
 @pytest.mark.parametrize(
     ("overlay", "enforced"),
     [
-        pytest.param((), False, id="off-by-default"),
-        pytest.param(("--set", "signing.enforce=true"), True, id="on-with-the-store-and-auth"),
-        pytest.param(("--set", "signing.enforce=true", "--set", "auth.enabled=false"), False, id="not-without-auth"),
-        pytest.param(("--set", "signing.enforce=true", "--set", "openbao.enabled=false"), False, id="not-without-a-store"),
+        pytest.param((), True, id="on-by-default-with-the-store-and-auth"),
+        pytest.param(("--set", "signing.enforce=false"), False, id="off-when-asked"),
+        pytest.param(("--set", "auth.enabled=false"), False, id="not-without-auth"),
+        pytest.param(("--set", "openbao.enabled=false"), False, id="not-without-a-store"),
     ],
 )
-def test_lineage_requires_signatures_only_when_asked_and_from_exactly_the_signers_the_chart_renders(overlay: tuple[str, ...], enforced: bool) -> None:  # noqa: FBT001
+def test_lineage_requires_signatures_from_exactly_the_rendered_signers_wherever_the_store_and_auth_are_on(overlay: tuple[str, ...], enforced: bool) -> None:  # noqa: FBT001
     docs = chart_render.render(*DEFAULT_ARGS, *overlay)
     env = _lineage_env(docs)
 
@@ -86,6 +86,7 @@ def test_lineage_requires_signatures_only_when_asked_and_from_exactly_the_signer
             f"lineage carries a verifier set without enforcement: {sorted(env.keys() & {'LINEAGE_SIGNERS', 'LINEAGE_DELEGATORS'})}"
         )
         return
+    assert {"LINEAGE_SIGNERS", "LINEAGE_DELEGATORS"} <= env.keys(), "lineage requires no signature: the chart gives it no signer set or delegator set"
     assert json.loads(env["LINEAGE_SIGNERS"]) == _signers(docs), "the signer set is not the identities the Deployments sign as"
     assert json.loads(env["LINEAGE_DELEGATORS"]) == ["service-catalog"], "only the catalog, which authenticated the person, may sign for one"
 
@@ -101,10 +102,12 @@ def test_an_enforced_render_with_no_signer_is_refused_rather_than_rendered_as_a_
         "--set",
         "services.ingest.env.RASK_LINEAGE_SERVICE_IDENTITY=",
     )
-    assert not _signers(chart_render.render(*DEFAULT_ARGS, *nobody)), "the overlay still has a signer, so the refusal below is not what it names"
+    assert not _signers(chart_render.render(*DEFAULT_ARGS, *nobody, "--set", "signing.enforce=false")), (
+        "the overlay still has a signer, so the refusal below is not what it names"
+    )
 
     with pytest.raises(subprocess.CalledProcessError) as refused:
-        chart_render.render(*DEFAULT_ARGS, *nobody, "--set", "signing.enforce=true")
+        chart_render.render(*DEFAULT_ARGS, *nobody)
     assert "no identity signs" in refused.value.stderr
 
 
