@@ -151,9 +151,11 @@ Call it **after** the backend mutation and its audit succeed, so a real change i
 `attach_control_signature` over its own `SigningKeyHolder` (the catalog's, `catalog/core/control_signing.py`,
 declares the `user:` actor it authenticated; maintenance signs as itself), or `None` when it holds no signing
 identity, which the doors accept only for an action `control_signer_role` exempts (the task actions, R3; an
-annotation project's grants, R5). A signer whose key is unresolved publishes nothing unsigned: with an outbox the
-event waits staged for a relay that signs it (the catalog's), without one it is withheld and counted under
-`reason="unsigned"`.
+annotation project's grants, R5). A signer whose key is unresolved publishes and stages nothing: the event is withheld
+and counted under `reason="unsigned"`, outbox or not, and the signer reports itself not ready, so a control event
+emitted then (a `table_published` included) is lost, not delayed. No relay signs: the catalog's control relay
+republishes a staged event verbatim only when it verifies as signed by the catalog's own identity and retires anything
+else as poison, so a staged forgery never becomes a catalog-signed event.
 
 **Under `RASK_SIGNATURE_DOORS=enforce` a named action reaches nobody unless the role that emits it signed it.**
 `service_kit.control_events.control_signer_role(action, object_id)` names that role, and the `/control-events` door

@@ -240,7 +240,11 @@ plan is compacted by the hourly sweep.
 **Cause.** The lineage outbox stages each event durably before publishing; the relay drains it. A sustained
 non-zero depth means the relay isn't draining — usually the lineage service or NATS is unhealthy.
 
-**Diagnose.** Lineage pod health + logs; NATS health. A healthy relay drives depth back toward 0.
+**Diagnose.** Lineage pod health + logs; NATS health. A healthy relay drives depth back toward 0. On the catalog's
+control lane (`service.name` catalog), `control_relay_keys_unavailable` lines mean its sidecar cannot read
+`signing-public-<catalog identity>`, so nothing staged is delivered until it can; `control_outbox_unverifiable` lines
+mean something other than the catalog wrote under `_control_outbox`: treat that as a forgery
+(§ A bus door refusing events).
 
 **Act.** Restore lineage / the bus; the relay re-ingests staged survivors idempotently on recovery.
 

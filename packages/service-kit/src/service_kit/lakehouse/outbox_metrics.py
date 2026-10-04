@@ -83,8 +83,9 @@ _poison_dropped = _meter.create_counter(
     "outbox.events.poison_dropped",
     unit="{event}",
     description=(
-        "Unparseable staged objects discarded so they cannot wedge the drain. Any non-zero value is a BUG "
-        "upstream (a malformed event was written) and warrants investigation — it is a silent lineage loss."
+        "Staged objects discarded so they cannot wedge the drain: an unparseable object, or on the catalog's "
+        "control lane one that does not verify as the catalog's own. Any non-zero value warrants investigation: "
+        "a malformed event was written upstream, or something other than the catalog wrote under its outbox."
     ),
 )
 

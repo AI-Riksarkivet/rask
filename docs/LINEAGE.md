@@ -234,9 +234,12 @@ or refuse an event and cannot forge one (`packages/lineage-kit/src/lineage_kit/s
   authenticated; maintenance signs `table_purged` and `namespace_purged` as itself; the medallion producer signs
   `promotion_review_requested`. The annotator's task actions and its grants on an `annotation_project:` object travel
   unsigned (owner rulings R3 and R5), so any identity the bus lets publish on the topic can forge them. A signer whose key
-  is unresolved publishes nothing unsigned: the catalog stages the event, and its control relay signs everything staged
-  with the key it then holds before publishing; maintenance withholds the event and counts it under
-  `maintenance_control_emit_failed_total{lance_maintenance_reason="unsigned"}`.
+  is unresolved publishes and stages nothing unsigned: it withholds the event, counts it under
+  `<service>_control_emit_failed_total{lance_<service>_reason="unsigned"}` and reports itself not ready, so a control
+  event emitted in that window is lost, not delayed. The catalog's control relay signs nothing: it republishes a staged
+  event verbatim only when it verifies as signed by the catalog's own identity against the keys that identity
+  publishes, and retires anything else under the control outbox unpublished (`outbox_events_poison_dropped_total`, WARN
+  `control_outbox_unverifiable`), so an object another credential stages there never becomes a catalog-signed event.
 - **What lineage accepts, and from where.** With `signing.enforce` on (the default, rendered only where auth and the
   secret store are on) lineage records an event only when a listed signer's published key verifies it. All four doors
   that record a bus or staged event apply the rule: the `/lineage-events` subscription, the outbox drain, the operator's
