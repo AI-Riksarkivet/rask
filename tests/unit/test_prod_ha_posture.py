@@ -38,6 +38,7 @@ _PROD_ARGS = [
     "--set", "age.password=ci-dummy-pw",
     "--set", "minio.secretKey=ci-dummy-key",
     "--set", "signing.provisioned=true",
+    "--set", "nats.auth.provisioned=true",
     "--set", "backups.volumeSnapshot.snapshotClassName=csi-snapclass",
     "--set", "ingress.host=lance.example.com",
     "--set", "frontend.oidc.sessionSecret=ci-dummy-session-secret-at-least-32-chars",

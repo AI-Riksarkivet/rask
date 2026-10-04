@@ -50,6 +50,7 @@ _PROD_ARGS = [
     "--set", "age.password=ci-dummy-pw",
     "--set", "minio.secretKey=ci-dummy-key",
     "--set", "signing.provisioned=true",
+    "--set", "nats.auth.provisioned=true",
     "--set", "backups.volumeSnapshot.snapshotClassName=csi-snapclass",
     "--set", "ingress.host=lance.example.com",
     "--set", "image.repository=ghcr.io/example/rask",

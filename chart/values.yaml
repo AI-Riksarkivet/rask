@@ -2714,6 +2714,27 @@ nats:
     cluster:
       enabled: true
       replicas: 3
+      # `nats.auth.server` (below) moves the routes into an included file that carries the route credential, and adds the
+      # authorization they are checked against; off, both evaluate to nothing. The subchart templates `$tplYaml` against its
+      # own values, where `nats.auth` is `.Values.auth`.
+      merge:
+        auth:
+          $tplYamlSpread: |
+            {{- if .Values.auth.server }}
+            $include: ../nats-auth/route.conf
+            {{- end }}
+      patch:
+        - $tplYamlSpread: |
+            {{- if .Values.auth.server }}
+            - { op: remove, path: /routes }
+            {{- end }}
+    # `nats.auth.server`: operator mode, from the file the ExternalSecret writes (operator, system_account, MEMORY resolver).
+    merge:
+      auth:
+        $tplYamlSpread: |
+          {{- if .Values.auth.server }}
+          $include: ../nats-auth/server.conf
+          {{- end }}
   # Memory bound (#139) — see the note under `openfga.resources`. The nats chart takes container
   # overrides as a `merge` into the Container spec, not a top-level `resources` key. Sized as the
   # BUS: JetStream file-store broker whose memory tracks in-flight messages + raft state, per node.
@@ -2722,6 +2743,18 @@ nats:
       resources:
         requests: { cpu: 50m, memory: 128Mi }
         limits: { memory: 512Mi }
+    # `nats.auth.server`: the two included files, mounted beside the config; the reloader watches them through the same mount.
+    patch:
+      - $tplYamlSpread: |
+          {{- if .Values.auth.server }}
+          - { op: add, path: /volumeMounts/-, value: { name: nats-auth, mountPath: /etc/nats-auth, readOnly: true } }
+          {{- end }}
+  podTemplate:
+    patch:
+      - $tplYamlSpread: |
+          {{- if .Values.auth.server }}
+          - { op: add, path: /spec/volumes/-, value: { name: nats-auth, secret: { secretName: {{ .Release.Name }}-nats-auth } } }
+          {{- end }}
   # Memory bound (#139): the config reloader is an inotify loop; the debug box is an idle shell.
   reloader:
     merge:
@@ -2735,6 +2768,13 @@ nats:
     merge:
       automountServiceAccountToken: false
   natsBox:
+    # `nats.auth.server`: the read-only `monitor` user, as a creds file ESO writes (never `contents`, which would carry it in values).
+    contexts:
+      default:
+        creds:
+          secretName:
+            $tplYaml: |
+              {{- if .Values.auth.server }}{{ .Release.Name }}-nats-box-creds{{ end }}
     serviceAccount:
       enabled: true
       merge:
@@ -2756,6 +2796,226 @@ nats:
   # now provides in-chart; keep the two in step, because a streamReplicas above the node count makes
   # `nats stream add` fail outright rather than degrade.
   streamReplicas: 3
+  # --- Bus authentication ([[XC-078]] slice 2): every client connects as its own NATS user -------------------------
+  # OPERATOR MODE IS THE ONLY SHAPE DAPR CAN USE. Dapr 1.18.1's pubsub.jetstream authenticates with a user JWT plus the NKEY
+  # seed that signs the server's nonce, a TLS client pair, or one shared token that names nobody, and with jwt or seedKey empty
+  # its Init falls through to an unauthenticated connect without a word. So the server runs in operator mode: one operator,
+  # a SYS account, and one APP account that holds JetStream and every user below, verified by the MEMORY resolver against the
+  # account key, so issuing or re-issuing a user never touches the server.
+  #
+  # THE TABLE (`users`) IS THE ONE DECLARATION: one user per Dapr app-id that holds a pubsub.jetstream Component, plus `admin`
+  # (the stream Job), `monitor` (nats-box, read-only) and `ingest` (its own nats-py client, which reads `nats-user-ingest`
+  # through its sidecar's secret API). The dev seed issues exactly these permissions, every app's deny list hides every user's
+  # secret but ingest's own from ingest, the components name them, and the attestation below lists them. The rules, from the
+  # components and the call sites, measured on nats-server 2.14.2 with protocol tracing on 2026-10-04:
+  #   - a publisher may publish its topics and receive on _INBOX.>, where the publish acknowledgement arrives;
+  #   - a subscriber on stream S through durable D also requests $JS.API.STREAM.NAMES (no component sets streamName),
+  #     $JS.API.CONSUMER.INFO.S.D and $JS.API.CONSUMER.CREATE.S.D.> (the create and the bind's lookup), and acknowledges on
+  #     $JS.ACK.S.D.>. The server sends the v1 ack subject `$JS.ACK.<stream>.<consumer>.<delivered>.<sseq>.<cseq>.<ts>.<pending>`
+  #     (measured, and FeatureFlagJsAckFormatV2 is false at v2.14.2), so a v2 pattern refuses every ack and every message
+  #     redelivers to the DLQ; a server upgrade that flips the flag changes these rows. A consumer the server names (the
+  #     catalog's ephemeral broadcast, ingest's per-run durables) acknowledges on $JS.ACK.S.>;
+  #   - a sidecar parks a dead letter through the component the delivery came on, so a subscriber publishes its own dlq.<app>;
+  #   - only admin (the stream Job's own command set, measured) and ingest (on its own work queue) create a stream or delete
+  #     a consumer, no app holds $JS.API.>, and monitor reads stream and consumer state but no message and publishes nothing.
+  # catalog.control.v1 is published by the catalog, by the medallion PRODUCER (promotion_review's request_approval runs in the
+  # workflow engine the producer hosts), by maintenance under maintenance.controlEmit and by the annotator under
+  # explorer.controlEmit: never by a stage runner, which also never publishes its downstream topic (MEDALLION_PUB_TOPIC only
+  # gates promotion; the catalog's table_published wakes the next tier). The table is static, so a grant a disabled flag does
+  # not use stays in it. A missing allowance fails closed and silently (a refused subscribe retries forever while the pod stays
+  # Ready), so a changed component, durable or topic changes this table in the same commit: tests/unit/test_a_dapr_component_
+  # names_a_secret_something_can_resolve.py fails a render whose components or configured topics a user does not cover.
+  #
+  # EACH COMPONENT IS ONE APP'S CONNECTION. A component two apps shared gave both the same credential, so the publish-only
+  # half of each is its own component: the catalog enqueues on `<maintenance.workPubsub>-<catalog>` and
+  # `<maintenance.indexPubsub>-<catalog>`, maintenance and the annotator announce on `<pubsub.controlName>-<app>`, and
+  # maintenance publishes its lineage on `lineage-pubsub-maintenance` even with no queue lane.
+  #
+  # THE DEV MINT (openbao.yaml; owner ruling R1: the bundled NATS and OpenBao are dev stand-ins, and their durability across a
+  # stand-in's loss is not a goal). The `mint` init container copies nsc and nk out of nats-box; the seed carries the trust root
+  # (`nats-root`: the operator and account keys nsc keeps, never a user's) and the route credential (`nats-route`: user,
+  # password) from the store behind the Service, else mints them, then issues every user of the table afresh under that root
+  # and writes `nats-user-<user>` (jwt, seed) and `nats-server` (operator, system_account, resolver_preload: public) before the
+  # readiness key. A root it cannot read or use stops the seed, because a store that is Ready without its users hands every
+  # sidecar an empty credential. A surge rollout therefore keeps the root the server trusts; a replacement with no outgoing pod
+  # mints a new one, which a server in operator mode refuses until its pods restart onto the new `nats-server` (a reload cannot
+  # change the operator or the system account), and that restart starts an empty JetStream. A user's earlier JWT stays valid until
+  # the root changes (no expiry, no revocation list), and a sidecar takes a re-issued one when it restarts.
+  # The APP account's JetStream disk is unlimited and memory 0: each server's max_file_store (1Gi) is the bound, as it is for
+  # the global account today. An account limit counts every replica (measured: an R3 stream reserving 400MB is refused under a
+  # 1G limit), so a 1Gi limit would hold a third of what the disks do.
+  #
+  # PRODUCTION (R1): the platform runs NATS and its store; rask names the credentials and owns no trust root. A store this chart
+  # does not seed (openbao.devMode=false or openbao.externalAddr), or a bus it does not run (nats.externalUrl), fails the render
+  # until `provisioned` attests that every `nats-user-<user>` exists, and `nats-route` while this chart runs the NATS cluster.
+  #
+  # THE SERVER SWITCH (`server`, phase N-B: replacing all three NATS pods together needs the owner's approval). Off, the server
+  # takes anyone and ignores a presented credential, so every client carries its credential before the switch: nats.conf is
+  # what it was before this block. On, nats.conf includes ../nats-auth/server.conf (operator, system_account, resolver MEMORY,
+  # resolver_preload) and the cluster block ../nats-auth/route.conf (routes carrying the route user, and the authorization they
+  # are checked against), both written by an ExternalSecret from `nats-server` and `nats-route`, so no JWT and no password lives
+  # in the release; nats-box takes `monitor` as a creds file. It needs externalSecrets.enabled and the store. A reload cannot
+  # switch modes (nats-server refuses a change to the resolver or the system account), a pod restarted alone into operator mode
+  # cannot join the other two, and a new system account starts an empty JetStream, so the streams are recreated by the stream
+  # Job with `admin` and every subscriber restarts after them.
+  #
+  # RESIDUALS, named: _INBOX.> is shared within the APP account (a client could read another's replies; Dapr exposes no inbox
+  # prefix), 8222 monitoring is unauthenticated by design, and anything holding OpenBao's dev root token reads the store (XC-079).
+  auth:
+    server: false
+    provisioned: false
+    users:
+      admin:
+        publish: [$JS.API.INFO, $JS.API.STREAM.LIST, $JS.API.STREAM.NAMES, $JS.API.STREAM.INFO.*, $JS.API.STREAM.CREATE.*, $JS.API.CONSUMER.NAMES.*, $JS.API.CONSUMER.INFO.*.*, $JS.API.CONSUMER.CREATE.*.>, $JS.API.CONSUMER.DELETE.*.*]
+        subscribe: [_INBOX.>]
+      annotator:
+        publish: [catalog.control.v1]
+        subscribe: [_INBOX.>]
+      bronze-to-silver:
+        publish:
+          - lineage.events.v1
+          - medallion.bronze # its own trigger: the Ray watcher re-wakes the stage
+          - medallion.promotion
+          - refused.bronze-to-silver
+          - dlq.bronze-to-silver
+          - $JS.API.STREAM.NAMES
+          - $JS.API.CONSUMER.INFO.MEDALLION.bronze-to-silver-durable
+          - $JS.API.CONSUMER.CREATE.MEDALLION.bronze-to-silver-durable.>
+          - $JS.ACK.MEDALLION.bronze-to-silver-durable.>
+          - $JS.API.CONSUMER.INFO.DLQ.bronze-to-silver-durable
+          - $JS.API.CONSUMER.CREATE.DLQ.bronze-to-silver-durable.>
+          - $JS.ACK.DLQ.bronze-to-silver-durable.>
+        subscribe: [_INBOX.>]
+      catalog:
+        publish:
+          - lineage.events.v1
+          - catalog.control.v1
+          - maintenance.work.v1
+          - maintenance.index.v1
+          - $JS.API.STREAM.NAMES
+          - $JS.API.CONSUMER.CREATE.CATALOG_CONTROL # the ephemeral broadcast every replica holds
+          - $JS.API.CONSUMER.INFO.CATALOG_CONTROL.*
+          - $JS.ACK.CATALOG_CONTROL.>
+        subscribe: [_INBOX.>]
+      ingest:
+        publish:
+          - ingest.tasks.>
+          - dlq.ingest.tasks
+          - $JS.API.STREAM.CREATE.INGEST
+          - $JS.API.STREAM.CREATE.DLQ
+          - $JS.API.STREAM.INFO.INGEST
+          - $JS.API.STREAM.INFO.DLQ
+          - $JS.API.STREAM.PURGE.INGEST
+          - $JS.API.CONSUMER.INFO.INGEST.*
+          - $JS.API.CONSUMER.CREATE.INGEST.*.ingest.tasks.>
+          - $JS.API.CONSUMER.DELETE.INGEST.*
+          - $JS.API.CONSUMER.MSG.NEXT.INGEST.*
+          - $JS.ACK.INGEST.> # a unit's ack, in-progress and nak
+        subscribe: [_INBOX.>]
+      lineage:
+        publish:
+          - lineage.events.v1 # recovered signed bytes, republished
+          - dlq.lineage.events
+          - $JS.API.STREAM.NAMES
+          - $JS.API.CONSUMER.INFO.LINEAGE.lineage-durable
+          - $JS.API.CONSUMER.CREATE.LINEAGE.lineage-durable.>
+          - $JS.ACK.LINEAGE.lineage-durable.>
+          - $JS.API.CONSUMER.INFO.DLQ.lineage-dlq-durable
+          - $JS.API.CONSUMER.CREATE.DLQ.lineage-dlq-durable.>
+          - $JS.ACK.DLQ.lineage-dlq-durable.>
+        subscribe: [_INBOX.>]
+      maintenance:
+        publish:
+          - lineage.events.v1
+          - maintenance.work.v1
+          - catalog.control.v1 # maintenance.controlEmit
+          - dlq.maintenance.work
+          - dlq.maintenance.index
+          - $JS.API.STREAM.NAMES
+          - $JS.API.CONSUMER.INFO.LINEAGE.maintenance-durable
+          - $JS.API.CONSUMER.CREATE.LINEAGE.maintenance-durable.>
+          - $JS.ACK.LINEAGE.maintenance-durable.>
+          - $JS.API.CONSUMER.INFO.MAINTENANCE_WORK.maintenance-work-durable
+          - $JS.API.CONSUMER.CREATE.MAINTENANCE_WORK.maintenance-work-durable.>
+          - $JS.ACK.MAINTENANCE_WORK.maintenance-work-durable.>
+          - $JS.API.CONSUMER.INFO.MAINTENANCE_INDEX.maintenance-index-durable
+          - $JS.API.CONSUMER.CREATE.MAINTENANCE_INDEX.maintenance-index-durable.>
+          - $JS.ACK.MAINTENANCE_INDEX.maintenance-index-durable.>
+        subscribe: [_INBOX.>]
+      media-to-silver:
+        publish:
+          - lineage.events.v1
+          - medallion.media
+          - medallion.promotion
+          - refused.media-to-silver
+          - dlq.media-to-silver
+          - $JS.API.STREAM.NAMES
+          - $JS.API.CONSUMER.INFO.MEDALLION.media-to-silver-durable
+          - $JS.API.CONSUMER.CREATE.MEDALLION.media-to-silver-durable.>
+          - $JS.ACK.MEDALLION.media-to-silver-durable.>
+          - $JS.API.CONSUMER.INFO.DLQ.media-to-silver-durable
+          - $JS.API.CONSUMER.CREATE.DLQ.media-to-silver-durable.>
+          - $JS.ACK.DLQ.media-to-silver-durable.>
+        subscribe: [_INBOX.>]
+      medallion-producer:
+        publish:
+          - lineage.events.v1
+          - medallion.bronze
+          - medallion.media
+          - medallion.silver
+          - training.jobs
+          - catalog.control.v1 # promotion_review_requested
+          - dlq.medallion-producer
+          - refused.medallion-producer
+          - $JS.API.STREAM.NAMES
+          - $JS.API.CONSUMER.INFO.LINEAGE.medallion-producer-durable
+          - $JS.API.CONSUMER.CREATE.LINEAGE.medallion-producer-durable.>
+          - $JS.ACK.LINEAGE.medallion-producer-durable.>
+          - $JS.API.CONSUMER.INFO.MEDALLION.medallion-producer-durable
+          - $JS.API.CONSUMER.CREATE.MEDALLION.medallion-producer-durable.>
+          - $JS.ACK.MEDALLION.medallion-producer-durable.>
+          - $JS.API.CONSUMER.INFO.TRAINING.medallion-producer-durable
+          - $JS.API.CONSUMER.CREATE.TRAINING.medallion-producer-durable.>
+          - $JS.ACK.TRAINING.medallion-producer-durable.>
+          - $JS.API.CONSUMER.INFO.DLQ.medallion-producer-durable
+          - $JS.API.CONSUMER.CREATE.DLQ.medallion-producer-durable.>
+          - $JS.ACK.DLQ.medallion-producer-durable.>
+          - $JS.API.CONSUMER.INFO.CATALOG_CONTROL.medallion-producer-control-durable
+          - $JS.API.CONSUMER.CREATE.CATALOG_CONTROL.medallion-producer-control-durable.>
+          - $JS.ACK.CATALOG_CONTROL.medallion-producer-control-durable.>
+        subscribe: [_INBOX.>]
+      monitor:
+        publish: [$JS.API.INFO, $JS.API.STREAM.LIST, $JS.API.STREAM.NAMES, $JS.API.STREAM.INFO.*, $JS.API.CONSUMER.LIST.*, $JS.API.CONSUMER.NAMES.*, $JS.API.CONSUMER.INFO.*.*, $SYS.REQ.USER.INFO]
+        subscribe: [_INBOX.>]
+      notifications:
+        publish:
+          - dlq.notifications
+          - $JS.API.STREAM.NAMES
+          - $JS.API.CONSUMER.INFO.LINEAGE.notifications-durable
+          - $JS.API.CONSUMER.CREATE.LINEAGE.notifications-durable.>
+          - $JS.ACK.LINEAGE.notifications-durable.>
+          - $JS.API.CONSUMER.INFO.CATALOG_CONTROL.notifications-control-durable
+          - $JS.API.CONSUMER.CREATE.CATALOG_CONTROL.notifications-control-durable.>
+          - $JS.ACK.CATALOG_CONTROL.notifications-control-durable.>
+          - $JS.API.CONSUMER.INFO.DLQ.notifications-durable
+          - $JS.API.CONSUMER.CREATE.DLQ.notifications-durable.>
+          - $JS.ACK.DLQ.notifications-durable.>
+        subscribe: [_INBOX.>]
+      silver-to-gold:
+        publish:
+          - lineage.events.v1
+          - medallion.silver
+          - medallion.promotion
+          - refused.silver-to-gold
+          - dlq.silver-to-gold
+          - $JS.API.STREAM.NAMES
+          - $JS.API.CONSUMER.INFO.MEDALLION.silver-to-gold-durable
+          - $JS.API.CONSUMER.CREATE.MEDALLION.silver-to-gold-durable.>
+          - $JS.ACK.MEDALLION.silver-to-gold-durable.>
+          - $JS.API.CONSUMER.INFO.DLQ.silver-to-gold-durable
+          - $JS.API.CONSUMER.CREATE.DLQ.silver-to-gold-durable.>
+          - $JS.ACK.DLQ.silver-to-gold-durable.>
+        subscribe: [_INBOX.>]
 
 # --- Dapr control plane (subchart) — injects the daprd sidecar into annotated pods ----------------
 dapr:

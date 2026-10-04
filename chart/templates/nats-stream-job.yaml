@@ -39,8 +39,12 @@ spec:
     spec:
       restartPolicy: OnFailure
       serviceAccountName: {{ include "lance.fullname" . }}-sa-jobs
+      {{- $creds := hasKey (include "lance.natsFiles" . | fromJson) "nats-admin-creds" }}
       volumes:
         {{- include "lance.tmpVolume" . | nindent 8 }}
+        {{- if $creds }}
+        - { name: nats-creds, secret: { secretName: {{ include "lance.fullname" . }}-nats-admin-creds } }
+        {{- end }}
       containers:
         - name: nats
           image: natsio/nats-box:0.14.5
@@ -49,8 +53,15 @@ spec:
                  emptyDir is the pair every app container in this chart already uses. */}}
           env:
             - { name: HOME, value: /tmp }
+            {{- if $creds }}
+            {{- /* The path of the `admin` creds file the nats CLI reads (values.yaml `nats.auth`), never the credential itself. */}}
+            - { name: NATS_CREDS, value: /etc/nats-creds/nats.creds }
+            {{- end }}
           volumeMounts:
             {{- include "lance.tmpMount" . | nindent 12 }}
+            {{- if $creds }}
+            - { name: nats-creds, mountPath: /etc/nats-creds, readOnly: true }
+            {{- end }}
           resources:
             requests: { cpu: "10m", memory: "32Mi" }
             limits: { cpu: "200m", memory: "128Mi" }
@@ -59,7 +70,11 @@ spec:
             - -c
             - |
               S="{{ include "lance.natsUrl" . }}"
-              until nats --server "$S" stream ls >/dev/null 2>&1; do echo wait-nats; sleep 3; done
+              {{- /* A server that is not up yet is waited for; one that refuses this Job's credential fails it now, by name. */}}
+              until err=$(nats --server "$S" stream ls 2>&1 >/dev/null); do
+                case "$err" in *[Aa]uthoriz*|*[Aa]uthentic*|*[Pp]ermission*) echo "!! NATS refused the stream Job's credential: $err"; exit 1 ;; esac
+                echo wait-nats; sleep 3
+              done
               # LINEAGE carries OpenLineage events; MEDALLION carries the stage triggers that cascade the
               # event-driven pipeline (medallion.bronze/silver/media); TRAINING carries the train triggers
               # (training.jobs — docs/RAY-TRAIN.md D1: its OWN stream, so the durable consumer names stay

@@ -29,8 +29,9 @@ authenticates only with a user JWT and the NKEY seed that signs the server's non
 through to an unauthenticated connect, silently. So wherever the store is on, every pub/sub Component names its one app's
 `nats-user-<app>` from that store, the store is scoped to that app (a store a sidecar has not loaded leaves the value empty
 too), and the user the dev seed issues may do what the render configures that app to do: consume through each of its
-components' durables, and publish or consume every topic its pods are given. A pod that is not a sidecar (the stream Job,
-nats-box, the NATS servers) mounts its credential as a file, so that file must be one an ExternalSecret writes from the store.
+components' durables, and publish or consume every topic its pods are given. Besides the deployed overlays this renders the two
+that split a shared component only under a flag. A pod that is not a sidecar (the stream Job, nats-box, the NATS servers) mounts
+its credential as a file, so that file must be one an ExternalSecret writes from the store.
 """
 
 from __future__ import annotations
@@ -53,6 +54,15 @@ STORE = "lance-secrets"
 #: Names ANOTHER stage's topic as DAG configuration: a stage runner reads it as a gate input and never publishes it, because
 #: only the catalog's publication advances a tier. Granting it would let a stage runner wake the next tier past that door.
 _NOT_A_TOPIC_THE_APP_USES = frozenset({"MEDALLION_PUB_TOPIC"})
+#: The renders where a component two apps would share is split only under a flag: the control topic's optional publishers, and
+#: maintenance's lineage with no queue lane to give it a component.
+_SPLIT_UNDER_A_FLAG = [
+    (
+        "every-optional-publisher",
+        (*DEFAULT_ARGS, "--set", "maintenance.controlEmit=true", "--set", "explorer.enabled=true", "--set", "explorer.controlEmit=true"),
+    ),
+    ("no-queue-lane", (*DEFAULT_ARGS, "--set", "maintenance.workTopic=", "--set", "maintenance.dedicatedWorkers.enabled=false")),
+]
 
 
 def _secret_refs(node: object, found: list[dict]) -> list[dict]:
@@ -113,15 +123,13 @@ def _bus_credential_problems(docs: tuple[dict, ...], components: list[dict]) -> 
                 problems.append(f"{app} may not create, bind and acknowledge its durable {durable} on any stream")
         elif "deliverPolicy" in rows and not any(_consumes(publish, stream, set()) for stream in streams):
             problems.append(f"{app} may not create, bind and acknowledge the ephemeral consumer {name} subscribes with")
+    app_of = {
+        f"{doc['kind']}/{doc['metadata']['name']}": ((doc["spec"]["template"].get("metadata") or {}).get("annotations") or {}).get("dapr.io/app-id")
+        for doc in docs
+        if doc.get("kind") in {"Deployment", "StatefulSet"}
+    }
     for workload, _, container in chart_render.containers(docs):
-        app = next(
-            (
-                (doc["spec"]["template"].get("metadata") or {}).get("annotations", {}).get("dapr.io/app-id")
-                for doc in docs
-                if f"{doc.get('kind')}/{doc['metadata']['name']}" == workload
-            ),
-            None,
-        )
+        app = app_of.get(workload)
         if app not in held:
             continue
         env = chart_render.env_of(container)
@@ -138,7 +146,7 @@ def _bus_credential_problems(docs: tuple[dict, ...], components: list[dict]) -> 
     return problems
 
 
-@pytest.mark.parametrize("label,overlay", _overlays(), ids=lambda v: v if isinstance(v, str) else "")
+@pytest.mark.parametrize("label,overlay", [*_overlays(), *_SPLIT_UNDER_A_FLAG], ids=lambda v: v if isinstance(v, str) else "")
 def test_every_referenced_secret_has_a_store_to_resolve_it(label: str, overlay: tuple[str, ...]) -> None:
     try:
         docs = render(*overlay, *OIDC_ARGS)

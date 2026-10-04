@@ -15,8 +15,9 @@
    Secret and the app compares against this field). Beside the bundle, for every identity in
    lance.signingIdentities, two secrets: signing-public-<identity> (field `keys`) and then signing-key-<identity>
    (field `seed`), described in values.yaml `signing:`; the render refuses a non-dev store until an operator
-   created them and signing.provisioned says so. The devMode seed below is the authoritative list — keep this
-   comment and that `bao kv put` in sync.
+   created them and signing.provisioned says so. Likewise nats-user-<user> per values.yaml `nats.auth` user, and
+   nats-route (and nats-server, in operator mode), attested by nats.auth.provisioned. The devMode seed below is the
+   authoritative list — keep this comment and that `bao kv put` in sync.
 
    TWO CONSUMERS, ONE KEY (2026-08-09). `publisher-oidc-client-secret` now serves the publish saga AND
    the MinIO StatefulSet's STS AssumeRoleWithWebIdentity config — there is one Dex client (`dex.clientId`),
@@ -28,6 +29,8 @@
 */}}
 {{- $signers := include "lance.signingIdentities" . | splitList " " | compact }}
 {{- $mint := and .Values.openbao.devMode (not .Values.openbao.externalAddr) $signers }}
+{{- $nats := include "lance.natsMints" . }}
+{{- $natsUsers := include "lance.natsUsers" . | splitList " " | compact }}
 {{- if not .Values.openbao.devMode }}
 apiVersion: v1
 kind: ConfigMap
@@ -108,10 +111,10 @@ spec:
         {{- end }}
         seccompProfile: { type: RuntimeDefault }
       {{- end }}
-      {{- if $mint }}
+      {{- if or $mint $nats }}
       initContainers:
-        {{- /* MINT: a candidate pair per signing identity on a memory volume the server never mounts. Prints names only and always exits 0
-               (values.yaml `signing:`). */}}
+        {{- /* MINT: a candidate pair per signing identity on a memory volume the server never mounts, and nsc and nk for the seed's bus users
+               (values.yaml `signing:`, `nats.auth`). Prints names only and always exits 0. */}}
         - name: mint
           image: {{ required "signing.mintImage is unset — upgrade with --reset-then-reuse-values, not --reuse-values" (.Values.signing).mintImage }}
           {{- include "lance.rootlessSecurityContext" 65532 | nindent 10 }}
@@ -120,8 +123,14 @@ spec:
             limits: { cpu: "100m", memory: "64Mi" }
           env:
             - { name: SIGNING_DIR, value: /signing }
+            {{- if $nats }}
+            - { name: NATS_TOOLS, value: /nats-tools }
+            {{- end }}
           volumeMounts:
             - { name: signing, mountPath: /signing }
+            {{- if $nats }}
+            - { name: nats-tools, mountPath: /nats-tools }
+            {{- end }}
           command:
             - sh
             - -c
@@ -143,6 +152,9 @@ spec:
                 chmod 0400 "$SIGNING_DIR/$id.seed" "$SIGNING_DIR/$id.pub"
                 echo "mint: key pair for $id"
               done
+              {{- if $nats }}
+              cp "$(command -v nsc)" "$(command -v nk)" "$NATS_TOOLS/" && echo "mint: nsc and nk for the bus users" || echo "mint: could not copy nsc and nk"
+              {{- end }}
               exit 0
       {{- end }}
       containers:
@@ -194,8 +206,11 @@ spec:
                  seed keeps there outlive a restart of either container. */}}
           volumeMounts:
             {{- include "lance.tmpMount" . | nindent 12 }}
-            {{- if $mint }}
+            {{- if or $mint $nats }}
             - { name: signing, mountPath: /signing }
+            {{- end }}
+            {{- if $nats }}
+            - { name: nats-tools, mountPath: /nats-tools, readOnly: true }
             {{- end }}
           resources:
             requests: { cpu: "10m", memory: "32Mi" }
@@ -204,8 +219,11 @@ spec:
             - { name: BAO_ADDR, value: "http://127.0.0.1:8200" }
             - { name: BAO_TOKEN, value: {{ .Values.openbao.devToken | quote }} }
             - { name: HOME, value: /tmp }
-            {{- if $mint }}
+            {{- if or $mint $nats }}
             - { name: SIGNING_DIR, value: /signing }
+            {{- end }}
+            {{- if $nats }}
+            - { name: NATS_TOOLS, value: /nats-tools }
             {{- end }}
           command:
             - sh
@@ -216,7 +234,9 @@ spec:
                      readiness key. Each check that may fail on purpose sits in an `if`, `until` or `&&`. */}}
               set -e
               mkdir -p "$HOME/seed"
-              {{- if $mint }}
+              {{- /* nsc reads its working directory, and the image's is not readable as this user (measured in nats-box 0.19.7). */}}
+              cd "$HOME"
+              {{- if or $mint $nats }}
               {{- /* ONE PAIR PER SIGNING IDENTITY, chosen from the kept copy, the store behind the Service, then the mint candidate
                      (values.yaml `signing:`). A value travels through shell variables, files and `@file` arguments, never argv or output. */}}
               {{- include "lance.signingShapes" . | nindent 14 }}
@@ -259,6 +279,58 @@ spec:
                 bao kv put "secret/signing-public-$1" keys=@"$p" >/dev/null
                 bao kv put "secret/signing-key-$1" seed=@"$k" >/dev/null
                 echo "signing pair for $1: $how"
+              }
+              {{- end }}
+              {{- if $nats }}
+              {{- /* THE BUS CREDENTIALS (values.yaml `nats.auth`): the trust root and the route credential carried from the store behind the
+                     Service or minted, then every user of the table issued afresh under that root, the whole bundle kept before the first write. */}}
+              nsc() { "$NATS_TOOLS/nsc" -H "$B/nsc" "$@"; }
+              nats_user() {
+                out=$("$NATS_TOOLS/nk" -gen user -pubout 2>/dev/null) || { echo "nk failed for NATS user $1" >&2; exit 1; }
+                s=; p=
+                for w in $out; do
+                  if seed_shaped "$w"; then s=$w; elif pub_shaped "$w"; then p=$w; fi
+                done
+                [ -n "$s" ] && [ -n "$p" ] || { echo "nk made no key pair for NATS user $1" >&2; exit 1; }
+                err=$(nsc add user -a APP -n "$1" -k "$p" --allow-pub "$2" --allow-sub "$3" 2>&1) || { echo "nsc could not issue NATS user $1: $err" >&2; exit 1; }
+                jwt=$(nsc describe user -a APP -n "$1" --raw)
+                printf '%s' "$jwt" > "$B/users/$1.jwt"
+                (umask 077; printf '%s' "$s" > "$B/users/$1.seed")
+              }
+              nats_bundle() {
+                K="$HOME/seed/nats"; B="$K.new"; how=kept
+                if [ ! -f "$K/done" ]; then
+                  rm -rf "$B"; mkdir -p "$B/users" "$B/nsc"
+                  if svc_get nats-root nsc; then
+                    { printf '%s' "$got" | base64 -d | tar -xzf - -C "$B/nsc" && nsc describe account -n APP --raw; } >/dev/null 2>&1 \
+                      || { echo "secret/nats-root behind the Service is malformed, refusing to replace the trust root the bus holds" >&2; exit 1; }
+                    how=carried
+                  else
+                    err=$({ nsc add operator -n rask --sys && nsc add account -n APP && nsc delete user -a SYS -n sys \
+                      && nsc edit account -n APP --js-tier 0 --js-disk-storage -1 --js-mem-storage 0 --js-streams -1 --js-consumer -1; } 2>&1) \
+                      || { echo "nsc could not mint a NATS trust root, so this store stays not Ready: $err" >&2; exit 1; }
+                    how=minted
+                  fi
+                  if svc_get nats-route password; then printf '%s' "$got" > "$B/route.password"; else head -c 18 /dev/urandom | base64 | tr '+/' '-_' | tr -d '\n' > "$B/route.password"; fi
+                  printf route > "$B/route.user"
+                  {{- range $natsUsers }}
+                  {{- $p := index $.Values.nats.auth.users . }}
+                  nats_user {{ . }} '{{ join "," $p.publish }}' '{{ join "," $p.subscribe }}'
+                  {{- end }}
+                  jwt=$(nsc describe operator --raw); printf '%s' "$jwt" > "$B/operator"
+                  sys=$(nsc describe account -n SYS --field sub | tr -d '"'); app=$(nsc describe account -n APP --field sub | tr -d '"')
+                  [ -n "$sys" ] && [ -n "$app" ] || { echo "the NATS trust root names no SYS or APP account" >&2; exit 1; }
+                  printf '%s' "$sys" > "$B/system_account"
+                  printf '{"%s":"%s","%s":"%s"}' "$sys" "$(nsc describe account -n SYS --raw)" "$app" "$(nsc describe account -n APP --raw)" > "$B/resolver_preload"
+                  rm -rf "$B/nsc/creds" "$B/nsc/keys/U" "$B"/nsc/*/accounts/*/users "$B/nsc/users"
+                  tar -czf - -C "$B/nsc" . | base64 | tr -d '\n' > "$B/root"
+                  rm -rf "$B/nsc"; : > "$B/done"; rm -rf "$K"; mv "$B" "$K"
+                fi
+                bao kv put secret/nats-root nsc=@"$K/root" >/dev/null
+                bao kv put secret/nats-server operator=@"$K/operator" system_account=@"$K/system_account" resolver_preload=@"$K/resolver_preload" >/dev/null
+                bao kv put secret/nats-route user=@"$K/route.user" password=@"$K/route.password" >/dev/null
+                for u in {{ join " " $natsUsers }}; do bao kv put "secret/nats-user-$u" jwt=@"$K/users/$u.jwt" seed=@"$K/users/$u.seed" >/dev/null; done
+                echo "NATS trust root $how, {{ len $natsUsers }} users"
               }
               {{- end }}
               seed() {
@@ -344,6 +416,9 @@ spec:
 
               echo "seeded secret/lance into OpenBao"
 
+              {{- if $nats }}
+              nats_bundle
+              {{- end }}
               {{- if $mint }}
               {{- range $signers }}
               put_pair {{ . }}
@@ -379,9 +454,10 @@ spec:
                      token and already writes the exact path the role must be allowed to read; a
                      separate bootstrap would need a second copy of both.
 
-                     THE POLICY IS SCOPED TO ONE PATH, not the mount. ESO is a controller with standing
-                     access, so `read` on `secret/data/lance` is the whole grant — no list, no other
-                     path, no write. Zero trust applies to the thing fetching the secrets too.
+                     THE POLICY IS SCOPED TO NAMED PATHS, not the mount. ESO is a controller with standing
+                     access, so `read` on `secret/data/lance`, and on each NATS credential a pod without a
+                     sidecar mounts (`lance.natsFiles`), is the whole grant — no list, no other path, no
+                     write. Zero trust applies to the thing fetching the secrets too.
 
                      EVERY STEP IS IDEMPOTENT: `auth enable` on an existing mount is the only one that
                      errors, and it is the expected outcome on re-run. */}}
@@ -392,6 +468,9 @@ spec:
               path "{{ $.Values.externalSecrets.kvMount }}/data/{{ $.Values.externalSecrets.secretPath }}" {
                 capabilities = ["read"]
               }
+              {{- range $files := include "lance.natsFiles" $ | fromJson }}{{- range $files }}
+              path "{{ $.Values.externalSecrets.kvMount }}/data/{{ . }}" { capabilities = ["read"] }
+              {{- end }}{{- end }}
               POLICY
               bao write auth/{{ $.Values.externalSecrets.kubernetesAuthPath }}/role/{{ $.Values.externalSecrets.role }} \
                 bound_service_account_names={{ $.Values.externalSecrets.serviceAccount | default "external-secrets" }} \
@@ -414,8 +493,11 @@ spec:
       volumes:
         {{- if .Values.openbao.devMode }}
         {{- include "lance.tmpVolume" . | nindent 8 }}
-        {{- if $mint }}
+        {{- if or $mint $nats }}
         - { name: signing, emptyDir: { medium: Memory, sizeLimit: 1Mi } }
+        {{- end }}
+        {{- if $nats }}
+        - { name: nats-tools, emptyDir: { sizeLimit: 64Mi } }
         {{- end }}
         {{- else }}
         - { name: config, configMap: { name: {{ include "lance.openbaoHost" . }}-config } }

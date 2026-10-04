@@ -43,6 +43,7 @@ _REAL = (
     "age.password=a-real-age-password",
     "minio.secretKey=a-real-rustfs-secret",
     "signing.provisioned=true",
+    "nats.auth.provisioned=true",
 )
 
 
