@@ -112,13 +112,17 @@ jobs:
   #             GreptimeDB the chart deploys as a Dagger service and replays every expression against
   #             it. An empty store is enough: the drill asserts the endpoint ACCEPTS the query, not
   #             that any series exists.
+  #   nats-auth the chart's NATS permission table (`nats.auth.users`) on the chart's own nats-server in
+  #             operator mode with test-only keys, and real daprd 1.18.1 running the chart's
+  #             Components against it: each bus client reaches exactly its own subjects. Hermetic,
+  #             public images only. `dagger call nats-auth` == `make nats-auth`.
   ms-gates:
     name: ms-${{ matrix.gate }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        gate: [lint, typecheck, openapi, charts, alert-rules-drill, go-fmt]
+        gate: [lint, typecheck, openapi, charts, alert-rules-drill, go-fmt, nats-auth]
     steps:
       - uses: actions/checkout@v4
       - name: Install Dagger CLI (pinned to the module's engineVersion)

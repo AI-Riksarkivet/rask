@@ -94,6 +94,26 @@ func (m *Rask) TestPackage(
 		Stdout(ctx)
 }
 
+// withRenderableChart gives a python-gate container what `tests/unit/chart_render.py` needs to render the
+// chart: the pinned helm and the vendored subcharts. Shared by the pytest lane (Test) and the NATS auth lane
+// (NatsAuth), so the two cannot render the same chart under different Helm minors or subchart sets.
+//
+// The subcharts are not optional: chart/charts/ is gitignored, so a fresh checkout declares ten dependencies
+// and vendors none, and every render dies with "found in Chart.yaml, but missing in charts/ directory".
+// Charts() documents that trap and solves it the same way — `make k3s-deps`, not a bare
+// `helm dependency build`, so the repository list (K3S_DEP_REPOS) stays in ONE place.
+func withRenderableChart(c *dagger.Container) *dagger.Container {
+	return c.
+		WithExec([]string{"apt-get", "update"}).
+		WithExec([]string{"apt-get", "install", "-y", "--no-install-recommends", "make", "ca-certificates"}).
+		WithFile("/usr/local/bin/helm", helmBinary()).
+		// Cache helm's repo index + vendored archives: the source mount changes on every edit, so
+		// `make k3s-deps` re-runs constantly, and without these it re-fetches ten subcharts each time.
+		WithMountedCache("/root/.cache/helm", dag.CacheVolume("rask-helm-cache")).
+		WithMountedCache("/root/.local/share/helm", dag.CacheVolume("rask-helm-data")).
+		WithExec([]string{"make", "k3s-deps"})
+}
+
 // Test runs the offline pytest suite: every root-workspace testpath (packages, services,
 // tests/unit, tests/integration — and tests/e2e-py stays collectable so the collection
 // gate can see it), excluding the live-stack `e2e` marker and the model-bound `slow`
@@ -121,19 +141,8 @@ func (m *Rask) Test(
 		// and e2e.go, none of which touch the chart — putting an apt layer and a helm download in
 		// front of the lint gate buys nothing and slows four lanes to fix one.
 		//
-		// helm ALONE would turn thirteen skips into thirteen FAILURES: chart/charts/ is gitignored, so
-		// a fresh checkout declares ten dependencies and vendors none, and every render dies with
-		// "found in Chart.yaml, but missing in charts/ directory". Charts() already documents that trap
-		// and solves it the same way — `make k3s-deps`, not a bare `helm dependency build`, so the
-		// repository list (K3S_DEP_REPOS) stays in ONE place instead of drifting in a second copy.
-		WithExec([]string{"apt-get", "update"}).
-		WithExec([]string{"apt-get", "install", "-y", "--no-install-recommends", "make", "ca-certificates"}).
-		WithFile("/usr/local/bin/helm", helmBinary()).
-		// Cache helm's repo index + vendored archives: the source mount above changes on every edit, so
-		// `make k3s-deps` re-runs constantly, and without these it re-fetches ten subcharts each time.
-		WithMountedCache("/root/.cache/helm", dag.CacheVolume("rask-helm-cache")).
-		WithMountedCache("/root/.local/share/helm", dag.CacheVolume("rask-helm-data")).
-		WithExec([]string{"make", "k3s-deps"}).
+		// helm ALONE would turn thirteen skips into thirteen FAILURES: see withRenderableChart.
+		With(withRenderableChart).
 		// ── a per-test ceiling, because a hang in HERE is undiagnosable without one ─────────────────
 		// This suite has hung in Dagger while passing on a developer box, and the container is what
 		// makes it undebuggable: Dagger buffers a WithExec's stdout until the exec COMPLETES, so a run

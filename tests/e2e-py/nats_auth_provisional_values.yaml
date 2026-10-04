@@ -1,0 +1,163 @@
+# A provisional `nats.auth.users` table for `dagger call nats-auth --values=tests/e2e-py/nats_auth_provisional_values.yaml`,
+# to exercise the lane until the chart's own table exists; deleted once chart/values.yaml carries the table, which the
+# lane reads by default. Each subscriber publishes $JS.API.STREAM.NAMES, $JS.API.CONSUMER.INFO.<S>.<D> and
+# $JS.API.CONSUMER.CREATE.<S>.<D>.>, and acks on $JS.ACK.<S>.>: nats-server 2.14.2 sends each delivery's ack subject as
+# $JS.ACK.<stream>.<consumer>.<delivered>.<stream seq>.<consumer seq>.<timestamp>.<pending> (measured by this lane).
+# Each client subscribes _INBOX.>.
+nats:
+  auth:
+    users:
+      catalog:
+        publish:
+          - lineage.events.v1
+          - catalog.control.v1
+          - maintenance.work.v1
+          - maintenance.index.v1
+          - $JS.API.STREAM.NAMES
+          - $JS.API.CONSUMER.CREATE.CATALOG_CONTROL
+          - $JS.API.CONSUMER.INFO.CATALOG_CONTROL.*
+          - $JS.ACK.CATALOG_CONTROL.>
+        subscribe: [_INBOX.>]
+      lineage:
+        publish:
+          - lineage.events.v1
+          - dlq.lineage.events
+          - $JS.API.STREAM.NAMES
+          - $JS.API.CONSUMER.INFO.LINEAGE.lineage-durable
+          - $JS.API.CONSUMER.CREATE.LINEAGE.lineage-durable.>
+          - $JS.ACK.LINEAGE.>
+          - $JS.API.CONSUMER.INFO.DLQ.lineage-dlq-durable
+          - $JS.API.CONSUMER.CREATE.DLQ.lineage-dlq-durable.>
+          - $JS.ACK.DLQ.>
+        subscribe: [_INBOX.>]
+      medallion-producer:
+        publish:
+          - medallion.bronze
+          - medallion.silver
+          - medallion.media
+          - training.jobs
+          - lineage.events.v1
+          - catalog.control.v1
+          - refused.medallion-producer
+          - dlq.medallion-producer
+          - $JS.API.STREAM.NAMES
+          - $JS.API.CONSUMER.INFO.LINEAGE.medallion-producer-durable
+          - $JS.API.CONSUMER.CREATE.LINEAGE.medallion-producer-durable.>
+          - $JS.ACK.LINEAGE.>
+          - $JS.API.CONSUMER.INFO.CATALOG_CONTROL.medallion-producer-control-durable
+          - $JS.API.CONSUMER.CREATE.CATALOG_CONTROL.medallion-producer-control-durable.>
+          - $JS.ACK.CATALOG_CONTROL.>
+          - $JS.API.CONSUMER.INFO.TRAINING.medallion-producer-durable
+          - $JS.API.CONSUMER.CREATE.TRAINING.medallion-producer-durable.>
+          - $JS.ACK.TRAINING.>
+          - $JS.API.CONSUMER.INFO.MEDALLION.medallion-producer-durable
+          - $JS.API.CONSUMER.CREATE.MEDALLION.medallion-producer-durable.>
+          - $JS.ACK.MEDALLION.>
+          - $JS.API.CONSUMER.INFO.DLQ.medallion-producer-durable
+          - $JS.API.CONSUMER.CREATE.DLQ.medallion-producer-durable.>
+          - $JS.ACK.DLQ.>
+        subscribe: [_INBOX.>]
+      bronze-to-silver:
+        publish:
+          - lineage.events.v1
+          - refused.bronze-to-silver
+          - dlq.bronze-to-silver
+          - medallion.bronze
+          - medallion.promotion
+          - $JS.API.STREAM.NAMES
+          - $JS.API.CONSUMER.INFO.MEDALLION.bronze-to-silver-durable
+          - $JS.API.CONSUMER.CREATE.MEDALLION.bronze-to-silver-durable.>
+          - $JS.ACK.MEDALLION.>
+          - $JS.API.CONSUMER.INFO.DLQ.bronze-to-silver-durable
+          - $JS.API.CONSUMER.CREATE.DLQ.bronze-to-silver-durable.>
+          - $JS.ACK.DLQ.>
+        subscribe: [_INBOX.>]
+      silver-to-gold:
+        publish:
+          - lineage.events.v1
+          - refused.silver-to-gold
+          - dlq.silver-to-gold
+          - medallion.silver
+          - medallion.promotion
+          - $JS.API.STREAM.NAMES
+          - $JS.API.CONSUMER.INFO.MEDALLION.silver-to-gold-durable
+          - $JS.API.CONSUMER.CREATE.MEDALLION.silver-to-gold-durable.>
+          - $JS.ACK.MEDALLION.>
+          - $JS.API.CONSUMER.INFO.DLQ.silver-to-gold-durable
+          - $JS.API.CONSUMER.CREATE.DLQ.silver-to-gold-durable.>
+          - $JS.ACK.DLQ.>
+        subscribe: [_INBOX.>]
+      media-to-silver:
+        publish:
+          - lineage.events.v1
+          - refused.media-to-silver
+          - dlq.media-to-silver
+          - medallion.media
+          - medallion.promotion
+          - $JS.API.STREAM.NAMES
+          - $JS.API.CONSUMER.INFO.MEDALLION.media-to-silver-durable
+          - $JS.API.CONSUMER.CREATE.MEDALLION.media-to-silver-durable.>
+          - $JS.ACK.MEDALLION.>
+          - $JS.API.CONSUMER.INFO.DLQ.media-to-silver-durable
+          - $JS.API.CONSUMER.CREATE.DLQ.media-to-silver-durable.>
+          - $JS.ACK.DLQ.>
+        subscribe: [_INBOX.>]
+      notifications:
+        publish:
+          - dlq.notifications
+          - $JS.API.STREAM.NAMES
+          - $JS.API.CONSUMER.INFO.LINEAGE.notifications-durable
+          - $JS.API.CONSUMER.CREATE.LINEAGE.notifications-durable.>
+          - $JS.ACK.LINEAGE.>
+          - $JS.API.CONSUMER.INFO.CATALOG_CONTROL.notifications-control-durable
+          - $JS.API.CONSUMER.CREATE.CATALOG_CONTROL.notifications-control-durable.>
+          - $JS.ACK.CATALOG_CONTROL.>
+          - $JS.API.CONSUMER.INFO.DLQ.notifications-durable
+          - $JS.API.CONSUMER.CREATE.DLQ.notifications-durable.>
+          - $JS.ACK.DLQ.>
+        subscribe: [_INBOX.>]
+      maintenance:
+        publish:
+          - lineage.events.v1
+          - maintenance.work.v1
+          - dlq.maintenance.work
+          - dlq.maintenance.index
+          - $JS.API.STREAM.NAMES
+          - $JS.API.CONSUMER.INFO.LINEAGE.maintenance-durable
+          - $JS.API.CONSUMER.CREATE.LINEAGE.maintenance-durable.>
+          - $JS.ACK.LINEAGE.>
+          - $JS.API.CONSUMER.INFO.MAINTENANCE_WORK.maintenance-work-durable
+          - $JS.API.CONSUMER.CREATE.MAINTENANCE_WORK.maintenance-work-durable.>
+          - $JS.ACK.MAINTENANCE_WORK.>
+          - $JS.API.CONSUMER.INFO.MAINTENANCE_INDEX.maintenance-index-durable
+          - $JS.API.CONSUMER.CREATE.MAINTENANCE_INDEX.maintenance-index-durable.>
+          - $JS.ACK.MAINTENANCE_INDEX.>
+        subscribe: [_INBOX.>]
+      ingest:
+        publish:
+          - ingest.tasks.>
+          - dlq.ingest.tasks
+          # the work queue's pull_subscribe looks its stream up by subject (services/ingest/src/ingest/queue.py)
+          - $JS.API.STREAM.NAMES
+          - $JS.API.STREAM.CREATE.INGEST
+          - $JS.API.STREAM.CREATE.DLQ
+          - $JS.API.STREAM.INFO.INGEST
+          - $JS.API.STREAM.INFO.DLQ
+          - $JS.API.STREAM.PURGE.INGEST
+          - $JS.API.CONSUMER.CREATE.INGEST.>
+          - $JS.API.CONSUMER.INFO.INGEST.*
+          - $JS.API.CONSUMER.DELETE.INGEST.*
+          - $JS.API.CONSUMER.MSG.NEXT.INGEST.*
+          - $JS.ACK.INGEST.>
+        subscribe: [_INBOX.>]
+      admin:
+        publish: [$JS.API.>]
+        subscribe: [_INBOX.>]
+      monitor:
+        publish:
+          - $JS.API.*.INFO.>
+          - $JS.API.STREAM.NAMES
+          - $JS.API.STREAM.LIST
+          - $JS.API.CONSUMER.NAMES.*
+          - $JS.API.CONSUMER.LIST.*
+        subscribe: [_INBOX.>]
