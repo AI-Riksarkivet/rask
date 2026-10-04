@@ -7,9 +7,12 @@ graph (security audit, prod-blocker). When the pod is annotated ``dapr.io/app-to
 injects ``APP_API_TOKEN`` into the app **and** adds a ``dapr-api-token`` header to every request it
 delivers. This dependency rejects any delivery whose header doesn't match.
 
-Defense-in-depth (the token is one layer): the ``pubsub.jetstream`` component is **scoped** to the
-trusted app-ids (only they can publish to the topic), the gateway **blocks** these routes from external
-traffic, and the route is only registered when Dapr is enabled.
+Defense-in-depth (the token is one layer): the gateway **blocks** these routes from external traffic, and
+the route is only registered when Dapr is enabled. The ``pubsub.jetstream`` component's ``scopes`` decide
+which app-ids' sidecars load it, which is not who may publish: every scoped app can publish every topic on
+it, and a client that reaches the broker directly needs no sidecar. So the token authenticates the sidecar
+that delivered an event and nothing about who wrote it; a door that acts on what an event claims verifies
+the producer's signature (``lineage_kit.signing``).
 
 **An unconfigured door REFUSES.** No ``APP_API_TOKEN`` means no caller can be authenticated, and a
 guard that cannot authenticate must not admit — ``RASK_ALLOW_UNAUTHENTICATED_DAPR`` is the one way to

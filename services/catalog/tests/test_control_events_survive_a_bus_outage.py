@@ -45,7 +45,9 @@ async def test_a_failed_control_publish_leaves_the_event_STAGED(tmp_path: Any, m
     from service_kit.lakehouse import outbox
 
     uri = f"file://{tmp_path}/control-outbox"
-    emitter = DaprControlEmitter(cast("Any", _Blip()), pubsub="p", topic="catalog.control.v1", timeout_seconds=1.0, service="catalog", outbox_uri=uri)
+    emitter = DaprControlEmitter(
+        cast("Any", _Blip()), pubsub="p", topic="catalog.control.v1", timeout_seconds=1.0, service="catalog", sign=None, outbox_uri=uri
+    )
 
     await emitter.emit(_event())
 
@@ -63,7 +65,7 @@ async def test_a_SUCCESSFUL_publish_drops_the_staged_copy(tmp_path: Any) -> None
             return None
 
     uri = f"file://{tmp_path}/control-outbox"
-    emitter = DaprControlEmitter(cast("Any", _Ok()), pubsub="p", topic="catalog.control.v1", timeout_seconds=1.0, service="catalog", outbox_uri=uri)
+    emitter = DaprControlEmitter(cast("Any", _Ok()), pubsub="p", topic="catalog.control.v1", timeout_seconds=1.0, service="catalog", sign=None, outbox_uri=uri)
 
     await emitter.emit(_event())
 

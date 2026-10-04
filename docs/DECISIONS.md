@@ -546,7 +546,7 @@ the live drive verifies (ingress no-buffer, adapter-bun `idleTimeout`).
 
 ## control-events — fail-open emit contract
 
-**Decision.** Every control-plane mutation endpoint `await`s the emit (`core/control_emit.py`)
+**Decision.** Every control-plane mutation endpoint `await`s the emit (`packages/service-kit/src/service_kit/control_emit.py`)
 **after** the backend/FGA mutation succeeds — so a change that did not happen is never announced — and
 the emitter **swallows every error**: a bus outage degrades to "no live refresh + the audit trail still
 records it", never a failed mutation. The **audit trail is the durable compliance record**; the event

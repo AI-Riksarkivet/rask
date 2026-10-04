@@ -136,7 +136,7 @@ await publish_event(client, pubsub_name="pubsub", topic_name="lineage.events.v1"
 await emit_control(  # best-effort; never raises into a committed mutation
     emitter,
     action="grant_revoked",  # MUST be in NAMED_ACTIONS
-    object_type="project",
+    object_type="grant",
     object_id=f"project:{project_id}",
     actor=f"user:{token.sub}",  # the VERIFIED principal that made the change
     extra={"relation": relation, "subject": user},  # `subject` = WHO this is about, `user:bob`
@@ -146,6 +146,14 @@ await emit_control(  # best-effort; never raises into a committed mutation
 Call it **after** the backend mutation and its audit succeed, so a real change is never announced.
 `extra.subject` is the entire targeting: `named_subject` returns `None` for a missing subject, a bare
 `user:`, and the `*` wildcard, and the event is then filed IGNORED with a `SUCCESS` ack.
+
+**The emitter signs, and `make_control_emitter(sign=...)` has no default** ([[XC-078]]). A producer passes
+`attach_control_signature` over its own `SigningKeyHolder` (the catalog's, `catalog/core/control_signing.py`,
+declares the `user:` actor it authenticated; maintenance signs as itself), or `None` when it holds no signing
+identity, which the doors accept only for an action `control_signer_role` exempts (the task actions, R3; an
+annotation project's grants, R5). A signer whose key is unresolved publishes nothing unsigned: with an outbox the
+event waits staged for a relay that signs it (the catalog's), without one it is withheld and counted under
+`reason="unsigned"`.
 
 **Under `RASK_SIGNATURE_DOORS=enforce` a named action reaches nobody unless the role that emits it signed it.**
 `service_kit.control_events.control_signer_role(action, object_id)` names that role, and the `/control-events` door
@@ -158,7 +166,9 @@ bus lets publish can forge those. A refusal is acked and counted in
 
 **A new named action is a THREE-file change, and all three are load-bearing:**
 
-1. `service_kit/control_events.py` — add the member to `ControlAction`, or the envelope will not validate.
+1. `service_kit/control_events.py` — add the member to `ControlAction`, or the envelope will not validate, and
+   its case to `control_signer_role` (ty fails the `assert_never` until it has one), which names the role whose
+   signature the doors require.
 2. `notifications/api/control_events.py` — add it to `NAMED_ACTIONS`, or the lane files it IGNORED.
 3. `notifications/models.py` — add the matching `NotificationReason`, because `as_delivery` constructs
    `NotificationReason(event.action)` and would otherwise **raise on every delivery**.

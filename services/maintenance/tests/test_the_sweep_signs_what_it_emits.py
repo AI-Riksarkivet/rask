@@ -1,18 +1,20 @@
-"""Maintenance signs every lineage event it emits as itself, authors its failures, and emits nothing without its key.
+"""Maintenance signs every event it emits as itself, authors its failures, and emits nothing without its key.
 
-[[LH-064]]. A verifier refuses an unsigned event, and a signature only verifies when the signer is the event's author,
-so the service stamps its own identity as the author of EVERY event it emits and signs as that identity. That includes a
-FAIL: it was authorless, which a verifier could never accept, and an unattributed failure is the one a person is most
-likely to have to chase.
+[[LH-064]], [[XC-078]]. A verifier refuses an unsigned event, and a signature only verifies when the signer is the event's
+author, so the service stamps its own identity as the author of EVERY lineage event it emits and signs as that identity.
+That includes a FAIL: it was authorless, which a verifier could never accept, and an unattributed failure is the one a
+person is most likely to have to chase. The control event a trash purge announces names the service as its actor and is
+signed the same way, with no delegation: maintenance never signs for a person.
 
 A SIGNER WITHOUT ITS KEY EMITS NOTHING and reports itself not ready, and every delivery that would make it emit (a unit
 of work, an index build, a write arrival, the sweep's own tick) is answered before the delivery is read, so it is
-redelivered or retried rather than lost. The sweep emits after the work it describes, so a signature that cannot be
-made is a withheld event and never a failed sweep.
+redelivered or retried rather than lost. The sweep and the purge emit after the work they describe, so a signature that
+cannot be made is a withheld event and never a failed pass; maintenance stages no control event, so nothing signs one
+later.
 
-The first two claims are driven through the real service lifespan, so the key reaches the emitter the way it does in the
-cluster: the secret store, the holder, the emitter and its author. The sidecar's secret API is answered by respx and its
-publish is a recording stand-in.
+The first two claims are driven through the real service lifespan, so the key reaches the emitters the way it does in the
+cluster: the secret store, the holder, the emitters and their author. The sidecar's secret API is answered by respx and
+its publish is a recording stand-in.
 """
 
 from __future__ import annotations
@@ -28,13 +30,15 @@ import respx
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from lineage_kit import SigningKey, parse_published_keys, verify_signature
+from lineage_kit import RefusalReason, SignatureError, SigningKey, parse_published_keys, verify_control_signature, verify_signature
 from maintenance.api.arrival import register_arrival_route
 from maintenance.api.index_work import register_index_route
 from maintenance.api.routes import build_router
 from maintenance.api.work import register_work_route
 from maintenance.core.config import MaintenanceSettings
 from maintenance.core.lineage_emit import DaprMaintenanceEmitter, NoopEmitter
+from maintenance.services.purge import ACTOR
+from service_kit.control_emit import emit_control
 from service_kit.governed.signing_key import SigningKeyHolder, attach_signing
 
 
@@ -82,6 +86,7 @@ def boot(monkeypatch: pytest.MonkeyPatch, respx_allows_unused_routes: None) -> I
         "RASK_SIGNING_IDENTITY": IDENTITY,
         "MAINTENANCE_S3_ACCESS_KEY_ID": "test",
         "MAINTENANCE_LINEAGE_EMIT_ENABLED": "true",
+        "MAINTENANCE_CONTROL_EMIT_ENABLED": "true",
         "DAPR_HTTP_PORT": "3500",
     }
     for name, value in env.items():
@@ -106,39 +111,59 @@ def boot(monkeypatch: pytest.MonkeyPatch, respx_allows_unused_routes: None) -> I
 
 
 def _emit(client: TestClient, kind: str) -> None:
-    """Emit through the service's own emitter, on the loop its lifespan runs on."""
-    emitter = client.app.state.lineage_emitter
+    """Emit through the service's own emitters, on the loop its lifespan runs on: the sweep's lineage, or the purge's control event."""
+    lineage = client.app.state.lineage_emitter
+    control = client.app.state.control_emitter
     portal = client.portal
     assert portal is not None, "the client was never entered, so the service's lifespan did not run"
-    if kind == "failure":
-        portal.call(lambda: emitter.emit_maintenance_failed(table_id="acme$events", namespace="acme", error="compaction failed"))
+    if kind == "purge":
+        portal.call(
+            lambda: emit_control(
+                control, action="table_purged", object_type="table", object_id="table:acme$events", actor=ACTOR, extra={"reason": "trash_expired"}
+            )
+        )
+    elif kind == "failure":
+        portal.call(lambda: lineage.emit_maintenance_failed(table_id="acme$events", namespace="acme", error="compaction failed"))
     else:
-        portal.call(lambda: emitter.emit_maintenance(table_id="acme$events", namespace="acme"))
+        portal.call(lambda: lineage.emit_maintenance(table_id="acme$events", namespace="acme"))
+
+
+def _signed(event: dict[str, Any], public: str) -> tuple[str, str, str] | RefusalReason:
+    """Who a verifier holding the service's published key finds signed an event, whom the event names, and what it says, or why it is refused."""
+    source = _Published(public)
+    try:
+        if "run" in event:
+            verified = verify_signature(event, source=source, signers=frozenset({IDENTITY}), delegators=frozenset())
+            return verified.identity, event["run"]["facets"]["author"]["sub"], event["eventType"]
+        verified = verify_control_signature(event, source=source, signers=frozenset({IDENTITY}), delegators=frozenset())
+    except SignatureError as exc:
+        return exc.reason
+    return verified.identity, event["actor"], event["action"]
 
 
 @pytest.mark.parametrize(
-    ("kind", "event_type"),
+    ("kind", "signed"),
     [
-        pytest.param("compaction", "COMPLETE", id="a-compaction"),
-        pytest.param("failure", "FAIL", id="a-failure"),
+        pytest.param("compaction", (IDENTITY, IDENTITY, "COMPLETE"), id="a-compaction"),
+        pytest.param("failure", (IDENTITY, IDENTITY, "FAIL"), id="a-failure"),
+        pytest.param("purge", (IDENTITY, ACTOR, "table_purged"), id="a-trash-purge"),
     ],
 )
-def test_every_event_the_sweep_emits_is_authored_and_signed_as_the_service(boot: Boot, event_signer: Any, kind: str, event_type: str) -> None:
+def test_every_event_the_service_emits_is_authored_and_signed_as_the_service(boot: Boot, event_signer: Any, kind: str, signed: tuple[str, str, str]) -> None:
     pair = event_signer(IDENTITY)
     client = boot(httpx.Response(200, json={"seed": pair.seed}), httpx.Response(200, json={"keys": pair.public}))
 
     _emit(client, kind)
 
     assert len(_Sidecar.published) == 1, "nothing was published"
-    event = _Sidecar.published[0]
-    verified = verify_signature(event, source=_Published(pair.public), signers=frozenset({IDENTITY}), delegators=frozenset())
-    assert (verified.identity, event["run"]["facets"]["author"]["sub"], event["eventType"]) == (IDENTITY, IDENTITY, event_type)
+    assert _signed(_Sidecar.published[0], pair.public) == signed
 
 
-def test_a_maintenance_without_its_key_emits_nothing_and_is_not_ready(boot: Boot) -> None:
+@pytest.mark.parametrize("kind", [pytest.param("failure", id="a-failure"), pytest.param("purge", id="a-trash-purge")])
+def test_a_maintenance_without_its_key_emits_nothing_and_is_not_ready(boot: Boot, kind: str) -> None:
     client = boot(httpx.Response(500), httpx.Response(404))
 
-    _emit(client, "failure")
+    _emit(client, kind)
     readiness = client.get("/readyz")
 
     assert _Sidecar.published == [], f"a signer without its key published {len(_Sidecar.published)} events"

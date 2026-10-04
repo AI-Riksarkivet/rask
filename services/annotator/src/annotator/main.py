@@ -84,6 +84,9 @@ async def _start_task_plane(app: FastAPI, _state: AppState) -> None:
         pubsub=settings.control_pubsub,
         timeout_seconds=settings.control_emit_timeout_seconds,
         service="annotator",
+        # UNSIGNED: the annotator holds no signing identity, and the doors exempt every action it emits
+        # (`control_signer_role`: the task actions by owner ruling R3, an annotation project's grants by R5).
+        sign=None,
     )
     set_process_control_emitter(app.state.control_emitter)
 

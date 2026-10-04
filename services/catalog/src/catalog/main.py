@@ -26,6 +26,7 @@ from catalog.api.v1.router import api_router
 from catalog.core import base_judge
 from catalog.core.config import Settings, get_settings
 from catalog.core.control_buffer import ControlEventBuffer
+from catalog.core.control_signing import control_sign
 from catalog.core.lineage_emit import make_emitter
 from catalog.core.namespace import build_namespace
 from catalog.core.vending import EncryptionAtRest, make_vendor
@@ -241,9 +242,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     if settings.control_emit_enabled and dapr_client is None:
         dapr_client = DaprClient()
     # The sidecar client itself, published for callers that are not the emitter. The control relay
-    # (api/control_relay.py) re-publishes STAGED BYTES verbatim, so it cannot go through
-    # `control_emitter` — that would re-serialize the event from the model and re-stage it. One client
-    # per process, closed by this lifespan; `None` when this deployment has no Dapr transport at all.
+    # (api/control_relay.py) re-publishes the STAGED event, never a re-serialization of the model, so it
+    # cannot go through `control_emitter`, which would rebuild the event from the model and stage it
+    # again. One client per process, closed by this lifespan; `None` when this deployment has no Dapr
+    # transport at all.
     app.state.dapr_client = dapr_client
     app.state.control_buffer = ControlEventBuffer(settings.control_buffer_size)
     app.state.control_emitter = make_control_emitter(
@@ -252,6 +254,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         pubsub=settings.control_pubsub,
         timeout_seconds=settings.control_emit_timeout_seconds,
         service="catalog",
+        # SIGNED AS THIS CATALOG ([[XC-078]]), with the holder the lineage emitter signs with, for the person each
+        # event names; None for a catalog with no store or no identity. The relay signs what waited for the key with
+        # the same holder, which `attach_signing` above published for it.
+        sign=control_sign(signing) if signing is not None else None,
         # Staged when configured, plain publish when not — opt-in, exactly like the lineage outbox.
         outbox_uri=settings.control_outbox_uri,
         storage_options=settings.storage_options(),

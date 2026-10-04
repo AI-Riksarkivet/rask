@@ -31,20 +31,20 @@ from dapr.aio.clients import DaprClient
 from fastapi import FastAPI
 from fastapi.concurrency import run_in_threadpool
 
-from lineage_kit import SigningKey, parse_published_keys
+from lineage_kit import SigningKey, attach_control_signature, parse_published_keys
 from maintenance.api.arrival import register_arrival_route
 from maintenance.api.index_work import register_index_route
 from maintenance.api.routes import build_router
 from maintenance.api.work import register_work_route
 from maintenance.core.config import MaintenanceSettings, get_settings
 from maintenance.core.lineage_emit import make_emitter
-from service_kit.control_emit import make_control_emitter
+from service_kit.control_emit import ControlSign, make_control_emitter
 from service_kit.draining import arm_drain_on_sigterm
 from service_kit.governed.auth_lifespan import build_fga_client
 from service_kit.governed.dapr_auth import assert_app_token_configured
 from service_kit.governed.fga import dispose as fga_dispose
 from service_kit.governed.secrets import apply_dapr_secrets
-from service_kit.governed.signing_key import attach_signing, make_signing_holder, signing_ready_check
+from service_kit.governed.signing_key import SigningKeyHolder, attach_signing, make_signing_holder, signing_ready_check
 from service_kit.lakehouse.lance_metrics import instrument_lance_if_available
 from service_kit.lance_app import build_lance_service_app
 from service_kit.obs import configure_app_logging
@@ -100,6 +100,12 @@ def _make_s3_client(settings: MaintenanceSettings) -> Any | None:  # noqa: ANN40
     except Exception:
         log.warning("reconcile_s3_client_failed", exc_info=True)
         return None
+
+
+def _control_sign(holder: SigningKeyHolder[SigningKey]) -> ControlSign:
+    """The purge's control events, signed as this service with no delegation: maintenance authenticates nobody, so the
+    actor it stamps is itself (`purge.ACTOR`) and it never signs for a person."""
+    return lambda envelope: attach_control_signature(envelope, key=holder.key(), identity=holder.identity)
 
 
 @asynccontextmanager
@@ -186,6 +192,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         pubsub=settings.control_pubsub,
         timeout_seconds=settings.publish_timeout_seconds,
         service="maintenance",
+        # SIGNED AS THIS SERVICE ([[XC-078]]) with the holder its lineage signs with; None for a stack with no store or
+        # no identity. Nothing stages a control event here, so one the purge emits while the key is unresolved is
+        # withheld and counted, never published unsigned.
+        sign=_control_sign(signing) if signing is not None else None,
     )
     # The reconciler's two read-only clients. Both are OPTIONAL by design: a missing one degrades its
     # categories to UNAVAILABLE-with-a-reason, and the other five still report. Boot must NOT fail on

@@ -224,6 +224,19 @@ or refuse an event and cannot forge one (`packages/lineage-kit/src/lineage_kit/s
 - **Who signs.** The identities the chart lists in `LINEAGE_SIGNERS` (`lance.signingIdentities`): the catalog,
   maintenance, the medallion producer, each stage runner and ingest. A signer is its own author. The one exception is
   the catalog, the sole entry in `LINEAGE_DELEGATORS`, which signs for the person it authenticated.
+- **Control events.** A `CatalogControlEvent` on `catalog.control.v1` is a flat envelope with no facet bag, so the same
+  facet rides as its top-level `rask_signature` member, and the signed bytes are canon-1 of the whole envelope with only
+  `rask_signature.signature` removed. The envelope's `actor` plays the author: a `user:<sub>` actor verifies only under a
+  delegation (`onBehalfOf` equal to the whole actor) declared by a delegator, and an absent or non-`user:` actor is a
+  service acting for itself, signed with no delegation. The emitting service signs at emit, before the event is staged
+  (`service_kit.control_emit`, its signer injected). Who signs which action is
+  `service_kit.control_events.control_signer_role`: the catalog signs every action it emits, for the person it
+  authenticated; maintenance signs `table_purged` and `namespace_purged` as itself; the medallion producer signs
+  `promotion_review_requested`. The annotator's task actions and its grants on an `annotation_project:` object travel
+  unsigned (owner rulings R3 and R5), so any identity the bus lets publish on the topic can forge them. A signer whose key
+  is unresolved publishes nothing unsigned: the catalog stages the event, and its control relay signs everything staged
+  with the key it then holds before publishing; maintenance withholds the event and counts it under
+  `maintenance_control_emit_failed_total{lance_maintenance_reason="unsigned"}`.
 - **What lineage accepts, and from where.** With `signing.enforce` on (the default, rendered only where auth and the
   secret store are on) lineage records an event only when a listed signer's published key verifies it. All four doors
   that record a bus or staged event apply the rule: the `/lineage-events` subscription, the outbox drain, the operator's
