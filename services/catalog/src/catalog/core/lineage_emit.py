@@ -378,6 +378,39 @@ def build_write_event(
     }
 
 
+def require_signable_run_facets(run_facets: dict[str, Any]) -> None:
+    """Refuse shaped run facets whose event could not be signed, canonicalizing them where that event carries them.
+
+    THE CATALOG SIGNS THE WHOLE EVENT ([[LH-064]]), so whether a payload has a canonical form depends on how deep it sits:
+    canon-1 refuses nesting past ``MAX_NESTING``, and a facet is nested inside its event's ``run`` and ``facets`` members,
+    deeper than in the bag the door parses. Canonicalizing that bag alone admits every payload nested within a few levels of
+    the limit, and the write that carried one commits with an announcement nothing can sign.
+
+    THE EVENT IS BUILT BY :func:`build_write_event`, so this restates no depth: a change to where the builder puts caller
+    facets moves this check with it. The operation is a data one because that is the shape that carries them: the
+    ``DatasetEvent`` a DDL operation emits takes only the catalog's own ``author`` and ``lance`` facets from the run bag.
+
+    Raises:
+        CanonError: the event has no canonical form. The message says the facets are judged where the event carries them,
+            because a header can be shallower than the limit it is refused for.
+    """
+    event = build_write_event(
+        table_id="",
+        namespace="",
+        author=None,
+        version=None,
+        operation=MERGE_INSERT,
+        run_id="",
+        event_time="",
+        job_namespace="",
+        extra_run_facets=run_facets,
+    )
+    try:
+        canon_1(event)
+    except CanonError as exc:
+        raise CanonError(f"the facets cannot be signed where the event carries them: {exc}") from exc
+
+
 #: Run-facet names a producer may NOT set through the passthrough: the ones the catalog STAMPS itself
 #: (``lance`` = operation/version, ``author`` = the verified principal) and the ones the lineage consumer
 #: TRUSTS off the wire (``errorMessage`` / ``progress`` run state, ``parent`` run hierarchy). Left open, a
@@ -453,8 +486,9 @@ def parse_run_facets(raw_json: str | None) -> dict[str, Any] | None:
     The Arrow-IPC body carries the write's data, so a producer's run metadata (e.g. training ``params``)
     rides this header instead. The catalog stays un-opinionated about the payload (:func:`shape_run_facets`
     only stamps each facet spec-legal + rejects reserved facet names); malformed JSON, a non-object shape,
-    or a reserved name/key fail-fast as a 4xx (never a 500). Shared by the create door and ``merge_insert``
-    for the same reason as :func:`merge_source_pin`.
+    a reserved name/key, or facets the event carrying them could not be signed with (:func:`require_signable_run_facets`)
+    fail-fast as a 4xx (never a 500). Shared by the create door and ``merge_insert`` for the same reason as
+    :func:`merge_source_pin`.
     """
     if not raw_json:
         return None
@@ -470,10 +504,10 @@ def parse_run_facets(raw_json: str | None) -> dict[str, Any] | None:
     try:
         shaped = shape_run_facets(parsed)
         # THE CATALOG SIGNS WHAT IT EMITS, and a signature is over the canonical form of the event: a number that has
-        # none (NaN and Infinity, which `json.loads` accepts, or an integer past 2^53-1) would make the event
-        # unsignable AFTER the write committed. Refused here, with the other malformed headers, so no write commits
-        # on a header whose announcement cannot be signed.
-        canon_1(shaped)
+        # none (NaN and Infinity, which `json.loads` accepts, or an integer past 2^53-1), or nesting too deep where the
+        # event carries the facets, would make the event unsignable AFTER the write committed. Refused here, with the
+        # other malformed headers, so no write commits on a header whose announcement cannot be signed.
+        require_signable_run_facets(shaped)
         return shaped
     except (ValueError, TypeError) as exc:  # CanonError is a ValueError; TypeError: belt-and-suspenders for a payload kwarg collision
         raise InvalidInputError(str(exc)) from exc
@@ -752,9 +786,11 @@ class DaprEmitter(_BaseLineageEmitter):
     topic — Dapr-native DLQ, default-on via the ``dapr.resiliency.enabled`` chart resiliency, park-and-alert
     not replay; docs/RESILIENCE.md gap #2, fixed 2026-07-12) + W3C trace-context propagation
     as *component config*, so the app holds no broker client (the decoupled microservice path). The topic
-    is versioned (``lineage.events.v1``). ``authorization`` is unused — the pub/sub topic is an internal
-    catalog-only channel, so the subscriber trusts the verified ``author`` the catalog stamped (the
-    anti-forgery ``enforce_author`` guard is only for the open HTTP endpoint).
+    is versioned (``lineage.events.v1``). ``authorization`` is unused: the topic authenticates the sidecar that
+    delivered an event and not the producer that wrote it, so the ``author`` stamped inside is a claim until the
+    event is signed. A catalog holding a signing key signs each authored event as itself (:meth:`_signed`), and
+    where signing is enforced the subscriber admits an event only when that signature verifies against the keys
+    the catalog publishes (the anti-forgery ``enforce_author`` guard is only for the open HTTP endpoint).
     """
 
     def __init__(

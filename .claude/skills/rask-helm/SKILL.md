@@ -117,8 +117,10 @@ it at boot (CrashLoopBackOff, contained only because the rolling update kept the
 
 `kubectl set image` keeps pods on current code and applies **no configuration**. When helm cannot
 write, config silently stops arriving while images keep moving — which is how LH-064 ran signing code
-for a day with neither half of its credential pair: `LANCE_SERVICE_IDENTITY` and the
-`service-token-service-catalog` key are both chart-supplied.
+for a day with neither half of its credential pair. A signer's pair comes from the release:
+`RASK_SIGNING_IDENTITY` is rendered on its Deployment, and the `signing-key-<identity>` secret is
+seeded into the chart's dev OpenBao (a store the chart does not mint into is provisioned by the
+operator and attested by `signing.provisioned`).
 
 - Before believing a chart commit landed: `helm history rask` — if the top revision predates the
   commit, it did not.
