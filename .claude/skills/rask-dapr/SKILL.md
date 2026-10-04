@@ -16,7 +16,7 @@ claim below was verified against the render or the code (2026-08-28), not inheri
 | --- | --- | --- |
 | Service invocation | ✅ | gateway `_target_base` → `/v1.0/invoke/{app_id}/method` (direct-httpx fallback when Dapr off); `invoke/lineage`, `invoke/compute` |
 | State | ✅ | `state.postgresql` ×1 (the actor state store; scopes are load-bearing — see traps) |
-| Pub/sub | ✅ | `pubsub.jetstream` ×6; `DaprApp.subscribe` incl. a DLQ route; `queueGroupName` makes replicas competing consumers |
+| Pub/sub | ✅ | `pubsub.jetstream` ×16 in the default render (measured 2026-10-04), each scoped to ONE app-id and naming that app's NATS user from the store (`jwt`/`seedKey` secretKeyRef to `nats-user-<app>`, `auth.secretStore: lance-secrets`; the permission table is `nats.auth.users` in values.yaml, [[XC-078]]); `DaprApp.subscribe` incl. a DLQ route; `queueGroupName` makes replicas competing consumers |
 | Bindings | ✅ | `bindings.cron` ×7 — measured on the deployed estate 2026-09-05: `maintenance-cron` (the sweep), `maintenance-reconcile-cron`, `lineage-reconcile-cron`, `notifications-reconcile-cron`, `catalog-control-relay-cron`, `compute-prune-jobs-cron`, `medallion-cascade-lag-cron`. `ingest-cron` renders from the chart but is not enabled here, so the CHART count is 8 and the RUNNING count is 7 — read the cluster, not the templates. Plus `bindings.smtp`, `bindings.http` — all delivered to `POST /<component-name>` at the pod ROOT |
 | Actors | ✅ | `DaprActor` ×17, `ActorProxy` ×28 (notifications inbox, project tasks) |
 | Secrets | ✅ | `secretstores.hashicorp.vault` → OpenBao. THE estate rule: sole source, fail-closed, never env fallback |
