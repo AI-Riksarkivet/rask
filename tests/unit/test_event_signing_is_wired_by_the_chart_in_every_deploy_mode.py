@@ -1,13 +1,17 @@
-"""The chart wires event signing the same way in every deploy mode, enforces it on one switch, and names each Dapr Configuration by its spec.
+"""The chart wires event signing the same way in every deploy mode, verifies it where its switches say, and names each Dapr Configuration by its spec.
 
-[[LH-064]] (values.yaml `signing:`). Three things the chart decides, each of which fails silently if it is wrong:
+[[LH-064]], [[XC-078]] (values.yaml `signing:`). Four things the chart decides, each of which fails silently if it is wrong:
 
 - A store nothing seeds (`openbao.devMode=false`, or `openbao.externalAddr`) mints no key, so every signer would stay not Ready
   and lineage could verify nothing. The render refuses it, naming every secret and the script that creates them, until the
   operator attests with `signing.provisioned`.
-- `signing.enforce` is the one switch, on by default. On, lineage carries the signer set and the delegator set the chart derives,
+- `signing.enforce` is lineage's switch, on by default. On, lineage carries the signer set and the delegator set the chart derives,
   and only when the store and auth are on; off, it carries neither. An enforced render with no signer at all is refused rather
   than rendered as a lineage that requires nothing.
+- `signing.doors` is the bus doors' mode (off, observe or enforce). Wherever the store and auth are on, every pod whose app hosts a
+  door carries that mode and the two sets lineage verifies with, and the pods whose doors take control events also carry the role
+  map their per-action policy resolves signers from. A door verifying against other sets would refuse what lineage records, or
+  act on what lineage refuses. A mode that verifies, with no signer at all, is refused at render: such a pod refuses to boot.
 - daprd loads its Configuration once, at boot (HotReload is off), and Helm applies a Deployment before the Configuration it names. A
   deny-list edit under an unchanged name is therefore loaded stale, for the life of the pod, by any pod that boots in between, with every
   probe green. A Configuration is named by the hash of its spec instead: a pod that boots before Helm applies the new object finds none
@@ -52,6 +56,47 @@ def _lineage_env(docs: tuple[dict, ...]) -> dict[str, str]:
     return chart_render.env_of(lineage["spec"]["template"]["spec"]["containers"][0])
 
 
+#: The apps that host a signature door, and whether one of their doors takes control events: the producer's /bronze-arrival
+#: and /publication-arrival, notifications' /lineage-events and /control-events, and maintenance's /maintenance-arrival, which
+#: `register_arrival_route` registers on every pod whose MAINTENANCE_WORK_TOPIC is set.
+_DOOR_APPS = {"medallion.producer:app": True, "notifications:app": True, "maintenance.service:app": False}
+_DOOR_ENV = ("RASK_SIGNATURE_DOORS", "RASK_EVENT_SIGNERS", "RASK_EVENT_DELEGATORS", "RASK_CONTROL_SIGNER_ROLES")
+
+
+def _app(container: dict) -> str:
+    return (container.get("args") or [""])[0]
+
+
+def _door_hosts(docs: tuple[dict, ...]) -> dict[str, str]:
+    """`kind/name` -> the app it runs, for every workload whose app hosts a door."""
+    return {
+        workload: _app(container)
+        for workload, _, container in chart_render.containers(docs)
+        if _app(container) in _DOOR_APPS and (_app(container) != "maintenance.service:app" or chart_render.env_of(container).get("MAINTENANCE_WORK_TOPIC"))
+    }
+
+
+def _door_env(docs: tuple[dict, ...]) -> dict[str, dict[str, object]]:
+    """`kind/name` -> the doors' settings it carries, the JSON ones parsed, for every workload that carries any."""
+    carried: dict[str, dict[str, object]] = {}
+    for workload, _, container in chart_render.containers(docs):
+        env = chart_render.env_of(container)
+        if door := {name: env[name] if name == "RASK_SIGNATURE_DOORS" else json.loads(env[name]) for name in _DOOR_ENV if name in env}:
+            carried[workload] = door
+    return carried
+
+
+def _identities_running(docs: tuple[dict, ...], app: str) -> list[str]:
+    """The identities the pods running `app` sign as."""
+    return sorted(
+        {
+            env["RASK_SIGNING_IDENTITY"]
+            for _, _, container in chart_render.containers(docs)
+            if _app(container) == app and "RASK_SIGNING_IDENTITY" in (env := chart_render.env_of(container))
+        }
+    )
+
+
 @pytest.mark.parametrize("mode", [pytest.param(_SEALED, id="a-sealed-store"), pytest.param(_EXTERNAL, id="an-external-store")])
 def test_a_store_nothing_seeds_is_refused_until_the_operator_attests_its_signing_keys(mode: tuple[str, ...]) -> None:
     identities = _signers(chart_render.render(*DEFAULT_ARGS))
@@ -69,15 +114,20 @@ def test_a_store_nothing_seeds_is_refused_until_the_operator_attests_its_signing
 
 
 @pytest.mark.parametrize(
-    ("overlay", "enforced"),
+    ("overlay", "enforced", "doors"),
     [
-        pytest.param((), True, id="on-by-default-with-the-store-and-auth"),
-        pytest.param(("--set", "signing.enforce=false"), False, id="off-when-asked"),
-        pytest.param(("--set", "auth.enabled=false"), False, id="not-without-auth"),
-        pytest.param(("--set", "openbao.enabled=false"), False, id="not-without-a-store"),
+        pytest.param((), True, "off", id="lineage-on-and-the-doors-off-by-default-with-the-store-and-auth"),
+        pytest.param(("--set", "signing.doors=enforce"), True, "enforce", id="the-doors-in-the-mode-asked"),
+        pytest.param(("--set", "signing.enforce=false"), False, "off", id="lineage-off-when-asked"),
+        pytest.param(("--set", "auth.enabled=false"), False, None, id="not-without-auth"),
+        pytest.param(("--set", "openbao.enabled=false"), False, None, id="not-without-a-store"),
     ],
 )
-def test_lineage_requires_signatures_from_exactly_the_rendered_signers_wherever_the_store_and_auth_are_on(overlay: tuple[str, ...], enforced: bool) -> None:  # noqa: FBT001
+def test_lineage_and_every_bus_door_verify_against_exactly_the_rendered_signers_wherever_the_store_and_auth_are_on(
+    overlay: tuple[str, ...],
+    enforced: bool,  # noqa: FBT001
+    doors: str | None,
+) -> None:
     docs = chart_render.render(*DEFAULT_ARGS, *overlay)
     env = _lineage_env(docs)
 
@@ -85,13 +135,43 @@ def test_lineage_requires_signatures_from_exactly_the_rendered_signers_wherever_
         assert not {"LINEAGE_SIGNERS", "LINEAGE_DELEGATORS"} & env.keys(), (
             f"lineage carries a verifier set without enforcement: {sorted(env.keys() & {'LINEAGE_SIGNERS', 'LINEAGE_DELEGATORS'})}"
         )
-        return
-    assert {"LINEAGE_SIGNERS", "LINEAGE_DELEGATORS"} <= env.keys(), "lineage requires no signature: the chart gives it no signer set or delegator set"
-    assert json.loads(env["LINEAGE_SIGNERS"]) == _signers(docs), "the signer set is not the identities the Deployments sign as"
-    assert json.loads(env["LINEAGE_DELEGATORS"]) == ["service-catalog"], "only the catalog, which authenticated the person, may sign for one"
+    else:
+        assert {"LINEAGE_SIGNERS", "LINEAGE_DELEGATORS"} <= env.keys(), "lineage requires no signature: the chart gives it no signer set or delegator set"
+        assert json.loads(env["LINEAGE_SIGNERS"]) == _signers(docs), "the signer set is not the identities the Deployments sign as"
+        assert json.loads(env["LINEAGE_DELEGATORS"]) == ["service-catalog"], "only the catalog, which authenticated the person, may sign for one"
+
+    hosts = _door_hosts(docs)
+    assert set(hosts.values()) == _DOOR_APPS.keys(), f"the overlay must render a pod for every app that hosts a door: {hosts}"
+    # Each role a control event's signer may hold, read from the identities the emitting pods sign as.
+    roles = {
+        "catalog": _identities_running(docs, "catalog.main:app"),
+        "maintenance": _identities_running(docs, "maintenance.service:app"),
+        "stage_runner": _identities_running(docs, "medallion.stage_runner:app"),
+    }
+    expected: dict[str, dict[str, object]] = {}
+    if doors is not None:
+        assert all(roles.values()), f"a role no rendered pod signs as makes the role map's comparison vacuous: {roles}"
+        expected = {
+            workload: {"RASK_SIGNATURE_DOORS": doors, "RASK_EVENT_SIGNERS": _signers(docs), "RASK_EVENT_DELEGATORS": ["service-catalog"]}
+            | ({"RASK_CONTROL_SIGNER_ROLES": roles} if _DOOR_APPS[app] else {})
+            for workload, app in hosts.items()
+        }
+    # One expected map for the whole render, so a door host missing a setting, a pod carrying one without hosting a door and a set that
+    # differs from lineage's all fail on the same diff.
+    assert _door_env(docs) == expected, "the doors' settings are not lineage's sets, in the asked mode, on exactly the pods that host a door"
 
 
-def test_an_enforced_render_with_no_signer_is_refused_rather_than_rendered_as_a_lineage_that_requires_nothing() -> None:
+@pytest.mark.parametrize(
+    ("switch", "refusal"),
+    [
+        pytest.param((), "lineage would verify nothing", id="lineage-enforcing"),
+        # observe verifies too (it counts what it would refuse), so the boundary is off against anything else.
+        pytest.param(("--set", "signing.enforce=false", "--set", "signing.doors=observe"), "the doors would verify nothing", id="the-doors-observing"),
+    ],
+)
+def test_a_render_that_verifies_with_no_signer_is_refused_rather_than_rendered_as_a_verifier_that_requires_nothing(
+    switch: tuple[str, ...], refusal: str
+) -> None:
     nobody = (
         "--set",
         "catalog.serviceIdentity=",
@@ -107,8 +187,8 @@ def test_an_enforced_render_with_no_signer_is_refused_rather_than_rendered_as_a_
     )
 
     with pytest.raises(subprocess.CalledProcessError) as refused:
-        chart_render.render(*DEFAULT_ARGS, *nobody)
-    assert "no identity signs" in refused.value.stderr
+        chart_render.render(*DEFAULT_ARGS, *nobody, *switch)
+    assert refusal in refused.value.stderr
 
 
 def _loaded_configurations(docs: tuple[dict, ...]) -> dict[str, tuple[str, dict]]:
