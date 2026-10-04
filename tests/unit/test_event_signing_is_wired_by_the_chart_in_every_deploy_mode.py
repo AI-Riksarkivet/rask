@@ -11,7 +11,8 @@
 - `signing.doors` is the bus doors' mode (off, observe or enforce). Wherever the store and auth are on, every pod whose app hosts a
   door carries that mode and the two sets lineage verifies with, and the pods whose doors take control events also carry the role
   map their per-action policy resolves signers from. A door verifying against other sets would refuse what lineage records, or
-  act on what lineage refuses. A mode that verifies, with no signer at all, is refused at render: such a pod refuses to boot.
+  act on what lineage refuses. A mode that verifies is refused at render with no signer at all, since such a pod refuses to boot,
+  and with a deployed control-event service no identity holds, since its doors would refuse every event that service signs.
 - daprd loads its Configuration once, at boot (HotReload is off), and Helm applies a Deployment before the Configuration it names. A
   deny-list edit under an unchanged name is therefore loaded stale, for the life of the pod, by any pod that boots in between, with every
   probe green. A Configuration is named by the hash of its spec instead: a pod that boots before Helm applies the new object finds none
@@ -117,7 +118,9 @@ def test_a_store_nothing_seeds_is_refused_until_the_operator_attests_its_signing
     ("overlay", "enforced", "doors"),
     [
         pytest.param((), True, "off", id="lineage-on-and-the-doors-off-by-default-with-the-store-and-auth"),
-        pytest.param(("--set", "signing.doors=enforce"), True, "enforce", id="the-doors-in-the-mode-asked"),
+        # maintenance off is the e2e-stack lane's overlay: a control-event service that is not deployed holds an empty role, which
+        # blocks no mode because nothing it would sign can arrive.
+        pytest.param(("--set", "signing.doors=enforce", "--set", "maintenance.enabled=false"), True, "enforce", id="the-mode-asked-with-maintenance-off"),
         pytest.param(("--set", "signing.enforce=false"), False, "off", id="lineage-off-when-asked"),
         pytest.param(("--set", "auth.enabled=false"), False, None, id="not-without-auth"),
         pytest.param(("--set", "openbao.enabled=false"), False, None, id="not-without-a-store"),
@@ -141,16 +144,16 @@ def test_lineage_and_every_bus_door_verify_against_exactly_the_rendered_signers_
         assert json.loads(env["LINEAGE_DELEGATORS"]) == ["service-catalog"], "only the catalog, which authenticated the person, may sign for one"
 
     hosts = _door_hosts(docs)
-    assert set(hosts.values()) == _DOOR_APPS.keys(), f"the overlay must render a pod for every app that hosts a door: {hosts}"
-    # Each role a control event's signer may hold, read from the identities the emitting pods sign as.
+    assert {"medallion.producer:app", "notifications:app"} <= set(hosts.values()), f"the overlay must render both control-event doors' apps: {hosts}"
+    # Each service that emits control events (service_kit.control_events.ControlSigner), mapped to the identities its pods sign as.
     roles = {
         "catalog": _identities_running(docs, "catalog.main:app"),
         "maintenance": _identities_running(docs, "maintenance.service:app"),
-        "stage_runner": _identities_running(docs, "medallion.stage_runner:app"),
+        "medallion_producer": _identities_running(docs, "medallion.producer:app"),
     }
     expected: dict[str, dict[str, object]] = {}
     if doors is not None:
-        assert all(roles.values()), f"a role no rendered pod signs as makes the role map's comparison vacuous: {roles}"
+        assert roles["catalog"] and roles["medallion_producer"], f"a role no rendered pod signs as makes the role map's comparison vacuous: {roles}"
         expected = {
             workload: {"RASK_SIGNATURE_DOORS": doors, "RASK_EVENT_SIGNERS": _signers(docs), "RASK_EVENT_DELEGATORS": ["service-catalog"]}
             | ({"RASK_CONTROL_SIGNER_ROLES": roles} if _DOOR_APPS[app] else {})
@@ -161,33 +164,42 @@ def test_lineage_and_every_bus_door_verify_against_exactly_the_rendered_signers_
     assert _door_env(docs) == expected, "the doors' settings are not lineage's sets, in the asked mode, on exactly the pods that host a door"
 
 
+#: An overlay in which no identity signs.
+_NOBODY = (
+    "--set", "catalog.serviceIdentity=",
+    "--set", "maintenance.enabled=false",
+    "--set", "medallion.enabled=false",
+    "--set", "services.ingest.env.RASK_LINEAGE_SERVICE_IDENTITY=",
+)  # fmt: skip
+
+
 @pytest.mark.parametrize(
-    ("switch", "refusal"),
+    ("overlay", "refusal"),
     [
-        pytest.param((), "lineage would verify nothing", id="lineage-enforcing"),
-        # observe verifies too (it counts what it would refuse), so the boundary is off against anything else.
-        pytest.param(("--set", "signing.enforce=false", "--set", "signing.doors=observe"), "the doors would verify nothing", id="the-doors-observing"),
+        pytest.param((*_NOBODY, "--set", "signing.doors=off"), "lineage would verify nothing", id="lineage-enforcing-with-no-signer"),
+        # observe verifies too (it counts what it would refuse), so each guard's boundary is off against anything else.
+        pytest.param(
+            (*_NOBODY, "--set", "signing.enforce=false", "--set", "signing.doors=observe"),
+            "the doors would verify nothing",
+            id="the-doors-observing-with-no-signer",
+        ),
+        pytest.param(
+            ("--set", "signing.doors=observe", "--set", "catalog.serviceIdentity="),
+            "no identity holds the control-event role catalog",
+            id="the-doors-observing-with-a-control-event-role-nobody-holds",
+        ),
     ],
 )
 def test_a_render_that_verifies_with_no_signer_is_refused_rather_than_rendered_as_a_verifier_that_requires_nothing(
-    switch: tuple[str, ...], refusal: str
+    overlay: tuple[str, ...], refusal: str
 ) -> None:
-    nobody = (
-        "--set",
-        "catalog.serviceIdentity=",
-        "--set",
-        "maintenance.enabled=false",
-        "--set",
-        "medallion.enabled=false",
-        "--set",
-        "services.ingest.env.RASK_LINEAGE_SERVICE_IDENTITY=",
-    )
-    assert not _signers(chart_render.render(*DEFAULT_ARGS, *nobody, "--set", "signing.enforce=false")), (
+    # The off side of both switches renders, so each refusal below is its guard's and not the overlay's.
+    assert not _signers(chart_render.render(*DEFAULT_ARGS, *_NOBODY, "--set", "signing.enforce=false", "--set", "signing.doors=off")), (
         "the overlay still has a signer, so the refusal below is not what it names"
     )
 
     with pytest.raises(subprocess.CalledProcessError) as refused:
-        chart_render.render(*DEFAULT_ARGS, *nobody, *switch)
+        chart_render.render(*DEFAULT_ARGS, *overlay)
     assert refusal in refused.value.stderr
 
 
