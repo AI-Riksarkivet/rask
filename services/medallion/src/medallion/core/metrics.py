@@ -19,7 +19,7 @@ if TYPE_CHECKING:
     from medallion.services.cascade_lag import BlindEdge, LagGauge
 
 from collections import OrderedDict
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from typing import Final
 
 from opentelemetry import metrics
@@ -367,6 +367,18 @@ def record_signature_refused(door: str, reason: str) -> None:
 def record_signature_would_refuse(door: str, reason: str) -> None:
     """Count one event an observing door acted on and would have refused: a `RefusalReason`, or `keys_unavailable`."""
     _signature_would_refuse.add(1, {"lance.medallion.door": door, "lance.medallion.reason": reason})
+
+
+def start_signature_refused_series(door: str, reasons: Iterable[str]) -> None:
+    """Create ``door``'s `medallion.signature.refused` series at zero, one per refusal reason.
+
+    The page reads `rate(medallion_signature_refused_total[5m]) > 0`, and a cumulative series born at one by its first
+    refusal has no rate until a second, so that first refusal would page nobody. Both labels are closed sets, so this is a
+    fixed handful of series. Call it once the MeterProvider is installed: an add on the API's proxy meter before then is
+    dropped.
+    """
+    for reason in reasons:
+        _signature_refused.add(0, {"lance.medallion.door": door, "lance.medallion.reason": reason})
 
 
 def record_dead_letter(app_label: str) -> None:

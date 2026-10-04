@@ -32,16 +32,24 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Mapping
-from typing import Any, Final, Literal
+from typing import Any, Final, Literal, get_args
 
 from fastapi import Request
 from fastapi.concurrency import run_in_threadpool
 
 from lineage_kit.door import DoorMode, judge
 from lineage_kit.keys import PublishedKeys
-from lineage_kit.signing import Signature, VerifiedSignature, control_signature_of, signature_of, verify_control_signature, verify_signature
+from lineage_kit.signing import (
+    RefusalReason,
+    Signature,
+    VerifiedSignature,
+    control_signature_of,
+    signature_of,
+    verify_control_signature,
+    verify_signature,
+)
 from medallion.core.config import MedallionSettings
-from medallion.core.metrics import record_signature_refused, record_signature_would_refuse
+from medallion.core.metrics import record_signature_refused, record_signature_would_refuse, start_signature_refused_series
 from service_kit.control_events import ControlAction, control_signer_role
 from service_kit.governed.signing_key import published_key_fetch
 
@@ -56,6 +64,11 @@ _RETRY: Final = {"status": "RETRY"}
 
 #: Bounds what an event's own text puts on a log line: the claimed identity and the event id are whatever the sender wrote.
 _MAX_LOGGED_CHARS: Final = 300
+
+
+def start_refusal_series(door: Door) -> None:
+    """Create ``door``'s refusal series at zero, one per `lineage_kit.signing.RefusalReason`, before its first refusal."""
+    start_signature_refused_series(door, get_args(RefusalReason.__value__))
 
 
 def _published_keys(request: Request, settings: MedallionSettings) -> PublishedKeys:

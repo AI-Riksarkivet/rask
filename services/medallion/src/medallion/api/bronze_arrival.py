@@ -89,6 +89,10 @@ def register_bronze_arrival_route(app: FastAPI) -> DaprApp:
             return withheld
         return await fire_bronze_arrival(dapr, config, arrival)
 
+    # Each head's refusal series exist before its first refusal ([[XC-078]]), created where the head is registered: the
+    # chart runs this app under `opentelemetry-instrument`, which installs the MeterProvider before the app is imported.
+    signature_door.start_refusal_series("bronze-arrival")
+
     # THE PUBLICATION HEAD (§ D2 B8). Separate subscription, separate topic, separate signal: this one
     # fires on the catalog's `table_published` — the moment the quality gate passed a version and the
     # `published` tag moved — and carries the {from_version, to_version} range onto the stage trigger.
@@ -153,5 +157,7 @@ def register_bronze_arrival_route(app: FastAPI) -> DaprApp:
             if withheld is not None:
                 return withheld
             return await fire_publication(dapr, config, arrival)
+
+        signature_door.start_refusal_series("publication-arrival")
 
     return dapr_app
