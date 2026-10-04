@@ -298,7 +298,7 @@ spec:
                  was refused, and the provenance of every cascade head was discarded with nothing red. */}}
             - { name: MEDALLION_FGA_SERVICE_IDENTITY, value: {{ .Values.medallion.producer.serviceIdentity | quote }} }
             {{- with include "lance.signingEnv" (list $root .Values.medallion.producer.daprAppId) }}{{ . | nindent 12 }}{{- end }}
-            {{- with include "lance.doorEnv" (list $root true) }}{{ . | nindent 12 }}{{- end }}
+            {{- with include "lance.doorEnv" (list $root true (list "medallion_producer" "catalog")) }}{{ . | nindent 12 }}{{- end }}
             {{- if .Values.medallion.qualityReview }}
             {{- /*
                S3/S4 — this app HOSTS `promotion_review` and serves the door that answers it. The

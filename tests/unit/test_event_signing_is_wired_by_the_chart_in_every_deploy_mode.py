@@ -9,10 +9,12 @@
   and only when the store and auth are on; off, it carries neither. An enforced render with no signer at all is refused rather
   than rendered as a lineage that requires nothing.
 - `signing.doors` is the bus doors' mode (off, observe or enforce). Wherever the store and auth are on, every pod whose app hosts a
-  door carries that mode and the two sets lineage verifies with, and the pods whose doors take control events also carry the role
-  map their per-action policy resolves signers from. A door verifying against other sets would refuse what lineage records, or
-  act on what lineage refuses. A mode that verifies is refused at render with no signer at all, since such a pod refuses to boot,
-  and with a deployed control-event service no identity holds, since its doors would refuse every event that service signs.
+  door carries that mode and the two sets lineage verifies with, except that the producer's signer set is the producer and the
+  catalog alone: its lineage door is the bronze head, and nothing else signs an event that head acts on. The pods whose doors take
+  control events also carry the role map their per-action policy resolves signers from. A door verifying against other sets would
+  refuse what reaches it honestly, or act on what lineage refuses. A mode that verifies is refused at render with no signer at all,
+  since such a pod refuses to boot, and with a deployed control-event service no identity holds, since its doors would refuse every
+  event that service signs.
 - daprd loads its Configuration once, at boot (HotReload is off), and Helm applies a Deployment before the Configuration it names. A
   deny-list edit under an unchanged name is therefore loaded stale, for the life of the pod, by any pod that boots in between, with every
   probe green. A Configuration is named by the hash of its spec instead: a pod that boots before Helm applies the new object finds none
@@ -162,14 +164,20 @@ def test_lineage_and_every_bus_door_verify_against_exactly_the_rendered_signers_
     expected: dict[str, dict[str, object]] = {}
     if doors is not None:
         assert roles["catalog"] and roles["medallion_producer"], f"a role no rendered pod signs as makes the role map's comparison vacuous: {roles}"
+        # The producer's lineage door is the bronze head, which only the producer's own events and the catalog's write announcements fire.
+        bronze_head = sorted({*roles["catalog"], *roles["medallion_producer"]})
         expected = {
-            workload: {"RASK_SIGNATURE_DOORS": doors, "RASK_EVENT_SIGNERS": _signers(docs), "RASK_EVENT_DELEGATORS": ["service-catalog"]}
+            workload: {
+                "RASK_SIGNATURE_DOORS": doors,
+                "RASK_EVENT_SIGNERS": bronze_head if app == "medallion.producer:app" else _signers(docs),
+                "RASK_EVENT_DELEGATORS": ["service-catalog"],
+            }
             | ({"RASK_CONTROL_SIGNER_ROLES": roles} if _DOOR_APPS[app] else {})
             for workload, app in hosts.items()
         }
     # One expected map for the whole render, so a door host missing a setting, a pod carrying one without hosting a door and a set that
-    # differs from lineage's all fail on the same diff.
-    assert _door_env(docs) == expected, "the doors' settings are not lineage's sets, in the asked mode, on exactly the pods that host a door"
+    # differs from the one its door admits all fail on the same diff.
+    assert _door_env(docs) == expected, "the doors' settings are not the sets their doors admit, in the asked mode, on exactly the pods that host a door"
 
 
 #: An overlay in which no identity signs.

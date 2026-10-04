@@ -52,12 +52,15 @@ from dapr.aio.clients import DaprClient
 from dapr.ext.workflow import WorkflowActivityContext
 from dapr.ext.workflow._durabletask.internal.shared import from_json, to_json
 
+from lineage_kit import SigningKey, parse_published_keys
 from medallion.api.promotions import handle_promotion_held
+from medallion.core import lineage_publish
 from medallion.core.config import MedallionSettings, get_settings
 from medallion.schemas.promotion import PromotionSpec
 from medallion.services.promotion_hold import hold_spec, publish_hold
 from medallion.services.transform import StageIdentity, resolve_stage_identity
 from medallion.workflow import PromotionOutcome, PromotionReport, emit_promotion_outcome
+from service_kit.governed.signing_key import SigningKeyHolder, SigningKeyUnavailableError
 from service_kit.lakehouse.transform_specs import TransformSpec
 
 
@@ -215,9 +218,22 @@ def test_a_DECLARED_lane_outcome_lands_on_the_tables_the_stage_wrote(captured: l
     )
 
 
-def test_a_lost_DECLARED_lane_outcome_names_the_table_it_was_about(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+@pytest.mark.parametrize(
+    ("producer_key", "outcome"),
+    [
+        pytest.param("not-signing", (None, ["curated$catalog"]), id="a-refused-publish-is-logged-naming-the-table-it-was-about"),
+        pytest.param("unresolved", (SigningKeyUnavailableError, []), id="an-outcome-the-producer-cannot-sign-yet-raises-for-its-retry"),
+    ],
+)
+def test_an_outcome_that_cannot_go_out_is_logged_by_its_table_or_raised_for_its_retry(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, producer_key: str, outcome: tuple[type[Exception] | None, list[str]]
+) -> None:
     """When the publish fails the log line is all that is left of the decision, so it must name the
-    table a person can find: the one the stage wrote, not a spelling the catalog has never seen."""
+    table a person can find: the one the stage wrote, not a spelling the catalog has never seen.
+
+    A decision the producer cannot sign yet is not handed to that line ([[XC-078]]): nothing goes out unsigned, so the
+    activity raises before it counts or sends anything, and the workflow's retry sends the record once the producer's
+    key holder, installed by the lifespan, has resolved the key."""
     import medallion.workflow as workflow_mod
 
     def _refused(coro: Any) -> None:
@@ -225,14 +241,22 @@ def test_a_lost_DECLARED_lane_outcome_names_the_table_it_was_about(monkeypatch: 
         raise RuntimeError("sidecar refused")
 
     monkeypatch.setattr(workflow_mod, "_run_async", _refused)
+    if producer_key == "unresolved":
+        holder = SigningKeyHolder(
+            identity="service-medallion-producer", store="lance-secrets", load_key=SigningKey.from_seed, parse_published=parse_published_keys
+        )
+        monkeypatch.setattr(lineage_publish, "_signing", holder)
     _, report = _declared_hold()
 
+    raised: type[Exception] | None = None
     with caplog.at_level(logging.ERROR):
-        emit_promotion_outcome(_ctx(), report)
+        try:
+            emit_promotion_outcome(_ctx(), report)
+        except SigningKeyUnavailableError as exc:
+            raised = type(exc)
 
-    lost = [record for record in caplog.records if "best_effort_emit_failed_promotion_outcome" in record.message]
-    assert lost, f"the lost outcome was not reported: {[record.message for record in caplog.records]}"
-    assert getattr(lost[0], "dataset", None) == "curated$catalog", f"the lost-outcome line named {getattr(lost[0], 'dataset', None)!r}"
+    lost = [getattr(record, "dataset", None) for record in caplog.records if "best_effort_emit_failed_promotion_outcome" in record.message]
+    assert (raised, lost) == outcome
 
 
 def test_the_held_version_is_the_one_on_the_wire(wire: list[dict[str, Any]]) -> None:

@@ -223,8 +223,8 @@ async def test_an_ask_that_cannot_go_out_never_parks_the_promotion(monkeypatch: 
     which is a visible outcome.
 
     An ask the producer cannot sign is not sent at all, since a door would drop it unsigned, and it is not a refusal
-    either: the key may resolve within the activity's retry window, so the activity raises and `ACTIVITY_RETRY` runs it
-    again.
+    either: the key may resolve within the activity's retry window, so the activity raises and `SIGNING_ACTIVITY_RETRY`
+    runs it again.
     """
     sent = _bus(monkeypatch, refuses=cause == "the-bus-refuses-it")
     async with _producer_key(monkeypatch, event_signer(PRODUCER), readable=cause != "the-producer-cannot-sign"):

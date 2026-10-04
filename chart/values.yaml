@@ -3255,8 +3255,9 @@ signing:
   # and each dedicated worker alike (register_arrival_route reads only the topic), so both Deployments carry the settings.
   #
   # Wherever the store and auth are on (where lineage can verify), each door's Deployment carries RASK_SIGNATURE_DOORS and
-  # the two sets lineage verifies with, from the same helpers: RASK_EVENT_SIGNERS (lance.signingIdentities) and
-  # RASK_EVENT_DELEGATORS (lance.delegatorIdentities), so a door and lineage cannot disagree about who signs. The two apps
+  # the two sets lineage verifies with, from the same helpers (one narrower set, below): RASK_EVENT_SIGNERS
+  # (lance.signingIdentities) and RASK_EVENT_DELEGATORS (lance.delegatorIdentities), so a door and lineage cannot disagree
+  # about who signs. The two apps
   # whose doors take control events (the producer and notifications) also carry RASK_CONTROL_SIGNER_ROLES, a JSON object
   # from each service that emits control events to the identities it signs as (lance.signers' `role`): catalog -> the
   # catalog, maintenance -> maintenance (its purge, under maintenance.controlEmit), medallion_producer -> the producer (it
@@ -3266,6 +3267,17 @@ signing:
   # (control_signer_role) resolves an action's allowed signers from it; task_* actions and grants on an annotation project
   # are exempt there, since the annotator signs nothing. Without the store or auth nothing is rendered and the doors
   # verify nothing, as lineage does.
+  #
+  # THE ONE NARROWER SET is the medallion producer's RASK_EVENT_SIGNERS, which it reads for /bronze-arrival and nothing else:
+  # the identities of the roles medallion_producer and catalog (lance.doorEnv's third argument). Only two kinds of event fire
+  # the bronze head: the producer's own /produce and /ingest-media bronze writes, and the catalog's announcement of a write
+  # through its doors. Ingest never publishes to the lineage topic (it emits over HTTP, ingest/lineage.py `_emitter`, and the
+  # catalog announces its writes), and the head ignores a maintenance pass (compaction, compact_table, create_index) before
+  # verifying it, so a signature from any other identity on an event the head acts on is a forgery to this door. A stage
+  # runner's own write reaches the head only when a declared lane names that table as its input: enforcing, the head
+  # refuses it as a signer it does not list (counted); observing, it acts and counts it. Such a lane is meant to be woken
+  # by /publication-arrival. The producer's RASK_EVENT_DELEGATORS stays lineage's (the catalog); /publication-arrival
+  # reads it too. Notifications and both maintenance Deployments keep lineage's full sets: every signer's events reach them.
   #
   # off verifies nothing. observe acts exactly as off and counts what it would refuse
   # (<service>_signature_would_refuse_total). enforce acknowledges a refused event (never a DROP, which parks and re-parks on

@@ -16,16 +16,33 @@ the decision is recorded in LINEAGE (workflow history is retention-bounded, so i
 review BAND is resolved by an activity rather than compiled into the body (a threshold read in the
 body is a determinism hazard the moment it changes mid-run); and a hold that reaches nobody is an
 outage wearing a pause.
+
+THE PRODUCER SIGNS THE ASK AND THE RECORD ([[XC-078]]), so both activities raise while its key holder has
+not resolved the key, which it heals in place. The review waits that out for as long as the holder takes,
+and a key that never comes back ends it BLOCKED, never a FAILED instance with the hold acknowledged and
+nobody told. Proved through the Dapr SDK's own orchestration executor, which applies the retry policy the
+body hands it.
 """
 
 from __future__ import annotations
 
+import json
+import logging
+from collections.abc import Generator
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
 import pytest
+from dapr.ext.workflow._durabletask import worker
+from dapr.ext.workflow._durabletask.internal import helpers
+from dapr.ext.workflow._durabletask.internal import protos as pb
+from dapr.ext.workflow._durabletask.internal.timer import new_timer_created_event, new_timer_fired_event
+from dapr.ext.workflow._durabletask.task import OrchestrationContext
+from dapr.ext.workflow.dapr_workflow_context import DaprWorkflowContext
+from pydantic import BaseModel
 
 from medallion.workflow import PromotionSpec, promotion_review
+from service_kit.governed.signing_key import MAX_REFRESH_SECONDS, SigningKeyUnavailableError
 
 
 class _Action:
@@ -198,6 +215,90 @@ def test_a_refused_publish_is_recorded_as_PROMOTION_FAILED_not_lost(monkeypatch:
     outcome = ctx.inputs["emit_promotion_outcome"]["outcome"]
     assert outcome["status"] == "PROMOTION_FAILED"
     assert any("backwards" in reason for reason in outcome["reasons"]), f"the reason the publish was refused must ride along; got {outcome['reasons']}"
+
+
+#: How long the producer's key may stay unresolved while its holder is healing rather than out: the holder re-reads an
+#: unresolved key every 15 s and a resolved one at least every `MAX_REFRESH_SECONDS`, so one refresh period and one re-read.
+_HOLDER_HEALS_WITHIN = timedelta(seconds=MAX_REFRESH_SECONDS + 15)
+
+#: What an activity that signs raises while the holder has no key.
+_KEY_MISS = SigningKeyUnavailableError("service-medallion-producer cannot sign: the signing key cannot be read from the secret store")
+
+
+class _Review(BaseModel):
+    """Where a review stands when the engine stops: the runtime status it completed with, or that it waits on the person;
+    the status it returned; and the outcome lineage took a record of."""
+
+    status: str
+    result: str | None = None
+    recorded: str | None = None
+
+
+def _orchestrate(ctx: OrchestrationContext, payload: dict[str, Any]) -> Generator[Any, Any, dict[str, Any]]:
+    """`promotion_review` behind the context the runtime hands it, as `WorkflowRuntime.register_workflow` wraps it."""
+    return promotion_review(DaprWorkflowContext(ctx), payload)
+
+
+def _review_while_the_key_is_unresolved(key_resolves_after: timedelta | None) -> _Review:
+    """One review run by the Dapr SDK's orchestration executor, with this function playing the engine.
+
+    The engine's part: confirm each task and timer the review schedules, fire each activity-retry timer at its time, and
+    answer each activity. The policy asks for review. An activity that signs fails with a key miss on every attempt that
+    starts before ``key_resolves_after`` has passed since the review began (every attempt, for None), and after that the
+    ask goes out and lineage takes the record. Stops when the review completes, or sets a timer that is no retry: the
+    deadline it waits on the person under.
+    """
+    registry = worker._Registry()
+    registry.add_named_orchestrator("promotion_review", _orchestrate)
+    executor = worker._OrchestrationExecutor(registry, logging.getLogger(__name__))
+    began = now = datetime(2026, 10, 4, 12, 0, tzinfo=UTC)
+    history: list[pb.HistoryEvent] = []
+    new = [helpers.new_workflow_started_event(now), helpers.new_execution_started_event("promotion_review", "promo-tok-1", _spec().model_dump_json())]
+    recorded: str | None = None
+    for _turn in range(200):
+        actions = executor.execute("promo-tok-1", history, new).actions
+        history += new
+        events: list[pb.HistoryEvent] = []
+        for action in actions:
+            if action.HasField("completeWorkflow"):
+                done = action.completeWorkflow
+                result = json.loads(done.result.value)["status"] if done.HasField("result") else None
+                return _Review(status=pb.OrchestrationStatus.Name(done.workflowStatus), result=result, recorded=recorded)
+            if action.HasField("createTimer"):
+                if not action.createTimer.HasField("activityRetry"):
+                    return _Review(status="waiting on the person", recorded=recorded)
+                fire_at = action.createTimer.fireAt.ToDatetime().replace(tzinfo=UTC)
+                events += [new_timer_created_event(action.id, fire_at), new_timer_fired_event(action.id, fire_at)]
+                now = max(now, fire_at)
+            elif action.HasField("scheduleTask"):
+                task = action.scheduleTask
+                events.append(helpers.new_task_scheduled_event(action.id, task.name))
+                if task.name == "resolve_review_policy":
+                    events.append(helpers.new_task_completed_event(action.id, json.dumps({"verdict": "review", "reasons": ["row_delta_band"]})))
+                elif key_resolves_after is None or now - began < key_resolves_after:
+                    events.append(helpers.new_task_failed_event(action.id, _KEY_MISS))
+                else:
+                    if task.name == "emit_promotion_outcome":
+                        recorded = json.loads(task.input.value)["outcome"]["status"]
+                    events.append(helpers.new_task_completed_event(action.id, json.dumps(True if task.name == "request_approval" else None)))
+        new = [helpers.new_workflow_started_event(now), *events]
+    raise AssertionError("the review neither completed nor waited on the person within 200 turns")
+
+
+@pytest.mark.parametrize(
+    ("key_resolves_after", "review"),
+    [
+        pytest.param(_HOLDER_HEALS_WITHIN, _Review(status="waiting on the person"), id="an-ask-the-holder-heals-in-time-for-reaches-the-approver"),
+        pytest.param(
+            _HOLDER_HEALS_WITHIN + timedelta(seconds=30),
+            _Review(status="ORCHESTRATION_STATUS_COMPLETED", result="BLOCKED", recorded="BLOCKED"),
+            id="an-ask-that-never-left-is-recorded-blocked",
+        ),
+        pytest.param(None, _Review(status="ORCHESTRATION_STATUS_COMPLETED", result="BLOCKED"), id="a-record-the-producer-never-signs-still-ends-the-review"),
+    ],
+)
+def test_a_review_waits_out_the_producers_key_and_never_fails_over_it(key_resolves_after: timedelta | None, review: _Review) -> None:
+    assert _review_while_the_key_is_unresolved(key_resolves_after) == review
 
 
 class TestAnUnansweredHoldExpiresRatherThanWaitingForever:

@@ -12,7 +12,12 @@ authenticates the sidecar that delivered the event, never the producer that wrot
 bronze write a listed lineage signer signed, and `/publication-arrival` only on a `table_published` the catalog signed.
 Enforcing, a refusal is acknowledged, counted and drives nothing (a DROP would park it, and park it again on every replay),
 and a key list the store cannot serve is retried; observing, the head acts as before and counts what it would have
-refused. An event the head ignores is never verified, so it is counted nowhere.
+refused. An event the head ignores is never verified, so it is counted nowhere. Every refusal series is exported at zero
+from the moment the routes are registered, so a first refusal is a rate the page can see.
+
+DECIDING COSTS ONE LISTING AT MOST. Whether the bronze head acts on a write it does not recognise is a question for the
+declared lanes, and reading them is one LIST and one GET per stored declaration: the head lists them at most once per
+delivery, whatever the event names, and never on the event loop.
 
 Driven through the registered routes with the production wiring: the public keys are read through the sidecar's secret
 API, stood in for by respx at the address the sidecar serves; the signatures are built by the root conftest's
@@ -22,10 +27,11 @@ lifespan resolves its key for readiness the way the stage runner's does, and tha
 
 from __future__ import annotations
 
+import asyncio
 import importlib
 import json
 from collections.abc import Callable, Iterator, Sequence
-from typing import Any, Final, Literal, cast
+from typing import Any, Final, Literal, cast, get_args
 from unittest import mock
 
 import httpx
@@ -38,13 +44,16 @@ from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader, NumberDataPoint
 from pydantic import BaseModel, ConfigDict, Field
 
-from lineage_kit import SigningKey, parse_published_keys
+from lineage_kit import RefusalReason, SigningKey, parse_published_keys
 from medallion.api.bronze_arrival import register_bronze_arrival_route
 from medallion.api.promotions import register_promotion_route
 from medallion.api.train import register_train_trigger_route
 from medallion.core import metrics
 from medallion.core.config import get_settings
 from service_kit.governed.signing_key import SigningKeyHolder, attach_signing
+from service_kit.lakehouse import transform_specs
+from service_kit.lakehouse.objectfs import StorageOptions
+from service_kit.lakehouse.transform_specs import TransformSpec
 
 
 PRODUCER: Final = "service-medallion-producer"
@@ -61,6 +70,9 @@ ROLES: Final = {"catalog": [CATALOG], "medallion_producer": [PRODUCER]}
 
 REFUSED: Final = "medallion.signature.refused"
 WOULD_REFUSE: Final = "medallion.signature.would_refuse"
+#: The refusal series both heads export at zero from the start, one per door and refusal reason: the page reads their rate,
+#: and a series born at one by the first refusal has none.
+ZERO_REFUSALS: Final = {(REFUSED, door, reason): 0 for door in ("bronze-arrival", "publication-arrival") for reason in get_args(RefusalReason.__value__)}
 
 type Signers = dict[str, Any]
 
@@ -80,9 +92,13 @@ class _Case(BaseModel):
     published: list[str] = Field(default_factory=list)
     #: (counter, door, reason) -> value, for every signature counter that moved.
     counted: dict[tuple[str, str, str], int] = Field(default_factory=dict)
+    #: How many times the head listed the declared lanes to decide; each listing must leave the event loop free.
+    listed: int = 0
 
 
-def _bronze_write(*, author: str = PRODUCER, operation: str = "lance_ray_ingest", tier: str = "bronze") -> dict[str, Any]:
+def _bronze_write(
+    *, author: str = PRODUCER, operation: str = "lance_ray_ingest", tier: str = "bronze", tables: tuple[str, ...] = ("events",)
+) -> dict[str, Any]:
     """A batch landed in tenant `acme`'s tier, for alice: the COMPLETE run `/produce` emits for a bronze write."""
     namespace = f"acme-{tier}"
     return {
@@ -96,7 +112,7 @@ def _bronze_write(*, author: str = PRODUCER, operation: str = "lance_ray_ingest"
             },
         },
         "job": {"namespace": "medallion", "name": "produce"},
-        "outputs": [{"namespace": namespace, "name": f"{namespace}$events"}],
+        "outputs": [{"namespace": namespace, "name": f"{namespace}${table}"} for table in tables],
         "producer": "https://github.com/AI-Riksarkivet/rask",
         "schemaURL": "https://openlineage.io/spec/2-0-2/OpenLineage.json#/$defs/RunEvent",
     }
@@ -192,8 +208,21 @@ CASES = [
         id="observing-an-unsigned-bronze-write-still-wakes-the-cascade-and-counts-it",
     ),
     pytest.param(
-        _Case(route="/bronze-arrival", deliver=lambda _s: _bronze_write(tier="silver")),
+        _Case(route="/bronze-arrival", deliver=lambda _s: _bronze_write(tier="silver"), listed=1),
         id="an-unsigned-write-the-bronze-head-ignores-is-not-verified",
+    ),
+    pytest.param(
+        _Case(route="/bronze-arrival", deliver=lambda _s: _bronze_write(tier="silver", tables=("events", "features", "pages")), listed=1),
+        id="a-write-naming-many-tables-is-decided-on-one-listing-of-the-declared-lanes",
+    ),
+    # The catalog stamps the tenant on every write it announces, so its compaction of acme's bronze table names exactly the
+    # pair the head fires on, and its signature verifies: only the operation says no batch landed.
+    pytest.param(
+        _Case(
+            route="/bronze-arrival",
+            deliver=lambda s: s[CATALOG].sign(_bronze_write(author="alice", operation="compact_table"), on_behalf_of="alice"),
+        ),
+        id="a-maintenance-pass-on-the-bronze-table-starts-no-cascade",
     ),
     pytest.param(
         _Case(route="/publication-arrival", deliver=lambda _s: _table_published(), counted={(REFUSED, "publication-arrival", "unsigned"): 1}),
@@ -263,6 +292,26 @@ class _Sidecar:
         self.topics.append(topic_name)
 
 
+class _Registry:
+    """The control root's transform declarations, read through `transform_specs.list_specs` and its signature: none declared.
+
+    A real listing is one LIST and one GET per stored declaration, so each call is recorded with where it ran: a listing
+    taken on the event loop holds every other delivery and the probes behind it.
+    """
+
+    def __init__(self) -> None:
+        self.listings: list[str] = []
+
+    def list_specs(self, control_root: str, storage_options: StorageOptions, project: str | None = None) -> list[TransformSpec]:
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            self.listings.append("in a worker thread")
+        else:
+            self.listings.append("on the event loop")
+        return []
+
+
 @pytest.fixture
 def metric_reader() -> Iterator[InMemoryMetricReader]:
     """The medallion's instruments bound to a real in-memory reader for one test, and rebound to the process's provider after.
@@ -309,6 +358,7 @@ def _producer(monkeypatch: pytest.MonkeyPatch, case: _Case, sidecar: _Sidecar) -
     for name, value in {
         "APP_API_TOKEN": TOKEN,
         "DAPR_HTTP_PORT": "3500",
+        "MEDALLION_CONTROL_ROOT": "s3://lakehouse",
         "MEDALLION_CONTROL_PUBSUB": "catalog-control-pubsub",
         "MEDALLION_TRANSFORM_ROUTES": json.dumps({"silver": "medallion.silver"}),
         "RASK_SIGNATURE_DOORS": case.mode,
@@ -341,6 +391,8 @@ def test_every_producer_delivery_is_decided_before_its_handler_reads_it(
     for identity in (PRODUCER, CATALOG):
         respx.get(f"{SECRETS}/signing-public-{identity}").mock(return_value=httpx.Response(200, json={"keys": signers[identity].public}))
     respx.get(f"{SECRETS}/signing-public-{INGEST}").mock(return_value=httpx.Response(500))
+    registry = _Registry()
+    monkeypatch.setattr(transform_specs, "list_specs", registry.list_specs)
     sidecar = _Sidecar()
     client = _producer(monkeypatch, case, sidecar)
 
@@ -348,7 +400,8 @@ def test_every_producer_delivery_is_decided_before_its_handler_reads_it(
 
     assert (answered.status_code, answered.json()) == (200, {"status": case.answer})
     assert sidecar.topics == case.published, f"the head published triggers on {sidecar.topics}"
-    assert _signature_counts(metric_reader) == case.counted
+    assert _signature_counts(metric_reader) == {**ZERO_REFUSALS, **case.counted}
+    assert registry.listings == ["in a worker thread"] * case.listed
 
 
 class _SidecarAtShutdown:

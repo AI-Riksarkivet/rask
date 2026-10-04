@@ -11,7 +11,9 @@ already run.
 ignored (their output namespace isn't bronze), so publishing the trigger can never re-fire the head. The
 second guard is by OPERATION rather than by namespace: the catalog publishes its own markers here, and an
 attach/detach/declare names the bronze table on a ``COMPLETE`` event without a byte having moved — so
-registering the head's tier would otherwise fire a second, batch-less cascade over the same data.
+registering the head's tier would otherwise fire a second, batch-less cascade over the same data. A
+maintenance pass (a compaction or an index build, by the catalog or by maintenance) is guarded the same
+way: it names the table it rewrote, and it lands no batch.
 Best-effort with ``RETRY`` so a sidecar/broker outage is redelivered rather than dropped.
 
 **The trigger NAMES the upstream** (I2), resolved through the catalog rather than composed — see
@@ -26,7 +28,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from functools import partial
+from functools import cache, partial
 from typing import Any
 
 from dapr.aio.clients import DaprClient
@@ -60,6 +62,19 @@ _RETRY = {"status": "RETRY"}
 #: for a byte-free change are excluded, and the strings are the wire contract — the medallion reads the
 #: bus, it does not import the catalog.
 _BYTE_FREE_CATALOG_OPERATIONS = frozenset({"register_table", "deregister_table", "declare_table"})
+
+#: Operations that MAINTAIN a table rather than write it: a compaction or an index build lands no batch and changes no row.
+#:
+#: Their emitters stamp them on this topic as ``COMPLETE`` events naming the table they maintained, and the catalog
+#: resolves the tenant on every write it announces, so its ``compact_table`` or ``create_index`` on a project's bronze
+#: table names exactly the pair this head fires on, under a signature that verifies. Firing on one would start a cascade
+#: no batch brought. Ignored before the signature door, so a maintenance pass is never verified either, whoever signed it.
+#:
+#: The emitters' own spelling: maintenance's ``COMPACTION`` and ``CREATE_INDEX`` (`maintenance.core.lineage_emit`) and
+#: the catalog's ``COMPACT_TABLE`` and ``CREATE_INDEX`` (`catalog.core.lineage_emit`), the set lineage keys its
+#: maintenance rung on (`lineage.models.MAINTENANCE_OPERATIONS`). Copied rather than imported, as maintenance copies its
+#: own loop guard: the medallion and maintenance are sibling deployables, and they share wire strings, not code.
+_MAINTENANCE_OPERATIONS = frozenset({"compaction", "compact_table", "create_index"})
 
 
 def _lance_facet(event: dict[str, Any]) -> dict[str, Any]:
@@ -100,7 +115,8 @@ def _bronze_write(event: dict[str, Any], settings: MedallionSettings, project: s
     Filters on ``eventType == COMPLETE``: a START or FAIL bronze event announces intent / failure, not a
     landed batch, so firing the cascade off one would kick the pipeline over data that isn't there (yet).
     Only a terminal-success bronze write is a real arrival — and an ATTACH is not a write, which is what
-    :data:`_BYTE_FREE_CATALOG_OPERATIONS` excludes. TWO ingest lanes share the head: the events
+    :data:`_BYTE_FREE_CATALOG_OPERATIONS` excludes, nor is a maintenance pass (:data:`_MAINTENANCE_OPERATIONS`).
+    TWO ingest lanes share the head: the events
     lane (``bronze_dataset``) — the returned name is
     the one actually written, so the trigger tells the stage runner which lane fired.
 
@@ -112,10 +128,14 @@ def _bronze_write(event: dict[str, Any], settings: MedallionSettings, project: s
     """
     if str(event.get("eventType", "")).upper() != "COMPLETE":
         return None
-    if str(_lance_facet(event).get("operation") or "") in _BYTE_FREE_CATALOG_OPERATIONS:
+    operation = str(_lance_facet(event).get("operation") or "")
+    if operation in _BYTE_FREE_CATALOG_OPERATIONS or operation in _MAINTENANCE_OPERATIONS:
         return None
     expected_namespace = project_namespace(project, settings.bronze_namespace)
     expected = {project_namespace(project, settings.bronze_dataset): settings.bronze_dataset}
+    # AT MOST ONE LISTING PER DELIVERY, and only once an output is not the configured pair: a listing is one LIST and one
+    # GET per stored declaration, and an event names as many outputs as its sender likes.
+    declared_inputs = cache(partial(_declared_inputs, settings, project=project))
     outputs = event.get("outputs") or []
     for output in outputs:
         if not isinstance(output, dict):
@@ -144,7 +164,7 @@ def _bronze_write(event: dict[str, Any], settings: MedallionSettings, project: s
         # this branch never followed. The result was ONE function returning two different kinds of
         # thing depending on which branch fired, so a lane declared through the door was reachable
         # from this head and not from the publication head.
-        if name and _has_declared_lane(settings, project=project, table_id=name):
+        if name and name in declared_inputs():
             return BronzeWrite(lane=lane_key(project, name), table_id=name)
     return None
 
@@ -160,22 +180,22 @@ def _bronze_write_dataset(event: dict[str, Any], settings: MedallionSettings, pr
     return write.lane if write is not None else None
 
 
-def _has_declared_lane(settings: MedallionSettings, *, project: str, table_id: str) -> bool:
-    """Whether any lane in this project declares ``table_id`` as its input.
+def _declared_inputs(settings: MedallionSettings, *, project: str) -> frozenset[str]:
+    """The tables this project's lanes declare as their input, from one listing of the control root.
 
-    Never raises: a control root that cannot be read must not stop the CONFIGURED dataset from
-    cascading, so an unreadable registry degrades to "nothing extra is declared" rather than taking
-    the head down. Logged, because a registry that cannot be read is a real fault.
+    Blocking, so the route decides in a worker thread. Never raises: a control root that cannot be read must not stop
+    the CONFIGURED dataset from cascading, so an unreadable registry degrades to "nothing extra is declared" rather
+    than taking the head down. Logged, because a registry that cannot be read is a real fault.
     """
     control_root = getattr(settings, "control_root", "")
     if not project or not control_root:
-        return False
+        return frozenset()
     try:
         specs = transform_specs.list_specs(control_root, settings.storage_options(), project)
     except Exception:  # noqa: BLE001 — a registry read must not break the cascade head
-        log.exception("cascade_head_lane_lookup_failed", extra={"project": project, "table_id": table_id})
-        return False
-    return any(spec.from_id == table_id for spec in specs)
+        log.exception("cascade_head_lane_lookup_failed", extra={"project": project})
+        return frozenset()
+    return frozenset(spec.from_id for spec in specs)
 
 
 def _cascade_token(event: dict[str, Any]) -> str:
@@ -230,7 +250,7 @@ async def _vended_upstream(settings: MedallionSettings, table_id: str) -> str:
     THE ANSWER IS ADVISORY, and every way of not getting one degrades to ``""`` — the composed-path
     fallback, which is the CORRECT upstream for a produce-first estate (the chart renders
     `MEDALLION_BRONZE_URI` and the stage runner's `MEDALLION_FROM_URI` from one expression, so the composed
-    path is where those bytes are). The same shape and the same reasoning as `_has_declared_lane`
+    path is where those bytes are). The same shape and the same reasoning as `_declared_inputs`
     above: a catalog that cannot be read must not stop the head from firing, and a head that answered
     RETRY to a describe outage would halt a cascade that works. Logged, because an unreachable catalog
     is a real fault.
@@ -279,7 +299,7 @@ def bronze_arrival_of(event: Any, settings: MedallionSettings) -> BronzeArrival 
     ``event`` is the untrusted Dapr CloudEvent envelope (hence ``Any`` + the ``isinstance`` guards); its ``data`` is the
     OpenLineage run event. Only a COMPLETE write to ``bronze_namespace``/``bronze_dataset``, or to a table a lane
     declares, is acted on; a downstream stage runner's event (silver/gold) is ignored, so the head never self-triggers
-    (loop guard).
+    (loop guard), and so is a maintenance pass on any table.
     """
     data = event.get("data") if isinstance(event, dict) else None
     if not isinstance(data, dict):
