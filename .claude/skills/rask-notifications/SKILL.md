@@ -1,6 +1,6 @@
 ---
 name: rask-notifications
-description: How a feature gets a person told — the targeted inbox behind the estate's bell. The six targeting sources (AUTHOR/ORIGINATOR/WATCH/GRANT_ADDED/GRANT_REVOKED/TASK_ASSIGNED+TASK_UNASSIGNED), the producer contract for the lineage and control lanes, and the four silent-drop traps that make an emitted event reach nobody. Use when adding a feature whose outcome a person should hear about; when a notification "should have fired" and did not; when adding a `ControlAction` or a `NotificationReason`; when emitting an OpenLineage run event from any service; or when wiring a new service into `lineage.events.v1` / `catalog.control.v1`.
+description: How a feature gets a person told — the targeted inbox behind the estate's bell. The six targeting sources (AUTHOR/ORIGINATOR/WATCH/GRANT_ADDED/GRANT_REVOKED/TASK_ASSIGNED+TASK_UNASSIGNED), the producer contract for the lineage and control lanes, and the five silent-drop traps (an emitted event that reaches nobody, or reaches the bell and not the graph). Use when adding a feature whose outcome a person should hear about; when a notification "should have fired" and did not; when adding a `ControlAction` or a `NotificationReason`; when emitting an OpenLineage run event from any service; or when wiring a new service into `lineage.events.v1` / `catalog.control.v1`.
 ---
 
 # rask notifications — how a feature gets a person told
@@ -94,6 +94,11 @@ reports the loss. This is the estate's most expensive silent failure mode.
    re-runs `can_get_metadata` against `table:<output name>`, so an unqualified name against
    tenant-qualified grants counts every recipient HIDDEN.
 
+**One more holds before notifications is asked, and it is not `notifiable()`'s: the event is SIGNED.** Lineage verifies
+the `rask_signature` of every event on the bus and in the outbox (`signing.enforce`, on by default) and refuses what
+does not verify; notifications verifies nothing, so an unsigned event still rings the bell for a run the graph never
+recorded (trap 5, `docs/LINEAGE.md` § Signed events).
+
 ```python
 event = {
     "eventType": "FAIL",  # (1) TERMINAL. START/RUNNING notify nobody.
@@ -103,6 +108,9 @@ event = {
         "facets": {
             # (2) The VERIFIED token sub. NOT settings.author, NOT a role/team string,
             #     NOT a display name. `{name, sub}` together is what every verifying writer stamps.
+            #     (5) binds it: a signer is its own author, so a service stamps its own signing
+            #     identity and the person rides in `lance.originator` (Q2). Only the catalog signs
+            #     for a person it authenticated (`on_behalf_of=`).
             "author": {"name": token.sub, "sub": token.sub},
             "lance": {
                 "operation": "promote",
@@ -114,6 +122,9 @@ event = {
     },
     "outputs": [{"namespace": "gold", "name": f"{project_id}-gold$catalog"}],  # (4)
 }
+# (5) SIGNED with this service's own key, through the service's one emit door
+#     (`medallion/core/lineage_publish.py::emit_lineage`). A bare dict is refused by lineage and acked.
+event = attach_signature(event, key=holder.key(), identity=holder.identity)
 await publish_event(client, pubsub_name="pubsub", topic_name="lineage.events.v1", data=json.dumps(event), data_content_type="application/json")
 ```
 
@@ -173,7 +184,7 @@ set, so a new member displays correctly with no TS edit. Two consequences: the v
 so it must read as a reason a person would accept; and `notification-center.stories.svelte` is stale
 (`project_watch` vs the backend's `watch`) without anything failing.
 
-## The four traps — an event emitted is not a person told
+## The five traps — an event emitted is not a person told
 
 1. **A role literal in `author.sub` reaches nobody.** `author_subject()` reads `author.sub` and
    **nothing else** — never `author.name`, never the standard `ownership` facet — because those are
@@ -218,6 +229,15 @@ so it must read as a reason a person would accept; and `notification-center.stor
 4. **A non-personal principal is not an address.** `user:*` (managed access) strips to a truthy `*`
    and used to write into an inbox actor literally named `*`; usersets (`team:acme#member`) still do.
    An address must identify a person.
+5. **An unsigned event, or one from a publisher lineage does not list, is recorded by nobody and still rings the bell.**
+   Lineage verifies every bus and outbox event against the keys its signer publishes and refuses one with no
+   signature, an identity outside `LINEAGE_SIGNERS`, a signer that is not its stamped author (only the catalog signs
+   for a person), or bytes that do not verify. The refusal is an ACK counted in `lineage_signature_refused_total{reason}`:
+   never retried, parked or recorded, and the only alert excludes `unsigned` and `signer`. Notifications verifies
+   nothing, so the person is told about a run the graph does not hold. **A new lineage-lane producer is a
+   `lance.signers` entry in the chart** (it mints the pair, sets `RASK_SIGNING_IDENTITY` and lists the identity in
+   `LINEAGE_SIGNERS`) that calls `attach_signature` on every event it emits and emits nothing while its key is
+   unresolved (`SigningKeyUnavailableError`). Worked reference: `services/medallion/src/medallion/core/lineage_publish.py`.
 
 ## The FGA prerequisite
 

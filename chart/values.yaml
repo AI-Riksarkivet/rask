@@ -3256,9 +3256,11 @@ openbao:
 # The chosen pair is persisted to the kept copy before the first write and every re-seed writes exactly it, public
 # list first ("publish before use": a signer is Ready only while its kid is listed).
 #
-# ROTATION. Delete `signing-key-<identity>` from the store and roll `deploy/rask-openbao`: the seed finds the list but
-# no key, takes the mint candidate and PREPENDS its public key, keeping one previous. Rotate at most once per 7 days:
-# the bus keeps 168 h and a retired key must stay listed until nothing signed with it is left to verify.
+# ROTATION. `bao kv metadata delete secret/signing-key-<identity>` and roll `deploy/rask-openbao`: the seed finds the list
+# but no key, takes the mint candidate and PREPENDS its public key, keeping one previous. Never a soft `bao kv delete`:
+# the seed refuses the "No data found" it leaves behind and the replacement pod never becomes Ready (docs/OPERATORS.md § 6).
+# Rotate at most once per 7 days: the bus keeps 168 h and a retired key must stay listed until nothing signed with it is
+# left to verify.
 # STORE LOSS. A replacement pod with no outgoing pod to carry from mints every identity afresh and the old public
 # keys go with the old store, so an event signed before the loss is refused once enforcement is on (acked and
 # counted); every signer re-resolves within 5 minutes and heals in place.
@@ -3281,11 +3283,11 @@ openbao:
 # RESIDUAL (owner, 2026-10-02): this is the Dapr-scope claim. A pod that holds OpenBao's root token or reaches :8200
 # reads the store without a sidecar until XC-079.
 signing:
-  # THE ONE SWITCH between helm revisions A/B (false) and C (true). False renders neither LINEAGE_SIGNERS nor
-  # LINEAGE_DELEGATORS, so lineage verifies nothing, ignores a present `rask_signature` and keeps its catalog-DROP
-  # shortcut off. True renders both (lance.signingIdentities, lance.delegatorIdentities), and only when the secret
-  # store and auth.enabled are on as well: lineage then refuses an unsigned or non-verifying event before it records it.
-  enforce: false
+  # THE ONE SWITCH. True renders LINEAGE_SIGNERS and LINEAGE_DELEGATORS (lance.signingIdentities, lance.delegatorIdentities),
+  # and only when the secret store and auth.enabled are on as well: lineage then refuses an unsigned or non-verifying event
+  # before it records it. False renders neither, so lineage verifies nothing, ignores a present `rask_signature` and keeps
+  # its catalog-DROP shortcut off.
+  enforce: true
   # NON-DEV STORES (openbao.devMode=false, or openbao.externalAddr) MINT NOTHING, so every signer would stay not
   # Ready. The render fails until the operator attests here that signing-public-<identity> and then
   # signing-key-<identity> exist for every identity the failure names. Tooling for that, and rotation on such a

@@ -213,12 +213,26 @@ estate (owner, no-prod parking 2026-09-21). Until the keys exist no signer is Re
 delivery to one is answered RETRY, not dropped.
 
 **Rotation, at most once per 7 days** (the bus keeps 168 h and a retired key must stay listed until nothing signed
-with it remains to verify). On the dev OpenBao: delete `signing-key-<identity>` from the store, delete its kept copy
-(`/tmp/seed/signing-key-<identity>` in the `seed` container, so an in-place restart cannot write the old key back) and
-roll `deploy/rask-openbao`; the seed finds the list without its key, mints, prepends the new public key and keeps one
-previous. Rotation on a sealed or external store belongs to the parked production
-runbook. The signer re-resolves its key within 5 minutes and heals in place, and the retired key leaves the list at the next
-rotation.
+with it remains to verify). On the dev OpenBao, with its pod Ready (2/2) and not recently restarted, because the
+replacement carries a pair over only from an outgoing pod that is serving a seeded store (LH-347):
+
+```
+kubectl exec deploy/rask-openbao -c seed -- bao kv metadata delete secret/signing-key-<identity>
+kubectl rollout restart deploy/rask-openbao
+```
+
+The seed in the replacement pod finds the list without its key, mints, prepends the new public key and keeps one
+previous. A replacement pod starts with an empty kept copy, so the old key is not written back (an in-place restart of
+the `seed` container would write it back from `/tmp/seed/signing-key-<identity>`).
+
+**The command is the metadata delete, never a soft `bao kv delete`.** Measured 2026-10-04 on openbao/openbao:2.2.0:
+after `bao kv metadata delete`, `bao kv get -field=seed secret/signing-key-<identity>` prints
+`No value found at secret/data/signing-key-<identity>`, which the seed reads as an absence and so rotates. After a
+soft `bao kv delete` it prints `No data found at ...`, which the seed refuses as an unreadable store, so the
+replacement pod never becomes Ready and the rollout wedges (the outgoing pod keeps serving, `maxUnavailable: 0`).
+
+Rotation on a sealed or external store belongs to the parked production runbook. The signer re-resolves its key within
+5 minutes and heals in place, and the retired key leaves the list at the next rotation.
 
 **Loss.** A dev OpenBao replacement with no outgoing pod to carry from (a deleted pod, a drained node) mints every
 identity afresh and the old public keys go with the old store. Events signed before the loss are refused once

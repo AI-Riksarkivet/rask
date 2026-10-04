@@ -212,6 +212,39 @@ visible verbatim in the `GET /events` feed — the graph promotes the headline f
 > [medallion-producer OpenLineage integration](RASK-INTEGRATION.md) on KubeRay — the true auto-instrumented,
 > Marquez-grade path that supersedes the here-dummies.
 
+## Signed events (the `rask_signature` facet)
+
+A bus door authenticates the sidecar that delivered an event, not the producer that wrote it, so the author an event
+stamps is a claim until a signature proves it. Every producer that publishes to `lineage.events.v1` or stages an event
+in the outbox signs it with its own Ed25519 key. The signature rides inside the event, in the `rask_signature` facet of
+`run.facets` (or `dataset.facets` for a catalog change), over the canon-1 bytes of the whole event. The facet names the
+signer (`identity`), its key (`kid`) and, for a delegation, `onBehalfOf`. Lineage holds public keys only, so it can admit
+or refuse an event and cannot forge one (`packages/lineage-kit/src/lineage_kit/signing.py` owns the format).
+
+- **Who signs.** The identities the chart lists in `LINEAGE_SIGNERS` (`lance.signingIdentities`): the catalog,
+  maintenance, the medallion producer, each stage runner and ingest. A signer is its own author. The one exception is
+  the catalog, the sole entry in `LINEAGE_DELEGATORS`, which signs for the person it authenticated.
+- **What lineage accepts, and from where.** With `signing.enforce` on (the default, rendered only where auth and the
+  secret store are on) lineage records an event only when a listed signer's published key verifies it. All four doors
+  that record a bus or staged event apply the rule: the `/lineage-events` subscription, the outbox drain, the operator's
+  DLQ replay and the parking route's re-ingest. The authenticated HTTP door (`POST /api/v1/lineage`: Ray jobs, the web
+  zones, ingest's live emits) takes no signature; it authenticates the caller's bearer token and strips any
+  `rask_signature` the body carries. With `signing.enforce` off lineage verifies nothing and ignores a present facet.
+- **What is refused.** An event with no facet (`unsigned`), a malformed facet or an unsupported `alg` or `canon`, an
+  identity outside `LINEAGE_SIGNERS` (`signer`), a signer that is not the stamped author and declares no delegation
+  (`author`), a delegation from a non-delegator (`delegation`) or for another subject (`author`), a `kid` its signer does
+  not publish (`kid`), and bytes that do not verify (`signature`, `uncanonical`, `encoding`). A refusal is final, so
+  nothing retries or parks it: the subscription and the parking route acknowledge the delivery, the drain records the
+  verdict with the event and retires the staged object, and the operator's replay is refused. The only trace is
+  `lineage_signature_refused_total{lance_lineage_reason}` and a `lineage_signature_refused` WARN line naming the run, the
+  claimed identity and the reason. A key list that cannot be read is an outage, not a verdict, and the delivery is
+  retried. What each reason means and what to do:
+  [RUNBOOK-oncall.md](runbooks/RUNBOOK-oncall.md#lineage-refusing-a-signers-events).
+- **The previous-key window.** Each identity publishes `signing-public-<identity>` with its current key first and at
+  most one previous key. An event signed just before a rotation verifies while the previous key is listed, and lineage
+  reads a list through its own sidecar and caches a successful read for 60 s. Provisioning, rotation and loss of the
+  keys: [OPERATORS.md](OPERATORS.md) § 6.
+
 ## Closing the loop: gold embeds its lineage as JSONB (demo driver only)
 
 > **Scope:** this is done by the **demo driver** (`scripts/medallion_demo.py: write_gold`), NOT by the
