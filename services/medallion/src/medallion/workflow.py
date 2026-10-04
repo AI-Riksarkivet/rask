@@ -57,7 +57,7 @@ from opentelemetry.trace import Status, StatusCode
 from pydantic import BaseModel, Field
 
 from medallion.core.best_effort import best_effort
-from medallion.core.lineage_publish import emit_lineage
+from medallion.core.lineage_publish import emit_lineage, signed_control_event
 from medallion.core.metrics import record_promotion_outcome, record_stage_outcome, record_train_outcome
 from medallion.schemas.promotion import PromotionSpec
 from service_kit.activity_loop import run_activity
@@ -1279,9 +1279,12 @@ def resolve_review_policy(ctx: WorkflowActivityContext, spec: PromotionSpec) -> 
 def request_approval(ctx: WorkflowActivityContext, spec: PromotionSpec) -> bool:
     """Tell the approver there is something to decide. Returns whether the ask went out.
 
-    Published DIRECTLY rather than through `process_control_emitter()`: the stage runner never sets a
-    process emitter, so that path is a no-op here and the ask would be silently swallowed — the exact
-    class of defect this feature exists to fix.
+    Published DIRECTLY rather than through `process_control_emitter()`: the medallion producer, which hosts the
+    `promotion_review` workflow this activity belongs to, sets no process emitter, so that path is a no-op here and
+    the ask would be silently swallowed — the exact class of defect this feature exists to fix.
+
+    Raises:
+        SigningKeyUnavailableError: the producer signs and has no key, so nothing is sent and the activity is retried.
     """
     # Dapr hands an activity the DECODED DICT, not the annotated model: the input crossed the
     # durable boundary as JSON and the SDK never reads the annotation. Coerce before use, or every
@@ -1314,6 +1317,11 @@ def request_approval(ctx: WorkflowActivityContext, spec: PromotionSpec) -> bool:
         # would collapse every promotion onto the first one, which is worse than the bug.
         event_id=f"promotion-review-{spec.token}",
     )
+    # SIGNED BEFORE THE PUBLISH IS TRIED, and outside the `try` below that turns a failed publish into a refusal
+    # ([[XC-078]]). An enforcing door drops an unsigned ask, so a producer without its key sends nothing: the raise
+    # reaches `ACTIVITY_RETRY`, which runs the activity again once the key may have resolved, where returning False
+    # would BLOCK the promotion on an ask that never left.
+    data = json.dumps(signed_control_event(settings, json.loads(event.model_dump_json())))
 
     async def _publish() -> None:
         async with DaprClient() as client:
@@ -1322,7 +1330,7 @@ def request_approval(ctx: WorkflowActivityContext, spec: PromotionSpec) -> bool:
                 timeout_seconds=settings.publish_timeout_seconds,
                 pubsub_name=settings.pubsub,
                 topic_name=CONTROL_TOPIC,
-                data=event.model_dump_json(),
+                data=data,
                 data_content_type="application/json",
             )
 

@@ -18,6 +18,9 @@ raise is the backstop for a key lost mid-delivery.
 
 SIGNING IS CONFIGURED BY THE SETTINGS, not by whether a holder happens to be installed: a service that is meant to sign
 and has none installed raises too, so a path that never ran the lifespan cannot emit unsigned by accident.
+
+THE CONTROL EVENTS THIS SERVICE EMITS ARE SIGNED HERE TOO ([[XC-078]]), by :func:`signed_control_event` with the same key
+and the same rule: the producer's `promotion_review_requested`, which a door verifies against the producer's identity.
 """
 
 from __future__ import annotations
@@ -25,7 +28,7 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING, Any
 
-from lineage_kit import SigningKey, attach_signature, parse_published_keys
+from lineage_kit import SigningKey, attach_control_signature, attach_signature, parse_published_keys
 from medallion.core.config import MedallionSettings
 from service_kit.governed.signing_key import SigningKeyHolder, SigningKeyUnavailableError, attach_signing, make_signing_holder
 from service_kit.lakehouse import outbox
@@ -82,6 +85,18 @@ async def stop_signing(holder: SigningKeyHolder[SigningKey] | None) -> None:
         await holder.stop()
 
 
+def _holder(settings: MedallionSettings) -> SigningKeyHolder[SigningKey] | None:
+    """The holder to sign with, or None when this service does not sign.
+
+    Raises:
+        SigningKeyUnavailableError: this service is meant to sign and no holder is installed.
+    """
+    holder = _signing
+    if holder is None and signing_configured(settings):
+        raise SigningKeyUnavailableError(f"{settings.signing_identity} is configured to sign but no key holder is installed")
+    return holder
+
+
 def _signed(settings: MedallionSettings, event: dict[str, Any]) -> dict[str, Any]:
     """The event as it leaves: signed as this service's identity, or unchanged when this service does not sign.
 
@@ -89,12 +104,27 @@ def _signed(settings: MedallionSettings, event: dict[str, Any]) -> dict[str, Any
     a board and `sub` is what the lineage door authorizes as, and a verifier requires the signer to be the stamped
     `sub`, so signing as the role would make the estate refuse its own cascade.
     """
-    holder = _signing
+    holder = _holder(settings)
     if holder is None:
-        if signing_configured(settings):
-            raise SigningKeyUnavailableError(f"{settings.signing_identity} is configured to sign but no key holder is installed")
         return event
     return attach_signature(event, key=holder.key(), identity=holder.identity)
+
+
+def signed_control_event(settings: MedallionSettings, envelope: dict[str, Any]) -> dict[str, Any]:
+    """A control event as it leaves: signed as this service's identity, or unchanged when this service does not sign.
+
+    ``envelope`` is the JSON the bus carries (`CatalogControlEvent.model_dump_json()` read back), the document a door
+    verifies. This service emits for itself, never for a person it authenticated, so the signature declares no
+    delegation, and an envelope naming a person as its actor is refused by `attach_control_signature` here rather
+    than by a door after it left.
+
+    Raises:
+        SigningKeyUnavailableError: this service signs and has no key to sign with. Nothing may then be sent.
+    """
+    holder = _holder(settings)
+    if holder is None:
+        return envelope
+    return attach_control_signature(envelope, key=holder.key(), identity=holder.identity)
 
 
 async def emit_lineage(client: object, settings: MedallionSettings, event: dict[str, Any]) -> None:

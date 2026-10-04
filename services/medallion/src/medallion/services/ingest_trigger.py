@@ -259,23 +259,54 @@ async def _vended_upstream(settings: MedallionSettings, table_id: str) -> str:
     return location or ""
 
 
-async def handle_bronze_arrival(dapr: DaprClient, settings: MedallionSettings, event: Any) -> dict[str, str]:
-    """Fire the cascade head when a bronze-dataset write arrives; ack-and-ignore everything else.
+class BronzeArrival(BaseModel):
+    """A delivery the head acts on: the lineage event as it arrived, the tenant it names, and the bronze write it completed.
 
-    ``event`` is the untrusted Dapr CloudEvent envelope (hence ``Any`` + the ``isinstance`` guards); its
-    ``data`` is the OpenLineage run event. Only a write to ``bronze_namespace``/``bronze_dataset`` (or the
-    page lane) publishes the ``medallion.bronze`` trigger — a downstream
-    stage runner's event (silver/gold) is acked and skipped, so the head never self-triggers (loop guard). A
-    publish outage returns ``RETRY`` for redelivery.
+    ``event`` is the CloudEvent's data with its members unchanged, never a re-serialisation or a model dump, because it
+    is the document a door verifies its producer's signature over ([[XC-078]]).
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    event: dict[str, Any]
+    project: str
+    write: BronzeWrite
+
+
+def bronze_arrival_of(event: Any, settings: MedallionSettings) -> BronzeArrival | None:
+    """What the head acts on in this delivery, or ``None`` for a delivery it acknowledges and ignores.
+
+    ``event`` is the untrusted Dapr CloudEvent envelope (hence ``Any`` + the ``isinstance`` guards); its ``data`` is the
+    OpenLineage run event. Only a COMPLETE write to ``bronze_namespace``/``bronze_dataset``, or to a table a lane
+    declares, is acted on; a downstream stage runner's event (silver/gold) is ignored, so the head never self-triggers
+    (loop guard).
     """
     data = event.get("data") if isinstance(event, dict) else None
     if not isinstance(data, dict):
-        return _SUCCESS  # not a parseable lineage event — ack so Dapr doesn't redeliver
+        return None  # not a parseable lineage event
     project = _cascade_project(data)
     write = _bronze_write(data, settings, project)
     if write is None:
-        return _SUCCESS  # not a bronze ingest — ack so Dapr doesn't redeliver, but drive nothing
-    dataset = write.lane
+        return None  # not a bronze ingest
+    return BronzeArrival(event=data, project=project, write=write)
+
+
+async def handle_bronze_arrival(dapr: DaprClient, settings: MedallionSettings, event: Any) -> dict[str, str]:
+    """Fire the cascade head when a bronze-dataset write arrives; ack-and-ignore everything else.
+
+    The route runs the two halves with the signature door between them (`medallion.api.bronze_arrival`):
+    :func:`bronze_arrival_of` decides whether the head acts on the delivery, and :func:`fire_bronze_arrival` acts.
+    """
+    arrival = bronze_arrival_of(event, settings)
+    if arrival is None:
+        return _SUCCESS  # ack so Dapr doesn't redeliver, but drive nothing
+    return await fire_bronze_arrival(dapr, settings, arrival)
+
+
+async def fire_bronze_arrival(dapr: DaprClient, settings: MedallionSettings, arrival: BronzeArrival) -> dict[str, str]:
+    """Publish the ``medallion.bronze`` trigger for one bronze arrival. A publish outage returns ``RETRY`` for redelivery."""
+    data, project = arrival.event, arrival.project
+    dataset = arrival.write.lane
     token = _cascade_token(data)
     # THE BATCH IDENTITY IS MINTED HERE (§8 change 9), because this is where a batch begins: one
     # `/produce`, one bronze write, one cascade. Every tier below carries this same id, so the runs of
@@ -297,7 +328,7 @@ async def handle_bronze_arrival(dapr: DaprClient, settings: MedallionSettings, e
     # not a location, and the stage runner reads an ABSENT `from_uri` as "compose the path", which is what
     # keeps an in-flight trigger from a pre-rollout head — and any external publisher that names no
     # upstream — working unchanged.
-    from_uri = await _vended_upstream(settings, write.table_id)
+    from_uri = await _vended_upstream(settings, arrival.write.table_id)
     if from_uri:
         trigger["from_uri"] = from_uri
     originator = _cascade_originator(data)
