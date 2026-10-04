@@ -3,6 +3,10 @@
 The OpenFGA knobs are the estate's, not this service's: it mixes in ``FgaSettings`` and reads
 ``RASK_FGA_*``. ``FgaSettings`` alone rather than ``GovernedAuthSettings`` because this service has no
 human door — its routes are gated by the Dapr app token and it only ever READS tuples, as itself.
+
+The signature door's knobs are the estate's too ([[XC-078]]): ``SignatureDoorSettings`` reads
+``RASK_SIGNATURE_DOORS``, ``RASK_EVENT_SIGNERS`` and ``RASK_EVENT_DELEGATORS``, which decide how
+``/maintenance-arrival`` treats the signature of a write event before it plans anything.
 """
 
 from __future__ import annotations
@@ -13,7 +17,7 @@ from typing import TYPE_CHECKING, Final, Literal
 from pydantic import AliasChoices, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from service_kit.governed.settings import FgaSettings
+from service_kit.governed.settings import FgaSettings, SignatureDoorSettings
 from service_kit.lakehouse.naming import CATALOG_DELIMITER
 from service_kit.lakehouse.objectfs import lance_storage_options
 
@@ -36,7 +40,7 @@ DEFAULT_COMPACT_THREADS: Final = 2
 DEFAULT_MAX_SOURCE_BYTES: Final = 256 * 1024 * 1024
 
 
-class MaintenanceSettings(FgaSettings, BaseSettings):
+class MaintenanceSettings(SignatureDoorSettings, FgaSettings, BaseSettings):
     """Config for the table-maintenance service + its S3 access to the lakehouse buckets."""
 
     # `populate_by_name` also teaches the env source the bare FIELD NAME as a second lookup, so

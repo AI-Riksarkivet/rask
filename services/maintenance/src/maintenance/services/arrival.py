@@ -88,6 +88,27 @@ def triggering_write(event: dict[str, Any]) -> TriggeringWrite | None:
     return None
 
 
+class PlannableWrite(BaseModel):
+    """A triggering write this lane acts on: the physical location it plans, and the version that debounces it."""
+
+    location: str
+    version: int | None = None
+
+
+def plannable_write(event: dict[str, Any]) -> PlannableWrite | None:
+    """The write this lane would plan for ``event``, or ``None`` when it acknowledges the event untouched.
+
+    ONE DECISION FOR THE DOOR AND THE HANDLER ([[XC-078]]). `/maintenance-arrival` checks the signature of exactly the
+    events this selects and `handle_arrival` plans exactly those, so what the lane acts on cannot widen past what the door
+    checks. A triggering write that names no location is acknowledged without a read, so it is not checked either: an
+    event that drives nothing costs no key read.
+    """
+    hit = triggering_write(event)
+    if hit is None or hit.location is None:
+        return None
+    return PlannableWrite(location=hit.location, version=hit.version)
+
+
 def _version_of(output: dict[str, Any]) -> int | None:
     """The output's ``version`` facet as an int, or ``None`` when absent or unparseable.
 
