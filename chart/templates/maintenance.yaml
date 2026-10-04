@@ -190,19 +190,16 @@ spec:
             {{- end }}
             {{- if .Values.maintenance.lineageEmit }}
             - { name: MAINTENANCE_LINEAGE_EMIT_ENABLED, value: "true" }
-            {{- if .Values.maintenance.workTopic }}
             {{- /*
                The PER-SUBSCRIBER component, not the shared broadcast one. `queueGroupName` lives on the
                COMPONENT, so subscribing through `pubsub.name` gives every replica every event instead of
                a competing-consumer group — measured 2026-09-03, the arrival route bound to
                `pubsub=lineage-pubsub` and would have planned the same dataset once per replica. Used for
                publishing too, exactly as the stage runners do (`lance.subPubsub`): the queue group affects
-               subscription only.
+               subscription only. With no queue lane it is a publish-only component, maintenance's own
+               connection either way (values.yaml `nats.auth`).
             */}}
             - { name: MAINTENANCE_LINEAGE_PUBSUB, value: {{ include "lance.subPubsub" (list $ .Values.maintenance.daprAppId) | quote }} }
-            {{- else }}
-            - { name: MAINTENANCE_LINEAGE_PUBSUB, value: {{ .Values.pubsub.name | quote }} }
-            {{- end }}
             - { name: MAINTENANCE_LINEAGE_TOPIC, value: {{ .Values.pubsub.topic | quote }} }
             {{- if .Values.services.lineage.outbox.enabled }}
             {{- /*
@@ -281,11 +278,10 @@ spec:
             - { name: MAINTENANCE_DISCOVERY_MAX_DEPTH, value: {{ hasKey .Values.maintenance "discoveryMaxDepth" | ternary .Values.maintenance.discoveryMaxDepth 3 | quote }} }
             - { name: MAINTENANCE_DECLARED_PLATFORM_ROOTS, value: {{ hasKey .Values.maintenance "declaredPlatformRoots" | ternary .Values.maintenance.declaredPlatformRoots "" | quote }} }
             {{- if .Values.maintenance.controlEmit }}
-            {{- /* The purge announces each reclamation on the catalog's control topic. The broadcast
-                   component must scope this app-id (dapr-component.yaml) or the sidecar refuses the
-                   publish — and because emission is best-effort, it refuses SILENTLY. */}}
+            {{- /* The purge announces each reclamation on the catalog's control topic, through maintenance's own
+                   component (dapr-component.yaml): one the sidecar is not scoped to refuses the publish SILENTLY. */}}
             - { name: MAINTENANCE_CONTROL_EMIT_ENABLED, value: "true" }
-            - { name: MAINTENANCE_CONTROL_PUBSUB, value: {{ .Values.pubsub.controlName | default "catalog-control-pubsub" | quote }} }
+            - { name: MAINTENANCE_CONTROL_PUBSUB, value: {{ printf "%s-%s" (.Values.pubsub.controlName | default "catalog-control-pubsub") .Values.maintenance.daprAppId | quote }} }
             {{- end }}
             - { name: MAINTENANCE_BINDING_NAME, value: {{ .Values.maintenance.bindingName | quote }} }
             - { name: MAINTENANCE_OLDER_THAN_DAYS, value: {{ .Values.maintenance.olderThanDays | quote }} }

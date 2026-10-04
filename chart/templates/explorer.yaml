@@ -120,11 +120,9 @@ spec:
             - { name: RASK_STORES, value: {{ toJson .stores | quote }} }
             {{- end }}{{- end }}
             {{- if and (eq $name "annotator") $root.Values.explorer.controlEmit }}
-            # The annotator is the third producer on `catalog.control.v1`. Its app-id must also appear in
-            # that component's `scopes:` or the sidecar refuses the publish and the emit — best-effort by
-            # design — loses it in silence.
+            # The annotator publishes `catalog.control.v1` on its own component, as its own NATS user.
             - { name: ANNOTATOR_CONTROL_EMIT_ENABLED, value: "true" }
-            - { name: ANNOTATOR_CONTROL_PUBSUB, value: {{ $root.Values.pubsub.controlName | default "catalog-control-pubsub" | quote }} }
+            - { name: ANNOTATOR_CONTROL_PUBSUB, value: {{ printf "%s-%s" ($root.Values.pubsub.controlName | default "catalog-control-pubsub") $svc.daprAppId | quote }} }
             {{- end }}
             {{- if and (eq $name "annotator") (include "lance.secretsViaDapr" $root) }}
             # THE APP-API TOKEN, FROM THE STORE — never from env, which is the estate's rule and the

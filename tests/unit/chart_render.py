@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import functools
 import pathlib
+import re
 import shutil
 import subprocess
 
@@ -100,3 +101,36 @@ def env_of(container: dict) -> dict[str, str]:
     """The container's `name: value` env pairs. `valueFrom` entries are omitted deliberately — a gate
     reading a rendered literal cannot see what a secret reference resolves to at run time."""
     return {e["name"]: e["value"] for e in container.get("env") or [] if "value" in e}
+
+
+#: One NATS user as the dev OpenBao's seed issues it: `nats_user <name> '<publish,...>' '<subscribe,...>'`.
+_NATS_USER = re.compile(r"^\s*nats_user ([a-z0-9][a-z0-9-]*) '([^']*)' '([^']*)'$", re.MULTILINE)
+#: A stream the NATS stream Job creates, through either of its two helpers, never a commented-out one.
+_STREAM = re.compile(r'^[^\S\n]*add(?:_workqueue)?_if_missing ([A-Z_]+) "([^"]+)"', re.MULTILINE)
+
+
+def nats_users(docs: tuple[dict, ...]) -> dict[str, tuple[frozenset[str], frozenset[str]]]:
+    """Each NATS user the dev OpenBao's seed issues, as (publish, subscribe) permissions; empty when the render issues none.
+
+    Read off the script the seed container runs, so it is the table as the chart passes it to nsc (values.yaml `nats.auth.users`).
+    """
+    issued: dict[str, tuple[frozenset[str], frozenset[str]]] = {}
+    for _, name, container in containers(docs):
+        if name == "seed":
+            for user, publish, subscribe in _NATS_USER.findall((container.get("command") or [""])[-1]):
+                issued[user] = (frozenset(publish.split(",")), frozenset(subscribe.split(",")))
+    return issued
+
+
+def jetstream_streams(docs: tuple[dict, ...]) -> dict[str, str]:
+    """Each stream the NATS stream Job creates -> the subject filter it captures."""
+    found: dict[str, str] = {}
+    for workload, _, container in containers(docs):
+        if workload.startswith("Job/") and "-nats-stream-" in workload:
+            found.update(_STREAM.findall((container.get("command") or [""])[-1]))
+    return found
+
+
+def captures(subject: str, declared: str) -> bool:
+    """NATS subject matching for the two forms the stream Job declares: a `>` tail or a literal."""
+    return subject.startswith(declared[:-1]) if declared.endswith(".>") else subject == declared

@@ -210,7 +210,7 @@ spec:
                is gated on this topic too, and a door that accepted work no worker consumes would be
                strictly worse than the synchronous rewrite it replaced.
             */}}
-            - { name: LANCE_MAINTENANCE_WORK_PUBSUB, value: {{ $.Values.maintenance.workPubsub | quote }} }
+            - { name: LANCE_MAINTENANCE_WORK_PUBSUB, value: {{ printf "%s-%s" $.Values.maintenance.workPubsub $.Values.services.catalog.daprAppId | quote }} }
             - { name: LANCE_MAINTENANCE_WORK_TOPIC, value: {{ $.Values.maintenance.workTopic | quote }} }
             {{- if $.Values.maintenance.indexTopic }}
             {{- /*
@@ -219,7 +219,7 @@ spec:
                service reads the SAME value, so neither side can believe a worker exists when it does not.
             */}}
             - { name: LANCE_MAINTENANCE_INDEX_TOPIC, value: {{ $.Values.maintenance.indexTopic | quote }} }
-            - { name: LANCE_MAINTENANCE_INDEX_PUBSUB, value: {{ $.Values.maintenance.indexPubsub | quote }} }
+            - { name: LANCE_MAINTENANCE_INDEX_PUBSUB, value: {{ printf "%s-%s" $.Values.maintenance.indexPubsub $.Values.services.catalog.daprAppId | quote }} }
             {{- end }}
             {{- end }}
             {{- if and .Values.catalog.controlEmit .Values.catalog.controlOutbox.enabled }}

@@ -25,12 +25,14 @@ CHART="${CHART:-chart}"
 # commit: the gate never reached the script that would have reported it. values-prod.yaml deliberately
 # does NOT pin a registry (the deployer supplies theirs), so the check must, exactly as it does for the
 # appToken and the age/minio credentials. signing.provisioned is the operator's attestation that the event-signing
-# keys exist in the sealed store (templates/signing-provisioned.yaml refuses a non-dev store without it).
+# keys exist in the sealed store (templates/signing-provisioned.yaml refuses a non-dev store without it), and
+# nats.auth.provisioned the same for the NATS users and route credential (templates/nats-provisioned.yaml).
 COMMON=(--set frontend.oidc.sessionSecret=ci-dummy-session-secret-at-least-32-chars
         --set frontend.oidc.publicIssuer=https://auth.example.com/dex
         --set frontend.oidc.publicOrigin=https://lance.example.com
         --set image.repository=ghcr.io/example/rask
-        --set signing.provisioned=true)
+        --set signing.provisioned=true
+        --set nats.auth.provisioned=true)
 OUT="$(mktemp)"
 trap 'rm -f "$OUT"' EXIT
 

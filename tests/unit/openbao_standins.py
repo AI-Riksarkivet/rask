@@ -1,4 +1,4 @@
-"""Stand-ins for the `bao` and `nk` CLIs, for the tests that run the scripts the chart renders and the operator's own.
+"""Stand-ins for the `bao`, `nk` and `nsc` CLIs, for the tests that run the scripts the chart renders and the operator's own.
 
 A shared plain module, as `chart_render.py` is, so two tests that run a script against the same CLI contract exercise one
 stand-in instead of two that drift. Both keep every call they receive and fail loudly on one the scripts have no business
@@ -61,6 +61,39 @@ echo "$n" > "$NK_STATE"
 case " $NK_FAIL " in *" $n "*) echo "nk: boom" >&2; exit 1 ;; esac
 case " $NK_GARBAGE " in *" $n "*) echo "not a key"; exit 0 ;; esac
 sed -n "$((2 * n - 1)),$((2 * n))p" "$NK_PAIRS"
+"""
+
+
+#: nsc 2.15's calls the dev seed makes ([[XC-078]]), measured as uid 65532 in natsio/nats-box:0.19.7 on 2026-10-04, against state
+#: kept under the `-H` directory so a carried root is just that directory again. A JWT is `eyJ.<base64 of a JSON claim>`: an
+#: account's names its key, a user's its issuer, its key and the permissions it was given, which the tests decode. Every call is
+#: appended to $NSC_CALLS, a non-empty $NSC_FAIL fails them all, and anything else the seed has no business calling fails loudly.
+NSC = """\
+#!/bin/sh
+[ "$1" = -H ] || { echo "nsc stand-in: -H <dir> must come first: $*" >&2; exit 99; }
+d=$2; shift 2
+echo "$*" >> "$NSC_CALLS"
+[ -z "$NSC_FAIL" ] || { echo "nsc: boom" >&2; exit 1; }
+jwt() { printf 'eyJ.%s' "$(printf '%s' "$1" | base64 | tr -d '\\n=')"; }
+key() { printf '%s%s' "$1" "$(od -An -N20 -tx1 /dev/urandom | tr -d ' \\n' | tr a-f A-F)"; }
+account() { [ -f "$d/$1.pub" ] || { echo "Error: account $1 not found" >&2; exit 1; }; }
+case "$*" in
+  "add operator -n rask --sys") jwt "{\\"operator\\":\\"$(key O)\\"}" > "$d/operator"
+    key A > "$d/SYS.pub"; jwt "{\\"account\\":\\"$(cat "$d/SYS.pub")\\"}" > "$d/SYS.jwt" ;;
+  "add account -n APP") key A > "$d/APP.pub"; jwt "{\\"account\\":\\"$(cat "$d/APP.pub")\\"}" > "$d/APP.jwt" ;;
+  "edit account -n APP --js-tier 0 --js-disk-storage -1 --js-mem-storage 0 --js-streams -1 --js-consumer -1") account APP ;;
+  "delete user -a SYS -n sys") account SYS ;;
+  "describe operator --raw") cat "$d/operator" ;;
+  "describe account -n SYS --raw"|"describe account -n APP --raw") account "$4"; cat "$d/$4.jwt" ;;
+  "describe account -n SYS --field sub"|"describe account -n APP --field sub") account "$4"; printf '"%s"\\n' "$(cat "$d/$4.pub")" ;;
+  "add user -a APP -n "*" -k "*" --allow-pub "*" --allow-sub "*)
+    [ "$#" -eq 12 ] || { echo "nsc stand-in: unexpected add user: $*" >&2; exit 99; }
+    account APP; mkdir -p "$d/users"
+    [ ! -f "$d/users/$6.jwt" ] || { echo "Error: user $6 already exists" >&2; exit 1; }
+    jwt "{\\"iss\\":\\"$(cat "$d/APP.pub")\\",\\"sub\\":\\"$8\\",\\"pub\\":\\"${10}\\",\\"subscribe\\":\\"${12}\\"}" > "$d/users/$6.jwt" ;;
+  "describe user -a APP -n "*" --raw") cat "$d/users/$6.jwt" ;;
+  *) echo "nsc stand-in: unhandled call: $*" >&2; exit 99 ;;
+esac
 """
 
 

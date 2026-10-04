@@ -16,15 +16,29 @@ its list refuses the seed, a list without its key is a rotation that prepends an
 the candidate; keeps it before the first write; and writes the public list first. A failed mint costs that
 identity its key and never the readiness key. No seed reaches an argument list or an output stream.
 
-The scripts run here against stand-ins for the bao and nk CLIs: the bao stand-in keeps two stores, the pod's
-own server and the one the Service routes to, and the nk stand-in hands out generated pairs.
+[[XC-078]] puts the bus credentials through it too (values.yaml `nats.auth`), and they are a set, not a pair per name: one
+trust root (an operator, its SYS account and the APP account every user belongs to) that the server is configured with, and
+a user per table entry that only that root can issue. The `mint` init container copies nsc and nk out of nats-box for the
+seed; the seed carries the root (`nats-root`, the operator and account keys) and the route credential (`nats-route`) from the
+store behind the Service, else mints a root, and issues EVERY user afresh from the table under it, so a permission the table
+changes reaches the store on the next rollout without touching the trust root the server holds. It writes `nats-user-<user>`,
+`nats-server` and those two before the readiness key; a root it cannot read or use stops the seed, because a store that is
+Ready without its users hands every sidecar an empty credential. The bundle is kept like the signing pairs.
+
+The scripts run here against stand-ins for the bao, nk and nsc CLIs: the bao stand-in keeps two stores, the pod's
+own server and the one the Service routes to, the nk stand-in hands out generated pairs, and the nsc stand-in issues JWTs
+that carry the permissions it was given.
 """
 
 from __future__ import annotations
 
+import base64
+import io
+import json
 import os
 import stat
 import subprocess
+import tarfile
 from pathlib import Path
 from typing import Any
 
@@ -32,7 +46,7 @@ import pytest
 
 from tests.unit import chart_render
 from tests.unit.chart_render import DEFAULT_ARGS, REPO
-from tests.unit.openbao_standins import BAO, NK, install
+from tests.unit.openbao_standins import BAO, NK, NSC, install
 
 
 _OWN = "http://127.0.0.1:8200"
@@ -138,8 +152,36 @@ def _arrange(case: str, ids: list[str], pool: list[Any], stores: Path, home: Pat
     return expected, nk
 
 
+def _claim(jwt: str) -> dict[str, str]:
+    """The claim a stand-in JWT carries."""
+    body = jwt.split(".", 1)[1]
+    return json.loads(base64.b64decode(body + "=" * (-len(body) % 4)))
+
+
+def _arrange_nats(case: str, stores: Path, tmp_path: Path, env: dict[str, str]) -> dict[str, str]:
+    """Lay out what the store behind the Service holds of the bus credentials; returns the root and route the seed must carry.
+
+    Empty for a case that carries nothing. The served root is a trust root the stand-in minted earlier, as a surge finds it.
+    """
+    served = stores / "served" / "secret"
+    if case == "nats-root-malformed":
+        (served / "nats-root").write_text("nsc=not-a-root\n")
+    if case != "nats-carried":
+        return {}
+    root = tmp_path / "earlier-root"
+    root.mkdir()
+    for call in (["add", "operator", "-n", "rask", "--sys"], ["add", "account", "-n", "APP"]):
+        subprocess.run([str(tmp_path / "nsc"), "-H", str(root), *call], env=env, check=True, capture_output=True)  # noqa: S603
+    packed = io.BytesIO()
+    with tarfile.open(fileobj=packed, mode="w:gz") as tar:
+        tar.add(root, arcname=".")
+    (served / "nats-root").write_text(f"nsc={base64.b64encode(packed.getvalue()).decode()}\n")
+    (served / "nats-route").write_text("user=route\npassword=an-earlier-route-password\n")
+    return {"operator": (root / "operator").read_text(), "account": (root / "APP.pub").read_text(), "password": "an-earlier-route-password"}
+
+
 @pytest.mark.parametrize(
-    ("overlay", "served", "local", "succeeds", "signing"),
+    ("overlay", "served", "local", "succeeds", "case"),
     [
         pytest.param(DEFAULT_ARGS, "lacks", "", True, "minted", id="minted-into-a-served-absence"),
         pytest.param(("--set", "image.localImages=true", "-f", str(REPO / "chart/values-local.yaml")), "lacks", "", True, "minted", id="minted-with-eso"),
@@ -156,6 +198,9 @@ def _arrange(case: str, ids: list[str], pool: list[Any], stores: Path, home: Pat
         pytest.param(DEFAULT_ARGS, "lacks", "", False, "key-without-list", id="a-key-without-its-list-stops-the-seed"),
         pytest.param(DEFAULT_ARGS, "lacks", "", False, "malformed-pair", id="a-malformed-pair-behind-the-service-is-refused"),
         pytest.param(DEFAULT_ARGS, "lacks", "", False, "malformed-list", id="a-malformed-list-is-not-rotated-onto"),
+        pytest.param(DEFAULT_ARGS, "lacks", "", True, "nats-carried", id="the-bus-trust-root-and-route-are-carried-and-every-user-issued-afresh"),
+        pytest.param(DEFAULT_ARGS, "lacks", "", False, "nats-root-malformed", id="a-bus-trust-root-it-cannot-use-stops-the-seed"),
+        pytest.param(DEFAULT_ARGS, "lacks", "", False, "nats-mint-failed", id="a-store-without-its-bus-users-is-never-ready"),
     ],
 )
 def test_the_dev_store_is_seeded_by_its_own_pod_and_keeps_its_signing_keys(  # noqa: PLR0913, PLR0915 — parametrized, one scenario per row
@@ -165,7 +210,7 @@ def test_the_dev_store_is_seeded_by_its_own_pod_and_keeps_its_signing_keys(  # n
     served: str,
     local: str,
     succeeds: bool,  # noqa: FBT001
-    signing: str,
+    case: str,
 ) -> None:
     docs = chart_render.render(*overlay)
     workload, container = _seed(docs)
@@ -181,13 +226,18 @@ def test_the_dev_store_is_seeded_by_its_own_pod_and_keeps_its_signing_keys(  # n
         (stores / "local.readonly").touch()
     elif local == "restart":
         (stores / "restart").touch()
-    install(tmp_path, bao=BAO, sleep=_SLEEP, nk=NK)
+    install(tmp_path, bao=BAO, sleep=_SLEEP, nk=NK, nsc=NSC)
     (tmp_path / "home" / "seed").mkdir(parents=True)
     pool = [event_signer(f"pair-{i}") for i in range(4 * len(ids))]
-    expected, nk = _arrange(signing, ids, pool, stores, tmp_path / "home")
-    (tmp_path / "pairs").write_text("".join(f"{pair.seed}\n{pair.public}\n" for pair in pool[: len(ids)]))
+    expected, nk = _arrange(case, ids, pool, stores, tmp_path / "home")
+    users = chart_render.nats_users(docs)
+    # The seed issues the users in the table's order, after the mint's one nk call per signing identity.
+    bus_pairs = {user: event_signer(f"bus-{user}") for user in sorted(users)}
+    (tmp_path / "pairs").write_text("".join(f"{pair.seed}\n{pair.public}\n" for pair in [*pool[: len(ids)], *bus_pairs.values()]))
     signing_dir = tmp_path / "signing"
     signing_dir.mkdir()
+    nats_tools = tmp_path / "nats-tools"
+    nats_tools.mkdir()
     [service] = [d for d in docs if d.get("kind") == "Service" and f"Deployment/{d['metadata']['name']}" == workload]
     service_addr = f"http://{service['metadata']['name']}:{service['spec']['ports'][0]['port']}"
     here = {
@@ -196,12 +246,16 @@ def test_the_dev_store_is_seeded_by_its_own_pod_and_keeps_its_signing_keys(  # n
         "STORES": str(stores),
         "SERVICE_ADDR": service_addr,
         "SIGNING_DIR": str(signing_dir),
+        "NATS_TOOLS": str(nats_tools),
         "NK_PAIRS": str(tmp_path / "pairs"),
         "NK_STATE": str(tmp_path / "nk-calls"),
         "NK_FAIL": "",
         "NK_GARBAGE": "",
+        "NSC_CALLS": str(tmp_path / "nsc-calls"),
+        "NSC_FAIL": "1" if case == "nats-mint-failed" else "",
         **nk,
     }
+    carried = _arrange_nats(case, stores, tmp_path, {**os.environ, **here, "NSC_FAIL": "", "NSC_CALLS": str(tmp_path / "earlier-calls")})
 
     def run(script_container: dict) -> subprocess.CompletedProcess[str]:
         argv = ["sh", "-c", script_container["command"][-1]]
@@ -215,10 +269,13 @@ def test_the_dev_store_is_seeded_by_its_own_pod_and_keeps_its_signing_keys(  # n
 
     assert minted.returncode == 0, f"a failed mint must not stop the pod: exit {minted.returncode}: {minted.stderr[-1000:]}"
     assert not modes, f"mint candidates must be mode 0400 for their owner alone: {modes}"
+    assert users, "the seed issues no NATS user, so no pub/sub client can authenticate"
     calls_text = (stores / "calls").read_text()
     calls = calls_text.splitlines()
-    leaked = [pair.seed for pair in pool if pair.seed in (minted.stdout + minted.stderr + ran.stdout + ran.stderr + calls_text)]
-    assert not leaked, "a private seed reached an output stream or a bao argument list"
+    nsc_calls = (tmp_path / "nsc-calls").read_text() if (tmp_path / "nsc-calls").exists() else ""
+    streams = minted.stdout + minted.stderr + ran.stdout + ran.stderr + calls_text + nsc_calls
+    leaked = [pair.seed for pair in [*pool, *bus_pairs.values()] if pair.seed in streams]
+    assert not leaked, "a private seed reached an output stream, a bao argument list or an nsc argument list"
     writes = [call for call in calls if call.split(" ", 1)[1].startswith(_WRITES)]
     assert writes, "the seed wrote nothing"
     assert all(call.startswith(f"{_OWN} ") for call in writes), (
@@ -238,9 +295,36 @@ def test_the_dev_store_is_seeded_by_its_own_pod_and_keeps_its_signing_keys(  # n
         assert not (tmp_path / "home" / "seed" / f"signing-key-{ids[0]}").exists(), (
             "the refused pair was kept, so every restart reads it back and refuses again"
         )
+        if case.startswith("nats-"):
+            bus = [call for call in writes if " kv put secret/nats-" in call]
+            assert not bus, f"bus credentials were written from a trust root the seed refused: {bus}"
         return
     assert writes[-1].startswith(f"{_OWN} kv put {_SENTINEL} "), f"the readiness key is not the last write: {writes[-1]}"
     assert len(seeded) == (2 if local == "restart" else 1), f"seeds that completed: {len(seeded)}"
+
+    root = _store(stores, "local", "secret/nats-server")
+    route = _store(stores, "local", "secret/nats-route")
+    assert root.get("operator", "").startswith("eyJ") and root.get("system_account"), f"the store holds no trust root for the server: {root}"
+    accounts = json.loads(root.get("resolver_preload", "{}"))
+    assert root["system_account"] in accounts and len(accounts) == 2, f"the server would preload {sorted(accounts)}, not the SYS and APP accounts"
+    assert route.get("user") and route.get("password"), f"the store holds no route credential: {route}"
+    assert _store(stores, "local", "secret/nats-root").get("nsc"), (
+        "the trust root's keys were not stored, so the next rollout mints a root the server does not trust"
+    )
+    if carried:
+        assert root["operator"] == carried["operator"] and route["password"] == carried["password"], (
+            "the trust root or the route credential behind the Service was replaced, so the running server refuses every new client"
+        )
+    for user, (publish, subscribe) in users.items():
+        issued = _store(stores, "local", f"secret/nats-user-{user}")
+        claim = _claim(issued.get("jwt", "eyJ.e30"))
+        assert issued.get("seed") == bus_pairs[user].seed and claim.get("sub") == bus_pairs[user].public, f"nats-user-{user} is not the pair issued for it"
+        assert (set(claim["pub"].split(",")), set(claim["subscribe"].split(","))) == (publish, subscribe), (
+            f"{user} was issued {claim}, not the table's permissions: a subject lost its $ or its wildcard on the way to nsc"
+        )
+        assert claim["iss"] == (carried.get("account") or claim["iss"]) and claim["iss"] in accounts, (
+            f"{user} is issued by an account the server does not preload"
+        )
 
     for identity in ids:
         pair = expected[identity]
@@ -248,7 +332,7 @@ def test_the_dev_store_is_seeded_by_its_own_pod_and_keeps_its_signing_keys(  # n
             _store(stores, "local", f"secret/signing-key-{identity}").get("seed"),
             _store(stores, "local", f"secret/signing-public-{identity}").get("keys"),
         )
-        assert stored == (pair or (None, None)), f"{signing}: {identity} holds {stored}, not {pair}"
+        assert stored == (pair or (None, None)), f"{case}: {identity} holds {stored}, not {pair}"
         public_put = next((i for i, call in enumerate(calls) if f" kv put secret/signing-public-{identity} " in call), None)
         key_put = next((i for i, call in enumerate(calls) if f" kv put secret/signing-key-{identity} " in call), None)
         if pair is None:
@@ -277,6 +361,14 @@ def test_the_dev_store_is_seeded_by_its_own_pod_and_keeps_its_signing_keys(  # n
     )
     mounted = {c["name"] for c in [*pod["initContainers"], *pod["containers"]] if any(m["name"] == "signing" for m in c.get("volumeMounts") or [])}
     assert mounted == {"mint", "seed"}, f"the candidate volume is mounted by {sorted(mounted)}, so a container that never needs a seed can read one"
+    tools = {
+        c["name"]: m.get("readOnly", False)
+        for c in [*pod["initContainers"], *pod["containers"]]
+        for m in c.get("volumeMounts") or []
+        if m["mountPath"] == env["NATS_TOOLS"]
+    }
+    assert tools == {"mint": False, "seed": True}, f"the NATS tools are mounted as {tools}: the mint copies them and the seed only runs them"
+    assert {p.name for p in nats_tools.iterdir()} == {"nsc", "nk"}, "the mint did not hand the seed the tools it issues bus users with"
     policies = [
         d
         for d in chart_render.render(*overlay, "--set", "networkPolicy.enabled=true")

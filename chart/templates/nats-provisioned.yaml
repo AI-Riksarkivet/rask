@@ -1,0 +1,11 @@
+{{- /* Renders no object, like `signing-provisioned.yaml`: credentials nothing in this chart mints must be attested, and operator mode needs ESO (values.yaml `nats.auth`). */ -}}
+{{- if and .Values.nats.auth.server (not (include "lance.natsCredsFiles" .)) }}
+{{- fail "nats.auth.server needs externalSecrets.enabled and a secret store: the server's operator configuration, its route credential and the credential files of nats-box and the stream Job are all written by ESO from the store, and a server in operator mode refuses every client without a user." }}
+{{- end }}
+{{- if and (include "lance.secretsViaDapr" .) (or (not .Values.openbao.devMode) .Values.openbao.externalAddr .Values.nats.externalUrl) (not .Values.nats.auth.provisioned) }}
+{{- $names := list }}
+{{- range (include "lance.natsUsers" . | splitList " " | compact) }}{{- $names = append $names (printf "nats-user-%s" .) }}{{- end }}
+{{- if .Values.nats.enabled }}{{- $names = append $names "nats-route" }}{{- end }}
+{{- if and .Values.nats.enabled .Values.nats.auth.server }}{{- $names = append $names "nats-server" }}{{- end }}
+{{- fail (printf "NATS CREDENTIALS NOT PROVISIONED: a store this chart does not seed (openbao.devMode=false or openbao.externalAddr) or a bus it does not run (nats.externalUrl) gets no NATS user from the chart, so every pub/sub client would connect with an empty credential. Create these secrets in the store (KV v2; nats-user-<user> holds the fields jwt and seed with the permissions nats.auth.users lists), then --set nats.auth.provisioned=true:\n  - %s" (join "\n  - " $names)) }}
+{{- end }}

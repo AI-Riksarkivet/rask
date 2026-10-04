@@ -686,6 +686,78 @@ component (dapr-component.yaml) and the app's *_PUBSUB env must agree on this na
 {{- $root.Values.pubsub.name }}-{{ index . 1 -}}
 {{- end -}}
 
+{{- /* The NATS users of values.yaml `nats.auth.users`, sorted and validated: a name becomes a secret name and a shell word, a subject a single-quoted shell word. */ -}}
+{{- define "lance.natsUsers" -}}
+{{- $names := list -}}
+{{- range $u, $p := .Values.nats.auth.users -}}
+{{- if not (regexMatch "^[a-z0-9][a-z0-9-]*$" $u) }}{{- fail (printf "nats.auth.users.%s: a user name must match ^[a-z0-9][a-z0-9-]*$" $u) }}{{- end -}}
+{{- range (concat ($p.publish | default list) ($p.subscribe | default list)) }}{{- if not (regexMatch "^[A-Za-z0-9_$.*>-]+$" .) }}{{- fail (printf "nats.auth.users.%s: %q is not a NATS subject this chart can pass to nsc" $u .) }}{{- end }}{{- end -}}
+{{- $names = append $names $u -}}
+{{- end -}}
+{{- join " " $names -}}
+{{- end -}}
+
+{{- /* A pub/sub Component's credential (list $root $appId): its one app's user, from the store (values.yaml `nats.auth`). */ -}}
+{{- define "lance.natsCreds" -}}
+{{- $root := index . 0 -}}{{- $app := index . 1 -}}
+{{- if include "lance.secretsViaDapr" $root -}}
+{{- if not (has $app (include "lance.natsUsers" $root | splitList " ")) }}{{- fail (printf "a pub/sub component of %s names nats-user-%s, which nats.auth.users does not declare" $app $app) }}{{- end -}}
+- { name: jwt, secretKeyRef: { name: nats-user-{{ $app }}, key: jwt } }
+- { name: seedKey, secretKeyRef: { name: nats-user-{{ $app }}, key: seed } }
+{{- end -}}
+{{- end -}}
+
+{{- /* The store that resolves a Component's credential, only while one exists (a null `auth:` is refused by the CRD). */ -}}
+{{- define "lance.natsAuth" -}}
+{{- if include "lance.secretsViaDapr" . }}
+auth: { secretStore: lance-secrets }
+{{- end }}
+{{- end -}}
+
+{{- /* A PUBLISH-ONLY pub/sub Component (list $root $name $appId): one app's connection, carrying no consumer settings. */ -}}
+{{- define "lance.publishPubsub" -}}
+{{- $root := index . 0 -}}{{- $name := index . 1 -}}{{- $app := index . 2 }}
+---
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: {{ $name }}
+  labels: {{- include "lance.labels" $root | nindent 4 }}
+spec:
+  type: pubsub.jetstream
+  version: v1
+  metadata:
+    - { name: natsURL, value: "{{ include "lance.natsUrl" $root }}" }
+    - { name: name, value: "lance-dapr-{{ $name }}" }
+    {{- with include "lance.natsCreds" (list $root $app) }}{{ . | nindent 4 }}{{- end }}
+{{- include "lance.natsAuth" $root }}
+scopes:
+  - {{ $app }}
+{{- end -}}
+
+{{- /* Whether the chart's dev OpenBao issues the NATS credentials: a dev store this chart runs, for a NATS this chart runs. */ -}}
+{{- define "lance.natsMints" -}}
+{{- if and .Values.openbao.enabled .Values.openbao.devMode (not .Values.openbao.externalAddr) .Values.nats.enabled (not .Values.nats.externalUrl) -}}true{{- end -}}
+{{- end -}}
+
+{{- /* Whether a pod with no sidecar gets its NATS credential as a file ESO writes from the store. */ -}}
+{{- define "lance.natsCredsFiles" -}}
+{{- if and (include "lance.secretsViaDapr" .) .Values.externalSecrets.enabled -}}true{{- end -}}
+{{- end -}}
+
+{{- /* The Secrets ESO writes for the NATS pods that have no sidecar, as JSON {target: [store secrets]}: the ExternalSecrets and the ESO policy both read it. */ -}}
+{{- define "lance.natsFiles" -}}
+{{- $files := dict -}}
+{{- if include "lance.natsCredsFiles" . -}}
+{{- if or .Values.nats.enabled .Values.nats.externalUrl }}{{- $_ := set $files "nats-admin-creds" (list "nats-user-admin") }}{{- end -}}
+{{- if and .Values.nats.enabled .Values.nats.auth.server }}
+{{- $_ := set $files "nats-box-creds" (list "nats-user-monitor") }}
+{{- $_ := set $files "nats-auth" (list "nats-server" "nats-route") }}
+{{- end -}}
+{{- end -}}
+{{- toJson $files -}}
+{{- end -}}
+
 {{/* daprd sidecar resource annotations — the app containers are bounded (resources.default), so the
 sidecars must be too (an unbounded daprd per pod × 8 pods can starve a small node). One helper = one
 place to size them. */}}
@@ -1705,6 +1777,13 @@ measured decision, and a second copy would drift without anything saying so. */}
         {{- $denied = append $denied (printf "signing-key-%s" .) }}
         {{- end }}
         {{- end }}
+        {{- /* Every bus credential (values.yaml `nats.auth`): a Component's secretKeyRef is resolved without these scopes, and ingest reads its own user. */}}
+        {{- range (include "lance.natsUsers" $cfgRoot | splitList " " | compact) }}
+        {{- if not (and (eq $app "ingest") (eq . "ingest")) }}
+        {{- $denied = append $denied (printf "nats-user-%s" .) }}
+        {{- end }}
+        {{- end }}
+        {{- $denied = concat $denied (list "nats-root" "nats-route") }}
         {{- if $denied }}
         deniedSecrets:
           {{- range $denied }}

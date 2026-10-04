@@ -424,6 +424,7 @@ _REAL_REGISTRY = (
     "minio.secretKey=a-real-secret-value-32-chars-long",
     "dapr.appToken=a-real-secret-value-32-chars-long",
     "signing.provisioned=true",
+    "nats.auth.provisioned=true",
 )
 
 
