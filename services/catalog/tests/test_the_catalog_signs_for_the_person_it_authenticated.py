@@ -15,8 +15,8 @@ publish is a recording stand-in, so what the verifier sees is exactly what the c
 
 A SIGNER WITHOUT ITS KEY ANNOUNCES NOTHING AND FAILS NOTHING. The emit runs after the Lance write committed, so a
 signature that cannot be made is a withheld announcement, never a failed request; the pod reports not ready meanwhile. A
-control event is not lost to the wait: it is staged unsigned in the control outbox, and the relay signs it once the key
-resolves (`test_the_control_lane_has_a_relay.py`).
+control event is withheld the same way and is not staged either: the control relay delivers only staged bytes this
+catalog signed (`test_the_control_lane_has_a_relay.py`), so an unsigned one could never leave the outbox.
 """
 
 from __future__ import annotations
@@ -207,17 +207,13 @@ def test_a_write_nobody_authenticated_is_announced_unsigned_and_its_control_even
         pytest.param(SimpleNamespace(sub=PERSON), id="a-write-by-a-person"),
     ],
 )
-def test_a_catalog_without_its_key_commits_the_write_announces_nothing_stages_its_control_events_and_is_not_ready(
-    boot: Boot, control_outbox: str, token: object
-) -> None:
+def test_a_catalog_without_its_key_commits_the_write_announces_nothing_stages_nothing_and_is_not_ready(boot: Boot, control_outbox: str, token: object) -> None:
     client = boot(httpx.Response(500), httpx.Response(404), token)
 
     _write_a_table_and_a_row(client)
     readiness = client.get("/readyz")
 
     assert _Sidecar.published == [], f"a catalog without its key announced {len(_Sidecar.published)} events"
-    staged = [json.loads(body) for _key, body in outbox.list_events(control_outbox, {})]
-    assert sorted((event["action"], SIGNATURE_FACET in event) for event in staged) == [("namespace_created", False), ("table_created", False)], (
-        "the control events a keyless catalog cannot sign must wait in the outbox, unsigned, for the relay"
-    )
+    staged = [json.loads(body)["action"] for _key, body in outbox.list_events(control_outbox, {})]
+    assert staged == [], f"a catalog without its key staged {staged} unsigned, and a staged object proves nothing about who wrote it"
     assert (readiness.status_code, sorted(readiness.json()["components"])) == (503, ["namespace", "signing"])
