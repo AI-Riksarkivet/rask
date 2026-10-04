@@ -12,6 +12,11 @@ dependencies = [
     # in the image, whose venv is `uv sync --frozen --package notifications` alone: that is the exact
     # crash-loop the ingest door and then the flows door each paid for once.
     "service-kit[governed]",
+    # The signature doors on both bus routes ([[XC-078]]): `lineage_kit.signing` verifies an event's
+    # `rask_signature`, `lineage_kit.keys` reads and caches each signer's published keys, and
+    # `lineage_kit.door` turns the outcome into deliver, refuse or retry. Declared rather than borrowed:
+    # the image's venv is this package's closure alone, as the comment above records.
+    "lineage-kit",
     "fastapi>=0.115",
     "pydantic>=2.7",
     "uvicorn>=0.30",
@@ -34,3 +39,4 @@ packages = ["src/notifications"]
 
 [tool.uv.sources]
 service-kit = { workspace = true }
+lineage-kit = { workspace = true }

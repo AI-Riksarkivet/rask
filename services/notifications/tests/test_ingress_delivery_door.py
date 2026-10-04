@@ -136,16 +136,19 @@ def _run_event(case: str, *, catalog: Any, intruder: Any) -> dict[str, Any]:
             return signed
         case "valid" | "store-down":
             return catalog.sign(RUN_EVENT, on_behalf_of="alice")
+        case "unsigned-start":
+            return {**RUN_EVENT, "eventType": "START"}
     raise AssertionError(f"no run event for case {case!r}")
 
 
 def _control_event(case: str, *, catalog: Any, producer: Any) -> dict[str, Any]:
-    """The control envelope a case delivers. A grant's actor is a person, so the catalog signs it as a delegator."""
+    """The control envelope a case delivers. A grant's actor is a person, so the catalog signs it as a delegator; a
+    review request names no actor, so its signer signs it for itself, and only the producer's role may."""
     match case:
         case "unsigned-catalog-grant":
             return GRANT
-        case "grant-signed-by-another-role":
-            return producer.sign_control(GRANT, on_behalf_of="user:admin")
+        case "review-signed-by-another-role":
+            return catalog.sign_control(REVIEW)
         case "tampered-grant":
             signed = catalog.sign_control(GRANT, on_behalf_of="user:admin")
             signed["extra"]["subject"] = "user:mallory"
@@ -158,6 +161,8 @@ def _control_event(case: str, *, catalog: Any, producer: Any) -> dict[str, Any]:
             return TASK
         case "unsigned-annotation-grant":
             return ANNOTATION_GRANT
+        case "unsigned-unnamed-action":
+            return {**GRANT, "action": "warehouse_bound", "object_type": "warehouse", "object_id": "warehouse:acme", "extra": {"namespace": "acme"}}
     raise AssertionError(f"no control event for case {case!r}")
 
 
@@ -256,6 +261,7 @@ def signature_counts() -> Iterator[Callable[[], Counts]]:
         pytest.param("enforce", "tampered", "SUCCESS", {}, ("notifications.signature.refused", "signature"), id="enforce-a-run-changed-after-it-was-signed"),
         pytest.param("enforce", "valid", "SUCCESS", {"alice": 1}, None, id="enforce-a-run-the-catalog-signed-for-its-author"),
         pytest.param("enforce", "store-down", "RETRY", {}, None, id="enforce-keys-the-sidecar-cannot-serve"),
+        pytest.param("enforce", "unsigned-start", "SUCCESS", {}, None, id="enforce-a-run-the-route-ignores-is-not-checked"),
         pytest.param("observe", "unsigned", "SUCCESS", {"alice": 1}, ("notifications.signature.would_refuse", "unsigned"), id="observe-an-unsigned-run"),
     ],
     indirect=["signing_door"],
@@ -290,12 +296,13 @@ def test_a_delivery_carrying_the_sidecars_token_reaches_an_inbox_only_when_a_lis
     ("signing_door", "case", "boxes", "counted"),
     [
         pytest.param("enforce", "unsigned-catalog-grant", {}, ("notifications.signature.refused", "unsigned"), id="enforce-an-unsigned-catalog-grant"),
-        pytest.param("enforce", "grant-signed-by-another-role", {}, ("notifications.signature.refused", "signer"), id="enforce-a-grant-another-role-signed"),
+        pytest.param("enforce", "review-signed-by-another-role", {}, ("notifications.signature.refused", "signer"), id="enforce-a-review-the-catalog-signed"),
         pytest.param("enforce", "tampered-grant", {}, ("notifications.signature.refused", "signature"), id="enforce-a-grant-changed-after-it-was-signed"),
         pytest.param("enforce", "catalog-grant", {"alice": 1}, None, id="enforce-a-grant-the-catalog-signed-for-its-actor"),
         pytest.param("enforce", "producer-review-request", {"vera": 1}, None, id="enforce-a-review-request-the-producer-signed"),
         pytest.param("enforce", "unsigned-task", {"bob": 1}, None, id="enforce-an-unsigned-task-is-exempt-r3"),
         pytest.param("enforce", "unsigned-annotation-grant", {"carol": 1}, None, id="enforce-an-unsigned-annotation-project-grant-is-exempt-r5"),
+        pytest.param("enforce", "unsigned-unnamed-action", {}, None, id="enforce-an-action-the-route-ignores-is-not-checked"),
         pytest.param("observe", "unsigned-catalog-grant", {"alice": 1}, ("notifications.signature.would_refuse", "unsigned"), id="observe-an-unsigned-grant"),
     ],
     indirect=["signing_door"],

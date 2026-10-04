@@ -8,7 +8,8 @@ caller cannot mint a new series by passing a value off a payload.
 is a person's notification, so the SUBJECT is per-user data: it belongs on spans and log lines, where
 access is already governed, and NEVER on a metric label. A counter labelled by subject would publish
 the estate's user list into a metrics store that nothing authorizes reads against, and would grow one
-series per person while doing it. Every function below takes only enum values for exactly that reason.
+series per person while doing it. So no function below takes a value off a payload: every label is an
+enum member, this app's own id, or one of lineage-kit's closed refusal reasons.
 
 Dot-namespaced under the project's `lance.*` attribute convention (the medallion's `record_*` set is
 the precedent); in PromQL the dots become underscores.
@@ -58,8 +59,13 @@ class Outcome(StrEnum):
     IGNORED = "ignored"
     #: Permanent — an unparseable payload. Redelivery cannot fix it, so the handler DROPs.
     DROPPED = "dropped"
-    #: Transient — the actor plane or OpenFGA was unreachable. The sidecar redelivers.
+    #: Transient — the actor plane, OpenFGA or the signers' published keys were unreachable. The sidecar redelivers.
     RETRIED = "retried"
+    #: An event an enforcing signature door refused: no listed signer's published key verifies it ([[XC-078]]).
+    #: ACKED and told to nobody, never DROPped: a redelivery cannot add a signature to bytes already published,
+    #: and a DROP on a subscription with a dead-letter topic parks the event on every replay.
+    #: `notifications.signature.refused` carries the reason this label cannot.
+    SIGNATURE_REFUSED = "signature_refused"
 
 
 class PassOutcome(StrEnum):
@@ -74,6 +80,13 @@ class PassOutcome(StrEnum):
     COMPLETED = "completed"
     #: The overlap branch: a previous pass still held the lock, so this delivery did nothing.
     SKIPPED = "skipped"
+
+
+class Door(StrEnum):
+    """Which signature door judged an event: each bus route verifies the events of its own lane ([[XC-078]])."""
+
+    LINEAGE_EVENTS = "lineage-events"
+    CONTROL_EVENTS = "control-events"
 
 
 _meter = metrics.get_meter("lance.notifications")
@@ -102,6 +115,20 @@ _feed_gaps = _meter.create_counter(
     "notifications.feed.gaps",
     unit="{pass}",
     description="Reconcile passes that found lineage's feed pruned BELOW this lane's cursor — rows lost unread.",
+)
+_signature_refused = _meter.create_counter(
+    "notifications.signature.refused",
+    unit="{event}",
+    description=(
+        "Bus events an enforcing signature door refused, by door and reason. A refusal is acked and tells nobody, so this count is the only trace it leaves."
+    ),
+)
+_signature_would_refuse = _meter.create_counter(
+    "notifications.signature.would_refuse",
+    unit="{event}",
+    description=(
+        "Bus events an observing signature door delivered that enforce would refuse, by door and reason (keys_unavailable: the keys could not be read)."
+    ),
 )
 
 
@@ -162,3 +189,13 @@ def record_feed_gap(count: int = 1) -> None:
     store's `information_schema.tables` before this changed.
     """
     _feed_gaps.add(count)
+
+
+def record_signature_refused(door: Door, reason: str) -> None:
+    """Count one event ``door`` refused. ``reason`` is `lineage_kit.signing.RefusalReason`, a closed set, never the event's own text."""
+    _signature_refused.add(1, {"lance.notifications.door": door.value, "lance.notifications.reason": reason})
+
+
+def record_signature_would_refuse(door: Door, reason: str) -> None:
+    """Count one event an observing ``door`` delivered that enforce would refuse: a refusal reason, or `keys_unavailable`."""
+    _signature_would_refuse.add(1, {"lance.notifications.door": door.value, "lance.notifications.reason": reason})

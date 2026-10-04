@@ -20,8 +20,16 @@ from typing import Self
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from service_kit.governed.settings import SignatureDoorSettings
 
-class IngressSettings(BaseSettings):
+
+class IngressSettings(SignatureDoorSettings, BaseSettings):
+    """What the bus routes are wired to, and what their signature doors believe ([[XC-078]]).
+
+    `SignatureDoorSettings` contributes the door mode and the signer sets the chart renders for this app; they are
+    ingress settings because only the two bus routes read them, and they mean nothing without a deployment's keys.
+    """
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
@@ -99,6 +107,11 @@ class IngressSettings(BaseSettings):
 
     #: The local sidecar's HTTP port — daprd's own env var, so a deployment that moves it moves this too.
     dapr_http_port: int = Field(default=3500, alias="DAPR_HTTP_PORT")
+
+    #: The Dapr secret store every signer publishes `signing-public-<identity>` in, which the signature doors read
+    #: through this pod's sidecar. `RASK_SECRET_STORE` is the estate's one store: the app token's door and lineage's
+    #: and the medallion's key readers name the same variable, so a deployment configures it once.
+    secret_store: str = Field(default="lance-secrets", alias="RASK_SECRET_STORE")
 
     #: The output-binding component names for the two channels, and the ONE place they are spelled on
     #: this side. A binding this deployment did not render is simply absent from the dispatch table, so

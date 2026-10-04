@@ -2265,6 +2265,7 @@ source = { editable = "services/notifications" }
 dependencies = [
     { name = "dapr-ext-fastapi" },
     { name = "fastapi" },
+    { name = "lineage-kit" },
     { name = "pydantic" },
     { name = "service-kit", extra = ["governed"] },
     { name = "uvicorn" },
@@ -2274,6 +2275,7 @@ dependencies = [
 requires-dist = [
     { name = "dapr-ext-fastapi", specifier = ">=1.18.1" },
     { name = "fastapi", specifier = ">=0.115" },
+    { name = "lineage-kit", editable = "packages/lineage-kit" },
     { name = "pydantic", specifier = ">=2.7" },
     { name = "service-kit", extras = ["governed"], editable = "packages/service-kit" },
     { name = "uvicorn", specifier = ">=0.30" },

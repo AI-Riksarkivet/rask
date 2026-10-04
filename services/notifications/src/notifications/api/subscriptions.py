@@ -20,6 +20,11 @@ The token dependency proves **"arrived via Dapr", never "trusted caller"** — t
 invokes through Dapr, so a request can carry a valid `dapr-api-token` and still be an anonymous
 stranger. It is not an authorization decision, and none is needed here: this handler writes into
 inboxes it derives itself, and every recipient's visibility is re-checked before a pointer is written.
+
+What the token cannot prove is who WROTE the event, since every pod the bus lets publish reaches this
+sidecar. Each route therefore asks `signature_door` first, over the event exactly as it arrived and
+before its handler runs: under `RASK_SIGNATURE_DOORS=enforce` an event no permitted signer's published
+key verifies is acknowledged and reaches no inbox, and under `observe` it is delivered and counted.
 """
 
 from typing import TYPE_CHECKING, Annotated, Any
@@ -33,6 +38,7 @@ from notifications.api.ingest import ingest_run_event
 from notifications.api.metrics import Lane
 from notifications.api.security import VisibilityDep
 from notifications.api.settings import get_ingress_settings
+from notifications.api.signature_door import screen_control_event, screen_lineage_event
 from notifications.config import get_notifications_settings
 from notifications.proxies import channel_push, inbox_for, watchers_of
 from service_kit.governed import fga
@@ -67,6 +73,7 @@ def register_subscriptions(app: FastAPI) -> None:
     )
     async def on_lineage_event(
         event: dict[str, Any],
+        request: Request,
         visibility: VisibilityDep,
         _: Annotated[None, Depends(require_dapr_token)],
         drain: Annotated[dict[str, str] | None, Depends(retry_when_draining)] = None,
@@ -80,7 +87,11 @@ def register_subscriptions(app: FastAPI) -> None:
         """
         if drain is not None:
             return drain
-        return await ingest_run_event(event.get("data"), lane=Lane.BUS, visibility=visibility, open_inbox=inbox_for, watchers=watchers_of, push=channel_push())
+        data = event.get("data")
+        withheld = await screen_lineage_event(data, request, settings)
+        if withheld is not None:
+            return withheld
+        return await ingest_run_event(data, lane=Lane.BUS, visibility=visibility, open_inbox=inbox_for, watchers=watchers_of, push=channel_push())
 
     def _make_expander(client: "OpenFgaClient | None") -> UsersetExpander | None:
         """Resolve `role:reviewers#assignee` to the people holding that relation, via the SAME
@@ -131,8 +142,12 @@ def register_subscriptions(app: FastAPI) -> None:
         """
         if drain is not None:
             return drain
+        data = event.get("data")
+        withheld = await screen_control_event(data, request, settings)
+        if withheld is not None:
+            return withheld
         return await ingest_control_event(
-            event.get("data"),
+            data,
             open_inbox=inbox_for,
             expand=_make_expander(getattr(request.app.state, "fga", None)),
         )

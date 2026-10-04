@@ -9,10 +9,11 @@ of two call sites.
 **The payload models are declared here rather than imported.** `lineage.models.RunEvent` is the
 authoritative shape, but it lives in another DEPLOYABLE — importing it would make `lineage` a declared
 dependency of `notifications`, which is the thing the workspace's per-package dependency closure
-exists to prevent. `lineage_kit.schemas` is a library and would be legitimate, but it is not in this
-service's declared closure either, and adding a dependency to satisfy a five-field read is the wrong
-trade. What IS declared here is only what the projection reads; `extra="ignore"` means a wider event
-parses unchanged, and the topic's `.v1` is the promise that the fields below keep their meaning.
+exists to prevent. `lineage_kit.schemas.RunEvent`, from a library this service declares for its
+signature door, is the AUTHORING shape: it requires a `job`, types the standard facets and has no form for a
+`DatasetEvent`, so parsing with it would drop events this projection can still target. What IS
+declared here is only what the projection reads; `extra="ignore"` means a wider event parses
+unchanged, and the topic's `.v1` is the promise that the fields below keep their meaning.
 """
 
 from typing import Any, Final

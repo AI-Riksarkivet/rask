@@ -96,8 +96,10 @@ reports the loss. This is the estate's most expensive silent failure mode.
 
 **One more holds before notifications is asked, and it is not `notifiable()`'s: the event is SIGNED.** Lineage verifies
 the `rask_signature` of every event on the bus and in the outbox (`signing.enforce`, on by default) and refuses what
-does not verify; notifications verifies nothing, so an unsigned event still rings the bell for a run the graph never
-recorded (trap 5, `docs/LINEAGE.md` § Signed events).
+does not verify. Notifications' `/lineage-events` checks the same signature against the same signer sets for every event
+`notifiable()` would deliver, as `RASK_SIGNATURE_DOORS` says: `enforce` refuses it (acked, told to nobody, counted in
+`notifications_signature_refused_total`), `observe` delivers it and counts it, and `off`, the default, verifies nothing,
+so an unsigned event still rings the bell for a run the graph never recorded (trap 5, `docs/LINEAGE.md` § Signed events).
 
 ```python
 event = {
@@ -144,6 +146,15 @@ await emit_control(  # best-effort; never raises into a committed mutation
 Call it **after** the backend mutation and its audit succeed, so a real change is never announced.
 `extra.subject` is the entire targeting: `named_subject` returns `None` for a missing subject, a bare
 `user:`, and the `*` wildcard, and the event is then filed IGNORED with a `SUCCESS` ack.
+
+**Under `RASK_SIGNATURE_DOORS=enforce` a named action reaches nobody unless the role that emits it signed it.**
+`service_kit.control_events.control_signer_role(action, object_id)` names that role, and the `/control-events` door
+verifies the envelope's top-level `rask_signature` against the role's identities in `RASK_CONTROL_SIGNER_ROLES`, so a
+valid signature from another service is refused. A person actor (`user:<sub>`) verifies only under a delegation from a
+delegator, `onBehalfOf` equal to the whole actor. The annotator's task actions and its grants on an
+`annotation_project:` object are exempt (owner rulings R3 and R5): it holds no signing identity, so any identity the
+bus lets publish can forge those. A refusal is acked and counted in
+`notifications_signature_refused_total{lance_notifications_door,lance_notifications_reason}`.
 
 **A new named action is a THREE-file change, and all three are load-bearing:**
 
@@ -229,12 +240,15 @@ so it must read as a reason a person would accept; and `notification-center.stor
 4. **A non-personal principal is not an address.** `user:*` (managed access) strips to a truthy `*`
    and used to write into an inbox actor literally named `*`; usersets (`team:acme#member`) still do.
    An address must identify a person.
-5. **An unsigned event, or one from a publisher lineage does not list, is recorded by nobody and still rings the bell.**
+5. **An unsigned event, or one from a publisher lineage does not list, is recorded by nobody, and it rings the bell
+   unless notifications' door enforces.**
    Lineage verifies every bus and outbox event against the keys its signer publishes and refuses one with no
    signature, an identity outside `LINEAGE_SIGNERS`, a signer that is not its stamped author (only the catalog signs
    for a person), or bytes that do not verify. The refusal is an ACK counted in `lineage_signature_refused_total{reason}`:
-   never retried, parked or recorded, and the only alert excludes `unsigned` and `signer`. Notifications verifies
-   nothing, so the person is told about a run the graph does not hold. **A new lineage-lane producer is a
+   never retried, parked or recorded, and the only alert excludes `unsigned` and `signer`. Notifications' signature door
+   (`notifications/api/signature_door.py`) applies the same check at `/lineage-events` and refuses the event only under
+   `RASK_SIGNATURE_DOORS=enforce`; under `observe` or `off` the person is told about a run the graph does not hold.
+   **A new lineage-lane producer is a
    `lance.signers` entry in the chart** (it mints the pair, sets `RASK_SIGNING_IDENTITY` and lists the identity in
    `LINEAGE_SIGNERS`) that calls `attach_signature` on every event it emits and emits nothing while its key is
    unresolved (`SigningKeyUnavailableError`). Worked reference: `services/medallion/src/medallion/core/lineage_publish.py`.
