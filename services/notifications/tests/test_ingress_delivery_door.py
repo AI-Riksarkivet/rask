@@ -1,10 +1,10 @@
-"""The bus route's door: who may put a CloudEvent into somebody's inbox.
+"""The bus routes' door: who may put a CloudEvent into somebody's inbox.
 
-The subscription is a POST route on the same FastAPI app that serves the public API, so without a
-check any client that can reach the port can forge a run event — and this plane's forged event is not
+The subscriptions are POST routes on the same FastAPI app that serves the public API, so without a
+check any client that can reach the port can forge an event — and this plane's forged event is not
 a graph row, it is a notification in a named person's inbox, attributed to them as the author.
 
-Two refusals, and they answer different questions:
+Three refusals, and they answer different questions:
 
 * **the app token** proves the request arrived through THIS app's sidecar. Unset is the documented dev
   default, and `assert_app_token_configured` turns it into a startup failure the moment Dapr ingest is
@@ -14,19 +14,29 @@ Two refusals, and they answer different questions:
   delivers, and the gateway forwards `/api/*` through Dapr service invocation — so an anonymous
   browser request arrives at a backend already holding a valid service token. It was measured against
   the ingest door as 403 direct, 403 via service DNS, **202 through the gateway**.
-
-The old form is reproduced below and shown to ingest the forged event, because "the door refuses it"
-is only interesting next to what happens when it does not.
+* **the signature** ([[XC-078]]) proves who WROTE the event, which neither check above can: both
+  authenticate the sidecar that delivered it, and every pod the bus lets publish reaches that sidecar.
+  Under `RASK_SIGNATURE_DOORS=enforce` a run event reaches an inbox only when a signer the estate lists
+  signed it, and a control event only when the role its action names signed it; the annotator's task
+  actions and the grants on its own projects need no signature (owner rulings R3 and R5). A refusal is
+  acknowledged and counted, keys the sidecar cannot serve are retried, and `observe` delivers what
+  `enforce` would refuse and counts it. The public keys are read through the sidecar's secret API, stood
+  in for by respx; the signatures are built by the root conftest's `EventSigner` from the wire format alone.
 """
 
+import importlib
+import json
 import logging
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator, Sequence
 from typing import Any, cast
 
+import httpx
 import pytest
+import respx
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from notifications.api import metrics as metrics_module
 from notifications.api import subscriptions as subscriptions_module
 from notifications.api.settings import get_ingress_settings
 from notifications.config import get_notifications_settings
@@ -36,11 +46,57 @@ from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 TOKEN = "the-sidecars-app-token"
 
+#: The sidecar's secret API for the store every signer publishes `signing-public-<identity>` in.
+SECRETS = "http://localhost:3500/v1.0/secrets/lance-secrets"
+CATALOG = "service-catalog"
+PRODUCER = "service-medallion-producer"
+
+#: What the signature counters hold: metric name -> (door, reason) -> count.
+type Counts = dict[str, dict[tuple[str, str], int]]
+
 RUN_EVENT: dict[str, Any] = {
     "eventType": "FAIL",
     "eventTime": "2026-08-09T12:00:00+00:00",
     "run": {"runId": "run-77", "facets": {"author": {"name": "alice", "sub": "alice"}}},
     "outputs": [{"namespace": "bronze", "name": "bronze$pages"}],
+}
+
+#: The control envelopes as their producers publish them: the catalog's grant on a table for the person it
+#: authenticated, the medallion producer's review request (a service acting for itself), and the annotator's
+#: task assignment and grant on one of its own projects.
+GRANT: dict[str, Any] = {
+    "event_id": "evt-grant",
+    "occurred_at": "2026-10-04T12:00:00+00:00",
+    "action": "grant_added",
+    "object_type": "grant",
+    "object_id": "table:acme$gold",
+    "actor": "user:admin",
+    "extra": {"relation": "reader", "subject": "user:alice"},
+}
+REVIEW: dict[str, Any] = {
+    "event_id": "promotion-review-tok-1",
+    "occurred_at": "2026-10-04T12:00:00+00:00",
+    "action": "promotion_review_requested",
+    "object_type": "table",
+    "object_id": "table:acme-gold$pages",
+    "actor": None,
+    "extra": {"subject": "user:vera", "reasons": ["row count fell by half"], "project": "acme", "token": "tok-1"},
+}
+TASK: dict[str, Any] = {
+    "event_id": "evt-task",
+    "occurred_at": "2026-10-04T12:00:00+00:00",
+    "action": "task_assigned",
+    "object_type": "annotation_task",
+    "object_id": "annotation_task:proj-1/task-1",
+    "actor": "user:manager",
+    "extra": {"subject": "user:bob"},
+}
+ANNOTATION_GRANT: dict[str, Any] = {
+    **GRANT,
+    "event_id": "evt-annotation-grant",
+    "object_id": "annotation_project:proj-1",
+    "actor": "user:manager",
+    "extra": {"relation": "annotator", "subject": "user:carol"},
 }
 
 
@@ -63,8 +119,46 @@ class _Plane:
         return cast(TypedActorProxy, _Inbox(self, subject))
 
 
-def _cloud_event(event: dict[str, Any]) -> dict[str, Any]:
-    return {"id": "ce-1", "source": "lineage", "type": "com.dapr.event.sent", "topic": "lineage.events.v1", "data": event}
+def _cloud_event(event: dict[str, Any], topic: str = "lineage.events.v1") -> dict[str, Any]:
+    return {"id": "ce-1", "source": "lineage", "type": "com.dapr.event.sent", "topic": topic, "data": event}
+
+
+def _run_event(case: str, *, catalog: Any, intruder: Any) -> dict[str, Any]:
+    """The run event a case delivers. Alice is a person, so only the catalog signs for her, as a delegator."""
+    match case:
+        case "unsigned":
+            return RUN_EVENT
+        case "wrong-signer":
+            return intruder.sign(RUN_EVENT)
+        case "tampered":
+            signed = catalog.sign(RUN_EVENT, on_behalf_of="alice")
+            signed["outputs"] = [{"namespace": "gold", "name": "gold$pages"}]
+            return signed
+        case "valid" | "store-down":
+            return catalog.sign(RUN_EVENT, on_behalf_of="alice")
+    raise AssertionError(f"no run event for case {case!r}")
+
+
+def _control_event(case: str, *, catalog: Any, producer: Any) -> dict[str, Any]:
+    """The control envelope a case delivers. A grant's actor is a person, so the catalog signs it as a delegator."""
+    match case:
+        case "unsigned-catalog-grant":
+            return GRANT
+        case "grant-signed-by-another-role":
+            return producer.sign_control(GRANT, on_behalf_of="user:admin")
+        case "tampered-grant":
+            signed = catalog.sign_control(GRANT, on_behalf_of="user:admin")
+            signed["extra"]["subject"] = "user:mallory"
+            return signed
+        case "catalog-grant":
+            return catalog.sign_control(GRANT, on_behalf_of="user:admin")
+        case "producer-review-request":
+            return producer.sign_control(REVIEW)
+        case "unsigned-task":
+            return TASK
+        case "unsigned-annotation-grant":
+            return ANNOTATION_GRANT
+    raise AssertionError(f"no control event for case {case!r}")
 
 
 @pytest.fixture
@@ -101,9 +195,133 @@ def token_door(plane: _Plane, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestC
     yield from _build(plane, monkeypatch)
 
 
-def test_a_delivery_carrying_the_sidecars_token_is_ingested(token_door: TestClient, plane: _Plane) -> None:
-    assert token_door.post("/lineage-events", headers={"dapr-api-token": TOKEN}, json=_cloud_event(RUN_EVENT)).json() == {"status": "SUCCESS"}
-    assert len(plane.boxes["alice"]) == 1
+@pytest.fixture
+def signing_door(request: pytest.FixtureRequest, plane: _Plane, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
+    """The token door with signature doors in the mode the case names, and the signer sets the chart renders for this app."""
+    for key, value in {
+        "APP_API_TOKEN": TOKEN,
+        "DAPR_HTTP_PORT": "3500",
+        "RASK_SIGNATURE_DOORS": request.param,
+        "RASK_EVENT_SIGNERS": json.dumps([CATALOG, PRODUCER]),
+        "RASK_EVENT_DELEGATORS": json.dumps([CATALOG]),
+        "RASK_CONTROL_SIGNER_ROLES": json.dumps({"catalog": [CATALOG], "medallion_producer": [PRODUCER]}),
+    }.items():
+        monkeypatch.setenv(key, value)
+    yield from _build(plane, monkeypatch)
+
+
+@pytest.fixture
+def signature_counts() -> Iterator[Callable[[], Counts]]:
+    """What the signature counters hold, read through a real in-memory reader.
+
+    The counters are created at import against the global meter, so the metrics module is reloaded under a meter
+    this test reads, and reloaded again afterwards so every later test records against the global one.
+    """
+    import opentelemetry.metrics as otel_metrics
+    from opentelemetry.sdk.metrics import MeterProvider
+    from opentelemetry.sdk.metrics.export import InMemoryMetricReader, NumberDataPoint
+
+    reader = InMemoryMetricReader()
+    provider = MeterProvider(metric_readers=[reader])
+
+    def counts() -> Counts:
+        found: Counts = {}
+        data = reader.get_metrics_data()
+        for resource in data.resource_metrics if data is not None else ():
+            for scope in resource.scope_metrics:
+                for metric in scope.metrics:
+                    if not metric.name.startswith("notifications.signature."):
+                        continue
+                    # `cast`: the reader types every point as the union of number and histogram shapes, and a counter
+                    # yields `NumberDataPoint`, the one carrying a `value`.
+                    for point in cast(Sequence[NumberDataPoint], metric.data.data_points):
+                        attributes = point.attributes or {}
+                        key = (str(attributes.get("lance.notifications.door")), str(attributes.get("lance.notifications.reason")))
+                        found.setdefault(metric.name, {})[key] = int(point.value)
+        return found
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(otel_metrics, "get_meter", lambda *_args, **_kwargs: provider.get_meter("lance.notifications"))
+        importlib.reload(metrics_module)
+        yield counts
+    importlib.reload(metrics_module)
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    ("signing_door", "case", "answer", "boxes", "counted"),
+    [
+        pytest.param("enforce", "unsigned", "SUCCESS", {}, ("notifications.signature.refused", "unsigned"), id="enforce-an-unsigned-run"),
+        pytest.param("enforce", "wrong-signer", "SUCCESS", {}, ("notifications.signature.refused", "signer"), id="enforce-a-signer-the-estate-does-not-list"),
+        pytest.param("enforce", "tampered", "SUCCESS", {}, ("notifications.signature.refused", "signature"), id="enforce-a-run-changed-after-it-was-signed"),
+        pytest.param("enforce", "valid", "SUCCESS", {"alice": 1}, None, id="enforce-a-run-the-catalog-signed-for-its-author"),
+        pytest.param("enforce", "store-down", "RETRY", {}, None, id="enforce-keys-the-sidecar-cannot-serve"),
+        pytest.param("observe", "unsigned", "SUCCESS", {"alice": 1}, ("notifications.signature.would_refuse", "unsigned"), id="observe-an-unsigned-run"),
+    ],
+    indirect=["signing_door"],
+)
+def test_a_delivery_carrying_the_sidecars_token_reaches_an_inbox_only_when_a_listed_signer_signed_it(
+    signing_door: TestClient,
+    plane: _Plane,
+    signature_counts: Callable[[], Counts],
+    event_signer: Any,
+    respx_allows_unused_routes: None,
+    case: str,
+    answer: str,
+    boxes: dict[str, int],
+    counted: tuple[str, str] | None,
+) -> None:
+    """A run event's author is a claim the token cannot prove: the signature decides whether anyone is told."""
+    catalog = event_signer(CATALOG)
+    published = respx.get(f"{SECRETS}/signing-public-{CATALOG}")
+    published.mock(return_value=httpx.Response(500) if case == "store-down" else httpx.Response(200, json={"keys": catalog.public}))
+    event = _run_event(case, catalog=catalog, intruder=event_signer("service-intruder"))
+
+    answered = signing_door.post("/lineage-events", headers={"dapr-api-token": TOKEN}, json=_cloud_event(event))
+
+    assert answered.status_code == 200, answered.text
+    assert answered.json() == {"status": answer}
+    assert {subject: len(rows) for subject, rows in plane.boxes.items()} == boxes
+    assert signature_counts() == ({} if counted is None else {counted[0]: {("lineage-events", counted[1]): 1}})
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    ("signing_door", "case", "boxes", "counted"),
+    [
+        pytest.param("enforce", "unsigned-catalog-grant", {}, ("notifications.signature.refused", "unsigned"), id="enforce-an-unsigned-catalog-grant"),
+        pytest.param("enforce", "grant-signed-by-another-role", {}, ("notifications.signature.refused", "signer"), id="enforce-a-grant-another-role-signed"),
+        pytest.param("enforce", "tampered-grant", {}, ("notifications.signature.refused", "signature"), id="enforce-a-grant-changed-after-it-was-signed"),
+        pytest.param("enforce", "catalog-grant", {"alice": 1}, None, id="enforce-a-grant-the-catalog-signed-for-its-actor"),
+        pytest.param("enforce", "producer-review-request", {"vera": 1}, None, id="enforce-a-review-request-the-producer-signed"),
+        pytest.param("enforce", "unsigned-task", {"bob": 1}, None, id="enforce-an-unsigned-task-is-exempt-r3"),
+        pytest.param("enforce", "unsigned-annotation-grant", {"carol": 1}, None, id="enforce-an-unsigned-annotation-project-grant-is-exempt-r5"),
+        pytest.param("observe", "unsigned-catalog-grant", {"alice": 1}, ("notifications.signature.would_refuse", "unsigned"), id="observe-an-unsigned-grant"),
+    ],
+    indirect=["signing_door"],
+)
+def test_a_control_event_reaches_an_inbox_only_when_the_role_its_action_names_signed_it(
+    signing_door: TestClient,
+    plane: _Plane,
+    signature_counts: Callable[[], Counts],
+    event_signer: Any,
+    respx_allows_unused_routes: None,
+    case: str,
+    boxes: dict[str, int],
+    counted: tuple[str, str] | None,
+) -> None:
+    """A control event's actor is a claim too, and a valid signature from another service is no authority over the action."""
+    catalog, producer = event_signer(CATALOG), event_signer(PRODUCER)
+    respx.get(f"{SECRETS}/signing-public-{CATALOG}").mock(return_value=httpx.Response(200, json={"keys": catalog.public}))
+    respx.get(f"{SECRETS}/signing-public-{PRODUCER}").mock(return_value=httpx.Response(200, json={"keys": producer.public}))
+    event = _control_event(case, catalog=catalog, producer=producer)
+
+    answered = signing_door.post("/control-events", headers={"dapr-api-token": TOKEN}, json=_cloud_event(event, topic="catalog.control.v1"))
+
+    assert answered.status_code == 200, answered.text
+    assert answered.json() == {"status": "SUCCESS"}
+    assert {subject: len(rows) for subject, rows in plane.boxes.items()} == boxes
+    assert signature_counts() == ({} if counted is None else {counted[0]: {("control-events", counted[1]): 1}})
 
 
 @pytest.mark.parametrize("headers", [{}, {"dapr-api-token": "a-guess"}, {"dapr-api-token": ""}], ids=["no-token", "wrong-token", "empty-token"])
