@@ -15,31 +15,42 @@ So the staged copy was a copy nothing read. Two ways that lands, both silent:
   `RunEvent.model_validate_json` in that drain, is classified POISON and is DELETED
   (`reconcile_cron.py` `_drain_outbox`) — the staged copy is destroyed by the thing meant to save it.
 
-These tests drive the relay that closes it. Each one fails with an ImportError until it exists, which
-is the honest shape of "there is no control-lane relay".
+These tests drive the relay that closes it. A signing catalog's relay also SIGNS what it delivers ([[XC-078]]): an event
+staged while the catalog's key was unresolved waits unsigned, and the relay publishes it only with the catalog's signature,
+because a door refuses an unsigned event and acknowledges the refusal.
 """
 
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, cast
 
+import httpx
 import pytest
+import respx
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from catalog.core.config import Settings
+from lineage_kit import RefusalReason, SignatureError, SigningKey, parse_published_keys, verify_control_signature
 from service_kit.control_emit import DaprControlEmitter
 from service_kit.control_events import CONTROL_TOPIC, CatalogControlEvent
+from service_kit.governed.signing_key import SigningKeyHolder, attach_signing
 from service_kit.lakehouse import outbox
 
 
 BINDING = "catalog-control-relay-cron"
+CATALOG = "service-catalog"
+SECRETS = "http://localhost:3500/v1.0/secrets/lance-secrets"
 
 
 class _Blip:
     """The NATS blip, as the emitter meets it: a sidecar that accepts nothing."""
+
+    def __init__(self) -> None:
+        self.published: list[dict[str, Any]] = []
 
     async def publish_event(self, **_kw: Any) -> None:
         raise TimeoutError("publish timed out")
@@ -65,8 +76,25 @@ def _settings(control_uri: str, *, lineage_uri: str = "") -> Settings:
     )
 
 
-def _relay_app(settings: Settings, publisher: object) -> FastAPI:
-    """A bare app carrying ONLY the relay router, so the route's own path is what is under test."""
+class _Published:
+    """The catalog's public keys, as a verifying door reads them."""
+
+    def __init__(self, *keys: str) -> None:
+        self._keys = keys
+
+    def published(self, identity: str) -> Sequence[str]:
+        return self._keys
+
+    def refresh(self, identity: str) -> Sequence[str]:
+        return self._keys
+
+
+def _relay_app(settings: Settings, publisher: object, *, signing: SigningKeyHolder[SigningKey] | None = None) -> FastAPI:
+    """A bare app carrying ONLY the relay router, so the route's own path is what is under test.
+
+    `signing` is published where the catalog's lifespan publishes its own holder (`attach_signing`); None is a catalog
+    that does not sign.
+    """
     from catalog.api.control_relay import mount_control_relay
     from catalog.core.config import get_settings
 
@@ -75,11 +103,33 @@ def _relay_app(settings: Settings, publisher: object) -> FastAPI:
     assert mounted, "the relay router refused to mount"
     app.dependency_overrides[get_settings] = lambda: settings
     app.state.dapr_client = publisher
+    attach_signing(app, signing)
     return app
 
 
+def _catalog_key(pair: Any | None) -> SigningKeyHolder[SigningKey]:
+    """The catalog's signing key holder: resolved from the sidecar's secret API when `pair` is given, else never resolved."""
+    holder = SigningKeyHolder(identity=CATALOG, store="lance-secrets", load_key=SigningKey.from_seed, parse_published=parse_published_keys)
+    if pair is not None:
+        with respx.mock:
+            respx.get(f"{SECRETS}/signing-key-{CATALOG}").mock(return_value=httpx.Response(200, json={"seed": pair.seed}))
+            respx.get(f"{SECRETS}/signing-public-{CATALOG}").mock(return_value=httpx.Response(200, json={"keys": pair.public}))
+            assert holder.resolve(), "precondition: the catalog's key must resolve"
+    return holder
+
+
+def _signed_by(event: dict[str, Any], public: str) -> tuple[str, str | None] | RefusalReason:
+    """Who a door holding the catalog's published key finds signed a control event, or the reason it refuses it."""
+    try:
+        verified = verify_control_signature(event, source=_Published(public), signers=frozenset({CATALOG}), delegators=frozenset({CATALOG}))
+    except SignatureError as exc:
+        return exc.reason
+    return verified.identity, verified.on_behalf_of
+
+
 async def _stage(uri: str, event: CatalogControlEvent) -> None:
-    """Stage one control event the way a NATS blip does — through the real emitter."""
+    """Stage one unsigned control event through the real emitter: what a NATS blip leaves behind when the catalog does not
+    sign, and the same bytes a signing catalog stages while its key is unresolved."""
     emitter = DaprControlEmitter(cast("Any", _Blip()), pubsub="p", topic=CONTROL_TOPIC, timeout_seconds=1.0, service="catalog", outbox_uri=uri)
     await emitter.emit(event)
 
@@ -115,33 +165,48 @@ async def test_the_relay_REPUBLISHES_a_staged_table_published(tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
-async def test_the_relay_republishes_the_STAGED_BYTES_so_the_cascade_dedupes(tmp_path: Path) -> None:
-    """`event_id` is the cascade's idempotency key: `/publication-arrival` mints its stage token from it
-    and `stage_submission_id` hashes that into the deterministic workflow instance id. Re-minting the
-    event — or round-tripping it through the model — would produce a NEW id and drive the hop twice."""
+async def test_the_relay_signs_the_staged_event_and_keeps_its_id_so_the_cascade_dedupes(
+    tmp_path: Path, event_signer: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An event staged unsigned reaches the bus signed by the catalog, for the person it authenticated, so the door that
+    wakes the next hop admits it. `event_id` is the cascade's idempotency key: `/publication-arrival` mints its stage token
+    from it and `stage_submission_id` hashes that into the deterministic workflow instance id. Re-minting the event, or
+    round-tripping it through the model, would produce a NEW id and drive the hop twice."""
+    monkeypatch.setenv("DAPR_HTTP_PORT", "3500")
     uri = f"file://{tmp_path}/control-outbox"
     event = _published_event()
     await _stage(uri, event)
+    pair = event_signer(CATALOG)
 
     recorder = _Recorder()
-    with TestClient(_relay_app(_settings(uri), recorder)) as client:
+    with TestClient(_relay_app(_settings(uri), recorder, signing=_catalog_key(pair))) as client:
         client.post(f"/{BINDING}")
 
     delivered = json.loads(recorder.published[0]["data"])
+    assert _signed_by(delivered, pair.public) == (CATALOG, "user:alice"), "the relay put a control event on the bus that no door would admit"
     assert delivered["event_id"] == event.event_id, "the re-published event carries a different id — the cascade cannot dedupe it"
     assert delivered["extra"] == {"project": "acme", "from_version": 3, "to_version": 4}, "the range the stage runner reads did not survive the relay"
 
 
 @pytest.mark.asyncio
-async def test_a_FAILED_republish_leaves_the_event_staged(tmp_path: Path) -> None:
-    """Publish BEFORE drop. Dropping first would destroy the only durable copy on a bus still down."""
+@pytest.mark.parametrize(
+    ("bus", "keyless"),
+    [
+        pytest.param(_Blip, False, id="a-bus-that-accepts-nothing"),
+        pytest.param(_Recorder, True, id="a-signing-catalog-whose-key-is-unresolved"),
+    ],
+)
+async def test_an_event_the_relay_may_not_deliver_yet_stays_staged(tmp_path: Path, bus: type[_Blip] | type[_Recorder], keyless: bool) -> None:
+    """Publish BEFORE drop: dropping first would destroy the only durable copy on a bus still down. And never unsigned: a
+    door refuses an unsigned event and acknowledges the refusal, so a signing catalog holds what it cannot sign yet."""
     uri = f"file://{tmp_path}/control-outbox"
     await _stage(uri, _published_event())
+    publisher = bus()
 
-    with TestClient(_relay_app(_settings(uri), _Blip())) as client:
+    with TestClient(_relay_app(_settings(uri), publisher, signing=_catalog_key(None) if keyless else None)) as client:
         response = client.post(f"/{BINDING}")
 
-    assert response.json()["republished"] == 0
+    assert (response.json()["republished"], publisher.published) == (0, []), "the relay delivered an event it may not deliver yet"
     assert list(outbox.list_events(uri, {})), "the relay dropped a staged event it never delivered"
 
 
