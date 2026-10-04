@@ -14,6 +14,7 @@ root_packages =
     annotator
     ingest
     service_kit
+    lineage_kit
     ray_kit
     dapr
 include_external_packages = True
@@ -113,3 +114,13 @@ source_modules =
     annotator.projects.ontology
 forbidden_modules =
     service_kit.lancekit
+
+# Neither kit declares the other, so an import across would pass in the root venv and fail in an image whose closure
+# lacks the package. What crosses between them is a callable (a key loader, a key parser, a secret fetch) or a name
+# spelled out on both sides (the door modes).
+[importlinter:contract:the-two-kits-import-neither-way]
+name = service_kit and lineage_kit never import each other
+type = independence
+modules =
+    service_kit
+    lineage_kit
