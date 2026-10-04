@@ -195,6 +195,15 @@ CASES = [
         _Case(route="/bronze-arrival", deliver=lambda _s: _bronze_write(tier="silver")),
         id="an-unsigned-write-the-bronze-head-ignores-is-not-verified",
     ),
+    # The catalog stamps the tenant on every write it announces, so its compaction of acme's bronze table names exactly the
+    # pair the head fires on, and its signature verifies: only the operation says no batch landed.
+    pytest.param(
+        _Case(
+            route="/bronze-arrival",
+            deliver=lambda s: s[CATALOG].sign(_bronze_write(author="alice", operation="compact_table"), on_behalf_of="alice"),
+        ),
+        id="a-maintenance-pass-on-the-bronze-table-starts-no-cascade",
+    ),
     pytest.param(
         _Case(route="/publication-arrival", deliver=lambda _s: _table_published(), counted={(REFUSED, "publication-arrival", "unsigned"): 1}),
         id="an-unsigned-publication-is-refused",
