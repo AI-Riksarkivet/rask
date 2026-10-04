@@ -212,6 +212,11 @@ NKEYs, comma-separated, current first) written before `signing-key-<identity>` (
 estate (owner, no-prod parking 2026-09-21). Until the keys exist no signer is Ready and none emits: a sidecar
 delivery to one is answered RETRY, not dropped.
 
+**Retiring `service-token-<identity>` on a sealed or external store.** No door reads `secret/service-token-<identity>`
+(a service is the ServiceAccount its projected token names), and no deploy removes one from a store the chart never wrote
+to. Delete any that exist, one per identity (`bao kv metadata delete secret/service-token-<identity>`), and narrow the
+`lance-infra` ESO policy to its one path, `secret/data/lance`.
+
 **Rotation, at most once per 7 days** (the bus keeps 168 h and a retired key must stay listed until nothing signed
 with it remains to verify). On the dev OpenBao, with its pod Ready (2/2) and not recently restarted, because the
 replacement carries a pair over only from an outgoing pod that is serving a seeded store (LH-347):

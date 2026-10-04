@@ -225,12 +225,9 @@ services:
       # The subject ingest's ServiceAccount maps to at the catalog's door (`lance.saSubjects`), where
       # its projected `rask-catalog` token authenticates it.
       RASK_CATALOG_SERVICE_IDENTITY: service-ingest
-      # Ingest presents its OWN `service-token-service-ingest` at both doors it calls, resolved from
-      # the store by `ingest.service_identity`. Explicitly opt-in rather than implied by the identity:
-      # `catalog_token` deliberately SKIPS the store when the identity and shared token are both set,
-      # because a fail-closed fetch written before the catalog had an identity door turned a
-      # missing-and-unneeded `catalog-token` into a failed run at the first activity. Reading the store
-      # unconditionally would put that read back on a dev stack that has no store and needs none.
+      # The signing gate: with RASK_SIGNING_IDENTITY (rendered from lance.signers) it makes ingest resolve
+      # `signing-key-<identity>` from the secret store and sign the event it stages for recovery. Off, ingest
+      # stages that event unsigned and an enforcing lineage refuses and acknowledges it.
       RASK_INGEST_SECRETS_FROM_DAPR: "true"
       # Route creation and commits through the CATALOG rather than writing the object store
       # directly. Opt-in by an explicit flag, never inferred from a reachable URL: a catalog that is
@@ -375,13 +372,6 @@ services:
       # grants allow. A deployment that admits it and grants it nothing gets a reconciler that runs
       # cleanly and reconciles nothing, the quiet failure this whole lane exists to prevent.
       RASK_LINEAGE_SERVICE_IDENTITY: notifications
-      # NOT ARMED, deliberately — the flag is absent and `secrets_from_dapr` defaults false.
-      # `notifications.api.service_identity` can resolve a dedicated credential and is tested, but this
-      # subject CANNOT PRESENT one: it reaches lineage through Dapr service invocation, and daprd
-      # stamps its own `dapr-api-token` on delivery, so the door sees the estate's shared token
-      # whatever the caller sets. Measured live 2026-09-07 (release 107 → 108, reverted). Arming it
-      # would cost a secret-store read per boot for a value the transport discards. One values edit
-      # away if that call ever moves off service invocation.
     waitFor: []
   gateway:
     module: "gateway:app"
@@ -901,39 +891,6 @@ frontend:
 
 # --- Governance (Dex OIDC + OpenFGA). Off → open dev mode; on → the full governed demo. ------------
 auth:
-  # Bind each privileged service identity to its OWN credential instead of the shared APP_API_TOKEN.
-  #
-  # ON BY DEFAULT since 2026-09-10, because the reason it was off is spent. It waited on the CLIENT
-  # half — a door demanding `service-token-<identity>` while the services still presented
-  # APP_API_TOKEN 401s every call and stops the cascade (measured 2026-08-26) — and every privileged
-  # subject now sends its own: the cascade writers and the trainer through
-  # `medallion.core.config.dedicated_token_for`, maintenance through
-  # `maintenance.services.catalog_identity`, ingest through `ingest.service_identity` at BOTH its
-  # doors (the lineage emitter was the last one, 2026-09-10).
-  #
-  # Three gates keep that true rather than a claim, and they are why this can default on:
-  # `test_a_privileged_subject_can_present_its_own_credential.py` refuses a privileged name whose
-  # service has no client half, refuses one whose construction site does not resolve a credential, and
-  # refuses one whose token `openbao.yaml` does not seed. All three already render with this ON.
-  #
-  # A security default must fail CLOSED — the same rule `auth.enabled` above records. Left off, a
-  # fresh install ships the shape where any holder of the shared token can claim any privileged name.
-  dedicatedServiceCredentials: true
-  # An operator's OWN material for a privileged identity, keyed by the identity name:
-  #
-  #   serviceTokens:
-  #     service-trainer: <from your secret manager>
-  #
-  # A supplied value WINS at both writers — the OpenBao seed and the mounted Secret — because supplying
-  # only one half is a 401 that nothing renders as an error (`dapr_auth.service_principal` compares with
-  # `compare_digest`).
-  #
-  # EMPTY IS NOT UNSAFE, which is why this defaults to `{}` rather than being required. An unsupplied
-  # identity gets the value already live in `<release>-infra-credentials`, or a fresh `randAlphaNum 40`
-  # on a first install — never a function of `dapr.appToken`, which fourteen Deployments carry. Supply
-  # one here only to pin a credential you hold elsewhere; the alternative to supplying is generation,
-  # not derivation.
-  serviceTokens: {}
   # THE CLUSTER'S SERVICE-ACCOUNT ISSUER: a service authenticates to a door as the ServiceAccount its pod
   # runs as, never as a name it claims ([[LH-220]], D1; Lakekeeper's multi-provider path,
   # docs/docs/authentication.md:457-483). Each caller projects one token per door audience
@@ -3248,7 +3205,7 @@ openbao:
 # container does not mount; it prints names only and always exits 0, so a failed mint costs that one signer its key
 # (the signer stays not Ready) and never the baseline seed or the `openbao-seeded` readiness key. The `seed`
 # container then chooses ONE pair per identity, in this order:
-#   1. the kept copy under $HOME/seed (the tmp emptyDir, where the kept service tokens live: it outlives a restart of
+#   1. the kept copy under $HOME/seed (the tmp emptyDir, where the kept signing pairs live: it outlives a restart of
 #      either container and is deleted with the pod). Both files present and well-formed, else ignored.
 #   2. the store behind the Service (the outgoing pod during a rollout). A private key with no public list refuses
 #      the seed; a public list with no private key is a ROTATION.

@@ -11,12 +11,11 @@ a git file. So the control that most wants to be declared was the one that could
 
 DERIVE IT, because the OTHER HALF OF THE PAIR is created separately. `mc admin user add` mints the
 user with this secret while five templates hand it to the pods that sign with it, and the two agree
-only by computing the same function of the same inputs — which is what makes derivation right here and
-wrong for `lance.dedicatedServiceToken`, whose one value is written to two places in a single render
-and so can be independent material. A scoped identity is named by ONE value — its access key — and its
-secret is computed. Nothing new enters git, the render is deterministic so a re-render is not a rotation, and on
-a real deployment `minio.secretKey` must already be overridden (`prod-credentials.yaml` refuses the
-dev value), so ONE override makes every derived secret real too.
+only by computing the same function of the same inputs — which is what makes derivation right here. A
+scoped identity is named by ONE value — its access key — and its secret is computed. Nothing new enters
+git, the render is deterministic so a re-render is not a rotation, and on a real deployment
+`minio.secretKey` must already be overridden (`prod-credentials.yaml` refuses the dev value), so ONE
+override makes every derived secret real too.
 
 THE PAIRING IS THE WHOLE TEST, and it is why this cannot be a grep. The secret is read at EIGHT sites
 across five templates — both maintenance Deployments, both medallion ones, the OpenBao seed and the

@@ -1373,79 +1373,13 @@ ONE OVERRIDE SECURES THE WHOLE SET, which is the reason to seed from `minio.secr
 from a constant: on a real deployment that value must already be overridden (`prod-credentials.yaml`
 refuses the published default), so every secret derived from it is real without a second decision.
 
-DETERMINISTIC, so a re-render is not a rotation — and unlike `lance.dedicatedServiceToken`, which
-GENERATES, this one must derive. The difference is the other half of the pair: an access key's secret
-is read at eight sites across five templates AND handed to `mc admin user add`, so the two halves
-agree here only by both computing the same function of the same inputs. A dedicated service token has
-no such counterpart to match — one value is written to two places within a single render — so it can
-be independent material, which is what its own threat model requires.
+DETERMINISTIC, so a re-render is not a rotation: an access key's secret is read at eight sites across
+five templates AND handed to `mc admin user add`, so the two halves agree only by both computing the
+same function of the same inputs.
 */}}
 {{- define "lance.scopedStorageSecret" -}}
 {{- $root := index . 0 -}}{{- $identity := index . 1 -}}{{- $explicit := index . 2 -}}
 {{- if $explicit -}}{{- $explicit -}}{{- else -}}{{- printf "%s-s3-%s" $identity $root.Values.minio.secretKey | sha256sum | trunc 40 -}}{{- end -}}
-{{- end -}}
-
-{{/*
-A privileged service identity's DEDICATED credential — `service-token-<identity>`.
-
-`dapr_auth.service_principal` compares what a caller presents against this value with
-`secrets.compare_digest`, so two derivations that merely look alike are a 401 nothing renders as an
-error. It is a helper rather than inline expressions because it has TWO writers that must agree
-byte-for-byte: `openbao.yaml` seeds the store the DOOR reads, and `infra-credentials.yaml` holds the
-copy a daprd-less consumer MOUNTS.
-
-INDEPENDENT MATERIAL, NOT A FUNCTION OF THE SHARED TOKEN. The dedicated pair exists to end "any holder
-of the shared app token may claim ANY allowlisted service", so a credential computed FROM that token
-leaves the property exactly where it was — measured 2026-09-23 on a prod-shaped render
-(`openbao.devMode=false`, an operator-supplied `dapr.appToken`): all five rendered identities were
-recomputable from it, while fourteen Deployments carry it.
-
-THREE SOURCES, in order, matching `rask.rayAuthToken`:
-  1. `auth.serviceTokens.<identity>` — an operator's own material, which always wins.
-  2. the value already live in `<release>-infra-credentials`, so a re-render is not a rotation. This is
-     also the ESO path: with `externalSecrets.enabled` the operator owns that Secret and the lookup
-     reads back whatever it synced from OpenBao.
-  3. `randAlphaNum 40` — same length as the hash prefix it replaces, so nothing downstream sees a
-     shorter credential.
-Only identities with a source 1 or 2 are rendered at all (`lance.mountedServiceIdentities`); for any
-other, 3 would be a new value on every render, so the OpenBao seed mints it once instead ([[LH-304]]).
-
-A LOOKED-UP VALUE THAT IS STILL DERIVABLE IS TREATED AS ABSENT, which is the only reason this
-remediates rather than merely stops the bleeding: every estate deployed before this holds the old
-`sha256("<identity>-<dapr.appToken>")[:40]` in exactly the Secret step 2 reads, so preserving it would
-carry the compromised credential forward untouched and report a fix. Recomputing the old expression and
-refusing a match rotates precisely the values that are guessable and leaves independent ones alone.
-Rotating a credential restarts the pods that mount it — the trainer, the web BFF and the Ray stage
-lanes — which is the cost of the remediation, paid once.
-
-MEMOISED ON `.Values` BECAUSE `randAlphaNum` IS NOT STABLE ACROSS CALLS. `.Values` is one map shared by
-every template in a render, so the first caller for an identity fixes the value and the second reads
-it — without that, the two writers randomise independently on a first install and every privileged
-call is a silent 401. Verified on helm v3.20.0: two templates including this for one identity render
-identical bytes, and distinct identities do not collide.
-
-Usage: {{ include "lance.dedicatedServiceToken" (list . "service-trainer") }}
-*/}}
-{{- define "lance.dedicatedServiceToken" -}}
-{{- $root := index . 0 -}}{{- $identity := index . 1 -}}
-{{- $supplied := get (default dict $root.Values.auth.serviceTokens) $identity -}}
-{{- if $supplied -}}
-{{- $supplied -}}
-{{- else -}}
-{{- $memo := (index $root.Values "dedicatedServiceTokensRendered") | default dict -}}
-{{- if not (hasKey $memo $identity) -}}
-{{- $live := "" -}}
-{{- $existing := (lookup "v1" "Secret" $root.Release.Namespace (printf "%s-infra-credentials" (include "lance.fullname" $root))) -}}
-{{- if and $existing $existing.data -}}
-{{- $live = (index $existing.data (printf "service-token-%s" $identity)) | default "" -}}
-{{- end -}}
-{{- $prior := ternary (b64dec $live) "" (ne $live "") -}}
-{{- $guessable := printf "%s-%s" $identity ($root.Values.dapr.appToken | default "") | sha256sum | trunc 40 -}}
-{{- $_ := set $memo $identity (ternary $prior (randAlphaNum 40) (and (ne $prior "") (ne $prior $guessable))) -}}
-{{- $_ := set $root.Values "dedicatedServiceTokensRendered" $memo -}}
-{{- end -}}
-{{- index $memo $identity -}}
-{{- end -}}
 {{- end -}}
 
 {{/*
@@ -1737,89 +1671,6 @@ measured decision, and a second copy would drift without anything saying so. */}
 {{- end }}
 {{- end -}}
 
-{{/* The service identities ONE app-id may read a dedicated credential for ([[XC-072]]).
-Call: include "lance.identitiesForApp" (list $root $appId) -> space-separated identities.
-
-LINEAGE ALONE reads the whole set: it verifies every producer's event signature, keyed on that
-producer's credential, until the Ed25519 signing keys replace that credential ([[LH-064]]). The catalog verifies
-no credential since a service is the service account its projected token names ([[LH-220]]), so it
-reads its own signing key, like every other app.
-
-DERIVED FROM THE SAME VALUES THE SEED USES, never a second hand-written list -- an identity seeded but
-not allowed here is an app that boots and then 401s with nothing naming the cause. */}}
-{{/* EVERY seeded service identity, space-separated. ONE derivation, shared by the seed's own list, by
-`lance.identitiesForApp` and by the deny-list that subtracts from it -- a second copy would let an
-identity be seeded and then denied to its own owner, which boots fine and 401s later. */}}
-{{/*
-The identities a daprd-less pod MOUNTS from `infra-credentials` — the trainer, the web BFF and the Ray
-stage lanes — so their token has a second writer and a stable source (the `lookup` in
-`lance.dedicatedServiceToken`). The OpenBao seed writes these as rendered and mints every other identity's
-token itself, once ([[LH-304]]). `test_a_dedicated_service_token_survives_an_upgrade.py` fails if this
-set and the Secret's `service-token-*` entries drift.
-*/}}
-{{- define "lance.mountedServiceIdentities" -}}
-{{- $root := . -}}{{- $mounted := list -}}
-{{- if $root.Values.auth.dedicatedServiceCredentials -}}
-{{- $mounted = list $root.Values.medallion.train.trainerIdentity $root.Values.frontend.serviceIdentity -}}
-{{- range $root.Values.medallion.stageRunners }}{{- $mounted = append $mounted .serviceIdentity }}{{- end -}}
-{{- end -}}
-{{- join " " (compact $mounted | uniq | sortAlpha) -}}
-{{- end -}}
-
-{{- define "lance.allServiceIdentities" -}}
-{{- $root := . -}}
-{{- $all := list $root.Values.medallion.train.trainerIdentity $root.Values.medallion.producer.serviceIdentity $root.Values.frontend.serviceIdentity $root.Values.maintenance.catalogServiceIdentity -}}
-{{- /* The catalog's own name, used to sign the lineage it emits ([[LH-064]]). It belongs here and not
-       on `services.yaml`'s privileged-subjects list: that one names subjects the catalog's door DEMANDS
-       a credential from, and the catalog does not call itself. This list is who has a credential at
-       all, which is a different question. */ -}}
-{{- with $root.Values.catalog.serviceIdentity }}{{- $all = append $all . }}{{- end -}}
-{{- range $root.Values.medallion.stageRunners }}{{- $all = append $all .serviceIdentity }}{{- end -}}
-{{- range ($root.Values.medallion.mediaStageRunners | default list) }}{{- $all = append $all .serviceIdentity }}{{- end -}}
-{{- with (get (($root.Values.services.ingest).env | default dict) "RASK_CATALOG_SERVICE_IDENTITY") }}{{- $all = append $all . }}{{- end -}}
-{{- with (get (($root.Values.services.ingest).env | default dict) "RASK_LINEAGE_SERVICE_IDENTITY") }}{{- $all = append $all . }}{{- end -}}
-{{- /* NOTIFICATIONS, and it is the one identity here that reads a DEFAULT rather than a declaration.
-       `services.yaml` and `bootstrap-admin.yaml` both admit this subject as
-       `env.RASK_LINEAGE_SERVICE_IDENTITY | default "notifications"`, so the allowlist and the app's own
-       `IngressSettings.service_identity` agree with no values at all — deliberately, because
-       `helm upgrade --reuse-values` renders an old release's values and drops a key that did not exist
-       then. This list was the third half and it was missing: measured live 2026-09-24, the subject was
-       ALLOWED and had NO CREDENTIAL, so the cron reconciler called lineage's `/events` with no bearer
-       and took 401 (not 403) about ten times a minute, while `dlq.notifications` held 102 parked events
-       in a rolling 7-day window. Both of this service's ingresses were down at once, which is the exact
-       state its two-ingress design exists to prevent. Read through the SAME expression as the other two
-       consumers so a future declaration moves all three together. */ -}}
-{{- if $root.Values.services.notifications -}}
-{{- $all = append $all ((get ($root.Values.services.notifications.env | default dict) "RASK_LINEAGE_SERVICE_IDENTITY") | default "notifications") -}}
-{{- end -}}
-{{- join " " (compact $all | uniq | sortAlpha) -}}
-{{- end -}}
-
-{{- define "lance.identitiesForApp" -}}
-{{- $root := index . 0 -}}{{- $app := index . 1 -}}
-{{- $all := include "lance.allServiceIdentities" $root | splitList " " -}}
-{{- if eq $app $root.Values.services.lineage.daprAppId -}}
-{{- join " " $all -}}
-{{- else -}}
-{{- $mine := list -}}
-{{- if eq $app $root.Values.services.catalog.daprAppId }}{{- $mine = append $mine $root.Values.catalog.serviceIdentity }}{{- end -}}
-{{- if eq $app $root.Values.medallion.producer.daprAppId }}{{- $mine = append $mine $root.Values.medallion.producer.serviceIdentity }}{{- end -}}
-{{- if eq $app $root.Values.maintenance.daprAppId }}{{- $mine = append $mine $root.Values.maintenance.catalogServiceIdentity }}{{- end -}}
-{{- range $root.Values.medallion.stageRunners }}{{- if eq $app .daprAppId }}{{- $mine = append $mine .serviceIdentity }}{{- end }}{{- end -}}
-{{- range ($root.Values.medallion.mediaStageRunners | default list) }}{{- if eq $app .daprAppId }}{{- $mine = append $mine .serviceIdentity }}{{- end }}{{- end -}}
-{{- if eq $app (($root.Values.services.ingest).daprAppId | default "ingest") -}}
-{{- with (get (($root.Values.services.ingest).env | default dict) "RASK_CATALOG_SERVICE_IDENTITY") }}{{- $mine = append $mine . }}{{- end -}}
-{{- with (get (($root.Values.services.ingest).env | default dict) "RASK_LINEAGE_SERVICE_IDENTITY") }}{{- $mine = append $mine . }}{{- end -}}
-{{- end -}}
-{{- /* Without this the app is minted a token it is then DENIED: `deniedSecrets` is `all - mine`, so an
-       app absent from this switch is scoped away from every `service-token-*` including its own. */ -}}
-{{- if eq $app (($root.Values.services.notifications).daprAppId | default "notifications") -}}
-{{- $mine = append $mine ((get (($root.Values.services.notifications).env | default dict) "RASK_LINEAGE_SERVICE_IDENTITY") | default "notifications") -}}
-{{- end -}}
-{{- join " " (compact $mine | uniq | sortAlpha) -}}
-{{- end -}}
-{{- end -}}
-
 {{- /* One app-id's Dapr Configuration spec: the Configuration object and its name (`lance.daprAppConfigName`) both derive from THIS. */ -}}
 {{- define "lance.daprAppSpec" -}}
 {{- $cfgRoot := index . 0 -}}{{- $app := index . 1 -}}
@@ -1833,8 +1684,8 @@ set and the Secret's `service-token-*` entries drift.
                name comes from the store registry, so a store added after deploy names a secret no
                rendered allowlist can contain. `defaultAccess: deny` would refuse it and the object
                browser would 503 on exactly the external stores the mechanism exists for.
-               So this closes the hole that was MEASURED -- a producer reading its peers' identity
-               credentials -- by naming those credentials and nothing else. Deny-by-default is the
+               So this closes the hole that was MEASURED -- a signer reading its peers' private
+               signing keys -- by naming those secrets and nothing else. Deny-by-default is the
                stronger posture and stays the goal; it needs the registry-driven readers enumerated
                first, which is a different change from this one. */}}
         defaultAccess: allow
@@ -1847,13 +1698,7 @@ set and the Secret's `service-token-*` entries drift.
                BOTH verifiers at once, so no chart change landed in CI at all while it stood. An
                absent deny-list and an empty one mean the same thing to Dapr; only one of them
                parses. */}}
-        {{- $mine := include "lance.identitiesForApp" (list $cfgRoot $app) | splitList " " }}
         {{- $denied := list }}
-        {{- range (include "lance.allServiceIdentities" $cfgRoot | splitList " ") }}
-        {{- if and . (not (has . $mine)) }}
-        {{- $denied = append $denied (printf "service-token-%s" .) }}
-        {{- end }}
-        {{- end }}
         {{- $signs := include "lance.signingIdentitiesForApp" (list $cfgRoot $app) | splitList " " }}
         {{- range (include "lance.signingIdentities" $cfgRoot | splitList " ") }}
         {{- if and . (not (has . $signs)) }}

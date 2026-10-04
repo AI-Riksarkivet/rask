@@ -2481,6 +2481,9 @@ units/s against the 4.75/s the planner injects, so it needs ~127s to clear a tic
 
 ## A producer signs for a person by DECLARING it (LH-064, owner 2026-09-24)
 
+*Superseded by the 2026-10-02 entry "Lineage events are signed with Ed25519, the keys in the store" below: the HMAC
+scheme and its symmetric-key acceptance are gone. The delegation rule carries over as `onBehalfOf`.*
+
 The lineage bus door reads `author.sub` off the payload and authorizes as it, so until a producer
 signs, that stamp is a self-assertion any pod holding the shared Dapr app token can make. The first
 binding closed that by requiring the signer to BE the author — right for a service-authored run, and

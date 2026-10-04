@@ -198,13 +198,15 @@ catalog, lineage, maintenance, the medallion, OpenBao and Dex ran as `default` w
   does. KubeRay refuses the field on a cluster a RayService creates, so it sits in `raycluster.yaml`.
 - **Changing the dev OpenBao's pod spec empties its store**, because `server -dev` keeps it in memory.
   The `seed` container in that pod writes only to its own server and gates the pod's readiness on a
-  key it writes last, and a rollout surges first so the seed can carry the minted tokens over from the
-  outgoing pod (`test_the_dev_openbao_is_seeded_by_its_own_pod.py`). A replacement with no outgoing pod
-  (a deleted pod, a drained node) mints them afresh, and every pod that cached the old ones needs a
-  restart (XC-005). The same seed carries each signing identity's Ed25519 pair (`signing-public-<id>`,
-  then `signing-key-<id>`), minted by a `mint` init container on a memory volume; values.yaml `signing:`
-  holds the tiers, the rotation and the store-loss cases, and a sealed or external store is refused at
-  render until `signing.provisioned` attests that an operator created them.
+  key it writes last, and a rollout surges first so the seed can carry each signing identity's Ed25519
+  pair (`signing-public-<id>`, then `signing-key-<id>`) over from the outgoing pod
+  (`test_the_dev_openbao_is_seeded_by_its_own_pod.py`); a `mint` init container on a memory volume makes
+  the candidates. A replacement with no outgoing pod (a deleted pod, a drained node) mints every pair
+  afresh: the old public keys go with the old store, and an enforcing lineage refuses what was signed
+  before the loss. Signers re-resolve their key within 5 minutes and heal in place, so restart the signers
+  and lineage after a non-surge replacement rather than waiting (docs/OPERATORS.md § 6). values.yaml
+  `signing:` holds the tiers, the rotation and the store-loss cases, and a sealed or external store is
+  refused at render until `signing.provisioned` attests that an operator created them.
 - **A Dapr Configuration edit reaches a sidecar only when its pod restarts** (HotReload is off), and Helm
   applies a Deployment before the Configuration it names, so an edit under an unchanged name is loaded
   stale by a pod that boots first, for its life. A per-app Configuration is therefore NAMED by the hash of

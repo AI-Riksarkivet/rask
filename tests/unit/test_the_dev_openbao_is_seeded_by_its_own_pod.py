@@ -1,15 +1,13 @@
-"""The dev OpenBao serves only a store its own pod seeded, and a minted credential outlives the server holding it.
+"""The dev OpenBao serves only a store its own pod seeded, and a signing key outlives the server holding it.
 
 [[XC-076]], the clause every sidecar still loading lance-secrets. `server -dev` keeps its store in memory,
 so every new OpenBao server starts empty. A seed that reaches the store through the Service writes to
 whichever pod the Service routes to: during a rollout that is the outgoing pod, whose store is deleted with
 it, and the replacement serves nothing while every sidecar restarting beside it fails on lance-secrets
-(the outage XC-005 records, 13 pods for 19 h). And a replacement that mints its tokens afresh rotates them
-under every caller and verifier that cached the old ones, a 401 with every pod Ready ([[LH-304]]).
+(the outage XC-005 records, 13 pods for 19 h).
 
-So the seed runs beside the server it seeds, writes only to 127.0.0.1, writes the key the server's
-readiness reads last, and resolves a minted token from its own earlier write, then from the store the
-Service routes to, and mints only where neither holds one.
+So the seed runs beside the server it seeds, writes only to 127.0.0.1 and writes the key the server's
+readiness reads last.
 
 [[LH-064]] puts an Ed25519 pair per signing identity through the same seed: `signing-public-<id>` (the public
 list) and `signing-key-<id>` (the seed). A `mint` init container generates the candidates on a memory volume;
@@ -25,7 +23,6 @@ own server and the one the Service routes to, and the nk stand-in hands out gene
 from __future__ import annotations
 
 import os
-import re
 import stat
 import subprocess
 from pathlib import Path
@@ -40,8 +37,6 @@ from tests.unit.openbao_standins import BAO, NK, install
 
 _OWN = "http://127.0.0.1:8200"
 _SENTINEL = "secret/openbao-seeded"
-_MINTED = "service-token-service-catalog"
-_SERVED_TOKEN = "Kx7Q2mZ9pLr4Vn8Bt1Wc6Hy3Ja5Ds0Fg2Ek9Uo4Z"
 
 #: The first sleep ends the run, unless the scenario restarts the server in place: then the first sleep
 #: empties the pod's own store and cuts the Service off, and the second ends the run.
@@ -54,9 +49,6 @@ exit 1
 """
 
 _WRITES = ("kv put ", "auth ", "write ", "policy ")
-
-#: The signing-pair scenarios: where each identity's pair comes from, and whether the seed may finish.
-_SIGNING_REFUSED = ("key-without-list", "malformed-pair", "malformed-list")
 
 
 def _seed(docs: tuple[dict, ...]) -> tuple[str, dict]:
@@ -147,38 +139,32 @@ def _arrange(case: str, ids: list[str], pool: list[Any], stores: Path, home: Pat
 
 
 @pytest.mark.parametrize(
-    ("overlay", "served", "local", "succeeds", "token", "signing"),
+    ("overlay", "served", "local", "succeeds", "signing"),
     [
-        pytest.param(DEFAULT_ARGS, "holds", "", True, "carried", "minted", id="carried-from-the-pod-the-service-routes-to"),
-        pytest.param(
-            ("--set", "image.localImages=true", "-f", str(REPO / "chart/values-local.yaml")), "holds", "", True, "carried", "minted", id="carried-with-eso"
-        ),
-        pytest.param(DEFAULT_ARGS, "lacks", "", True, "minted", "minted", id="minted-into-a-served-absence"),
-        pytest.param(DEFAULT_ARGS, "refused", "", True, "minted", "minted", id="minted-when-nothing-serves"),
-        pytest.param(DEFAULT_ARGS, "forbidden", "", False, None, "minted", id="a-served-store-it-cannot-read-stops-the-seed"),
-        pytest.param(DEFAULT_ARGS, "holds", "readonly", False, None, "minted", id="a-failed-write-stops-the-seed"),
-        pytest.param(DEFAULT_ARGS, "holds", "restart", True, "carried", "minted", id="a-server-restarted-in-place-gets-the-same-token-and-keys"),
-        pytest.param(DEFAULT_ARGS, "malformed", "", False, None, "minted", id="a-malformed-token-behind-the-service-is-refused-and-not-kept"),
-        pytest.param(DEFAULT_ARGS, "holds", "kept-malformed", True, "carried", "minted", id="a-malformed-kept-copy-is-read-again"),
-        pytest.param(DEFAULT_ARGS, "holds", "", True, "carried", "carried", id="a-signing-pair-behind-the-service-is-carried"),
-        pytest.param(DEFAULT_ARGS, "holds", "", True, "carried", "rotated", id="a-list-without-its-key-is-a-rotation-that-keeps-one-previous"),
-        pytest.param(DEFAULT_ARGS, "holds", "", True, "carried", "kept", id="a-kept-pair-beats-a-new-mint-candidate"),
-        pytest.param(DEFAULT_ARGS, "holds", "", True, "carried", "kept-half", id="half-a-kept-pair-is-not-kept"),
-        pytest.param(DEFAULT_ARGS, "holds", "", True, "carried", "mint-failed", id="a-failed-mint-costs-that-identity-its-key-and-nothing-else"),
-        pytest.param(DEFAULT_ARGS, "holds", "", True, "carried", "mint-garbled", id="a-mint-that-prints-no-key-pair-leaves-nothing-behind"),
-        pytest.param(DEFAULT_ARGS, "holds", "", False, None, "key-without-list", id="a-key-without-its-list-stops-the-seed"),
-        pytest.param(DEFAULT_ARGS, "holds", "", False, None, "malformed-pair", id="a-malformed-pair-behind-the-service-is-refused"),
-        pytest.param(DEFAULT_ARGS, "holds", "", False, None, "malformed-list", id="a-malformed-list-is-not-rotated-onto"),
+        pytest.param(DEFAULT_ARGS, "lacks", "", True, "minted", id="minted-into-a-served-absence"),
+        pytest.param(("--set", "image.localImages=true", "-f", str(REPO / "chart/values-local.yaml")), "lacks", "", True, "minted", id="minted-with-eso"),
+        pytest.param(DEFAULT_ARGS, "refused", "", True, "minted", id="minted-when-nothing-serves"),
+        pytest.param(DEFAULT_ARGS, "forbidden", "", False, "minted", id="a-served-store-it-cannot-read-stops-the-seed"),
+        pytest.param(DEFAULT_ARGS, "lacks", "readonly", False, "minted", id="a-failed-write-stops-the-seed"),
+        pytest.param(DEFAULT_ARGS, "lacks", "restart", True, "minted", id="a-server-restarted-in-place-gets-the-same-keys"),
+        pytest.param(DEFAULT_ARGS, "lacks", "", True, "carried", id="a-signing-pair-behind-the-service-is-carried"),
+        pytest.param(DEFAULT_ARGS, "lacks", "", True, "rotated", id="a-list-without-its-key-is-a-rotation-that-keeps-one-previous"),
+        pytest.param(DEFAULT_ARGS, "lacks", "", True, "kept", id="a-kept-pair-beats-a-new-mint-candidate"),
+        pytest.param(DEFAULT_ARGS, "lacks", "", True, "kept-half", id="half-a-kept-pair-is-not-kept"),
+        pytest.param(DEFAULT_ARGS, "lacks", "", True, "mint-failed", id="a-failed-mint-costs-that-identity-its-key-and-nothing-else"),
+        pytest.param(DEFAULT_ARGS, "lacks", "", True, "mint-garbled", id="a-mint-that-prints-no-key-pair-leaves-nothing-behind"),
+        pytest.param(DEFAULT_ARGS, "lacks", "", False, "key-without-list", id="a-key-without-its-list-stops-the-seed"),
+        pytest.param(DEFAULT_ARGS, "lacks", "", False, "malformed-pair", id="a-malformed-pair-behind-the-service-is-refused"),
+        pytest.param(DEFAULT_ARGS, "lacks", "", False, "malformed-list", id="a-malformed-list-is-not-rotated-onto"),
     ],
 )
-def test_the_dev_store_is_seeded_by_its_own_pod_and_keeps_its_minted_tokens_and_signing_keys(  # noqa: PLR0913, PLR0915 — parametrized, one scenario per row
+def test_the_dev_store_is_seeded_by_its_own_pod_and_keeps_its_signing_keys(  # noqa: PLR0913, PLR0915 — parametrized, one scenario per row
     tmp_path: Path,
     event_signer: Any,
     overlay: tuple[str, ...],
     served: str,
     local: str,
-    succeeds: bool,
-    token: str | None,  # noqa: FBT001
+    succeeds: bool,  # noqa: FBT001
     signing: str,
 ) -> None:
     docs = chart_render.render(*overlay)
@@ -189,11 +175,7 @@ def test_the_dev_store_is_seeded_by_its_own_pod_and_keeps_its_minted_tokens_and_
     assert len(ids) >= 2, f"the signers the chart renders are {ids}: the scenarios need two"
     stores = tmp_path / "stores"
     (stores / "served" / "secret").mkdir(parents=True)
-    if served == "holds":
-        (stores / "served" / "secret" / _MINTED).write_text(f"token={_SERVED_TOKEN}\n")
-    elif served == "malformed":
-        (stores / "served" / "secret" / _MINTED).write_text(f"token={_SERVED_TOKEN[:39]}\n")
-    elif served in {"refused", "forbidden"}:
+    if served in {"refused", "forbidden"}:
         (stores / f"served.{served}").touch()
     if local == "readonly":
         (stores / "local.readonly").touch()
@@ -201,9 +183,6 @@ def test_the_dev_store_is_seeded_by_its_own_pod_and_keeps_its_minted_tokens_and_
         (stores / "restart").touch()
     install(tmp_path, bao=BAO, sleep=_SLEEP, nk=NK)
     (tmp_path / "home" / "seed").mkdir(parents=True)
-    kept = tmp_path / "home" / "seed" / _MINTED
-    if local == "kept-malformed":
-        kept.write_text(_SERVED_TOKEN[:12])
     pool = [event_signer(f"pair-{i}") for i in range(4 * len(ids))]
     expected, nk = _arrange(signing, ids, pool, stores, tmp_path / "home")
     (tmp_path / "pairs").write_text("".join(f"{pair.seed}\n{pair.public}\n" for pair in pool[: len(ids)]))
@@ -250,29 +229,18 @@ def test_the_dev_store_is_seeded_by_its_own_pod_and_keeps_its_minted_tokens_and_
     seeded = [call for call in writes if call.startswith(f"{_OWN} kv put {_SENTINEL} ")]
     if not succeeds:
         assert not seeded, f"the seed stopped but still marked the store ready: {seeded}"
-        if signing in _SIGNING_REFUSED:
-            written = [
-                identity
-                for identity in ids
-                if _store(stores, "local", f"secret/signing-key-{identity}") or _store(stores, "local", f"secret/signing-public-{identity}")
-            ]
-            assert not written, f"a pair was written for {written} after the seed refused it"
-            assert not (tmp_path / "home" / "seed" / f"signing-key-{ids[0]}").exists(), (
-                "the refused pair was kept, so every restart reads it back and refuses again"
-            )
-            return
-        assert not _store(stores, "local", f"secret/{_MINTED}"), "a token was written after the seed refused"
-        if served == "malformed":
-            assert not kept.exists(), "the refused token was kept, so every restart reads it back and refuses again"
+        written = [
+            identity
+            for identity in ids
+            if _store(stores, "local", f"secret/signing-key-{identity}") or _store(stores, "local", f"secret/signing-public-{identity}")
+        ]
+        assert not written, f"a pair was written for {written} after the seed refused it"
+        assert not (tmp_path / "home" / "seed" / f"signing-key-{ids[0]}").exists(), (
+            "the refused pair was kept, so every restart reads it back and refuses again"
+        )
         return
     assert writes[-1].startswith(f"{_OWN} kv put {_SENTINEL} "), f"the readiness key is not the last write: {writes[-1]}"
     assert len(seeded) == (2 if local == "restart" else 1), f"seeds that completed: {len(seeded)}"
-
-    written = _store(stores, "local", f"secret/{_MINTED}").get("token", "")
-    if token == "carried":
-        assert written == _SERVED_TOKEN, "the minted token was replaced, so every caller that cached it now disagrees with its verifier"
-    else:
-        assert re.fullmatch(r"[A-Za-z0-9]{40}", written), f"not a 40-character token: {written!r}"
 
     for identity in ids:
         pair = expected[identity]
@@ -302,7 +270,7 @@ def test_the_dev_store_is_seeded_by_its_own_pod_and_keeps_its_minted_tokens_and_
         "RollingUpdate",
         0,
         1,
-    ), f"the rollout is {rolling}: unless the outgoing pod serves until its replacement is Ready, there is nothing to carry the tokens from"
+    ), f"the rollout is {rolling}: unless the outgoing pod serves until its replacement is Ready, there is nothing to carry the pairs from"
     [volume] = [v for v in pod["volumes"] if v["name"] == "signing"]
     assert volume["emptyDir"].get("medium") == "Memory" and volume["emptyDir"].get("sizeLimit"), (
         f"the candidate volume is {volume}: seeds would reach node disk"

@@ -12,11 +12,11 @@
    publisher-oidc-client-secret (the Dex client secret), dapr-state-connection-string,
    dapr-app-token (the app-API token, for any pod whose doors read it from here rather than from env —
    it must equal the value the `dapr-app-token` Secret holds, since daprd stamps the header from that
-   Secret and the app compares against this field), plus one service-token-<identity> per subject listed
-   in any *_PRIVILEGED_SUBJECTS, plus signing-public-<identity> (field `keys`) and then signing-key-<identity>
-   (field `seed`) for every identity in lance.signingIdentities (values.yaml `signing:`; render refuses a non-dev
-   store until an operator created them and signing.provisioned says so). The devMode seed
-   below is the authoritative list — keep this comment and that `bao kv put` in sync.
+   Secret and the app compares against this field). Beside the bundle, for every identity in
+   lance.signingIdentities, two secrets: signing-public-<identity> (field `keys`) and then signing-key-<identity>
+   (field `seed`), described in values.yaml `signing:`; the render refuses a non-dev store until an operator
+   created them and signing.provisioned says so. The devMode seed below is the authoritative list — keep this
+   comment and that `bao kv put` in sync.
 
    TWO CONSUMERS, ONE KEY (2026-08-09). `publisher-oidc-client-secret` now serves the publish saga AND
    the MinIO StatefulSet's STS AssumeRoleWithWebIdentity config — there is one Dex client (`dex.clientId`),
@@ -78,7 +78,7 @@ metadata:
 spec:
   replicas: 1
   {{- if .Values.openbao.devMode }}
-  {{- /* SURGE BEFORE REMOVING: the seed carries the minted tokens over from the pod the Service still
+  {{- /* SURGE BEFORE REMOVING: the seed carries the signing pairs over from the pod the Service still
          routes to, which exists only while the outgoing pod serves until its replacement is Ready. */}}
   strategy: { type: RollingUpdate, rollingUpdate: { maxSurge: 1, maxUnavailable: 0 } }
   {{- end }}
@@ -190,7 +190,7 @@ spec:
           image: {{ .Values.openbao.image }}
           {{- include "lance.rootlessSecurityContext" 65532 | nindent 10 }}
           {{- /* the bao CLI writes a token file under $HOME, which a read-only rootfs turns into a failure. HOME on the tmp
-                 emptyDir is the pair every app container in this chart already uses, and the minted tokens the
+                 emptyDir is the pair every app container in this chart already uses, and the signing pairs the
                  seed keeps there outlive a restart of either container. */}}
           volumeMounts:
             {{- include "lance.tmpMount" . | nindent 12 }}
@@ -216,41 +216,6 @@ spec:
                      readiness key. Each check that may fail on purpose sits in an `if`, `until` or `&&`. */}}
               set -e
               mkdir -p "$HOME/seed"
-              {{- /* MINTED HERE, ONCE, when nothing else holds the value ([[LH-304]]). A token the operator
-                     supplied, or one a daprd-less pod mounts from `infra-credentials`, has a stable
-                     source and is written as rendered. Any other would be `randAlphaNum` again on every
-                     render — nothing it could be looked up from — so each upgrade rotated it under the
-                     signers it did not restart: measured 2026-09-26, lineage refused the catalog's
-                     events "signature does not verify" after a chart-only upgrade. So it is never
-                     rendered: the seed takes the value it wrote before (kept under $HOME through a restart
-                     of either container), else the one the store behind the Service holds (another pod,
-                     Ready so seeded, which a rollout keeps serving until this one is Ready), and mints
-                     only into a clean absence: that store answering "No value found", or no pod serving,
-                     which the Service answers "connection refused" (both measured on OpenBao 2.2.0,
-                     2026-10-02). Any other read failure stops the seed rather than rotating a credential
-                     it could not see. */}}
-              {{- /* A VALUE IS CHECKED BEFORE IT IS KEPT, so one bad read cannot outlive a restart: a kept copy
-                     that fails the check is read again from behind the Service rather than trusted. */}}
-              token_shaped() { case "$1" in *[!A-Za-z0-9]*) return 1 ;; esac; [ "${#1}" -eq 40 ]; }
-              put_minted() {
-                tok=$(cat "$HOME/seed/$1" 2>/dev/null || true)
-                if ! token_shaped "$tok"; then
-                  if tok=$(BAO_ADDR=http://{{ include "lance.openbaoHost" . }}:{{ .Values.openbao.port }} BAO_CLIENT_TIMEOUT=5s bao kv get -field=token "secret/$1" 2>&1); then
-                    token_shaped "$tok" || { echo "secret/$1 behind the Service is not a 40-character token, refusing to replace it" >&2; return 1; }
-                  else
-                    case "$tok" in
-                      "No value found at"*|*"connect: connection refused") ;;
-                      *) echo "cannot read secret/$1 behind the Service, refusing to mint over it: $tok" >&2; return 1 ;;
-                    esac
-                    tok=$(dd if=/dev/urandom bs=96 count=1 2>/dev/null | base64 | tr -dc 'A-Za-z0-9' | cut -c1-40)
-                    token_shaped "$tok" || { echo "could not mint a 40-character token for $1" >&2; return 1; }
-                    echo "minted secret/$1"
-                  fi
-                  printf '%s' "$tok" > "$HOME/seed/$1.new"
-                  mv "$HOME/seed/$1.new" "$HOME/seed/$1"
-                fi
-                bao kv put "secret/$1" token="$tok" >/dev/null
-              }
               {{- if $mint }}
               {{- /* ONE PAIR PER SIGNING IDENTITY, chosen from the kept copy, the store behind the Service, then the mint candidate
                      (values.yaml `signing:`). A value travels through shell variables, files and `@file` arguments, never argv or output. */}}
@@ -334,39 +299,6 @@ spec:
                      the published pair could never match: a consumer either signed as root, defeating
                      the scoping entirely, or failed SignatureDoesNotMatch. */}}
                 ray-compute-secret-key={{ include "lance.scopedStorageSecret" (list $ $.Values.minio.rayComputeAccessKey $.Values.minio.rayComputeSecretKey) }} \
-                {{- /* ONE DEDICATED CREDENTIAL PER PRIVILEGED IDENTITY. Without these the binding in
-                       `dapr_auth.py` is unreachable: a subject not on *_PRIVILEGED_SUBJECTS
-                       authenticates with the estate's SHARED APP_API_TOKEN, so any holder of that one
-                       token may claim ANY allowlisted service — including identities that hold a WRITE
-                       and PUBLISH rung on every warehouse (`owner` until 2026-09-10, which also carried
-                       drop, deregister, restore and grant management across every tenant). The
-                       narrowing shrank the prize; it did not remove it. The control existed and was
-                       tested; nothing rendered it, and
-                       nothing seeded the secret it needs, so it was inert in every deployment.
-                       Derived from the same medallion declarations as LANCE_FGA_CASCADE_WRITERS, so a
-                       new stage runner cannot be added with an identity that has no credential of its own. */}}
-                {{- /* `frontend.serviceIdentity` is here for the widest holder rather than the most
-                       privileged one: SEVEN zone Deployments mount the shared bearer, and the privileged
-                       block's own note records what that buys — "Reading one web pod's environment was
-                       the whole attack." It needs no client half, because the BFF already reads
-                       `LINEAGE_SERVICE_TOKEN` from env. */}}
-                {{- /* `maintenance.catalogServiceIdentity` is on this list because the catalog's
-                       `LANCE_PRIVILEGED_SUBJECTS` names it: a privileged subject whose token is not
-                       seeded resolves to nothing, falls back to the shared bearer, and is refused —
-                       so the SEED is a third half of this control, not an afterthought to the pair. */}}
-                {{- /* Ingest claims ONE subject at TWO doors — the catalog's and the graph's — and both
-                       name it privileged, so one seeded token serves both. Read from the service's own
-                       declarations rather than written out, and `uniq` below collapses them when they
-                       agree (they do, and the render is what proves it). */}}
-                {{- /* THE SHARED DERIVATION, not a second copy of it. `lance.allServiceIdentities` already
-                       feeds `lance.identitiesForApp` and the deny-list that subtracts from it, and its own
-                       comment says why a copy is dangerous: "an identity seeded but not allowed here is an
-                       app that boots and then 401s with nothing naming the cause". This list WAS that copy,
-                       and adding the catalog's identity to it alone seeded a credential every peer's
-                       deny-list stayed blind to — caught by
-                       `tests/unit/test_a_dedicated_credential_is_not_readable_by_its_peers.py`, which is
-                       the gate that exists for exactly this. */}}
-                {{- $privileged := include "lance.allServiceIdentities" . | splitList " " }}
                 {{- /* THE MAINTENANCE PLANE'S SCOPED S3 SECRET, when one is provisioned. Its own field
                        rather than a second value on `minio-secret-key`: that field IS the tenant root's
                        secret and other services read it, so overwriting it would repoint the whole
@@ -412,30 +344,6 @@ spec:
 
               echo "seeded secret/lance into OpenBao"
 
-              {{- /* EACH DEDICATED CREDENTIAL AS ITS OWN SECRET ([[XC-072]]), which is what makes it
-                     scopeable at all. Dapr grants by secret NAME — the `{key}` in
-                     `GET /v1.0/secrets/{store}/{key}` — and never by field within one, so while these
-                     lived on the `lance` bundle the only grant expressible was the whole bundle.
-                     Measured live 2026-09-23 before the split: `.../secrets/lance-secrets/lance`
-                     answered 200 with 21 fields to the `medallion-producer` pod, eight of them other
-                     identities' credentials, and `.../service-token-service-ingest` answered 500
-                     because it was not an addressable secret.
-                     SAME SHAPE AS `secret/viewer-s3` below, for the reason that one already states:
-                     a credential in its own secret can be handed to one reader without every reader of
-                     the shared bundle gaining it.
-                     SQUOTED because `auth.serviceTokens` lets an operator supply this value: a generated
-                     token is alphanumeric and safe bare, but a credential from a secret manager carries
-                     `+/=` and can carry `$`, which this `sh -c` would expand — seeding a DIFFERENT value
-                     than the mounted half and 401ing that identity with no error anywhere. */}}
-              {{- $mounted := include "lance.mountedServiceIdentities" $ | splitList " " }}
-              {{- range (compact $privileged | uniq | sortAlpha) }}
-              {{- if or (get (default dict $.Values.auth.serviceTokens) .) (has . $mounted) }}
-              bao kv put secret/service-token-{{ . }} token={{ include "lance.dedicatedServiceToken" (list $ .) | squote }}
-              {{- else }}
-              put_minted service-token-{{ . }}
-              {{- end }}
-              {{- end }}
-              echo "seeded the per-identity service credentials into OpenBao"
               {{- if $mint }}
               {{- range $signers }}
               put_pair {{ . }}
@@ -480,34 +388,10 @@ spec:
               bao auth enable -path={{ $.Values.externalSecrets.kubernetesAuthPath }} kubernetes 2>/dev/null || echo "kubernetes auth already enabled"
               bao write auth/{{ $.Values.externalSecrets.kubernetesAuthPath }}/config \
                 kubernetes_host="https://$KUBERNETES_SERVICE_HOST:$KUBERNETES_SERVICE_PORT"
-              {{- /* ESO READS THE PER-IDENTITY SECRETS TOO ([[XC-072]]), and its policy has to say so.
-                     The split moved every `service-token-<identity>` out of the `lance` bundle into its
-                     own secret, and this policy granted read on exactly ONE path — so the pods that get
-                     their credential through ESO rather than a Dapr sidecar (the Ray lane, the web
-                     zones) lost it silently: ESO cannot read what no policy grants, and an unsynced key
-                     is an EMPTY value, not an error. Measured: the baked dummy-lane job posting to
-                     `rask-lineage:8000/api/v1/lineage` answered `403 Forbidden`.
-                     ENUMERATED, NOT GLOBBED. `service-token-*` would hand ESO every identity's
-                     credential and re-open exactly what the split closed; these are the three groups
-                     `external-secrets.yaml` actually delivers. */}}
               bao policy write {{ $.Values.externalSecrets.role }} - <<'POLICY'
               path "{{ $.Values.externalSecrets.kvMount }}/data/{{ $.Values.externalSecrets.secretPath }}" {
                 capabilities = ["read"]
               }
-              {{- if $.Values.auth.dedicatedServiceCredentials }}
-              {{- range (list $.Values.medallion.train.trainerIdentity $.Values.frontend.serviceIdentity | compact) }}
-              path "{{ $.Values.externalSecrets.kvMount }}/data/service-token-{{ . }}" {
-                capabilities = ["read"]
-              }
-              {{- end }}
-              {{- range $.Values.medallion.stageRunners }}
-              {{- if .serviceIdentity }}
-              path "{{ $.Values.externalSecrets.kvMount }}/data/service-token-{{ .serviceIdentity }}" {
-                capabilities = ["read"]
-              }
-              {{- end }}
-              {{- end }}
-              {{- end }}
               POLICY
               bao write auth/{{ $.Values.externalSecrets.kubernetesAuthPath }}/role/{{ $.Values.externalSecrets.role }} \
                 bound_service_account_names={{ $.Values.externalSecrets.serviceAccount | default "external-secrets" }} \

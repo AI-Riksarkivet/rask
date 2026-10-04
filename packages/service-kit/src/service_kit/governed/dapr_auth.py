@@ -104,7 +104,7 @@ class DaprDoorSettings(BaseSettings):
     secret_store: str = Field(default="lance-secrets", alias="RASK_SECRET_STORE")
     secret_key: str = Field(default="lance", alias="RASK_DAPR_SECRET_KEY")
     #: The field within the bundle. Hyphenated because that is how every other field in `secret/lance`
-    #: is spelled (`catalog-s3-secret-key`, `service-token-<identity>`) — an underscore here would read
+    #: is spelled (`catalog-s3-secret-key`, `dapr-app-token`) — an underscore here would read
     #: as an env var, which is the one thing this value must never be.
     app_token_field: str = Field(default="dapr-app-token", alias="RASK_APP_TOKEN_FIELD")
 
