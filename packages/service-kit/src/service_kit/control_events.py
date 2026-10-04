@@ -199,8 +199,8 @@ type ControlSigner = Literal["catalog", "maintenance", "medallion_producer"]
 type ControlSignerRole = ControlSigner | Literal["exempt"]
 
 
-def control_signer_role(action: ControlAction) -> ControlSignerRole:
-    """The role whose signature ``action`` needs before a door acts on it, or "exempt" when it needs none.
+def control_signer_role(action: ControlAction, object_id: str) -> ControlSignerRole:
+    """The role whose signature ``action`` on ``object_id`` needs before a door acts on it, or "exempt" when it needs none.
 
     The role is the service whose code emits the action, so a door verifies against that role's identities in
     `RASK_CONTROL_SIGNER_ROLES` and never against every signer the estate lists: a valid signature from another
@@ -208,6 +208,11 @@ def control_signer_role(action: ControlAction) -> ControlSignerRole:
     here fails the `assert_never`.
     """
     match action:
+        case "grant_added" | "grant_revoked" if object_id.startswith("annotation_project:"):
+            # EXEMPT by owner ruling R5 (2026-10-04): the annotator's member door emits the grant pair for its own
+            # projects and holds no signing identity. Decided on the object, so a grant on any catalog object still
+            # needs the catalog's signature. The residual is R3's: any identity the bus lets publish here can forge one.
+            return "exempt"
         case (
             "grant_added"
             | "grant_revoked"
@@ -246,8 +251,6 @@ def control_signer_role(action: ControlAction) -> ControlSignerRole:
             | "table_tag_updated"
             | "table_tag_deleted"
         ):
-            # The annotator's member door emits the grant pair too, and it holds no signing identity, so its grant
-            # events verify under no role.
             return "catalog"
         case "table_purged" | "namespace_purged":
             # The expiry purge: maintenance's sweep emits both under `maintenance.controlEmit`.
