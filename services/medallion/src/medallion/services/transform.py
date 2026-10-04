@@ -584,8 +584,8 @@ async def _preflight(
         # guard, a bronze$pages arrival drove this stage runner into a deterministic FAIL — and that FAIL is
         # what live-proof-2026-07-28.md used as evidence the page lane had no consumer. A silent fix
         # would have removed the symptom AND the only way to notice the lane is still unlanded.
-        # (INFO is not noisy: the trigger is published once per bronze WRITE by handle_bronze_arrival,
-        # not once per page — one record per ingest.)
+        # (INFO is not noisy: the cascade head publishes the trigger once per bronze WRITE, in
+        # `fire_bronze_arrival`, not once per page — one record per ingest.)
         record_other_lane(transition)
         log.info(
             "medallion_stage_other_lane",
