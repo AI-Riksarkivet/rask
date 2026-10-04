@@ -253,6 +253,15 @@ or refuse an event and cannot forge one (`packages/lineage-kit/src/lineage_kit/s
   claimed identity and the reason. A key list that cannot be read is an outage, not a verdict, and the delivery is
   retried. What each reason means and what to do:
   [RUNBOOK-oncall.md](runbooks/RUNBOOK-oncall.md#lineage-refusing-a-signers-events).
+- **The doors that act on the bus.** The cascade heads (`/bronze-arrival`, `/publication-arrival`), notifications
+  (`/lineage-events`, `/control-events`) and maintenance's `/maintenance-arrival` verify the same signatures before they
+  act, in the mode `RASK_SIGNATURE_DOORS` names (chart `signing.doors`: off, observe or enforce). A lineage event verifies
+  against `RASK_EVENT_SIGNERS` and `RASK_EVENT_DELEGATORS`, lineage's own sets; a control event against the identities
+  `RASK_CONTROL_SIGNER_ROLES` lists for the role its action names. Only an event the door would act on is verified.
+  Enforcing, a refusal is acknowledged and drives nothing, counted in `<service>_signature_refused_total` by door and
+  reason, and every reason pages ([RUNBOOK-oncall.md](runbooks/RUNBOOK-oncall.md#a-bus-door-refusing-events)); a key
+  list that cannot be read is retried. Observing, the door acts as before and counts what enforcing would refuse in
+  `<service>_signature_would_refuse_total`.
 - **The previous-key window.** Each identity publishes `signing-public-<identity>` with its current key first and at
   most one previous key. An event signed just before a rotation verifies while the previous key is listed, and lineage
   reads a list through its own sidecar and caches a successful read for 60 s. Provisioning, rotation and loss of the
