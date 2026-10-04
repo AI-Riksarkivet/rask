@@ -28,7 +28,8 @@ import respx
 from fastapi import FastAPI
 from starlette.testclient import TestClient
 
-from lineage.services.signature import KEY_REFRESH_INTERVAL_SECONDS, KEY_TTL_SECONDS, PublishedKeys
+from lineage.services.signature import dapr_published_keys
+from lineage_kit.keys import KEY_REFRESH_INTERVAL_SECONDS, KEY_TTL_SECONDS
 
 
 SIGNER = "service-maintenance"
@@ -148,7 +149,7 @@ def test_an_unknown_key_id_is_retried_until_the_list_is_fresh_and_a_cached_list_
         monkeypatch.setenv(key, value)
     # One key id remembered: the second distinct unknown one pushes the first out. `raising=False` lets the test run against a reader
     # with no bound at all (the red check); if the patch ever fails to take effect the eviction case fails, so it cannot pass unnoticed.
-    monkeypatch.setattr("lineage.services.signature.MAX_UNKNOWN_KEY_IDS", 1, raising=False)
+    monkeypatch.setattr("lineage_kit.keys.MAX_UNKNOWN_KEY_IDS", 1, raising=False)
     from lineage.api.dapr import register_dapr
     from lineage.core.config import get_settings
     from service_kit.lakehouse.ns_errors import install_problem_handlers
@@ -160,7 +161,7 @@ def test_an_unknown_key_id_is_retried_until_the_list_is_fresh_and_a_cached_list_
     feed = _Feed()
     app.state.repository = feed
     clock = _Clock()
-    app.state.published_keys = PublishedKeys(store=STORE, clock=clock)
+    app.state.published_keys = dapr_published_keys(STORE, clock=clock)
     signers = {name: event_signer(SIGNER) for name in RUN_IDS}
     events = {name: signer.sign(_event(RUN_IDS[name])) for name, signer in signers.items()}
     published = respx.get(f"{SECRETS}/signing-public-{SIGNER}").mock(return_value=httpx.Response(200, json={"keys": signers["old"].public}))

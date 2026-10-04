@@ -48,6 +48,7 @@ from lineage_kit.emitter import (
     set_default_emitter,
     use_emitter,
 )
+from lineage_kit.keys import PublishedKeys
 from lineage_kit.runs import LineageRun, job_run, run_id_for
 from lineage_kit.schemas import (
     BASE_FACET_SCHEMA_URL,
@@ -141,6 +142,7 @@ __all__ = [
     "OutputStatisticsFacet",
     "ParentRunFacet",
     "PublicKeySource",
+    "PublishedKeys",
     "RecordingEmitter",
     "RefusalReason",
     "Run",
