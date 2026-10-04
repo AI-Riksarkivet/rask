@@ -124,13 +124,13 @@ def test_a_store_nothing_seeds_is_refused_until_the_operator_attests_its_signing
 @pytest.mark.parametrize(
     ("overlay", "enforced", "doors", "door_hosts"),
     [
-        pytest.param((), True, "off", _ALL_HOSTS, id="lineage-on-and-the-doors-off-by-default-with-the-store-and-auth"),
+        pytest.param((), True, "enforce", _ALL_HOSTS, id="lineage-on-and-the-doors-enforcing-by-default-with-the-store-and-auth"),
         # maintenance off is the e2e-stack lane's overlay: a control-event service that is not deployed holds an empty role, which
         # blocks no mode because nothing it would sign can arrive.
         pytest.param(
             ("--set", "signing.doors=enforce", "--set", "maintenance.enabled=false"), True, "enforce", _CONTROL_HOSTS, id="the-mode-asked-with-maintenance-off"
         ),
-        pytest.param(("--set", "signing.enforce=false"), False, "off", _ALL_HOSTS, id="lineage-off-when-asked"),
+        pytest.param(("--set", "signing.enforce=false"), False, "enforce", _ALL_HOSTS, id="lineage-off-when-asked"),
         pytest.param(("--set", "auth.enabled=false"), False, None, _ALL_HOSTS, id="not-without-auth"),
         pytest.param(("--set", "openbao.enabled=false"), False, None, _ALL_HOSTS, id="not-without-a-store"),
     ],

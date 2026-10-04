@@ -3285,7 +3285,9 @@ signing:
   # of `enforce`, which is lineage's. observe and enforce fail the render with no signer at all (the services refuse to boot
   # on an empty signer set rather than verify against it), and when a deployed control-event service has no identity: its
   # role would hold nobody, and the doors would refuse every event it signs.
-  doors: "off"
+  # enforce is the default: the observe soak at helm rev 267 (2026-10-04) counted no would-refuse on genuine traffic at any
+  # door. observe is the mode to soak a change to who signs before enforcing it.
+  doors: "enforce"
   # NON-DEV STORES (openbao.devMode=false, or openbao.externalAddr) MINT NOTHING, so every signer would stay not
   # Ready. The render fails until the operator attests here that signing-public-<identity> and then
   # signing-key-<identity> exist for every identity the failure names. Tooling for that, and rotation on such a
