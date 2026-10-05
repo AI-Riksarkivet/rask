@@ -2161,6 +2161,8 @@ Found by the 2026-10-02 review of LH-064, its fix round and its live readback (h
 - XC-117 · LOW · Nothing ties a non-off signature-door mode to a reachable secret store: an enforcing door with no store answers RETRY to every delivery it would act on · `chart, service-kit`
 - XC-118 · LOW · Downstream of the OTel Collector, not to be fixed (owner 2026-10-04: GreptimeDB is being replaced by OpenObserve or the Grafana stack): vmalert v1.106.1 POSTs every query with no Content-Type and GreptimeDB answers 415, so all 59 rules are health=err and no alert fires; a rules change restarts vmalert, resetting `for:` clocks; Alertmanager's config has no checksum · `chart (observability)`
 - XC-119 · LOW · The INGEST stream reports 3,090 consumers and MAINTENANCE_WORK holds 290,607 messages (272 MiB), seen in passing 2026-10-04; provenance not established · `nats, ingest, maintenance`
+- LH-387 · LOW · `RASK_INGEST_SECRETS_FROM_DAPR` is hard-coded "true" in values.yaml, so a render with no secret store pays ~2 minutes of boot retries before ingest connects without its NATS user; render it from lance.secretsViaDapr (found in XC-078 slice 3) · `ingest, chart`
+- LH-388 · LOW · Ingest reads `nats-user-ingest` once at startup: a store unreachable for the whole boot window leaves it without a user until restart, refused under NATS auth; a background re-resolve like the signing holder's would heal in place (found in XC-078 slice 3) · `ingest`
 
 ### No-prod parking (uncounted)
 
