@@ -345,7 +345,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criterion 5. Rolling one service redeploys ten, and a soak on maintenance freezes catalog, lineage and medallion deploys. D14(1) confirmed one image per member.
 - *How:* `ARG SERVICE` plus `uv sync --package ${SERVICE}` (`--extra workflow` only for medallion), the estate's own one-definition-N-images pattern (frontend.dockerfile ARG APP, ray-runner.dockerfile ARG RUNNER); pylance and pyarrow in a deps-only member layer like packages/ray-cluster-env. `scripts/dagger-image.sh` stays the one build seam. No Lance surface; Lakekeeper ships one binary.
 - *Closes when:* A lineage-only publish plus `--set image.tags.<lineage-stem>=<tag>` rolls only rask-lineage while the other ten pods keep their image (read back with kubectl), and the stem list is declared once.
-- *Evidence:* .docker/rest-catalog.dockerfile:39-42,50-53 · Makefile:666-669,699 · chart/templates/_helpers.tpl:613 · chart/templates/backup-control-root.yaml:72, bootstrap-admin.yaml:75, backup-pg.yaml:91, explorer.yaml:83 · .docker/frontend.dockerfile:24,72 · .docker/ray-runner.dockerfile:32-46 · live: 11 deployments on lance-rest-catalog:lakehouse-854a0cf2
+- *Evidence:* .docker/rest-catalog.dockerfile:39,50 (no ARG SERVICE) · chart/templates/_helpers.tpl:599-600 (the row cites :613) · grep -rn catalogImage chart/templates → 14 hits
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: Live claim '11 deployments on lance-rest-catalog:lakehouse-854a0cf2' not read back (no kubectl run); Makefile:666-669,699 K3S_IMAGES lines not re-opened.
 
 **LH-178 · An erasure cannot complete while a branch pins the fork-point version holding the subject, and no person is told**
 `catalog, notifications` · **HIGH**
@@ -353,16 +354,18 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criterion 2 (governance). `checkout_version(N)` still serves the erased subject while a branch pins N; the report says complete=False and no person ever receives it.
 - *How:* A branch is a shallow clone under `tree/<name>/` whose `_refs/branches/<name>.json` records parentVersion, and cleanup keeps files any branch references (lance_docs/file_format.md:2719-2763; guide.md:4051). Measured on pylance 12.0.0: delete the branch, `create_branch(name, reference=<main post-erasure head>)`, then `cleanup_old_versions` reclaims the pinned version and main keeps only the clean head. Announce through the ControlAction contract and notifications NAMED_ACTIONS. Lakekeeper has no erasure; its expiry/purge split (docs/audits/2026-09-25/lakekeeper-deep-read/governance.md §1) is the model for D4 option (c)'s grace step.
 - *Closes when:* D4 is recorded in DECISIONS.md and implemented in erase(); a RED test drives a branch-pinned erasure to the ruled end state and asserts the targeted event; per-branch undrop recreates a branch at a recorded reference.
-- *Evidence:* services/catalog/src/catalog/services/erasure.py:104-225 · services/catalog/src/catalog/api/v1/endpoints/erasure.py:41-74 · services/catalog/tests/test_erasure_reaches_every_surface.py:74,106 · lance_docs/file_format.md:2719-2763 · skeptic01/probe_branch_cleanup.py (case 2)
+- *Evidence:* services/catalog/src/catalog/services/erasure.py:881-924 (_holders, head becomes the holder at :920-921), :955-988 (doomed |= held.branches at :978, head residuals `continue` at :973-975); open_backlog_left_new2.md:77 (D4 open); grep 'D4' docs/DECISIONS.md finds only an unrelated delta ruling at :695
 - **blocked:** D4 (what erase() does to a pinning branch; the grace period is an owner-set value).
+- *Re-audited 2026-10-05:* still blocked; the row's own blocker holds (an auditor and an independent checker, against main fd99d857). Not confirmed: That the over-report fires in practice: I traced the code but ran no probe with a branch whose head is a residual head and which also holds an older residual version; That ControlAction has no erasure action: I did not re-grep control_events.py and relied on the auditor's grep.
 
 **LH-207 · Classification is laundered or hidden from the vend check: drop_columns, a same-type re-type, or a label on a nested or branch-local field leaves the raw bytes directly vendable**
 `catalog, maintenance` · **HIGH**
-- *What is left:* The credentials door refuses a direct vend only when the latest MAIN schema carries `rask.classification` on a TOP-LEVEL field. drop_columns and any alter data_type change (even string→string, which re-mints the field id with empty metadata) need only can_write_data while old files and time travel keep the column; a label on `payload.ssn` answers 200 yet the vend answers mode=direct. Measured on 12.0.0 through classified_columns (vending.py:288-307). add_columns({'leak': 'secret'}) copies the values into an unlabelled `leak`; after drop_columns(['secret']) the classified set is () while `leak` still holds the values in the LIVE version. The update door is a second copy path that needs no new column: dataplane.update_table forwards expressions to dataset.update (dataplane.py:1386-1396), and update({'note': 'secret'}) leaves `note` unlabelled. A label written with body.branch=work lands on the branch (dataplane.py:1945-1947), but dataset_facts opens main only (vending.py:339,351), and /credentials (credentials.py:119-141) and describe(vend) (tables.py:449) gate on main's facts, so both vends answer direct while the label sits on work.
+- *What is left:* (1) Nested labels: classified_columns (services/catalog/src/catalog/core/vending.py:299-318) skips any path the flat names list cannot address, so a label on `payload.ssn` still vends direct. Walk the schema recursively. (2) Laundering: drop_columns (columns.py:185), a same-type alter data_type (columns.py:155, which re-mints the field id), add_columns('leak = secret') (columns.py:123) and update({'note': 'secret'}) (services/catalog/src/catalog/services/dataplane.py:1792, dataset.update at :1808) need only can_write_data, and each one either shrinks the classified set or copies the values unlabelled. After add/alter/drop/overwrite, add a field-id-keyed check that a non-classifier may not shrink the classified set, plus derivation inheritance for add_columns and update expressions. (3) Branch-local labels as seen from main: a label on tree/work no longer lets a branch=work vend go direct. But /credentials with no branch, and describe(vend_credentials=true) (tables.py:450, which calls dataset_facts with no branch), are judged on main's facts while the read policy grants {prefix}/* (vending.py:521), which includes tree/work. Main and describe vends must take the union of labels across every branch the credential can read, or the credential must exclude tree/. Closes-when as written, minus the branch-vend path.
 - *Why:* Criterion 2, zero trust: a writer can turn a classified table into a directly vendable one.
 - *How:* drop_columns is metadata-only and does not delete data (lance_docs/guide.md:745-749); nested fields are addressed by dot path (spec.yaml:5463-5475). Walk the schema recursively on the ref being vended (every branch when the policy grants tree/*); give a label a lifetime tied to history (a control-root record keyed on table + Lance field id, cleared only by maintenance once no retained manifest references that id); one post-condition on add/alter/drop/overwrite: a non-classifier may not shrink the classified set keyed by field id. Until the walk exists, refuse `rask.*` writes on paths the vend cannot see. Derivation tracking must cover add_columns and update expressions: the new or updated field inherits the strictest classification of the fields it reads, or the request is refused without can_classify. Emit a columnLineage facet; catalog produces none today (lineage_deps.py:31-81). This narrows the hole rather than closing it. A writer is also a reader (model.fga:431-432,551-552) and the server-mediated path does not mask (credentials.py:136-139), so client-side copying needs LH-288's ruling.
 - *Closes when:* After classify then a writer's drop, same-type cast, nested label or branch label, both /credentials and describe(vend_credentials=true) stay server_mediated, one RED test per path, and after classify, a writer's add_columns('leak = secret') followed by a drop of secret leaves both vends server_mediated.
-- *Evidence:* services/catalog/src/catalog/core/vending.py:274-351,459-460 · services/catalog/src/catalog/api/v1/endpoints/columns.py:68,153,184,247 · services/catalog/src/catalog/api/v1/endpoints/credentials.py:121-144 · docs/audits/2026-09-25/03-lance-docs-full-audit.md LD01, LD02 · unverified-claims-a/m123.py · verify-unverified-claims-a/v_update_copy.py
+- *Evidence:* services/catalog/src/catalog/core/vending.py:299-318, :334-370, :521; services/catalog/src/catalog/api/v1/endpoints/credentials.py:123; services/catalog/src/catalog/api/v1/endpoints/tables.py:450; services/catalog/src/catalog/api/v1/endpoints/columns.py:123,155,185,252; services/catalog/src/catalog/services/dataplane.py:1792-1808
+- *Re-audited 2026-10-05:* partly done; *What is left* rewritten to the remainder (done by 68a07c12 (LH-279), for the branch-credential facts) (an auditor and an independent checker, against main fd99d857). Not confirmed: Did not measure on pylance 12.0.0 that a main read credential can actually GET tree/work data objects. This is inferred from the policy resource string at vending.py:521; Did not re-measure that a same-type alter re-mints the field id on 12.0.0. The claim is taken from the row's earlier measurement (unverified-claims-a/m123.py, not opened).
 
 **LH-212 · Every full-lane stage write rewrites every row and the media lane retracts by run id, so the change feed sees the whole tier as changed and two overlapping runs empty it**
 `medallion (scripts/ray_stage_job.py), service-kit` · **HIGH**
@@ -370,7 +373,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criteria 1, 4 and 5: BYO change-feed consumers see every row as updated, lineage names the latest run instead of the producing one, and a tier can be emptied silently.
 - *How:* The change feed is defined on `_row_last_updated_at_version` (lance_docs/file_format.md:4270-4298), so write only changed rows: `when_matched_update_all(condition=<null-safe content diff>)` over non-provenance columns (compare a sha256 column for blobs; verified on 12.0.0). Converge the media lane in ONE commit: stage batches, then one `merge_insert(...).when_not_matched_by_source_delete()`. Then create the lineage index only when absent and fold with `optimize_indices`.
 - *Closes when:* On the in-process lane, two full runs over identical input leave `_row_last_updated_at_version` unchanged and index coverage at 100%, RED. The media lane's convergence (two interleaved media runs converge to the full row set) is LH-326's.
-- *Evidence:* scripts/ray_stage_job.py:291,300,530,570,717,802 · services/medallion/src/medallion/services/compute.py:175-176,249,392 · packages/service-kit/src/service_kit/lakehouse/stage_stamp.py:146-151 · docs/audits/2026-09-25/02-lance-and-lakekeeper-practice.md LK09 · docs/audits/2026-09-25/03-lance-docs-full-audit.md LD12
+- *Evidence:* services/medallion/src/medallion/services/compute.py:257-259,381-383 (unconditioned merge_insert), :196,:285-294,:400 (_index_lineage after each write); docs/DECISIONS.md:3326-3328
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: Did not re-measure `_row_last_updated_at_version` or index coverage on pylance 12.0.0. The verdict comes from reading the code only; The row's compute.py line numbers (175-176,249,392) are stale; the current lines are 196/257/381/400; Did not re-check the scripts/ray_stage_job.py line numbers (the Ray half is LH-326's anyway).
 
 **LH-215 · A rename does not carry the table's name-keyed governance: direct grants are revoked silently and a forced rename leaves protection at the old id**
 `catalog, service-kit` · **HIGH**
@@ -378,7 +382,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criterion 2: governance must follow the object; Lance has no table UUID, so rask carries it.
 - *How:* A lance-ns id is the name path (lance_docs/ns_catalog/catalog/dir/index.md; RenameTable spec.yaml:597), so make the name-keyed stores enumerable: one list in service_kit.lakehouse (FGA tuples, protection, maintenance_policies, trash, _policies) that rename iterates to migrate and drop/deregister iterates to clear, with a test that fails when a record prefix is missing. Copy the source's direct tuples to the destination in the seed batch, then revoke. Lakekeeper keeps grants and the protected flag across a rename (UUID-keyed).
 - *Closes when:* A direct reader grant and a protection record survive a forced rename on the destination and are gone from the source, proven on the real-OpenFGA tier (LH-235), and reconcile reports no ghost tables afterwards.
-- *Evidence:* services/catalog/src/catalog/api/v1/endpoints/tables.py:1028,1040-1047,1106-1129 · services/catalog/src/catalog/api/fga_deps.py:152-167,1241-1272 · packages/service-kit/src/service_kit/lakehouse/protection.py:40-55 · tests/unit/test_drop_protection.py:6-12
+- *Evidence:* services/catalog/src/catalog/api/v1/endpoints/tables.py:1142-1290 (protection read at 1187, seed_ownership 1257, revoke_ownership 1259, migrate_policy 1273); deregister tables.py:640-690 (clear_protection 663, no delete_policy); drop clears policy at tables.py:593; fga_deps.py:1335 revoke_ownership
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: Did not re-run the real-OpenFGA tier (LH-235); the verdict comes from reading the code only; Did not read the body of fga_deps.revoke_ownership to re-count which relations it deletes.
 
 **LH-218 · The medallion discards the table-scoped write credential it asks for and signs every byte with its estate-wide static key**
 `medallion` · **HIGH**
@@ -386,7 +391,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* The owner's rule: STS for storage, a scoped static key is not a fix; also the precondition for deleting the medallion MinIO user (XC-084).
 - *How:* Lance takes per-open storage_options with expires_at_millis inside (lance_docs/guide.md:2310-2318; spec.yaml:2883-2891): return the credential and hold a per-table cache (write tier for the destination, read tier for the upstream) fed to every site; a server_mediated answer (a table with no location, a classified column, a base the session policy cannot address, or no credential minted; credentials.py:111-112,139-157,176) means that table's writes go through whatever the commit-door decision provides (LH-330), never an ambient fallback, and a refused vend fails the stage with its reason. Name what stays on the static key until XC-084 (control reads, outbox staging). The end state is Lance's own refresh through namespace_client (LH-229).
 - *Closes when:* On the in-process lane, every medallion data-plane read and write of a governed table is signed by a credential vended for that table, or goes through the path the commit-door decision provides when the vend answers server_mediated (observed live), the vend authorize_stage_write obtains is the one used rather than discarded, the in-process add_columns commits under a vend for that table or through the path the commit-door decision provides (LH-330), and a refused vend fails the stage with its reason. The authorize_stage_write docstring (catalog_register.py:234-240) states the credential the stage write actually uses.
-- *Evidence:* services/medallion/src/medallion/services/catalog_register.py:221-264 (docstring :234-240, the raise :260-263) · services/medallion/src/medallion/services/compute.py:366 · services/medallion/src/medallion/services/transform.py:879,897,947,1084 · services/medallion/src/medallion/services/produce.py:235 · chart/values.yaml:1009 · chart/templates/minio-scoped-users.yaml:378-389 · the commit-door decision for these lanes: LH-330
+- *Evidence:* services/medallion/src/medallion/services/catalog_register.py:199-240 (docstring :208-228, raise :238-239); transform.py:1013-1037 (the authorize_stage_write result is dropped), :823,870,905,1003,1109; compute.py:363-367 (in-process _add_new_columns_by_id + merge_insert on to_uri with the caller's storage_options); inprocess_executor.py:104 (self._storage_options()); produce.py:229 (seed_bronze with settings.storage_options())
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: Line refs in the row (catalog_register.py:221-264, compute.py:366, transform.py:879/897/947/1084, produce.py:235) have drifted; current lines are listed in evidence_now; Did not re-read chart/values.yaml:1009 or minio-scoped-users.yaml:378-389 for the rask-medallion key's policy.
 
 **LH-219 · Maintenance rewrites fall back to the static key or the ambient AWS chain whenever a vend is skipped or refused**
 `maintenance, service-kit` · **HIGH**
@@ -394,7 +400,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* The owner's rule bans a fallback chain on a write path; also the precondition for deleting the maintenance user (XC-084).
 - *How:* Read record_credential_tier{tier="ambient"} first to know the refusal count. Replace the three `return fallback` arms with MaintenanceDenied carrying denial_remedy; set `aws_provider_scheme='token'` so a dict without keys errors (verify on the deployed MinIO first; the vendored options table, guide.md:2330-2345, does not list it). Compaction then requires vending sts or web_identity; under mode_b maintenance refuses every rewrite by design, and the row says so.
 - *Closes when:* No maintenance write is signed by anything but a vend for that table (ambient-tier series 0 across a full sweep), and a refused vend is recorded as a refusal.
-- *Evidence:* services/maintenance/src/maintenance/services/credentials.py:23-24,101-130 · services/maintenance/src/maintenance/services/sweep.py:383 · floor.py:205 · packages/service-kit/src/service_kit/lakehouse/vended_credentials.py:102-121 · chart/templates/minio-scoped-users.yaml:234-245 · the trash-after-plan race (a table trashed after its unit was planned, vended 404 under the default `distributedCompaction: false`, values.yaml:1753) closed in ed061905: a vend 404 with code 1 or 4 raises TableNotGoverned and parks the table (maintenance credentials.py:245-248; sweep.py:415-420), pinned by services/maintenance/tests/test_nothing_touches_a_table_the_catalog_refused.py and test_a_table_the_catalog_does_not_govern_is_left_alone.py
+- *Evidence:* services/maintenance/src/maintenance/services/credentials.py:86,120,124,143,223 · packages/service-kit/src/service_kit/lakehouse/vended_credentials.py:121 · grep for aws_provider_scheme in services/ and packages/ outside tests finds nothing
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: The live ambient-tier refusal count (record_credential_tier{tier="ambient"}) was not read; this audit is code-only; Whether MinIO honours aws_provider_scheme='token' was not measured.
 
 **LH-270 · An empty per-base credential reference silently falls back to the estate credential**
 `catalog` · **HIGH**
@@ -402,7 +409,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Zero trust: a base configured for its own credential must never run on the estate's; the fallback is invisible.
 - *How:* Refuse an empty reference at settings parse (a validator on the map), RED test with the empty form; an unset base keeps the estate default only where no reference is declared.
 - *Closes when:* A declared-but-empty base reference fails settings validation, pinned by a test.
-- *Evidence:* docs/audits/2026-09-25/06-lakehouse-test-audit.md § Real product defects
+- *Evidence:* services/catalog/src/catalog/core/config.py:430,445-454 (no empty-ref check) · services/catalog/src/catalog/services/base_credentials.py:52-55 (`if not ref: params[uri] = dict(storage_options)`)
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: Did not run a test; this is from reading the code only.
 
 **LH-177 · The vended S3 endpoint is the STS endpoint and cannot be set per warehouse**
 `catalog` · **MEDIUM**
@@ -410,7 +418,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criterion 2 (vending correct). On any store whose STS has its own host, every vended credential points at the STS host and an off-cluster client gets a credential for a host it cannot use, silently.
 - *How:* Now: a distinct `vending.stsEndpoint` chart value and setting beside the client-facing S3 endpoint; the vendor calls STS on one and vends the other (Lakekeeper keeps `sts_endpoint` separate, crates/lakekeeper/src/service/storage/s3.rs:93-99). Under D9(a) (recommended): vending is in-cluster by design; the vend annotates or refuses a caller it cannot serve and points it at `vend_credentials=false` and the server-mediated path. Under D9(b): the warehouse's `endpoint` becomes its client-facing endpoint, plus a batched server-mediated blob door over `read_blob_ranges` once a consumer is measured. The `aws_endpoint` key-spelling defect is LH-238.
 - *Closes when:* A unit test with distinct STS and client endpoints shows the vendor calls one and vends the other, and D9 is recorded in DECISIONS.md with its behaviour pinned by a unit test.
-- *Evidence:* services/catalog/src/catalog/core/vending.py:575-642 · services/catalog/src/catalog/main.py:146-150 · services/catalog/src/catalog/core/config.py:103,631 · chart/templates/services.yaml:166 · services/catalog/src/catalog/services/warehouses.py:119-124
+- *Evidence:* services/catalog/src/catalog/core/vending.py:657,674,697-707,741,754,812-826 · services/catalog/src/catalog/main.py:150-153 · services/catalog/src/catalog/core/config.py:103,587-593 · chart/templates/services.yaml:159 · open_backlog_left_new2.md:82 (D9 still open)
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: Not checked: whether warehouses.py still ignores the warehouse record's `endpoint` (warehouses.py:119-124 not opened).
 
 **LH-141 · Nothing repairs a relative Dataset `source_uri`, and the shipped restamp would be refused at the bus door**
 `maintenance, lineage, catalog` · **MEDIUM**
@@ -418,7 +427,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criterion 1. A Dataset node naming no storage location is reported unreadable every tick and the sweep refuses its crossing for good; the shipped repair cannot pass its own door.
 - *How:* DescribeTable `with_table_uri` gives the authoritative location (lance_docs/ns_catalog/spec.yaml:404,2348-2355). The repair is a static DatasetEvent with only a dataSource facet. `update_schema_metadata` keeps `_rowid` (measured on pylance 12.0.0; lance_docs is silent). Lakekeeper rebuilds derived state from its catalog index (docs/audits/2026-09-25/lakekeeper-deep-read/authz.md §4). P3.7 ruled this shape; no owner decision remains.
 - *Closes when:* No Dataset node carries a relative `source_uri` except ungoverned removals, a restamp from service-maintenance is admitted at `/lineage-events` under test, and the sweep's location-mismatch refusal fires zero times in a full tick.
-- *Evidence:* services/maintenance/src/maintenance/core/lineage_emit.py:177,184-224 · services/lineage/src/lineage/api/fga_deps.py:71-91 · services/catalog/src/catalog/api/v1/endpoints/credentials.py:81-84 · services/lineage/src/lineage/services/repository.py:193-213
+- *Evidence:* services/lineage/src/lineage/models.py:58 (the set has moved here from fga_deps; fga_deps.py:44,75-91 imports and uses it) · services/maintenance/src/maintenance/core/lineage_emit.py:179-218
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: Live count of Dataset nodes with a relative source_uri not queried; The sweep's location-mismatch refusal rate per tick not measured.
 
 **LH-063 · FGA grants key on Dex's raw `sub`; the ruled `<idp-id>~<claim>` principal key is not implemented**
 `service-kit, catalog, lineage, notifications, frontend` · **MEDIUM**
@@ -426,7 +436,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criterion 2. A connector rename or IdP switch re-keys every grant, and humans and services share one bare subject namespace. D5 ruled the key.
 - *How:* Lakekeeper's `UserId`: `~` separator split on the first `~`, FGA sees `user:` plus the URL-encoded id, subject claim per provider (docs/audits/2026-09-25/lakekeeper-deep-read/authn.md T3/T4). OpenFGA caps the user field at 512 bytes. Current state is test data, so reseed rather than migrate.
 - *Closes when:* A RED test shows a connector rename with the same upstream user id keeps its grants, seeding refuses a bare-sub tuple, and every subject in the FGA store carries an idp prefix.
-- *Evidence:* packages/service-kit/src/service_kit/governed/deps.py:172-192,223 · packages/service-kit/src/service_kit/governed/oidc.py:143-165,329 · frontend/packages/api/src/bff.ts:72
+- *Evidence:* packages/service-kit/src/service_kit/governed/deps.py:173-193 (subject = token.sub); grep for 'class Principal|idp_id|federated:id|kubernetes~' in packages/service-kit/src, services/*/src and frontend/packages/api/src finds nothing
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: The count of 147 non-test token.sub reads was not recounted; bff.ts:72's scope request was not opened.
 
 **LH-072 · A vended credential is an untyped dict, so nothing stops its secret and session token reaching a repr, log or error echo**
 `catalog` · **MEDIUM**
@@ -434,7 +445,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criterion 2 and the secrets rule: a short-lived STS secret is still a credential, and its redaction depends on every caller remembering not to print the object.
 - *How:* Keep the wire one flat storage_options map (spec.yaml:2883-2892). In process, a typed model with `aws_secret_access_key` and `aws_session_token` as SecretStr, a redacting repr/str, and an explicit `as_storage_options()` used only at the HTTP response and the `lance.dataset` boundary. Lakekeeper derives Redact on every credential struct (crates/lakekeeper/src/service/storage/s3.rs:215,229,238). RED first.
 - *Closes when:* A unit test proves repr/str/model_dump/log/error echo of a vend never carry the secret or session token, and the response body is byte-identical to today's.
-- *Evidence:* services/catalog/src/catalog/core/vending.py:59-68,643,720 · lance_docs/ns_catalog/spec.yaml:2883-2892
+- *Evidence:* services/catalog/src/catalog/core/vending.py:64-73
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857).
 
 **LH-075 · 'Read by' answers from lineage-page views, not from data reads: two read-audit streams share one name**
 `lineage, catalog, frontend` · **MEDIUM**
@@ -442,15 +454,17 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criteria 1 and 2. The access-audit surface reports the opposite population from what it claims.
 - *How:* One read-audit stream owned by the catalog: lineage metadata views become ordinary audit() records in lance.audit; `/readers` queries lance_audit filtered on the read action and the table. Delete lineage_reads, record_read, LINEAGE_READ_AUDIT_ENABLED and services.lineage.readAudit (no dual path). Lakekeeper has one audit stream where a read is an ordinary authz event (docs/audits/2026-09-25/lakekeeper-deep-read/provenance-audit.md T4). RED: a catalog query by bob makes bob appear in /readers.
 - *Closes when:* /readers is answered from the catalog's data-read audit, lineage_reads and its flag are gone, and a RED test pins it.
-- *Evidence:* services/catalog/src/catalog/api/v1/endpoints/data.py:608,664,722,758,780 · services/lineage/src/lineage/api/fga_deps.py:187-200 · services/lineage/src/lineage/services/repository.py:1422-1435 · services/lineage/src/lineage/services/postgres.py:131-141 · frontend/microfrontends/lakehouse/src/lib/ReadersPanel.svelte:63
+- *Evidence:* services/lineage/src/lineage/services/postgres.py:131-141,175 · services/lineage/src/lineage/api/fga_deps.py:208 · services/lineage/src/lineage/services/repository.py:1524 · services/lineage/src/lineage/core/config.py:224 · services/lineage/src/lineage/api/v1/endpoints/datasets.py:86-99
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: Did not re-open the catalog data.py audit call sites (:608 etc.) or ReadersPanel.svelte:63; their line numbers may have drifted.
 
 **LH-076 · Every estate-admin door checks `can_observe_events`, one relation named for reading the event feed**
 `catalog, lineage, controlplane, service-kit` · **MEDIUM**
-- *What is left:* Tenant minting, the store registry, the raw tuple editor, project listing and lineage's estate projection all gate on `can_observe_events` (model.fga:168), while controlplane lists every project to any estate reader (security.py:42,52 checks `reader`; can_observe_events appears there only in a docstring) where the catalog gates the same listing on owner-tier can_observe_events (projects.py:166-184), so controlplane's listing moves onto can_list_all_projects in the same split; `can_create_project` exists and no door checks it; the comment at model.fga:160-163 claims the name is in seeded tuples, which a computed userset cannot be.
+- *What is left:* Split can_observe_events for the catalog doors that still use it. In model.fga, add computed `: owner` relations can_list_all_projects, can_manage_stores and can_administer_authz, and repoint each door: projects.py:184 (POST), 248 (list) and 266 (get); stores.py:105,135,197; access_admin.py:198; and me.py:72 (the estate_admin flag). Keep can_observe_events for GET /v1/events only (events.py:60). Move controlplane's project listing (controlplane/security.py:42-58, which checks `reader` on the root) onto can_list_all_projects. can_create_project (model.fga:145) is still checked by no door; POST /v1/projects moves to it once D2 is answered. Correct the comment at model.fga:164-165, and its copy at model.fga.yaml:392, which says the name 'appears in seeded tuples'. Update the hand-kept consumer list at model.fga:150-163. Cover each new relation in model.fga.yaml. The lineage half is done: can_read_event_feed takes the place of the row's proposed can_observe_estate_lineage.
 - *Why:* Criterion 2. A future grant meant to let someone watch events would make them estate admin.
 - *How:* Split, don't rename (docs/audits/2026-09-25/lakekeeper-deep-read/authz.md §8 item 2): add computed `: owner` relations can_list_all_projects, can_manage_stores, can_administer_authz, can_observe_estate_lineage; repoint each call site; keep can_observe_events for GET /v1/events only. No tuple migrates. POST /v1/projects moves to can_create_project once D2 answers who may create a tenant.
 - *Closes when:* Every estate-admin call site checks a relation named for its purpose, can_observe_events gates only the feed, and model.fga.yaml covers each new relation.
-- *Evidence:* packages/service-kit/src/service_kit/governed/auth/model.fga:142,160-168 · services/catalog/src/catalog/api/v1/endpoints/stores.py:105,135,197 · projects.py:166-184,248,266 · access_admin.py:199 · events.py:60 · me.py:73 · services/lineage/src/lineage/api/fga_deps.py:169 · services/controlplane/src/controlplane/security.py:42,52
+- *Evidence:* packages/service-kit/src/service_kit/governed/auth/model.fga:145,150-168,212 · model.fga.yaml:392,1652-1684 · services/lineage/src/lineage/api/fga_deps.py:153-180 · services/catalog/src/catalog/api/v1/endpoints/projects.py:166,184,239,248,261,266 · stores.py:105,135,197 · access_admin.py:198 · me.py:72 · events.py:60 · services/controlplane/src/controlplane/security.py:42-58
+- *Re-audited 2026-10-05:* partly done; *What is left* rewritten to the remainder (done by 1feab46a (CTL-021), for the lineage estate-projection call site only) (an auditor and an independent checker, against main fd99d857). Not confirmed: Did not run `fga model test` on model.fga.yaml. That it covers can_read_event_feed was read from the assertions at lines 1652-1684, not executed.
 
 **CTL-019 · The project admin split (security_admin, data_admin, role_creator) reaches no rung and no code**
 `service-kit (model.fga), catalog` · **LOW**
@@ -458,8 +472,9 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criterion 2: dormant relations read as governance that is not there.
 - *How:* Either wire them the Lakekeeper way (warehouse manage_grants gains `or security_admin from project`; data_admin gets a steward lifecycle rung that is not ownership; project.can_create_role: role_creator, the create door itself staying under the WONTFIX) or delete the three relations and their assertions; RED first either way (docs/audits/2026-09-25/lakekeeper-deep-read/authz.md §8 item 1).
 - *Closes when:* The three relations either gate named doors under RED tests or are gone from model.fga and model.fga.yaml.
-- *Evidence:* packages/service-kit/src/service_kit/governed/auth/model.fga:68-73 · model.fga.yaml:51-53,210-224 · docs/DECISIONS.md:412-420 · docs/audits/2026-09-25/lakekeeper-deep-read/authz.md §8
+- *Evidence:* packages/service-kit/src/service_kit/governed/auth/model.fga:68-73; packages/service-kit/src/service_kit/governed/auth/model.fga.yaml:51-53,210-224; open_backlog_left_new2.md:88,462
 - **blocked:** Owner decision per docs/audits/2026-09-25/lakekeeper-deep-read/authz.md §8 item 1: wire the admin split or delete it.
+- *Re-audited 2026-10-05:* still blocked; the row's own blocker holds (an auditor and an independent checker, against main fd99d857). Not confirmed: Did not open the generated model.json; it is a compiled copy of model.fga.
 
 **LH-097 · Silver copies every managed blob payload from bronze; one base-path commit can carry lineage without the copy**
 `medallion, service-kit, maintenance, catalog` · **MEDIUM**
@@ -467,15 +482,17 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criterion 5: silver doubles the corpus's bytes and loads every payload into driver memory. Criterion 1 holds because lineage lands in the same commit.
 - *How:* Declare the stage output (DeclareTable, spec.yaml:1977-1983; rask door tables.py:245), tag bronze@N, then commit silver's first version as one `Overwrite(initial_bases=[bronze root, name=<tag>])` whose fragments reference bronze's files by base_id plus one silver-owned file for stage/source_rowid/lineage (lance_docs/file_format.md:3083,3152-3187,5105-5110; measured on 12.0.0: 60/60 payloads byte-identical, survives bronze compaction and cleanup while tagged). Replace the protected_base refusal (sweep.py:265-292) with the tag pin; the cascade holds publisher, so it may tag. No Lakekeeper parallel. The silver `Overwrite(initial_bases=[bronze root])` must be written into LH-279's sanctioned-base record. Otherwise LH-279's drift check flags it, and base_refs stops protecting bronze once it trusts only recorded relations. Land the two rows in a compatible order.
 - *Closes when:* A silver produce commits no managed blob bytes in the one commit that carries lineage, bronze stays compactable while silver references a tagged version, and a RED test drives it through compute.py.
-- *Evidence:* services/medallion/src/medallion/services/compute.py:341-345,479-525 · packages/service-kit/src/service_kit/lakehouse/blobs.py:158-189 · services/medallion/src/medallion/services/catalog_register.py:347-349 · services/maintenance/src/maintenance/services/sweep.py:265-292 · rows02/lh097/probe3.py
+- *Evidence:* services/medallion/src/medallion/services/compute.py:511-588 (managed path at :546-588, docstring :521-526) · services/medallion/src/medallion/services/catalog_register.py:317,330 (mode=exist_ok) · services/maintenance/src/maintenance/services/sweep.py:279-298 (protection_for/protection_of; LH-279 already added pin_tags support there)
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: The 60/60 byte-identical tagged-base probe (rows02/lh097/probe3.py) was not re-run on pylance 12.0.0; Line refs moved: compute.py:341-345,479-525 are now ~:343-394 and :511-588; sweep.py:265-292 is now ~:279-298.
 
 **LH-150 · Five settings let a service spell FGA object ids with a different delimiter**
 `catalog, ingest, maintenance, medallion, service-kit, chart` · **MEDIUM**
-- *What is left:* LANCE_NS_DELIMITER, RASK_CATALOG_DELIMITER, MEDALLION_DELIMITER, MAINTENANCE_DELIMITER and MEDIA_CATALOG_DELIMITER exist only to be changed, and changing one silently re-keys every FGA object id and lineage name that service writes or checks. Three f-strings also hand-type `$` instead of CATALOG_DELIMITER: medallion workflow.py:1133, train.py:305 and source_uri.py:69 (test audit).
+- *What is left:* Delete the five settings: LANCE_NS_DELIMITER (services/catalog/src/catalog/core/config.py:378), RASK_CATALOG_DELIMITER (services/ingest/src/ingest/config.py:132), MEDALLION_DELIMITER (services/medallion/src/medallion/core/config.py:442), MAINTENANCE_DELIMITER (services/maintenance/src/maintenance/core/config.py:277) and MEDIA_CATALOG_DELIMITER (packages/service-kit/src/service_kit/media/config.py:173). Also delete chart/templates/services.yaml:73, .docker/docker-compose.yml:53 and SEED_NS_DELIMITER (scripts/seed_estate.py:96, plus the --delimiter flag at :692). Replace the two remaining hand-typed `$` with CATALOG_DELIMITER: services/medallion/src/medallion/services/train.py:314 and services/lineage/src/lineage/core/source_uri.py:69. Add a test that pins that no delimiter setting is read, and record the change in DECISIONS.md.
 - *Why:* Criteria 2 and 5: an operator knob whose only effect is to deny every existing grant.
 - *How:* Delete the knob: remove the five settings, services.yaml:74, the compose line and SEED_NS_DELIMITER; everything uses `service_kit.lakehouse.naming.CATALOG_DELIMITER`. The spec makes `$` the default the server must use (spec.yaml:2314-2318), so the refusal of a client naming another delimiter stays. Lakekeeper keys FGA objects on UUIDs, never a configurable separator. Record in DECISIONS.md.
 - *Closes when:* No setting, env var, chart value or script can change the delimiter, and a test pins that none is read.
-- *Evidence:* services/catalog/src/catalog/core/config.py:402 · services/ingest/src/ingest/config.py:130 · services/medallion/src/medallion/core/config.py:439 · services/maintenance/src/maintenance/core/config.py:268 · packages/service-kit/src/service_kit/media/config.py:172 · chart/templates/services.yaml:74 · scripts/seed_estate.py:96
+- *Evidence:* services/catalog/src/catalog/core/config.py:378 · services/ingest/src/ingest/config.py:132 · services/medallion/src/medallion/core/config.py:442 · services/maintenance/src/maintenance/core/config.py:277 · packages/service-kit/src/service_kit/media/config.py:173 · chart/templates/services.yaml:73 · .docker/docker-compose.yml:53 · scripts/seed_estate.py:96,692 · services/medallion/src/medallion/services/train.py:314 · services/lineage/src/lineage/core/source_uri.py:69
+- *Re-audited 2026-10-05:* partly done; *What is left* rewritten to the remainder (done by ac30f3b1 (CP-029) removed the workflow.py f-string only) (an auditor and an independent checker, against main fd99d857). Not confirmed: The link from the removed workflow.py f-string to ac30f3b1 rests on `git log -S'}${'` naming ac30f3b1 as the newest commit that touched that string. I did not read that commit's diff line by line.
 
 **LH-164 · The cascade head and stage-runner env still compose a second, chart-side home per medallion tier**
 `medallion, maintenance, chart` · **MEDIUM**
@@ -483,7 +500,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criterion 2: a location the writer composes is a home the catalog cannot govern, and residue under it can collide with a real create.
 - *How:* Under D6(a): the head creates through CreateTable?mode=exist_ok or DeclareTable and seeds at the returned location (CreateTable takes no location, spec.yaml:1424-1441); then remove the four chart URIs and the produce.py composition, make a describe the stage runner cannot answer fail the stage with its reason instead of reading a composed path, move `silver-media` to the platform warehouse and re-run the reconcile.
 - *Closes when:* Each tier has one catalog-placed home, no chart value or code composes a medallion location, no default-lane namespace is bound into a tenant warehouse, and the reconcile reports zero ungoverned or unregistered medallion datasets (the models$e2etrain* entries are LOW-036's).
-- *Evidence:* chart/templates/medallion.yaml:324,350,581-582 · services/medallion/src/medallion/services/produce.py:141-152,187 · services/medallion/src/medallion/services/catalog_register.py:345-349,397-418 · services/medallion/src/medallion/services/transform.py:684-728,1097-1107 · docs/audits/2026-09-30/lakehouse-dataflow.md (weak point 10) · services/maintenance/src/maintenance/core/config.py:221 · chart/values.yaml:1520
+- *Evidence:* services/medallion/src/medallion/services/produce.py:149 · services/medallion/src/medallion/services/transform.py:622-647 · services/medallion/src/medallion/services/catalog_register.py:390-398 · chart/templates/medallion.yaml:326,333,352,587-588 · chart/values.yaml:1492 · open_backlog_left_new2.md:79 (D6)
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: Part (2), reaping the live `lakehouse-bronze$events` residue at s3://lakehouse-wh/medallion/bronze: live-estate state, not read (read-only audit, no cluster read); Row line refs have shifted: transform.py :709-724 is now ~:636-647.
 
 **LH-195 · With the event lane on by default, the sweep still re-plans the whole estate every 120 s**
 `maintenance, chart` · **MEDIUM**
@@ -491,15 +509,17 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criterion 5: a standing ~17k units/h load.
 - *How:* Default `maintenance.schedule` to the wall-clock `0 0 * * * *` whenever workTopic is set (values-prod.yaml:216 already does), extend the capacity gate's parser to the cron form, rewrite values.yaml:1568-1582, add planner-tick jitter. Per-tier cadence stays available through `_policies/` compact_interval_hours, Lakekeeper's per-warehouse task_config shape (docs/audits/2026-09-25/lakekeeper-deep-read/governance.md:365).
 - *Closes when:* The default render has an hourly wall-clock backstop with the event lane on, the capacity gate reads it, and a live fresh write is maintained through /maintenance-arrival between ticks.
-- *Evidence:* chart/values.yaml:1568-1582,1630 · chart/values-prod.yaml:216 · services/maintenance/src/maintenance/api/arrival.py:72-85 · tests/unit/test_the_lane_can_keep_up_with_its_own_sweep.py:54-66
+- *Evidence:* chart/values.yaml:1516-1530 (comment + schedule), :1578 (workTopic) · chart/values-prod.yaml:212
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: The capacity gate's parser handling of the cron form was not re-read (tests/unit/test_the_lane_can_keep_up_with_its_own_sweep.py); The ~600 evaluations/tick and ~46% refused figures were not re-measured.
 
 **CP-044 · Stage submit and poll reach Ray through the port, but the resubmit rule, the train submit and the undeclared-lane fallback still bypass it**
 `medallion, service-kit` · **MEDIUM**
-- *What is left:* (1) Gate stage_run's resubmit on the executor's `Capability.DURABLE_RECORD` (nothing reads it yet). (2) Route handle_train_trigger through `executor_for(RAY_ENGINE)`: train.py imports ray_submit and calls submit_train_job; the port cannot express a report-don't-resubmit policy (`_SUBMIT_OUTCOME` omits already_failed). (3) Derive the saga instance id outside the Ray-named module. (4) Rewrite dapr_saga.py:4 (names the deleted rayjob_executor) and services/medallion/pyproject.toml:11-12, and DECISIONS.md:1525 and :1911 (the deleted rayjob_executor); DECISIONS.md:1950's heading 'both lanes now go through the port' (which :1940 disclaims) becomes true only with (2). The stage_submit settings fallback is CP-031. (5) stage_runner.py:31 imports `ray_submit.close_ray_client`. (3,4) also: work_order.py:224-226 and ray_submit.py:105-110 say stage_submission_id names the Ray job, but the job is submitted as order.idempotency_key (rayjobs_api_executor.py:130), and stage_submission_id's only production caller is the Dapr instance id (transform.py:193).
+- *What is left:* (1) Gate the sweep's resubmit (services/medallion/src/medallion/services/stage_plans.py:295-302, MAX_RESUBMITS at :67) on the executor's Capability.DURABLE_RECORD. Nothing reads that capability. (2) Route the training submit through executor_for(RAY_ENGINE). train_plans.py:43,173,199 calls ray_submit.train_submission_id and submit_train_job directly, and train.py:28,356 imports ray_submit to catch RayJobError. Add an engine-neutral SubmitOutcome.ALREADY_FAILED plus a resubmit-terminal flag, derive train_submission_id inside the adapter, and make sure the train submission carries no empty env value (LH-299). (3) Move id derivation out of the Ray-named module (ray_submit.py:94 train_submission_id). (4) Rewrite the stale prose: services/medallion/pyproject.toml:4 ('the Ray Jobs REST submit seam') and :11-12 (the R2 comment); docs/DECISIONS.md:1525 (rayjob_executor named as a live adapter); and DECISIONS.md:1950's heading 'both lanes now go through the port'. Also fix the comments that cite the deleted stage_submission_id: packages/service-kit/src/service_kit/lakehouse/work_order.py:195,202, services/medallion/src/medallion/services/rayjobs_api_executor.py:69, services/medallion/src/medallion/api/bronze_arrival.py:115 and services/catalog/src/catalog/api/control_relay.py:205. (5) stage_runner.py:32 and producer.py:45 import ray_submit.close_ray_client. Closes when medallion/src reaches ray_submit/ray_jobs_api only from adapter modules, submit_train_job has no caller outside an adapter, the resubmit reads DURABLE_RECORD, a live /train still dispatches and is watched, and the named prose is true.
 - *Why:* Criterion 3: the resubmit rule and the train submit are Ray knowledge in platform code.
 - *How:* Resolve capabilities in the submit activity and carry them on StageJobSpec so the workflow stays replay-deterministic; add an engine-neutral SubmitOutcome.ALREADY_FAILED plus a resubmit-terminal flag, honoured by RayJobsApiExecutor, with train_submission_id derived inside the adapter; job metadata carries originator and project. No Lance surface.
 - *Closes when:* medallion/src reaches ray_submit/ray_jobs_api only from adapter modules, `grep -rn submit_train_job services/medallion/src` finds only its definition or nothing, the resubmit branch reads `Capability.DURABLE_RECORD`, a live /train still dispatches and is watched, and the named prose no longer references what does not exist, and (2)'s train submission carries no empty env value (LH-299).
-- *Evidence:* services/medallion/src/medallion/workflow.py:113,336,545-559 · services/medallion/src/medallion/services/train.py:27,337,346,379 · services/medallion/src/medallion/stage_runner.py:31 · services/medallion/src/medallion/services/rayjobs_api_executor.py:58-66 · packages/service-kit/src/service_kit/lakehouse/executor.py:127-134 · services/medallion/src/medallion/services/dapr_saga.py:4 · docs/DECISIONS.md:1525,1911,1940,1950
+- *Evidence:* services/medallion/src/medallion/services/stage_plans.py:67,295-302; services/medallion/src/medallion/services/train_plans.py:43,173,199; services/medallion/src/medallion/services/train.py:28,356; services/medallion/src/medallion/services/ray_submit.py:81,94,104; services/medallion/src/medallion/stage_runner.py:32; services/medallion/src/medallion/producer.py:45; services/medallion/pyproject.toml:4,11-12; docs/DECISIONS.md:1525,1950
+- *Re-audited 2026-10-05:* partly done; *What is left* rewritten to the remainder (done by ac30f3b1 (CP-029) removed the workflow half) (an auditor and an independent checker, against main fd99d857). Not confirmed: That DECISIONS.md:1911 still needs rewriting: it is a supersede note that already says rayjob_executor no longer exists, so I dropped it from what is left; That submit_stage_order ends in the executor port: I saw the executor= argument at stage_plans.py:301 but did not trace planned_runs to its end.
 
 **CP-031 · No lane is declared, so every stage runner runs the settings-default Ray entrypoint, and the medallion keeps an env fallback beside the TransformSpec**
 `medallion, catalog, chart` · **MEDIUM**
@@ -507,7 +527,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criterion 3 and the no-dual-path rule: the platform's settings name a Ray script as the default program.
 - *How:* Seed through `POST /v1/project/{id}/transform/set` from a chart hook authenticating as its own ServiceAccount, which needs the catalog to accept SA tokens (LH-220); no CRD. The producer registers tasks at boot so declarations validate. RED first: a runner with no declaration refuses at boot.
 - *Closes when:* MedallionSettings has no ray_entrypoint or ray_job_params, no row carries stageJob, every default lane runs from its declared TransformSpec, and an undeclared runner refuses at boot (test).
-- *Evidence:* services/medallion/src/medallion/core/config.py:318-375 · services/medallion/src/medallion/services/stage_submit.py:155-158 · services/medallion/src/medallion/services/transform.py:833-839 · chart/templates/medallion.yaml:531,623-629 · services/catalog/src/catalog/api/v1/endpoints/transforms.py:148
+- *Evidence:* services/medallion/src/medallion/core/config.py:319,356; services/medallion/src/medallion/services/stage_submit.py:149-150; services/medallion/src/medallion/services/transform.py:756-767; chart/templates/medallion.yaml:536,622-627
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: engine_choice.py:95-96 no longer shows a spec-or-settings fallback; it chooses RAY_ENGINE when settings.ray_enabled (line 94). Not confirmed whether that counts as one of the fallback branches the row names.
 
 **CP-025 · Dapr workflows are registered unversioned, so a deploy replays in-flight instances against new code**
 `medallion, ingest` · **MEDIUM**
@@ -515,7 +536,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criterion 5: promotion_review waits days on a human event and every row deploys, so a body change can strand or corrupt an in-flight instance.
 - *How:* Register each through register_versioned_workflow, keep superseded bodies at is_latest=False until no instance references them, use is_patched for small in-body changes, and rewrite the two docstrings. No source-hash gate: a test that reads source is banned (CLAUDE.md). First observe that the deployed daprd records the version in history and one live replay across a deploy.
 - *Closes when:* A deploy that changes a workflow body with an instance in flight completes that instance on its recorded version, observed live.
-- *Evidence:* services/medallion/src/medallion/workflow.py:889 · services/ingest/src/ingest/workflow.py:1563 · services/medallion/src/medallion/api/promotions.py:185 · .venv dapr/ext/workflow/workflow_runtime.py:200-238
+- *Evidence:* services/medallion/src/medallion/workflow.py:132,137-138,500 · services/ingest/src/ingest/workflow.py:1450,1555,1561-1562
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: The row's evidence lines (medallion workflow.py:889, ingest :1563) are stale; the current lines are 138 and 1562; Did not check whether LH-226's saga port adds any versioning hook. A grep found no versioned registration in services/ or packages/; Did not observe the deployed daprd recording versions.
 
 **LH-096 · Ingest opens Lance bare nine times and exports no Lance IO metrics**
 `ingest` · **MEDIUM**
@@ -523,7 +545,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criterion 5: each bare open gets its own 1 GiB metadata and 6 GiB index cache defaults (lance_docs/guide.md:3004-3037) in a memory-limited pod, and ingest's IO is invisible.
 - *How:* Open through `service_kit.lakehouse.lance_session.lance_session` sized by affordable_cache_bytes, as the four lakehouse services do.
 - *Closes when:* Ingest's banned-api entry for `lance.dataset` is green with its nine opens moved onto the session, and ingest's lifespan instruments Lance.
-- *Evidence:* services/ingest/src/ingest/lander.py:128,185,189,287 · adapters.py:205 · catalog.py:176,255 · workflow.py:1122 · services/ingest/pyproject.toml:52-55 (ingest's banned-api table)
+- *Evidence:* services/ingest/src/ingest/lander.py:127,184,188,286 · catalog.py:176,255 · adapters.py:205 · workflow.py:1121 · services/ingest/pyproject.toml:52-60
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: Did not check ingest's lifespan module separately for instrumentation; a grep of services/ingest/src for instrument_lance found nothing.
 
 **CP-005 · An ingest run whose source enumerates nothing still leaves a newly created bronze table and namespace registered behind a COMPLETE**
 `ingest, catalog` · **MEDIUM**
@@ -531,7 +554,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criterion 2: a governed object no data justified, with FGA ownership seeded.
 - *How:* Put created flags on DatasetHandle; on zero units, drop what THIS run created through DropTable with `purge=true` (the default trash grace of 7 days would otherwise block the next ingest of the same id) and DropNamespace (spec.yaml:213,496) before emit_terminal; a found table stays untouched. Do not reorder.
 - *Closes when:* RED tests: an empty prefix against a fresh dataset leaves nothing it created registered, a second run with units then creates the table, and an empty prefix against an existing table reports COMPLETE untouched.
-- *Evidence:* services/ingest/src/ingest/workflow.py:203-223,520-533,629-634 · services/ingest/src/ingest/catalog_service.py:336-380 · services/catalog/src/catalog/api/v1/endpoints/tables.py:268-270,524-529 · chart/templates/services.yaml:91
+- *Evidence:* services/ingest/src/ingest/workflow.py:519 (ensure_dataset before the fan-out), :628-633 (units_total == 0 returns COMPLETE after emit_terminal, no drop); services/ingest/src/ingest/catalog_service.py:312-314 (created vs found, not surfaced on the handle)
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: Did not re-read catalog tables.py:268-270,524-529 (DropTable purge semantics) or chart/templates/services.yaml:91.
 
 **CP-006 · StagingOverlapError's docstring claims the worker can produce a partial overlap**
 `ingest` · **LOW**
@@ -539,7 +563,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* CLAUDE.md comment rule: falsified prose sends an operator hunting a defect that no longer exists.
 - *How:* Documentation only.
 - *Closes when:* The docstring makes no claim that drain_chunk batches redeliveries and carries no history prose.
-- *Evidence:* services/ingest/src/ingest/staging.py:195-215,312-327 · services/ingest/src/ingest/worker.py:527-561
+- *Evidence:* services/ingest/src/ingest/staging.py:195-215 · services/ingest/src/ingest/worker.py:538-561
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857).
 
 **CP-007 · Ingest signs source reads and fragment writes with the ambient AWS chain whenever no scoped credential resolves**
 `ingest` · **MEDIUM**
@@ -547,7 +572,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criterion 2 and the secrets rule's ban on fallback chains: any AWS_* later added to the pod env becomes an unscoped reader and writer.
 - *How:* (a) No ambient or without_credentials exit; the estate-default read uses a D1/STS-vended credential. (b) Every external registered store declares a secret reference, measured from the live registry. Always pass explicit credentials (lance_docs/guide.md:2385-2413); `aws_provider_scheme: token` makes a keyless dict an error (verify on MinIO first); governed tables take the catalog vend (spec.yaml:2835-2840,2883-2891). Lakekeeper treats a None credential as unsigned, never ambient (docs/audits/2026-09-25/lakekeeper-deep-read/storage-vending.md T13).
 - *Closes when:* No ingest path builds a client, filesystem or Lance write without explicit credentials, and an unregistered bucket and a secret-less store are each refused with a typed error, pinned by tests.
-- *Evidence:* services/ingest/src/ingest/objectstore.py:119-124,136-168,207-253 · services/ingest/src/ingest/lander.py:316-326 · packages/service-kit/src/service_kit/lakehouse/objectfs.py:148-156
+- *Evidence:* services/ingest/src/ingest/objectstore.py:121-124,154-159 · services/ingest/src/ingest/lander.py:291,322-326 · services/ingest/src/ingest/catalog_service.py:94-152 · services/ingest/src/ingest/lineage.py:271-275
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: Did not re-check that the live ingest pod holds no ambient AWS_* key (no kubectl exec); Did not open packages/service-kit/src/service_kit/lakehouse/objectfs.py:148-156.
 
 **CP-008 · Ingest has no byte ceiling, and the worker holds each whole object in memory**
 `ingest, chart` · **LOW**
@@ -555,7 +581,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criterion 5: one oversized object OOM-kills the worker and JetStream redelivery repeats the crash to the DLQ.
 - *How:* Carry list_objects_v2's Size on UnitTask (free in the same page); refuse a run over RASK_INGEST_MAX_BYTES at enumeration and park a unit over RASK_INGEST_MAX_UNIT_BYTES before fetch, which bounds managed placement; for external placement stream the sha256 and bound validation reads, since Lance stores only the pointer (`Blob.from_uri`, lance_docs/guide.md:274-321). Chart defaults beside RASK_INGEST_MAX_UNITS.
 - *Closes when:* A run over the byte ceiling is refused before fan-out and an oversized unit is parked unfetched, both tested.
-- *Evidence:* services/ingest/src/ingest/workflow.py:122-157,597-603 · services/ingest/src/ingest/queue.py:100-140 · services/ingest/src/ingest/worker.py:145,184-186,476-477 · services/ingest/src/ingest/fetch.py:144
+- *Evidence:* services/ingest/src/ingest/workflow.py:122-171 · services/ingest/src/ingest/queue.py:102-140 · services/ingest/src/ingest/worker.py:223
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: The worker's full-byte fetch for external placement (worker.py:184-186,476-477; fetch.py:144) was not re-read line by line.
 
 **CP-015 · /train falls back to a composed tier path when the catalog cannot resolve a named feature table**
 `medallion` · **MEDIUM**
@@ -563,15 +590,17 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* In Phase 1 because /train is one of the producer's three write doors and FGA authorizes one table while training reads another. Criteria 1 and 2: the run is authorized and recorded against one table but trains on other bytes.
 - *How:* Delete both fallbacks: TableNotFound (code 4) or PermissionDenied (code 15) answers 422 through resolve_failed, an outage answers 503; one describe with load_detailed_metadata=true and vend_credentials=true gives location, version and a read-tier credential for the pin (spec.yaml:2819-2840,2862-2872,2416,2427).
 - *Closes when:* A /train naming `silver$features` submits FEATURES[].uri equal to the catalog's location, and an unknown or undescribable name is refused 4xx even when the tier dataset exists.
-- *Evidence:* services/medallion/src/medallion/services/train.py:87-135,158-163,325 · services/medallion/src/medallion/services/catalog_register.py:378-418 · services/medallion/src/medallion/api/train.py:116-117
+- *Evidence:* services/medallion/src/medallion/services/train.py:93-140 (fallbacks at :125-140), :165 (static-key open)
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: api/train.py:116-117 and catalog_register.py:378-418 not re-opened after CP-029.
 
 **CP-027 · No test asserts report_stage_outcome records verdict=failed on the counter the alert reads**
 `medallion` · **LOW**
-- *What is left:* One test driving a failed StageReport through report_stage_outcome with an InMemoryMetricReader, asserting medallion.stage.outcome records verdict=failed with a duration; mutation-check by dropping the call.
+- *What is left:* Add one test that drives a planned stage run to FAILED through the real resolution path: the outcome door or the sweep, as test_a_planned_stage_reaches_exactly_one_terminal.py already does, which reaches record_failure at services/medallion/src/medallion/services/stage_plans.py:172-174. Read medallion.stage.outcome (core/metrics.py:148-187) with an OTel InMemoryMetricReader, and assert verdict=failed with a duration on medallion.stage.duration. Mutation-check it by dropping the record_stage_outcome('failed') call at stage_plans.py:174. The alert it protects is chart/alerting/rules.yml:410.
 - *Why:* Criterion 5: the counter is the only application-side failure signal the alert reads.
 - *How:* OTel SDK in-memory reader.
 - *Closes when:* A medallion test fails if report_stage_outcome stops recording the failed verdict.
-- *Evidence:* services/medallion/src/medallion/workflow.py:655,709 · services/medallion/src/medallion/core/metrics.py:150-175 · chart/alerting/rules.yml:353-354
+- *Evidence:* services/medallion/src/medallion/services/stage_plans.py:43,169,172-174; services/medallion/src/medallion/core/metrics.py:148-187; chart/alerting/rules.yml:410; services/medallion/tests/test_a_planned_stage_reaches_exactly_one_terminal.py:33,228 (door only, no metric reader)
+- *Re-audited 2026-10-05:* partly done; *What is left* rewritten to the remainder (done by ac30f3b1 (CP-029) moved the seam) (an auditor and an independent checker, against main fd99d857). Not confirmed: The exact line range of core/metrics.py's record_stage_outcome: not re-read, taken from the auditor.
 
 **LH-221 · Both transaction doors check a table-scoped transaction id against a namespace object nothing seeds, and alter answers SUCCEEDED having applied nothing**
 `catalog, service-kit (model.fga)` · **MEDIUM**
@@ -579,7 +608,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criterion 2 (lance-ns): a spec door that denies owners, and a 200 that lies.
 - *How:* AlterTransaction is all-or-nothing (spec.yaml:2274). Authorize both doors on `table:<segments[:-1]>` (describe: can_get_metadata; alter: can_write_data); answer a one-segment id with InvalidInputError before FGA; refuse alter with UnsupportedOperationError while the backend applies nothing; keep describe. Delete `type transaction` (can_set_property, can_cancel) with `fga model test` green; an undrop-as-cancel door, if ever ruled, would check table.can_restore. Upstream report through LH-048's go.
 - *Closes when:* An owner can describe a table's transaction, alter answers 406 on the dir backend, and `type transaction` is gone with fga model test green.
-- *Evidence:* services/catalog/src/catalog/api/fga_deps.py:531-570 · services/catalog/src/catalog/api/v1/endpoints/transactions.py:21-34 · model.fga:700-724 · model.fga.yaml:748-754 · tests/integration/test_authz.py:838-861 · skeptic02/txn_probe.py
+- *Evidence:* services/catalog/src/catalog/api/fga_deps.py:531-545; services/catalog/src/catalog/api/v1/endpoints/transactions.py:20-31; packages/service-kit/src/service_kit/governed/auth/model.fga:719
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: Did not re-measure on pylance 12.0.0 that alter_transaction still applies nothing.
 
 **LH-222 · can_get_metadata recurses down through every child while each child walks back up, so a denied describe costs about 4 ms per descendant**
 `service-kit (model.fga), catalog` · **MEDIUM**
@@ -587,7 +617,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criterion 5: any authenticated caller can load OpenFGA by describing a large container they cannot see.
 - *How:* Port the DECISIONS.md:2253-2261 shape: bare relations stay the assignable grants (no tuple rewritten); add computed `*_effective` twins and repoint checks; add `visible_below` over the bare names; set `can_get_metadata: reader_effective or visible_below from child`. Keep the deep-grant breadcrumb case green, re-measure before and after, re-run the compatibility audit, correct values.yaml:3077. Interacts with LH-236.
 - *Closes when:* The denied describe on the 234-descendant warehouse is re-measured and no longer scales with descendants, with fga model test green and no tuple rewritten.
-- *Evidence:* packages/service-kit/src/service_kit/governed/auth/model.fga:304,325,332,387-394,432,472,525 · chart/values.yaml:3077 · docs/DECISIONS.md:2253-2261
+- *Evidence:* packages/service-kit/src/service_kit/governed/auth/model.fga:349,486 · chart/values.yaml:3311
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: Did not re-measure the latency of the denied describe; The row's values.yaml:3077 is stale; the claim is now at :3311.
 
 **LH-223 · Listings filter through one estate-wide list_objects capped at 1,000, so a principal who reaches more tables sees a small namespace listed short**
 `catalog` · **MEDIUM**
@@ -595,7 +626,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criterion 2: whether a listing is complete must not depend on how many tables the caller reaches elsewhere.
 - *How:* ListTables answers one namespace's children, so authorize over the candidate page: positive short-circuit on reader of the parent, negative when can_get_metadata on the parent is false, otherwise batch_check over the page (batch_check shipped with LH-200, dafba63). Never use can_get_metadata as a positive short-circuit. Keep list_objects only for /v1/me. Lakekeeper checks the parent once, then per item.
 - *Closes when:* A subject reaching more than 1,000 tables lists a 3-table namespace completely (test past the cap), and no listing but /v1/me calls list_objects.
-- *Evidence:* services/catalog/src/catalog/api/v1/endpoints/tables.py:220-236 · packages/service-kit/src/service_kit/governed/fga.py:1260 (LIST_OBJECTS_SERVER_CAP) · services/catalog/src/catalog/api/v1/endpoints/warehouses.py:314,373,413 · services/catalog/src/catalog/api/v1/endpoints/namespaces.py:374,996 · services/catalog/src/catalog/api/v1/endpoints/models.py:106
+- *Evidence:* services/catalog/src/catalog/api/v1/endpoints/tables.py:218-232 · warehouses.py:329,388,428 · namespaces.py:446,1120 · models.py:106 · packages/service-kit/src/service_kit/governed/fga.py:1164,1260
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857).
 
 **LH-224 · Identifier segments are not shape-checked: a '$' in rename's target plants a table in another namespace, empty segments create unnamed objects, and '${' reaches the vended policy**
 `catalog, service-kit` · **MEDIUM**
@@ -603,7 +635,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criterion 2, zero trust: identity is the namespace path.
 - *How:* A name is unique within its parent and the identifier joins names with the delimiter (lance_docs/namespace.md:1577-1605; spec.yaml:2312-2318), so a segment containing the delimiter, or an empty one, is not a name. One segment rule at every minting door (create, declare, register, rename targets, batch ids): non-empty, no delimiter, whitespace, control characters, '/', '{' or '}'; add '${' to the vending prefix guard; parent_namespace_id refuses empty segments. Copy Lakekeeper's `${$}` escaping only after probing MinIO.
 - *Closes when:* Every minting door refuses a delimiter, empty segment or brace with InvalidInputError (RED per door), and no vended policy can contain '${'.
-- *Evidence:* services/catalog/src/catalog/core/identifiers.py:47-83 · services/catalog/src/catalog/core/vending.py:142-152 · services/catalog/src/catalog/api/v1/endpoints/tables.py:1049-1062 · packages/service-kit/src/service_kit/governed/fga.py:186-201 · docs/audits/2026-09-25/03-lance-docs-full-audit.md LD19
+- *Evidence:* services/catalog/src/catalog/core/identifiers.py:45-73 (_SEGMENT_WILDCARD_METACHARS = ('*','?')); services/catalog/src/catalog/core/vending.py:147-158 (_IAM_METACHARACTERS ('*','?'), no '${'); packages/service-kit/src/service_kit/governed/fga.py:237-251 (empty segments dropped); services/catalog/src/catalog/api/v1/endpoints/tables.py:1195
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: Did not re-run the live probes ('bronze$planted' rename, 'a$/create', 'a$$t/create'); Did not check declare/register/batch-id doors individually.
 
 **LH-227 · The trash purge is blocked indefinitely by orphan-scan findings the estate never clears**
 `maintenance` · **MEDIUM**
@@ -611,7 +644,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criteria 2 and 5: dropped tables never finish, on classes nobody may act on.
 - *How:* First diagnose, no ruling: an unreferenced transaction file is what `cleanup_old_versions` reclaims (lance_docs/guide.md:3780-3855); check whether the base-ref guard refuses that dataset's cleanup; below the listing floor it clears itself in 7 days (lance_sdk.md:931). Set reclaimable_by_lance=True for kind=='indices' and rewrite orphans.py:8-9. Only if the .txn sits above the floor with no format reclamation does D13 apply (recommended: take orphan_files out of the purge gate).
 - *Closes when:* trash_purge_blocked no longer fires on a finding Lance itself reclaims, and dropped tables past grace are purged on the deployed estate.
-- *Evidence:* services/maintenance/src/maintenance/services/purge.py (header) · services/maintenance/src/maintenance/services/orphans.py:8-9,436-467 · services/maintenance/src/maintenance/services/reconcile.py:1352 · live rask-maintenance log 2026-09-25 · docs/audits/2026-09-25/03-lance-docs-full-audit.md LD32
+- *Evidence:* services/maintenance/src/maintenance/services/orphans.py:8-9,125,459-467 · services/maintenance/src/maintenance/services/reconcile.py:1352-1353 · services/maintenance/src/maintenance/services/purge.py:260-275,850
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: The live trash_purge_blocked state after helm revs 271-279 was not read from the deployed rask-maintenance log; Whether Lance cleanup_old_versions reclaims unreferenced _indices segments was not re-measured on 12.0.0; lance_docs/guide.md:3780-3855 was not opened.
 
 **LH-228 · In the default chart a drop never completes: the purge is off, and expiry is fused with it, so grants stay live and the name stays locked**
 `catalog, maintenance` · **MEDIUM**
@@ -619,7 +653,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criterion 2, zero trust: a guard that fails open admits a create over a live trash record, and an undrop that ignores the location clears a record for a table it never restored. With the ruling: an erasure drop deletes nothing and owner/reader tuples stay live indefinitely.
 - *How:* Now: require_no_live_trash fails closed on a read error; undrop compares locations before clearing; answer a trashed drop with the trash record id as a Queued transaction in DropTableResponse.transaction_id (spec.yaml:3914,4054-4076); grace_days and delete_mode on the warehouse record, defaulting to the estate value. After the ruling: an always-on maintenance step at expires_at revokes the object's tuples, marks the record expired and frees the name while bytes wait for the purge. Lakekeeper's expiration worker removes the row and its FGA tuples in one transaction and the purge only removes files (crates/lakekeeper/src/service/tasks/tabular_expiration_queue.rs).
 - *Closes when:* RED tests show require_no_live_trash refusing on a store read error, undrop never clearing a record at a different location, a trashed drop naming its trash record, and grace and mode set per warehouse; and, after the ruling, in the default chart an expired drop has no live tuples and frees its name while its bytes await the purge.
-- *Evidence:* services/catalog/src/catalog/core/config.py:506 · chart/values.yaml:1891 · chart/templates/maintenance.yaml:225 · services/maintenance/src/maintenance/services/purge.py:14-20,57-60 · services/catalog/src/catalog/api/fga_deps.py:1069-1108 · tables.py:527-598,903-935 · docs/audits/2026-09-25/02-lance-and-lakekeeper-practice.md:76
+- *Evidence:* services/catalog/src/catalog/api/fga_deps.py:1086-1095 · services/catalog/src/catalog/api/v1/endpoints/tables.py:579-580 (empty DropTableResponse), :1040-1057 (claim take, then the TableAlreadyExists arm converges) · chart/values.yaml:1839 (trashPurge: false)
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: The owner ruling on separating expiry from purge is assumed still pending; I did not look for it in DECISIONS.md; The grace_days/delete_mode absence comes from one grep of services/catalog warehouse and schema files, so it is not exhaustive.
 
 **LH-229 · Stock Lance clients opening through the namespace get no credential and silently sign with their ambient one**
 `catalog, service-kit` · **MEDIUM**
@@ -627,7 +662,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criteria 2 and 5, zero trust: a stock client with an ambient key writes outside every vend.
 - *How:* When unset the server may decide (spec.yaml:2836-2843), and Lance refreshes on expires_at_millis (:2883-2891): vend the READ tier on describe when unset (keeping the classified and base refusals); do not vend the write tier on every describe while LH-202 stands; ship a service-kit LanceNamespace subclass whose describe_table calls the write-tier door, reached by namespace_impl; honour vend_credentials on declare; signal a refused explicit vend. Then move ingest and maintenance to namespace_client and delete VendedCredentialCache.
 - *Closes when:* `lance.dataset(namespace_client=RestNamespace(catalog), table_id=...)` opens with a scoped credential and consults no AWS_* variable (e2e), and a refused explicit vend is visible to the client.
-- *Evidence:* services/catalog/src/catalog/api/v1/endpoints/tables.py:346,447-473 · services/catalog/src/catalog/api/v1/endpoints/credentials.py:46-51 · tests/e2e-py/test_the_other_stock_clients_drive_the_catalog.py:127-167 · docs/audits/2026-09-25/02-lance-and-lakekeeper-practice.md LK19
+- *Evidence:* services/catalog/src/catalog/api/v1/endpoints/tables.py:344,405-406,445-474
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: Not re-measured: pylance 11/12 and lance-ray 0.5.0 leaving vend_credentials unset; Not re-read: declare ignoring vend_credentials, and credentials.py:46-51.
 
 **LH-230 · The latest-schema query orders by event time, so a back-filled old version becomes the latest schema**
 `lineage, catalog (prose)` · **MEDIUM**
@@ -635,7 +671,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criterion 1: the graph's view of a table's current schema can regress.
 - *How:* The per-table Lance version is monotonic (put-if-not-exists commit, lance_docs/file_format.md:4770,4791): pick the edge with `max(toInteger(w.version))` on main (w.ref IS NULL). RED: back-fill an older version after a newer one. Rewrite the comment.
 - *Closes when:* A back-filled older version never displaces the newest schema (RED), and no prose claims event-time ordering.
-- *Evidence:* services/lineage/src/lineage/services/cypher.py:523-529 · services/catalog/src/catalog/core/lineage_emit.py:275
+- *Evidence:* services/lineage/src/lineage/services/cypher.py:523-526 · services/catalog/src/catalog/core/lineage_emit.py:286 (the row cites :275)
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857).
 
 **LH-231 · Audit records carry no format version and an open action vocabulary, read doors leave holes, and no test proves every door emits**
 `service-kit, catalog` · **MEDIUM**
@@ -643,7 +680,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criterion 2: a renamed field silently breaks every compliance query, and read audits cannot say what was read.
 - *How:* A closed Enum for action and Literal outcome; `audit.format='1.0'` on every record with a golden fixture; explain and analyze join `_DATA_READ_ACTIONS` with audit_read; record column names (or 'all'), and served version/offset/_rowid for blobs (request shapes, spec.yaml:5145-5277). One corpus test drives create, describe, query, vend, grant and a refusal through the real client and the real-OpenFGA tier (LH-235) and asserts a record-count floor, vocabulary membership, a subject and one verdict per request id; delete the getsource tests. Storage stays XC-003, message keying XC-058.
 - *Closes when:* Every audit record carries audit.format and a vocabulary member, and the corpus test fails when any door stops emitting or omits its columns or version.
-- *Evidence:* packages/service-kit/src/service_kit/governed/audit.py:20-31,49-106 · services/catalog/tests/test_a_data_read_is_audited.py:37-57 · services/catalog/src/catalog/api/v1/endpoints/data.py:555-608,626-665,762-800 · docs/audits/2026-09-25/03-lance-docs-full-audit.md LD28 · verify-fts-index-semantics/v_rss.py, v_server.py
+- *Evidence:* packages/service-kit/src/service_kit/governed/audit.py:82-90 (audit(action: str, outcome: str, ...)); services/catalog/tests/test_a_data_read_is_audited.py:39 (inspect.getsource); services/catalog/src/catalog/api/v1/endpoints/data.py:723-734 (_column_names), :891-892 (analyze_plan, no audit); measured: QueryTableRequestColumns.model_fields = column_names, column_aliases
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: The blob audit's missing served version/row and the per-ref erasure audit were not re-read; The counts of 45 literal and 16 variable actions were not recounted.
 
 **LH-232 · Destructive reclaim leaves no per-file audit record, although Lance emits one per deleted file when asked**
 `maintenance, catalog, medallion, chart` · **MEDIUM**
@@ -651,7 +689,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criteria 1 and 2: a destructive operation should be reconstructable file by file.
 - *How:* Lance's `lance::file_audit` events carry mode and type per file (lance_docs/guide.md:2916). Set `LANCE_LOG='warn,lance::events::file_audit=info,lance::events::dataset_events=info'` on maintenance, the catalog, the stage runners and the Ray head, and make those pods' stderr reach the OTel Collector. Delete events carry full paths; creates carry bare names, so the record is complete for deletes only, and the row says so.
 - *Closes when:* A GC run on the deployed estate leaves one queryable delete line per removed file in the log store.
-- *Evidence:* packages/service-kit/src/service_kit/lakehouse/lance_metrics.py:29-34 · services/maintenance/src/maintenance/services/optimize.py:576-582 · services/maintenance/src/maintenance/services/orphans.py:23
+- *Evidence:* grep -rn 'LANCE_LOG|file_audit' over services packages chart .docker scripts (non-test): no hits
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: Did not check whether the OTel Collector filelog receiver already tails these pods' stderr.
 
 **LH-233 · No principal record and no door that revokes every tuple naming a departed subject**
 `catalog, service-kit` · **MEDIUM**
@@ -659,7 +698,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criterion 2: offboarding must be an act the estate can perform and prove.
 - *How:* A control-root principal record (`_principals/<blake2s(key)>.json` via create_json: kind, provenance, created_at, deleted_at) and a DELETE door that reads every tuple for the user, revokes them and emits a principal-deleted control event. Key it on the D5 principal (after LH-063) so it never re-keys twice. Lakekeeper persists users with deleted_at and removes a user's grants on delete (crates/lakekeeper-storage-postgres/migrations/20241009122911_users_and_roles.sql).
 - *Closes when:* One door revokes every tuple naming a subject and records the principal as deleted, pinned on the real-OpenFGA tier.
-- *Evidence:* packages/service-kit/src/service_kit/governed/auth/model.fga:41-58 · packages/service-kit/src/service_kit/governed/deps.py:181,208 · services/catalog/src/catalog/api/v1/endpoints/access_admin.py
+- *Evidence:* services/catalog/src/catalog/api/v1/endpoints/access_admin.py:206-515 (route list) · grep for _principals/principal_deleted found nothing
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: Did not re-read model.fga:41-58 or deps.py:181,208 to check their line numbers; LH-063 (the D5 principal key this row sequences after) is still open in the register, so the row's ordering still holds.
 
 **LH-234 · Idempotency records are never reclaimed, and the purge's hand-written control-prefix list misses four prefixes**
 `service-kit, catalog, maintenance` · **MEDIUM**
@@ -667,7 +707,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criterion 5: unbounded growth of the control root and a purge that can miss control state.
 - *How:* A maintenance pass, report-only first, deletes records older than a retention setting (e.g. 24 h, far above the 300 s lease). Build all three lists from one registry list in service_kit.lakehouse shared with LH-215's name-keyed list and LH-204's control-prefix refusal, and check it by behaviour: the purge refuses a location under every prefix in the registry. State in the docstring that re-execution after a crash is inherent. Lakekeeper deletes idempotency rows older than a retention (crates/lakekeeper-storage-postgres/src/idempotency.rs).
 - *Closes when:* Records older than the retention are reclaimed on the deployed estate, and the purge refuses a location under every prefix in the one registry (test through the purge).
-- *Evidence:* packages/service-kit/src/service_kit/lakehouse/idempotency.py:32-35,83-147 · services/catalog/src/catalog/api/idempotency.py:95-127 · services/maintenance/src/maintenance/services/purge.py:97 · services/maintenance/src/maintenance/services/optimize.py:208 · scripts/control_root_backup.py:49
+- *Evidence:* packages/service-kit/src/service_kit/lakehouse/idempotency.py:32-35 · services/maintenance/src/maintenance/services/purge.py:98 · services/maintenance/src/maintenance/services/optimize.py:211 · scripts/control_root_backup.py:49-57
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: Did not re-read the docstring's atomicity wording at idempotency.py:83-147.
 
 **LH-235 · No test drives the catalog door against a real OpenFGA store, so authorization OUTCOMES are unproven**
 `catalog, .dagger` · **MEDIUM**
@@ -675,7 +716,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criterion 2: LH-215, LH-236 and LH-237 are defects in exactly this gap.
 - *How:* Bind `openfga/openfga:v1.18.3 run --datastore-engine=memory` (already pinned in .dagger/governed.go:12) into `dagger call test` as NATS is bound (.dagger/test.go:187-191), never docker; a function-scoped fixture creates a store, writes model.json and puts a real client on app.state.fga. Port the absent-object test, the tenant role guard and the rename choreography first; keep fakes only for transport and fail-closed legs.
 - *Closes when:* The ported tests run in CI against a per-test OpenFGA store and fail when a relation in model.fga is loosened (mutation-checked).
-- *Evidence:* tests/integration/test_authz.py:1-30,93 · tests/integration/test_an_absent_object_is_not_found_rather_than_forbidden.py:63-71 · .dagger/governed.go:12,272 · .dagger/test.go:187-191 · scripts/auth_chain.sh:106-136
+- *Evidence:* .dagger/test.go:190-193 (only the nats service binding); .dagger/governed.go:12,119,129 (openfga image used only there); grep of tests/, services/*/tests and packages/*/tests for a real-OpenFGA fixture found none
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: Did not open tests/integration/test_authz.py or scripts/auth_chain.sh:106-136 for this row; CTL-021's feed-walk rung test was not checked for a real store (grep found no openfga binding).
 
 **LH-236 · A reader of one child can tell which hidden siblings exist: describe answers 403 for them and 404 for absent names**
 `catalog` · **MEDIUM**
@@ -683,7 +725,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criterion 2, zero trust: name enumeration of objects the listing hides.
 - *How:* Keep the 2026-09-11 rule's premise ('they can already list it') and gate the absent-vs-denied probe on the parent's READER, which cascades to every child; the alternative is a uniform 404, Lakekeeper's choice. RED on the real-OpenFGA tier (LH-235), asserting status and problem code (the stock client dispatches on the code). Interacts with LH-222.
 - *Closes when:* For a caller without reader on the parent, describe of a hidden sibling and of an absent name answer the same status and code on the real-OpenFGA tier.
-- *Evidence:* services/catalog/src/catalog/api/fga_deps.py:108,917-970 · model.fga:332,472,551 · services/catalog/src/catalog/api/v1/endpoints/namespaces.py:965-967
+- *Evidence:* services/catalog/src/catalog/api/fga_deps.py:913,917-982 (check at :965) · packages/service-kit/src/service_kit/governed/auth/model.fga:349,486
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: Not exercised on a real OpenFGA; the row's model citation model.fga:332,472,551 has moved to :349,486; The list_tables filter on can_read_data was not re-read in namespaces.py.
 
 **LH-237 · The route-gate completeness test passes on a docstring, and require_relation silently no-ops without a client**
 `catalog` · **MEDIUM**
@@ -691,7 +734,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criterion 2: a gate that cannot fail gates nothing.
 - *How:* Replace the source-text heuristic with a behavioural gate: for every fall-through route not in `_AUTHN_IS_ENOUGH`, drive the real app with FGA patched to DENY and assert non-2xx plus at least one awaited FGA call; mutation-check by deleting one handler's call. require_relation fails closed (503) when FGA is on without a client.
 - *Closes when:* Deleting any fall-through handler's authorization call reds the gate (mutation-checked), and require_relation refuses when FGA is on without a client.
-- *Evidence:* services/catalog/src/catalog/api/v1/router.py:48 · services/catalog/src/catalog/api/fga_deps.py:724-760,1423-1438 · services/catalog/tests/test_stores_reads_are_gated.py:130-195
+- *Evidence:* services/catalog/tests/test_stores_reads_are_gated.py:169 · services/catalog/src/catalog/api/fga_deps.py:1517-1532
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: Did not recount the 65 of 164 fall-through routes.
 
 **LH-238 · Ambient AWS_* env overrides what a vended or explicit storage dict says: the endpoint loses to AWS_ENDPOINT_URL in about half of processes, and an ambient AWS_ALLOW_HTTP beats the scheme-derived allow_http**
 `service-kit, catalog, chart` · **MEDIUM**
@@ -699,7 +743,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Zero trust: where a credential is sent, and whether in plaintext, must be decided by the vend, not by hash order or ambient env.
 - *How:* Lance takes config from env or storage_options with allow_http default False and the canonical key `aws_endpoint` (lance_docs/guide.md:2310-2318,2338,2414,2438): emit aws_endpoint and aws_region, remove AWS_ENDPOINT_URL and AWS_ALLOW_HTTP from the writer env and the hardcoded allow_http from the scripts; rewrite test_explicit_credentials_beat_the_ambient_environment to run N subprocesses under a conflicting env and require N of N. Transport TLS stays XC-007.
 - *Closes when:* Under a conflicting AWS_* environment N of N fresh processes send the vended credential to the vended endpoint.
-- *Evidence:* packages/service-kit/src/service_kit/lakehouse/objectfs.py:27-86 · services/catalog/src/catalog/core/vending.py:631-638,710-717 · scripts/ray_stage_job.py:84-89 · chart/templates/fleet.yaml:196-198 · packages/service-kit/tests/test_explicit_credentials_beat_the_ambient_environment.py · docs/audits/2026-09-25/03-lance-docs-full-audit.md LD27 · the https-vend half closed in ed32c2e4 and 563db6cd: allow_http is derived from the endpoint scheme in any case (objectfs.py:48-61,93; endpoint_scheme.allow_http_for), so an https vend carries allow_http=false
+- *Evidence:* chart/templates/fleet.yaml:198-199 · packages/service-kit/src/service_kit/lakehouse/objectfs.py:60,89 · scripts/medallion_demo.py:122 · scripts/media_pipeline_e2e.py:54 · scripts/client_direct_demo.py:108
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: Item (4), that the evidence test runs no N-subprocess check: a grep for 'subprocess' in the test file found nothing, but the file was not read in full.
 
 **LH-240 · The compaction commit door commits a client RewriteResult whose rows can vanish or be rebound to other stable row ids, and tells a stale caller to re-send**
 `catalog` · **MEDIUM**
@@ -707,7 +752,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criteria 1 and 2: a content change laundered into lineage as compaction.
 - *How:* A Rewrite is 'without semantic modification' and a stale one is retried by re-running the operation (lance_docs/file_format.md:4853-4990): persist read_version, task ids and original fragment ids at /compaction_plan and bind results to them; for stable-row-id tables require the new row_id_meta to equal the originals' surviving sequence; require live-row totals to match; open new files with LanceFileReader as in LH-211; answer RETRYABLE with 'discard and re-plan'.
 - *Closes when:* A forged RewriteResult (row count, row-id rebinding) is refused with the table unchanged (RED per forgery), and a stale result is told to re-plan.
-- *Evidence:* services/catalog/src/catalog/services/dataplane.py:1174-1236 · services/catalog/src/catalog/api/v1/endpoints/data.py:233-235,252-290 · services/maintenance/src/maintenance/services/compaction_executor.py:99-106 · docs/audits/2026-09-25/03-lance-docs-full-audit.md LD11
+- *Evidence:* services/catalog/src/catalog/services/dataplane.py:1484-1543 · services/catalog/src/catalog/api/v1/endpoints/data.py:273-356
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: The RETRYABLE remedy text (_COMPACTION_REMEDY / _classify_commit_error) was not re-read; The forgery measurements (8→3, 8→20, rebinding) were not re-run on 12.0.0.
 
 **LH-244 · Compaction and index builds still conflict with stable row ids and the fragment reuse index, so a compaction during _index_lineage fails a stage whose data committed**
 `maintenance, medallion` · **MEDIUM**
@@ -715,7 +761,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criteria 4 and 5: a committed write reported as FAIL is a provenance lie.
 - *How:* The format lists these as retryable conflicts with Rewrite (lance_docs/file_format.md:4935,4977) whatever the reuse-index prose says (:1264,2182): catch the typed retryable CommitConflictError around `_index_lineage` and never fail a committed stage (emit COMPLETE, log the index as missing); retry the index commit against latest before answering RETRY; rewrite optimize.py:410-414; pin all three orders; report the doc mismatch through LH-048's go.
 - *Closes when:* A compaction racing `_index_lineage` leaves the stage COMPLETE with its WROTE edge, pinned by a characterization test over the three orders.
-- *Evidence:* services/maintenance/src/maintenance/services/optimize.py:410-414,398-431 · services/medallion/src/medallion/services/compute.py:180-189,274-287,405-408 · services/maintenance/src/maintenance/api/index_work.py:80-86 · docs/audits/2026-09-25/03-lance-docs-full-audit.md LD26
+- *Evidence:* services/medallion/src/medallion/services/compute.py:196,285-297,400 (_index_lineage unguarded); scripts/ray_stage_job.py:100-130 (retry on the merge only); services/maintenance/src/maintenance/services/optimize.py:~429-433 (defer_index_remap 'no longer conflict' comment)
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: Whether CP-029's clause e ('FAILED after a commit names the committed version') changes the provenance harm on the in-process lane: I did not trace how an exception from _index_lineage reaches the stage outcome; I did not re-measure the three race orders on pylance 12.0.0.
 
 **LH-246 · Encoding create properties are unvalidated and mis-scoped, so one bad create makes every later write fail or panic**
 `catalog` · **MEDIUM**
@@ -723,7 +770,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criteria 5 and 2: one bad create poisons every later write.
 - *How:* The file format enumerates each knob and the leaf types it applies to (lance_docs/file_format.md:578-587,656-700,727,743-748,765-766): validate values against those and answer 400, stamp each knob on the leaves it acts on, refuse structural-encoding, rewrite the docstring premise (DECISIONS.md LH-034).
 - *Closes when:* An invalid encoding value is refused at create (RED) and each accepted knob lands on the leaves it acts on.
-- *Evidence:* services/catalog/src/catalog/services/dataplane.py:187-212 · docs/audits/2026-09-25/03-lance-docs-full-audit.md LD30
+- *Evidence:* services/catalog/src/catalog/services/dataplane.py:287-316 (row cited :187-212; the code has moved)
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: Did not re-measure the OSError/PanicException on a later append.
 
 **LH-248 · The index door drops spec parameters, returns ids nobody can track, and forwards a base_tokenizer Lance follows out of its model home**
 `catalog, maintenance` · **MEDIUM**
@@ -731,15 +779,17 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criterion 2 (lance-ns), zero trust.
 - *How:* CreateTableIndex carries the vector parameters and returns a trackable transaction (spec.yaml:1741-1746,3405-3444,3479-3487); tokenizers resolve from a model home (lance_docs/file_format.md:1711-1740). rebuild scalar indexes with IndexConfig(kind, params from index_statistics), carried through IndexWorkItem on both paths; validate the column at the door (`lance_schema.field(path)` resolves nested paths) and normalise index_type there; make the worker resolve nested paths the same way; rewrite index_specs.py:14-17. Omit the queued transaction_id or make DescribeTransaction resolve it; validate base_tokenizer as a single-segment model name.
 - *Closes when:* A queued build honours every accepted scalar and FTS spec parameter, its returned id resolves or is absent, and a traversing tokenizer name is refused, under test. Also under test: ZONEMAP (1024) and BLOOMFILTER (1000, 0.01) keep their parameters through reindex on both paths; 'payload.x' and 'btree' build on the queued path, and an unknown column or type is refused 400 at the door.
-- *Evidence:* services/catalog/src/catalog/api/v1/endpoints/indices.py:251-334 · chart/values.yaml:1775 · services/maintenance/src/maintenance/services/index_build.py:70-113 · docs/audits/2026-09-25/03-lance-docs-full-audit.md LD33 · unverified-claims-a/m10.py, m10b.py, m10c.py, m10d.py · verify-unverified-claims-a/v_native_idx.py · fts-index-semantics/m11_idxsize.py, m12_idxparams.py · verify-fts-index-semantics/v_idx.py
+- *Evidence:* services/catalog/src/catalog/api/v1/endpoints/indices.py:92,129,262-294,323,333 · services/maintenance/src/maintenance/services/index_build.py:106-119
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: Did not re-measure the ZONEMAP/BLOOMFILTER parameter reset or the tokenizer traversal on pylance 12.0.0; Did not re-check index_specs.py:14-17 or the dapr-resiliency retry numbers.
 
 **LH-249 · Stage attestation checks the wrong things and runs nowhere: O7 reads the manifest default, O8 cannot see a demoted blob column, and verify_stage_output has no production caller**
 `service-kit, medallion, catalog` · **MEDIUM**
-- *What is left:* O7 reads `dataset.data_storage_version`, the default for new writes, so a 2.2 table with 2.1 fragments PASSED with flags (258,258); O8 always passes against a dataset schema and always fails against a to_table() schema; verify_stage_output has no production caller (attestation.py:109; only packages/service-kit/tests/test_the_platform_re_derives_a_conforming_output.py calls it).
+- *What is left:* Fix O7 (_o7_storage_version, attestation.py:241-251) so it detects mixed file versions from reader flag bit 256 or from describe_foreign_data_file_versions over the fragments, not from dataset.data_storage_version. Fix O8 (_o8_blob_columns_survive / _is_blob, attestation.py:253-270) so it uses lancekit.blobs.is_blob_field (the lance.blob.v2 extension) against the upstream Lance dataset schema. Add RED tests: a mixed 2.1/2.2 output must fail O7, and a blob-v2 to large_binary demotion must fail O8. Keep the 'nothing calls this' docstring (attestation.py:9-11) true, or wire verify_stage_output into publish.
 - *Why:* Criteria 3 and 1: the engine-neutral acceptance check is the lakehouse's BYO-engine contract.
 - *How:* Blob-v2 fields are identified by field metadata (lance_docs/file_format.md:488-512,4482): use is_blob_field against the upstream Lance dataset schema; for O7 use flag bit 256 or `describe_foreign_data_file_versions` over the fragments, never unsupported_features. RED: a v2→large_binary demotion fails O8, a mixed table fails O7. Wire verify_stage_output into publish or keep its docstring saying it is not wired.
 - *Closes when:* O7 fails a mixed-version output and O8 fails a demoted blob column (RED), and verify_stage_output runs at publish or is documented as unwired.
-- *Evidence:* packages/service-kit/src/service_kit/lakehouse/attestation.py:1-12,105,236-267 · packages/service-kit/src/service_kit/lancekit/blobs.py:15-24 · services/medallion/src/medallion/services/transform.py:1180-1190 · docs/audits/2026-09-25/03-lance-docs-full-audit.md LD35
+- *Evidence:* packages/service-kit/src/service_kit/lakehouse/attestation.py:9-11,109,241-270 · packages/service-kit/src/service_kit/lancekit/blobs.py:15-23
+- *Re-audited 2026-10-05:* partly done; *What is left* rewritten to the remainder (done by 9563eb87 (the unwired docstring, which predates the row)) (an auditor and an independent checker, against main fd99d857). Not confirmed: Did not measure on pylance 12.0.0 that O8 passes against a dataset schema and fails against a to_table() schema, or that a mixed-version table reports data_storage_version 2.2. Both come from the row and from reading the code.
 
 **LH-250 · LH-172's removal of LANCE_CPU_THREADS rests on the wrong thread pool: the variable does bound Lance's compute pool on pylance 12**
 `catalog, maintenance` · **MEDIUM**
@@ -747,7 +797,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criterion 5: a falsified premise steers sizing.
 - *How:* Lance's threading model names the compute pool and its env control (lance_docs/guide.md:2970-2995,3283-3284). Add a RED cpu/wall test under LANCE_CPU_THREADS=1 (the former thread-count test that counted `lance_background` was deleted 2026-09-25); count pools in a running catalog from OUTSIDE the pod (never exec a repro into the cgroup under study); set OMP_NUM_THREADS=1 in the catalog image; rewrite the docstrings that carry the falsified premise (Evidence).
 - *Closes when:* The thread gate measures the pool it names, and the estate's thread counts are recorded from outside the pod. Pre-register a lance_background bound before the from-outside count, because the count varies from 7 to 17.
-- *Evidence:* lance_docs/PROVENANCE.md (the per-pool thread counts) · tests/unit/test_the_lakehouse_bounds_its_allocator_arenas.py:30-32 · services/maintenance/src/maintenance/core/config.py:101-104 · docs/audits/2026-09-25/03-lance-docs-full-audit.md LD36 · unverified-claims-b/threads.py · verify-unverified-claims-b/v_threads.py
+- *Evidence:* grep OMP_NUM_THREADS/OPENBLAS/LANCE_CPU_THREADS over .docker/*.dockerfile and chart/: only ray-runner.dockerfile:192-193, ray-cluster.dockerfile:166-167, runner.dockerfile:105-106; tests/unit/test_the_lakehouse_bounds_its_allocator_arenas.py:32; services/maintenance/src/maintenance/core/config.py:104-108
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: Did not re-measure thread pools on pylance 12.0.0 (the measurement in the row was taken as given); Did not open lance_docs/PROVENANCE.md:116-147.
 
 **LH-251 · Nothing reclaims __manifest: every namespace operation rewrites it as a new version, every old version is kept, and dropped ids stay readable in its history**
 `catalog, maintenance` · **MEDIUM**
@@ -755,7 +806,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criteria 5 and 2: describe/list latency grows with history and dropped ids stay readable.
 - *How:* The dir catalog stores the namespace in the `__manifest` Lance table and specifies its indexes (lance_docs/ns_catalog/catalog/dir/index.md:81,123-129); as an ordinary Lance dataset the format's own reclamation applies. The catalog, its only writer, runs `cleanup_old_versions(older_than=<hours>)` on each root's `__manifest`; decide inline_optimization_enabled only after cleanup exists, pinned by a test.
 - *Closes when:* Each root's __manifest keeps a bounded number of versions on the deployed estate, and the index choice is pinned, and a test pins that dir commits ignore auto_cleanup, so nobody 'fixes' this with config.
-- *Evidence:* services/maintenance/src/maintenance/services/optimize.py:208,242 · services/catalog/src/catalog/core/config.py:638-665 · docs/audits/2026-09-25/03-lance-docs-full-audit.md LD37 · unverified-claims-b/manifest_growth.py, manifest_autoclean.py · verify-unverified-claims-b/v_manifest.py
+- *Evidence:* services/maintenance/src/maintenance/services/optimize.py:267 (skips `__` dirs) · services/catalog/src/catalog/services/table_bases.py:42,173-175 (the only catalog code that opens __manifest, read-only) · docs/DECISIONS.md:3330-3359 (LH-245)
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: The growth figures (20.1 MB at 1,001 objects) and the claim that auto_cleanup is ignored on dir commits were not re-measured on pylance 12.0.0; The deployed estate's __manifest version count was not read.
 
 **LH-253 · Shared maintenance sizes fragments by tier name using page-image row widths, so one modality's shape sizes every bronze tier**
 `maintenance` · **MEDIUM**
@@ -763,7 +815,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criterion 3 and the agnostic rule ('would this be right for audio?').
 - *How:* Size by measured bytes per dataset (fragment bytes over physical_rows, about 1 GB per fragment, capped by max_bytes_per_file; lance_docs/guide.md:3100-3129); keep the policy override; rewrite the rationale.
 - *Closes when:* No tier-name or modality constant sizes compaction, and a text and an image bronze get targets from their own byte widths (test).
-- *Evidence:* services/maintenance/src/maintenance/services/tiers.py:1-59 · services/maintenance/src/maintenance/services/sweep.py:427 · docs/audits/2026-09-25/03-lance-docs-full-audit.md LD42
+- *Evidence:* services/maintenance/src/maintenance/services/tiers.py:48-60
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: Did not re-read the sweep.py:427 call site, which may have moved after LH-245/LH-203/LH-204.
 
 **LH-271 · An unknown branch on compaction_plan answers 503 'storage fault'**
 `catalog` · **MEDIUM**
@@ -771,7 +824,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criterion 2 (spec error contract) and 5 (a false outage signal).
 - *How:* Classify the branch-open failure through the same branch-not-found mapping open_dataset already uses (lance_docs/ns_catalog/spec.yaml error codes); RED test with an unknown branch.
 - *Closes when:* An unknown branch answers 404 code 22 on compaction_plan and on the compaction commit, and on every other maintenance door.
-- *Evidence:* docs/audits/2026-09-25/06-lakehouse-test-audit.md § Real product defects · verify-session-findings/probe_branch_compaction.py · the plan door's absent-data comment names code 4, TableNotFound, correctly since ed061905 (dataplane.py:1160-1164)
+- *Evidence:* services/catalog/src/catalog/services/dataplane.py:1426-1477,1484-1508 · services/catalog/src/catalog/api/v1/endpoints/data.py:273-322,327-351 (InvalidInput for no location at ~:308 and ~:350) · tests/integration/test_a_declared_branch_is_never_silently_dropped.py (no compaction case)
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: Not driven live or on pylance 12. A ghost branch's ValueError text ('Not found: …/tree/ghost') may match reads_as_absent and then answer 404 code 4 rather than 503; Not checked: the other maintenance doors.
 
 **LH-056 · Record D3 (a table writer writes every branch) and pin both halves**
 `catalog, service-kit` · **LOW**
@@ -779,7 +833,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criterion 2. The ruling lives only in the owner's rulings note, and nothing pins the writer half, so a later tightening passes CI unnoticed.
 - *How:* A branch is a parameter of table operations, not a resource (lance_docs/ns_catalog/spec.yaml:2323-2333). Read 'tags stay owner-tier' as unchanged: `can_create_tag`/`can_update_tag` are `owner or publisher` (model.fga:591-592), and first publication depends on it. Lakekeeper authorizes per table with no per-ref authz (docs/audits/2026-09-25/lakekeeper-deep-read/authz.md §12).
 - *Closes when:* DECISIONS.md and model.fga carry D3, and router tests pin 'writer admitted on a branch' beside the owner-tier pins.
-- *Evidence:* services/catalog/src/catalog/api/v1/endpoints/credentials.py:79-120 · services/catalog/src/catalog/core/vending.py:444-483 · services/catalog/src/catalog/api/fga_deps.py:168-199 · model.fga:583-598 · tests/integration/test_authz.py:904-938
+- *Evidence:* packages/service-kit/src/service_kit/governed/auth/model.fga:596-611 · docs/DECISIONS.md (no D3 entry) · tests/integration/test_a_declared_branch_is_never_silently_dropped.py (LH-272, a different pin)
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: tests/integration/test_authz.py:904-938 was not re-read for any existing writer-on-branch case.
 
 **LH-016 · Nested-namespace `features` copies still occupy `lakehouse-wh`**
 `catalog` · **LOW**
@@ -787,7 +842,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criterion 2 (catalog hierarchy). Registered copies of a feature table sit in a tenant warehouse, and the unbind door rightly refuses while they exist.
 - *How:* DropTable through the catalog, anchored ids. Both producers of the nested spelling are gone: the stage runners ran on `lakehouse$…` names before 2026-08-25 (chart/values.yaml:1473-1486), and ingest's `$` join is only in docstrings.
 - *Closes when:* `lakehouse-wh` holds no nested `lakehouse$<tier>$*` copy and the unbind of the nested children answers 200.
-- *Evidence:* chart/values.yaml:1473-1486,1520 · services/ingest/src/ingest/naming.py:5 · packages/service-kit/src/service_kit/lakehouse/warehouse_registry.py:187,199 · services/catalog/src/catalog/api/v1/endpoints/warehouses.py:689-702
+- *Evidence:* No commit in git log -60 touches lakehouse$silver$features or lakehouse$silver-media$features; LH-164 (moving silver-media off lakehouse-wh) is still open in the register
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: Whether the nested copies still exist in lakehouse-wh: I did not query the live catalog.
 
 **LIN-002 · The omission of NominalTimeRunFacet is not recorded, and cron-planned maintenance runs are undecided**
 `lineage, service-kit, maintenance` · **LOW**
@@ -795,7 +851,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criterion 1. A consumer schedules and back-fills on nominal time, so a wrong value is worse than none, and an unrecorded omission reads as a gap.
 - *How:* OpenLineage NominalTimeRunFacet defines nominalStartTime as the schedule time. No lance_docs angle; Lakekeeper emits no OpenLineage.
 - *Closes when:* DECISIONS.md names every run class and whether it carries the facet, and any value emitted is pinned by a test.
-- *Evidence:* packages/service-kit/src/service_kit/openlineage.py:159,180,237,278 · services/maintenance/src/maintenance/core/lineage_emit.py:231-257 · chart/templates/maintenance.yaml:17,36
+- *Evidence:* grep -i 'nominaltime|nominalStartTime' over docs/DECISIONS.md, packages, services: no hits
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857).
 
 **LH-074 · Storage is accounted per warehouse, but no byte quota is enforced**
 `catalog, maintenance` · **LOW**
@@ -803,7 +860,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criterion 2 (tenant isolation). Low priority per D14(5).
 - *How:* First make the count whole. Take total bytes and files from each discovered dataset's prefix listing, independent of the orphan layout gate, and keep `tree/` and `_mem_wal/` bytes inside the owning table. Report excluded_bytes and unaccounted external bases explicitly, and rewrite orphans.py:167-176. lance-ns defines no quota, so it lives on the management prefix, never in a spec payload. Lakekeeper has no quota but keeps per-warehouse settings as sub-resources (docs/audits/2026-09-25/lakekeeper-deep-read/governance.md row 7). Each warehouse claims its own bucket, so per-bucket bytes are per-warehouse bytes.
 - *Closes when:* A write that would exceed a set quota is refused with a typed error at each write door, tested per door, and an unset quota changes nothing. On a fixture holding a flag-16 table, a branched table and a MemWAL table, bytes_by_bucket equals the bucket's listed bytes minus the control prefixes (test).
-- *Evidence:* services/maintenance/src/maintenance/services/orphans.py:143,533-562 · services/maintenance/src/maintenance/services/reconcile.py:368,1363-1373 · docs/DECISIONS.md:2073-2111 · services/maintenance/src/maintenance/services/orphans.py:167-176,379-404,577-590 · verify-txn-types-memwal/v2_plain_create_accounting.py · txn-types-memwal/m2c_clone_orphans.py, m3_memwal.py
+- *Evidence:* grep for 'quota' in services/catalog/src and services/maintenance/src returned only tables.py:1386 (prose)
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: Did not re-read orphans.py or reconcile.py line numbers; Did not check whether LH-204 or LH-203 (branch directory layout) changed how bytes_by_dataset treats `tree/`.
 
 **LH-035 · The inline-bytes won't-do is unrecorded, and the `/blobs` door's docstring names a route that does not exist**
 `catalog, frontend (generated client)` · **LOW**
@@ -811,7 +869,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criterion 2. A rask-only parameter on a spec route would break the spec-surface test, and today's published contract sends readers to a route that 404s.
 - *How:* spec.yaml has 0 blob fields and lance-namespace 0.11.1's QueryTableRequest has 22 fields, none blob; `scanner(blob_handling="all_binary")` is an SDK scan mode (lance_docs/guide.md:394-395) the viewer already moved off (VS-05, pages.py:19-27). Off-cluster, the one credential-less blob path is the one-row `/blobs` door (see LH-177).
 - *Closes when:* DECISIONS.md carries the won't-do, and the regenerated contract names `/management/v1/table/{id}/blobs` and pylance 12.0.0.
-- *Evidence:* services/catalog/src/catalog/api/v1/endpoints/data.py:614,627 · docs/catalog-openapi.json:16133 · frontend/packages/api/src/generated/catalog.ts:705 · docs/DECISIONS.md:~2192
+- *Evidence:* services/catalog/src/catalog/api/v1/endpoints/data.py:652,668,680 · docs/catalog-openapi.json:15181-15183 · frontend/packages/api/src/generated/catalog.ts:692,704 · docs/DECISIONS.md:2192
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: Did not search all of DECISIONS.md for a separately worded inline-bytes won't-do; grepped 'inline' and 'blob_handling' only.
 
 **LH-041 · A tag move is last-writer-wins, and that is not recorded**
 `catalog` · **LOW**
@@ -819,7 +878,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criterion 5. Two concurrent tag moves both answer 200; unrecorded, that reads as an oversight rather than a format limit.
 - *How:* Tags are `_refs/tags/*.json` at the dataset root (lance_docs/file_format.md:2796-2807); pylance 12.0.0 `Tags.update(tag, reference=None)` takes no precondition, and UpdateTableTag lists no 409 (spec.yaml:2089-2113). Lakekeeper CASes refs in Postgres, which the Lance-only ruling excludes.
 - *Closes when:* DECISIONS.md records the semantics with the pylance 12 evidence.
-- *Evidence:* services/catalog/src/catalog/services/publication.py:298-311 · services/catalog/src/catalog/services/models.py:213-215 · lance_docs/ns_catalog/spec.yaml:2089-2113
+- *Evidence:* docs/DECISIONS.md (no match); measured on pylance 12.0.0: `inspect.signature(Tags.update)` gives `(self, tag, reference=None)`; services/catalog/src/catalog/services/models.py:215; services/catalog/src/catalog/services/publication.py:311
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: Did not re-read spec.yaml:2089-2113 for the absence of a 409 on UpdateTableTag.
 
 **LH-099 · A compaction's no-control-event decline is unrecorded**
 `maintenance` · **LOW**
@@ -827,7 +887,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criterion 4: an unrecorded decline gets re-litigated every audit.
 - *How:* Record in DECISIONS.md: compaction changes no identity, name, protection, ref or grant; the spec defines no compaction operation; its provenance is the maintenance RunEvent. Lakekeeper also announces no maintenance (docs/audits/2026-09-25/lakekeeper-deep-read/events.md:178-181).
 - *Closes when:* DECISIONS.md records the decline, and one compaction RunEvent has been observed in the live graph.
-- *Evidence:* services/maintenance/src/maintenance/services/sweep.py:737,786,1072,1081,1136 · services/maintenance/src/maintenance/core/metrics.py:35,212
+- *Evidence:* docs/DECISIONS.md (grep for compaction with control/event/announce: only :3156, the LH-214 note) · services/maintenance/src/maintenance/services/sweep.py
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: The live compaction RunEvent in the graph was not observed; no cluster reads were made.
 
 **LH-148 · A parked lineage delivery has no path back to the graph once its cause is fixed**
 `lineage` · **LOW**
@@ -835,7 +896,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criteria 1 and 4: the DLQ is kept 'for as long as a park is worth replaying' and nothing replays it.
 - *How:* Re-present on demand through the same `_reingest_from_the_park`, publishing nothing: an admin-gated lineage door beside the existing `/admin/dlq` door (endpoints/dlq.py:40) that re-drives by run id or sequence, or a tested replay window on the DLQ component so Dapr stays the only NATS client. The pre-fix backlog's retention ran out about 2026-09-28, so it is recorded as residue.
 - *Closes when:* A REFUSED park repaired by writing its tuple is re-presented on demand and observed live as RECOVERED without landing on lineage.events.v1, and both dispositions are recorded.
-- *Evidence:* services/lineage/src/lineage/api/dapr.py:117-161,182-191 · services/lineage/src/lineage/core/metrics.py:94,110-111 · chart/templates/nats-stream-job.yaml:201-212
+- *Evidence:* services/lineage/src/lineage/api/dapr.py:119-161 · services/lineage/src/lineage/api/v1/endpoints/dlq.py:1-4
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: The residue and Dex-subject park dispositions and the never-observed-live RECOVERED were not checked against the live estate.
 
 **LH-171 · Nine legacy transform records fail TransformSpec and still sit under `_transforms/`**
 `catalog, service-kit` · **LOW**
@@ -843,7 +905,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criterion 1: a declared lane no listing can see is invisible to everything downstream.
 - *How:* Delete, don't migrate (current state is test data): POST /v1/project/{id}/transform/delete where the key equals `_key(project, lane)`, else by the path `_parse` logs; keep the one valid record; read `transform.specs.malformed` at 0 after a listing.
 - *Closes when:* `transform.specs.malformed` reads 0 after a listing and every record under `_transforms/` validates.
-- *Evidence:* packages/service-kit/src/service_kit/lakehouse/transform_specs.py:62-99,116-119,148-155,158-230 · services/catalog/src/catalog/api/v1/endpoints/transforms.py:211-232
+- *Evidence:* packages/service-kit/src/service_kit/lakehouse/transform_specs.py:196,205-215,229
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: Not confirmed: that the nine records are still under `_transforms/` on the live estate (no cluster read in a read-only audit).
 
 **LH-048 · Measured pylance 12.0.0 upstream defects are unfiled: REST GET vs spec POST, and alter_columns' annotation**
 `catalog` · **LOW**
@@ -851,16 +914,18 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criterion 2: each workaround is a dual path kept alive by an unfiled bug.
 - *How:* File both naming 12.0.0 with the probes as repros; record each URL beside its workaround (tags.py:33-42, data.py:785-786; the alter_columns site is dataplane.py:1761); delete the compat mounts when a release fixes the GET.
 - *Closes when:* Both issues are filed and their URLs sit beside the workarounds.
-- *Evidence:* services/catalog/src/catalog/api/v1/endpoints/data.py:785-786 · tags.py:33-48 · services/catalog/src/catalog/services/dataplane.py:1761 · lance_docs/ns_catalog/spec.yaml:1350-1354,1894-1900 · rows02/lh048_probe.py
+- *Evidence:* services/catalog/src/catalog/api/v1/endpoints/data.py:839-840 · services/catalog/src/catalog/api/v1/endpoints/tags.py:33-49 · services/catalog/src/catalog/services/dataplane.py:2031-2051 (ty: ignore at :2051; the row cites :1761) · no 'lance-format/lance/issues' URL anywhere under services/catalog/src
 - **blocked:** The owner's go to post issues on github.com/lance-format/lance (an outward-facing action on a third party's tracker).
+- *Re-audited 2026-10-05:* still blocked; the row's own blocker holds (an auditor and an independent checker, against main fd99d857). Not confirmed: Whether the issues were filed upstream anyway: the GitHub tracker was not checked. Only services/catalog/src was searched for an issue URL, and none was found; Whether the owner has given the go somewhere outside the repo: docs/DECISIONS.md and the owner-rulings memory notes were not searched for it.
 
 **LH-050 · The no-query-store decision is unrecorded and its reopen alert evaluates nowhere**
 `catalog, chart` · **LOW**
-- *What is left:* Record in DECISIONS.md: no query store until listing load reaches interactive frequency, with CatalogListingLoadReachedInteractiveFrequency as the reopen trigger; repoint the alert annotation from 'LH-050' to that entry; observe a running vmalert with the rule loaded after the next roll (none runs today; webhookUrl is empty).
+- *What is left:* Record in docs/DECISIONS.md: no query store until listing load reaches interactive frequency, with CatalogListingLoadReachedInteractiveFrequency as the reopen trigger. Repoint the rule's comment and annotations from LH-050 to that entry (chart/alerting/rules.yml:355,380,383). Keep it a standard PromQL rule. Do not observe a live evaluator; that is out of scope under DECISIONS.md:2779 and the 2026-10-04 ruling. Prove the exported listing-load series instead.
 - *Why:* Criterion 5: a deliberate non-build needs a trigger that actually fires, and a durable record.
 - *How:* Lakekeeper's caches are not to be ported until a need is measured (docs/audits/2026-09-25/lakekeeper-deep-read/governance.md:27,468).
 - *Closes when:* The DECISIONS entry exists and the rule is observed loaded and evaluating on the live estate.
-- *Evidence:* chart/alerting/rules.yml:312-325 · chart/values.yaml:3316-3321 · chart/values-local.yaml:232-234 · live: no vmalert/alertmanager pod
+- *Evidence:* chart/alerting/rules.yml:355,372-383; grep -i 'query store' docs/DECISIONS.md finds nothing; docs/DECISIONS.md:2779 (vmalert out of scope by R8); memory observability-seam-is-the-otel-collector.md (2026-10-04)
+- *Re-audited 2026-10-05:* partly done; *What is left* rewritten to the remainder (done by Owner ruling 2026-10-04 and DECISIONS.md:2779 (out of scope by R8) drop the vmalert clause) (an auditor and an independent checker, against main fd99d857). Not confirmed: That the listing-load series is exported live: not measured.
 
 **LH-079 · An audit doc still prescribes an x-api-key principal that D1 withdrew**
 `catalog, docs` · **LOW**
@@ -868,7 +933,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criterion 2: a standing instruction to build a long-lived bearer store contradicts the ruled model.
 - *How:* Rewrite B6 and item 3 as a conformance note: the spec's security block is a disjunction (spec.yaml:81-84), so bearer-only conforms; record bearer-only in DECISIONS.md citing D1. Lakekeeper issues no API keys.
 - *Closes when:* The audit doc no longer prescribes x-api-key and DECISIONS.md records bearer-only.
-- *Evidence:* docs/audits/lakehouse-2026-09/lance-conformance-and-build-rules.md:122-124,367 · lance_docs/ns_catalog/spec.yaml:81-84
+- *Evidence:* docs/audits/lakehouse-2026-09/lance-conformance-and-build-rules.md:122-124,367; grep 'bearer-only|bearer only|x-api-key' in docs/DECISIONS.md: no hits
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857).
 
 **LH-225 · A crash between the Lance commit and the outbox stage loses the event's author and inputs, although Lance can commit who and which run with the manifest**
 `catalog, lineage, service-kit` · **LOW**
@@ -876,7 +942,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criterion 1: who made a write should survive a crash.
 - *How:* Stamp rask.run_id, rask.author (the verified sub), rask.operation and rask.on_behalf_of as transaction_properties on every catalog commit whose pylance path takes them (write_dataset/insert; merge_insert via execute_uncommitted then `commit(Transaction(transaction_properties=...))`; the fragment door), measured on 12.0.0; name the doors that cannot (delete, update, native ops). Reconcile reads `read_transaction(v).transaction_properties` to emit an attributed event. Coordinate the property names with XC-048's trace id. The stamped sub falls under erasure (LH-178). Lakekeeper has no outbox. Transaction properties can be written by any committer (measured; LH-280). The reconcile must therefore verify a catalog-stamped sub before attributing a write, never read a client-written author. LH-280 closed without a transaction-property marker: the catalog keeps a private record of each run's commit (packages/service-kit/src/service_kit/lakehouse/commit_runs.py, keyed by location, verified subject and run id), so LH-225 stamps its own properties and the reconcile never takes a client-written one as proof.
 - *Closes when:* A write whose event is lost between commit and stage is back-filled with its real author and run id on every door that can carry them, and the prose names the doors that cannot.
-- *Evidence:* services/catalog/src/catalog/services/dataplane.py:693-699,822-833 · packages/service-kit/src/service_kit/lakehouse/outbox.py:8-13,336-392 · services/lineage/src/lineage/core/reconcile.py:111-197 · services/catalog/src/catalog/core/lineage_emit.py:23-24
+- *Evidence:* packages/service-kit/src/service_kit/lakehouse/commit_marker.py:1-26,47,74 (seam exists, names LH-225's remaining keys) · imports only in services/medallion/src/medallion/services/stage_plans.py:48, train_plans.py:46 · services/catalog/src/catalog/core/lineage_emit.py:20-25
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: Did not re-read dataplane.py:693-699,822-833 or lineage reconcile.py:111-197 to check their line numbers; How the catalog doors should call commit_marker.stamped is not something the row states; worth noting when the row is taken.
 
 **LH-254 · The CAS guarantee every commit rests on was last proven on RustFS while the estate runs MinIO**
 `catalog, docs` · **LOW**
@@ -884,7 +951,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criterion 5: commit atomicity is the one thing rask deliberately does not build, so its proof must be on the store that runs.
 - *How:* Lance commits by put-if-not-exists of `_versions/{N}.manifest` and needs an external manifest store only without it (lance_docs/file_format.md:4770,4791,5375-5379). Re-run `make e2e-cas` against MinIO and re-date the verdict; call the door 'a governed commit caller'; fix CLAUDE.md's RustFS claims in the same commit.
 - *Closes when:* `make e2e-cas` has a recorded green run against the deployed MinIO, and no document names RustFS as the store the verdict covers. A green e2e-stack run meets this: its no-skip block runs test_object_store_cas_e2e.py against MinIO (e2e_stack.sh:237,323,381). That needs XC-075 and XC-096 to let the lane come up.
-- *Evidence:* chart/values.yaml:2309-2313 · docs/DURABILITY.md:23,40 · services/catalog/src/catalog/services/dataplane.py:842
+- *Evidence:* docs/DURABILITY.md:23,31-45 · scripts/e2e_stack.sh:9,231-236,412,419 · services/catalog/src/catalog/services/dataplane.py:1069 · chart/values.yaml:614 (minio)
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: Did not check for a recorded `make e2e-cas` run against MinIO outside the repo; Did not re-read CLAUDE.md's state-surface bullet for RustFS claims.
 
 **LH-255 · Live refusal tests check a bare status, never the problem code, the unchanged state, or a cross-tenant leak**
 `tests/e2e-py, scripts/auth_chain.sh` · **LOW**
@@ -892,7 +960,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criterion 2: a 403 that still wrote, or one that names the owner, passes.
 - *How:* The stock client dispatches on the problem code (ErrorResponse, spec.yaml), so add one helper `assert_refused(resp, status, spec_code, unchanged=readback)` for tests/e2e-py and auth_chain.sh, apply it to auth_chain steps 6-7 and the outsider legs, add a no-foreign-identifier assertion, and on the real-OpenFGA tier read tuples before and after.
 - *Closes when:* Every live refusal leg asserts status, code, unchanged state and no cross-tenant identifier.
-- *Evidence:* tests/e2e-py/test_governance_e2e.py:150,213-216 · scripts/auth_chain.sh:132-136 · tests/e2e-py/test_credential_isolation_e2e.py:237-257
+- *Evidence:* scripts/auth_chain.sh:132-136; grep 'assert_refused' over tests/ and scripts/: no match; git log for scripts/auth_chain.sh and tests/e2e-py/test_governance_e2e.py: last touched by ec58f0f3/5cb7ec5d (older than the row)
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: Did not open tests/e2e-py/test_credential_isolation_e2e.py:237-257 or test_governance_e2e.py:150,213-216 line by line.
 
 **LH-256 · Comments the pylance 12 upgrade and the audits proved false, where no other row's commit rewrites them**
 `service-kit, catalog, maintenance, lineage-kit` · **LOW**
@@ -900,7 +969,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* CLAUDE.md comment rule: falsified prose is rewritten, never annotated.
 - *How:* Rewrite each claim to what code and measurement say, citing lance_docs where the format decides; run scripts/comment_history_gate.py on changed lines; a site a later row touches moves into that row's commit.
 - *Closes when:* None of the listed sites still carries its falsified claim, and flag 2048 has a name in refusal messages.
-- *Evidence:* packages/service-kit/src/service_kit/lakehouse/features.py (_FLAG_NAMES) · packages/lineage-kit/src/lineage_kit/consume.py:20-21,92-99 · docs/audits/2026-09-25/02-lance-and-lakekeeper-practice.md LK49 · txn-types-memwal/m1_update_bases.py · unverified-claims-b/layout_probe.py
+- *Evidence:* packages/service-kit/src/service_kit/lakehouse/features.py:184-196,504 · services/catalog/src/catalog/services/dataplane.py:1437 · packages/lineage-kit/src/lineage_kit/consume.py:98 · packages/service-kit/src/service_kit/lakehouse/work_items.py:141,149 (the row's path services/maintenance/.../work_items.py does not exist; the file is in service-kit) · services/maintenance/src/maintenance/services/index_build.py:13,90-91 · services/ingest/src/ingest/catalog.py:233
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: Not every one of the 'at least 13' Unsupported-is-501 sites was enumerated; two were confirmed; Not checked: base_refs.py:136-139, frames.py:188-190, the lance_metrics docstring, credentials.py:61-69, vending.py:450-453, consume.py:20-21 (that line now reads differently).
 
 **LH-257 · On non-stable datasets with a user index, the sweep defers index remap then optimizes, and the fragment reuse index grows a version per compaction**
 `maintenance` · **LOW**
@@ -908,15 +978,17 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criterion 5: unbounded index metadata.
 - *How:* The fragment reuse index is a remap for non-stable tables only (lance_docs/file_format.md:2182-2238): compact non-stable tables with defer_index_remap=False, rebuild indexes and drop `__lance_frag_reuse` where it exists, report fri_versions in index_health.
 - *Closes when:* No non-stable dataset's reuse index grows across repeated sweeps (test), and index_health reports fri_versions.
-- *Evidence:* services/maintenance/src/maintenance/services/optimize.py:297,398-431,451-500 · docs/audits/2026-09-25/03-lance-docs-full-audit.md LD41
+- *Evidence:* services/maintenance/src/maintenance/services/optimize.py:369,429-500
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: Did not measure reuse-index growth on pylance 12.0.0.
 
 **LH-258 · Lance Namespace conformance defects on edge paths (batched)**
 `catalog, service-kit` · **LOW**
-- *What is left:* Verified: restore to a missing version answers 500 code 18 and to a missing branch code 4 not 22; TableExists ignores the version; Register Overwrite answers code 13 instead of 406; concurrent ExistOk creates answer 409 code 14 in one pod; authorize runs before DelimiterGuard (403 not 400); limit=0 or negative accepted on namespace listings; routing 404/405 carry code 0; CreateTable storage_options silently dropped; describe(load_detailed_metadata) omits stats; a branch Overwrite insert reports 0 rows; branch and tag listings ignore limit; a virtual_column-only alter answers 500; the metrics bridge logs 'instrumented' when Lance refused. Namespace Overwrite is LH-037; deregister's `_policies` residue is LH-215. Also: (a) deleting a branch that a tag or a child branch names answers code 23 'branch already exists' (delete_branch, dataplane.py:2449-2453). The code should be 19 (InvalidTableState) naming the referencing refs; spec.yaml:2213-2227 declares no 409 for DeleteTableBranch. (b) branches/create with from_branch='main' answers 404 code 22, with or without from_version, because dataplane.py:2434 checks membership in branches.list(), which never holds main; it should be normalised through recorded_branch (:2229). The credentials door's `branch='main'` has the same list-lookup shape (credentials.py:119-120 → vending.py:370); that path was read, not driven. (c) Idempotency-Key '.' and '..' pass the catalog's header pattern (catalog/api/idempotency.py:41-44), the shared seam raises ValueError (service_kit/lakehouse/idempotency.py:44,77-79), and begin() does not catch it (:117-120), so the answer is 500 code 18.
+- *What is left:* Each path below should answer the spec's code, with one conformance test per item. Restore to a missing version on main (no branch): tables.py:1343 opens the ref only when body.branch is set, so this path still goes straight to native.call. The row recorded it as 500 code 18. TableExists ignores the version. Register Overwrite answers code 13 instead of 406. Concurrent ExistOk creates in one pod answer 409 code 14. Authorize runs before DelimiterGuard, so the answer is 403, not 400. Namespace listings accept limit=0 or a negative limit. Routing 404/405 answers carry code 0. CreateTable silently drops storage_options. describe(load_detailed_metadata) omits stats. A branch Overwrite insert reports 0 rows. Branch and tag listings ignore limit. An alter that only touches virtual_column answers 500. The metrics bridge logs 'instrumented' when Lance refused. (a) Only the tag half remains: deleting a branch that a tag names should answer 19 and name the tag. There is no tag pre-check in delete_branch (dataplane.py:2810-2840). If pylance refuses with a ref conflict, the except at :2834-2838 does answer 19, but its message blames a branch forked since the check, not the tag. (b) branches/create with from_branch='main' answers 404 code 22: dataplane.py:2782-2783 checks membership in branches.list(), and main is never in that list. Normalise it through recorded_branch (:2537). The credentials door's branch='main' path has the same shape. (c) The catalog header pattern at catalog/api/idempotency.py:43 still accepts '.' and '..'. Either align that pattern with the seam's negative lookahead (service_kit/lakehouse/idempotency.py:44), or translate the seam's ValueError into InvalidInputError in begin() (:108-121).
 - *Why:* Criterion 2: correct for lance-ns on every path a stock client reaches.
 - *How:* spec.yaml is authoritative (:451-452,1409-1418,2297,2423-2435,2669-2694,2820-2826,3035-3044): classify restore failures through open_dataset (codes 11, 22); pinned open for exists; 406 for declined modes and virtual_column-only alters; re-describe after an ExistOk conflict; DelimiterGuard before authorize; Query(ge=1) and paginated refs; refuse storage_options explicitly; fill TableBasicStats; count a branch insert's rows; honour instrument_lance_metrics' return. (a) map Lance's 'is referenced by' delete conflict to InvalidTableStateError carrying the refs; (b) normalise from_branch; (c) translate the seam's ValueError to InvalidInputError.
 - *Closes when:* Each listed path answers the spec's code, one conformance test per item.
-- *Evidence:* services/catalog/src/catalog/api/v1/endpoints/tables.py:481-486,611-670,749-755 · namespaces.py:271-291,328,928 · api/v1/router.py:48 · api/pagination.py:22-25 · packages/service-kit/src/service_kit/lakehouse/ns_errors.py:5-7,173-181 · docs/audits/2026-09-25/03-lance-docs-full-audit.md LD44 · ff-branch-tag-index-layout/p8_branch_delete.py, p9_branch_delete_raw.py, p11_from_main.py · verify-ff-branch-tag-index-layout/probes/v5_tag_resolvers.py, v14_branch_refs_honoured.py
+- *Evidence:* services/catalog/src/catalog/api/v1/endpoints/tables.py:1339-1345 · services/catalog/src/catalog/services/dataplane.py:2537,2782-2786,2810-2846 · services/catalog/src/catalog/api/idempotency.py:43,108-121 · packages/service-kit/src/service_kit/lakehouse/idempotency.py:44,77-81
+- *Re-audited 2026-10-05:* partly done; *What is left* rewritten to the remainder (done by 5e4e2304 (LH-272) for restore to a missing branch; 7360d1da (LH-203) for the forked-child half of (a)) (an auditor and an independent checker, against main fd99d857). Not confirmed: Not re-driven, carried forward from the row: TableExists ignoring the version, Register Overwrite, the ExistOk race, DelimiterGuard order, listing limit, routing codes, storage_options, load_detailed_metadata, branch Overwrite row count, branch/tag listing limit, the virtual_column-only alter, the metrics bridge; Not driven: whether restore to a missing version on main still answers 500 code 18. I only read the code path in tables.py:1343-1345, and did not check how native.call classifies it; Not confirmed: whether pylance 12.0.0 refuses to delete a branch that a tag names, so how the tag half of (a) behaves today was read from dataplane.py:2834-2838, not measured; Not driven: the credentials door's branch='main' path (credentials.py / vending.py were not re-read).
 
 **LH-259 · add_columns loses to any write that commits during it, and ingest treats the resulting code 14 as fatal**
 `catalog, ingest` · **LOW**
@@ -924,7 +996,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criterion 5: a schema change loses to every concurrent write, and ingest stops on the loss.
 - *How:* add_columns commits a Merge that conflicts with concurrent writes (lance_docs/guide.md:606-610; file_format.md:4853-4990). At the door, retry a metadata-only add a bounded number of times on a retryable conflict; this costs no files. A computed add takes a schema-change lease that quiesces the table's writers (lance_docs/guide.md:606-610). Answer code 14 with Retry-After, and have ingest retry 14.
 - *Closes when:* Under a concurrent appender, a cast(NULL) add lands within the retry bound (test), and ingest's ensure survives one 409/14.
-- *Evidence:* services/catalog/src/catalog/services/dataplane.py:1707-1738 · services/ingest/src/ingest/catalog_service.py:640-664 · docs/audits/2026-09-25/03-lance-docs-full-audit.md LD45 · unverified-claims-b/addcol_race.py · verify-unverified-claims-b/v_addcol_retry.py
+- *Evidence:* services/catalog/src/catalog/services/dataplane.py:1996-2029 (the row cites :1707-1738) · services/ingest/src/ingest/catalog_service.py:579-598 (the row cites :640-664)
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: Whether _column_op maps the preemption to code 14 with Retry-After was not checked; The race measurements were not re-run.
 
 **LOW-029 · The catalog's merge_insert door runs Lance's default conflict_retries, so a stale merge re-executes and silently reverts a concurrent edit to the same row**
 `catalog` · **LOW**
@@ -932,7 +1005,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criterion 5: an edit lost silently at a catalog door.
 - *How:* A matched update is retryable against a newer version (lance_docs/file_format.md:4853-4869): set conflict_retries(0) on the door's builder so the conflict surfaces as rask's 409 (code 14), or condition the update on a prior version column; record the door's policy (last-writer-wins may be acceptable, if written down). RED first.
 - *Closes when:* Two concurrent merge_insert calls on one row through the catalog door give exactly one 409 and no silent revert, or the recorded last-writer-wins policy is what they observe, and the door's retry policy is recorded.
-- *Evidence:* services/catalog/src/catalog/services/dataplane.py:1571-1601 (merge_insert_into_table) · lance_docs/file_format.md:4853-4869
+- *Evidence:* services/catalog/src/catalog/services/dataplane.py:1860-1906 (no conflict_retries; the main arm is native.call at :1881-1883)
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: The silent revert was not re-measured on pylance 12.0.0.
 
 **LH-260 · Clients cannot learn a table's file version, and no estate census of 2.1 or mixed tables has run**
 `catalog, maintenance` · **LOW**
@@ -940,7 +1014,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criteria 5 and 1: closes the remaining ways a mix can be attempted and baselines the leave-or-migrate decision.
 - *How:* Advertise data_storage_version as a table property in describe and vend (DescribeTableResponse properties, spec.yaml:2845); read the census from maintenance_dataset_outcome's data_storage_version across one full tick.
 - *Closes when:* Describe and vend expose the table's data_storage_version, and one full-tick census is recorded.
-- *Evidence:* services/catalog/src/catalog/core/vending.py:310-350 · docs/audits/2026-09-25/05-pylance12-mixed-version-plan.md S9(d),(f)
+- *Evidence:* grep data_storage_version over services/catalog/src/catalog/api, core/vending.py, core/namespace.py: no hits
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: Census absence was checked only in open_backlog_left_new2.md and docs/DECISIONS.md, not in docs/audits or the live maintenance metrics.
 
 **LH-261 · The vendored lance_docs bundle predates pylance 12 and contradicts it, while the owner's rule makes it the authority**
 `lance_docs, docs` · **LOW**
@@ -948,7 +1023,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* A stale authority produces confident wrong answers; the owner's rule is lance_docs or a pylance 12 measurement.
 - *How:* Re-vendor from the lance v12.0.0 tag (not main, which describes 13) and the lance-namespace release matching 0.11.1, plus the matching lance-ray docs; carry the LD 'DOC CONFLICTS' list into PROVENANCE.md; keep spec.yaml ranked above prose.
 - *Closes when:* lance_docs is vendored at v12.0.0 with PROVENANCE.md naming the revision and the known divergences.
-- *Evidence:* lance_docs/PROVENANCE.md · lance_docs/lance_sdk.md:925 · lance_docs/ray.md:684,798-857 · docs/audits/2026-09-25/03-lance-docs-full-audit.md DOC CONFLICTS · skeptic08/lance_ray_0.5.0_signatures.txt · unverified-claims-b/layout_probe.py · dir-bases-proto/probe_manifest_fields.py · verify-unverified-claims-b/v_branch_id.py
+- *Evidence:* lance_docs/PROVENANCE.md:12-16 · git log -- lance_docs (f31534e6, b2f100a9, 563db6cd, fc9b32b3, 9563eb87)
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: Did not re-verify each of the seven listed contradictions against the bundle.
 
 **LH-274 · The trash-window 409 names an undrop route that 404s**
 `catalog` · **LOW**
@@ -956,7 +1032,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* An actionable error must name a route that exists.
 - *How:* Name the served path; test the message against the router.
 - *Closes when:* The 409's route answers when called.
-- *Evidence:* docs/audits/2026-09-25/06-lakehouse-test-audit.md § Real product defects
+- *Evidence:* services/catalog/src/catalog/api/fga_deps.py:1102 · services/catalog/src/catalog/api/v1/endpoints/namespaces.py:851 (@management_router.post('/{id}/undrop'))
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: Did not call the route live to observe the 404.
 
 **LH-276 · The shared catalog client is half-used by the medallion**
 `medallion` · **LOW**
@@ -964,7 +1041,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* One client carries the timeouts, auth and tracing; two drift.
 - *How:* Route both through the shared client; a MockTransport test proves the shared client serves them.
 - *Closes when:* Both calls go through the shared client, pinned by a test.
-- *Evidence:* docs/audits/2026-09-25/06-lakehouse-test-audit.md § Real product defects
+- *Evidence:* services/medallion/src/medallion/services/transform.py:1014-1037 (no client= on either call); services/medallion/src/medallion/services/catalog_register.py:242-256 (_catalog_client falls back to an owned httpx.Client)
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857).
 
 **LH-329 · /ingest-media starts the cascade itself instead of the arrival event**
 `medallion` · **MEDIUM**
@@ -972,7 +1050,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criterion 4: the cascade is driven by the arrival event rather than by the ingest call (CLAUDE.md, Architecture), and one head mechanism makes the relay's re-delivery the recovery path for every lane. Criterion 1: the media chain's provenance then starts from the same bronze-write event as every other lane. CLAUDE.md's literal sentence ("Neither publishes `medallion.bronze` directly") is not broken, since the media head publishes the media topic; its intent is.
 - *How:* Drop the direct publish, and have /ingest-media answer after the emit alone. Requirements on /bronze-arrival, which cannot see the media write today: (1) it recognises a byte-carrying COMPLETE write to `media_bronze_namespace`/`media_bronze_dataset` (the declared-lane branch cannot, because the media head is single-tenant and stamps no project), and it does not fire on the catalog's `create_table` event for the empty table `ensure_stage_output` creates on a first ingest (catalog_register.py:347-351): every /create emits `create_table` (catalog core/lineage_emit.py:677), and `create_table` is not in `_BYTE_FREE_CATALOG_OPERATIONS` (ingest_trigger.py:62); (2) the trigger names the matched namespace, where today `namespace` is always `settings.bronze_namespace` (ingest_trigger.py:294); (3) it publishes to the topic of the stage runner that consumes that namespace, where today it publishes only `settings.bronze_topic` (:312). `transform_routes` already maps each stage runner's source namespace to its topic, `bronze-media` to `medallion.media` among them (chart/templates/medallion.yaml:213-226), and publication_trigger reads it (publication_trigger.py:189-197). The trigger carries `from_uri` from the head's describe (ingest_trigger.py:220-262) and `originator` from the event, which the media emit already stamps (media_produce.py:230). A failed publish at /bronze-arrival answers RETRY (ingest_trigger.py:318-319). Measure first: whether the catalog's `create_table` event already fires an ingest-created configured or declared lane on its empty table, by driving one ingest and counting the triggers /bronze-arrival publishes; a double fire found there goes to the parking list.
 - *Closes when:* With the direct publish removed, an /ingest-media call on the deployed estate, with the media bronze table absent before it, starts the media chain through /bronze-arrival (the media stage runner receives exactly one trigger on the media topic, carrying `from_uri` and `originator`, and the bronze→silver stage runner receives none), and a media bronze-write event left staged in the outbox by a crash between the outbox stage and the publish (a crash before the stage loses it, outbox.py:15-16) starts the chain once the reconcile relay re-publishes it, each RED first.
-- *Evidence:* services/medallion/src/medallion/services/media_produce.py:203-231,238-283 · services/medallion/src/medallion/services/ingest_trigger.py:62,117-125,171-172,220-262,290-319 · services/medallion/src/medallion/services/catalog_register.py:347-351 · services/catalog/src/catalog/core/lineage_emit.py:677 · services/medallion/src/medallion/core/config.py:607-609 · services/medallion/src/medallion/services/publication_trigger.py:189-197 · chart/templates/medallion.yaml:213-226 · services/medallion/src/medallion/api/bronze_arrival.py:38-62 · CLAUDE.md Architecture ("The orchestrator is gone") · docs/audits/2026-09-30/lakehouse-dataflow.md (weak point 8, hop M4)
+- *Evidence:* services/medallion/src/medallion/services/media_produce.py:250-253 · services/medallion/src/medallion/services/ingest_trigger.py:134,342,360
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: Line refs moved: ingest_trigger.py:294/312 are now :342/:360. The create_table double-fire measurement was not run.
 
 **LH-330 · The catalog is not the sole committer and announcer of tier writes: /produce, /ingest-media, the in-process lane and the Ray lane write and commit Lance directly, and no writer-tier door commits a client-written fragment set as anything but an Append**
 `catalog, medallion, scripts` · **HIGH**
@@ -980,7 +1059,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criterion 2: a write the catalog never committed is judged by none of its doors (the file-version guard, the based-file refusal, the run record LH-280 added, protection), so the catalog is not the one authority on a table's state. Criterion 1: the lineage graph's first edge has three announcers with three trust levels (audit weak point 9), and only the catalog's is bound to the commit it describes.
 - *How:* Measure first, all workable now, each as a script committed to the repo: (1) Transaction inventory: read each writer's commits with `read_transaction` on its output after a deployed run, shared with LH-202's How. (2) Body-cap fit: log each writer's largest single write on the deployed estate and compare it with the catalog's request-body cap (`LANCE_MAX_BODY_BYTES`, 256 MiB by default, catalog core/config.py:602) and with /ingest-media's own ceiling (1 GiB, medallion core/config.py:261). (3) Splitting: on pylance 12 through the native namespace, split a full-sync merge_insert into several requests whose by-source deletes are confined with `when_not_matched_by_source_delete_filt` (data.py:410), and record whether the rows and `_rowid` match one unsplit merge and how many versions it commits. (4) Column adds: /add_columns accepts SQL expressions only (dataplane.py:1733-1735); measure whether a merge_insert accepts a source carrying a column the target lacks, and whether /add_columns with a NULL expression followed by /merge_insert lands the in-process lane's data-carrying column, counting the commits. (5) Row identity: measure whether a re-seed through /merge_insert with by-source delete keeps `_rowid` (the door calls the native `merge_insert_into_table` on main, dataplane.py:1591-1594). (6) Blob-v2 rows: measure whether /ingest-media's and the Ray media lane's blob-v2 rows pass /insert and /merge_insert as Arrow-IPC bodies, and /commit's file-version and base checks as client-written fragments. (7) The /compaction_commit precedent: measure whether its shape, worker-written results committed as a Rewrite under can_maintain (data.py:289-290; dataplane.py:1180-1190; fga_deps.py:143), carries each transaction type (1) finds, with a prototype door in a test. (8) Token threading: `X-Lance-Run-Facets` (data.py:126,416) refuses a producer-set `lance` facet (catalog core/lineage_emit.py:386,403-404), and `_cascade_token` reads only `lance.token`, else the event's runId, else a fresh id (ingest_trigger.py:181-194); drive /produce through a catalog door and record which token the resulting trigger carries. Then decide, under **Decisions still open**: (a) the writers commit through the catalog's existing server-side data doors; (b) a new client-direct commit door for non-Append transactions; (c) the maintainer tier for stage identities, whose commits stay direct (it names stage identities, not the producer's heads). Because (c) keeps commits direct and names stage identities only, the producer's two heads need (a) or (b), whatever the lanes get. /produce's first write at a catalog-chosen location also waits on D6. LH-218 and LH-129 follow the decision.
 - *Closes when:* (1) Under the decision, and for /produce also under D6 and for /ingest-media also after LH-329, an /ingest-media call and a /produce call each land bronze through a catalog door on the deployed estate, the only bronze-write lineage event each produces is the catalog's, and /bronze-arrival starts the cascade from it. (2) Under the decision, one bronze→silver→gold run on each lane completes on the deployed estate with the rask-medallion and rask-ray-compute MinIO users denied Put on the tier prefixes, through the path the decision chose under LH-202's narrowed vend, or under option (c), a can_maintain vend for stage identities, added to LH-202's closes-when. Each measure-first step (1)-(8) is committed with its result. Each clause RED first.
-- *Evidence:* services/catalog/src/catalog/api/v1/endpoints/data.py:110,126,192-230,289-290,344,390,410,416,489,522 · services/catalog/src/catalog/api/v1/endpoints/columns.py:122,268 · services/catalog/src/catalog/api/v1/endpoints/versions.py:193-201 · services/catalog/src/catalog/api/fga_deps.py:143 · services/catalog/src/catalog/services/dataplane.py:875-887,1180-1190,1591-1594,1733-1735 · services/catalog/src/catalog/core/config.py:602 · services/catalog/src/catalog/core/lineage_emit.py:386,403-404 · services/medallion/src/medallion/core/config.py:261 · services/medallion/src/medallion/services/produce.py:141-153,187-215,235-278 · services/medallion/src/medallion/services/media_produce.py:171-193,238-250 · services/medallion/src/medallion/services/ingest.py:199-208 · services/medallion/src/medallion/services/compute.py:180-186,242-261,284,363-408 · services/medallion/src/medallion/services/ingest_trigger.py:181-194 · packages/service-kit/src/service_kit/lakehouse/stage_stamp.py:176 · scripts/ray_stage_job.py:73-89,106,288-313,570,601,667,715,777,800-868 · services/catalog/src/catalog/api/v1/endpoints/indices.py:70,105 · related rows LH-202, LH-218, LH-129, CP-029, LH-280, LH-194, LH-329 · docs/audits/2026-09-30/lakehouse-dataflow.md (weak points 5 and 9, Register vs architecture §1)
+- *Evidence:* services/medallion/src/medallion/services/compute.py:221-264 (seed_bronze), :378-393 (stage merge or create), :403 (_index_lineage) · services/medallion/src/medallion/services/produce.py:229 · services/medallion/src/medallion/services/ingest.py:199 · scripts/ray_stage_job.py (12 merge_insert/write_dataset/delete_dir hits) · open_backlog_left_new2.md:96
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: Did not re-verify each Ray-lane line number (out of lakehouse scope per the owner ruling); LH-202's row lists newer ones (:113,360,393,772,913,949,974); None of the measure-first steps (1)-(8) were checked for committed results.
 
 ### From cross-cutting
 
@@ -990,7 +1070,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criterion 5: every zero-trust change that adds an ExternalSecret property re-triggers a consumer outage (measured 696 s with five zones in CreateContainerConfigError, not re-measured).
 - *How:* On install the seed stays an ordinary resource; on upgrade the same template also renders as a `pre-upgrade,post-upgrade` hook weighted before minio-scoped-users (5), `before-hook-creation`, bounded by lance.bootstrapJobDeadline, idempotent, never a duplicated template (hooks count against the release ceiling). This is ordering by construction; Lakekeeper's consumers wait on migration state instead. Re-seed whenever the store is empty: a seed sidecar or initContainer on the OpenBao pod, or a short CronJob keyed on a sentinel secret.
 - *Closes when:* On the dev estate, a `helm upgrade` that adds one ExternalSecret property keeps every consumer's Secret complete throughout, or fails the release before any pod restarts, and after `kubectl delete pod` on OpenBao every sidecar reads lance-secrets again within one seed interval, observed live.
-- *Evidence:* chart/templates/openbao.yaml:50,129-142 · chart/templates/external-secrets.yaml:39,155,193,226 · chart/templates/minio-scoped-users.yaml:84-89
+- *Evidence:* chart/templates/openbao.yaml:31,196-290 (put_pair: kept, then carried, then minted) · chart/templates/external-secrets.yaml
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: The row text naming 'five minted service tokens' is stale since b5e72aa5; the 'kept copy surviving a restart' path was read, not driven; Not looked for: any ESO-sync ordering added for half (2).
 
 **XC-001 · A secret rotation does not reach the zones' session key or the infra stores that bind credentials at boot**
 `chart, frontend-zones` · **HIGH**
@@ -998,7 +1079,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Secrets rule: a rotation that never reaches the consumer leaves a revoked credential accepted or suddenly failing; dev rotation of the MinIO key is broken today.
 - *How:* Zones: mount `<release>-frontend-session` narrowed with `items`, read per request through `readSecretFile`, add both names to SECRETS_DELIVERED_AS_FILES, keep a two-key session ring, answer 503 when OIDC is configured but the file is unreadable, drop `checksum/infra-credentials` from the zones. Infra under D8(b): a narrow CronJob with get on the named ExternalSecrets and patch on named workloads stamps syncedResourceVersion onto pod templates, reading no Secret. Lakekeeper leaves external rotation unsolved (docs/audits/2026-09-25/lakekeeper-deep-read/chart.md §7). For object-store keys the end state is vended sessions (spec.yaml:2889-2891).
 - *Closes when:* A session-key rotation reaches every zone with no restart and logs no one out, and an ESO refresh of rask-infra-credentials is observed reaching MinIO, OpenFGA, the Collector and AGE.
-- *Evidence:* chart/templates/frontends.yaml:111,121,314-315,332-343,467-475 · frontend/packages/api/src/bff.ts:365-382 · frontend/packages/zone-contract/src/secret-from-file.test.ts:30 · tests/unit/test_a_rotated_secret_reaches_the_pods_that_hold_it.py:86 · chart/templates/minio.yaml:83
+- *Evidence:* chart/templates/frontends.yaml:112,306,313 · frontend/packages/api/src/bff.ts:74-75 · frontend/packages/zone-contract/src/secret-from-file.test.ts:30 · chart/templates/minio.yaml:83 · open_backlog_left_new2.md:81 (D8 open)
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: Not judged whether the owner ruling of 2026-10-04 (MinIO, OTel and ESO are platform-run in production; bundled copies are dev stand-ins, from user memory) narrows the infra half to dev only. That is an owner reading, not a code fact; XC-004 status not checked.
 
 **LH-160 · Zone and infra secrets still arrive through env**
 `chart, service-kit` · **HIGH**
@@ -1006,7 +1088,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Secrets rule, verbatim: never a secret through env.
 - *How:* Infra moves to `*_FILE` or config mounts or named exemptions (LH-161); the zones' session and OIDC secrets move with XC-001. Lakekeeper delivers everything by env (docs/audits/2026-09-25/lakekeeper-deep-read/chart.md §5); copy only its every-credential-has-a-reference rule.
 - *Closes when:* A render of the chart shows no zone (frontends.yaml) or infra (minio, openfga, otel-collector, age, greptimedb) container taking a secret through env outside named exemptions, and the ratchet's baseline is lowered by the entries removed.
-- *Evidence:* tests/unit/test_secret_env_delivery_only_shrinks.py:43-64 (SECRET_ENV_BASELINE = 23 at :43) · chart/templates/_helpers.tpl:1497-1532,1557-1566
+- *Evidence:* tests/unit/test_secret_env_delivery_only_shrinks.py:43 (SECRET_ENV_BASELINE = 23)
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: The per-container env entries in frontends.yaml and the infra templates were not re-rendered; The owner's 2026-10-04 'platform services are external in production' ruling (memory) may narrow the infra half (minio, otel-collector as dev stand-ins); no repo record of that narrowing found.
 
 **LH-129 · Ray jobs sign with a static S3 key and lineage tokens from pod env; they should open tables through the namespace with a projected SA token**
 `medallion (Ray lane), chart, service-kit` · **HIGH**
@@ -1014,7 +1097,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Phase 1 takes it as the stated enabler of CP-029 (jobs vend their own credentials), LH-218 (the Ray lane's root-key byte path is this row's). The owner's secrets rule and criterion 2: the Ray head holds an estate-wide compute key, and dead work-order fields pretend the job honours a credential ref, merge key and write mode it ignores.
 - *How:* Per D1 the head gets its own SA with a projected token; jobs obtain a WRITE-tier table-scoped credential (the catalog's `/management/v1/table/{id}/credentials?tier=write` or XC-084's workload door keyed by RASK_CREDENTIAL_REF; describe's vend is read-tier only) and open tables through the namespace: installed lance_ray 0.5.0 read_lance/write_lance take table_id + namespace_impl + namespace_properties, and pylance 12 `lance.dataset` takes namespace_client (vendored ray.md is stale, LH-261). Refresh before expires_at_millis (spec.yaml:2883-2891; latest_storage_options, lance_sdk.md:4059,4070). Lineage emits authenticate with the same SA token; HF_TOKEN moves to a mounted file. Delete the five dead to_env fields and add a reader gate. Lakekeeper engines pull table-scoped credentials on each load (docs/audits/2026-09-25/lakekeeper-deep-read/storage-vending.md:380-392). The vend is bound to the run (2026-09-30 best-practice review): every Ray job runs under the head's one ServiceAccount, so a vend the SA alone authorizes lets any job write any table that SA may (a confused deputy). The job presents its audience-bound projected SA token plus its run id (RASK_RUN_ID, work_order.py:180, registered by CP-029's plan document), and the catalog vends only for that run's destination, after checking the identity CP-029's plan document registered for that run at submit (its on_behalf_of, or the submitting stage runner when the run names no person), never the job's own RASK_ORIGINATOR env (work_order.py:183), which the job itself asserts, against the rung the commit-door decision (LH-330) gives stage lanes; the tier's statement is LH-202's narrowed policy for that rung. The credential never travels in the submission: the Jobs API body carries `runtime_env.env_vars` = WorkOrder.to_env() (rayjobs_api_executor.py:132), so the job vends for itself and refreshes through the storage-options provider. That provider re-asks DescribeTable with vend_credentials=true (measured on pylance 12.0.0), and describe vends the read tier (catalog tables.py:462), so the job opens through a RestNamespace whose `dynamic_context_provider.impl` (lance namespace.py:185-245) sends the projected SA token and RASK_RUN_ID as headers on every call, and describe answers that run-bound caller with the write tier for its run's destination only (with LH-229). lance_ray's write_lance commits client-direct (datasink.py:218-226) and has no merge_insert (modes create, append, overwrite), so under a catalog-door decision the job writes with lance_ray's LanceFragmentWriter and the catalog commits; a job-side create passes data_storage_version="2.2" and enable_stable_row_ids=True, which write_lance leaves off by default.
 - *Closes when:* No Ray pod render carries an S3_*, lineage token or HF_TOKEN in env, a short-TTL vend outlived by one write still commits (test), the to_env reader gate is green, and the Ray key can no longer list the estate's buckets. A job's vend request for a table its run does not target is refused (test), and no job submission body carries a credential value. A job whose env names a different originator than its registered plan is vended only what its registered identity may write (test).
-- *Evidence:* scripts/ray_stage_job.py:84-88 · scripts/ray_train_job.py:84-85 · scripts/ray_lance_job.py:44-46 · chart/templates/_ray-cluster-config.tpl:175-251 · packages/service-kit/src/service_kit/lakehouse/work_order.py:160-190 · chart/templates/minio-scoped-users.yaml:287-305 · skeptic08/lance_ray_0.5.0_signatures.txt · the commit-door decision for these lanes: LH-330
+- *Evidence:* scripts/ray_stage_job.py:145-146; scripts/ray_train_job.py:94-95; scripts/ray_lance_job.py:45-46; chart/templates/_ray-cluster-config.tpl:122-126,175-180; packages/service-kit/src/service_kit/lakehouse/work_order.py:146-179
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: Did not re-check chart/templates/minio-scoped-users.yaml for the rask-ray-compute policy; Whether RASK_TASK or RASK_CODE_VERSION are read anywhere outside scripts/ and runners/ (only those two trees were searched).
 
 **XC-049 · rask's release ships Kueue for a lane it does not use, on CRDs that another team's htr-batch Workloads depend on**
 `chart, Makefile, medallion (docstring)` · **HIGH**
@@ -1022,7 +1106,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criterion 5: the release ceiling blocks every chart-borne Phase-1 fix, and a careless disable deletes another team's Workloads. D11 rules that rask ships no Kueue.
 - *How:* D11(b), in order once the owner confirms the note arrived, reading back each step: (1) annotate all 11 CRDs `helm.sh/resource-policy=keep`; (2) the htr-batch owner adopts the CRDs in kueue-system (their act, per the handover note); (3) verify htr-batch Workloads read at v1beta1 and v1beta2; (4) `kueue.enabled=false` and delete the dependency, the values block, templates, init container and its test, medallion.kueueQueue and the hook-applied ClusterQueue/LocalQueue/ResourceFlavor. rask's rotator keeps writing its CA until step 4, so run 2→4 in one window. Add a render gate refusing any hook resource of kind ServiceAccount/Role/ClusterRole/(Cluster)RoleBinding. Measure the packed release before and after; correct the rask-helm skill ('three times' → four) and scripts/helm.sh:4-6 (Helm never stores chart/charts/*.tgz). Lakekeeper's app chart ships no operator or CRD (docs/audits/2026-09-25/lakekeeper-deep-read/chart.md §12).
 - *Closes when:* `grep -rni kueue chart/` returns nothing but the handover record, the htr-batch Workloads survive under a controller rask does not ship, the hook-identity gate is green and mutation-checked, and the release size is recorded.
-- *Evidence:* chart/Chart.yaml:65-68 · chart/values.yaml:1352-1362,2932-2952 · chart/templates/kueue-queues.yaml:16-61,119 · chart/templates/gpu-coherence.yaml · .claude/skills/rask-helm/SKILL.md:53-59 · scripts/helm.sh:4-6 · live: two Kueue controllers, 11 CRDs owned by release rask, 5 conversion webhooks · docs/audits/2026-09-25/kueue-handover-note.md
+- *Evidence:* chart/Chart.yaml:9,65-68 · chart/templates/kueue-queues.yaml · chart/values.yaml (12 kueue mentions)
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: Did not read the live cluster (CRD owner, the two controllers, Workload count). The audit was read-only and no kubectl was run; Did not confirm whether the owner has acknowledged the handover note; that may make this effectively blocked.
 
 **XC-009 · No Dapr accessControl on any callee, and the NetworkPolicy prose misstates k3s**
 `chart, gateway, notifications, annotator, medallion, ingest, flows` · **MEDIUM**
@@ -1030,15 +1115,17 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* The governance enabler of D1/LH-220 (per-service identity); an absent caller (annotator, flows) changes nothing under defaultAction deny. Criterion 2, zero trust: a compromised pod reaches every app over sentry mTLS; accessControl keyed on the SPIFFE id is Dapr's form of 'identity from a verified credential'.
 - *How:* A per-app Configuration for every Dapr app-id (_helpers.tpl:246-250); `accessControl: {defaultAction: deny, trustDomain, policies}` per callee from gateway `_routes()` plus the ActorProxy and Workflow callers (DECISIONS.md:1693-1716); a WorkflowAccessPolicy; rewrite values.yaml:771; then P6.6's NetworkPolicy order (API-server-to-webhook allows, the OpenFGA selector, Job labels, then enable).
 - *Closes when:* Every callee's Configuration carries defaultAction: deny with per-caller policies, a cross-app workflow policy exists, and a live drive of every gateway route and cascade hop still succeeds.
-- *Evidence:* chart/templates/observability.yaml:75-81,99-110 · chart/templates/_helpers.tpl:237-250 · chart/values.yaml:771 · docs/DECISIONS.md:1693-1716 · /etc/systemd/system/k3s.service (no --disable-network-policy)
+- *Evidence:* grep accessControl|WorkflowAccessPolicy chart/templates → none · chart/values.yaml:743
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: Did not re-check /etc/systemd/system/k3s.service for --disable-network-policy; Did not re-read which apps share the lance-tracing Configuration.
 
 **FE-002 · The lineage pages hand-roll fetch state over a pass-through that serves signed-out readers as the zone's service identity**
 `lakehouse-zone, lineage` · **MEDIUM**
-- *What is left:* Six route pages and six lib modules import the browser client `$lib/api`, bound to the `/lakehouse/api/*` pass-through (makeLineageProxy, no requireSession); with no session a read carries the zone's service token and an asserted `x-lance-service-identity`, so a signed-out browser gets 200 and the 401 branch never runs; three list pages keep rows after a 401. This is zero-trust sweep §B4. Move reads to `query` remote functions forwarding only the user's bearer, set requireSession on the lineage proxy, delete lib/api.ts and the pass-through once the cross-zone workbench consumers move.
+- *What is left:* Six route pages import the browser client `$lib/api`, which is bound to the /lakehouse/api/* pass-through (routes/api/[...path]/+server.ts): lineage/runs, jobs, jobs/[...job], datasets, datasets/[name] and columns. So do seven lib modules: lineage/DatasetProvenance, lineage/RunInputs, lineage/RunsBoard, lineage/columns.svelte.ts, lineage/store.svelte.ts, data/TableDetail and data/VersionCompare. makeLineageProxy (frontend/packages/api/src/bff.ts:378-387) sets no requireSession, so the 401 at bff.ts:187-192 never fires. On a read with no session, bff.ts:199-205 sends the zone's projected rask-lineage ServiceAccount token as the bearer. A signed-out browser therefore reads lineage as a service, and the page's 401 branch never runs. To fix: move reads to `query` remote functions that forward only the user's bearer, set requireSession on the lineage proxy, and delete lib/api.ts and the pass-through once the cross-zone workbench consumers move.
 - *Why:* Criterion 2, zero trust: an unauthenticated browser reads lineage through a borrowed service identity a header asserts, which D1 retires.
 - *How:* Serve reads from lib/lineage/remote/lineage.remote.ts (it already binds the client server-side and forwards the bearer on writes) and render from `.current`. Lakekeeper refuses anonymous callers when authn is on (docs/audits/2026-09-25/lakekeeper-deep-read/authn.md:313).
 - *Closes when:* No lakehouse file imports `$lib/api`, and on an auth-on stack every lineage list returns 401 to a signed-out request and the page clears its rows (Playwright with an expired session).
-- *Evidence:* frontend/microfrontends/lakehouse/src/lib/api.ts:8-30 · frontend/packages/api/src/bff.ts:184-200,370-382,391-405 · chart/templates/frontends.yaml:301-317 · frontend/microfrontends/lakehouse/src/routes/lineage/runs/+page.svelte:10-26 · lib/lineage/remote/lineage.remote.ts:40-47
+- *Evidence:* frontend/packages/api/src/bff.ts:187-192,199-205,378-387; frontend/packages/api/src/runs-feed.ts:222-228; frontend/microfrontends/lakehouse/src/routes/api/[...path]/+server.ts; grep for imports of $lib/api finds 6 route pages and 7 lib modules
+- *Re-audited 2026-10-05:* partly done; *What is left* rewritten to the remainder (done by bf8bf06d (LH-220, only the asserted-header part)) (an auditor and an independent checker, against main fd99d857). Not confirmed: Did not check live that a signed-out request gets 200; Did not check which three list pages keep their rows after a 401; Did not re-read chart/templates/frontends.yaml:301-317 (line 285 still mentions frontend.serviceIdentity in a comment).
 
 **XC-079 · Every daprd authenticates to OpenBao as ROOT in dev and with one shared, unprovisioned static token in prod**
 `chart (dapr-component, openbao, ESO)` · **HIGH**
@@ -1046,7 +1133,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Zero trust: OpenBao cannot tell app-ids apart, so one compromised sidecar reads every path.
 - *How:* In both modes the seed uses Kubernetes auth against a narrow provisioning role and mints an orphan, periodic, policy-bound sidecar token limited to the paths lance.secretScopes' apps fetch (after XC-080); ESO's VaultDynamicSecret refreshes it before TTL, then a sidecar restart (Dapr cannot renew). Point dev at the same path; move ESO's auth provisioning out of the devMode block; add the render test; document the token contract. Per-app isolation in OpenBao policy means one Component per app-id (interacts with LH-168). The token reaches daprd as a file (2026-09-30 best-practice review): Dapr's `secretstores.hashicorp.vault` authenticates only with `vaultToken` or `vaultTokenMountPath` and has no Kubernetes auth method (docs.dapr.io hashicorp-vault component spec), and it reads the mount file once, at component Init (dapr/components-contrib secretstores/hashicorp/vault/vault.go:400-421, main). So an OpenBao Agent with Kubernetes auto-auth, or ESO, writes the periodic token to a file the component names in `vaultTokenMountPath`; renewing that same periodic token in place keeps a running sidecar valid, and only a new token string needs the sidecar restart. Not checked: vault.go as shipped in the chart's daprd 1.18.1, and whether the in-chart OpenBao (openbao.yaml, no injector) should run the Agent as a rendered sidecar or leave the file to ESO.
 - *Closes when:* No component, Job or pod authenticates to OpenBao with root in either mode, the sidecar token's policy covers only the enumerated paths, and the render test pins it. Every lance-secrets component names `vaultTokenMountPath`, and none carries an inline `vaultToken`.
-- *Evidence:* chart/templates/dapr-component.yaml:352-381 · chart/templates/openbao.yaml:103,176,354-389 · chart/templates/observability.yaml:99-145 · chart/values.yaml:3190-3191
+- *Evidence:* chart/templates/dapr-component.yaml:354,362 · chart/templates/openbao.yaml:221 · ~/.claude/projects/-home-gabriel-Desktop-rask/memory/platform-services-are-external-in-production.md
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: The 2026-10-04 ruling is in auto-memory and was not found as a docs/DECISIONS.md entry; I did not check whether the owner already re-scoped XC-079 against it; daprd 1.18.1 vault.go token-read behaviour was not checked.
 
 **XC-080 · Every sidecar'd app can read the tenant ROOT S3 pair, the AGE password and every peer's scoped S3 key from the shared secret/lance bundle**
 `chart (openbao seed, dapr Configuration, ESO), all sidecar'd services` · **HIGH**
@@ -1054,7 +1142,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Zero trust: the scoped storage identities contain nothing against a compromised service, and adding compute to the scope (LH-160) would hand it root.
 - *How:* Split per consumer as XC-072 did: both halves of each S3 pair into `secret/<identity>-s3`, root/postgres/publisher on paths only ESO's policy and their single consumer read, those paths added to every app's deniedSecrets; update the seed, the ESO remoteRefs and the ESO policy together (each credential has two readers). After XC-005 and LH-220. The end state is vended sessions (LH-218, XC-084).
 - *Closes when:* From each sidecar'd pod a fetch of secret/lance returns no root, postgres, publisher or peer material, and each service still reads its own pair, observed live.
-- *Evidence:* chart/templates/observability.yaml:94-97,112-121 · chart/templates/openbao.yaml:184-300 · live key-name listing from rask-medallion-producer
+- *Evidence:* chart/templates/openbao.yaml:337-418
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: Did not fetch secret/lance live from a sidecar'd pod (read-only, no exec); Did not re-check observability.yaml:94-97,112-121 or lance.secretScopes membership.
 
 **XC-081 · With no secret store configured the chart renders plaintext S3 secrets as literal env, and every hermetic lane boots the catalog on env secrets**
 `chart, .dagger, scripts/ray_e2e_stack.sh, tests/e2e-py, service settings` · **HIGH**
@@ -1062,7 +1151,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* 'Never secret through envs' must hold for every render and be proven off the live estate.
 - *How:* Move the e2e stacks to openbao-on plus ESO (needs XC-004's installer). Add `bao server -dev` and a standalone daprd as Dagger services to the governed stack; boot the catalog with no S3 secret in env and assert it serves, a peer app-id is refused the catalog's key, and boot fails closed with the key removed. Then replace every `if not lance.secretsViaDapr` env branch with one render `fail` (the age-cluster.yaml precedent) and update the five unit renders. Dagger only, never docker. Lakekeeper runs its secret backend for real in CI.
 - *Closes when:* No render emits a secret as env `value:`, and a CI lane boots the catalog from a real store with no secret in env and proves the peer refusal.
-- *Evidence:* chart/templates/services.yaml:140-149,578,666 · chart/templates/medallion.yaml:386-387,592 · chart/templates/maintenance.yaml:308 · chart/templates/_helpers.tpl:847-849 · .dagger/governed.go:161-163 · services/catalog/src/catalog/main.py:78-79,104,222
+- *Evidence:* chart/templates/services.yaml:140,586 · chart/templates/medallion.yaml:389,599 · chart/templates/maintenance.yaml:306 · chart/templates/maintenance-worker.yaml:263
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: Not rendered: whether these lines are reachable only when openbao.enabled=false; Not read: .dagger/governed.go:161-163 and catalog main.py:78-79.
 
 **XC-083 · The credential vendor's own parent is a static key: AssumeRole is signed with rask-catalog, and the catalog's own IO runs on the same pair**
 `catalog, chart (minio)` · **HIGH**
@@ -1070,7 +1160,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Zero trust ('a scoped static key is not a fix'): this one user is what every AssumeRole design still needs and what keeps `mc admin` alive.
 - *How:* D1: after the P5.3 probes (MinIO fetches the k3s SA issuer's JWKS; AssumeRoleWithWebIdentity with an inline Policy enforces the intersection; another SA's token is refused when bound by sub), register the SA issuer as a MinIO OpenID provider with a claim-bound policy; the catalog's vending and own IO use AssumeRoleWithWebIdentity(own projected token, session policy), own-IO policy keeping the observability and control deny; RoleSessionName becomes the sanitised caller subject. Lance consumes it as storage_options with expires_at_millis (spec.yaml:2883-2891). Rewrite the docstrings. Lakekeeper still holds an access key on MinIO, so rask goes further.
 - *Closes when:* The catalog holds no static storage key on the deployed estate, and the rask-catalog MinIO user is deleted.
-- *Evidence:* services/catalog/src/catalog/main.py:146-157 · services/catalog/src/catalog/core/config.py:652-665 · services/catalog/src/catalog/core/vending.py:6,551,569-574,618,652,699 · chart/templates/minio.yaml:3-10 · chart/values.yaml:2480-2482
+- *Evidence:* services/catalog/src/catalog/core/vending.py:6-26,613-623,684 · services/catalog/src/catalog/main.py:146-160 · chart/templates/minio.yaml:143-165 · chart/values.yaml:2447-2448
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: The catalog's own IO credential path (config.py:652-665) was not re-read; No live readback of the MinIO users.
 
 **XC-084 · Six static per-service MinIO users (Allow * and */*, keys that never expire) and backup jobs that sign as the tenant ROOT**
 `chart (minio-scoped-users, backups), catalog, medallion, maintenance, lineage` · **HIGH**
@@ -1078,7 +1169,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* The owner's rule: a scoped static key is not a fix; a backup needs read on one prefix and write on one destination.
 - *How:* POST /management/v1/workload/credentials: no path in the request, the caller's projected SA token authenticates (LH-220), the identity maps to the session-policy documents moved verbatim from minio-scoped-users.yaml, minted through the vendor, returned as flat storage_options with expires_at_millis (spec.yaml:2883-2891). Move catalog (via XC-083), medallion, maintenance, lineage and both backup jobs (per-run prefix-scoped sessions, PGPASSFILE) onto it; delete those users, derivations, OpenBao seeds and the *_DAPR_SECRET_S3_FIELD wiring; rask-ray-compute goes with LH-129, rask-viewer last. Estate-wide scopes stay estate-wide; what changes is a 900 s TTL, an audit line per mint and no key at rest. Measure the release headroom recovered.
 - *Closes when:* No first-party workload holds a static MinIO key: the six users are gone, backups run on per-run sessions, and pg_dump reads a PGPASSFILE, observed on the deployed estate.
-- *Evidence:* chart/templates/minio-scoped-users.yaml:120-157,228-558 · chart/templates/_helpers.tpl:1418-1421 · chart/values.yaml:1009,2334-2335 · chart/templates/external-secrets.yaml:215-246 · chart/templates/backup-pg.yaml:41-44,100-104
+- *Evidence:* chart/templates/minio-scoped-users.yaml:285-589 (rask-maintenance, rask-ray-compute, rask-medallion, rask-lineage, rask-catalog, rask-viewer); chart/templates/backup-pg.yaml:42,99; grep 'workload/credentials' services/catalog/src finds nothing
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: The control-root backup's root-pair file and values.yaml's 'static' vending mode were not re-read.
 
 **XC-011 · Bootstrap is re-applied on every upgrade and leaves no record**
 `chart, catalog, service-kit` · **MEDIUM**
@@ -1086,7 +1178,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criterion 2: bootstrap should be one-shot, recorded and refusable, as Lakekeeper's is.
 - *How:* An authenticated catalog bootstrap door (Lakekeeper's POST /management/v1/bootstrap and its `open_for_bootstrap` gate): the Job calls it with its projected SA token (D1); the catalog, the only OpenFGA writer, writes the owner/admin tuples keyed on the D5 principal, then `_control/bootstrap.json {subject, store_id, model_id, at}` through `records.create_json` (put IfNoneMatch=*, the same conditional put Lance commits with); a second bootstrap gets 409; an operator-only reopen path.
 - *Closes when:* A fresh install writes the record, a second bootstrap naming a different subject is refused, and bootstrap-admin.yaml no longer writes tuples.
-- *Evidence:* chart/templates/bootstrap-admin.yaml:42,119,301 · packages/service-kit/src/service_kit/lakehouse/records.py:89,105 · packages/service-kit/src/service_kit/governed/fga.py:580-582 · docs/audits/2026-09-25/lakekeeper-deep-read/governance.md:471 · docs/audits/2026-09-25/lakekeeper-deep-read/chart.md:257,277
+- *Evidence:* chart/templates/bootstrap-admin.yaml:37,98-162; grep 'bootstrap' over services/catalog/src/catalog/api/v1/endpoints: no door found
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: Did not look for the _control/bootstrap.json record writer outside the catalog endpoints.
 
 **XC-031 · The stage-runner FGA grants come from a manual script, not the chart, and there is no ordered prod install runbook**
 `chart, catalog (FGA)` · **MEDIUM**
@@ -1094,7 +1187,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criteria 2 and 5: authorization that depends on an out-of-band script cannot be reproduced.
 - *How:* Derive the grants from the service-identity values bootstrap-admin already reads, and derive the target warehouse rather than copying the script's default (namespaces hang from several warehouses, seed_medallion_fga.sh:19-25); better, send bootstrap through the catalog door XC-011 builds. The parked runbook should render the catalog's existing read-only mode for upgrades (LANCE_MAINTENANCE_READ_ONLY), Lakekeeper's MAINTENANCE_MODE=read-only (docs/audits/2026-09-25/lakekeeper-deep-read/resilience.md:423-440).
 - *Closes when:* A fresh install with medallion.fgaEnabled=true runs the cascade with no manual seed and neither rules.yml nor RUNBOOK-oncall.md names the script.
-- *Evidence:* chart/templates/bootstrap-admin.yaml:168-283 · scripts/seed_medallion_fga.sh:19-25,94-129 · chart/alerting/rules.yml:476 · docs/runbooks/RUNBOOK-oncall.md:105,128 · chart/values-local.yaml:77 · services/catalog/src/catalog/core/config.py:230
+- *Evidence:* chart/alerting/rules.yml:532 · docs/runbooks/RUNBOOK-oncall.md:106,129 · chart/values-local.yaml:77 · chart/templates/bootstrap-admin.yaml:141-150,209
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: Did not read bootstrap-admin.yaml in full to rule out any per-stage-runner writer tuple; the grep hits show only readers; The row's rules.yml:476 is stale; the line is now :532.
 
 **XC-033 · 14 of 26 live e2e modules run in no CI lane, and the ephemeral lanes that do run are red**
 `e2e, ci, catalog, maintenance, medallion` · **MEDIUM**
@@ -1102,7 +1196,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* XC-090's enabler, with XC-096. Criteria 2 and 5: the stock-client conformance proof and the maintenance and cascade legs run only by hand.
 - *How:* Preconditions before wiring more modules: XC-075, XC-096, and XC-049 for the kueue-setup hook. Lakekeeper runs live-dependency suites against ephemeral services in CI (docs/audits/2026-09-25/lakekeeper-deep-read/resilience.md:510-520,559). Make e2e-stack and e2e-ray green, then add the lakehouse modules to e2e_stack.sh's no-skip block, starting with the two stock-client suites (they prove the typed ErrorResponse code round-trips, spec.yaml:2393-2410). Either add a host-side timer running `scripts/e2e_live.sh --require-live` against the deployed estate or record the dropped cadence in DECISIONS.md. Fix the header count.
 - *Closes when:* Every lakehouse e2e module runs in a CI lane on push under the no-skip rule, those lanes are green on the latest main run, and deployed-estate cadence is scheduled or recorded as dropped.
-- *Evidence:* .github/workflows/ci.yml:620-671,732-734,855-886 · scripts/e2e_stack.sh:379-401 · scripts/e2e_live.sh:4,357-359 · gh run 36116165165 · gh run 36148029490 (jobs 108118325356, 108118325294) · gh run 36166947904 · verify-phase1-done/e2e_history.py
+- *Evidence:* gh run 37337264580 (jobs: web-e2e failure; e2e-stack/e2e-ray/e2e-lakehouse-lanes/e2e-auth/e2e-lineage skipped) · scripts/e2e_live.sh:4 · tests/e2e-py/ (36 .py files)
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: Did not re-count how many tests/e2e-py modules no lane script names (the row says 14 of 26; the directory now holds 36 .py files, some of which may be helpers); Did not check why the e2e jobs were skipped on that run (ms-test dependency assumed); The three newer runs were still in progress.
 
 **LH-161 · GreptimeDB holds the object store's root key pair through envFrom**
 `chart, observability` · **MEDIUM**
@@ -1110,7 +1205,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Zero trust and the secrets rule: anyone who can dump this pod's env gets root on every bucket.
 - *How:* If a refreshing path exists, pass it through the subchart's args and extraVolumes with no fork: AssumeRoleWithWebIdentity with a projected SA token (D1) and a bucket-prefix session policy. Otherwise D7(a): GreptimeDB on its PVC with `[storage] type=File`. No Lakekeeper parallel; not a Lance table.
 - *Closes when:* The greptimedb StatefulSet renders no envFrom and no root key, read from the render.
-- *Evidence:* chart/charts/greptimedb-standalone-0.4.5.tgz (statefulset.yaml:114-124) · chart/templates/observability.yaml:8-9,18-19
+- *Evidence:* chart/templates/observability.yaml:6-22 (Secret with GREPTIMEDB_STANDALONE__STORAGE__ACCESS_KEY_ID/SECRET from .Values.minio.accessKey/secretKey); open_backlog_left_new2.md:80 (D7 still open)
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: Did not render the chart or open the subchart tgz statefulset.yaml:114-124 to confirm envFrom; Whether the 2026-10-04 'downstream of the Collector is out of scope' ruling covers this row was not confirmed in docs/DECISIONS.md or the register's Owner rulings section (source: owner memory only).
 
 **XC-048 · The trace-context ruling is unrecorded, request-id is still a second correlation path, and durable records carry no trace id**
 `service-kit, gateway, catalog, lineage` · **MEDIUM**
@@ -1118,7 +1214,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criteria 1 and 4: a relayed event starts a fresh trace, so a WROTE edge cannot be joined to the request that caused it.
 - *How:* traceparent is the one correlation id (HTTPX and Dapr propagate it); responses echo `traceresponse` (spec.yaml:2472-2491 Context mapping). On catalog commits write trace_id as its own transaction property via `lance.Transaction(transaction_properties=...)` (measured on 12.0.0), never inside commit_message, because the replay check compares `__lance_commit_message` by equality (dataplane.py:775); delete, update and merge_insert cannot carry one on 12.0.0. Coordinate property names with LH-225. Lakekeeper's `trace-id` extension carries only a request id with a TODO (docs/audits/2026-09-25/lakekeeper-deep-read/events.md:365-373).
 - *Closes when:* DECISIONS §9 records the supersession, no RequestIDMiddleware or X-Request-ID remains, and a test pins that a commit's lineage event, control event and outbox record carry the originating trace id.
-- *Evidence:* packages/service-kit/src/service_kit/middleware.py:13,40-80 · packages/service-kit/src/service_kit/context.py:24-57 · services/gateway/src/gateway/__init__.py:492-513 · packages/service-kit/src/service_kit/control_events.py:161 · services/catalog/src/catalog/services/dataplane.py:701-702,775,840
+- *Evidence:* packages/service-kit/src/service_kit/middleware.py:13,40,43 · packages/service-kit/src/service_kit/lance_app.py:59,107 · packages/service-kit/src/service_kit/media/middleware.py:21,51
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: The gateway minting (services/gateway/src/gateway/__init__.py:492-513) and the trace-id stamping on catalog commits, control events and the outbox were not re-read.
 
 **XC-061 · The secret store, IdP, AGE and MinIO render unhardened by default behind a dev-off flag, and the NATS stream Job runs as root**
 `chart` · **MEDIUM**
@@ -1126,7 +1223,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criterion 2 and the no-dual-path rule: OpenBao and Dex run without the baseline everywhere rask is exercised.
 - *How:* Delete the flag and render age, openbao, dex and minio hardened unconditionally (container-only keys, emptyDirs per write path, the pinned uids at values.yaml:736-746; minio's uid must match or writes fail). Replace the nats-box script with a first-party nats-py provisioner (nats-py 2.15.0 is in uv.lock) and rewrite DECISIONS.md:349-353,499-500's NACK conditional in that commit. Prove each live (S3 PUT, unseal plus a Dapr secret read, a Dex login, an AGE query, streams created). Lakekeeper forces the image uid in one helper (lakekeeper-charts templates/_helpers.tpl:26-35); take its secure-values idea further with a restricted-PSA kind lane.
 - *Closes when:* `_UNHARDENED_TODAY` is empty, the infraContexts key is gone, a restricted-PSA lane admits every first-party pod, and the five live proofs pass.
-- *Evidence:* tests/unit/test_every_first_party_workload_is_hardened.py:40,127-139 · chart/values.yaml:729-746 · chart/values-prod.yaml:194-195 · chart/templates/nats-stream-job.yaml:47-49
+- *Evidence:* tests/unit/test_every_first_party_workload_is_hardened.py:111-127 · chart/templates/minio.yaml:89 · chart/templates/dex.yaml:87 · chart/templates/age-postgres.yaml:121 · chart/values-prod.yaml:189 · chart/templates/nats-stream-job.yaml:50-51
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: Did not check openbao.yaml for its infraContexts branch (grep matched only minio, dex and age-postgres); Whether the 2026-10-04 platform-services ruling moots hardening the stand-ins is an owner question, not decided here.
 
 **XC-067 · `HttpServerLatencyHigh` cannot fire for any lakehouse service: the eight agent-launched apps never get the bucket View**
 `service-kit, chart, observability` · **MEDIUM**
@@ -1134,7 +1232,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criterion 5: a slow lakehouse service pages nobody, and two OTel wiring paths are a dual path.
 - *How:* One OTel path: launch the eight with plain uvicorn and have the lance and media factories call `service_kit.setup_otel` (which owns the View); render the fleet's otel env for them; the roster test refuses any chart command naming `opentelemetry-instrument`; the bucket gate asserts exported boundaries through XC-064's lane. Lakekeeper exposes Prometheus only.
 - *Closes when:* catalog exports `le="30000"` series on the cluster, a mutation lowering the threshold below a real p95 makes the rule fire, and no chart command for catalog, lineage, maintenance, the medallion producer or a stage runner names the launcher.
-- *Evidence:* packages/service-kit/src/service_kit/otel.py:54-60,89-92,165-177 · packages/service-kit/src/service_kit/app.py:284 · chart/templates/_helpers.tpl:423-425 · chart/alerting/rules.yml:1212-1213
+- *Evidence:* chart/templates/services.yaml:50,467 · chart/templates/maintenance.yaml:97 · chart/templates/maintenance-worker.yaml:55 · chart/templates/medallion.yaml:47,467 · chart/templates/explorer.yaml:86 · packages/service-kit/src/service_kit/otel.py:164-175
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: Not checked on the cluster: whether catalog exports le="30000"; Not re-measured: whether setup_otel's MeterProvider loses to the agent's under the launcher.
 
 **XC-064 · No CI lane proves an app's OTLP export reaches the backend through the Collector**
 `ci, chart, observability` · **MEDIUM**
@@ -1142,7 +1241,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criteria 1 and 5: XC-067's dead View and an empty audit trail were invisible to every gate.
 - *How:* A Dagger lane beside alert-rules-drill reusing its GreptimeDB service: bind the Collector with the chart-rendered config, run one lakehouse and one fleet app under their real chart commands, drive one request each, assert through standard PromQL and a trace query that a span, an `http_server_duration_*_bucket` series with the expected boundaries and one `lance.audit` record landed. Keep assertions in OTLP/PromQL so the backend stays swappable (the Collector is the seam).
 - *Closes when:* A CI lane goes red when the exporter, the Collector route or the View is broken (mutation-checked each), green otherwise.
-- *Evidence:* scripts/e2e_stack.sh:13-14,115 · scripts/ray_e2e_stack.sh:118 · Makefile:1115 · .github/workflows/ci.yml:121 · .dagger/charts.go:359-378
+- *Evidence:* scripts/e2e_stack.sh:13-14 · Makefile:1122 · .dagger/charts.go:354 (AlertRulesDrill only)
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: ci.yml:121 and ray_e2e_stack.sh:118 were not re-opened.
 
 **XC-058 · The Collector selects the audit trail by log body text, and nothing pins `audit()` as the only writer to `lance.audit`**
 `service-kit, chart` · **MEDIUM**
@@ -1150,7 +1250,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criterion 1: the compliance trail can gain foreign rows or lose real ones silently.
 - *How:* Route on a structured key: `audit()` sets `event_source="audit"` (Lakekeeper's discriminator, crates/lakekeeper/src/service/events/backends/audit.rs:133) or OTTL `instrumentation_scope.name == "lance.audit"` on collector-contrib 0.157.0, validated with `otelcol validate`; add a test that no module outside governed/audit.py obtains the logger. The format version and closed vocabulary are LH-231.
 - *Closes when:* The Collector routes on the structured key, a test refuses a second writer, and a drill shows a record with a changed message still lands in lance_audit.
-- *Evidence:* packages/service-kit/src/service_kit/governed/audit.py:23-24,82-106 · chart/templates/otel-collector.yaml:439-458,566-576 · chart/values.yaml:3284
+- *Evidence:* chart/templates/otel-collector.yaml:449-458,566,573-576; grep 'event_source' packages/service-kit/src/service_kit/governed/audit.py finds nothing
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: The 'no second writer' gate's absence was inferred from the grep, not from a full test search.
 
 **XC-082 · Secrets fetched from the store are cached for the life of the process, so a rotation made in OpenBao reaches no running pod**
 `service-kit, catalog, all sidecar'd services` · **MEDIUM**
@@ -1158,7 +1259,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criterion 5, zero trust: a store the pods never re-read makes rotation an outage.
 - *How:* A bounded jittered TTL (300-600 s, single-flight per (store, ref, field)) on warehouse_credentials.resolve, failing closed on a miss; move the boot secret into a credential holder the storage_options builders read with the same TTL; the APP token accepts current or previous and rotates by restart (daprd keeps its token until then). Lakekeeper uses a moka cache with a 600 s jittered TTL and single-flight loads (crates/lakekeeper/src/service/secrets.rs).
 - *Closes when:* A value rotated behind the store double is served after the TTL with no restart (RED with a clock), and the app token rotates across a restart with no 403.
-- *Evidence:* packages/service-kit/src/service_kit/governed/secrets.py:147-194 · packages/service-kit/src/service_kit/governed/dapr_auth.py:141-168 · services/catalog/src/catalog/services/warehouse_credentials.py:16-19,41-61
+- *Evidence:* services/catalog/src/catalog/services/warehouse_credentials.py:30,41; packages/service-kit/src/service_kit/governed/secrets.py:169
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: Did not re-read _secret_bundle or dapr_auth.py:141-168 line by line.
 
 **XC-085 · The remaining operators (nvdp, kuberay, nats, dapr, cnpg, openfga, greptimedb, perses) still ride in the app release, and the recorded no-split decision rests on a store the estate has left**
 `chart, Makefile (k3s-up)` · **MEDIUM**
@@ -1166,8 +1268,9 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criterion 5: ends the release ceiling as a recurring outage and keeps operators' CRD lifecycle out of the app release.
 - *How:* Move the eight into an infra release, annotating each operator's CRDs keep before handover; k3s-up does two installs through scripts/helm.sh; record the reversal in DECISIONS.md. Lakekeeper's app chart ships no operator or CRD (docs/audits/2026-09-25/lakekeeper-deep-read/chart.md §12).
 - *Closes when:* The app release carries no operator subchart or CRD, k3s-up installs infra and app as two releases, and the decision is recorded.
-- *Evidence:* docs/DECISIONS.md:810-849 (833-837: the split is the intended end state) · scripts/helm.sh:9-12 · chart/Chart.yaml dependencies · .claude/skills/rask-helm §1-§3
+- *Evidence:* chart/Chart.yaml:65-68 (kueue dependency, condition kueue.enabled) · open_backlog_left_new2.md:1019-1023 (XC-049 still open) · open_backlog_left_new2.md:84 (D11 option (c) listed as an open decision gated on XC-049) · open_backlog_left_new2.md:1170 (blocked note) · docs/DECISIONS.md:833-837 (still names the split as the intended end state; those line numbers have not drifted)
 - **blocked:** The owner's timing for D11 option (c), the full infra/app split. DECISIONS.md:833-837 already names the split the intended end state, so the question is when, asked once XC-049 has landed and the packed release is measured.
+- *Re-audited 2026-10-05:* still blocked; the row's own blocker holds (an auditor and an independent checker, against main fd99d857). Not confirmed: Did not measure the packed release size; the precondition does not depend on it.
 
 **XC-112 · rask ships no Kyverno policy, so nothing at admission enforces the controls XC-076, XC-061 and XC-009 put in the chart**
 `chart (a separate policies chart), build` · **MEDIUM**
@@ -1175,15 +1278,17 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criterion 2, zero trust: the chart's render gates prove what rask renders, not what the cluster admits, so a hand-applied or drifted pod bypasses them (the hand-applied ray-lance-head, CP-042). Namespaced policies keep cluster-scoped objects out of rask's charts, and a separate chart keeps them out of the app release's 1 MiB object (XC-049).
 - *How:* Kyverno's namespaced types are `NamespacedValidatingPolicy` and `NamespacedImageValidatingPolicy` (policies.kyverno.io, served at v1 and v1beta1); `kyverno.io/v1` Policy is marked deprecated in their favour (kyverno/kyverno api/kyverno/v1/policy_types.go:28, main c51c8f6). Unit-test each policy with `kyverno test` (default file kyverno-test.yaml, cmd/cli/kubectl-kyverno/commands/test/command.go:49) and drive admission end to end with Chainsaw (kyverno/chainsaw), both in a Dagger lane, each policy mutation-checked by a resource it must refuse; `failurePolicy: Fail`. Each policy runs with `validationActions: [Audit]` until its row has landed (XC-076, XC-061, XC-009) and with `[Deny]` after, so no rask workload is refused before its fix ships. Unverified: the Kyverno version on the target cluster, and whether `kyverno test` evaluates the namespaced CEL types.
 - *Closes when:* With the policies chart installed on the deployed cluster, a pod on the `default` ServiceAccount, a pod without the hardened securityContext and a Dapr-annotated pod without its own Configuration are each refused in rask's namespace while every rask workload is still admitted, and the Dagger lane runs `kyverno test` and the Chainsaw suite green, each observed red under its mutation.
-- *Evidence:* docs/DECISIONS.md:1803 · kyverno/kyverno (main c51c8f6) api/kyverno/v1/policy_types.go:28, config/crds/policies.kyverno.io/policies.kyverno.io_namespacedvalidatingpolicies.yaml, policies.kyverno.io_namespacedimagevalidatingpolicies.yaml, cmd/cli/kubectl-kyverno/commands/test/command.go:49
+- *Evidence:* git grep -il kyverno (docs/DECISIONS.md, lakehouse-architecture.html only) · chart/ is the only chart directory
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: Did not check the target cluster's Kyverno version; Did not check whether `kyverno test` evaluates the namespaced CEL types.
 
 **XC-017 · The zero-trust §B gap list is not mapped to owning rows**
 `catalog, lineage, maintenance, medallion, frontend` · **LOW**
-- *What is left:* Write the §B→row map into zero-trust.md: §B1→XC-084/LH-129; §B3→LH-220; §B5→XC-009; §B6→XC-007 (parked, no-prod); §B7→LH-204; §B9→XC-004; §B10→XC-048 and XC-003; §B12→XC-030 (parked, no-prod); §B2, §B8 and §B11 closed. §B4 (anonymous lineage reads served under `frontend.serviceIdentity`) is owned by FE-002.
+- *What is left:* Write the §B-to-row map into docs/audits/lakehouse-2026-09/sweeps/zero-trust.md: §B1 → XC-084/LH-129; §B4 → FE-002; §B5 → XC-009; §B6 → XC-007 (parked, no-prod); §B9 → XC-004; §B10 → XC-048 and XC-003; §B12 → XC-030 (parked, no-prod). Mark §B2, §B8 and §B11 closed. Mark §B7 closed by LH-204 after checking register_table's require_registrable_location (tables.py:788) against the §B7 text: under the warehouse root and outside reserved buckets. For §B3, check what LH-220 replaced. If chart/templates/dapr-app-token.yaml, the one shared Secret still read as APP_API_TOKEN, is still the bearer a service door accepts, §B3 stays open and needs an owning row. Otherwise mark it closed by LH-220.
 - *Why:* Zero trust: a gap with no owning row is a gap nobody closes; D14(3) set this closes-when.
 - *How:* A register edit, no new gate. Lakekeeper authorizes an unauthenticated caller as Anonymous, never as a service (docs/audits/2026-09-25/lakekeeper-deep-read/authn.md).
 - *Closes when:* Every §B item in zero-trust.md is marked closed or names an open row.
-- *Evidence:* docs/audits/lakehouse-2026-09/sweeps/zero-trust.md §B1-§B12 · packages/service-kit/src/service_kit/governed/settings.py:186,223-242 · services/catalog/src/catalog/core/vending.py:56 · chart/templates/services.yaml:425 · frontend/packages/api/src/bff.ts:365-382
+- *Evidence:* docs/audits/lakehouse-2026-09/sweeps/zero-trust.md §(B) 1-12 (no row names); open_backlog_left_new2.md:42; chart/templates/dapr-app-token.yaml:1-30; services/catalog/src/catalog/api/v1/endpoints/tables.py:788
+- *Re-audited 2026-10-05:* partly done; *What is left* rewritten to the remainder (an auditor and an independent checker, against main fd99d857). Not confirmed: Whether LH-220 fully closes §B3 (dapr-app-token.yaml still renders and still feeds APP_API_TOKEN); did not trace dapr_auth.py's service-door check; Whether require_registrable_location enforces the warehouse root and reserved buckets as §B7 asks; looked only at the call site, tables.py:788; Which commit added require_registrable_location (LH-204 or earlier).
 
 **XC-032 · values-prod.yaml names no registry or digests, and its example keys pin nothing**
 `chart` · **LOW**
@@ -1191,7 +1296,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criterion 5 (supply chain): a prod render resolves mutable tags, and the example gives an operator a pin that does nothing.
 - *How:* rask.image reads only image.tags.<c>/image.digests.<c> (lance.catalogImage, _helpers.tpl:608-611, reads only `.repository`); for the parked half, set image.repository and digests for every component in prod, and assert in scripts/prod_render_check.sh that every first-party image renders @sha256:. Lakekeeper owns its bytes digest-pinned (docs/audits/2026-09-25/lakekeeper-deep-read/chart.md:345).
 - *Closes when:* No values file carries a key the helper ignores.
-- *Evidence:* chart/values-prod.yaml:9-14 · chart/values.yaml:524-556 · chart/templates/_helpers.tpl:613-616,1223-1257
+- *Evidence:* chart/values.yaml:527-528 · chart/values-prod.yaml:13-14 · chart/templates/_helpers.tpl:599-602
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: Line refs moved: values.yaml:557-558 is now :527-528 and _helpers.tpl:608-611 is now :599-602.
 
 **XC-013 · pg dumps land in the store they back up, VolumeSnapshots are never pruned, and the snapshot selector matches no live PVC**
 `chart, lineage, openfga` · **LOW**
@@ -1199,7 +1305,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criterion 5: a PVC loss takes the dumps with the data and snapshots grow without bound.
 - *How:* Prune by stamp in the same Job; the parked half is a separate off-cluster endpoint for backups.pgDump with a per-run session. Not a Lance table; no Lakekeeper backup parallel.
 - *Closes when:* backup-snapshot prunes beyond keep and the selector matches the store's PVCs.
-- *Evidence:* chart/templates/backup-pg.yaml:84-120 · chart/templates/backup-snapshot.yaml:19-26,75-98 · chart/templates/minio.yaml:200-211 · chart/values-prod.yaml:138-144 · live PVC labels
+- *Evidence:* chart/templates/backup-snapshot.yaml:21-26,77 · live `kubectl get pvc -A --show-labels` (KUBECONFIG=/etc/rancher/k3s/k3s.yaml): data-*-rask-minio-0 LABELS <none>
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: Did not re-read backup-pg.yaml:84-120 to confirm where the dump lands.
 
 **XC-039 · Thirteen live e2e modules probe /livez once with a 5 s timeout, and e2e_live.sh passes on skips**
 `e2e` · **LOW**
@@ -1207,7 +1314,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* The same probe gives a silent green in e2e_live.sh and a flaky red in CI.
 - *How:* One `wait_until_live` call per fixture; `--require-live` at e2e_live.sh:375. Do not copy Lakekeeper's retry-the-flake action. Select `-m 'e2e and not chaos'` by default, and run chaos only when named.
 - *Closes when:* No /livez probe in tests/e2e-py is a single attempt, and e2e_live.sh fails on any skip, and a default e2e_live.sh drive scales nothing.
-- *Evidence:* tests/e2e-py/liveness.py:38 · tests/e2e-py/require_live.py:28-51 · scripts/e2e_live.sh:375
+- *Evidence:* tests/e2e-py/liveness.py · scripts/e2e_live.sh:375 · tests/e2e-py/test_chaos_e2e.py:33
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: The count of 13 single-probe modules was not re-counted: 19 files contain 'timeout=5', and not every match is a /livez probe.
 
 **XC-109 · ingest and controlplane are in neither import-linter decoupling contract, so criterion 3's static gate does not see the bronze landing**
 `ingest, controlplane, build` · **MEDIUM**
@@ -1215,7 +1323,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criterion 3: XC-093, the criterion-3 proof, can pass while a bronze head is built on Dapr Workflow, and nothing stops ingest or controlplane from growing new engine coupling.
 - *How:* Add `controlplane` to `root_packages` (.importlinter:8-18, which already names ingest), then add `ingest` and `controlplane` to `source_modules` of both contracts, and name `ingest.workflow -> dapr.ext.workflow` and `ingest -> dapr.ext.workflow` as ignore lines, as the medallion's adapters are named; an import-linter contract is the code-shape gate CLAUDE.md sanctions. Then move ingest_run behind the saga port (the `medallion.services.dapr_saga` shape, LH-226) so the ignore lines shrink to one adapter module.
 - *Closes when:* `make lint-imports` passes with ingest and controlplane in both contracts, and has been observed failing when a non-adapter ingest module imports dapr.ext.workflow; after the port, ingest's workflow import sits in one named adapter module.
-- *Evidence:* .importlinter:51-84 · services/ingest/src/ingest/workflow.py:56,66-70,1498 · services/ingest/src/ingest/__init__.py:161-370 · services/ingest/src/ingest/queue.py:33-35,234 · docs/audits/2026-09-30/lakehouse-dataflow.md (weak point 7, hop F1)
+- *Evidence:* .importlinter:8-20,54-84 · services/ingest/src/ingest/workflow.py:56,70 · services/ingest/src/ingest/queue.py:34
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: ingest/__init__.py:161-370 function-local imports not re-read.
 
 ### From controlplane and notifications
 
@@ -1225,7 +1334,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criterion 2, zero trust: a blocklist fails open for every new root route.
 - *How:* Give Route an `exposed` allowlist: catalog `/v1/` (every spec path is /v1/..., spec.yaml:89-2265) and `/management/v1/`; lineage's measured root-mounted prefixes (/datasets, /runs, /events, /events/projection, /graph, /jobs, /namespaces, /search, /admin/dlq, /api/v1/lineage), excluding /ui, /demo, /dapr/*, subscription routes and probes. A contract test imports both apps and asserts the allowlist equals their authorized routes minus those. Delete lineage_sidecar_guard, lineage_sidecar_only_routes and its helper/env. Comment the /api/catalog row citing DECISIONS.md:301-316. Lakekeeper nests only /catalog/v1, /management/v1, /lakekeeper/v1 and /health (crates/lakekeeper/src/api/router.rs:142-173).
 - *Closes when:* Under test the listed paths 404 at the gateway while allowlisted paths proxy, the contract test fails when a service adds an unlisted public route, the blocklist env and helper are gone, and the /api/catalog row carries its rationale comment.
-- *Evidence:* services/gateway/src/gateway/__init__.py:225-226,516-534 · services/gateway/src/gateway/config.py:71-98 · chart/templates/_helpers.tpl:851-873 · chart/templates/configmap.yaml:118-120 · services/lineage/src/lineage/main.py:187-219 · services/lineage/src/lineage/api/v1/router.py:19
+- *Evidence:* services/gateway/src/gateway/__init__.py:328,525-535 (lineage_sidecar_guard); services/gateway/src/gateway/config.py:71,98
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: The live edge responses (/api/lineage/dapr/subscribe 200 and others) were not re-probed.
 
 **CTL-006 · The gateway has no body cap, rate limit or access line, and lance-plane services built by the factory accept unbounded bodies**
 `gateway, service-kit, lineage, medallion, maintenance` · **MEDIUM**
@@ -1233,7 +1343,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criterion 5: POST /lineage, /produce and /train buffer bodies with no ceiling.
 - *How:* (1) Mount service_kit.body_limit.BodySizeLimitMiddleware on the gateway, outermost, with GatewaySettings.max_body_bytes; add a per-subject/IP bucket through service_kit.rate_limit honouring its single-replica gate, or re-scope the 429 to edge config per DECISIONS.md:301-316 and say so; one structured access line per proxied request keyed on the trace id (XC-048). (2) Make max_body_bytes a required keyword of build_lance_service_app (like docs_enabled) and delete catalog/main.py:345. Lakekeeper applies DefaultBodyLimit to the whole router (router.rs:153).
 - *Closes when:* RED tests show an over-cap body refused 413 at the gateway and at lineage, maintenance, the producer and a stage runner, catalog no longer mounts the cap itself, and the 429 and access-line clauses are met or explicitly re-scoped.
-- *Evidence:* services/gateway/src/gateway/__init__.py:442,513 · packages/service-kit/src/service_kit/lance_app.py:63-116 · services/catalog/src/catalog/main.py:316-342 · packages/service-kit/src/service_kit/rate_limit.py:8-22 · chart/values.yaml:2859-2862
+- *Evidence:* services/gateway/src/gateway/__init__.py:450,521; packages/service-kit/src/service_kit/lance_app.py:59-106; services/catalog/src/catalog/main.py:35,367
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: Did not check whether CTL-013 (delete the gateway) was ruled, which would make part (1) moot.
 
 **CTL-022 · Notifications has no door that erases a subject's inbox, prefs, cursor and watch enrolment**
 `notifications, catalog` · **MEDIUM**
@@ -1241,8 +1352,9 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criterion 2 (Art. 17): a deleted principal's state persists.
 - *How:* The notifications control lane consumes LH-233's principal-deleted CatalogControlEvent and calls a new idempotent InboxActor.erase that clears every key and unwatches each project in InboxWatches; per rask-notifications, add both a ControlAction and a NotificationReason. The inbox is already bounded by compaction; ActorStateTTL is not a substitute for erasure (it would un-enrol live people). Lakekeeper's user delete removes assignments and FGA state (crates/lakekeeper/src/api/management/v1/user.rs:525-570).
 - *Closes when:* After the door runs, a RED test shows the subject's inbox, prefs, cursor, digest and watches empty, the subject in no WatchIndexActor, and a replayed event does not recreate enrolment.
-- *Evidence:* services/notifications/src/notifications/api/watches.py:117 · services/notifications/src/notifications/inbox_actor.py:210-640 · services/notifications/src/notifications/watch_actor.py:61-95 · services/notifications/src/notifications/models.py:211,267,289,331,357
+- *Evidence:* open_backlog_left_new2.md:656-662 (LH-233 still open) · services/notifications/src/notifications/api/watches.py:80,92,117 (GET/PUT, plus DELETE as the only removal route) · grep 'def erase|principal_deleted|PRINCIPAL_DELETED' over services/notifications/src, services/catalog/src and packages/*/src finds nothing in notifications
 - **not workable now:** waits on LH-233's principal-deleted event.
+- *Re-audited 2026-10-05:* still blocked; the row's own blocker holds (an auditor and an independent checker, against main fd99d857). Not confirmed: Did not re-read the line numbers cited for watch_actor.py:61-95, models.py or inbox_actor.py:210-640; only checked that inbox_actor.py has no erase method.
 
 **CTL-025 · The inbox row cap is enforced only by a 6-hourly reminder, so each delivery rewrites an unbounded partition between ticks**
 `notifications` · **MEDIUM**
@@ -1250,7 +1362,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criterion 5: write volume into the actor state store grows quadratically with a burst.
 - *How:* Apply compact(max_rows=inbox_max_rows) in deliver before _persist (it already drops handled rows before unread ones). RED: deliver cap+50 pointers without firing the reminder.
 - *Closes when:* A delivery never persists more than inbox_max_rows pointers, pinned by a test that fires no reminder.
-- *Evidence:* services/notifications/src/notifications/inbox_actor.py:233-239,308-352,414-431 · services/notifications/src/notifications/feed.py:61-80 · services/notifications/src/notifications/config.py:66-75
+- *Evidence:* services/notifications/src/notifications/inbox_actor.py:330-352 (deliver), 308 (_persist), 242-252 (compaction reminder)
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: Did not re-read feed.py compact() or config.py inbox_max_rows; their behaviour is taken from the row.
 
 **CTL-023 · A sidecar transport failure on an inbox or watch actor call answers 500 instead of 503**
 `notifications` · **LOW**
@@ -1258,24 +1371,27 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criterion 5: a sidecar outage should read 'wait and retry'.
 - *How:* Map the SDK's connection error (measure the exact type on the installed SDK) and non-InboxUnreadable Dapr errors to ServiceUnavailableError with Retry-After, the spec's 503 meaning (lance_docs/ns_catalog/spec.yaml:6685-6688). Separating per-pod from shared faults is rask's own improvement; Lakekeeper fails readiness on any shared fault (docs/audits/2026-09-25/lakekeeper-deep-read/resilience.md:194).
 - *Closes when:* A sidecar connection failure on any inbox, watch or prefs route answers 503 problem+json with Retry-After (unit test), and InboxUnreadable keeps its own 503.
-- *Evidence:* services/notifications/src/notifications/proxies.py:85-125 · packages/service-kit/src/service_kit/exceptions.py:127,191-212
+- *Evidence:* services/notifications/src/notifications/proxies.py:85-114 (:108-110 re-raises); grep for ClientConnectorError/DaprHttpError handling in services/notifications/src: none
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: Did not measure the SDK's exact connection-error type on the installed dapr SDK.
 
 **CTL-024 · The rask-notifications skill contradicts services/notifications on the reason set, line refs and actors**
 `notifications, docs` · **LOW**
-- *What is left:* The skill says four reasons and six sources while NotificationReason has 12 members; notifiable, enforce_author, WatcherLookup and the no-project gate have moved; WatchIndexActor, named_subjects' userset expansion and /events/projection are missing. After CTL-021.
+- *What is left:* Rewrite .claude/skills/rask-notifications/SKILL.md against HEAD, citing symbols rather than line numbers. (1) The description at :3 and the text at :12: list the 11 targeting reasons, which are AUTHOR, WATCH, GRANT_ADDED, GRANT_REVOKED, ORIGINATOR, TASK_ASSIGNED, TASK_UNASSIGNED, TASK_CHANGES_REQUESTED, TASK_DROPPED, PROMOTION_REVIEW_REQUESTED and TASK_LEASE_EXPIRED. Note UNKNOWN separately as the read-only fallback (services/notifications/src/notifications/models.py:63-98). (2) Fix the stale refs: notifiable is lineage_events.py:226 (the skill says :154-203); TERMINAL_STATES is :34 (the skill says :32); WatcherLookup is fanout.py:64 (the skill says :37-69); the AUTHOR and no-project gates at fanout.py:87/88 are now inside audience_for at fanout.py:77; enforce_author is lineage/api/fga_deps.py:213 (the skill says :96-103). (3) Add WatchIndexActor (notifications/watch_actor.py:61). Correct SKILL.md:260 to describe how named_subjects expands usersets through list_users (api/control_events.py:84).
 - *Why:* CLAUDE.md requires skills to match code; a wrong reason count is how a producer ships an unhandled reason.
 - *How:* Rewrite SKILL.md:3,12,50,84,203,206,236 against the code, citing symbols rather than line numbers where a symbol suffices.
 - *Closes when:* Every reason, actor, door and reference in the skill matches services/notifications and services/lineage at HEAD.
-- *Evidence:* services/notifications/src/notifications/models.py:52-98 · services/notifications/src/notifications/api/lineage_events.py:225 · services/notifications/src/notifications/api/fanout.py:64,77,102 · .claude/skills/rask-notifications/SKILL.md
+- *Evidence:* .claude/skills/rask-notifications/SKILL.md:3,12,50,91,95,245,248,260,277,296 · services/notifications/src/notifications/models.py:63-98 · services/notifications/src/notifications/api/lineage_events.py:34,226 · services/notifications/src/notifications/api/fanout.py:64,77 · services/notifications/src/notifications/watch_actor.py:61 · services/notifications/src/notifications/api/control_events.py:84 · services/lineage/src/lineage/api/fga_deps.py:213
+- *Re-audited 2026-10-05:* partly done; *What is left* rewritten to the remainder (done by 1feab46a (CTL-021) added /events/projection to the skill) (an auditor and an independent checker, against main fd99d857). Not confirmed: I did not read lines 50-245 of the skill in full. Other stale refs or missing actors there were not checked beyond the grep for WatchIndex, named_subjects, userset and projection; I did not check whether the control lane (lane 2) of the skill describes named_subjects under another name. The grep found only SKILL.md:260 and :313, which mention usersets.
 
 **CTL-026 · Every 30 s reconcile tick re-reads the newest 500 full OpenLineage payloads, however few are new**
 `notifications, lineage` · **LOW**
-- *What is left:* Each tick starts at the head with limit=500 and summary=false and discards everything at or below the mark; on /events lineage also over-fetches 2000 rows and batch-checks FGA over them.
+- *What is left:* Workable now (CTL-021 has landed, df82f766). The reconciler's page() sends only `limit` (default 500) and `after`, with no lower bound. So a tick whose head equals the mark still fetches up to 500 rows at or below it (services/notifications/src/notifications/api/reconciler.py:248-255), and they are thrown away client-side at :383. Fix: add a `since=<walk_floor>` lower bound to GET /events/projection (services/lineage/src/lineage/api/v1/endpoints/runs.py:217-256) and have the reconciler send it. On the server, list_events(summary=False) still loads full payloads before targeting_view cuts them (runs.py:249). Either bound that read (for example, project it in SQL) or record the cost as accepted. Closes when an idle tick fetches no row at or below the mark (RED).
 - *Why:* Criterion 5: steady-state cost scales with page size and facet size, not work.
 - *How:* After CTL-021 moves the walk to /events/projection, add a symmetric lower bound (`since=<walk_floor>`) and send it; catch-up stays one page at a time. Lakekeeper only pushes events, so no parallel.
 - *Closes when:* A tick whose head equals the mark fetches no row at or below it (RED), and the per-page byte cost of new rows is bounded or recorded as accepted.
-- *Evidence:* services/notifications/src/notifications/api/reconciler.py:248-258,353-386 · services/notifications/src/notifications/api/settings.py:112-122 · services/lineage/src/lineage/api/v1/endpoints/runs.py:33-34,163-255
+- *Evidence:* services/notifications/src/notifications/api/reconciler.py:248-255,367,383 · services/notifications/src/notifications/api/settings.py:89 · services/lineage/src/lineage/api/v1/endpoints/runs.py:217-256
 - **not workable now:** waits on CTL-021 moving the walk to /events/projection.
+- *Re-audited 2026-10-05:* partly done; *What is left* rewritten to the remainder (done by 1feab46a / df82f766 (CTL-021): the walk moved to /events/projection and rows are cut to targeting_view) (an auditor and an independent checker, against main fd99d857). Not confirmed: Did not measure the per-tick byte or row cost live; Did not read repository.list_events, so I have not confirmed that summary=False loads the full JSONB payload; this rests on the endpoint docstring and the parameter.
 
 **CTL-027 · A group-grant fan-out stops at the first failing member, so later members are never told**
 `notifications` · **LOW**
@@ -1283,7 +1399,8 @@ Owner, 2026-10-02: the production triage classed these Phase 1 rows as hardening
 - *Why:* Criterion 4: one bad inbox drops a grant notification for the whole group.
 - *How:* Attempt every member with bounded concurrency (TaskGroup under a Semaphore, well under ackWait), collect per-member outcomes as fan_out does, RETRY only after all were attempted; delivery is idempotent on `<event_id>@<ACTION>`.
 - *Closes when:* A group whose second member's inbox raises InboxUnreadable still delivers to the third (test).
-- *Evidence:* services/notifications/src/notifications/api/control_events.py:84-134,172-215 · services/notifications/src/notifications/api/fanout.py:124-198
+- *Evidence:* services/notifications/src/notifications/api/control_events.py:172-214
+- *Re-audited 2026-10-05:* still open as written (an auditor and an independent checker, against main fd99d857). Not confirmed: Not re-read: fanout.py:124-198.
 
 ## PHASE 2 · COMPUTE
 
