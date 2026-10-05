@@ -30,6 +30,7 @@ __all__ = [
     "EXTERNAL_KIND",
     "blob_column_resolves",
     "blob_field_names",
+    "carried_blob_values",
     "carry_external_descriptor",
     "dangling_blob_columns",
     "external_base_of",
@@ -118,6 +119,29 @@ def carry_external_descriptor(descriptor: object, base: str) -> object | None:
     if size:
         return Blob(uri=absolute, position=descriptor.get("position") or 0, size=size)
     return Blob.from_uri(absolute)
+
+
+def carried_blob_values(ds: lance.LanceDataset, column: str, descriptors: list[object], row_ids: list[int], base: str) -> list[object | None]:
+    """One blob column of a dataset with an external base, as the values a downstream write takes.
+
+    AN EXTERNAL BASE DOES NOT MAKE EVERY ROW EXTERNAL. Blob V2 places each value by itself: a
+    `Blob(uri=...)` under the base is kind 3, and bytes written beside it land inline (0), packed (1) or
+    dedicated (2) by the column's thresholds (`lancemultibasebranchingblobv2.md`, Blob V2 storage
+    kinds). Kind 3 rows are forwarded as pointers; every other non-null row owns bytes that exist at no
+    URI, so those bytes are read and carried. Measured on pylance 12.0.0: one column held kinds
+    [3, 0, 1, 2, null], and mapping only kind 3 wrote [Blob, None, None, None, None] ([[LH-217]]).
+
+    `descriptors` and `row_ids` are one scan's blob descriptors and `_rowid`s, row-aligned. The managed
+    rows are read by row id with `preserve_order=True`, and only they are read: a null row is not
+    selected, so `read_blobs` dropping nulls cannot misalign the result.
+    """
+    values = [carry_external_descriptor(descriptor, base) for descriptor in descriptors]
+    managed = [i for i, d in enumerate(descriptors) if isinstance(d, dict) and d.get("kind") != EXTERNAL_KIND]
+    if managed:
+        read = ds.read_blobs(column, ids=[row_ids[i] for i in managed], preserve_order=True)
+        for position, (_, payload) in zip(managed, read, strict=True):
+            values[position] = payload
+    return values
 
 
 def read_aligned_table(

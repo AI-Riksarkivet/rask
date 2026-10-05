@@ -62,7 +62,64 @@ def _bronze(uri: str, uris: list[str], base: str | None) -> None:
     )
 
 
+#: Thresholds low enough that one small column holds every managed placement Blob V2 has: inline
+#: (kind 0) below 100 B, packed (kind 1) up to 5,000 B, dedicated (kind 2) above it.
+_THRESHOLDS = {
+    b"lance-encoding:blob-inline-size-threshold": b"100",
+    b"lance-encoding:blob-dedicated-size-threshold": b"5000",
+}
+_CLASSIFICATION = "rask.classification"
+
+
+def _mixed_bronze(uri: str, external: str | None, base: str | None) -> list[bytes | None]:
+    """A bronze whose blob field carries thresholds, with every payload kind.
+
+    `external` is one object under `base`; when `base` is None the column is managed only. Returns
+    the payload bytes a reader of bronze sees, in `id` order.
+    """
+    field = blob_field("payload", nullable=True).with_metadata(_THRESHOLDS)
+    managed: list[bytes | None] = [b"i" * 40, b"p" * 1_000, b"d" * 9_000, None]
+    values: list[Any] = ([Blob.from_uri(external)] if external else []) + managed
+    table = pa.table(
+        {"id": pa.array(range(len(values)), pa.int64()), "payload": blob_array(values)},
+        schema=pa.schema([pa.field("id", pa.int64()), field]),
+    )
+    lance.write_dataset(
+        table,
+        uri,
+        mode="create",
+        data_storage_version="2.2",
+        enable_stable_row_ids=True,
+        initial_bases=[lance.DatasetBasePath(base, "source")] if base else None,
+    )
+    return ([Path(external[7:]).read_bytes()] if external else []) + managed
+
+
+def _payloads_by_id(uri: str) -> list[bytes | None]:
+    table = lance.dataset(uri).scanner(columns=["id", "payload"], blob_handling="all_binary").to_table().sort_by("id")
+    return table.column("payload").to_pylist()
+
+
 class TestAnExternalUpstreamIsForwardedNotCopied:
+    def test_a_mixed_upstream_keeps_every_managed_payload_and_forwards_the_pointer(self, tmp_path: Path) -> None:
+        """An external base does not make every row external: inline, packed and dedicated rows own their bytes.
+
+        Mapping only kind-3 descriptors turns the other three kinds into None while the stage still
+        reports success, so silver's managed payloads would be gone ([[LH-217]]).
+        """
+        source = tmp_path / "corpus"
+        (external,) = _corpus(source, count=1, size=2_000)
+        bronze = str(tmp_path / "bronze.lance")
+        expected = _mixed_bronze(bronze, external, base=str(source))
+        assert [d and d["kind"] for d in lance.dataset(bronze).to_table(columns=["payload"]).column("payload").to_pylist()] == [3, 0, 1, 2, None]
+
+        silver = str(tmp_path / "silver.lance")
+        transform_stage(bronze, silver, {}, stage="silver")
+
+        assert _payloads_by_id(silver) == expected
+        silver_kinds = lance.dataset(silver).to_table(columns=["id", "payload"]).sort_by("id").column("payload").to_pylist()
+        assert silver_kinds[0]["kind"] == blobs.EXTERNAL_KIND, "the external row was copied rather than forwarded"
+
     def test_a_derived_tier_costs_kilobytes_not_a_second_corpus(self, tmp_path: Path) -> None:
         """The claim the whole change exists for, as a ratio so it survives a fixture resize."""
         source = tmp_path / "corpus"
@@ -100,6 +157,35 @@ class TestAnExternalUpstreamIsForwardedNotCopied:
         assert blobs.external_base_of(lance.dataset(silver)) == str(source), "silver dropped the base it inherited"
         assert _resolves(gold) == 8
         assert set(lance.dataset(gold).to_table(columns=["stage"]).column("stage").to_pylist()) == {"gold"}
+
+
+def _classification(uri: str, column: str) -> str | None:
+    value = (lance.dataset(uri).schema.field(column).metadata or {}).get(_CLASSIFICATION.encode())
+    return value.decode() if value is not None else None
+
+
+@pytest.mark.parametrize("placement", ["external", "managed"])
+def test_a_tier_carries_the_upstream_blob_thresholds_and_a_classification_set_after_it_exists(tmp_path: Path, placement: str) -> None:
+    """Blob thresholds and `rask.classification` are per-column field metadata (lance_docs/guide.md, blob v2 thresholds).
+
+    The usual order is ingest, cascade, then classify. A stage that carried field metadata only on a
+    tier's first write would leave silver vendable raw while bronze is restricted ([[LH-217]]). A
+    re-run's full-sync merge keeps the target's schema, so the carry is its own step. It only ever
+    adds a label: silver's own classification on `id` is not replaced by bronze's.
+    """
+    source = tmp_path / "corpus"
+    (external,) = _corpus(source, count=1, size=2_000)
+    bronze = str(tmp_path / "bronze.lance")
+    _mixed_bronze(bronze, external if placement == "external" else None, base=str(source) if placement == "external" else None)
+    silver = str(tmp_path / "silver.lance")
+    transform_stage(bronze, silver, {}, stage="silver")
+    lance.dataset(silver).update_field_metadata({"id": {_CLASSIFICATION: "secret"}})
+    lance.dataset(bronze).update_field_metadata({"payload": {_CLASSIFICATION: "restricted"}, "id": {_CLASSIFICATION: "internal"}})
+
+    transform_stage(bronze, silver, {}, stage="silver")
+
+    assert lance.dataset(silver).schema.field("payload").metadata == {**_THRESHOLDS, _CLASSIFICATION.encode(): b"restricted"}
+    assert _classification(silver, "id") == "secret", "the carry replaced the tier's own classification"
 
 
 class TestTheManagedPathIsUnchanged:

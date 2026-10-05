@@ -24,7 +24,7 @@ from typing import Any, cast
 
 import lance
 import pyarrow as pa
-from lance import blob_array, blob_field
+from lance import blob_array
 from lance.indices.builder import IndexConfig
 from pydantic import BaseModel, Field
 
@@ -382,6 +382,7 @@ def transform_stage(
             "id"
         ).when_matched_update_all().when_not_matched_insert_all().when_not_matched_by_source_delete().execute(declare_dataset_id(out, dataset_id))
         ensure_declared_dataset_id(to_uri, dataset_id or "", storage_options, session=shared_lance_session())
+        _carry_governance_labels(ds.schema, to_uri, storage_options)
     else:
         lance.write_dataset(  # noqa: TID251
             declare_dataset_id(out, dataset_id),
@@ -407,6 +408,46 @@ def transform_stage(
 #: How many times a widening re-reads the tier after another commit passed the version it read. A
 #: maintenance compaction is the expected concurrent writer, and it does not land three times in one run.
 _WIDEN_ATTEMPTS = 3
+
+
+#: The field-metadata namespace the estate acts on ([[LH-058]]): `rask.classification` decides whether a
+#: table's bytes may be vended raw (`catalog.core.vending.CLASSIFICATION_KEY`).
+_GOVERNANCE_FIELD_PREFIX = "rask."
+
+
+def _carry_governance_labels(upstream: pa.Schema, to_uri: str, storage_options: dict[str, str]) -> None:
+    """Copy the upstream's `rask.*` field labels onto the same-named target fields that lack them.
+
+    A label set on bronze AFTER silver exists is the usual order (ingest, cascade, then classify), and
+    a re-run keeps the target's schema (the full-sync `merge_insert` and the by-id widening `merge`,
+    measured on pylance 12.0.0), so without this step the label reaches no tier above and silver stays vendable raw while
+    bronze is restricted ([[LH-217]]).
+
+    ADD-ONLY. A key the target already holds is never replaced or removed, whatever its value: the
+    estate defines no order between classification values (the vocabulary is delegated, [[LH-055]]),
+    and vending refuses on a label's presence (`classified_columns`), so the only change known to be
+    tighter is absent -> present. No `can_classify` check is asked for: the catalog's classify door
+    gates that rung because a writer could otherwise CLEAR a label, and this copies one a classifier
+    already put on the upstream, which can only make the target less vendable.
+
+    Top-level fields only, which is where the classify door's labels on the cascade's tiers live.
+    """
+    target = lance.dataset(to_uri, storage_options=storage_options, session=shared_lance_session())
+    updates: dict[str, dict[str, str | None]] = {}
+    for field in upstream:
+        if field.name not in target.schema.names:
+            continue
+        held = target.schema.field(field.name).metadata or {}
+        missing: dict[str, str | None] = {
+            key.decode(): value.decode()
+            for key, value in (field.metadata or {}).items()
+            if key.decode().startswith(_GOVERNANCE_FIELD_PREFIX) and key not in held
+        }
+        if missing:
+            updates[field.name] = missing
+    if updates:
+        target.update_field_metadata(updates)
+        log.info("medallion_stage_carried_governance_labels", extra={"to_uri": to_uri, "fields": sorted(updates)})
 
 
 def _add_new_columns_by_id(out: pa.Table, to_uri: str, storage_options: dict[str, str]) -> None:
@@ -524,7 +565,10 @@ def _carry_forward(ds: lance.LanceDataset, stage: str) -> tuple[pa.Table, dict[s
         if f.name in blob_cols:
             payloads = aligned.column(f.name).to_pylist()
             blob_payloads[f.name] = payloads
-            fields.append(blob_field(f.name))
+            # The UPSTREAM field, not a fresh `blob_field(name)`: Blob V2 thresholds and
+            # `rask.classification` are this field's metadata (lance_docs/guide.md, blob v2), and a
+            # rebuilt field creates the tier above declassified and on default placement ([[LH-217]]).
+            fields.append(f)
             columns[f.name] = blob_array(payloads)
         else:
             fields.append(aligned.schema.field(f.name))
@@ -570,24 +614,28 @@ def _carry_forward_external(ds: lance.LanceDataset, stage: str, blob_cols: list[
 
     **The copy goes.** The output carries descriptors resolved against the upstream's declared base,
     so the tier costs a few KB instead of the corpus. `blob_array` accepts the mapped `Blob` values
-    and Lance writes pointers.
+    and Lance writes pointers. Rows of the same column that the dataset itself holds (inline, packed
+    or dedicated) are carried as bytes beside them (`blobs.carried_blob_values`).
 
-    **And the RAM goes, for every stage that was never going to derive anything.** `derive_artifacts`
+    **And the external rows' bytes are read only when a deriver wants them.** `derive_artifacts`
     dispatches on the FIRST non-null payload and passes tabular / unrecognised content straight
     through — yet the managed path materialises EVERY payload before asking. Here the probe reads one
-    row, and the full read happens only when a deriver actually matched. A gold aggregation over ten
-    million page images now reads one image, not ten million.
+    row, and the full read happens only when a deriver actually matched, so a gold aggregation over
+    ten million external page images reads one image, not ten million. Rows the dataset owns are
+    always read, because carrying them needs their bytes; when the column is also derivable, the full
+    read reads them a second time.
     """
     table = ds.to_table(columns=[f.name for f in ds.schema if f.name not in _RESTAMPED_COLUMNS], with_row_id=True)
     rows = table.num_rows
+    row_ids = table.column("_rowid").to_pylist()
     columns: dict[str, Any] = {}
     fields: list[pa.Field] = []
     for f in ds.schema:
         if f.name in _RESTAMPED_COLUMNS:
             continue
         if f.name in blob_cols:
-            carried = [blobs.carry_external_descriptor(d, external_base) for d in table.column(f.name).to_pylist()]
-            fields.append(blob_field(f.name))
+            carried = blobs.carried_blob_values(ds, f.name, table.column(f.name).to_pylist(), row_ids, external_base)
+            fields.append(f)  # the upstream field and its metadata, as on the managed path
             columns[f.name] = blob_array(carried)
         else:
             fields.append(table.schema.field(f.name))

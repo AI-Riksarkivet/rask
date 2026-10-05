@@ -84,6 +84,13 @@ Two silent failure modes live between the read and write shapes, both handled in
 - `size == 0` means *the whole object*, and passing it back as a slice length yields an empty read
   with **no error at all**.
 
+A column under an external base can also hold rows the dataset owns (inline, packed or dedicated).
+`service_kit.lakehouse.blobs.carried_blob_values` forwards the kind-3 rows as pointers and carries the
+bytes of every other non-null row, and the downstream blob field is the upstream's, so its thresholds
+and `rask.classification` reach the tier the stage creates. Every later stage write copies a `rask.*`
+field label set upstream onto the tier when the tier's field lacks it, and never replaces one it holds
+([[LH-217]]).
+
 ## 3. The write path
 
 ```
