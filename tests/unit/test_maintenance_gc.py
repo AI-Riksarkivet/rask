@@ -131,7 +131,7 @@ def test_run_gc_passes_bounds_and_reports_stats() -> None:
 def test_compact_now_passes_target_and_optimizes_indices() -> None:
     ds = _FakeDs(version=1, versions=_versions(1), tags={})
     out = maintenance.compact_now(ds, target_rows_per_fragment=1_000_000, storage_options={})
-    assert out == {"ok": True, "fragments_removed": 4, "fragments_added": 1}
+    assert out == {"ok": True, "fragments_removed": 4, "fragments_added": 1, "version": 1}
     assert ds.optimize.compact_kw == {"target_rows_per_fragment": 1_000_000, **maintenance.COMPACTION_BOUND}
     assert ds.optimize.indices_optimized is True  # indices kept covering the new fragments
 
@@ -271,7 +271,7 @@ def test_compact_now_survives_a_PANICKING_index_report() -> None:
 
     result = maintenance.compact_now(ds, target_rows_per_fragment=None, storage_options={})
 
-    assert result == {"ok": True, "fragments_removed": 4, "fragments_added": 1}
+    assert result == {"ok": True, "fragments_removed": 4, "fragments_added": 1, "version": 1}
 
 
 def test_compact_now_still_lets_a_KEYBOARD_INTERRUPT_through() -> None:

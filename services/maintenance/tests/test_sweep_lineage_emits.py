@@ -40,7 +40,16 @@ class _RecordingEmitter:
         finally:
             self.in_flight -= 1
 
-    async def emit_maintenance(self, *, table_id: str, namespace: str, operation: str = COMPACTION) -> None:
+    async def emit_maintenance(
+        self,
+        *,
+        table_id: str,
+        namespace: str,
+        operation: str = COMPACTION,
+        version: int | None = None,
+        branch: str | None = None,
+        branch_identifier: str | None = None,
+    ) -> None:
         await self._publish(table_id, self.completed)
 
     async def emit_maintenance_failed(self, *, table_id: str, namespace: str, error: str, operation: str = COMPACTION) -> None:

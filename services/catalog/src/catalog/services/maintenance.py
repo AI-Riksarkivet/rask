@@ -126,10 +126,14 @@ class Optimizer(Protocol):
 
 
 class CompactableDataset(FragmentCarrier, Protocol):
-    """What COMPACTION needs: the optimizer, plus the manifest + fragment walk its gate weighs."""
+    """What COMPACTION needs: the optimizer, plus the manifest + fragment walk its gate weighs, and the
+    version the rewrite commits at."""
 
     @property
     def optimize(self) -> Optimizer: ...
+
+    @property
+    def version(self) -> int: ...
 
 
 def require_compactable(ds: CompactableDataset, storage_options: StorageOptions, protected: BaseRefs | None = None) -> None:
@@ -322,6 +326,8 @@ class CompactData(TypedDict):
     ok: bool
     fragments_removed: int
     fragments_added: int
+    #: The version the compaction committed, for the lineage event; not part of the door's answer.
+    version: int
 
 
 def preview_gc(ds: VersionedDataset, *, branch: str | None, retention_days: int | None, retain_versions: int | None) -> GcPreviewData:
@@ -467,6 +473,10 @@ def compact_now(
     size_kw: dict[str, Any] = {"target_rows_per_fragment": target_rows_per_fragment} if target_rows_per_fragment else {}
     size_kw.update(COMPACTION_BOUND)
     metrics: Any = ds.optimize.compact_files(**size_kw)
+    # THE COMPACTION'S OWN COMMIT, read before the index pass below can commit another: `compact_files`
+    # advances the handle to its Rewrite version (measured on pylance 12.0.0), and a reopen would name
+    # whatever landed after it.
+    committed = int(ds.version)
     # Index work is best-effort — a no-index dataset or an unindexed column must not cost this door the
     # compaction that already succeeded. `BaseException`, deliberately, and NOT `suppress(Exception)`:
     # pylance PANICS for real (`pyo3_runtime.PanicException: not yet implemented` out of `index_stats`,
@@ -488,6 +498,7 @@ def compact_now(
         "ok": True,
         "fragments_removed": int(getattr(metrics, "fragments_removed", 0) or 0),
         "fragments_added": int(getattr(metrics, "fragments_added", 0) or 0),
+        "version": committed,
     }
 
 

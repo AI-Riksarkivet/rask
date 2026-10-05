@@ -53,7 +53,7 @@ def test_the_native_path_hides_the_internal_key_like_the_dataplane_path_does(ns)
     native_answer = dataplane.filter_internal_metadata(
         native.call(ns, "update_table_schema_metadata", UpdateTableSchemaMetadataRequest(id=TABLE_ID, metadata={"owner": "alice"})).metadata or {}
     )
-    dataplane_answer = dataplane.update_schema_metadata(ns, {}, TABLE_ID, {"owner": "bob"})
+    dataplane_answer, _ = dataplane.update_schema_metadata(ns, {}, TABLE_ID, {"owner": "bob"})
 
     assert INTERNAL not in native_answer, f"the native route still returns the internal key: {native_answer}"
     assert set(native_answer) == set(dataplane_answer), (

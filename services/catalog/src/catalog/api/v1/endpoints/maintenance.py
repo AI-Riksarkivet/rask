@@ -261,8 +261,8 @@ async def compact_maintenance(
     )
     # The QUEUED lane above is answered by an executor that emits; this lane has no such partner, and it
     # is the lane the deployed estate runs (`maintenance.workTopic` is empty on the release's values).
-    # `pin_version` is None because `compact_now` reports fragment counts and no version — the trailer
-    # reads the snapshot the rewrite just committed.
+    # Pinned to the version the rewrite committed and to the ref it rewrote: the index pass after it may
+    # commit again, and a branch's number names another snapshot on main.
     await lineage_deps.emit_measured_write(
         emitter,
         segments,
@@ -272,6 +272,8 @@ async def compact_maintenance(
         token=token,
         operation=COMPACT_TABLE,
         authorization=authorization,
+        pin_version=result.get("version"),
+        branch=branch,
     )
     return CompactResult(**result)
 
@@ -375,6 +377,8 @@ async def reindex_maintenance(
         token=token,
         operation=CREATE_INDEX,
         pin_version=outcome,
+        # The ref the rebuild ran on: `outcome` is that ref's version, a different snapshot on main.
+        branch=branch,
         authorization=authorization,
     )
     return ReindexResult(index_name=spec.name, column=spec.column, kind=spec.kind, index_type=spec.index_type, version=outcome)

@@ -115,31 +115,6 @@ def test_an_unknown_branch_is_a_404_naming_the_branch(branched: tuple[TestClient
     assert _names(location) == ["id", "v"], "a rejected branch write still touched main"
 
 
-def test_the_lineage_edge_is_stamped_with_the_branch_version_and_schema(branched: tuple[TestClient, str], monkeypatch: pytest.MonkeyPatch) -> None:
-    """The trap in this fix: threading ``branch`` into the WRITE and forgetting the lineage read-back.
-
-    ``read_version_and_schema`` reopens the dataset to stamp the WROTE edge; opened on main it reports main's
-    (unchanged) version and main's schema, so the graph records the column evolution against a version that
-    never carried it — and every assertion about the RESPONSE still passes. Nothing here is stubbed except
-    the emit sink itself: the version and the schema are read off the real branch.
-    """
-    client, _location = branched
-    captured: dict[str, object] = {}
-
-    async def _capture(_emitter: object, _segments: object, **kwargs: object) -> None:
-        captured.update(kwargs)
-
-    monkeypatch.setattr("catalog.api.lineage_deps.emit_write_event", _capture)
-
-    r = client.post("/v1/table/b1$t/add_columns", json={"branch": "dev", "new_columns": [{"name": "on_dev", "expression": "id + 1"}]})
-    assert r.status_code == 200, r.text
-
-    assert captured["operation"] == "add_columns"
-    assert captured["version"] == 2, captured  # the BRANCH's version — main is still at 1
-    names = [field["name"] for field in captured["schema_fields"]]  # ty: ignore[not-iterable]
-    assert "on_dev" in names, captured  # read off the branch's schema, not main's
-
-
 def test_restore_on_a_branch_rewinds_the_branch_and_stamps_its_lineage(branched: tuple[TestClient, str], monkeypatch: pytest.MonkeyPatch) -> None:
     """``restore`` honours ``branch``: the branch rewinds, main stays put, and the RESTORE edge names the branch.
 

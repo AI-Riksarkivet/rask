@@ -14,6 +14,7 @@ branch write is never reported — or recorded — against main (#100).
 
 from __future__ import annotations
 
+from functools import partial
 from typing import Annotated, Any, Final
 
 from fastapi import APIRouter, Header
@@ -277,7 +278,7 @@ async def update_table_schema_metadata(
     authorization: Annotated[str | None, Header()] = None,
 ) -> JSONResponse:
     """Upsert the table's schema-level metadata map — a ``null`` value DELETES that key; emits an
-    UPDATE_SCHEMA_METADATA event (the response omits the version, so it is read back best-effort).
+    UPDATE_SCHEMA_METADATA event at the version the update committed (the response omits it, so the event resolves it from the commit).
 
     The op MERGES, whatever the spec's "Replace" wording says (probed against a real ``dir`` backend:
     posting ``{owner}`` over ``{owner, tier}`` leaves ``tier`` standing). Omitting a key therefore cannot
@@ -329,8 +330,9 @@ async def update_table_schema_metadata(
     # detour around one. It costs the native op's transaction id on branch writes, which is a real
     # trade and the right way round: an id naming a commit to the wrong dataset is worth less than no
     # id at all.
+    committed: int | None
     if branch is not None or any(v is None for v in values.values()):
-        updated = await run_in_threadpool(dataplane.update_schema_metadata, ns, so, segments, values, branch=branch)
+        updated, committed = await run_in_threadpool(partial(dataplane.update_schema_metadata, ns, so, segments, values, branch=branch))
         response = UpdateTableSchemaMetadataResponse(metadata=updated)
     else:
         req = UpdateTableSchemaMetadataRequest(id=segments, metadata={k: v for k, v in values.items() if v is not None}, branch=branch)
@@ -340,6 +342,8 @@ async def update_table_schema_metadata(
         # two different ways depending on which route the request happened to take — and the map a
         # caller sees is the map it saves back.
         response.metadata = dataplane.filter_internal_metadata(response.metadata or {})
+        # The native op answers a transaction id and no version; the version is the one THAT transaction made.
+        committed = await run_in_threadpool(partial(dataplane.committed_version, ns, so, segments, response.transaction_id, branch=None))
     await lineage_deps.emit_measured_write(
         emitter,
         segments,
@@ -349,6 +353,8 @@ async def update_table_schema_metadata(
         token=token,
         operation=UPDATE_SCHEMA_METADATA,
         authorization=authorization,
+        pin_version=committed,
+        branch=branch,
     )
     # THE DIRECT MAP, per the spec's REST-only rule: the body IS the updated metadata, not an envelope
     # around it. rask answered `{metadata, transaction_id}`, on which pylance's Rust client raises

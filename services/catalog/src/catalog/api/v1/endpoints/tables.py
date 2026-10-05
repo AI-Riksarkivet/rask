@@ -1291,9 +1291,10 @@ async def restore_table(
     if body.branch is not None:
         await run_in_threadpool(partial(open_dataset_unchecked, ns, so, segments, version=body.version, branch=body.branch))
     response: RestoreTableResponse = await run_in_threadpool(native.call, ns, "restore_table", body)
-    # The response carries only a transaction_id — the shared trailer reads the new current version + its
-    # schema off one reopen of the ref the restore committed to (best-effort: a readback failure never
-    # fails the already-committed restore).
+    # The response carries only a transaction_id, so the event names the version THAT transaction
+    # committed on the ref it restored, and the shared trailer reads its schema off one pinned open
+    # (best-effort: a lookup or readback failure never fails the already-committed restore).
+    committed = await run_in_threadpool(partial(dataplane.committed_version, ns, so, segments, response.transaction_id, branch=body.branch))
     await lineage_deps.emit_measured_write(
         emitter,
         segments,
@@ -1303,6 +1304,7 @@ async def restore_table(
         token=token,
         operation=RESTORE_TABLE,
         authorization=authorization,
+        pin_version=committed,
         branch=body.branch,
     )
     await converge.remember(200, response)

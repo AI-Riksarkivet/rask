@@ -144,7 +144,16 @@ class _LineageEmitter:
         self.completed: list[str] = []
         self.failed: list[str] = []
 
-    async def emit_maintenance(self, *, table_id: str, namespace: str, operation: str = "compaction") -> None:
+    async def emit_maintenance(
+        self,
+        *,
+        table_id: str,
+        namespace: str,
+        operation: str = "compaction",
+        version: int | None = None,
+        branch: str | None = None,
+        branch_identifier: str | None = None,
+    ) -> None:
         self.completed.append(table_id)
 
     async def emit_maintenance_failed(self, *, table_id: str, namespace: str, error: str, operation: str = "compaction") -> None:

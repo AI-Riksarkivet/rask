@@ -242,8 +242,9 @@ async def commit_fragments(
         body.fragments,
         body.read_version,
     )
-    # Reuse the shared measured-write emitter (reopens once for version + schema), same as /insert — so the
+    # The shared measured-write trailer, pinned to the version THIS commit made, same as /insert — so the
     # WROTE edge + columnLineage-ready schema land identically whether the append was byte-proxy or direct.
+    # The door commits on main only: it takes no ref, and the location it commits to is main's.
     await lineage_deps.emit_measured_write(
         emitter,
         segments,
@@ -253,6 +254,8 @@ async def commit_fragments(
         token=token,
         operation=INSERT,
         authorization=authorization,
+        pin_version=version,
+        branch=None,
     )
     return CommitFragmentsResponse(version=version, row_count=row_count)
 
@@ -384,22 +387,20 @@ async def insert_into_table(
     """Append Arrow-IPC rows — ``insert_into_table``; emits an INSERT lineage event.
     ``branch`` targets a non-main branch (spec 0.9 query param for Arrow-IPC-body ops)."""
     segments = parse_identifier(id, settings.delimiter)
-    # PARSED HERE, ONCE, for both arms. Without a branch the native backend reads `mode`; with one,
-    # pylance's `LanceDataset.insert` does, and the two refuse a value outside Append/Overwrite
-    # differently — InvalidInput (400) on main, a bare ValueError or OSError (500) on a branch, measured
-    # on pylance 12.0.0. Ahead of the coerce because that opens the dataset, and a shape refusal costs
-    # no round trip.
+    # PARSED HERE, ONCE: pylance's `LanceDataset.insert` refuses a value outside Append/Overwrite with a
+    # bare ValueError or OSError (500, measured on pylance 12.0.0), where the spec answers InvalidInput.
+    # Ahead of the coerce because that opens the dataset, and a shape refusal costs no round trip.
     insert_mode = InsertMode.parse(mode)
     # Cast the incoming rows to the table's schema first, so a client that infers loose Arrow types (a
-    # browser infers float64 for every JS number) can append to int64 columns — else the native append 500s
-    # on the mismatch. A genuinely incompatible payload becomes a clean 400 here, not a 500 downstream.
+    # browser infers float64 for every JS number) can append to int64 columns — else the append 500s on
+    # the mismatch. A genuinely incompatible payload becomes a clean 400 here, not a 500 downstream.
     data = await run_in_threadpool(
         dataplane.coerce_insert_arrow, ns, so, segments, data, branch, max_bytes=settings.max_body_bytes, overwrite=insert_mode is InsertMode.OVERWRITE
     )
     req = InsertIntoTableRequest(id=segments, mode=insert_mode.value, branch=branch)
     response: InsertIntoTableResponse = await run_in_threadpool(dataplane.insert_into_table, ns, so, req, data, max_bytes=settings.max_body_bytes)
-    # Insert's response carries only a transaction_id, not the Lance version it produced — the shared
-    # trailer reads version + schema off ONE reopen (best-effort) so the WROTE edge records the real version.
+    # The version THIS insert committed, off the handle that committed it: a reopen would name whichever
+    # append landed last.
     await lineage_deps.emit_measured_write(
         emitter,
         segments,
@@ -409,6 +410,7 @@ async def insert_into_table(
         token=token,
         operation=INSERT,
         authorization=authorization,
+        pin_version=response.version,
         # A branch has its own version sequence; reading this write back off main pins the edge to a
         # version that never carried it.
         branch=branch,
@@ -544,6 +546,9 @@ async def update_table(
         operation=UPDATE,
         authorization=authorization,
         pin_version=response.version,
+        # The ref the dataplane committed to: the version above is that ref's number, and on main the
+        # same number is a different snapshot.
+        branch=body.branch,
     )
     return response
 
@@ -575,6 +580,9 @@ async def delete_from_table(
         operation=DELETE,
         authorization=authorization,
         pin_version=response.version,
+        # The ref the dataplane committed to: the version above is that ref's number, and on main the
+        # same number is a different snapshot.
+        branch=body.branch,
     )
     return response
 

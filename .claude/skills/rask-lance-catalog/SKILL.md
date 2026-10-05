@@ -334,6 +334,14 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   into the version slot unjudged, so they answer 406 while `managed_versioning` is never advertised
   ([[LH-206]]). Advertising it is a design change, not a flag: those doors would first need the
   judgement, protection and lineage the four above carry.
+- **A write's lineage event names the commit that write made, never a reopen** ([[LH-214]]).
+  `lineage_deps.emit_measured_write` takes `pin_version` and `branch` with no default: a new write door
+  passes its handle's `version` after the commit, its response's `version`, or
+  `dataplane.committed_version(transaction_id, branch=...)` (the spec's `DescribeTransaction` on main; a
+  bounded walk of the branch's own handle on a branch, because the `dir` `describe_transaction` reads
+  main only, measured on pylance 12.0.0). A branch write also carries `lance.branchIdentifier`, the last
+  uuid of pylance's `branch_identifier` chain, because a recreated branch restarts its numbering. Pinned
+  by `tests/integration/test_a_write_event_names_the_commit_it_made.py`, which drives every branch door.
 - **`version/delete` reclaims through `cleanup_old_versions(versions=[...])`, never the `dir` backend's raw
   manifest delete** ([[LH-206]], `maintenance.delete_versions`). Measured on pylance 12.0.0, the raw delete
   removes every manifest on `{0, -1}` (describe 200, the table unopenable), and a range ending at latest

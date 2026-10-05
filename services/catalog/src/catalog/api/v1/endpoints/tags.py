@@ -11,6 +11,7 @@ from lance_namespace import (
     DeleteTableTagResponse,
     GetTableTagVersionRequest,
     GetTableTagVersionResponse,
+    LanceNamespace,
     ListTableTagsRequest,
     ListTableTagsResponse,
     UpdateTableTagRequest,
@@ -82,7 +83,7 @@ async def create_table_tag(
         object_type="table",
         object_id=f"table:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}",
         actor=f"user:{token.sub}" if token is not None else None,
-        extra={"tag": body.tag, "version": body.version},
+        extra={"tag": body.tag, "version": body.version, **await run_in_threadpool(_ref_of, ns, so, segments, body.branch)},
     )
     return response
 
@@ -122,7 +123,7 @@ async def update_table_tag(
         object_type="table",
         object_id=f"table:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}",
         actor=f"user:{token.sub}" if token is not None else None,
-        extra={"tag": body.tag, "version": body.version},
+        extra={"tag": body.tag, "version": body.version, **await run_in_threadpool(_ref_of, ns, so, segments, body.branch)},
     )
     return response
 
@@ -150,6 +151,9 @@ async def delete_table_tag(
     canonical = fga.canonical_object_id(segments, delimiter=settings.delimiter)
     guard = await run_in_threadpool(protection.get_protection, settings.registry_root, settings.storage_options(), "table", canonical)
     fga_deps.require_not_protected(guard or {}, kind="table", obj_id=canonical, force=force)
+    # The ref the tag pinned, read while the tag still exists: after the delete nothing records it.
+    listed = await run_in_threadpool(dataplane.list_tags, ns, so, ListTableTagsRequest(id=segments))
+    pinned = (listed.tags or {}).get(body.tag)
     response = dataplane.delete_tag(ns, so, body)
     # AFTER the data-plane call — a change that did not happen is never announced.
     await emit_control(
@@ -158,6 +162,20 @@ async def delete_table_tag(
         object_type="table",
         object_id=f"table:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}",
         actor=f"user:{token.sub}" if token is not None else None,
-        extra={"tag": body.tag},
+        extra={"tag": body.tag, **await run_in_threadpool(_ref_of, ns, so, segments, pinned.branch if pinned is not None else None)},
     )
     return response
+
+
+def _ref_of(ns: LanceNamespace, so: dict[str, str], segments: list[str], branch: str | None) -> dict[str, str]:
+    """The ref a tag pins, for a tag event's ``extra``: nothing for main, else the branch and its identifier.
+
+    A tag names a version WITHIN its branch's history, and branch histories are numbered independently,
+    so ``version`` alone names a different snapshot on main. The identifier says which incarnation of the
+    branch: a recreated branch restarts its numbering. Absent for main, as the lineage event's ``ref`` is.
+    """
+    ref = dataplane.recorded_branch(branch)
+    if ref is None:
+        return {}
+    identifier = dataplane.branch_identifier(ns, so, segments, ref)
+    return {"branch": ref, **({dataplane.BRANCH_IDENTIFIER_KEY: identifier} if identifier is not None else {})}

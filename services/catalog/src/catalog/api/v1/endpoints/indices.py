@@ -3,8 +3,10 @@
 A build/drop bumps the Lance version (new manifest) without changing data or columns, so each emits a
 best-effort versioned lineage ``WROTE`` event (operation ``create_index`` / ``drop_index``) — provenance of
 when a scalar/vector index was (re)built or removed. The native responses carry only a ``transaction_id``,
-so the shared ``lineage_deps.emit_measured_write`` trailer reads the produced version back off the dataset
-(one open, best-effort — a readback failure never fails the already-committed index op).
+so the version each event names is the one THAT transaction committed, resolved through the spec's
+``DescribeTransaction`` (``dataplane.committed_version``) and read back in one pinned open by the shared
+``lineage_deps.emit_measured_write`` trailer (best-effort — a readback failure never fails the
+already-committed index op).
 
 **WHERE A BUILD RUNS depends on whether this deployment has an index queue, and the spec asks for the
 queued form.** ``CreateTableIndex`` states outright that "index creation is handled asynchronously"
@@ -98,6 +100,9 @@ async def create_index(
         token=token,
         operation=CREATE_INDEX,
         authorization=authorization,
+        pin_version=await run_in_threadpool(partial(dataplane.committed_version, ns, so, segments, response.transaction_id, branch=None)),
+        # Main only: this door refuses a branch before the build.
+        branch=None,
     )
     return response
 
@@ -132,6 +137,9 @@ async def create_scalar_index(
         token=token,
         operation=CREATE_INDEX,
         authorization=authorization,
+        pin_version=await run_in_threadpool(partial(dataplane.committed_version, ns, so, segments, response.transaction_id, branch=None)),
+        # Main only: this door refuses a branch before the build.
+        branch=None,
     )
     return response
 
@@ -244,6 +252,9 @@ async def drop_table_index(
         token=token,
         operation=DROP_INDEX,
         authorization=authorization,
+        pin_version=await run_in_threadpool(partial(dataplane.committed_version, ns, so, segments, response.transaction_id, branch=None)),
+        # Main only: this door refuses a branch before the build.
+        branch=None,
     )
     return response
 

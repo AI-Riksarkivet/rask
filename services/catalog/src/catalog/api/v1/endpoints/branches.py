@@ -124,7 +124,12 @@ def _recorded_parent(ns: LanceNamespace, so: dict[str, str], body: CreateTableBr
     # ATTRIBUTES, not `.get` — `ListTableBranchesResponse.branches` holds `BranchContents` models and a
     # dict-shaped read raises. The data-plane builds them from plain dicts, which is what makes the
     # mistake easy and silent right up to the AttributeError.
-    return {"parent_branch": entry.parent_branch, "parent_version": entry.parent_version}
+    recorded: dict[str, Any] = {"parent_branch": entry.parent_branch, "parent_version": entry.parent_version}
+    # WHICH INCARNATION was created: a branch deleted and created again under the same name restarts its
+    # version numbering, so a consumer keyed on the name alone cannot tell the two apart.
+    if (identifier := (entry.metadata or {}).get(dataplane.BRANCH_IDENTIFIER_KEY)) is not None:
+        recorded[dataplane.BRANCH_IDENTIFIER_KEY] = identifier
+    return recorded
 
 
 @router.post("/{id}/branches/delete", response_model_exclude_none=True)
@@ -153,6 +158,9 @@ async def delete_table_branch(
     canonical = fga.canonical_object_id(segments, delimiter=settings.delimiter)
     guard = await run_in_threadpool(protection.get_protection, settings.registry_root, settings.storage_options(), "table", canonical)
     fga_deps.require_not_protected(guard or {}, kind="table", obj_id=canonical, force=force)
+    # The incarnation being deleted, read while it still exists: the name alone also names whatever branch
+    # is created under it next.
+    identifier = await run_in_threadpool(dataplane.branch_identifier, ns, so, segments, body.name)
     response = dataplane.delete_branch(ns, so, body)
     await emit_control(
         control,
@@ -160,6 +168,6 @@ async def delete_table_branch(
         object_type="table",
         object_id=f"table:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}",
         actor=f"user:{token.sub}" if token is not None else None,
-        extra={"branch": body.name},
+        extra={"branch": body.name, **({dataplane.BRANCH_IDENTIFIER_KEY: identifier} if identifier is not None else {})},
     )
     return response

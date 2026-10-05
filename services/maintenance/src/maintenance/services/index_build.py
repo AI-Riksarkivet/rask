@@ -48,8 +48,12 @@ class IndexOutcome(BaseModel):
     name: str
     column: str
     kind: str
-    #: The dataset version the index was committed at, so a caller can tell a rebuild from a no-op.
+    #: The version the index was committed at, ON THE REF THE UNIT NAMED, so a caller can tell a rebuild
+    #: from a no-op and the lineage event names the commit that happened.
     version: int
+    #: The incarnation of that ref when it is a branch (pylance's ``branch_identifier``), else ``None``: a
+    #: recreated branch restarts its numbering, so ``(branch, version)`` alone names two commits.
+    branch_identifier: str | None = None
 
 
 class UnknownIndexKindError(ValueError):
@@ -113,10 +117,11 @@ def build_index(item: IndexWorkItem, *, write_options: Mapping[str, str]) -> Ind
         dataset.create_scalar_index(item.column, index_type=cast(ScalarIndexType, item.index_type), **kwargs)
     else:
         raise UnknownIndexKindError(f"unknown index kind {item.kind!r}; this worker builds {sorted((VECTOR_INDEX, SCALAR_INDEX))}")
-    # RE-OPENED, because the build commits a new manifest and the handle above still describes the
-    # version it started from. Reporting that one would tell a caller their index landed at a version
-    # that does not contain it.
-    committed = lance.dataset(item.uri, storage_options=dict(write_options) or None, session=shared_lance_session())
+    # OFF THE HANDLE THAT BUILT, never a reopen: both create doors advance the handle to the version they
+    # committed (measured on pylance 12.0.0), while a reopen of the URI opens MAIN's latest — the wrong
+    # ref for a branch build, and under concurrent writers somebody else's commit even on main.
+    committed = int(dataset.version)
+    identifier = _branch_identifier(dataset, item.branch) if item.branch else None
     log.info(
         "index_built",
         extra={
@@ -125,7 +130,22 @@ def build_index(item: IndexWorkItem, *, write_options: Mapping[str, str]) -> Ind
             "column": item.column,
             "kind": item.kind,
             "index_type": item.index_type,
-            "version": committed.version,
+            "branch": item.branch,
+            "version": committed,
         },
     )
-    return IndexOutcome(name=item.name or f"{item.column}_idx", column=item.column, kind=item.kind, version=int(committed.version))
+    return IndexOutcome(name=item.name or f"{item.column}_idx", column=item.column, kind=item.kind, version=committed, branch_identifier=identifier)
+
+
+def _branch_identifier(dataset: lance.LanceDataset, branch: str) -> str | None:
+    """The last uuid of ``branch``'s ``branch_identifier`` chain in ``branches.list()``, the one minted at its
+    create (pylance 12.0.0; it differs across a delete-and-recreate). ``None`` when it cannot be read: the
+    identifier enriches the lineage event and must not fail a build that already committed."""
+    try:
+        entry = dataset.branches.list().get(branch)
+    except Exception as exc:
+        log.warning("branch_identifier_unreadable", extra={"branch": branch, "error": str(exc)})
+        return None
+    chain = entry.get("branch_identifier") if isinstance(entry, dict) else None
+    last = chain[-1] if isinstance(chain, list) and chain else None
+    return str(last[1]) if isinstance(last, tuple | list) and len(last) == 2 else None

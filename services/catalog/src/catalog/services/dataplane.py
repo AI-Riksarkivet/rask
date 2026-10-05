@@ -57,6 +57,7 @@ from lance_namespace import (
     DeleteTableTagResponse,
     DeregisterTableRequest,
     DescribeTableRequest,
+    DescribeTransactionRequest,
     DropTableRequest,
     GetTableTagVersionRequest,
     GetTableTagVersionResponse,
@@ -127,27 +128,27 @@ def read_version_and_schema(
     ns: LanceNamespace,
     so: StorageOptions,
     table_id: list[str],
-    pin_version: int | None = None,
-    branch: str | None = None,
+    pin_version: int | None,
+    branch: str | None,
 ) -> tuple[int | None, SchemaFields, str | None]:
-    """The ``(version, schema-facet fields)`` pair for stamping lineage after a committed write.
+    """The ``(version, schema-facet fields, location)`` triple for stamping lineage after a committed write.
 
-    ONE dataset open serves both reads, so the version and the schema can never come from two different
-    snapshots (two separate reopens let a concurrent writer land between them and attach version N+1's
-    schema to version N's WROTE edge). ``pin_version`` opens the dataset AT the version the write's
-    response reported, so the schema is exactly that version's; without it (ops whose response carries
-    only a ``transaction_id`` — insert/index/restore/schema-metadata) both come from the current snapshot.
+    ``pin_version`` is the version the write COMMITTED, as the write itself reported it: a handle's
+    ``version`` after the commit, a response's ``version``, or :func:`committed_version` for a response
+    carrying only a ``transaction_id``. ONE dataset open, AT that version, serves the schema and the
+    location, so neither can come from another writer's snapshot. ``None`` means the commit could not be
+    identified, and the answer is then versionless and schemaless: the latest snapshot names whichever
+    commit landed last, which under concurrent appends is somebody else's (measured on pylance 12.0.0:
+    two handles appending in turn commit v3 and v4, and a reopen after both reports v4 for each).
 
-    ``branch`` must name the ref the write COMMITTED TO. Reading a branch write back off main pins the WROTE
-    edge to main's version and main's schema — the lineage graph would then record the evolution as having
-    happened on a version that never carried it.
+    ``branch`` must name the ref the write COMMITTED TO: a branch keeps its own version sequence, so
+    version N opened on main is a different snapshot.
 
     Entirely best-effort: the write is already committed, so a readback failure must degrade the lineage
-    enrichment (``(pin_version, [])`` — versionless when unpinned), never fail the request.
+    enrichment (``(pin_version, [], None)``), never fail the request.
     """
     try:
         dataset = open_dataset(ns, so, table_id, version=pin_version, branch=branch)
-        version = pin_version if pin_version is not None else int(dataset.version)
         # The physical URI rides the SAME handle, so the standard `dataSource` facet costs nothing
         # beyond this open. Without it #23 reconcile has no URI to read and reports every live table
         # `missing_on_storage`, and an event-driven consumer receives a table id it cannot resolve —
@@ -156,11 +157,104 @@ def read_version_and_schema(
     except Exception as exc:
         log.warning("lineage_readback_failed", extra={"table": table_id, "error": str(exc)})
         return pin_version, [], None
+    if pin_version is None:
+        return None, [], location
     try:
-        return version, facet_fields(dataset.schema), location
+        return pin_version, facet_fields(dataset.schema), location
     except Exception as exc:
         log.warning("schema_facet_read_failed", extra={"table": table_id, "error": str(exc)})
-        return version, [], location
+        return pin_version, [], location
+
+
+#: How far below a branch's head :func:`committed_version` looks for a transaction. The commit being
+#: identified has just landed, so it sits at the head unless other writers committed after it; the bound
+#: keeps a lookup on a busy branch from walking its whole history.
+_TRANSACTION_SEARCH_DEPTH: Final = 64
+
+
+def committed_version(ns: LanceNamespace, so: StorageOptions, table_id: list[str], transaction_id: str | None, *, branch: str | None) -> int | None:
+    """The version the transaction ``transaction_id`` committed on ``branch``, or ``None`` when it cannot be found.
+
+    For the native ops whose response carries a ``transaction_id`` and no version (restore, schema
+    metadata, the index doors): the spec's ``DescribeTransaction`` answers ``properties.version``
+    (``spec.yaml`` ``/v1/transaction/{id}/describe``), the version that transaction made rather than the
+    one the table is at now. Lakekeeper builds its commit event from its own transaction's context the
+    same way, never from a re-read.
+
+    A BRANCH IS SEARCHED ON ITS OWN HANDLE, because the ``dir`` backend's ``describe_transaction`` reads
+    main's history only: measured on pylance 12.0.0, a restore on branch ``x`` answered a transaction id
+    that ``describe_transaction`` reports ``TransactionNotFound``, while ``read_transaction`` on the
+    branch's head returned that uuid. The walk starts at the head and stops at the bound or above the
+    branch point, the first version the branch did not commit.
+
+    Best-effort: ``None`` makes the event versionless, never the request a failure.
+    """
+    if not transaction_id:
+        return None
+    try:
+        if recorded_branch(branch) is None:
+            described = ns.describe_transaction(DescribeTransactionRequest(id=[*table_id, transaction_id]))
+            raw = (described.properties or {}).get("version")
+            return int(raw) if raw is not None else None
+        dataset = open_dataset_unchecked(ns, so, table_id, branch=branch)
+        head = int(dataset.version)
+        # THE WALK STOPS ABOVE THE BRANCH POINT. A branch's first manifest carries the parent's version
+        # number and no transaction a write could have made, and on pylance 12.0.0 `read_transaction` on
+        # it PANICS (`pyo3_runtime.PanicException: not yet implemented`) while one version lower raises
+        # OSError (no manifest of the branch's own). Nothing at or below `parent_version` is this
+        # branch's commit, so neither is read.
+        listed = dataset.branches.list().get(cast(str, recorded_branch(branch))) or {}
+        parent = listed.get("parent_version")
+        floor = max(head - _TRANSACTION_SEARCH_DEPTH, int(parent) if isinstance(parent, int) else 0)
+        for version in range(head, floor, -1):
+            transaction = dataset.read_transaction(version)
+            if transaction is not None and transaction.uuid == transaction_id:
+                return version
+    except BaseException as exc:  # noqa: BLE001 — a Rust PANIC is not an Exception; see below
+        # `BaseException`, the way `maintenance.compact_now` catches it: a pyo3 panic derives from
+        # BaseException and cannot be caught by name (`pyo3_runtime` is synthesised lazily and is not
+        # importable). This runs after the write committed, so an escaped panic answers 500 for a commit
+        # that happened and skips the door's idempotency record, and a retry commits again.
+        if isinstance(exc, KeyboardInterrupt | SystemExit):
+            raise
+        log.warning("committed_version_unreadable", extra={"table": table_id, "branch": branch, "error": str(exc), "error_type": type(exc).__name__})
+    return None
+
+
+def branch_identifier(ns: LanceNamespace, so: StorageOptions, table_id: list[str], branch: str | None) -> str | None:
+    """The identifier of the CURRENT incarnation of ``branch``, or ``None`` for main or when unreadable.
+
+    pylance 12's ``branches.list()`` carries ``branch_identifier``, the version mapping stored in
+    ``_refs/branches/<b>.json``: a list of ``(parent version, uuid)`` pairs from the first branch off main
+    down to this one, whose LAST uuid is minted when this branch is created. Measured on 12.0.0: it
+    differs across a delete-and-recreate within the same second while ``parentVersion`` and ``createAt``
+    are identical, and a nested branch extends its parent's list by one pair.
+
+    Best-effort, like the rest of the lineage enrichment it feeds.
+    """
+    name = recorded_branch(branch)
+    if name is None:
+        return None
+    try:
+        entry = open_dataset_unchecked(ns, so, table_id).branches.list().get(name)
+    except Exception as exc:
+        log.warning("branch_identifier_unreadable", extra={"table": table_id, "branch": name, "error": str(exc)})
+        return None
+    return identifier_of(entry)
+
+
+#: The key a branch's identifier is published under: in ``list_branches``' per-branch ``metadata`` and in
+#: the ``extra`` of the branch control events. pylance's own field name, so it reads the same everywhere.
+BRANCH_IDENTIFIER_KEY: Final = "branch_identifier"
+
+
+def identifier_of(entry: object) -> str | None:
+    """The last uuid of a listed branch's ``branch_identifier`` chain: the one that names this incarnation."""
+    chain = entry.get("branch_identifier") if isinstance(entry, dict) else None
+    if not isinstance(chain, list) or not chain:
+        return None
+    last = chain[-1]
+    return str(last[1]) if isinstance(last, tuple | list) and len(last) == 2 else None
 
 
 def payload_schema_fields(schema: pa.Schema, table_id: list[str]) -> SchemaFields:
@@ -1683,57 +1777,34 @@ def delete_from_table(ns: LanceNamespace, so: StorageOptions, req: DeleteFromTab
 
 
 def insert_into_table(ns: LanceNamespace, so: StorageOptions, req: InsertIntoTableRequest, data: bytes, *, max_bytes: int) -> InsertIntoTableResponse:
-    """Append (or overwrite) Arrow-IPC rows on the ref the request NAMES.
+    """Append (or overwrite) Arrow-IPC rows on the ref the request NAMES, and report the commit it made.
 
-    The worst of this family, because it is a WRITE that succeeds. Measured live 2026-08-31 against the
-    object store: `POST /insert?branch=work` answered 200, main gained the row and the branch did not —
-    and `?branch=ghost-never-made` also answered 200 and wrote to main a second time. A branch exists so
-    work can be staged without touching main; appending to main instead is the one outcome that makes
-    the feature worse than not having it, and nothing in the response says which dataset was written.
+    ONE PATH FOR EVERY REF, through a handle opened on that ref. A branch needs it: measured live
+    2026-08-31, the upstream op answered `?branch=work` by appending to main. Main needs it too, for the
+    version: the `dir` backend's `insert_into_table` answers `{}` (measured on pylance 12.0.0), while the
+    spec's `InsertIntoTableResponse.version` is "the commit version associated with the operation". A
+    reopen cannot recover that number: under concurrent appends it reports whichever commit landed last.
+    `LanceDataset.insert` advances its own handle to the version IT committed, after any conflict
+    rebase (measured on 12.0.0: two handles appending in turn report v3 and v4, each holding its own
+    rows), so the response and the lineage event name the write that happened.
 
-    `LanceDataset.insert` is the same operation the upstream path performs, taken against a handle
-    opened on the branch — so this is the operation honoured, not a re-derivation of it. `mode` is read
-    through `InsertMode`, whose two values are pylance's own spellings of the spec's two modes.
+    The handle is opened through the checked open ([[LH-279]]), so the manifest the write builds on is
+    the one judged. `mode` is read through `InsertMode`, whose two values are pylance's own spellings of
+    the spec's two modes.
     """
-    if req.branch is None:
-        # The native write opens the table inside Rust; judge it first ([[LH-279]]). A write cannot be
-        # pinned to the version judged, so a base planted between the two rides into the new version —
-        # where every later read refuses it.
-        judged_native_version(ns, so, _table_id(req), version=None)
-        response = cast(InsertIntoTableResponse, native.call(ns, "insert_into_table", req, data))
-        # THE NATIVE BACKEND ANSWERS `{}`, so both declared fields came back None on the ORDINARY path
-        # while the branch path below filled them — a caller had to stage on a branch to learn what
-        # their insert did. Measured against the installed backend on pylance 11.0.0.
-        #
-        # Filled from ONE reopen, and only when something is missing: the row count is read off the
-        # payload the caller already sent (no I/O), and the version off a single open — which is the
-        # cost the row deferred this on, and it is already paid one line later by the caller's lineage
-        # trailer. Best-effort by construction: the write is COMMITTED, so a readback failure must
-        # leave the response as the backend gave it rather than fail a successful insert.
-        if response.version is None or response.num_inserted_rows is None:
-            with suppress(Exception):
-                inserted = read_arrow_body(data, max_bytes=max_bytes).num_rows
-                response.num_inserted_rows = response.num_inserted_rows if response.num_inserted_rows is not None else inserted
-                # `branch=req.branch` even though this arm is the branchless one: it is None here, so
-                # the call is identical — and it says "open the ref the request NAMES" at the seam
-                # where opening the wrong one is the whole defect this family keeps having.
-                # `test_siblings_agree::test_a_branch_carrying_request_reaches_open_dataset` reads it
-                # the same way a reviewer does, and it flagged the bare form on sight.
-                current = open_dataset(ns, so, _table_id(req), branch=req.branch)
-                response.version = response.version if response.version is not None else current.version
-        return response
-    # Validated here as well as at the door's coercion: this arm hands pyarrow's buffers to Lance
-    # in-process, and Lance writes whatever an unvalidated offset points at.
+    # Validated here as well as at the door's coercion: this hands pyarrow's buffers to Lance in-process,
+    # and Lance writes whatever an unvalidated offset points at.
     rows = read_arrow_body(data, max_bytes=max_bytes)
     dataset = open_dataset(ns, so, _table_id(req), branch=req.branch)
-    before = dataset.count_rows()
-    # THROUGH `InsertMode`, the one vocabulary both arms share. pylance's own parser is not the spec's:
-    # it takes `create`, which the spec does not give this door, and refuses an unknown value with a bare
-    # ValueError that answers 500 where the branchless arm's native backend answers InvalidInput. The
-    # parse is idempotent, so a mode the door already parsed passes through unchanged.
+    # THROUGH `InsertMode`, the one vocabulary every caller shares. pylance's own parser is not the
+    # spec's: it takes `create`, which the spec does not give this door, and refuses an unknown value with
+    # a bare ValueError that would answer 500. The parse is idempotent, so a mode the door already parsed
+    # passes through unchanged.
     with _write_schema_errors():
         dataset.insert(rows, mode=InsertMode.parse(req.mode).value)
-    return InsertIntoTableResponse(version=dataset.version, num_inserted_rows=max(dataset.count_rows() - before, 0))
+    # The rows this request wrote, read off its own payload: a row count diff across the commit would
+    # include whatever a concurrent writer appended in between.
+    return InsertIntoTableResponse(version=int(dataset.version), num_inserted_rows=rows.num_rows)
 
 
 def merge_insert_into_table(
@@ -2141,7 +2212,7 @@ def read_schema_metadata(ns: LanceNamespace, so: StorageOptions, table_id: list[
 
 def update_schema_metadata(
     ns: LanceNamespace, so: StorageOptions, table_id: list[str], values: dict[str, str | None], *, branch: str | None = None
-) -> dict[str, str]:
+) -> tuple[dict[str, str], int]:
     """Upsert the table's schema-level metadata; a ``None`` value DELETES that key.
 
     The table-level twin of :func:`update_field_metadata`'s dialect, and the only way to REMOVE a table
@@ -2157,19 +2228,22 @@ def update_schema_metadata(
     ``values`` naming a reserved key is the DOOR's to refuse (``provenance_guard.refuse_reserved_keys``):
     this function is also how the platform itself writes them.
 
-    Returns the table's new full map with the reserved keys filtered out, matching what the read twin reports.
+    Returns the table's new full map with the reserved keys filtered out, matching what the read twin
+    reports, and the version the update committed: the handle advances to it in place (measured on pylance
+    12.0.0), so the lineage event names this commit rather than whatever a reopen finds.
     """
-    result = open_dataset(ns, so, table_id, branch=branch).update_schema_metadata(values)
-    return filter_internal_metadata(result)
+    dataset = open_dataset(ns, so, table_id, branch=branch)
+    result = dataset.update_schema_metadata(values)
+    return filter_internal_metadata(result), int(dataset.version)
 
 
 def coerce_insert_arrow(
     ns: LanceNamespace, so: StorageOptions, table_id: list[str], data: bytes, branch: str | None = None, *, max_bytes: int, overwrite: bool = False
 ) -> bytes:
-    """Align Arrow-IPC insert rows to the table's schema before the native append.
+    """Align Arrow-IPC insert rows to the table's schema before the append.
 
     A client that INFERS types loosely — most importantly the browser's apache-arrow, which infers
-    ``float64`` for every JS number — otherwise hits the native ``insert_into_table`` with a ``float64``
+    ``float64`` for every JS number — otherwise hits the ``insert_into_table`` append with a ``float64``
     batch against an ``int64`` column, which raises a bare **500** ("Internal Server Error"). That is both
     a broken insert AND the wrong status for a client-side mismatch (browser-driven find 2026-07-21). Here we
     select the table's columns BY NAME (a column the table lacks is dropped and LOGGED by name
@@ -2183,15 +2257,15 @@ def coerce_insert_arrow(
     which is every non-browser client — for zero behavioural difference (#141).
 
     The body is read through :func:`read_arrow_body`, so one that is not a valid Arrow IPC stream is
-    refused 400 before the dataset opens, on both arms of the insert door. Rows that would be over
+    refused 400 before the dataset opens, on main and on a branch alike. Rows that would be over
     ``max_bytes`` as the table's types are refused before the cast runs (:mod:`catalog.services.cast_size`),
-    so a dictionary decoded once per row cannot allocate past the cap, and neither arm is handed a body
+    so a dictionary decoded once per row cannot allocate past the cap, and the append is never handed a body
     larger than the one the caller was held to.
 
     AN ``overwrite`` KEEPS THE TABLE'S PROVENANCE ([[LH-208]]). Lance takes an overwrite's schema from
     its payload, metadata included, so a payload naming a reserved key would forge one and a payload
     with none would erase every ``lineage.*`` stamp and the primary key's field metadata (measured on
-    pylance 12.0.0, both arms). A reserved key in the payload is refused, and the body handed on carries
+    pylance 12.0.0, on main and on a branch). A reserved key in the payload is refused, and the body handed on carries
     the table's own schema and field metadata. An append is left alone: Lance discards an append
     payload's schema metadata (measured on the same version).
     """
@@ -2612,12 +2686,19 @@ def list_branches(ns: LanceNamespace, so: StorageOptions, req: ListTableBranches
     branches: dict[str, dict[str, Any]] = {}
     for name, branch in open_dataset_unchecked(ns, so, _table_id(req)).branches.list().items():
         entry = branch if isinstance(branch, dict) else {}
+        metadata = dict(entry.get("metadata") or {})
+        # WHICH INCARNATION, in the one free-form map `BranchContents` has: the spec declares no field for
+        # it, and a recreated branch restarts its numbering, so a reader holding `(branch, N)` from a
+        # lineage event needs this to tell whether that N is still the same commit. Written over a user
+        # key of the same name, because the value is Lance's record and not the user's.
+        if (identifier := identifier_of(entry)) is not None:
+            metadata[BRANCH_IDENTIFIER_KEY] = identifier
         branches[name] = {
             "parent_branch": entry.get("parent_branch"),
             "parent_version": entry.get("parent_version"),
             "create_at": entry.get("create_at"),
             "manifest_size": entry.get("manifest_size") or 0,
-            "metadata": entry.get("metadata") or {},
+            "metadata": metadata,
         }
     return ListTableBranchesResponse.model_validate({"branches": branches})
 

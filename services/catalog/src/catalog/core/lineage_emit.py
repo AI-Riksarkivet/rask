@@ -247,6 +247,7 @@ def build_write_event(
     project: str | None = None,
     originator: str | None = None,
     branch: str | None = None,
+    branch_identifier: str | None = None,
     catalog_impl: str = "",
     warehouse_uri: str = "",
 ) -> dict[str, Any]:
@@ -281,6 +282,12 @@ def build_write_event(
     # testing presence would get yes for everything.
     if branch:
         lance_fields["ref"] = branch
+        # WHICH INCARNATION of that ref. A deleted and recreated branch restarts its numbering, so
+        # `(table, ref, N)` names two different commits; pylance 12 records a fresh `branch_identifier`
+        # UUID for each create, and it differs across a delete-and-recreate in the same second while
+        # `parentVersion` and `createAt` are identical (measured on 12.0.0). Main has no identifier.
+        if branch_identifier:
+            lance_fields["branchIdentifier"] = branch_identifier
     # THE TENANT, and it is WATCH targeting's only key. `notifications` reads
     # `run.facets.lance.project` (`api/lineage_events.py::project_id`) and its fan-out skips the
     # watcher loop ENTIRELY when it is absent — so while this facet carried only operation/version,
@@ -554,6 +561,9 @@ class EmitFields(TypedDict, total=False):
     #: "main": every historical write carries none, so a literal would make them all read as a different
     #: ref, and a consumer testing PRESENCE would answer "was this a branch write?" with yes for every one.
     branch: str | None
+    #: The incarnation of ``branch`` the write committed to (pylance's ``branch_identifier``): a recreated
+    #: branch restarts its version numbering, so the ref and version alone name two commits.
+    branch_identifier: str | None
 
 
 @runtime_checkable
@@ -749,6 +759,7 @@ class _BaseLineageEmitter:
             project=resolved_project,
             originator=fields.get("originator"),
             branch=fields.get("branch"),
+            branch_identifier=fields.get("branch_identifier"),
             catalog_impl=self._catalog_impl,
             warehouse_uri=self._warehouse_uri,
         )
@@ -937,6 +948,7 @@ async def emit_write_event(
     operation: str,
     authorization: str | None,
     branch: str | None = None,
+    branch_identifier: str | None = None,
     schema_fields: SchemaFields | None = None,
     source_uri: str | None = None,
     inputs: list[InputPin] | None = None,
@@ -983,4 +995,5 @@ async def emit_write_event(
         extra_run_facets=extra_run_facets,
         project=project,
         branch=branch,
+        branch_identifier=branch_identifier,
     )

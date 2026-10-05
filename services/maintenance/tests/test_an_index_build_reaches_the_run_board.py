@@ -37,7 +37,16 @@ class _Emitter:
         self.emitted: list[dict[str, Any]] = []
         self.failed: list[dict[str, Any]] = []
 
-    async def emit_maintenance(self, *, table_id: str, namespace: str, operation: str = COMPACTION) -> None:
+    async def emit_maintenance(
+        self,
+        *,
+        table_id: str,
+        namespace: str,
+        operation: str = COMPACTION,
+        version: int | None = None,
+        branch: str | None = None,
+        branch_identifier: str | None = None,
+    ) -> None:
         self.emitted.append({"table_id": table_id, "namespace": namespace, "operation": operation})
 
     async def emit_maintenance_failed(self, *, table_id: str, namespace: str, error: str, operation: str = COMPACTION) -> None:

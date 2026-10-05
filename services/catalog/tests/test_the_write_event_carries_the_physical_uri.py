@@ -74,6 +74,8 @@ def test_the_measured_write_trailer_STAMPS_the_uri_it_read_back() -> None:
                 token=None,
                 operation="insert",
                 authorization=None,
+                pin_version=4,
+                branch=None,
             )
         )
     finally:
@@ -108,6 +110,8 @@ def test_a_readback_that_could_not_open_the_dataset_stamps_no_uri() -> None:
                 token=None,
                 operation="insert",
                 authorization=None,
+                pin_version=4,
+                branch=None,
             )
         )
     finally:

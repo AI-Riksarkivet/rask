@@ -52,6 +52,7 @@ from service_kit.openlineage import (
     DATASOURCE_FACET_SCHEMA_URL,
     ERROR_MESSAGE_FACET_SCHEMA_URL,
     RUN_EVENT_SCHEMA_URL,
+    VERSION_FACET_SCHEMA_URL,
     custom_facet,
     run_id_for,
 )
@@ -230,14 +231,27 @@ def build_restamp_event(*, table_id: str, namespace: str, source_uri: str, event
 
 
 def build_maintenance_event(
-    *, table_id: str, namespace: str, job_namespace: str, run_id: str, event_time: str, operation: str = COMPACTION, author: str = ""
+    *,
+    table_id: str,
+    namespace: str,
+    job_namespace: str,
+    run_id: str,
+    event_time: str,
+    operation: str = COMPACTION,
+    author: str = "",
+    version: int | None = None,
+    branch: str | None = None,
+    branch_identifier: str | None = None,
 ) -> dict[str, Any]:
-    """Build the OpenLineage ``RunEvent`` (wire JSON) for one dataset's compaction/GC pass.
+    """Build the OpenLineage ``RunEvent`` (wire JSON) for one dataset's compaction/GC pass or index build.
 
-    Versionless and input-less: a maintenance pass produces no new logical data and derives from nothing,
-    so the lineage repository records a ``(:Run)-[:WROTE]->(:Dataset)`` with no version and no
-    ``DERIVED_FROM`` — ``producers()`` then surfaces the compaction run next to the data writes. ``run_id`` /
-    ``event_time`` are injected so the builder is pure and deterministically testable.
+    Input-less: a maintenance pass produces no new logical data and derives from nothing, so the lineage
+    repository records a ``(:Run)-[:WROTE]->(:Dataset)`` with no ``DERIVED_FROM`` — ``producers()`` then
+    surfaces the run next to the data writes. A sweep pass is versionless; a unit that made ONE commit it
+    can name (an index build) passes ``version``, with ``branch`` and ``branch_identifier`` when it built
+    on a branch — the ``lance.ref`` / ``lance.branchIdentifier`` the catalog's write events carry, because
+    a branch's version number names another snapshot on main, and a recreated branch restarts its
+    numbering. ``run_id`` / ``event_time`` are injected so the builder is pure and deterministically testable.
 
     ``author`` IS THE SERVICE'S OWN IDENTITY, NEVER A PERSON'S. A maintenance pass is nobody's request;
     signing it as the service is the only claim this emitter is entitled to make, and it is the claim
@@ -250,9 +264,19 @@ def build_maintenance_event(
     unverified, and its rule is that anonymous beats misattributed. A fabricated subject would be worse
     than none — a later bus gate would authorize it.
     """
-    facets: dict[str, Any] = {"lance": custom_facet(_PRODUCER, operation=operation)}
+    lance_fields: dict[str, Any] = {"operation": operation}
+    if version is not None:
+        lance_fields["version"] = version
+    if branch:
+        lance_fields["ref"] = branch
+        if branch_identifier:
+            lance_fields["branchIdentifier"] = branch_identifier
+    facets: dict[str, Any] = {"lance": custom_facet(_PRODUCER, **lance_fields)}
     if author:
         facets["author"] = custom_facet(_PRODUCER, name=author, sub=author)
+    output: dict[str, Any] = {"namespace": namespace, "name": table_id}
+    if version is not None:
+        output["facets"] = {"version": {"_producer": _PRODUCER, "_schemaURL": VERSION_FACET_SCHEMA_URL, "datasetVersion": str(version)}}
     return {
         "eventType": "COMPLETE",
         "eventTime": event_time,
@@ -263,7 +287,7 @@ def build_maintenance_event(
         # into one ``compaction`` Job node whose output set spans the whole lakehouse.
         "job": {"namespace": job_namespace, "name": f"{COMPACTION}.{table_id}"},
         "inputs": [],
-        "outputs": [{"namespace": namespace, "name": table_id}],
+        "outputs": [output],
     }
 
 
@@ -271,7 +295,16 @@ def build_maintenance_event(
 class MaintenanceEmitter(Protocol):
     """Emits compaction maintenance events (success + failure) to the lineage service (best-effort)."""
 
-    async def emit_maintenance(self, *, table_id: str, namespace: str, operation: str = COMPACTION) -> None: ...
+    async def emit_maintenance(
+        self,
+        *,
+        table_id: str,
+        namespace: str,
+        operation: str = COMPACTION,
+        version: int | None = None,
+        branch: str | None = None,
+        branch_identifier: str | None = None,
+    ) -> None: ...
 
     async def emit_maintenance_failed(self, *, table_id: str, namespace: str, error: str, operation: str = COMPACTION) -> None: ...
 
@@ -279,7 +312,16 @@ class MaintenanceEmitter(Protocol):
 class NoopEmitter:
     """The emitter used when lineage emission is disabled (or unwired) — does nothing."""
 
-    async def emit_maintenance(self, *, table_id: str, namespace: str, operation: str = COMPACTION) -> None:
+    async def emit_maintenance(
+        self,
+        *,
+        table_id: str,
+        namespace: str,
+        operation: str = COMPACTION,
+        version: int | None = None,
+        branch: str | None = None,
+        branch_identifier: str | None = None,
+    ) -> None:
         return None
 
     async def emit_maintenance_failed(self, *, table_id: str, namespace: str, error: str, operation: str = COMPACTION) -> None:
@@ -326,7 +368,16 @@ class DaprMaintenanceEmitter:
         self._outbox_uri = outbox_uri
         self._storage_options = storage_options or {}
 
-    async def emit_maintenance(self, *, table_id: str, namespace: str, operation: str = COMPACTION) -> None:
+    async def emit_maintenance(
+        self,
+        *,
+        table_id: str,
+        namespace: str,
+        operation: str = COMPACTION,
+        version: int | None = None,
+        branch: str | None = None,
+        branch_identifier: str | None = None,
+    ) -> None:
         # uuid4 ON PURPOSE: each materially-compacting tick is a distinct successful run (§4 decided —
         # do NOT make COMPLETE deterministic; only the FAIL path below needs the flood guard).
         event = build_maintenance_event(
@@ -337,6 +388,9 @@ class DaprMaintenanceEmitter:
             run_id=str(uuid.uuid4()),
             event_time=datetime.now(UTC).isoformat(),
             author=self._author,
+            version=version,
+            branch=branch,
+            branch_identifier=branch_identifier,
         )
         await self._publish(event, table_id)
 

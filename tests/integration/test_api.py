@@ -260,25 +260,6 @@ def test_create_branch_from_main_uses_no_reference(client: TestClient, monkeypat
     dataset.create_branch.assert_called_once_with("exp", None)  # neither → latest of main
 
 
-def test_insert_stamps_the_real_version_on_lineage(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
-    # Insert's native response carries only a transaction_id; the shared trailer reopens the dataset for
-    # the version it produced and stamps it on the WROTE edge — it used to emit version=None.
-    from lance_namespace import InsertIntoTableResponse
-
-    fake_ns.insert_into_table.return_value = InsertIntoTableResponse(transaction_id="tx1")
-    dataset = MagicMock()
-    dataset.version = 7
-    monkeypatch.setattr("catalog.services.dataplane.open_dataset", lambda *a, **k: dataset)
-    # Schema coercion (real Arrow parse + live-schema open) is orthogonal to lineage version-stamping and
-    # has its own coverage (test_insert_coerce.py); pass the placeholder bytes through to the mocked native.
-    monkeypatch.setattr("catalog.services.dataplane.coerce_insert_arrow", lambda _ns, _so, _seg, data, _branch=None, *, max_bytes, overwrite=False: data)
-    captured = _capture_measured_emit(monkeypatch)
-
-    resp = client.post("/v1/table/db$t/insert", content=b"ARROWSTREAM", headers=ARROW_STREAM)
-    assert resp.status_code == 200
-    assert captured["version"] == 7  # the real Lance version, not None
-
-
 # --- #110 lineage-emit coverage: schema-evolution / index / restore / register / declare now emit, ---
 # --- through the shared best-effort + version-pinned read-back trailer (lineage_deps).            ---
 
@@ -498,28 +479,31 @@ def test_merge_insert_rejects_blank_source_with_version(client: TestClient, fake
     fake_ns.merge_insert_into_table.assert_not_called()  # rejected before the write
 
 
-def test_create_index_emits_lineage_at_readback_version(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
-    # The native index response carries only a transaction_id → the new manifest version is read back.
-    from lance_namespace import CreateTableIndexResponse
+def test_create_index_emits_lineage_at_the_version_its_transaction_committed(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
+    # The native index response carries only a transaction_id → the event names the version THAT transaction
+    # committed (DescribeTransaction), not the table's latest, which a later writer may already have moved.
+    from lance_namespace import CreateTableIndexResponse, DescribeTransactionResponse
 
     fake_ns.create_table_index.return_value = CreateTableIndexResponse(transaction_id="tx")
+    fake_ns.describe_transaction.return_value = DescribeTransactionResponse(status="SUCCEEDED", properties={"uuid": "tx", "version": "9"})
     dataset = MagicMock()
-    dataset.version = 9
+    dataset.version = 12
     monkeypatch.setattr("catalog.services.dataplane.open_dataset", lambda *a, **k: dataset)
     captured = _capture_measured_emit(monkeypatch)
 
     resp = client.post("/v1/table/db$t/create_index", json={"column": "vec", "index_type": "IVF_PQ"})
     assert resp.status_code == 200
     assert captured["operation"] == "create_index"
-    assert captured["version"] == 9  # read back off the dataset, not None
+    assert captured["version"] == 9  # the transaction's commit, not the latest (12)
 
 
 def test_create_index_succeeds_when_readback_fails(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
     # The index op is COMMITTED before the lineage read-back runs — a transient reopen failure must
-    # degrade the emit to versionless, never turn the committed op into an error response.
-    from lance_namespace import CreateTableIndexResponse
+    # degrade the emit to its schemaless form, never turn the committed op into an error response.
+    from lance_namespace import CreateTableIndexResponse, DescribeTransactionResponse
 
     fake_ns.create_table_index.return_value = CreateTableIndexResponse(transaction_id="tx")
+    fake_ns.describe_transaction.return_value = DescribeTransactionResponse(status="SUCCEEDED", properties={"uuid": "tx", "version": "9"})
 
     def _boom(*_a: object, **_k: object) -> object:
         raise RuntimeError("transient object-store hiccup")
@@ -530,23 +514,24 @@ def test_create_index_succeeds_when_readback_fails(client: TestClient, fake_ns: 
     resp = client.post("/v1/table/db$t/create_index", json={"column": "vec", "index_type": "IVF_PQ"})
     assert resp.status_code == 200  # the committed index build still returns success
     assert captured["operation"] == "create_index"
-    assert captured["version"] is None  # degraded to a versionless marker; reconcile recovers the version
+    assert captured["version"] == 9  # the commit is still known: it came from the transaction, not the reopen
     assert captured["schema_fields"] == []
 
 
 def test_restore_emits_lineage_at_new_version(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
-    from lance_namespace import RestoreTableResponse
+    from lance_namespace import DescribeTransactionResponse, RestoreTableResponse
 
     fake_ns.restore_table.return_value = RestoreTableResponse(transaction_id="tx")
+    fake_ns.describe_transaction.return_value = DescribeTransactionResponse(status="SUCCEEDED", properties={"uuid": "tx", "version": "12"})
     dataset = MagicMock()
-    dataset.version = 12
+    dataset.version = 13
     monkeypatch.setattr("catalog.services.dataplane.open_dataset", lambda *a, **k: dataset)
     captured = _capture_measured_emit(monkeypatch)
 
     resp = client.post("/v1/table/db$t/restore", json={"version": 3})
     assert resp.status_code == 200
     assert captured["operation"] == "restore_table"
-    assert captured["version"] == 12  # the NEW current version after restore
+    assert captured["version"] == 12  # the NEW version the restore minted, not the latest (13)
 
 
 def test_create_exist_ok_reads_schema_back_instead_of_trusting_payload(real_ns_client: TestClient, monkeypatch) -> None:
@@ -559,7 +544,7 @@ def test_create_exist_ok_reads_schema_back_instead_of_trusting_payload(real_ns_c
 
     seen: dict[str, object] = {}
 
-    def _readback(_ns: object, _so: object, _segments: object, pin_version: object = None) -> object:
+    def _readback(_ns: object, _so: object, _segments: object, pin_version: object = None, branch: object = None) -> object:
         seen["pin"] = pin_version
         return pin_version, [{"name": "true_col", "type": "int64"}], "s3://bucket/abc12345_db$t"
 

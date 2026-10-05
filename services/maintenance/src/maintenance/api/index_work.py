@@ -100,7 +100,16 @@ async def handle_index_unit(event: dict[str, Any], settings: MaintenanceSettings
     # keyed on a URI the graph does not know is noise rather than provenance.
     if item.table_id:
         namespace = item.table_id.split(settings.delimiter, 1)[0]
-        await emitter.emit_maintenance(table_id=item.table_id, namespace=namespace, operation=CREATE_INDEX)
+        # The commit the build made, on the ref it made it on: a branch's version names another snapshot
+        # on main, and its identifier says which incarnation of the branch.
+        await emitter.emit_maintenance(
+            table_id=item.table_id,
+            namespace=namespace,
+            operation=CREATE_INDEX,
+            version=outcome.version,
+            branch=item.branch or None,
+            branch_identifier=outcome.branch_identifier,
+        )
     # THE BUDGET IS A PROPERTY OF THE PROCESS, so both lanes must ask ([[LH-183]]). This one does not
     # COUNT a pass — it builds indices, not rewrites — but a worker that spent its budget on
     # compactions and then receives only index units would run past its ceiling with nothing checking.
