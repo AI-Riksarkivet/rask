@@ -27,7 +27,7 @@ from typing import Any, cast
 import pytest
 
 from medallion.core.config import MedallionSettings
-from medallion.services import ray_submit, stage_submit, transform
+from medallion.services import ray_jobs_api, stage_submit, transform
 
 
 @pytest.fixture
@@ -40,7 +40,7 @@ def captured(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         seen["body"] = body
         return "submitted"  # the real `submit_or_reattach` answers what happened; its caller maps it
 
-    monkeypatch.setattr(ray_submit.rk, "submit_or_reattach", _capture)
+    monkeypatch.setattr(ray_jobs_api, "submit_or_reattach", _capture)
 
     async def _resolve(_settings: Any, *, project: str = "") -> None:
         return None

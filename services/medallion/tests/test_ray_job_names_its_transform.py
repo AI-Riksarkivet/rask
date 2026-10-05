@@ -23,7 +23,7 @@ from typing import Any
 
 import pytest
 
-from medallion.services import ray_submit, stage_submit
+from medallion.services import ray_jobs_api, stage_submit
 from medallion.services.rayjobs_api_executor import RayJobsApiExecutor
 from service_kit.lakehouse.work_order import WorkDestination, WorkIdentity, WorkOrder, WorkSource, WorkStamp
 
@@ -46,7 +46,7 @@ def captured(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         seen["body"] = body
         return "submitted"  # the real `submit_or_reattach` answers what happened; its caller maps it
 
-    monkeypatch.setattr(ray_submit.rk, "submit_or_reattach", _capture)
+    monkeypatch.setattr(ray_jobs_api, "submit_or_reattach", _capture)
     return seen
 
 

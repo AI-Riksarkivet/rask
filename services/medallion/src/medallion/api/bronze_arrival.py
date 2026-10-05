@@ -111,8 +111,8 @@ def register_bronze_arrival_route(app: FastAPI) -> DaprApp:
     # the other from the bronze-write run's `lance.token` facet), so the deterministic-instance dedupe
     # never engages between them, and there is no token de-duplication in the stage runners either — a
     # comment here claimed one until 2026-08-08; `transform.py` only reads the token into logs and
-    # lineage run-ids. That is the intended shape: the token distinguishes EVENTS, while
-    # `stage_submission_id` distinguishes WORK, and merging the two questions is the defect.
+    # lineage run-ids. That is the intended shape: the token distinguishes EVENTS, while the order's
+    # `derive_idempotency_key` distinguishes WORK, and merging the two questions is the defect.
     #
     # A table that genuinely emits both signals for the same dataset does pay duplicate compute, which
     # is survivable rather than correct-by-luck: the stage write is overwrite-convergent (the

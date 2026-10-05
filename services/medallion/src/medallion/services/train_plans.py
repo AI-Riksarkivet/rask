@@ -1,8 +1,9 @@
 """A Ray training job is PLANNED before it is submitted, and reaches exactly one terminal (CP-029).
 
 A durable record, not a watcher, carries the run, so a job the head loses still reaches a terminal and no deadline
-guesses an outcome. The training consumer writes a plan (`service_kit.lakehouse.run_plans`) under the job's `ray-train-<token>` id, announces it on the control lane,
-submits, and acks. The job keeps its own START / RUNNING / COMPLETE / FAIL lineage and, AFTER its terminal emit
+guesses an outcome. The training consumer builds the run's `WorkOrder` (:func:`train_order`), writes a plan
+(`service_kit.lakehouse.run_plans`) under the order's key, announces it on the control lane, submits the order through
+the executor port (CP-044) and acks. The job keeps its own START / RUNNING / COMPLETE / FAIL lineage and, AFTER its terminal emit
 landed, reports through the producer's outcome door (`api/train_outcomes.py`). A run whose report never arrives is
 the sweep's. Both resolve through ONE function (`run_outcomes.resolve`); :class:`TrainOutcomeLane` decides what each
 terminal does:
@@ -40,14 +41,17 @@ from medallion.core.config import MedallionSettings
 from medallion.core.lineage_publish import emit_lineage
 from medallion.core.metrics import record_outcome_conflict, record_train_outcome
 from medallion.schemas.events import build_train_outcome_event
-from medallion.services import ray_submit
 from medallion.services.engine_names import RAY_ENGINE
+from medallion.services.engine_registry import executor_for
 from medallion.services.planned_runs import FAIL_MESSAGE_CAP, MAX_UNSEEN_TICKS, destination_version, outcome_url, publish_plan, ray_executor, run_handle
+from medallion.services.stage_submit import build_stage_order_observability
 from service_kit.lakehouse.commit_marker import marked_version
-from service_kit.lakehouse.executor import Executor, RunState
+from service_kit.lakehouse.executor import Executor, RunState, SubmitOutcome
 from service_kit.lakehouse.naming import CATALOG_DELIMITER
 from service_kit.lakehouse.run_outcomes import OutcomeNotRecordedError, OutcomeReport, SweepReport, SweepVisit, resolve, sweep_plans
 from service_kit.lakehouse.run_plans import OutcomeConflictError, OutcomeStatus, PlanDocument, PlanKind, PlanStore, RunOutcome
+from service_kit.lakehouse.task_registry import TaskRegistration
+from service_kit.lakehouse.work_order import WorkDestination, WorkIdentity, WorkOrder, WorkStamp, derive_idempotency_key
 from service_kit.openlineage import run_id_for
 
 
@@ -58,6 +62,15 @@ TRAIN_TASK: Final = "train"
 
 #: What `dispatch` did: the engine's answer to the submit, or the plan's own when the run had already ended.
 type TrainDispatch = Literal["submitted", "attached", "already_failed", "already_landed"]
+
+#: What each `SubmitOutcome` answers to the consumer. A training order never replaces a failed run, so `RESUBMITTED`
+#: cannot arrive; it is mapped as the fresh start it would be rather than left to raise in the ack path.
+_DISPATCHED: Final[dict[SubmitOutcome, TrainDispatch]] = {
+    SubmitOutcome.SUBMITTED: "submitted",
+    SubmitOutcome.RESUBMITTED: "submitted",
+    SubmitOutcome.REATTACHED: "attached",
+    SubmitOutcome.ALREADY_FAILED: "already_failed",
+}
 
 
 class TrainOutcomeNotRecordedError(OutcomeNotRecordedError):
@@ -146,6 +159,52 @@ class TrainOutcomeLane:
         log.warning("medallion_train_outcome_conflict", extra={"action_id": plan.action_id, "recorded": recorded, "refused": refused})
 
 
+def train_action_id(registry_uri: str, token: str) -> str:
+    """The training run's ONE name, derived in one place: the door answers it, the order carries it as its key.
+
+    `derive_idempotency_key` over the token and the registry, with no source and no code version, so a redelivery
+    after a deploy re-attaches to the run already training rather than starting a second (D2).
+    """
+    return derive_idempotency_key(stage=TRAIN_TASK, token=token, from_uri="", to_uri=registry_uri, code_version="")
+
+
+def train_order(
+    settings: MedallionSettings,
+    *,
+    token: str,
+    model: str,
+    features: list[dict[str, Any]],
+    config: dict[str, Any],
+    registry_uri: str,
+    artifact_base: str,
+    originator: str,
+    project: str,
+) -> WorkOrder:
+    """The training run's `WorkOrder`: the contract a stage submits, with no source table.
+
+    The order's key is the run's ONE name (CP-029, :func:`train_action_id`): the plan's action id, the engine's
+    submission id, the outcome door's key and the registry commit's marker.
+
+    What the job needs beyond the platform's own fields rides ``params``, which `WorkOrder.to_env` serializes as
+    ``RASK_PARAM_*``; the token rides the stamp (``RASK_TOKEN``). ``replace_failed_run`` is false: a run that failed
+    stays failed until a person asks again under a new token. The job's spans name the trainer, the compute head's one
+    identity, rather than the producer that submitted it.
+    """
+    key = train_action_id(registry_uri, token)
+    observability = build_stage_order_observability().model_copy(update={"service_name": settings.trainer_identity})
+    return WorkOrder(
+        task=TRAIN_TASK,
+        destination=WorkDestination(uri=registry_uri, table_id=f"{settings.models_namespace}{CATALOG_DELIMITER}{model}"),
+        stamp=WorkStamp(stage=settings.models_namespace, token=token),
+        identity=WorkIdentity(run_id=train_run_id(token), project=project, originator=originator),
+        observability=observability,
+        params={"MODEL": model, "FEATURES": json.dumps(features), "CONFIG": json.dumps(config), "ARTIFACT_BASE": artifact_base},
+        idempotency_key=key,
+        outcome_url=outcome_url(settings, key),
+        replace_failed_run=False,
+    )
+
+
 async def dispatch(
     settings: MedallionSettings,
     dapr: object,
@@ -158,60 +217,52 @@ async def dispatch(
     artifact_base: str,
     originator: str,
     project: str,
+    executor: Executor | None = None,
 ) -> TrainDispatch:
-    """Plan this training run, announce it, submit it, and answer what happened. The consumer acks on return.
+    """Plan this training run, announce it, submit it through the executor port, and answer what happened.
 
-    The plan is written first and idempotently, so a redelivered trigger finds it and re-attaches. A plan that has
-    already ENDED submits nothing (D2): one that succeeded answers ``already_landed``, one that failed
-    ``already_failed``, which the consumer drops.
+    The plan is written first and idempotently, so a redelivered trigger finds it and submits the order the plan
+    stored, re-attaching under the same key. A plan that has already ENDED submits nothing (D2): one that succeeded
+    answers ``already_landed``, one that failed ``already_failed``, which the consumer drops. The engine is resolved BY
+    NAME from the plan, unless the caller already holds it.
 
     Raises:
-        ray_submit.RayJobError: the engine could not be reached or refused the submission; the plan stays open, so a
-            redelivery re-attaches and the sweep fails a submission that never registers.
+        EngineError: the engine could not be reached or refused the submission; the plan stays open, so a redelivery
+            re-attaches and the sweep fails a submission that never registers.
         ServiceUnavailableError: no control root is configured.
     """
-    action_id = ray_submit.train_submission_id(token)
-    store = plan_store(settings)
-    base_version = await asyncio.to_thread(destination_version, registry_uri, settings.storage_options())
-    planned = PlanDocument(
-        action_id=action_id,
-        run_id=train_run_id(token),
-        kind=PlanKind.TRAIN,
-        engine=RAY_ENGINE,
-        task=TRAIN_TASK,
-        stage=settings.models_namespace,
-        from_uri="",
-        to_uri=registry_uri,
-        to_id=f"{settings.models_namespace}{CATALOG_DELIMITER}{model}",
-        base_version=base_version,
-        originator=originator,
-        project=project,
-        trigger={"token": token, "model": model, "features": features},
-        submitted_at=datetime.now(UTC),
-        report_url=outcome_url(settings, action_id),
-        command=settings.train_entrypoint,
-    )
-    plan, created = await asyncio.to_thread(store.create, planned)
-    if plan.outcome is not None:
-        log.info("medallion_train_run_already_ended", extra={"action_id": action_id, "outcome": plan.outcome.status})
-        return "already_landed" if plan.outcome.status == "succeeded" else "already_failed"
-    plan = await publish_plan(settings, dapr, store, plan)
-    submitted = await ray_submit.submit_train_job(
+    order = train_order(
         settings,
-        model=model,
-        features_json=json.dumps(features),
-        config_json=json.dumps(config),
         token=token,
+        model=model,
+        features=features,
+        config=config,
         registry_uri=registry_uri,
         artifact_base=artifact_base,
         originator=originator,
         project=project,
-        outcome_url=plan.report_url,
     )
-    log.info("medallion_train_run_planned", extra={"action_id": action_id, "plan_created": created, "submitted": submitted})
-    if submitted == "already_failed":
-        return "already_failed"
-    return "attached" if submitted == "attached" else "submitted"
+    store = plan_store(settings)
+    base_version = await asyncio.to_thread(destination_version, registry_uri, settings.storage_options())
+    planned = PlanDocument.for_order(
+        order,
+        kind=PlanKind.TRAIN,
+        engine=RAY_ENGINE,
+        command=settings.train_entrypoint,
+        base_version=base_version,
+        trigger={"token": token, "model": model, "features": features},
+        submitted_at=datetime.now(UTC),
+    )
+    plan, created = await asyncio.to_thread(store.create, planned)
+    if plan.outcome is not None:
+        log.info("medallion_train_run_already_ended", extra={"action_id": plan.action_id, "outcome": plan.outcome.status})
+        return "already_landed" if plan.outcome.status == "succeeded" else "already_failed"
+    plan = await publish_plan(settings, dapr, store, plan)
+    registration = TaskRegistration(task=plan.task, engine=plan.engine, command=plan.command, code_version=plan.code_version)
+    engine = executor or executor_for(plan.engine, storage_options={})
+    _handle, submitted = await engine.submit(plan.order if plan.order is not None else order, registration)
+    log.info("medallion_train_run_planned", extra={"action_id": plan.action_id, "plan_created": created, "submitted": submitted.value})
+    return _DISPATCHED[submitted]
 
 
 async def _failure_text(executor: Executor, plan: PlanDocument, state: RunState) -> str:

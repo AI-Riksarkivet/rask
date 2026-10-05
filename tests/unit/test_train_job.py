@@ -240,11 +240,11 @@ def _run_main(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, fail_publish: 
     lance.write_dataset(pa.table({"amount": [9.0]}), str(tmp_path / "silver"), mode="overwrite")
     features = [{"dataset": "silver$features", "version": 1, "uri": str(tmp_path / "silver")}]
 
-    monkeypatch.setenv("MODEL", "churn")
-    monkeypatch.setenv("TRAIN_TOKEN", "tok1")
-    monkeypatch.setenv("FEATURES", json.dumps(features))
-    monkeypatch.setenv("REGISTRY_URI", str(tmp_path / "registry"))
-    monkeypatch.setenv("ARTIFACT_BASE", str(tmp_path / "artifacts"))
+    monkeypatch.setenv("RASK_PARAM_MODEL", "churn")
+    monkeypatch.setenv("RASK_TOKEN", "tok1")
+    monkeypatch.setenv("RASK_PARAM_FEATURES", json.dumps(features))
+    monkeypatch.setenv("RASK_DEST_URI", str(tmp_path / "registry"))
+    monkeypatch.setenv("RASK_PARAM_ARTIFACT_BASE", str(tmp_path / "artifacts"))
     monkeypatch.delenv("LINEAGE_URL", raising=False)
     # The WIRE form, so every assertion below reads what the ingest would receive rather than the
     # model the job now hands its emitter.
@@ -298,11 +298,11 @@ def test_main_emits_an_attributable_fail_on_misconfiguration(monkeypatch: pytest
     # Review 2026-07-11: the consumer already acked (submit-and-ack) — if env parsing crashed
     # OUTSIDE the FAIL guard, a misconfigured run would vanish from provenance entirely.
     events: list[dict[str, Any]] = []
-    monkeypatch.setenv("MODEL", "churn")
-    monkeypatch.setenv("TRAIN_TOKEN", "tok1")
-    monkeypatch.setenv("FEATURES", "{not json")
-    monkeypatch.setenv("REGISTRY_URI", str(tmp_path / "registry"))
-    monkeypatch.setenv("ARTIFACT_BASE", str(tmp_path / "artifacts"))
+    monkeypatch.setenv("RASK_PARAM_MODEL", "churn")
+    monkeypatch.setenv("RASK_TOKEN", "tok1")
+    monkeypatch.setenv("RASK_PARAM_FEATURES", "{not json")
+    monkeypatch.setenv("RASK_DEST_URI", str(tmp_path / "registry"))
+    monkeypatch.setenv("RASK_PARAM_ARTIFACT_BASE", str(tmp_path / "artifacts"))
     monkeypatch.delenv("LINEAGE_URL", raising=False)
     # The WIRE form, so every assertion below reads what the ingest would receive rather than the
     # model the job now hands its emitter.

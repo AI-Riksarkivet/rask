@@ -15,8 +15,9 @@ outcome. The job reports its own terminal state through this stage runner's outc
 THE SWEEP (D-6), one tick per cron firing, over this stage runner's open plans and through the executor port only:
 a RUNNING or PENDING job is left alone at any age (a running job is not failed; `/cascade/stalled` and its alert
 surface a hung hop); SUCCEEDED, FAILED and STOPPED resolve; a job the engine no longer knows (seen and then gone, or
-never registered within :data:`MAX_UNSEEN_TICKS`) resolves succeeded when its marker is found, is resubmitted under
-the same key within :data:`MAX_RESUBMITS` otherwise, and fails after that.
+never registered within :data:`MAX_UNSEEN_TICKS`) resolves succeeded when its marker is found; otherwise it is
+resubmitted under the same key within :data:`MAX_RESUBMITS` and fails after that, unless the engine advertises
+`Capability.DURABLE_RECORD`, whose lost record is not a lost run: that one fails at once (CP-044).
 
 `bindings.cron` FIRES ON EVERY REPLICA, and this sweep needs no lease: every plan mutation is ETag CAS, the close is
 first-wins, a hand-off is replay-safe (pass 2 dedupes its volume, `metrics.record_stage_completion`), and a resubmit
@@ -46,7 +47,7 @@ from medallion.services.planned_runs import FAIL_MESSAGE_CAP, MAX_UNSEEN_TICKS, 
 from medallion.services.stage_submit import build_stage_order, submit_stage_order
 from service_kit import dapr_publish
 from service_kit.lakehouse.commit_marker import marked_version
-from service_kit.lakehouse.executor import Executor, RunState
+from service_kit.lakehouse.executor import Capability, Executor, RunState
 from service_kit.lakehouse.naming import CATALOG_DELIMITER
 from service_kit.lakehouse.run_outcomes import OutcomeNotRecordedError, OutcomeReport, SweepReport, SweepVisit, resolve, sweep_plans
 from service_kit.lakehouse.run_plans import OutcomeConflictError, OutcomeStatus, PlanDocument, PlanKind, PlanStore, RunOutcome
@@ -292,7 +293,10 @@ async def _tick(store: PlanStore, plan: PlanDocument, executor: Executor, lane: 
     if await lane.committed_version(plan) is not None:
         await resolve(store, plan, OutcomeReport(status="succeeded"), lane, source="sweep")
         return "resolved"
-    if plan.resubmits < MAX_RESUBMITS:
+    # ONLY BEHIND AN ENGINE THAT CAN LOSE A RECORD. A resubmit answers a lost record; an engine that keeps a durable
+    # one did not lose the run, so a second submission under its key would be a second copy of work nothing lost.
+    durable = Capability.DURABLE_RECORD in executor.capabilities
+    if not durable and plan.resubmits < MAX_RESUBMITS:
         resubmitted = await asyncio.to_thread(
             store.update, plan.action_id, lambda p: p.model_copy(update={"resubmits": p.resubmits + 1, "seen": False, "unseen_ticks": 0})
         )
@@ -301,7 +305,10 @@ async def _tick(store: PlanStore, plan: PlanDocument, executor: Executor, lane: 
             await submit_stage_order(resubmitted.order, _registration(resubmitted), executor=executor)
         return "resubmitted"
     lost = "vanished" if vanished else "never registered"
-    error = f"the Ray stage job {plan.action_id} {lost} after {plan.resubmits} resubmit(s), and its destination carries no commit marker"
+    if durable:
+        error = f"the stage job {plan.action_id} {lost} on an engine that keeps a durable record, and its destination carries no commit marker"
+    else:
+        error = f"the Ray stage job {plan.action_id} {lost} after {plan.resubmits} resubmit(s), and its destination carries no commit marker"
     await resolve(store, plan, OutcomeReport(status="failed", error=error), lane, source="sweep")
     return "resolved"
 

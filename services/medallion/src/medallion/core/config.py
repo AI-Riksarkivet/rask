@@ -586,10 +586,10 @@ class MedallionSettings(OidcSettings, FgaSettings, SignatureDoorSettings, BaseSe
     #: train lane that first authenticated as it. A stage runner's outcome door admits it and nothing else.
     trainer_identity: str = Field(default="service-trainer", alias="MEDALLION_TRAINER_IDENTITY")
     models_namespace: str = Field(default="models", alias="MEDALLION_MODELS_NAMESPACE")
-    # The lineage HTTP ingest the TRAINING JOB posts its own RunEvents to (D2/D3: Ray pods carry no
-    # Dapr sidecar, so the job emits over plain HTTP like medallion_demo). Default = the chart's
-    # in-cluster service for the standard `lance-ns` release (same convention as ray_address); set ""
-    # to disable emission, e.g. in environments without the lineage service.
+    # The lineage service this producer READS: the cascade-lag reader asks it which runs wrote a dataset
+    # (`cascade_lag_readers`). No job is sent it: a training job emits to the lineage ingest its own pod names
+    # (`RASK_LINEAGE_ENDPOINT` on the Ray head, CP-044), because a submitted endpoint would outvote the pod's.
+    # Default = the chart's in-cluster service for the standard `lance-ns` release.
     train_lineage_url: str = Field(default="http://lance-ns-lineage:8000", alias="MEDALLION_TRAIN_LINEAGE_URL")
 
     # --- media ingest head (multimodal §9) — POST /ingest-media lands external media as bronze blobs and

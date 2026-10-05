@@ -42,7 +42,7 @@ from medallion.api.train_outcomes import mount_train_outcomes
 from medallion.core.config import get_settings
 from medallion.core.lineage_publish import start_signing, stop_signing
 from medallion.services.dapr_saga import DaprSagaClient
-from medallion.services.ray_submit import close_ray_client
+from medallion.services.engine_registry import close_executors
 from medallion.services.task_register import register_tasks
 from service_kit.draining import arm_drain_on_sigterm
 from service_kit.governed.actor_state_store import probe_actor_state_store
@@ -166,10 +166,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             await app.state.dapr.close()
         with suppress(Exception):
             await app.state.http.aclose()
-        # The Ray client the executor pools at module level (`ray_submit.ray_client`): the training submit, the plan
+        # What the executors hold for the process (the Ray adapter's pooled client): the training submit, the plan
         # sweep and the training operator routes use it on THIS loop, so it is closed here.
         with suppress(Exception):
-            await close_ray_client()
+            await close_executors()
         fga_client = getattr(app.state, "fga", None)
         if fga_client is not None:
             with suppress(Exception):

@@ -70,22 +70,3 @@ def test_an_absent_token_is_not_the_same_as_the_string_none() -> None:
 
     assert absent != literal
     assert absent == key(token=None)
-
-
-def test_neither_lane_hand_rolls_the_key() -> None:
-    """The structural half: one derivation means no call site can spell it differently.
-
-    Source-read rather than behavioural, because the defect was never a wrong VALUE at either site —
-    each was self-consistent. It was two sites at all.
-    """
-    from pathlib import Path
-
-    repo = Path(__file__).resolve().parents[2]
-    for path in (
-        repo / "services" / "medallion" / "src" / "medallion" / "services" / "transform.py",
-        repo / "services" / "medallion" / "src" / "medallion" / "services" / "ray_submit.py",
-    ):
-        source = path.read_text()
-        assigned = [line.strip() for line in source.splitlines() if "idempotency_key=" in line]
-        for line in assigned:
-            assert "derive_idempotency_key" in line, f"{path.name} spells the key itself: {line!r}"

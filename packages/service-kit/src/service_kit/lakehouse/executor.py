@@ -11,12 +11,12 @@ from it by hand — not-yet-registered, record-lost, and a transport blip — wi
 `never_registered` and a poll ceiling. A port answering `None` forces every caller to re-derive that,
 and a caller that gets it wrong either resubmits live work or waits 24 hours on a job that is gone.
 
-`DURABLE_RECORD` IS WHAT A RESUBMIT HAS TO ASK ABOUT. The medallion's `MAX_UNSEEN_TICKS` and
-`MAX_RESUBMITS` are justified by an engine-specific durability defect it names outright: Ray's GCS is
-not fault-tolerant in this estate (no external Redis, a standing rule), so a head restart takes every
-job record with it. Against an engine that advertises `DURABLE_RECORD` the same machinery is a spurious
-DOUBLE-SUBMIT — a second copy of work nothing lost — so it is sound only behind an engine that withholds
-the capability, which both adapters in this estate do.
+`DURABLE_RECORD` IS WHAT A RESUBMIT HAS TO ASK ABOUT, and the stage sweep asks it (`stage_plans._tick`, CP-044). The
+medallion's `MAX_RESUBMITS` is justified by an engine-specific durability defect it names outright: Ray's GCS is not
+fault-tolerant in this estate (no external Redis, a standing rule), so a head restart takes every job record with it.
+Against an engine that advertises `DURABLE_RECORD` the same machinery is a spurious DOUBLE-SUBMIT — a second copy of
+work nothing lost — so the sweep resubmits only behind an engine that withholds the capability, and closes a lost run
+failed behind one that claims it.
 """
 
 from __future__ import annotations
@@ -103,14 +103,27 @@ class SubmitOutcome(StrEnum):
     REATTACHED = "reattached"
     #: A terminally-FAILED prior run was replaced. Never a live one.
     RESUBMITTED = "resubmitted"
+    #: A prior run under this key ended FAILED and the order asked not to replace it
+    #: (`WorkOrder.replace_failed_run` false): nothing was started, and the failure stands.
+    ALREADY_FAILED = "already_failed"
+
+
+class EngineError(RuntimeError):
+    """The engine could not be reached, or refused the request.
+
+    ON THE PORT so a caller can tell an engine fault from its own bug without naming an adapter: a consumer that
+    retries a delivery on this error and lets anything else fail loudly needs one type every adapter raises. An
+    adapter's own transport error subclasses it.
+    """
 
 
 class RunHandle(BaseModel):
     """What `submit` returned, carried to every later call.
 
-    NEVER RE-DERIVED by the watcher. `ray_submit.py` records the measured defect: the submitter and the
-    watcher must name the same job, and a second inline derivation is how a poller ends up watching an
-    id the submitter never used, reporting a healthy job as missing forever.
+    NEVER RE-DERIVED by the watcher. The submitter and the watcher must name the same job, and a second
+    inline derivation is how a poller ends up watching an id the submitter never used, reporting a
+    healthy job as missing forever (measured on the Ray lane before `derive_idempotency_key` was the one
+    derivation).
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -160,6 +173,9 @@ class Executor(Protocol):
         BOTH ARGUMENTS, and neither is redundant: the order says what must happen (this is the
         platform's, identical across engines), the registration says what running it means here (this
         is the engine's own). Collapsing them would make one of the two a per-engine shape.
+
+        Raises:
+            EngineError: the engine could not be reached or refused the submission.
         """
         ...
 

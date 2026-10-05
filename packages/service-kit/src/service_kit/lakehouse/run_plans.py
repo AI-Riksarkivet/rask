@@ -54,7 +54,7 @@ CLOSED_RETENTION: Final = timedelta(days=14)
 #: the entry first, so a younger orphan may be a plan still being written.
 ORPHAN_ENTRY_GRACE: Final = timedelta(minutes=10)
 
-#: An action id or owner as it may appear in an object key: a stage's 40-hex key and the train lane's `ray-train-<token>`.
+#: An action id or owner as it may appear in an object key: a run's 40-hex `derive_idempotency_key`, or an owner's identity.
 KEY_SEGMENT_PATTERN: Final = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
 
 #: The cap on a terminal outcome's error text. It becomes a FAIL event's message, which is published through the
@@ -93,9 +93,10 @@ class RunOutcome(BaseModel):
 class PlanDocument(BaseModel):
     """One planned run: what it does, where it reports, how the sweep has seen it, and how it ended.
 
-    ``order`` is the stage lane's exact `WorkOrder`, kept so a resubmit sends the same work under the same key; the
-    identity fields beside it mirror the order where one is present (a validator holds them equal), so a lane that
-    submits without an order can still be planned and a reader of the published plan needs no engine's vocabulary.
+    ``order`` is the run's exact `WorkOrder`, kept so a resubmit or a redelivery sends the same work under the same key;
+    the identity fields beside it mirror the order where one is present (a validator holds them equal), so a plan
+    written without an order still parses and a reader of the published plan needs no engine's vocabulary. A training
+    run's order has no source, and its plan's ``from_uri`` and ``from_id`` are empty.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -144,8 +145,8 @@ class PlanDocument(BaseModel):
             "run_id": order.identity.run_id,
             "task": order.task,
             "stage": order.stamp.stage,
-            "from_uri": order.source.uri,
-            "from_id": order.source.table_id,
+            "from_uri": order.source.uri if order.source is not None else "",
+            "from_id": order.source.table_id if order.source is not None else "",
             "to_uri": order.destination.uri,
             "to_id": order.destination.table_id,
             "code_version": order.identity.code_version,
@@ -179,8 +180,8 @@ class PlanDocument(BaseModel):
             engine=engine,
             task=order.task,
             stage=order.stamp.stage,
-            from_uri=order.source.uri,
-            from_id=order.source.table_id,
+            from_uri=order.source.uri if order.source is not None else "",
+            from_id=order.source.table_id if order.source is not None else "",
             to_uri=order.destination.uri,
             to_id=order.destination.table_id,
             base_version=base_version,

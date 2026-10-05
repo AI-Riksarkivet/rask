@@ -25,9 +25,10 @@ from fastapi.concurrency import run_in_threadpool
 from lance_namespace import ServiceUnavailableError
 
 from medallion.core.config import MedallionSettings, shared_lance_session
-from medallion.services import catalog_register, ray_submit, train_plans
+from medallion.services import catalog_register, train_plans
 from service_kit import dapr_publish
 from service_kit.governed import fga
+from service_kit.lakehouse.executor import EngineError
 from service_kit.lakehouse.naming import CATALOG_DELIMITER
 
 
@@ -176,7 +177,7 @@ async def submit_train_request(
     token: str,
     originator: str = "",
 ) -> dict[str, Any]:
-    """Resolve feature-version pins and publish the training trigger; returns ``{token, features}``.
+    """Resolve feature-version pins and publish the training trigger; returns ``{token, model, features, instance_id}``.
 
     A resolution failure (unknown dataset / unreadable storage) surfaces as ``resolve_failed`` and a
     publish failure as ``publish_failed`` — the route maps both to explicit errors rather than a 202
@@ -218,7 +219,10 @@ async def submit_train_request(
     if not landed:
         return {"status": "publish_failed", "token": token}
     log.info("train_requested", extra={"token": token, "model": model, "features": pinned})
-    return {"token": token, "model": model, "features": pinned}
+    # THE RUN'S NAME, so the caller holding the 202 can ask `GET /trains/<instance_id>` how it ended: the consumer plans
+    # the run under exactly this key (`train_plans.train_order`).
+    instance_id = train_plans.train_action_id(registry_uri_for(settings, model), token)
+    return {"token": token, "model": model, "features": pinned, "instance_id": instance_id}
 
 
 async def handle_train_trigger(settings: MedallionSettings, event: Any, *, dapr: object, fga_client: Any | None = None) -> dict[str, str]:
@@ -353,7 +357,7 @@ async def handle_train_trigger(settings: MedallionSettings, event: Any, *, dapr:
             # alone — the third of `notifiable()`'s four rules, and the silent one.
             project=settings.produce_admin_project,
         )
-    except ray_submit.RayJobError as exc:
+    except EngineError as exc:
         log.warning("train_submit_failed", extra={"token": token, "error": str(exc)})
         return _RETRY
     if outcome == "already_failed":

@@ -27,7 +27,7 @@ from typing import Any
 import pytest
 
 from medallion.core.config import MedallionSettings
-from medallion.services import ray_submit, stage_submit
+from medallion.services import ray_jobs_api, stage_submit
 
 
 async def _submit_stage_job(settings: Any, **kwargs: Any) -> None:
@@ -66,28 +66,8 @@ def stage_body(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         return None
 
     monkeypatch.setenv("APP_API_TOKEN", APP_TOKEN)
-    monkeypatch.setattr(ray_submit.rk, "submit_or_reattach", _capture)
+    monkeypatch.setattr(ray_jobs_api, "submit_or_reattach", _capture)
     monkeypatch.setattr(stage_submit, "resolve_transform_async", _resolve)
-    return seen
-
-
-@pytest.fixture
-def train_body(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
-    seen: dict[str, Any] = {}
-
-    class _Response:
-        status_code = 200
-
-    class _Client:
-        async def post(self, _path: str, json: dict[str, Any]) -> _Response:  # noqa: A002 - httpx's own kwarg name
-            seen.update(json)
-            return _Response()
-
-    async def _client() -> _Client:
-        return _Client()
-
-    monkeypatch.setenv("APP_API_TOKEN", APP_TOKEN)
-    monkeypatch.setattr(ray_submit, "ray_client", _client)
     return seen
 
 
@@ -101,25 +81,3 @@ async def test_the_stage_submission_carries_no_secret_material(stage_body: dict[
     serialized = json.dumps(stage_body)
     assert SECRET not in serialized, "the secret VALUE is in the submission body under some other key"
     assert APP_TOKEN not in serialized, "the app token VALUE is in the submission body under some other key"
-
-
-@pytest.mark.asyncio
-async def test_the_train_submission_carries_no_secret_material(train_body: dict[str, Any]) -> None:
-    await ray_submit.submit_train_job(
-        _settings(),
-        model="m1",
-        features_json="[]",
-        config_json="{}",
-        token="tok-1",
-        originator="",
-        project="",
-        registry_uri="s3://models/registry",
-        artifact_base="s3://models/artifacts",
-    )
-    env = train_body["runtime_env"]["env_vars"]
-    assert "S3_SECRET" not in env
-    assert "LINEAGE_SERVICE_TOKEN" not in env
-
-    serialized = json.dumps(train_body)
-    assert SECRET not in serialized
-    assert APP_TOKEN not in serialized

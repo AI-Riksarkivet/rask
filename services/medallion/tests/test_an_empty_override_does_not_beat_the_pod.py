@@ -1,9 +1,9 @@
 """An OTLP name the stage runner does not have is OMITTED from `runtime_env`, never blanked.
 
-[[XC-066]] THE FILE ALREADY RECORDS THE MECHANISM, for a different pair of keys. `ray_submit.py` states,
-measured twice on the live estate, that "Ray merges `runtime_env` OVER the process env, so a key sent
-here BEATS the pod's" — written about an S3 credential pair whose double ownership gave every job
-`SignatureDoesNotMatch`, and whose halves were moved to the pod for exactly that reason.
+[[XC-066]] THE ESTATE ALREADY MEASURED THE MECHANISM, for a different pair of keys, twice on the live estate:
+"Ray merges `runtime_env` OVER the process env, so a key sent here BEATS the pod's" — written about an S3
+credential pair whose double ownership gave every job `SignatureDoesNotMatch`, and whose halves were moved to
+the pod for exactly that reason. A training order serializes the same OTLP map (`train_plans.train_order`).
 
 The OTLP block was left forwarding `os.environ.get("OTEL_...", "")`. An empty value is not an absence
 in an override layer: it makes the SUBMITTER the owner of that key, so a stage runner with

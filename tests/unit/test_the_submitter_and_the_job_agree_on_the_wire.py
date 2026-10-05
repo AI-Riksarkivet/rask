@@ -29,9 +29,10 @@ import re
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 
-#: Every program a STAGE submission feeds. `ray_train_job.py` and `ray_lance_job.py` are absent
-#: deliberately — they answer different submitters with different contracts (TRAIN_*, RUN), and
-#: folding them in would assert an agreement that was never claimed.
+#: Every program a STAGE submission feeds. `ray_lance_job.py` answers a different submitter with a different
+#: contract (RUN). `ray_train_job.py` reads the order's vocabulary too (CP-044), and its agreement is pinned by
+#: running it on the env its submission carried
+#: (`services/medallion/tests/test_a_planned_training_run_reaches_exactly_one_terminal.py`).
 #:
 #: THE SEALED RUNNER IS HERE ON PURPOSE, and the boundary is worth stating because it looks like a
 #: violation. A runner owns its stage graph, its models and its output format, and the platform

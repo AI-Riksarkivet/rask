@@ -1,4 +1,5 @@
-"""A planned Ray stage run reaches exactly one terminal (CP-029 S1: clauses b, d and e, and D-6's resubmit budget).
+"""A planned Ray stage run reaches exactly one terminal (CP-029 S1: clauses b, d and e; D-6's resubmit budget, which
+the sweep spends only behind an engine that withholds `Capability.DURABLE_RECORD`, CP-044).
 
 Driven on real collaborators end to end. The stage runner's own pass 1 (`handle_stage`) plans and submits the run into
 a plan store on `tmp_path`; the REAL Ray stage job (`scripts/ray_stage_job.py`) writes the destination on real pylance
@@ -86,16 +87,20 @@ class _Bus:
         return [p["data"] for p in self.published if p["topic"] == topic]
 
 
+#: What the Ray adapter advertises: no `DURABLE_RECORD`, because a head restart takes the job history with it.
+_RAY_CAPABILITIES = frozenset({Capability.CANCEL, Capability.FAILURE_DETAIL})
+
+
 class _Engine:
     """The executor port as the sweep reads it: one scripted state per status read, every submit recorded, and the
     failure Ray recorded for the job, when it recorded one."""
 
     name = "ray"
-    capabilities = frozenset({Capability.CANCEL, Capability.FAILURE_DETAIL})
 
-    def __init__(self, *states: RunState, failure: RunFailure | None = None) -> None:
+    def __init__(self, *states: RunState, failure: RunFailure | None = None, capabilities: frozenset[Capability] = _RAY_CAPABILITIES) -> None:
         self._states = list(states)
         self._failure = failure
+        self.capabilities = capabilities
         self.submitted: list[str] = []
 
     def validate_task(self, registration: TaskRegistration) -> None:
@@ -176,7 +181,7 @@ def _pass_one(settings: MedallionSettings, bus: _Bus, trigger: dict[str, Any]) -
 def _job_commits(plan: PlanDocument, *, cardinality: str = ONE_TO_ONE) -> None:
     """The real stage job, as the order tells it to run: its last commit carries the run's marker."""
     order = plan.order
-    assert order is not None
+    assert order is not None and order.source is not None
     job._run_stage(
         order.source.uri,
         order.destination.uri,
@@ -339,21 +344,36 @@ def test_a_job_that_commits_and_then_fails_names_the_version_its_marker_records(
     assert message.endswith("… (truncated) (driver exit 1)") and len(message) < 1000, f"the cause was not bounded: {len(message)} chars"
 
 
-def test_a_lost_job_with_no_marker_is_resubmitted_under_its_key_twice_and_then_fails(
-    settings: MedallionSettings, dashboard: list[str], door: tuple[TestClient, _Bus]
+@pytest.mark.parametrize(
+    ("capabilities", "losses", "resubmits", "reason"),
+    [
+        pytest.param(_RAY_CAPABILITIES, 3, 2, "vanished after 2 resubmit(s)", id="record-can-be-lost"),
+        pytest.param(_RAY_CAPABILITIES | {Capability.DURABLE_RECORD}, 1, 0, "vanished on an engine that keeps a durable record", id="durable-record"),
+    ],
+)
+def test_a_lost_job_with_no_marker_is_resubmitted_only_where_the_engine_can_lose_its_record(
+    settings: MedallionSettings,
+    dashboard: list[str],
+    door: tuple[TestClient, _Bus],
+    capabilities: frozenset[Capability],
+    losses: int,
+    resubmits: int,
+    reason: str,
 ) -> None:
-    """D-6's budget. Each time the head loses the job and the destination holds no marker, the same key is submitted
-    again (it creates a fresh job or re-attaches to a live one); after two, the run fails, bare, saying why."""
+    """D-6's budget, read off the engine's capabilities. Behind an engine that can lose a record, each time the head
+    loses the job and the destination holds no marker the same key is submitted again (it creates a fresh job or
+    re-attaches to a live one), and after two the run fails, bare, saying why. Behind one that keeps a durable record, a
+    lost record is not a lost run: nothing is submitted again and the run fails on the first loss."""
     _client, bus = door
     plan = _pass_one(settings, bus, {"token": "tok-1"})
-    engine = _Engine(*([RunState.RUNNING, RunState.UNKNOWN] * 3))
+    engine = _Engine(*([RunState.RUNNING, RunState.UNKNOWN] * losses), capabilities=capabilities)
 
-    for _ in range(6):
+    for _ in range(2 * losses):
         _sweep(settings, bus, engine)
 
-    assert engine.submitted == [plan.action_id, plan.action_id]
+    assert engine.submitted == [plan.action_id] * resubmits
     closed = _plan(settings, plan)
     assert closed.outcome is not None and closed.outcome.status == "failed"
     fail = next(event for event in bus.on(LINEAGE_TOPIC) if event["eventType"] == "FAIL")
     assert "facets" not in fail["outputs"][0], "a run that wrote nothing named a version"
-    assert "vanished after 2 resubmit(s)" in fail["run"]["facets"]["errorMessage"]["message"]
+    assert reason in fail["run"]["facets"]["errorMessage"]["message"]

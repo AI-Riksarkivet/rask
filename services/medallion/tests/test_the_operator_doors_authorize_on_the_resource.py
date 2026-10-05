@@ -770,7 +770,7 @@ def test_the_training_doors_serve_the_run_the_consumer_PLANS_on_the_configured_p
     settings = app.dependency_overrides[get_settings]()
     trigger = {"token": "tok-1", "model": "churn", "features": [{"dataset": "silver$features", "version": 7}], "config": {}, "project": "other"}
     assert asyncio.run(train_service.handle_train_trigger(settings, {"data": trigger}, dapr=_Bus())) == {"status": "SUCCESS"}
-    minted = ray_submit.train_submission_id("tok-1")
+    ((minted, _written),) = train_plans.plan_store(settings).open_entries()
     # The job had already published its model, its commit carrying the run's marker, when the stop reached it: Ray
     # answers the stop with `stopped: false` and SUCCEEDED, and the run must close succeeded, never FAIL (D-4).
     planned = asyncio.run(train_plans.read(settings, minted))

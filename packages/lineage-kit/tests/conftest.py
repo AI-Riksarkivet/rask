@@ -19,7 +19,6 @@ _LINEAGE_ENV_VARS = (
     # The credential. Left ambient, an exported value would decide which file or bearer the emitter
     # presents, and the tests would pass or fail by where they ran.
     "RASK_LINEAGE_IDENTITY_TOKEN_FILE",
-    "LINEAGE_URL",
     "LINEAGE_TOKEN",
     "OPENLINEAGE_URL",
     "OPENLINEAGE_API_KEY",

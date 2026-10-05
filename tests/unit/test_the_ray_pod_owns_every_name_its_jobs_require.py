@@ -89,18 +89,3 @@ def test_the_head_carries_every_name_a_stage_job_requires() -> None:
 
     missing = [name for name in _POD_MUST_PROVIDE if name not in env]
     assert not missing, f"the Ray head does not provide {missing} — a stage job on it dies before reading a byte"
-
-
-def test_the_submitter_sends_no_S3_NAME_AT_ALL() -> None:
-    """STEP TWO. Ray merges `runtime_env` OVER the process env, so a name sent by the submitter BEATS
-    the pod's — which is the two-owner drift the module docstring is about, and which this estate has
-    already paid for once on the credential halves.
-
-    Asserted on the SUBMISSION BODIES, not on the module: `settings.s3_endpoint` is still read
-    elsewhere in this file (the medallion does its own S3 work), and a grep for the setting would go
-    red for the wrong reason.
-    """
-    source = (REPO / "services/medallion/src/medallion/services/ray_submit.py").read_text()
-
-    for name in ("S3_ENDPOINT", "S3_KEY", "S3_SECRET", "S3_REGION"):
-        assert f'"{name}": ' not in source, f"{name} is back on the submission body — the pod and the submitter now disagree silently"

@@ -8,25 +8,23 @@ and paid for the whole engine to get it; `services/compute` — the estate's Ray
 consumes only the other half and is unaffected. One consumer each, so the split is clean and nothing
 is duplicated.
 
-WHY ENGINE KNOWLEDGE MAY LIVE HERE. It is an ADAPTER, not a consumer: the cascade reaches it through
-`service_kit.lakehouse.executor`, so swapping the engine means adding a sibling adapter rather than
-editing a workflow. That is the same role `services/compute` plays for the dashboard, and the rule
-two `.importlinter` contracts encode — `the-lakehouse-is-not-built-on-ray` refuses a `ray` or
-`ray_kit` import in any lakehouse service, and `the-workflow-reads-ray-through-the-port` keeps
-`medallion.workflow` off this module: a service may adapt an engine, and must not depend on one.
+WHY ENGINE KNOWLEDGE MAY LIVE HERE. It is part of the Ray ADAPTER (`rayjobs_api_executor`), not a consumer: the
+cascade and the training lane reach it through `service_kit.lakehouse.executor`, so swapping the engine means adding a
+sibling adapter rather than editing a planner. Two `.importlinter` contracts encode that —
+`the-lakehouse-is-not-built-on-ray` refuses a `ray` or `ray_kit` import in any lakehouse service, and
+`only-the-ray-adapter-speaks-the-jobs-api` refuses this module to every medallion module but the adapter.
 """
 
 from __future__ import annotations
 
-import hashlib
 import logging
-import re
 from collections.abc import Mapping
 from typing import Literal
 
 import httpx
 
 from medallion.services.ray_job_failure import RayJobFailure
+from service_kit.lakehouse.executor import EngineError
 
 
 log = logging.getLogger(__name__)
@@ -37,72 +35,8 @@ TERMINAL_OK = "SUCCEEDED"
 TERMINAL_BAD = ("FAILED", "STOPPED")
 
 
-class RayJobError(RuntimeError):
-    """A submitted Ray job failed, was stopped, or did not finish within the timeout."""
-
-
-#: Every character outside the id's alphabet, which folds to ``-``. Ray 2.58 checks only that a
-#: submission id is a string (``dashboard/modules/job/common.py``, ``JobSubmitRequest.__post_init__``)
-#: and then names the driver log FILE after it (``job-driver-{submission_id}.log``), so the id keeps a
-#: file-name-safe alphabet and the 200-character cap, well inside a 255-byte file name.
-_UNSAFE = re.compile(r"[^A-Za-z0-9_-]")
-#: What the id spells for an absent token.
-_ABSENT = "notoken"
-#: The tail of a disambiguated token segment: ``_`` and 12 hex of the raw token's sha256.
-_DISAMBIGUATED = re.compile(r"_[0-9a-f]{12}\Z")
-
-
-def _token_segment(token: str | None) -> str:
-    """The token as the id spells it: verbatim only when no other token spells the same.
-
-    Three spellings are shared: a folded one (``a.b`` and ``a-b`` both fold to ``a-b``), the absent
-    marker (``notoken`` is also a token a door accepts), and a verbatim token ending the way a
-    disambiguated segment does. Each of those carries its raw token's digest instead, so two tokens
-    share a segment only on a 48-bit digest collision.
-    """
-    if not token:
-        return _ABSENT
-    folded = _UNSAFE.sub("-", token)
-    if folded == token and token != _ABSENT and _DISAMBIGUATED.search(token) is None:
-        return token
-    return f"{folded}_{hashlib.sha256(token.encode()).hexdigest()[:12]}"
-
-
-def submission_id(stage: str, token: str | None, work: str = "", code: str = "") -> str:
-    """A deterministic id per ``(stage, token, work, code)`` so redelivery re-attaches to the same job.
-
-    Idempotency lives HERE rather than in the caller: a trigger delivered twice must not start two jobs,
-    and the only thing both deliveries share is what this hashes.
-
-    TWO AXES, and they answer different questions.
-
-    ``work`` is WHAT is being computed — for a stage transform, its ``from→to`` URIs. Without it a
-    token-less trigger collapsed EVERY submission of a stage onto one id (``ray-silver-notoken``), and
-    ``submit_or_reattach`` read the collision as a successful re-attach — the second transform's work
-    silently never ran. The same collapse hid WITH a token whenever one trigger fans out to two tables
-    of the same stage.
-
-    ``code`` is WHICH BUILD computes it, and it exists because re-attach is only correct while the
-    thing being re-attached to is the same program. During a rolling deploy a redelivered trigger
-    landing on the NEW pod re-attached to a job the OLD pod submitted — old entrypoint, old
-    ``runtime_env``, old transform — and reported success. The run then carried the new build's
-    provenance over the old build's output, which is worse than a failure because nothing is red.
-    Folding the build in means a deploy starts a new job while a plain redelivery still re-attaches.
-
-    Empty ``code`` reproduces the previous id byte-for-byte, so a deployment that does not set it is
-    unchanged rather than silently re-attaching across builds under a new scheme.
-
-    The token is INJECTIVE in the id (:func:`_token_segment`), so two accepted tokens name two training
-    Ray jobs (a stage's job is named by ``derive_idempotency_key``). It stays greppable: verbatim, or folded with
-    its digest appended. ``work`` and ``code`` ride as short digests so arbitrarily long URIs and tags
-    cannot push the id past the length cap.
-    """
-    raw = f"ray-{stage}-{_token_segment(token)}"
-    if work:
-        raw = f"{raw}-{hashlib.sha256(work.encode()).hexdigest()[:12]}"
-    if code:
-        raw = f"{raw}-{hashlib.sha256(code.encode()).hexdigest()[:8]}"
-    return _UNSAFE.sub("-", raw)[:200]
+class RayJobError(EngineError):
+    """The Ray dashboard could not be reached, or refused a submit or a read: the port's `EngineError`, for this engine."""
 
 
 async def job_failure(client: httpx.AsyncClient, sub_id: str) -> RayJobFailure | None:

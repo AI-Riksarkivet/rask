@@ -27,12 +27,14 @@ namespace is byte-identical to the one this file used to derive itself.
 Its storage options and artifact filesystem come from ``service_kit.lakehouse.objectfs``, which that
 env declares too.
 
-Env: MODEL FEATURES(json [{dataset,version,uri}]) CONFIG TOKEN MODELS_NAMESPACE REGISTRY_URI
-     ARTIFACT_BASE [LINEAGE_URL] [LINEAGE_TOKEN] [RASK_IDEMPOTENCY_KEY RASK_OUTCOME_URL]
-     S3_ENDPOINT S3_KEY S3_SECRET [S3_REGION]
-     [TRACEPARENT TRACESTATE OTEL_*] — trace continuity across the Ray boundary (prod-readiness P3):
-     when the submitting consumer injected its span + OTLP config, the job runs under one root span
-     parented on that trace; absent → untraced, exactly as before.
+Env, in the `WorkOrder` vocabulary the producer's order serializes (`service_kit.lakehouse.work_order.to_env`, CP-044):
+     RASK_PARAM_MODEL RASK_TOKEN RASK_PARAM_FEATURES(json [{dataset,version,uri}]) RASK_PARAM_CONFIG
+     RASK_PARAM_ARTIFACT_BASE RASK_DEST_URI (the registry) RASK_STAGE (the models namespace)
+     [RASK_ORIGINATOR RASK_PROJECT RASK_IDEMPOTENCY_KEY RASK_OUTCOME_URL]
+     From the pod, never the submission: RASK_LINEAGE_ENDPOINT (the lineage ingest), S3_ENDPOINT S3_KEY S3_SECRET
+     [S3_REGION]. [TRACEPARENT TRACESTATE OTEL_*] — trace continuity across the Ray boundary (prod-readiness P3):
+     when the submitting consumer injected its span + OTLP config, the job runs under one root span parented on that
+     trace; absent → untraced.
 """
 # TOKEN-AUTHED CLUSTER (gate 7 / R3): with RAY_AUTH_MODE=token on the head, export
 # RAY_AUTH_MODE=token + RAY_AUTH_TOKEN (kubectl get secret rask-ray-auth-token -o
@@ -181,7 +183,7 @@ def emit(event: RunEvent) -> bool:
     the training, and a terminal that did not land is not reported to the producer, whose sweep records it instead.
 
     THE CREDENTIAL RULES ARE `lineage-kit`'s, not this file's. It takes the endpoint from the head's
-    ``RASK_LINEAGE_ENDPOINT`` (or the submission's ``LINEAGE_URL``) and presents the head's projected
+    ``RASK_LINEAGE_ENDPOINT`` (the pod's, never the submission's) and presents the head's projected
     `rask-lineage` ServiceAccount token, re-read on every emit, so the job reports as the subject the
     lineage door maps that account to: `service-trainer` ([[LH-220]]).
     """
@@ -239,8 +241,8 @@ def emit_metrics(model: str, metrics: dict[str, Any], *, reader: Any = None) -> 
 def _extract_trace_parent() -> Any:
     """The submitter-injected W3C trace context, or ``None`` to run untraced.
 
-    The submitting service (services/medallion/services/ray_submit.py) injects its active span as a
-    TRACEPARENT env var in the job's runtime_env. Absent, malformed, or opentelemetry unimportable
+    The producer's work order carries its active span (`WorkOrder.observability`), which reaches the job as a
+    TRACEPARENT env var in its runtime_env. Absent, malformed, or opentelemetry unimportable
     (the ray image ships the SDK, but a telemetry regression must never kill the job) → ``None`` and
     the job runs exactly as before — the trace is only ever continued, never fabricated.
     """
@@ -423,13 +425,12 @@ def publish_registry(
 
 
 def main() -> None:
-    # MODEL + TOKEN are the run identity — without them there is nothing to attribute an event to,
+    # THE MODEL AND THE TOKEN are the run identity — without them there is nothing to attribute an event to,
     # so only these two may hard-crash. Everything else parses under the FAIL guard: a malformed
-    # FEATURES/CONFIG or missing S3 env becomes an attributable FAILed run, not a silent vanish
+    # features/config or missing S3 env becomes an attributable FAILed run, not a silent vanish
     # (review 2026-07-11 — the consumer already acked; lineage is the only trace left).
-    model = os.environ["MODEL"]
-    token = os.environ["TRAIN_TOKEN"]  # NOT "TOKEN" — a bare TOKEN env is consumed by lance's object-store
-    # env fallback as the AWS session token (bogus x-amz-security-token → RustFS 500) — live 2026-07-13.
+    model = os.environ["RASK_PARAM_MODEL"]
+    token = os.environ["RASK_TOKEN"]  # never a bare TOKEN: lance's object-store env fallback reads it as the AWS session token
 
     # Continue the submitting consumer's trace (P3): the whole training run is one child span of the
     # submitting trace (a FAIL below re-raises through the span, marking it ERROR before the flush);
@@ -450,8 +451,8 @@ def _terminal(event: RunEvent, outcome_url: str, report: OutcomeReport) -> None:
 
 
 def _run_train(model: str, token: str, *, marker: CommitMarker | None = None, outcome_url: str = "") -> None:
-    namespace = os.environ.get("MODELS_NAMESPACE", "models")
-    registry_uri = os.environ.get("REGISTRY_URI", "")
+    namespace = os.environ.get("RASK_STAGE", "models")
+    registry_uri = os.environ.get("RASK_DEST_URI", "")
     features: list[dict[str, Any]] = []
 
     def event(**kw: Any) -> RunEvent:
@@ -463,16 +464,16 @@ def _run_train(model: str, token: str, *, marker: CommitMarker | None = None, ou
             registry_uri=registry_uri,
             # Read HERE, so every emit below carries them — including the config-parse FAIL, which is
             # the earliest thing that can go wrong and the one a person most needs to hear about.
-            originator=os.environ.get("ORIGINATOR", ""),
-            project=os.environ.get("TRAIN_PROJECT", ""),
+            originator=os.environ.get("RASK_ORIGINATOR", ""),
+            project=os.environ.get("RASK_PROJECT", ""),
             **kw,
         )
 
     try:
-        features.extend(json.loads(os.environ["FEATURES"]))
-        config: dict[str, Any] = json.loads(os.environ.get("CONFIG", "{}"))
-        registry_uri = registry_uri or os.environ["REGISTRY_URI"]  # required — KeyError FAILs above
-        artifact_base = os.environ["ARTIFACT_BASE"]
+        features.extend(json.loads(os.environ["RASK_PARAM_FEATURES"]))
+        config: dict[str, Any] = json.loads(os.environ.get("RASK_PARAM_CONFIG", "{}"))
+        registry_uri = registry_uri or os.environ["RASK_DEST_URI"]  # required — KeyError FAILs above
+        artifact_base = os.environ["RASK_PARAM_ARTIFACT_BASE"]
         so = _storage_options() if registry_uri.startswith("s3://") else None
     except Exception as exc:
         error = f"train config: {exc}"

@@ -2,8 +2,9 @@
 
 Covers the DONE WHEN unit items: the head publishes the pinned trigger (LATEST resolved AT the head),
 the token guard is wired on /train, the consumer gates as the trainer identity (deny → DROP, outage →
-RETRY), submit-and-ack semantics (bounded, re-attach on redelivery, NO resubmit of a terminally FAILED
-prior job), and transport failure → RETRY.
+RETRY), submit-and-ack semantics through the executor port (re-attach on redelivery, NO resubmit of a
+terminally FAILED prior job), and transport failure → RETRY. The Ray Jobs API is the one stand-in: the
+consumer's order reaches it through the real Ray adapter (CP-044).
 """
 
 from __future__ import annotations
@@ -28,7 +29,7 @@ from openfga_sdk.models.check_response import CheckResponse
 from medallion.api.dependencies import get_dapr, get_settings
 from medallion.api.train import router
 from medallion.core.config import MedallionSettings
-from medallion.services import ray_submit, train
+from medallion.services import ray_submit, train, train_plans
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 
@@ -61,6 +62,43 @@ class _FakeDapr:
 
     async def publish_event(self, *, pubsub_name: str, topic_name: str, data: str, **_kw: Any) -> None:
         self.published.append({"pubsub": pubsub_name, "topic": topic_name, "data": data})
+
+
+class _Ray:
+    """The Ray Jobs API behind the Ray adapter: each POST answered by the next ``(status, existing job state)`` of
+    ``answers`` (a fresh 200 once they run out), every body kept, and a DELETE refused — the train lane never deletes
+    a prior job (D2)."""
+
+    def __init__(self, answers: list[tuple[int, str | None]] | None = None, *, unreachable: bool = False) -> None:
+        self.posts: list[dict[str, Any]] = []
+        self._answers = list(answers or [])
+        self._existing: str | None = None
+        self._unreachable = unreachable
+
+    def handle(self, request: httpx.Request) -> httpx.Response:
+        if self._unreachable:
+            raise httpx.ConnectError("ray head unreachable", request=request)
+        if request.method == "POST":
+            self.posts.append(json.loads(request.content))
+            status, self._existing = self._answers.pop(0) if self._answers else (200, None)
+            return httpx.Response(status)
+        if request.method == "GET":
+            return httpx.Response(200, json={"status": self._existing})
+        raise AssertionError(f"the train lane must never {request.method} a prior job ({request.url})")
+
+    def tokens(self) -> list[str]:
+        return [post["runtime_env"]["env_vars"]["RASK_TOKEN"] for post in self.posts]
+
+
+def _ray(monkeypatch: pytest.MonkeyPatch, ray: _Ray | None = None) -> _Ray:
+    fake = ray or _Ray()
+    client = httpx.AsyncClient(base_url="http://ray-head:8265", transport=httpx.MockTransport(fake.handle))
+
+    async def _client() -> httpx.AsyncClient:
+        return client
+
+    monkeypatch.setattr(ray_submit, "ray_client", _client)
+    return fake
 
 
 # --------------------------------------------------------------------------- #
@@ -168,22 +206,17 @@ def _gate(monkeypatch: pytest.MonkeyPatch, allowed: dict[str, bool]) -> None:
 
 
 def test_consumer_denied_input_or_models_rung_drops(monkeypatch: pytest.MonkeyPatch) -> None:
-    submitted: list[str] = []
-    monkeypatch.setattr(
-        train.ray_submit,
-        "submit_train_job",
-        lambda *a, **k: submitted.append("x"),  # never awaited
-    )
+    ray = _ray(monkeypatch)
     _gate(monkeypatch, {"can_read_data:table:silver$features": False})
     result = asyncio.run(train.handle_train_trigger(_settings(), _EVENT, fga_client=object(), dapr=_FakeDapr()))
-    assert result["status"] == "DROP" and submitted == []  # denied BEFORE any compute is spent
+    assert result["status"] == "DROP" and ray.posts == []  # denied BEFORE any compute is spent
 
     _gate(
         monkeypatch,
         {"can_read_data:table:silver$features": True, "can_create_table:namespace:models": False},
     )
     result = asyncio.run(train.handle_train_trigger(_settings(), _EVENT, fga_client=object(), dapr=_FakeDapr()))
-    assert result["status"] == "DROP" and submitted == []
+    assert result["status"] == "DROP" and ray.posts == []
 
 
 def test_consumer_fga_outage_retries(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -223,34 +256,23 @@ class _TrainerOpenFga:
         self.written.append(body)
 
 
-def _submits(monkeypatch: pytest.MonkeyPatch) -> list[str]:
-    submitted: list[str] = []
-
-    async def submit(*_a: Any, token: str, **_kw: Any) -> str:
-        submitted.append(token)
-        return "submitted"
-
-    monkeypatch.setattr(train.ray_submit, "submit_train_job", submit)
-    return submitted
-
-
 def test_the_sdk_harness_trains_on_inputs_openfga_answered(monkeypatch: pytest.MonkeyPatch) -> None:
     """Without this, the RETRY below could be a gate that never reached OpenFGA."""
-    submitted = _submits(monkeypatch)
+    ray = _ray(monkeypatch)
     client = _TrainerOpenFga(unanswered=set())
 
     assert asyncio.run(train.handle_train_trigger(_settings(), _EVENT, fga_client=client, dapr=_FakeDapr())) == {"status": "SUCCESS"}
-    assert submitted == ["t1"] and len(client.written) == 1
+    assert ray.tokens() == ["t1"] and len(client.written) == 1
 
 
 def test_an_input_openfga_could_not_answer_retries_rather_than_drops(monkeypatch: pytest.MonkeyPatch) -> None:
     """A DROP is terminal, and D2 never resubmits training, so an unanswered input read as a deny
     would lose the trigger to an OpenFGA fault as if the trainer lacked the grant."""
-    submitted = _submits(monkeypatch)
+    ray = _ray(monkeypatch)
     client = _TrainerOpenFga(unanswered={"table:silver$features"})
 
     assert asyncio.run(train.handle_train_trigger(_settings(), _EVENT, fga_client=client, dapr=_FakeDapr())) == {"status": "RETRY"}
-    assert submitted == [] and client.written == []
+    assert ray.posts == [] and client.written == []
 
 
 def test_consumer_seeds_the_model_parent_link_before_submit(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -262,15 +284,12 @@ def test_consumer_seeds_the_model_parent_link_before_submit(monkeypatch: pytest.
     async def fake_write(_client: Any, tuples: list[Any], **_kw: Any) -> None:
         written.extend(tuples)
 
-    async def fake_submit(*_a: Any, **_kw: Any) -> str:
-        return "submitted"
-
+    _ray(monkeypatch)
     _gate(
         monkeypatch,
         {"can_read_data:table:silver$features": True, "can_create_table:namespace:models": True},
     )
     monkeypatch.setattr(train.fga, "write_tuples", fake_write)
-    monkeypatch.setattr(train.ray_submit, "submit_train_job", fake_submit)
     result = asyncio.run(train.handle_train_trigger(_settings(), _EVENT, fga_client=object(), dapr=_FakeDapr()))
     assert result == {"status": "SUCCESS"}
     assert (written[0].user, written[0].relation, written[0].object) == (
@@ -288,29 +307,21 @@ def test_consumer_seeds_the_model_parent_link_before_submit(monkeypatch: pytest.
 
 
 def test_consumer_submits_and_acks_and_maps_outcomes(monkeypatch: pytest.MonkeyPatch) -> None:
-    outcomes = iter(["submitted", "attached", "already_failed"])
-    calls: list[str] = []
-
-    async def fake_submit(_s: Any, *, model: str, features_json: str, token: str, **kw: Any) -> str:
-        calls.append(token)
-        # #115b: the consumer enriches each pinned feature with its Lance URI and derives the D4
-        # publish pointers — the job reads these verbatim (layout convention lives in train.py only).
-        assert json.loads(features_json) == [{"dataset": "silver$features", "version": 7, "uri": f"{_ROOT}/medallion/silver"}]
-        assert kw["registry_uri"] == f"{_ROOT}/medallion/models/churn"
-        assert kw["artifact_base"] == f"{_ROOT}/medallion/model-artifacts/churn"
-        return next(outcomes)
-
-    monkeypatch.setattr(train.ray_submit, "submit_train_job", fake_submit)
+    # A fresh submit, a redelivery re-attaching to the running job, and one finding the job FAILED.
+    ray = _ray(monkeypatch, _Ray([(200, None), (409, "RUNNING"), (409, "FAILED")]))
     assert asyncio.run(train.handle_train_trigger(_settings(), _EVENT, dapr=_FakeDapr())) == {"status": "SUCCESS"}
     assert asyncio.run(train.handle_train_trigger(_settings(), _EVENT, dapr=_FakeDapr())) == {"status": "SUCCESS"}  # re-attach
-    # a terminally FAILED prior job is DROPPED — training is never auto-resubmitted (D2)
+    # a terminally FAILED prior job is DROPPED and never deleted — training is never auto-resubmitted (D2)
     assert asyncio.run(train.handle_train_trigger(_settings(), _EVENT, dapr=_FakeDapr()))["status"] == "DROP"
-    assert calls == ["t1", "t1", "t1"]
+    assert ray.tokens() == ["t1", "t1", "t1"] and len({post["submission_id"] for post in ray.posts}) == 1
+    # #115b: the consumer enriches each pinned feature with its Lance URI and derives the D4 publish pointers — the
+    # job reads these verbatim (layout convention lives in train.py only).
+    env = ray.posts[0]["runtime_env"]["env_vars"]
+    assert json.loads(env["RASK_PARAM_FEATURES"]) == [{"dataset": "silver$features", "version": 7, "uri": f"{_ROOT}/medallion/silver"}]
+    assert env["RASK_DEST_URI"] == f"{_ROOT}/medallion/models/churn"
+    assert env["RASK_PARAM_ARTIFACT_BASE"] == f"{_ROOT}/medallion/model-artifacts/churn"
 
-    async def transport_error(*_a: Any, **_kw: Any) -> str:
-        raise ray_submit.RayJobError("submit failed")
-
-    monkeypatch.setattr(train.ray_submit, "submit_train_job", transport_error)
+    _ray(monkeypatch, _Ray(unreachable=True))
     assert asyncio.run(train.handle_train_trigger(_settings(), _EVENT, dapr=_FakeDapr())) == {"status": "RETRY"}
 
     assert asyncio.run(train.handle_train_trigger(_settings(), {"data": {}}, dapr=_FakeDapr())) == {"status": "DROP"}
@@ -319,25 +330,20 @@ def test_consumer_submits_and_acks_and_maps_outcomes(monkeypatch: pytest.MonkeyP
 def test_consumer_drops_unpinned_or_empty_features(monkeypatch: pytest.MonkeyPatch) -> None:
     # Review 2026-07-10: a version-less feature would train on floating LATEST (violates D1) and an
     # empty-after-filter list would gate vacuously — both are malformed triggers: DROP, never repair.
-    async def never(*_a: Any, **_kw: Any) -> str:
-        raise AssertionError("must not submit")
-
-    monkeypatch.setattr(train.ray_submit, "submit_train_job", never)
+    ray = _ray(monkeypatch)
     unpinned = {"data": {"token": "t", "model": "m", "features": [{"dataset": "silver$features"}]}}
     assert asyncio.run(train.handle_train_trigger(_settings(), unpinned, dapr=_FakeDapr()))["status"] == "DROP"
     junk = {"data": {"token": "t", "model": "m", "features": ["junk"]}}
     assert asyncio.run(train.handle_train_trigger(_settings(), junk, dapr=_FakeDapr()))["status"] == "DROP"
     empty = {"data": {"token": "t", "model": "m", "features": []}}
     assert asyncio.run(train.handle_train_trigger(_settings(), empty, dapr=_FakeDapr()))["status"] == "DROP"
+    assert ray.posts == []
 
 
 def test_consumer_drops_path_unsafe_names(monkeypatch: pytest.MonkeyPatch) -> None:
     # #115b: model/token/dataset from the BUS become S3 key prefixes and Lance URIs — a traversal-shaped
     # or separator-carrying name is a malformed trigger, DROPped before any URI is derived.
-    async def never(*_a: Any, **_kw: Any) -> str:
-        raise AssertionError("must not submit")
-
-    monkeypatch.setattr(train.ray_submit, "submit_train_job", never)
+    ray = _ray(monkeypatch)
     ok = {"dataset": "silver$features", "version": 7}
     for data in (
         {"token": "t1", "model": "../etc", "features": [ok]},
@@ -353,6 +359,7 @@ def test_consumer_drops_path_unsafe_names(monkeypatch: pytest.MonkeyPatch) -> No
         {"token": "t1", "model": "churn", "features": [{"dataset": "events", "version": 1}]},
     ):
         assert asyncio.run(train.handle_train_trigger(_settings(), {"data": data}, dapr=_FakeDapr())) == {"status": "DROP"}
+    assert ray.posts == []
 
 
 def test_consumer_drops_oversized_or_nondict_config_and_too_many_features(
@@ -360,10 +367,7 @@ def test_consumer_drops_oversized_or_nondict_config_and_too_many_features(
 ) -> None:
     # Review 2026-07-11: the head's claim-check bound must hold at the CONSUMER too — the bus is a
     # wider trust surface, and config flows verbatim into the Ray Jobs runtime_env.
-    async def never(*_a: Any, **_kw: Any) -> str:
-        raise AssertionError("must not submit")
-
-    monkeypatch.setattr(train.ray_submit, "submit_train_job", never)
+    ray = _ray(monkeypatch)
     ok = {"dataset": "silver$features", "version": 7}
     huge = {"blob": "x" * (train._MAX_CONFIG_BYTES + 1)}
     for data in (
@@ -372,6 +376,7 @@ def test_consumer_drops_oversized_or_nondict_config_and_too_many_features(
         {"token": "t1", "model": "churn", "features": [ok] * (train.MAX_FEATURES + 1)},
     ):
         assert asyncio.run(train.handle_train_trigger(_settings(), {"data": data}, dapr=_FakeDapr())) == {"status": "DROP"}
+    assert ray.posts == []
 
 
 def test_train_route_422s_the_names_its_consumer_would_drop() -> None:
@@ -420,10 +425,7 @@ def test_the_door_202s_exactly_the_tokens_its_consumer_trains_on(monkeypatch: py
     here too. A refused key must publish nothing.
     """
 
-    async def submitted(*_a: Any, **_kw: Any) -> str:
-        return "submitted"
-
-    monkeypatch.setattr(train.ray_submit, "submit_train_job", submitted)
+    _ray(monkeypatch)
     bus = _FakeDapr()
     app = FastAPI()
     app.include_router(router)
@@ -439,6 +441,8 @@ def test_the_door_202s_exactly_the_tokens_its_consumer_trains_on(monkeypatch: py
     assert door.json()["token"] == key
     consumer = asyncio.run(train.handle_train_trigger(_settings(), {"data": json.loads(bus.published[0]["data"])}, dapr=_FakeDapr()))
     assert consumer["status"] == "SUCCESS"
+    ((planned, _written),) = train_plans.plan_store(_settings()).open_entries()
+    assert door.json()["instance_id"] == planned, "the door answered a run id the consumer did not plan under"
 
 
 def test_head_rejects_an_oversized_config() -> None:
@@ -454,81 +458,3 @@ def test_head_rejects_an_oversized_config() -> None:
         )
     )
     assert result == {"status": "config_too_large"}
-
-
-# --------------------------------------------------------------------------- #
-# submit_train_job against a fake Ray Jobs API — the D2 semantics at the transport
-# --------------------------------------------------------------------------- #
-
-
-class _FakeJobsAPI:
-    """Programmable stand-in for httpx.AsyncClient against the Ray Jobs REST API."""
-
-    def __init__(self, post_status: int, existing_status: str | None) -> None:
-        self.posts: list[dict[str, Any]] = []
-        self.deletes: list[str] = []
-        self._post_status = post_status
-        self._existing = existing_status
-
-    async def __aenter__(self) -> _FakeJobsAPI:
-        return self
-
-    async def __aexit__(self, *_exc: Any) -> None:
-        return None
-
-    async def post(self, _url: str, json: dict[str, Any]) -> Any:
-        self.posts.append(json)
-        return httpx.Response(self._post_status, request=httpx.Request("POST", "http://ray"))
-
-    async def get(self, url: str) -> Any:
-        assert self._existing is not None, f"unexpected GET {url}"
-        return httpx.Response(200, request=httpx.Request("GET", "http://ray"), json={"status": self._existing})
-
-    async def delete(self, url: str) -> Any:  # pragma: no cover — MUST never be called for train
-        raise AssertionError(f"train path must never DELETE a prior job (got {url})")
-
-
-def _run_submit(monkeypatch: pytest.MonkeyPatch, api: _FakeJobsAPI) -> str:
-    def make_client(**kw: Any) -> _FakeJobsAPI:
-        # The ack-window bound: EVERY await inside submit_train_job runs under this client timeout —
-        # a refactor dropping it would un-bound the handler against a hung Ray API (review 2026-07-10).
-        assert kw["timeout"] == _settings().ray_request_timeout_seconds
-        return api
-
-    monkeypatch.setattr(ray_submit.httpx, "AsyncClient", make_client)
-    return asyncio.run(
-        ray_submit.submit_train_job(
-            _settings(),
-            model="churn",
-            features_json="[]",
-            token="tok1",
-            registry_uri="s3://lake/medallion/models/churn",
-            artifact_base="s3://lake/models/churn",
-        )
-    )
-
-
-def test_submit_train_job_fresh_submit(monkeypatch: pytest.MonkeyPatch) -> None:
-    api = _FakeJobsAPI(post_status=200, existing_status=None)
-    assert _run_submit(monkeypatch, api) == "submitted"
-    assert api.posts[0]["submission_id"] == "ray-train-tok1"  # deterministic idempotency key
-    assert api.posts[0]["entrypoint"].endswith("ray_train_job.py")
-    env = api.posts[0]["runtime_env"]["env_vars"]
-    # #115b: the job's publish pointers + its lineage ingest travel in the job env verbatim.
-    assert env["REGISTRY_URI"] == "s3://lake/medallion/models/churn"
-    assert env["ARTIFACT_BASE"] == "s3://lake/models/churn"
-    assert env["LINEAGE_URL"] == _settings().train_lineage_url
-
-
-def test_submit_train_job_reattaches_to_a_running_job(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Redelivery: the POST 4xxs (id exists), the job is RUNNING → attach, no second job, no delete.
-    api = _FakeJobsAPI(post_status=409, existing_status="RUNNING")
-    assert _run_submit(monkeypatch, api) == "attached"
-    assert len(api.posts) == 1  # exactly one submit attempt — never a duplicate job
-
-
-def test_submit_train_job_never_resubmits_a_failed_job(monkeypatch: pytest.MonkeyPatch) -> None:
-    # D2: unlike the stage path (delete + fresh resubmit), a FAILED training job is terminal.
-    api = _FakeJobsAPI(post_status=409, existing_status="FAILED")
-    assert _run_submit(monkeypatch, api) == "already_failed"
-    assert len(api.posts) == 1 and api.deletes == []

@@ -29,7 +29,7 @@ from medallion.api.stage_ops import router as stage_ops_router
 from medallion.api.stage_outcomes import mount_stage_outcomes
 from medallion.core.config import get_settings
 from medallion.core.lineage_publish import start_signing, stop_signing
-from medallion.services.ray_submit import close_ray_client
+from medallion.services.engine_registry import close_executors
 from service_kit.draining import arm_drain_on_sigterm
 from service_kit.governed.auth_lifespan import attach_auth
 from service_kit.governed.dapr_auth import assert_app_token_configured
@@ -108,10 +108,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # raises on a already-broken connection must not stop the rest of the teardown.
         with suppress(Exception):
             app.state.catalog_http.close()
-        # And the RAY client the executor pools at module level (`ray_submit.ray_client`). Dispatch, the sweep and
+        # And what the executors hold for the process (the Ray adapter's pooled client). Dispatch, the sweep and
         # the operator routes all use it on THIS loop, so it is closed here, on the loop that owns its pool.
         with suppress(Exception):
-            await close_ray_client()
+            await close_executors()
         if app.state.fga is not None:
             with suppress(Exception):
                 await app.state.fga.close()

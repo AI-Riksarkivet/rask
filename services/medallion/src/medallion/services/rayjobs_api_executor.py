@@ -30,7 +30,7 @@ from typing import Any
 
 import httpx
 
-from medallion.services import ray_jobs_api
+from medallion.services import ray_jobs_api, ray_submit
 from medallion.services.engine_names import RAY_ENGINE
 from service_kit.lakehouse.executor import Capability, RunFailure, RunHandle, RunState, SubmitOutcome, TaskRegistration, WrongEngineError
 from service_kit.lakehouse.work_order import WorkOrder
@@ -51,22 +51,22 @@ _RUN_STATE = {
     "STOPPED": RunState.CANCELLED,
 }
 
-#: `submit_or_reattach`'s answers, mapped onto the port's. `already_failed` has no `SubmitOutcome` and
-#: deliberately so — it is the TRAIN contract's terminal answer, and the stage lane this adapter serves
-#: passes `on_terminal_failure="resubmit"`, so it cannot arrive here. Absent rather than guessed: an
-#: outcome invented for a branch that cannot happen is a claim nobody can check.
+#: `submit_or_reattach`'s answers, mapped onto the port's. `already_failed` arrives only for an order that asked not to
+#: replace a failed run (`WorkOrder.replace_failed_run` false, the training lane), and `resubmitted` only for one that
+#: asked to.
 _SUBMIT_OUTCOME = {
     "submitted": SubmitOutcome.SUBMITTED,
     "reattached": SubmitOutcome.REATTACHED,
     "resubmitted": SubmitOutcome.RESUBMITTED,
+    "already_failed": SubmitOutcome.ALREADY_FAILED,
 }
 
 
 class RayJobsApiExecutor:
-    """Submits a stage to a STANDING Ray cluster through the dashboard Jobs API.
+    """Submits a stage or a training run to a STANDING Ray cluster through the dashboard Jobs API.
 
-    The handle is the submission id the caller already derived, never re-derived here — `RunHandle`'s
-    own docstring states why, and `ray_submit.stage_submission_id` was extracted for the same reason.
+    The handle is the order's `idempotency_key`, derived by the planner through `derive_idempotency_key` and never
+    re-derived here — `RunHandle`'s own docstring states why.
     """
 
     name = RAY_ENGINE
@@ -83,9 +83,7 @@ class RayJobsApiExecutor:
     async def _http(self) -> httpx.AsyncClient:
         if self._client is not None:
             return self._client
-        from medallion.services.ray_submit import ray_client
-
-        return await ray_client()
+        return await ray_submit.ray_client()
 
     def validate_task(self, registration: TaskRegistration) -> None:
         """Refuse a declaration belonging to another engine, with the reason the door's 422 will carry."""
@@ -121,9 +119,13 @@ class RayJobsApiExecutor:
         """Start the job, or re-attach to the one already doing this work.
 
         The body is the order's own `to_env()` — the ONE serialization, as `WorkOrder` states — so no
-        adapter hand-rolls the wire shape. `on_terminal_failure="resubmit"` is the STAGE contract: a
-        redelivery must retry on a healthy worker rather than re-observe the same failure until the
-        trigger is silently dropped.
+        adapter hand-rolls the wire shape. What a prior FAILED job under the key means is the ORDER's
+        `replace_failed_run`: a stage replaces it, so a redelivery retries on a healthy worker rather than
+        re-observing the same failure until the trigger is silently dropped; a training run (D2) leaves it
+        and answers `ALREADY_FAILED`.
+
+        Raises:
+            RayJobError: the dashboard could not be reached or refused the submission (an `EngineError`).
         """
         client = await self._http()
         body: dict[str, Any] = {
@@ -136,7 +138,9 @@ class RayJobsApiExecutor:
             # for: undeliverable rather than under-delivered.
             "metadata": self.job_metadata(order),
         }
-        answered = await ray_jobs_api.submit_or_reattach(client, order.idempotency_key, body, on_terminal_failure="resubmit")
+        answered = await ray_jobs_api.submit_or_reattach(
+            client, order.idempotency_key, body, on_terminal_failure="resubmit" if order.replace_failed_run else "report"
+        )
         return RunHandle(engine=RAY_ENGINE, handle=order.idempotency_key), _SUBMIT_OUTCOME[answered]
 
     async def status(self, handle: RunHandle) -> RunState:
@@ -194,3 +198,8 @@ class RayJobsApiExecutor:
         as "the run produced nothing", and a caller cannot branch on a value carrying two meanings.
         """
         raise NotImplementedError(f"{RAY_ENGINE} writes out-of-process and advertises no RESULT capability; measure the destination for run {handle.handle}")
+
+
+async def close() -> None:
+    """Release what this adapter holds for the process: the pooled dashboard client. Idempotent."""
+    await ray_submit.close_ray_client()

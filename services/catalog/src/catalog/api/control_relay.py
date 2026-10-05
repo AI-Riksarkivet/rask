@@ -202,10 +202,10 @@ async def _republish(publisher: object, settings: Settings, event_json: str) -> 
     because it is the whole answer to "does this drive the cascade twice?":
 
     ``event_id`` survives -> ``/publication-arrival`` mints its stage ``token`` from it
-    (`publication_trigger.py`) -> ``stage_submission_id(stage, token, from_uri, to_uri)`` hashes that
-    into the workflow's deterministic ``instance_id`` (`medallion/services/transform.py`) ->
-    ``schedule_new_workflow`` for a live instance errors, and the stage runner reports that as the RE-ATTACH it
-    is. So a duplicate delivery attaches to the run already in flight rather than starting a second.
+    (`publication_trigger.py`) -> ``derive_idempotency_key(stage, token, from_uri, to_uri, code_version)`` hashes that
+    into the run's deterministic key, its plan's action id (`medallion/services/stage_submit.py`) -> the plan store
+    answers the plan already written under that key, and the engine re-attaches to the job submitted under it. So a
+    duplicate delivery attaches to the run already in flight rather than starting a second.
 
     Every other subscriber on this topic keys on the same id: the catalog's own ring buffer dedupes on
     ``event_id``, and the notifications plane's ledger on ``<event_id>@<ACTION>``.

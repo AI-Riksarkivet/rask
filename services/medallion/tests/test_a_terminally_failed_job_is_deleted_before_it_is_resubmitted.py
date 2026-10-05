@@ -8,9 +8,8 @@ bought idempotency becoming the thing that guarantees the work never completes.
 THE DELETE IS WHAT MAKES THE RESUBMIT POSSIBLE, not a tidy-up. Ray's Jobs API refuses to create a
 submission id that already exists, so posting again without deleting returns the same 4xx and the
 branch would loop back to re-attaching. Outside this file only the negative is pinned — that `report`
-never deletes (`tests/unit/test_train.py::test_submit_train_job_never_resubmits_a_failed_job`) — plus a
-workflow-level activity count (`test_a_vanished_stage_is_resubmitted.py:36`). Neither would notice
-the DELETE going missing.
+never deletes (`tests/unit/test_train.py::test_consumer_submits_and_acks_and_maps_outcomes`), which would not
+notice the DELETE going missing.
 
 THE ORDER IS ASSERTED, NOT JUST THE PRESENCE. A POST before the DELETE fails against a live Jobs API
 and would leave the branch reporting `"resubmitted"` for a job it never replaced — the wrong-but-

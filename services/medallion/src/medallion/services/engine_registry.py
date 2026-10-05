@@ -80,6 +80,18 @@ def executor_for(
     )
 
 
+async def close_executors() -> None:
+    """Release what the adapters hold for the process; a planner's lifespan calls it once, at shutdown.
+
+    THE REGISTRY CLOSES WHAT IT RESOLVES, so a planner names no adapter to shut one down: the Ray adapter pools one
+    dashboard client per process (`ray_submit.ray_client`), used on the planner's own loop by dispatch, the sweep and
+    the operator routes. The in-process adapter holds nothing.
+    """
+    from medallion.services import rayjobs_api_executor
+
+    await rayjobs_api_executor.close()
+
+
 def hosted_engines() -> frozenset[str]:
     """Which engines this registry resolves to an `Executor` — a code fact about the adapters present.
 

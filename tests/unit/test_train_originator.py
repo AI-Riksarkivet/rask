@@ -16,7 +16,7 @@ built for exactly this shape: a run authored by a service that is nevertheless F
 TARGETING hint and authorizes nothing — the notifications plane re-derives each recipient's visibility
 at delivery — which is why carrying it across the bus needs no new trust.
 
-The chain is five links, and it delivers only if every one holds; each test below is one link.
+The chain is five links, and it delivers only if every one holds; each section below pins one link, or two read off one submission.
 """
 
 from __future__ import annotations
@@ -137,75 +137,56 @@ def test_the_head_omits_the_originator_when_there_is_no_person(monkeypatch: pyte
     assert "originator" not in json.loads(dapr.published[0]["data"])
 
 
-# ── link 3: the consumer forwards it to the submitter ────────────────────────────────────────────
+# ── links 3 and 4: the consumer's order names the human, where the job and a failure can both read it ───
 
 
-def test_the_consumer_forwards_the_originator_to_the_ray_submission(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """The trigger arrives off the bus, so the originator is an untrusted CLAIM — carried, never
-    trusted. It authorizes nothing here and is re-checked against visibility at delivery, the same
-    posture `StageTrigger.originator` already documents."""
-    seen: dict[str, Any] = {}
+class _Ray:
+    """The Ray Jobs API behind the Ray adapter: accepts every submission and keeps its body."""
 
-    async def fake_submit(_s: Any, **kw: Any) -> str:
-        seen.update(kw)
-        return "submitted"
-
-    monkeypatch.setattr(train.ray_submit, "submit_train_job", fake_submit)
-    event = {"data": {"token": "t1", "model": "churn", "features": [{"dataset": "silver$features", "version": 7}], "originator": "alice"}}
-    local = _settings(MEDALLION_BRONZE_URI=f"{tmp_path}/medallion/bronze", MEDALLION_CONTROL_ROOT=f"{tmp_path}/control")
-    assert asyncio.run(train.handle_train_trigger(local, event, dapr=_FakeDapr())) == {"status": "SUCCESS"}
-    assert seen["originator"] == "alice"
-
-
-# ── link 4: the submission names the human where a failure can READ it ───────────────────────────
-
-
-class _FakeJobsAPI:
     def __init__(self) -> None:
         self.posts: list[dict[str, Any]] = []
 
-    async def __aenter__(self) -> _FakeJobsAPI:
-        return self
-
-    async def __aexit__(self, *_exc: Any) -> None:
-        return None
-
-    async def post(self, _url: str, json: dict[str, Any]) -> Any:
-        self.posts.append(json)
-        return httpx.Response(200, request=httpx.Request("POST", "http://ray"))
+    def handle(self, request: httpx.Request) -> httpx.Response:
+        self.posts.append(json.loads(request.content))
+        return httpx.Response(200)
 
 
-def _submit(monkeypatch: pytest.MonkeyPatch, **kw: Any) -> _FakeJobsAPI:
-    api = _FakeJobsAPI()
-    monkeypatch.setattr(ray_submit.httpx, "AsyncClient", lambda **_kw: api)
-    asyncio.run(
-        ray_submit.submit_train_job(
-            _settings(),
-            model="churn",
-            features_json="[]",
-            token="tok1",
-            registry_uri="s3://lake/medallion/models/churn",
-            artifact_base="s3://lake/models/churn",
-            **kw,
-        )
-    )
-    return api
+def _consume(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, **trigger: Any) -> dict[str, Any]:
+    """One training trigger through the producer's consumer; the body its order reached Ray with."""
+    ray = _Ray()
+    client = httpx.AsyncClient(base_url="http://ray-head:8265", transport=httpx.MockTransport(ray.handle))
+
+    async def _client() -> httpx.AsyncClient:
+        return client
+
+    monkeypatch.setattr(ray_submit, "ray_client", _client)
+    event = {"data": {"token": "t1", "model": "churn", "features": [{"dataset": "silver$features", "version": 7}], **trigger}}
+    local = _settings(MEDALLION_BRONZE_URI=f"{tmp_path}/medallion/bronze", MEDALLION_CONTROL_ROOT=f"{tmp_path}/control", MEDALLION_PRODUCE_ADMIN_PROJECT="acme")
+    assert asyncio.run(train.handle_train_trigger(local, event, dapr=_FakeDapr())) == {"status": "SUCCESS"}
+    (body,) = ray.posts
+    return body
 
 
-def test_the_training_submission_names_the_human_in_rays_own_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`metadata`, not only `runtime_env.env_vars`, and the distinction is the whole point: the
-    identity has to be readable from OUTSIDE the job AFTER it has failed, and `metadata` is what comes
-    back on `GET /api/jobs/<id>`. The env var is the job's own copy, for the events it emits itself."""
-    api = _submit(monkeypatch, originator="alice", project="acme")
-    assert api.posts[0]["metadata"]["rask.originator"] == "alice"
-    assert api.posts[0]["metadata"]["rask.project"] == "acme"
-    env = api.posts[0]["runtime_env"]["env_vars"]
-    assert env["ORIGINATOR"] == "alice" and env["TRAIN_PROJECT"] == "acme"
+def test_the_consumer_names_the_human_in_the_jobs_env_and_in_rays_own_metadata(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The trigger arrives off the bus, so the originator is an untrusted CLAIM — carried, never trusted. It
+    authorizes nothing here and is re-checked against visibility at delivery, the same posture
+    `StageTrigger.originator` already documents.
+
+    `metadata`, not only `runtime_env.env_vars`, and the distinction is the whole point: the identity has to be
+    readable from OUTSIDE the job AFTER it has failed, and `metadata` is what comes back on `GET /api/jobs/<id>`. The
+    env var is the job's own copy, for the events it emits itself."""
+    body = _consume(monkeypatch, tmp_path, originator="alice")
+
+    assert (body["metadata"]["rask.originator"], body["metadata"]["rask.project"]) == ("alice", "acme")
+    env = body["runtime_env"]["env_vars"]
+    assert (env["RASK_ORIGINATOR"], env["RASK_PROJECT"]) == ("alice", "acme")
 
 
-def test_a_personless_training_submission_carries_no_empty_identity(monkeypatch: pytest.MonkeyPatch) -> None:
-    api = _submit(monkeypatch)
-    assert "rask.originator" not in api.posts[0]["metadata"]
+def test_a_personless_training_submission_carries_no_empty_identity(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    body = _consume(monkeypatch, tmp_path)
+
+    assert "rask.originator" not in body["metadata"]
+    assert "RASK_ORIGINATOR" not in body["runtime_env"]["env_vars"]
 
 
 # ── link 5: the job stamps it on the events it emits itself ──────────────────────────────────────

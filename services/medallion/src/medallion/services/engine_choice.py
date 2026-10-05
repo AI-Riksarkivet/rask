@@ -38,7 +38,7 @@ from service_kit.lakehouse.transform_specs import TransformSpec
 
 log = logging.getLogger(__name__)
 
-#: The engine that submits to the Ray cluster (`ray_submit`).
+#: The engine that submits to the Ray cluster (`rayjobs_api_executor.RayJobsApiExecutor`).
 RAY_ENGINE: Final = engine_names.RAY_ENGINE
 #: The engine that reads, transforms and writes inside this process (`compute.transform_stage`).
 #: A real second engine, not a fallback: it is what an estate without a Ray cluster runs on, and it

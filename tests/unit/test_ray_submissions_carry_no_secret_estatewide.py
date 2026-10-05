@@ -60,7 +60,7 @@ def _assert_clean(seam: str, body: object) -> None:
         assert value not in serialized, f"{seam}: the value of {name} rides the submission body, which the Jobs API echoes to any reader"
 
 
-# ── seams 2+3: medallion stage + train (services/medallion/services/ray_submit.py) ───────────────
+# ── seam 2: the medallion stage lane (training is an order through the port seam below, CP-044) ───
 
 
 def _medallion_settings() -> Any:
@@ -79,18 +79,14 @@ def _medallion_settings() -> Any:
 
 @pytest.fixture
 def medallion_bodies(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
-    from medallion.services import ray_submit, stage_submit
+    from medallion.services import ray_jobs_api, ray_submit, stage_submit
 
     seen: dict[str, Any] = {}
 
     async def _capture(_client: Any, submission_id: str, body: dict[str, Any], **_policy: Any) -> str:
         # `**_policy` swallows the kernel's `on_terminal_failure` keyword: the pin captures BODIES,
         # and pinning the policy signature here would make every kernel-contract change a pin edit.
-        # KEYED BY THE ID'S OWN PREFIX, not by which double intercepted it: since move 14 collapsed
-        # train onto the kernel, BOTH seams flow through submit_or_reattach, and a capture keyed by
-        # interception point silently filed train's body under "stage" — this pin's own
-        # never-captured guard is what caught that.
-        seen["train" if submission_id.startswith("ray-train-") else "stage"] = body
+        seen["stage"] = body
         return "submitted"
 
     class _Response:
@@ -98,7 +94,7 @@ def medallion_bodies(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
 
     class _Client:
         # Present only so `ray_client()` returns something; with the kernel monkeypatched above,
-        # nothing posts through it — both seams' bodies arrive via `_capture`.
+        # nothing posts through it — the body arrives via `_capture`.
         async def post(self, _path: str, json: dict[str, Any]) -> _Response:  # noqa: A002 — httpx's kwarg name
             raise AssertionError("a submission bypassed the kernel — some seam still carries an inline POST")
 
@@ -110,13 +106,8 @@ def medallion_bodies(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
 
     for name, value in MATERIAL.items():
         monkeypatch.setenv(name, value)
-    monkeypatch.setattr(ray_submit.rk, "submit_or_reattach", _capture)
+    monkeypatch.setattr(ray_jobs_api, "submit_or_reattach", _capture)
     monkeypatch.setattr(ray_submit, "ray_client", _client)
-    # PATCHED ON `stage_submit` ALONE, because only the STAGE lane resolves a declaration: the train
-    # lane reads its entrypoint straight from settings and asks the object store nothing. Patching
-    # `ray_submit` here raises `AttributeError` rather than silently doing nothing, which is the
-    # monkeypatch behaviour worth having — a patch aimed at a name its module does not own is a
-    # pin that covers nothing, and it says so instead of passing.
     monkeypatch.setattr(stage_submit, "resolve_transform_async", _resolve)
     return seen
 
@@ -127,25 +118,6 @@ async def test_the_medallion_stage_seam_is_clean(medallion_bodies: dict[str, Any
     await _submit_stage_job(_medallion_settings(), from_uri="s3://a/bronze", to_uri="s3://a/silver", stage="silver", token="t1")
     assert "stage" in medallion_bodies, "the stage submission was never captured — the seam moved and this pin is checking nothing"
     _assert_clean("medallion.submit_stage_order", medallion_bodies["stage"])
-
-
-@pytest.mark.asyncio
-async def test_the_medallion_train_seam_is_clean(medallion_bodies: dict[str, Any]) -> None:
-    from medallion.services import ray_submit
-
-    await ray_submit.submit_train_job(
-        _medallion_settings(),
-        model="m1",
-        features_json="[]",
-        config_json="{}",
-        token="t1",
-        originator="",
-        project="",
-        registry_uri="s3://models/registry",
-        artifact_base="s3://models/artifacts",
-    )
-    assert "train" in medallion_bodies, "the train submission was never captured — the seam moved and this pin is checking nothing"
-    _assert_clean("medallion.submit_train_job", medallion_bodies["train"])
 
 
 # ── the enumeration guard: a fourth seam cannot land outside this file ───────────────────────────

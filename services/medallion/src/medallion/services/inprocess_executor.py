@@ -91,8 +91,15 @@ class InProcessExecutor:
         The order's `idempotency_key` IS the handle, which makes a redelivered order re-attach to the
         recorded outcome rather than running the work twice — the same property a deterministic Ray
         submission id gives, expressed with the only durable identity a synchronous engine has.
+
+        Raises:
+            WrongEngineError: the task is registered for another engine.
+            ValueError: the order names no source table, so it is not a stage transform.
         """
         self.validate_task(registration)
+        if order.source is None:
+            # A stage transform reads its source row by row; an order with none (a training run) is not one.
+            raise ValueError(f"order {order.idempotency_key!r} names no source table, and this engine runs only stage transforms")
         handle = RunHandle(engine=IN_PROCESS_ENGINE, handle=order.idempotency_key)
         if (recorded := self._state.get(handle.handle)) is not None and recorded in {RunState.SUCCEEDED, RunState.FAILED}:
             return handle, SubmitOutcome.REATTACHED

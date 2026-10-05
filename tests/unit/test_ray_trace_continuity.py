@@ -30,7 +30,7 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from medallion.core.config import MedallionSettings
-from medallion.services import ray_submit, stage_submit
+from medallion.services import ray_submit, stage_submit, train_plans
 
 
 async def _submit_stage_job(settings: Any, **kwargs: Any) -> None:
@@ -107,22 +107,22 @@ def test_stage_submission_carries_the_active_spans_traceparent(monkeypatch: pyte
     assert env["TRACEPARENT"].startswith(f"00-{ctx.trace_id:032x}-{ctx.span_id:016x}-")
 
 
-def test_train_submission_carries_the_active_spans_traceparent(monkeypatch: pytest.MonkeyPatch) -> None:
-    captured = _capture_submits(monkeypatch)
+def test_train_order_carries_the_active_spans_traceparent() -> None:
+    """The training run's order, which the Ray adapter posts as `runtime_env` through `to_env` (CP-044)."""
     tracer = TracerProvider().get_tracer("test")
     with tracer.start_as_current_span("trainer") as span:
-        asyncio.run(
-            ray_submit.submit_train_job(
-                MedallionSettings.model_validate({}),
-                model="churn",
-                features_json="[]",
-                token="tok1",
-                registry_uri="s3://lake/models/churn",
-                artifact_base="s3://lake/artifacts/churn",
-            )
+        order = train_plans.train_order(
+            MedallionSettings.model_validate({}),
+            token="tok1",
+            model="churn",
+            features=[],
+            config={},
+            registry_uri="s3://lake/models/churn",
+            artifact_base="s3://lake/artifacts/churn",
+            originator="",
+            project="",
         )
-    env = captured[0]["runtime_env"]["env_vars"]
-    assert f"{span.get_span_context().trace_id:032x}" in env["TRACEPARENT"]
+    assert f"{span.get_span_context().trace_id:032x}" in order.to_env()["TRACEPARENT"]
 
 
 # --------------------------------------------------------------------------- #

@@ -24,10 +24,11 @@ import json
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
 
 from medallion.core.config import MedallionSettings
-from medallion.services import train
+from medallion.services import ray_submit, train
 
 
 def _settings(**overrides: Any) -> MedallionSettings:
@@ -40,6 +41,23 @@ def _settings(**overrides: Any) -> MedallionSettings:
     }
     values.update(overrides)
     return MedallionSettings.model_validate(values)
+
+
+def _features_the_job_reads(monkeypatch: pytest.MonkeyPatch) -> list[list[dict[str, Any]]]:
+    """The Ray Jobs API behind the Ray adapter: each submission's feature list, as the job will read it."""
+    seen: list[list[dict[str, Any]]] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(json.loads(request.content)["runtime_env"]["env_vars"]["RASK_PARAM_FEATURES"]))
+        return httpx.Response(200)
+
+    client = httpx.AsyncClient(base_url="http://ray-head:8265", transport=httpx.MockTransport(handle))
+
+    async def _client() -> httpx.AsyncClient:
+        return client
+
+    monkeypatch.setattr(ray_submit, "ray_client", _client)
+    return seen
 
 
 def _local(root: Path) -> dict[str, str]:
@@ -87,32 +105,20 @@ def test_the_ray_JOB_is_given_the_location_the_door_RESOLVED(monkeypatch: pytest
     A gate on the innermost call proves nothing about the hop that does the work.
     """
     monkeypatch.setattr(train.catalog_register, "describe_table_location", lambda **_kw: "s3://tenant-wh/90fabc")
-    seen: dict[str, Any] = {}
-
-    async def fake_submit(_settings_arg: Any, *, features_json: str, **_kw: Any) -> str:
-        seen["features"] = json.loads(features_json)
-        return "submitted"
-
-    monkeypatch.setattr(train.ray_submit, "submit_train_job", fake_submit)
+    seen = _features_the_job_reads(monkeypatch)
     event = {"data": {"token": "t1", "model": "churn", "features": [{"dataset": "silver$features", "version": 7}]}}
 
     local = _settings(MEDALLION_CATALOG_URL="http://catalog:2333", **_local(tmp_path))
     outcome = asyncio.run(train.handle_train_trigger(local, event, dapr=object()))
 
     assert outcome == {"status": "SUCCESS"}
-    assert seen["features"] == [{"dataset": "silver$features", "version": 7, "uri": "s3://tenant-wh/90fabc"}]
+    assert seen == [[{"dataset": "silver$features", "version": 7, "uri": "s3://tenant-wh/90fabc"}]]
 
 
 def test_an_unregistered_feature_still_reaches_the_job_by_its_composed_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """The fallback has to survive the same hop — the demo shape trains from the composed layout."""
-    seen: dict[str, Any] = {}
-
-    async def fake_submit(_settings_arg: Any, *, features_json: str, **_kw: Any) -> str:
-        seen["features"] = json.loads(features_json)
-        return "submitted"
-
-    monkeypatch.setattr(train.ray_submit, "submit_train_job", fake_submit)
+    seen = _features_the_job_reads(monkeypatch)
     event = {"data": {"token": "t1", "model": "churn", "features": [{"dataset": "silver$features", "version": 7}]}}
 
     assert asyncio.run(train.handle_train_trigger(_settings(**_local(tmp_path)), event, dapr=object())) == {"status": "SUCCESS"}
-    assert seen["features"] == [{"dataset": "silver$features", "version": 7, "uri": f"{tmp_path}/medallion/silver"}]
+    assert seen == [[{"dataset": "silver$features", "version": 7, "uri": f"{tmp_path}/medallion/silver"}]]

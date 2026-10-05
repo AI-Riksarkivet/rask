@@ -29,7 +29,7 @@ from typing import Any
 
 import pytest
 
-from medallion.services import ray_submit, stage_submit
+from medallion.services import ray_jobs_api, stage_submit
 from medallion.services.trigger_guards import StageTrigger
 
 
@@ -45,7 +45,7 @@ def captured(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         # double that took neither could not stand in for it at all, and its caller maps the answer.
         return "submitted"
 
-    monkeypatch.setattr(ray_submit.rk, "submit_or_reattach", _capture)
+    monkeypatch.setattr(ray_jobs_api, "submit_or_reattach", _capture)
     return seen
 
 

@@ -95,13 +95,13 @@ def test_each_emit_presents_the_identity_token_the_file_holds_at_that_moment(
     """The kubelet rewrites the projected token at about 515 s of its 600 s life, so an emitter built once
     (the process-wide default) must present whatever the file holds when each event is sent.
 
-    The endpoint is named by ``LINEAGE_URL``, the Ray train lane's spelling, because that lane is the
+    The endpoint is named by ``RASK_LINEAGE_ENDPOINT``, as the Ray head renders it for the training job, the
     long-lived emitter this matters for.
     """
     url, received = lineage_door
     token_file = tmp_path / "token"
     token_file.write_text("first.projected.jwt\n")
-    monkeypatch.setenv("LINEAGE_URL", url)
+    monkeypatch.setenv("RASK_LINEAGE_ENDPOINT", url)
     monkeypatch.setenv("RASK_LINEAGE_IDENTITY_TOKEN_FILE", str(token_file))
     emitter = build_emitter()
 

@@ -1,9 +1,9 @@
 """A planned training run reaches exactly one terminal, and a running one none (CP-029 S2: clause c).
 
-Driven on real collaborators end to end. The producer's own training consumer (`handle_train_trigger`) plans and
-submits each run into a plan store on `tmp_path`; the REAL training job (`scripts/ray_train_job.py`) trains on real
-pylance and stamps its registry commit with the run's marker; the plan sweep reads Ray through the real executor
-adapter; and a late report reaches the outcome door of the producer's own app, running its own lifespan, which builds
+Driven on real collaborators end to end. The producer's own training consumer (`handle_train_trigger`) plans each run
+into a plan store on `tmp_path` and submits its `WorkOrder` through the real Ray executor adapter (CP-044); the REAL
+training job (`scripts/ray_train_job.py`) runs on exactly the env that submission carried, trains on real pylance and
+stamps its registry commit with the run's marker; the plan sweep reads Ray through the same adapter; and a late report reaches the outcome door of the producer's own app, running its own lifespan, which builds
 the service-account verifier from the env the chart renders and checks the compute head's projected token offline
 against the loopback issuer.
 
@@ -71,16 +71,20 @@ class _Bus:
 
 
 class _Dashboard:
-    """The Ray Jobs API: accepts every submission, and answers each job's scripted states in turn, then 404."""
+    """The Ray Jobs API: accepts every submission and keeps its body, and answers each job's scripted states in turn,
+    then 404."""
 
     def __init__(self) -> None:
         self.posted: list[str] = []
+        self.bodies: dict[str, dict[str, Any]] = {}
         self.states: dict[str, list[str]] = {}
 
     def handle(self, request: httpx.Request) -> httpx.Response:
         if request.method == "POST" and request.url.path == "/api/jobs/":
-            submission = json.loads(request.content)["submission_id"]
+            body = json.loads(request.content)
+            submission = body["submission_id"]
             self.posted.append(submission)
+            self.bodies[submission] = body
             return httpx.Response(200, json={"submission_id": submission})
         job_id = request.url.path.removeprefix("/api/jobs/")
         scripted = self.states.get(job_id, [])
@@ -141,29 +145,25 @@ def producer(tmp_path: Path, sa_issuer: Any, monkeypatch: pytest.MonkeyPatch) ->
 
 def _plan(settings: MedallionSettings, bus: _Bus, token: str) -> PlanDocument:
     """The producer's training consumer on one trigger: it plans the run, submits it and acks."""
+    store = train_plans.plan_store(settings)
+    before = {action_id for action_id, _written in store.open_entries()}
     trigger = {"token": token, "model": "churn", "features": [{"dataset": "silver$features", "version": 1}], "originator": "alice"}
     assert asyncio.run(train.handle_train_trigger(settings, {"data": trigger}, dapr=bus)) == {"status": "SUCCESS"}
-    plan = train_plans.plan_store(settings).read(ray_submit.train_submission_id(token))
+    (action_id,) = {action_id for action_id, _written in store.open_entries()} - before
+    plan = store.read(action_id)
     assert plan is not None
     return plan
 
 
-def _job_commits_and_reaches_nobody(plan: PlanDocument, monkeypatch: pytest.MonkeyPatch) -> int:
-    """The real training job, as its submission tells it to run, with lineage unreachable from the head: it trains and
-    commits its marked registry version, and its COMPLETE never lands, so it reports nothing."""
-    settings = get_settings()
-    feature = {"dataset": "silver$features", "version": 1, "uri": train.feature_uri_for(settings, "silver$features")}
+def _job_commits_and_reaches_nobody(env: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> int:
+    """The real training job on exactly the env its submission carried, with lineage unreachable from the head: it
+    trains and commits its marked registry version, and its COMPLETE never lands, so it reports nothing."""
     with monkeypatch.context() as patch:
-        patch.setenv("MODEL", "churn")
-        patch.setenv("TRAIN_TOKEN", str(plan.trigger["token"]))
-        patch.setenv("FEATURES", json.dumps([feature]))
-        patch.setenv("REGISTRY_URI", plan.to_uri)
-        patch.setenv("ARTIFACT_BASE", train.artifact_base_for(settings, "churn"))
-        patch.setenv("RASK_IDEMPOTENCY_KEY", plan.action_id)
-        patch.setenv("RASK_OUTCOME_URL", plan.report_url)
+        for name, value in env.items():
+            patch.setenv(name, value)
         patch.setattr(job, "emit", lambda _event: False)
         job.main()
-    return int(lance.dataset(plan.to_uri).version)
+    return int(lance.dataset(env["RASK_DEST_URI"]).version)
 
 
 def _report(client: TestClient, sa_issuer: Any, plan: PlanDocument, report: OutcomeReport) -> httpx.Response:
@@ -177,16 +177,19 @@ def test_a_vanished_training_job_reaches_one_terminal_and_a_running_one_none(
 ) -> None:
     """Clause c. Three training runs are planned; the head then restarts and loses two of them.
 
-    The one whose job never committed gets exactly one FAIL, bare. The one whose job committed its registry version and
-    then could not reach lineage gets exactly one COMPLETE naming that version, read off its commit marker. The one
-    still training, 25 hours in and past the poll ceiling the watcher used to have, gets nothing at all. Neither lost
-    job is resubmitted, and a late report from either cannot add a second terminal.
+    Each submission is the run's `WorkOrder` and carries no empty env value, so it overrides nothing the Ray pod owns
+    (LH-299), and the job runs on that env alone. The one whose job never committed gets exactly one FAIL, bare. The one
+    whose job committed its registry version and then could not reach lineage gets exactly one COMPLETE naming that
+    version, read off its commit marker. The one still training, 25 hours in, gets nothing at all. Neither lost job is
+    resubmitted, and a late report from either cannot add a second terminal.
     """
     client, bus, settings = producer
     lost = _plan(settings, bus, "tok-lost")
     landed = _plan(settings, bus, "tok-landed")
     training = _plan(settings, bus, "tok-training")
-    committed = _job_commits_and_reaches_nobody(landed, monkeypatch)
+    env = dashboard.bodies[landed.action_id]["runtime_env"]["env_vars"]
+    assert [name for name, value in env.items() if not value] == [], f"the training submission blanks names the Ray pod owns: {env}"
+    committed = _job_commits_and_reaches_nobody(env, monkeypatch)
     store = train_plans.plan_store(settings)
     store.update(training.action_id, lambda p: p.model_copy(update={"submitted_at": p.submitted_at - timedelta(hours=25)}))
     dashboard.states = {lost.action_id: ["RUNNING"], landed.action_id: ["RUNNING"], training.action_id: ["RUNNING"] * 3}

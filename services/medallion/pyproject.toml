@@ -1,15 +1,13 @@
 [project]
 name = "medallion"
 version = "0.1.0"
-description = "Medallion service — bronze/silver/gold producer and stage runners: Dapr pub/sub events, Lance writes, and the Ray Jobs REST submit seam."
+description = "Medallion service — bronze/silver/gold producer and stage runners: Dapr pub/sub events, Lance writes, and the planned runs it submits through the executor port."
 requires-python = ">=3.13"
 license = "Apache-2.0"
 dependencies = [
     "service-kit[governed,lakehouse,media]",
     "storage",
     "lineage-kit",
-    # The generic Ray submitter (R2). It moved OUT of this service so `compute` — the execution
-    # plane — can start jobs without importing the medallion; the wrappers here still use it.
     "fastapi>=0.115",
     "pydantic>=2.7",
     "pydantic-settings>=2.5",

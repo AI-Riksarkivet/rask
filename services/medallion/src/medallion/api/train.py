@@ -104,7 +104,7 @@ async def train(
     idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=1, max_length=64, pattern=TOKEN_PATTERN)],
 ) -> dict[str, Any] | JSONResponse:
     """Request a training run: pin feature versions (omitted → LATEST, resolved HERE) and publish the
-    training trigger — 202 with the correlation ``token``. Token-guarded like ``/produce``; a disabled
+    training trigger — 202 with the correlation ``token`` and the run's ``instance_id``. Token-guarded like ``/produce``; a disabled
     head (no Ray path / S3 / bronze URI) is an explicit 409, a lost trigger an explicit 503 — never a 202
     that silently trains nothing."""
     if not train_head_enabled(settings):
@@ -203,7 +203,7 @@ async def show_train(instance_id: str, settings: SettingsDep, fga_client: FgaCli
     """DWF-MGT-002 on plans: the HTTP view of a planned training run. `POST /train` answers 202, and this is how a
     caller learns whether the run is still training, landed, or failed; an id no training plan has is 404.
 
-    ``instance_id`` is the plan's action id, `ray-train-<token>`. Gated on `can_administer` over the project the plan
+    ``instance_id`` is the plan's action id, which `POST /train` answers (`train_plans.train_action_id`). Gated on `can_administer` over the project the plan
     records: reading the status of compute you may not spend is not public, and the estate argues this exact point
     on `flows.get_run` and `ingest.get_ingest`.
     """
