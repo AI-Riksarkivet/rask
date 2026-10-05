@@ -334,6 +334,11 @@ spec:
                 echo "NATS trust root $how, {{ len $natsUsers }} users"
               }
               {{- end }}
+              {{- $baseFixture := include "lance.baseFixture" . | fromJson }}
+              {{- if $baseFixture }}
+              root={{ .Values.minio.secretKey | squote }}
+              {{- include "lance.baseFixtureSecretFn" . | nindent 14 }}
+              {{- end }}
               seed() {
               bao kv put secret/lance minio-secret-key={{ .Values.minio.secretKey }} \
                 minio-access-key={{ .Values.minio.accessKey }} postgres-password={{ .Values.age.password }} \
@@ -438,6 +443,12 @@ spec:
                 access_key={{ $.Values.minio.viewerAccessKey }} \
                 secret_key={{ include "lance.scopedStorageSecret" (list $ $.Values.minio.viewerAccessKey $.Values.minio.viewerSecretKey) }}
               echo "seeded secret/viewer-s3 into OpenBao"
+              {{- end }}
+              {{- /* values.yaml `catalog.multibase.devSeed`: each data base's credential, under the name its reference gives. */}}
+              {{- range $ref, $_ := $baseFixture }}
+              base_secret {{ $ref }} "$HOME/seed/base-{{ $ref }}"
+              bao kv put secret/{{ $ref }} aws_access_key_id={{ $ref }} {{ include "lance.catalogSecretField" $ }}=@"$HOME/seed/base-{{ $ref }}" >/dev/null
+              echo "seeded secret/{{ $ref }} into OpenBao"
               {{- end }}
 
               {{- if $.Values.externalSecrets.enabled }}

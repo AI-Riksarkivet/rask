@@ -4,7 +4,8 @@
 {{- $lineage := .Values.minio.lineageAccessKey }}
 {{- $viewer := .Values.minio.viewerAccessKey }}
 {{- $catalog := .Values.minio.catalogAccessKey }}
-{{- if and .Values.minio.enabled (or $ray $maint $medallion $lineage $viewer) }}
+{{- $fixture := include "lance.baseFixture" . | fromJson }}
+{{- if and .Values.minio.enabled (or $ray $maint $medallion $lineage $viewer $fixture) }}
 {{- /*
    SCOPED USERS — the provisioning step `values.yaml` admitted was missing.
 
@@ -109,6 +110,33 @@ spec:
       serviceAccountName: {{ include "lance.fullname" . }}-sa-hooks
       volumes:
         {{- include "lance.tmpVolume" . | nindent 8 }}
+        {{- if $fixture }}
+        - { name: base-keys, emptyDir: { medium: Memory, sizeLimit: 1Mi } }
+        - name: minio-root
+          secret: { secretName: {{ include "lance.fullname" . }}-infra-credentials, items: [{ key: minio-secret-key, path: minio-secret-key }] }
+      {{- /* The data-base fixture's secrets are derived from the root secret as a mounted file, in the openbao image whose
+             busybox sha256sum was measured (2026-10-05); mc reads them from memory, so no key is in a pod spec or an env. */}}
+      initContainers:
+        - name: derive
+          image: {{ .Values.openbao.image }}
+          {{- include "lance.rootlessSecurityContext" 65532 | nindent 10 }}
+          volumeMounts:
+            - { name: base-keys, mountPath: /keys }
+            - { name: minio-root, mountPath: /minio-root, readOnly: true }
+          resources:
+            requests: { cpu: "10m", memory: "16Mi" }
+            limits: { cpu: "100m", memory: "32Mi" }
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              root=$(cat /minio-root/minio-secret-key)
+              {{- include "lance.baseFixtureSecretFn" . | nindent 14 }}
+              {{- range $ref, $_ := $fixture }}
+              base_secret {{ $ref }} /keys/{{ $ref }}
+              {{- end }}
+        {{- end }}
       containers:
         - name: mc
           image: {{ .Values.minio.mcImage }}
@@ -117,6 +145,9 @@ spec:
                  emptyDir is the pair every app container in this chart already uses. */}}
           volumeMounts:
             {{- include "lance.tmpMount" . | nindent 12 }}
+            {{- if $fixture }}
+            - { name: base-keys, mountPath: /keys, readOnly: true }
+            {{- end }}
           resources:
             requests: { cpu: "10m", memory: "32Mi" }
             limits: { cpu: "200m", memory: "128Mi" }
@@ -587,5 +618,31 @@ spec:
               mc admin user add rfs {{ $viewer }} "$VIEWER_SECRET_KEY" || true
               mc admin policy attach rfs rask-viewer --user {{ $viewer }} || true
               echo "provisioned scoped user {{ $viewer }} (rask-viewer)"
+              {{- end }}
+
+              {{- /* values.yaml `catalog.multibase.devSeed`: one user per credential reference, reaching only its bases. */}}
+              {{- range $ref, $locs := $fixture }}
+              cat >/tmp/base-{{ $ref }}.json <<'POLICY'
+              {
+                "Version": "2012-10-17",
+                "Statement": [
+                  {{- range $i, $l := $locs }}
+                  {{- $objects := ternary (printf "%s/%s/*" $l.bucket $l.prefix) (printf "%s/*" $l.bucket) (ne $l.prefix "") }}
+                  {{ if $i }},{{ end }}{ "Effect": "Allow", "Action": ["s3:GetBucketLocation", "s3:ListBucketMultipartUploads"], "Resource": ["arn:aws:s3:::{{ $l.bucket }}"] },
+                  { "Effect": "Allow", "Action": ["s3:ListBucket"], "Resource": ["arn:aws:s3:::{{ $l.bucket }}"]{{ if $l.prefix }}, "Condition": { "StringLike": { "s3:prefix": ["{{ $l.prefix }}", "{{ $l.prefix }}/*"] } }{{ end }} },
+                  { "Effect": "Allow", "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload", "s3:ListMultipartUploadParts"], "Resource": ["arn:aws:s3:::{{ $objects }}"] }
+                  {{- end }}
+                ]
+              }
+              POLICY
+              {{- range $locs }}
+              mc mb --ignore-existing rfs/{{ .bucket }}
+              {{- end }}
+              mc admin policy create rfs rask-base-{{ $ref }} /tmp/base-{{ $ref }}.json
+              mc admin user add rfs {{ $ref }} "$(cat /keys/{{ $ref }})"
+              if ! out=$(mc admin policy attach rfs rask-base-{{ $ref }} --user {{ $ref }} 2>&1); then
+                case "$out" in *already*) ;; *) echo "$out" >&2; exit 1 ;; esac
+              fi
+              echo "provisioned data-base user {{ $ref }} (rask-base-{{ $ref }})"
               {{- end }}
 {{- end }}

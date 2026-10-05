@@ -135,7 +135,7 @@ spec:
                that no longer existed and failed closed at startup on an estate whose store was
                otherwise healthy. A name the chart writes and the chart seeds cannot drift apart.
             */}}
-            - { name: LANCE_DAPR_SECRET_S3_FIELD, value: {{ ternary "catalog-s3-secret-key" "minio-secret-key" (not (not $catalogScoped)) | quote }} }
+            - { name: LANCE_DAPR_SECRET_S3_FIELD, value: {{ include "lance.catalogSecretField" . | quote }} }
             {{- if not (include "lance.secretsViaDapr" .) }}
             - { name: LANCE_S3_SECRET_ACCESS_KEY, value: {{ ternary (include "lance.scopedStorageSecret" (list . .Values.minio.catalogAccessKey .Values.minio.catalogSecretKey)) .Values.minio.secretKey (not (not $catalogScoped)) | quote }} }
             {{- else }}

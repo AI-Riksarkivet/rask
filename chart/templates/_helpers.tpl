@@ -1473,6 +1473,41 @@ same function of the same inputs.
 {{- if $explicit -}}{{- $explicit -}}{{- else -}}{{- printf "%s-s3-%s" $identity $root.Values.minio.secretKey | sha256sum | trunc 40 -}}{{- end -}}
 {{- end -}}
 
+{{/* The bundle field the catalog reads its S3 secret from, and so the field a per-base credential carries. */}}
+{{- define "lance.catalogSecretField" -}}
+{{- ternary "catalog-s3-secret-key" "minio-secret-key" (not (not .Values.minio.catalogAccessKey)) -}}
+{{- end -}}
+
+{{/* [[LH-067]] The local data-base fixture (values.yaml `catalog.multibase.devSeed`): JSON
+{ref: [{bucket, prefix}]} over `baseCredentialRefs`, `{}` when off. */}}
+{{- define "lance.baseFixture" -}}
+{{- $out := dict -}}
+{{- if .Values.catalog.multibase.devSeed -}}
+{{- if or (include "rask.isRealDeployment" .) (not .Values.minio.enabled) (not .Values.openbao.enabled) -}}
+{{- fail "catalog.multibase.devSeed is a local fixture: it needs minio.enabled, the bundled dev-mode openbao and side-loaded images" -}}
+{{- end -}}
+{{- range $base, $ref := .Values.catalog.multibase.baseCredentialRefs | default dict -}}
+{{- if not (and (hasPrefix "s3://" $base) (regexMatch "^[a-z0-9][a-z0-9-]*$" $ref)) -}}
+{{- fail (printf "catalog.multibase.devSeed cannot seed %q=%q: it needs an s3:// base and a lowercase [a-z0-9-] reference" $base $ref) -}}
+{{- end -}}
+{{- $parts := splitn "/" 2 (trimPrefix "s3://" $base) -}}
+{{- $loc := dict "bucket" $parts._0 "prefix" (trimSuffix "/" ($parts._1 | default "")) -}}
+{{- $_ := set $out $ref (append (get $out $ref | default list) $loc) -}}
+{{- end -}}
+{{- end -}}
+{{- $out | toJson -}}
+{{- end -}}
+
+{{/* Writes the fixture secret for reference $1 to file $2 from the store's root secret in $root, never
+to output; the same function as `lance.scopedStorageSecret`, so every caller derives one value. */}}
+{{- define "lance.baseFixtureSecretFn" -}}
+base_secret() {
+  s=$(printf '%s-s3-%s' "$1" "$root" | sha256sum | cut -c1-40)
+  [ ${#s} -eq 40 ] || { echo "could not derive the data-base secret for $1" >&2; exit 1; }
+  (umask 077; printf '%s' "$s" > "$2")
+}
+{{- end -}}
+
 {{/*
 The app-ids `lance-secrets` admits — ONE derivation, consumed by the Component that enforces it and by
 every workload that decides whether it may read from it.

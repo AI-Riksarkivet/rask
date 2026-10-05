@@ -1069,6 +1069,23 @@ catalog:
     # The runtime symptom is indistinguishable from a caller naming a bucket they invented, which is
     # why it has to fail here instead.
     baseCredentialRefs: {}
+    # LOCAL FIXTURE for the references above, off by default and refused at render on a real deployment
+    # (`rask.isRealDeployment`), with MinIO off, or without the bundled dev-mode OpenBao. In production
+    # the store, its users and the secret each reference names are platform-run: an operator creates
+    # them and the chart only names them. On, for every reference:
+    #   * `minio-scoped-users` creates the bucket if missing, a policy `rask-base-<ref>` that reaches
+    #     only that reference's bases (the bucket's metadata, a LIST conditioned on the base prefix on a
+    #     path boundary, object read/write under `<prefix>/`), and a user named `<ref>` holding it;
+    #   * the dev OpenBao's seed writes `secret/<ref>` with `aws_access_key_id=<ref>` and the secret under
+    #     the field the catalog reads (`lance.catalogSecretField`), the bundle shape
+    #     `catalog/services/warehouse_credentials.py::resolve` requires.
+    # THE SECRET IS DERIVED IN THE CLUSTER, never rendered: sha256("<ref>-s3-<minio.secretKey>")[:40], the
+    # function `lance.scopedStorageSecret` uses, computed by both pods from the root secret they already
+    # hold (the Job reads it as a mounted file). So the two halves agree without one handing the other a
+    # key, a re-run is idempotent, and the seed's own re-seed loop restores the entry after an in-place
+    # OpenBao restart or a replaced pod. It is a fixture identity, not a tenant's: it proves the per-base
+    # credential path end to end.
+    devSeed: false
   # Control-plane change-events: every governance/metadata mutation (grants/warehouses/policies/tables)
   # publishes a CatalogControlEvent onto a DEDICATED broadcast Dapr topic (catalog.control.v1, no
   # queueGroupName) that EVERY catalog replica buffers, so the admin console live-refreshes via
