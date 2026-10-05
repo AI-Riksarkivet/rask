@@ -498,7 +498,8 @@ def test_a_table_location_is_exclusive(estate: _Estate) -> None:
     that opens another table's directory: pylance 12.0.0 drops the tab from ``x/.\\t./<victim>`` (and a line
     feed or carriage return likewise) and resolves the ``..`` left behind (lh279 r4 register_probe). Each
     segment is judged as it reads after one percent-decode, so ``%2e%2e`` is refused as ``..`` and ``%5Fbases``
-    as ``_bases``.
+    as ``_bases``. A location over the model registry is refused too ([[LH-204]]): it is opened by explicit
+    URI and never registered, so a table there would be vended every model's history.
 
     A table whose NAME the catalog percent-encodes into its location (``räksmörgås`` ->
     ``r%C3%A4ksm%C3%B6rg%C3%A5s``, ``growth%`` -> ``growth%25``) is still its own: it is created with a
@@ -514,7 +515,7 @@ def test_a_table_location_is_exclusive(estate: _Estate) -> None:
     from service_kit.lakehouse import trash
 
     victim = estate.victim.removeprefix(f"{estate.root}/")
-    for location in (".", "_bases", "%5Fbases", victim, f"{victim}/tree", f"x/.\t./{victim}", f"x/.\n./{victim}", f"x/%2e%2e/{victim}"):
+    for location in (".", "_bases", "%5Fbases", victim, f"{victim}/tree", f"x/.\t./{victim}", f"x/.\n./{victim}", f"x/%2e%2e/{victim}", "medallion/models/m"):
         resp = estate.client.post("/v1/table/db$squatter/register", json={"location": location})
         assert resp.status_code == 400, f"{location!r}: {resp.status_code} {resp.text}"
         assert estate.client.post("/v1/table/db$squatter/exists").status_code == 404, f"{location!r}: a refused registration must be detached"

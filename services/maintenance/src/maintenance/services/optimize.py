@@ -207,7 +207,7 @@ class Discovery(BaseModel):
 #: gates the #79 purge. Measured on the deployed release 2026-09-16: three incomplete entries, all
 #: backup snapshots, against 932 orphan files across 8 datasets the purge could not touch.
 #: `_bases` holds the catalog's per-table base records ([[LH-279]]): control-root JSON, never a dataset.
-_CONTROL_PREFIXES = ("_warehouses", "_policies", "_protection", "_trash", "_lineage_outbox", "_staging", "_backups", "_bases")
+_CONTROL_PREFIXES = ("_warehouses", "_policies", "_protection", "_trash", "_lineage_outbox", "_staging", "_backups", "_bases", "_locations")
 
 
 def _may_hide_a_dataset(fs: pafs.FileSystem, path: str) -> bool:

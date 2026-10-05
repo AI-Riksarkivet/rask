@@ -23,6 +23,7 @@ from lance_namespace import (
     GetTableStatsResponse,
     GetTableTagVersionRequest,
     InvalidInputError,
+    InvalidTableStateError,
     LanceNamespace,
     ListNamespacesRequest,
     ListTablesRequest,
@@ -70,10 +71,10 @@ from catalog.core.modes import RegisterMode
 from catalog.core.namespace import judged_native_version, open_dataset_unchecked, registered_dataset_facts, warn_if_mixed_file_versions
 from catalog.core.vending import dataset_facts, require_vendable_bases, unsanctioned_bases
 from catalog.schemas import ProtectionResponse, SetProtectionRequest, TrashEntry
-from catalog.services import dataplane, native, table_bases, warehouses
+from catalog.services import dataplane, native, table_bases, table_claims, warehouses
 from service_kit.control_emit import emit_control
 from service_kit.governed import fga
-from service_kit.lakehouse import base_registry, maintenance_policies, protection, trash
+from service_kit.lakehouse import base_registry, location_claims, maintenance_policies, protection, trash
 from service_kit.lakehouse.ns_errors import PartiallyApplied
 
 
@@ -556,15 +557,25 @@ async def drop_table(
                 grace_days=settings.trash_grace_days,
             )
             await run_in_threadpool(trash.put, settings.registry_root, settings.storage_options(), record)
+            # [[LH-204]] The trashed id keeps its location until undrop or purge, so no other id registers
+            # over bytes someone can still restore.
+            await run_in_threadpool(table_claims.keep_for_trash, ns, table_claims.claim_store(settings), described.location, canonical, segments)
             await run_in_threadpool(native.call, ns, "deregister_table", DeregisterTableRequest(id=segments))
             trashed = True
     if not trashed:
+        # [[LH-204]] The drop deletes the LOCATION, so it refuses while the location's claim names another
+        # table that still resolves to it: that table's bytes are not this id's to destroy.
+        doomed: DescribeTableResponse = await run_in_threadpool(native.call, ns, "describe_table", DescribeTableRequest(id=segments))
+        if doomed.location:
+            await run_in_threadpool(table_claims.require_no_other_holder, ns, table_claims.claim_store(settings), doomed.location, canonical)
         response: DropTableResponse = await run_in_threadpool(native.call, ns, "drop_table", DropTableRequest(id=segments))
         # [[LH-279]] The base record goes with the bytes: left behind, it would sanction its bases for the next
-        # table registered at this location. The `dir` backend's drop answers the dropped location.
+        # table registered at this location. The `dir` backend's drop answers the dropped location. The
+        # location's claim goes too ([[LH-204]]).
         if response.location:
             registry = base_registry.BaseRegistry(control_root=settings.registry_root, storage_options=settings.storage_options())
             await run_in_threadpool(base_registry.forget_base_record, registry, response.location)
+            await run_in_threadpool(location_claims.release, table_claims.claim_store(settings), response.location, canonical)
     else:
         response = DropTableResponse()
     # The record's job ends with the object: clear it so a LATER table reusing this id does not
@@ -645,6 +656,9 @@ async def deregister_table(
     guard = await run_in_threadpool(protection.get_protection, settings.registry_root, settings.storage_options(), "table", canonical)
     fga_deps.require_not_protected(guard or {}, kind="table", obj_id=canonical, force=force)
     response: DeregisterTableResponse = await run_in_threadpool(native.call, ns, "deregister_table", DeregisterTableRequest(id=segments))
+    # The detached bytes are nobody's now, so the id's claim on them goes ([[LH-204]]).
+    if response.location:
+        await run_in_threadpool(location_claims.release, table_claims.claim_store(settings), response.location, canonical)
     if guard:  # only when one existed — a clear on nothing is a guaranteed-wasted S3 DELETE per drop
         await run_in_threadpool(protection.clear_protection, settings.registry_root, settings.storage_options(), "table", canonical)
     # Record the detach as best-effort lineage — asymmetric with drop (which deletes data), deregister
@@ -707,8 +721,9 @@ def absolute_table_location(ns: LanceNamespace, segments: list[str], registered:
 
     NEVER FAILS THE REGISTER. The registration is already committed, so an unreachable describe or an
     empty answer leaves the registered value — no worse than before, where raising would turn a
-    successful register into a 500 the caller cannot retry into a better state. Its one caller is the
-    409 branch, which compares the resolved location against a claim and judges nothing.
+    successful register into a 500 the caller cannot retry into a better state. Neither caller judges
+    with it: the 409 branch compares the resolved location against the body's, and a fresh registration
+    keys its location claim by it ([[LH-204]]).
     """
     try:
         described = native.call(ns, "describe_table", DescribeTableRequest(id=segments))
@@ -771,7 +786,11 @@ async def register_table(
         governed=GovernedStorage.from_settings(settings),
     )
     body.location = table_bases.require_registrable_location(
-        body.location, root=root, control_root=settings.registry_root, configured=[*context.configured, *context.data_allowlist]
+        body.location,
+        root=root,
+        control_root=settings.registry_root,
+        configured=[*context.configured, *context.data_allowlist],
+        model_roots=[settings.models_root, settings.model_artifacts_root],
     )
     # SAME AMPLIFIER AS create (see `catalog.api.idempotency`): a replay re-enters a door that
     # MINTS an id and seeds its ownership. OPTIONAL, because the spec defines no such header and a stock client must keep working.
@@ -854,16 +873,31 @@ async def register_table(
             log.info("register_converged_governance", extra={"table": id, "location": registered})
         raise
 
+    claims = table_claims.claim_store(settings)
+    canonical = fga.canonical_object_id(segments, delimiter=settings.delimiter)
+    # The location as the backend RESOLVED it, the spelling every other door keys the claim by: a `%` in
+    # the body is stored re-encoded, so the body's spelling can decode to another key.
+    stated_location = f"{root.rstrip('/')}/{body.location}"
+    claimed_location = await run_in_threadpool(absolute_table_location, ns, segments, stated_location) or stated_location
+
     async def _detach() -> None:
         # DEREGISTER, never drop. Register ATTACHES bytes that already existed and are not ours to
         # destroy — the whole point of the door. Deregister is the exact inverse: it removes the
-        # catalog object this request created and leaves the data exactly where it was found.
+        # catalog object this request created and leaves the data exactly where it was found. The
+        # location's claim goes with it; one another table holds is not this registration's to free.
         await run_in_threadpool(native.call, ns, "deregister_table", DeregisterTableRequest(id=segments))
+        await run_in_threadpool(location_claims.release, claims, claimed_location, canonical)
 
     # AFTER THE REGISTER, because only the backend knows which root a relative location resolves
     # against and the overlap check must see this registration's own row; BEFORE THE SEED, so a refused
-    # dataset never gains an owner, a record entry, a lineage node or an event.
+    # dataset never gains an owner, a record entry, a lineage node or an event. The location's claim
+    # first ([[LH-204]]): a rename holding it, or a table a recoverable drop is keeping it for, refuses
+    # this registration even when the manifest shows no other row at the location.
     try:
+        try:
+            await run_in_threadpool(table_claims.take, ns, claims, claimed_location, canonical, segments)
+        except location_claims.LocationHeldError as held:
+            raise InvalidInputError(f"register location {body.location!r} is held by table {held.claim.table!r}") from None
         verdict = await run_in_threadpool(table_bases.judge_registered_table, ns, so, segments, body.location, context)
     except Exception as refusal:
         try:
@@ -1000,6 +1034,13 @@ async def undrop_table(
     # absolute URI stays on the record because that is what an operator reading the trash needs.
     location = str(record["location"])
     body = RegisterTableRequest(id=segments, location=location.rstrip("/").rsplit("/", 1)[-1])
+    # The drop kept the location's claim for this id ([[LH-204]]), so this take is the retry of an
+    # existing hold; another holder means another table now resolves to these bytes, and re-attaching
+    # this id would put two live ids on one dataset.
+    try:
+        await run_in_threadpool(table_claims.take, ns, table_claims.claim_store(settings), location, canonical, segments)
+    except location_claims.LocationHeldError as held:
+        raise InvalidTableStateError(f"cannot undrop {canonical}: its location is now held by table {held.claim.table!r}") from None
     try:
         response: RegisterTableResponse = await run_in_threadpool(native.call, ns, "register_table", body)
     except TableAlreadyExistsError:
@@ -1127,7 +1168,8 @@ async def rename_table(
     namespace/tenant they lack create rights on. FGA tuples migrate from the old id to the new; a
     versionless REGISTER marker records the attachment at the new id so the destination appears in the
     graph with its provenance (#23 reconcile back-fills its on-disk version). Source missing → 404
-    ``TableNotFound``; destination name taken → 409 ``TableAlreadyExists``."""
+    ``TableNotFound``; destination name taken → 409 ``TableAlreadyExists``; the location held by a
+    concurrent rename or registration → 409 ``ConcurrentModification`` (code 14, [[LH-204]])."""
     # SAME AMPLIFIER AS create (see `catalog.api.idempotency`): a replay re-enters a door that
     # retires the source id and re-registers the destination. OPTIONAL, because the spec defines no such header and a stock client must keep working.
     converge = await idem.begin(settings, so, token, idempotency_key, endpoint="POST /v1/table/{id}/rename")
@@ -1163,7 +1205,17 @@ async def rename_table(
     # into a namespace/tenant they have no create rights on. (authorize already gated can_drop on the source.)
     await fga_deps.require_create_on_parent(client, settings, token, resource="table", segments=new_segments)
     new_segments, location = await run_in_threadpool(
-        partial(dataplane.rename_table, ns, so, segments, body.new_table_name, body.new_namespace_id, root=settings.root)
+        partial(
+            dataplane.rename_table,
+            ns,
+            so,
+            segments,
+            body.new_table_name,
+            body.new_namespace_id,
+            claims=table_claims.claim_store(settings),
+            delimiter=settings.delimiter,
+            root=settings.root,
+        )
     )
     # Emit the SOURCE's terminal marker BEFORE revoking its tuples. The default ``http`` lineage transport
     # runs ``enforce_output_authz`` (``can_write_data`` on the source); revoking first deletes the

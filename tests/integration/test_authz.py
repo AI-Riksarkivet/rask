@@ -550,7 +550,7 @@ def test_rename_table_seeds_destination_then_revokes_source(client: TestClient, 
         # threadpool — the door then answered 500 and this test read it as the FGA choreography failing.
         # A `**_` would have absorbed it and absorbed the next signature change too; naming the argument
         # is what keeps the double a faithful stand-in for the thing it replaces.
-        lambda ns, so, segments, name, nsid, *, root="": (
+        lambda ns, so, segments, name, nsid, *, claims, delimiter, root="": (
             [*(list(nsid) if nsid else segments[:-1]), name],
             "s3://b/db1$u2",
         ),

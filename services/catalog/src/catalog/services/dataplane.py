@@ -22,6 +22,7 @@ import json
 import logging
 import re
 import threading
+import uuid
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager, suppress
@@ -99,10 +100,11 @@ from catalog.core.base_judge import require_sanctioned_bases
 from catalog.core.config import shared_lance_session
 from catalog.core.modes import CreateMode, InsertMode
 from catalog.core.namespace import judged_native_version, open_dataset, open_dataset_unchecked
-from catalog.services import changes, client_fragments, native, table_bases, warehouse_credentials
+from catalog.services import changes, client_fragments, native, table_bases, table_claims, warehouse_credentials
 from catalog.services.base_credentials import compose_base_store_params
 from catalog.services.cast_size import bytes_after_cast
-from service_kit.lakehouse import base_registry, branch_layout, commit_runs
+from service_kit.lakehouse import base_registry, branch_layout, commit_runs, location_claims
+from service_kit.lakehouse.base_refs import decoded_path
 from service_kit.lakehouse.features import VersionedDataFile, describe_foreign_data_file_versions, manifest_base_path_refs
 from service_kit.lakehouse.objectfs import StorageOptions, credential_of, s3_filesystem
 from service_kit.lakehouse.schema import SchemaFields, facet_fields
@@ -668,6 +670,8 @@ def rename_table(
     new_table_name: str,
     new_namespace_id: list[str] | None,
     *,
+    claims: location_claims.ClaimStore,
+    delimiter: str,
     root: str = "",
 ) -> tuple[list[str], str]:
     """Rename a table by moving its POINTER. No data byte is read, written or deleted.
@@ -677,8 +681,8 @@ def rename_table(
     mapping in the ``__manifest`` table; the hash is there for object-store throughput and for
     create/delete/recreate conflict prevention, and the spec says the ``object_id`` suffix "ensures
     uniqueness and aids debugging" (`lance_docs/namespace.md`, *Manifest Table Directory*). It is a
-    label, not the resolution path. So the whole rename is: register the destination id at the
-    source's existing location, then deregister the source.
+    label, not the resolution path. So the whole rename is: take the location's claim for the
+    destination, deregister the source, and register the destination id at the source's location.
 
     That makes it **O(1) in the dataset**, which is the point. The cost of a rename used to be the
     dataset's size, paid inside a request handler that answered 200 — unbounded work no pod sizing
@@ -698,12 +702,20 @@ def rename_table(
     has that shape, so the refusal costs nothing and names the reason.
 
     Returns ``(new_segments, location)`` — the location UNCHANGED, because that is the property.
-    Raises ``TableNotFoundError`` (source missing / declared-only) or ``TableAlreadyExistsError``
-    (destination taken) so the endpoint maps 404 / 409.
+    Raises ``TableNotFoundError`` (source missing / declared-only), ``TableAlreadyExistsError``
+    (destination taken) or ``ConcurrentModificationError`` (another rename or registration holds the
+    location) so the endpoint maps 404 / 409 / 409.
 
-    The two calls are not one transaction. A crash between them leaves BOTH ids pointing at the SAME
-    dataset — one dataset, two pointers, no data at risk and no bytes duplicated — which a
-    deregister of either id resolves. The byte-copy shape's equivalent window left two full COPIES.
+    THE LOCATION CLAIM IS THE ARBITRATION ([[LH-204]]). Before either backend call, the location's
+    claim is handed from the source id to the destination id under the store's put-if-not-exists and
+    ETag (:mod:`service_kit.lakehouse.location_claims`), so of N concurrent renames of one source exactly
+    one holds the location and the rest answer code 14. Nothing in the backend can do this: measured on
+    pylance 12.0.0 (lh204 m1), concurrent deregisters of one id all succeed and a register at an occupied
+    location commits, so eight barrier-threaded renames left eight live ids on one dataset, 4 of 4 rounds.
+
+    The two backend calls are not one transaction. A crash between them leaves the table reachable by
+    no id with its claim naming the destination; a re-register of either id at the location, after the
+    claim's lease, recovers it.
     """
     if not new_table_name.strip():
         raise InvalidInputError("new_table_name is required")
@@ -726,7 +738,7 @@ def rename_table(
     # The destination must be free in EVERY form, checked BEFORE anything is touched. A declared-only
     # stub is TAKEN, never adopted: adopting one skips `register_table`, which is what arbitrates two
     # concurrent renames into the SAME destination name — the source-side race is arbitrated by the
-    # `deregister_table` below, and the two together are what make this door safe under concurrency.
+    # location claim below, and the two together are what make this door safe under concurrency.
     dest_uri, _dest_only_declared = _existing_location(ns, new_segments)
     if dest_uri is not None:
         raise TableAlreadyExistsError(f"table already exists: {'.'.join(new_segments)}")
@@ -741,21 +753,45 @@ def rename_table(
     # after a rename returns the identical entry and the data reads back, because the bytes never
     # moved. Re-adding a refusal would decline a safe operation.
     location = _relative_location(source_uri, root=root)
-    # THE SOURCE IS RETIRED FIRST, and that ordering is the whole of this door's race arbitration.
-    # `register_table` accepts a second id at a location another id already holds — measured on the
-    # `dir` backend — so a destination written first refuses nothing: two renames of one source both
-    # pass their free-destination checks, both register, and both retire the source, leaving two live
-    # ids on one dataset. `drop_table` removes BYTES, so dropping either then destroys the other's
-    # table while that id goes on resolving, and the two `describe_table` answers are identical and
-    # correct until it happens. Retiring first makes `deregister_table` the contended operation: the
-    # second caller finds the pointer already consumed and loses.
-    ns.deregister_table(DeregisterTableRequest(id=segments))
+    # THE CLAIM IS HANDED OVER FIRST, and it is the whole of this door's race arbitration: the loser of
+    # two renames of one source reads the winner's claim and answers code 14 before touching the
+    # backend. The source is still retired before the destination is written, so a rename never shows
+    # two ids on the dataset even for the instant between the two calls. The token makes this request's
+    # claim its own: two renames into the SAME destination name one holder, and only the request that
+    # stamped the claim may read it as its retry.
+    source_id, dest_id = delimiter.join(segments), delimiter.join(new_segments)
+    try:
+        table_claims.take(ns, claims, source_uri, dest_id, new_segments, previous=source_id, token=uuid.uuid4().hex)
+    except location_claims.LocationHeldError as held:
+        raise ConcurrentModificationError(
+            f"cannot rename {source_id}: its location is held by {held.claim.table}, by a concurrent rename or registration; describe it and retry"
+        ) from None
+
+    def _hand_back() -> None:
+        # The source keeps its location, so it keeps the claim; left with the destination, every later
+        # rename of the source would answer code 14 for the claim's lease. Logged, never raised over the
+        # failure that made the rename compensate.
+        try:
+            table_claims.take(ns, claims, source_uri, source_id, segments, previous=dest_id)
+        except Exception as exc:
+            log.error("rename_claim_not_handed_back", extra={"source": source_id, "location": source_uri, "error": str(exc)[:300]})
+
+    try:
+        ns.deregister_table(DeregisterTableRequest(id=segments))
+    except Exception:
+        _hand_back()
+        raise
     try:
         ns.register_table(RegisterTableRequest(id=new_segments, location=location))
-    except Exception:
+    except Exception as failed:
+        # A destination that now resolves to this location is another request's finished rename: putting
+        # the source back would make a second live id on the dataset, so its state stands and this one
+        # answers code 14.
+        if isinstance(failed, TableAlreadyExistsError) and _resolves_to(ns, new_segments, source_uri):
+            raise ConcurrentModificationError(f"cannot rename {source_id}: a concurrent rename already moved it to {dest_id}") from None
         # COMPENSATE, or a rename that trips on its destination leaves the table reachable by NO id —
-        # bytes intact and invisible, which is the cost this ordering would otherwise impose on the
-        # common single-rename failure. The same call at the same location the source already had.
+        # bytes intact and invisible. The same call at the same location the source already had, and
+        # the claim handed back with it.
         try:
             ns.register_table(RegisterTableRequest(id=segments, location=location))
         except Exception as restore:
@@ -763,10 +799,21 @@ def rename_table(
             # log rather than being swallowed with the original error.
             log.error(
                 "rename_source_pointer_lost",
-                extra={"source": ".".join(segments), "location": location, "error": str(restore)},
+                extra={"source": source_id, "location": location, "error": str(restore)},
             )
+        else:
+            _hand_back()
         raise
     return new_segments, source_uri
+
+
+def _resolves_to(ns: LanceNamespace, segments: list[str], location: str) -> bool:
+    """Whether ``segments`` is registered and describes ``location``; an unreadable answer is ``False``."""
+    try:
+        described = ns.describe_table(DescribeTableRequest(id=segments))
+    except Exception:  # noqa: BLE001 — not provably the winner's table, so the caller compensates as before
+        return False
+    return decoded_path(str(described.location or "")) == decoded_path(location)
 
 
 def _relative_location(uri: str, *, root: str) -> str:

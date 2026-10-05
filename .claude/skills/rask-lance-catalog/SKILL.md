@@ -32,11 +32,19 @@ Two contracts stack here, and confusing them is how bugs happen:
   own location, so version history, row count and the `<hash>_<object_id>` directory all survive
   untouched — the V2 layout makes the `object_id` suffix a label, not a resolution path
   (`lance_docs/namespace.md`).
-  THE SOURCE IS RETIRED FIRST, and that ordering is the door's race arbitration rather than a detail:
-  `register_table` accepts a second id at a location another id already holds (measured on the `dir`
-  backend), so writing the destination first let two concurrent renames of one source both succeed —
-  two live ids on one dataset, where `drop_table` on either destroys the other's bytes. Retiring first
-  makes `deregister_table` the contended call; a destination that then fails re-registers the source. The spec's *minimum* is 8 metadata ops; we carry the whole list
+  THE LOCATION CLAIM IS THE DOOR'S RACE ARBITRATION ([[LH-204]]), not the call order: the `dir` backend
+  arbitrates only object-id ADDs, so a register at an occupied location commits and two deregisters of one
+  id both succeed (measured on pylance 12.0.0: eight barrier-threaded renames left eight live ids on one
+  dataset, where `drop_table` on any destroys the others' bytes). The rename hands the location's claim
+  (`service_kit.lakehouse.location_claims`, `_locations/` on the control root, put-if-not-exists then
+  ETag) from source to destination before either backend call, stamped with a per-request token so two
+  renames into ONE destination are not each other's retry; the losers answer 409 code 14, and a failed
+  retire or destination register hands it back (unless the destination already resolves to the location:
+  then the winner's state stands). A destructive drop or cascade refuses 409 while the claim names another
+  live holder. Register and both undrops take a claim, a recoverable drop
+  keeps it for the trashed id, and destructive drops, deregister and the purge release it. A holder that no
+  longer resolves to its location is taken over only after `LEASE` (15 min). Pinned by
+  `tests/integration/test_concurrent_renames_leave_one_id_per_location.py`. The spec's *minimum* is 8 metadata ops; we carry the whole list
   including versioning, tags, branches, indices and transactions.
 - **Route grammar:** `POST /v1/<object>/{id}/<action>` — everything a reverse proxy needs (authN/Z,
   routing) is in the PATH, never only in the body. Path/body id conflict → 400. List ops are GET with

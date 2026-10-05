@@ -23,6 +23,7 @@ from lance_namespace import (
     DropTableRequest,
     DropTableResponse,
     InvalidInputError,
+    InvalidTableStateError,
     LanceNamespace,
     ListNamespacesRequest,
     ListNamespacesResponse,
@@ -55,10 +56,10 @@ from catalog.core.modes import CreateMode, DropBehavior, DropMode
 from catalog.core.namespace import warn_if_mixed_file_versions
 from catalog.core.store_endpoint import require_estate_store
 from catalog.schemas import ProtectionResponse, SetProtectionRequest, TrashEntry
-from catalog.services import native, warehouses
+from catalog.services import native, table_claims, warehouses
 from service_kit.control_emit import emit_control
 from service_kit.governed import fga
-from service_kit.lakehouse import base_registry, maintenance_policies, protection, trash
+from service_kit.lakehouse import base_registry, location_claims, maintenance_policies, protection, trash
 
 
 log = logging.getLogger(__name__)
@@ -437,6 +438,8 @@ async def _trash_subtree(
         # unrecoverable one. Here the window costs only a declaration the caller can redo.
         if described.location:
             await run_in_threadpool(trash.put, settings.registry_root, so, record)
+            # The trashed id keeps its location until undrop or purge, as at the table door ([[LH-204]]).
+            await run_in_threadpool(table_claims.keep_for_trash, ns, table_claims.claim_store(settings), described.location, str(record["id"]), child)
             await run_in_threadpool(native.call, ns, "deregister_table", DeregisterTableRequest(id=child))
         else:
             await run_in_threadpool(native.call, ns, "deregister_table", DeregisterTableRequest(id=child))
@@ -479,7 +482,15 @@ async def _trash_subtree(
         await run_in_threadpool(warehouses.unbind_namespace, settings.registry_root, so, segments[0])
 
 
-async def _destroy_subtree(ns: LanceNamespace, segments: list[str], descendants: list[tuple[str, list[str]]], *, registry: base_registry.BaseRegistry) -> None:
+async def _destroy_subtree(
+    ns: LanceNamespace,
+    segments: list[str],
+    descendants: list[tuple[str, list[str]]],
+    *,
+    registry: base_registry.BaseRegistry,
+    claims: location_claims.ClaimStore,
+    delimiter: str,
+) -> None:
     """Destroy the subtree BOTTOM-UP, ourselves (#117).
 
     `drop_namespace(behavior=Cascade)` is not implemented by the `dir` backend the chart runs — it
@@ -499,7 +510,8 @@ async def _destroy_subtree(ns: LanceNamespace, segments: list[str], descendants:
     cascade treats a binding that outlived its namespace.
 
     Each destroyed table's base record goes with its bytes ([[LH-279]]), off the location its drop answers:
-    left behind, it would sanction its bases for the next table registered there.
+    left behind, it would sanction its bases for the next table registered there. Its location claim goes
+    too ([[LH-204]]), or the location stays held for the claim's lease.
     """
     tables = [child for resource, child in descendants if resource == "table"]
     child_namespaces = sorted((child for resource, child in descendants if resource == "namespace"), key=len, reverse=True)
@@ -508,11 +520,20 @@ async def _destroy_subtree(ns: LanceNamespace, segments: list[str], descendants:
     # for: a mid-loop failure must leave a strictly SMALLER subtree that the same call finishes on a
     # retry, and the namespace drops must run deepest-first so each is empty when its own drop lands.
     # Concurrency buys latency on a path nobody is waiting on and costs both of those.
+    #
+    # [[LH-204]] BEFORE ANYTHING IS DESTROYED, every table's location is checked against its claim: a
+    # location another live table holds refuses the whole cascade, as a protected descendant does.
+    for child in tables:
+        with suppress(TableNotFoundError):
+            doomed: DescribeTableResponse = await run_in_threadpool(native.call, ns, "describe_table", DescribeTableRequest(id=child))
+            if doomed.location:
+                await run_in_threadpool(table_claims.require_no_other_holder, ns, claims, doomed.location, delimiter.join(child))
     for child in tables:
         with suppress(TableNotFoundError):
             dropped: DropTableResponse = await run_in_threadpool(native.call, ns, "drop_table", DropTableRequest(id=child))
             if dropped.location:
                 await run_in_threadpool(base_registry.forget_base_record, registry, dropped.location)
+                await run_in_threadpool(location_claims.release, claims, dropped.location, delimiter.join(child))
     for child in [*child_namespaces, segments]:
         with suppress(NamespaceNotFoundError):
             await run_in_threadpool(native.call, ns, "drop_namespace", DropNamespaceRequest(id=child))
@@ -629,7 +650,7 @@ async def drop_namespace(
     elif cascade:
         # The dir backend cannot cascade (#117) — we enumerate and destroy bottom-up ourselves.
         registry = base_registry.BaseRegistry(control_root=settings.registry_root, storage_options=settings.storage_options())
-        await _destroy_subtree(ns, segments, descendants, registry=registry)
+        await _destroy_subtree(ns, segments, descendants, registry=registry, claims=table_claims.claim_store(settings), delimiter=settings.delimiter)
         response = DropNamespaceResponse()
     else:
         try:
@@ -847,7 +868,14 @@ async def undrop_namespace(
         if location:
             # The RELATIVE form register_table accepts — the same #75 lesson as the table undrop:
             # the dir backend refuses the absolute URI the record carries for the operator's sake.
-            body = RegisterTableRequest(id=parse_identifier(t_id, settings.delimiter), location=location.rstrip("/").rsplit("/", 1)[-1])
+            t_segments = parse_identifier(t_id, settings.delimiter)
+            body = RegisterTableRequest(id=t_segments, location=location.rstrip("/").rsplit("/", 1)[-1])
+            # The cascade kept each location's claim for its trashed id; another holder means another
+            # table now resolves to these bytes, as at the table door ([[LH-204]]).
+            try:
+                await run_in_threadpool(table_claims.take, ns, table_claims.claim_store(settings), location, t_id, t_segments)
+            except location_claims.LocationHeldError as held:
+                raise InvalidTableStateError(f"cannot undrop table {t_id}: its location is now held by table {held.claim.table!r}") from None
             try:
                 await run_in_threadpool(native.call, ns, "register_table", body)
             except TableAlreadyExistsError:

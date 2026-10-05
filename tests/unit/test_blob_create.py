@@ -26,6 +26,7 @@ from lance_namespace import (
 
 from catalog.services.dataplane import create_table
 from service_kit.lakehouse import blobs
+from service_kit.lakehouse.location_claims import ClaimStore
 
 
 def _declare_namespace(ns: object, name: str) -> None:
@@ -231,7 +232,7 @@ def test_rename_rejects_a_blank_name_and_keeps_the_source(tmp_path: Path) -> Non
 
     for blank in ("", "   "):
         with pytest.raises(InvalidInputError):
-            rename_table(ns, {}, ["keep"], blank, None)
+            rename_table(ns, {}, ["keep"], blank, None, claims=ClaimStore(control_root=str(tmp_path)), delimiter="$")
     assert _open(ns, ["keep"]).read_blobs("payload", indices=[0])[0][1] == b"x"  # source untouched
 
 
@@ -242,7 +243,7 @@ def test_rename_onto_itself_is_rejected(tmp_path: Path) -> None:
     create_table(ns, {}, ["same"], _blob_table([b"x"]), mode="create", registry=None)
 
     with pytest.raises(InvalidInputError):
-        rename_table(ns, {}, ["same"], "same", None)
+        rename_table(ns, {}, ["same"], "same", None, claims=ClaimStore(control_root=str(tmp_path)), delimiter="$")
     assert _open(ns, ["same"]).count_rows() == 1  # not relocated onto itself / deleted
 
 
@@ -257,21 +258,17 @@ def test_rename_treats_a_declared_only_destination_as_taken(tmp_path: Path) -> N
     ns.declare_table(DeclareTableRequest(id=["media", "stub"]))  # declared-but-unwritten destination
 
     with pytest.raises(TableAlreadyExistsError):
-        rename_table(ns, {}, ["media", "src"], "stub", None)
+        rename_table(ns, {}, ["media", "src"], "stub", None, claims=ClaimStore(control_root=str(tmp_path)), delimiter="$")
     assert _open(ns, ["media", "src"]).read_blobs("payload", indices=[0])[0][1] == b"x"  # source intact
 
 
 def test_a_failed_source_claim_leaves_the_rename_UNDONE(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The pointer move is two calls, so there is a window — and what is in it is the whole safety case.
 
-    The SOURCE is retired first. A failure there aborts before any destination exists: the source still
-    resolves, no second pointer was written, and the caller sees the error. Nothing to reconcile.
-
-    That ordering is not a preference. `register_table` accepts a second id at a location another id
-    already holds (measured on the `dir` backend), so writing the destination first leaves a window in
-    which two concurrent renames of one source both succeed — two live ids on one dataset. `drop_table`
-    removes BYTES, so dropping either then destroys the other's table while that id goes on resolving,
-    and both `describe_table` answers are identical and correct until it happens.
+    The location's claim is handed to the destination first ([[LH-204]]) and the SOURCE is retired
+    next. A failure there aborts before any destination exists: the source still resolves, no second
+    pointer was written, the caller sees the error, and the claim is handed back — left with the
+    destination, every later rename of the source would answer code 14 for the claim's lease.
 
     A byte copy's equivalent window left two full COPIES of the dataset and, if the source delete had
     already run partway, an unreadable source. That failure class does not exist here either way.
@@ -292,7 +289,7 @@ def test_a_failed_source_claim_leaves_the_rename_UNDONE(tmp_path: Path, monkeypa
     # is an `invalid-assignment` to `ty`, and the estate's rule is to type it rather than suppress it.
     monkeypatch.setattr(ns, "deregister_table", _fails)
     with pytest.raises(OSError, match="rustfs 503"):
-        dataplane.rename_table(ns, {}, ["media", "a"], "b", None)
+        dataplane.rename_table(ns, {}, ["media", "a"], "b", None, claims=ClaimStore(control_root=str(tmp_path)), delimiter="$")
     monkeypatch.undo()
 
     # The source is untouched and the destination was never written.
@@ -300,3 +297,4 @@ def test_a_failed_source_claim_leaves_the_rename_UNDONE(tmp_path: Path, monkeypa
     with pytest.raises(Exception, match="(?i)not found|does not exist|no such"):
         ns.describe_table(DescribeTableRequest(id=["media", "b"]))
     assert _open(ns, ["media", "a"]).read_blobs("payload", indices=[0])[0][1] == b"x"
+    assert dataplane.rename_table(ns, {}, ["media", "a"], "c", None, claims=ClaimStore(control_root=str(tmp_path)), delimiter="$")[1] == source

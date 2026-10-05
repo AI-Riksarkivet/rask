@@ -106,7 +106,7 @@ def requested_external_blob_base(
     return base
 
 
-def require_registrable_location(location: str | None, *, root: str, control_root: str, configured: Sequence[str]) -> str:
+def require_registrable_location(location: str | None, *, root: str, control_root: str, configured: Sequence[str], model_roots: Sequence[str]) -> str:
     """The relative ``location`` a register names, refused when its shape alone breaks exclusivity.
 
     ``root`` is the namespace root the backend resolves the location against. Answered from the path
@@ -134,7 +134,10 @@ def require_registrable_location(location: str | None, *, root: str, control_roo
       a table off the records beneath it;
     - it may not equal, contain or sit under a ``configured`` base (the external blob and approved data
       bases). A table containing one is vended write access to the bytes that base's pointers name; a
-      table beneath one is readable through every table that registers that base as its external blob base.
+      table beneath one is readable through every table that registers that base as its external blob base;
+    - it may not equal, contain or sit under a ``model_roots`` entry (the model registry and the model
+      artifact tree, [[LH-204]]). Those datasets and objects are opened by explicit URI and never
+      registered, so a table over one would be vended write access to every model's weights and history.
 
     Raises:
         InvalidInputError: The location breaks the rule; the message says which part.
@@ -158,6 +161,9 @@ def require_registrable_location(location: str | None, *, root: str, control_roo
     for base in configured:
         if location_within(absolute, base) or location_within(base, absolute):
             raise InvalidInputError(f"register location {stated!r} overlaps a configured base, which every vended credential may read")
+    for model_root in model_roots:
+        if location_within(absolute, model_root) or location_within(model_root, absolute):
+            raise InvalidInputError(f"register location {stated!r} overlaps the model registry, which no table may be vended")
     return relative
 
 

@@ -30,8 +30,9 @@ could destroy live data:
 * **STILL REGISTERED.** The catalog's undrop registers and THEN clears the record
   (``tables.py`` / ``namespaces.py``); a crash in between — or a manual ``register_table`` at the same
   location — leaves a LIVE table with a stale trash record. Purging that record deletes a live table's
-  bytes. So the id is checked against ``__manifest`` (the spec's own object index, which is the only
-  place a namespace exists at all) TWICE: once against the tick's shared snapshot, as a cheap filter
+  bytes. The same holds when ANOTHER id resolves to the location (a rename or a register attached the
+  bytes under a new id, [[LH-204]]), so the id and the location are checked against ``__manifest`` (the
+  spec's own object index, which is the only place a namespace exists at all) TWICE: once against the tick's shared snapshot, as a cheap filter
   over every due record, and again in :func:`_purge_one` at the last instant before the first mutation.
   The second read is the one that closes the undrop window — a snapshot taken before the loop cannot
   see a registration that lands during it, and undrop re-registers BEFORE clearing the record, which is
@@ -77,8 +78,8 @@ from maintenance.services.reconcile import MANIFEST_DIR, NON_GATING_CATEGORIES, 
 from service_kit.control_emit import ControlEmitter, NoopControlEmitter, emit_control
 from service_kit.control_events import ControlAction, ControlObjectType
 from service_kit.governed import fga
-from service_kit.lakehouse import trash, warehouse_records
-from service_kit.lakehouse.base_refs import BaseRefs
+from service_kit.lakehouse import location_claims, trash, warehouse_records
+from service_kit.lakehouse.base_refs import BaseRefs, location_within
 from service_kit.lakehouse.base_registry import BaseRegistry, UnreadableBaseRecordError, forget_base_record
 from service_kit.lakehouse.objectfs import StorageOptions, fs_and_base
 
@@ -94,9 +95,10 @@ ACTOR = "service:maintenance"
 #: path crosses one of these is refused outright. The check covers EVERY segment, not just the last: a
 #: location of ``s3://bkt/_trash/x`` names a file inside the trash registry, and refusing only when the
 #: FINAL segment matches would delete it.
-CONTROL_PREFIXES = frozenset({MANIFEST_DIR, "_trash", "_projects", "_warehouses", "_policies", "_protection", "_bases"})
+CONTROL_PREFIXES = frozenset({MANIFEST_DIR, "_trash", "_projects", "_warehouses", "_policies", "_protection", "_bases", "_locations"})
 
 _STILL_REGISTERED = "still registered — recovered or re-registered since the drop, so these bytes are LIVE"
+_LOCATION_LIVE = "another registered table resolves to these bytes — a rename or a register attached them under a new id, so they are LIVE"
 _MANIFEST_UNREADABLE = "the object manifest could not be read, so liveness cannot be re-checked — refusing to delete blind"
 _PURGE_OFF = (
     "MAINTENANCE_TRASH_PURGE_ENABLED is off — reclamation is opt-in and report-only is the shipped default "
@@ -306,51 +308,88 @@ def maintained_roots(settings: MaintenanceSettings, storage_options: StorageOpti
     return {f"s3://{bucket}" for bucket in buckets if bucket}
 
 
-def live_object_ids(root: str, storage_options: StorageOptions) -> set[str] | None:
-    """Every object id ``root``'s ``__manifest`` records — tables AND namespaces — or ``None``.
+class Liveness(BaseModel):
+    """What the estate's ``__manifest`` rows say is live: every object id, and every table's location.
+
+    The ids answer "was this object recovered"; the locations answer "does any id still resolve to these
+    bytes" ([[LH-204]]). A rename or a register can attach a trashed table's bytes under ANOTHER id, and
+    an id-only check then purges a live table: the trashed id is absent while its bytes are not.
+    """
+
+    ids: set[str] = Field(default_factory=set)
+    #: Absolute table locations, joined onto the root that recorded them.
+    locations: set[str] = Field(default_factory=set)
+
+    def __or__(self, other: Liveness) -> Liveness:
+        return Liveness(ids=self.ids | other.ids, locations=self.locations | other.locations)
+
+    def resolves_into(self, location: str) -> bool:
+        """Whether a live table's location equals, contains or sits under ``location``."""
+        return any(location_within(live, location) or location_within(location, live) for live in self.locations)
+
+
+def manifest_liveness(root: str, storage_options: StorageOptions) -> Liveness | None:
+    """Every object id ``root``'s ``__manifest`` records — tables AND namespaces — and every table location, or ``None``.
 
     ``None`` means UNREADABLE, and the caller must treat it as "refuse everything". A missing manifest is
-    NOT unreadable: a root with no ``_versions`` directory is a fresh estate and yields the empty set (the
+    NOT unreadable: a root with no ``_versions`` directory is a fresh estate and yields an empty answer (the
     same probe-first shape :func:`reconcile._top_level_namespaces` uses, so an absent dataset never rides
     an exception). The difference is load-bearing — collapsing the two would let a broken manifest read
     as "nothing is live" and authorise deleting all of it.
 
-    No ``object_type`` filter, unlike the reconciler's read: a table record and a namespace record are
-    both checked against this set, and a namespace is only ever a manifest ROW.
+    No ``object_type`` filter on the ids, unlike the reconciler's read: a table record and a namespace
+    record are both checked against them, and a namespace is only ever a manifest ROW. A table row's
+    ``location`` is relative to the root (``lance_docs/ns_catalog/catalog/dir/index.md`` § Manifest Table
+    Schema) unless it carries a scheme.
     """
     try:
         fs, base = fs_and_base(root, storage_options)
         if fs.get_file_info(f"{base}/{MANIFEST_DIR}/_versions").type != pafs.FileType.Directory:
-            return set()
+            return Liveness()
         manifest_uri = f"s3://{base}/{MANIFEST_DIR}" if root.startswith("s3://") else f"{base}/{MANIFEST_DIR}"
         dataset = lance.dataset(manifest_uri, storage_options=storage_options, session=shared_lance_session())
-        return {str(v) for v in dataset.to_table(columns=["object_id"]).column("object_id").to_pylist() if v}
+        rows = dataset.to_table(columns=["object_id", "object_type", "location"]).to_pylist()
     except Exception:  # noqa: BLE001 — ANY failure here must fail toward not-deleting, not toward a partial set
         log.warning("trash_purge_manifest_unreadable", extra={"root": root}, exc_info=True)
         return None
+    live = Liveness()
+    for row in rows:
+        if row["object_id"]:
+            live.ids.add(str(row["object_id"]))
+        stored = str(row["location"] or "").strip()
+        if row["object_type"] == "table" and stored:
+            live.locations.add(stored if "://" in stored else f"{root.rstrip('/')}/{stored.strip('/')}")
+    return live
 
 
-def live_ids_across(roots: set[str], storage_options: StorageOptions) -> set[str] | None:
-    """The union of every maintained root's live object ids, or ``None`` if ANY root was unreadable.
+def live_object_ids(root: str, storage_options: StorageOptions) -> set[str] | None:
+    """The ids half of :func:`manifest_liveness`: ``None`` when the manifest is unreadable."""
+    live = manifest_liveness(root, storage_options)
+    return None if live is None else live.ids
+
+
+def liveness_across(roots: set[str], storage_options: StorageOptions) -> Liveness | None:
+    """The union of every maintained root's liveness, or ``None`` if ANY root was unreadable.
 
     All-or-nothing on purpose. A ``kind="namespace"`` record carries no root of its own, so its liveness
-    question is "is this id registered ANYWHERE in the estate" — an answer computed from a subset of the
-    roots is not an answer, it is a smaller search that finds fewer live objects and therefore deletes
-    more. One unreadable manifest poisons the whole tick; the next tick retries.
+    question is "is this id registered ANYWHERE in the estate", and a table's bytes can be resolved by a
+    table registered under any root — an answer computed from a subset of the roots is not an answer, it
+    is a smaller search that finds fewer live objects and therefore deletes more. One unreadable manifest
+    poisons the whole tick; the next tick retries.
 
     Operational consequence, stated rather than discovered: a warehouse whose bucket the registry names
     but this process cannot REACH blocks reclamation estate-wide until it is fixed or the record is
     removed. That is the intended direction — an unreachable part of the estate is a part nobody checked
     — and it is visible: every failing root is logged by name (``trash_purge_manifest_unreadable``) and
     the refusal reason lands on every record. A bucket that merely has no ``__manifest`` yet is NOT this
-    case; it lists as absent and contributes the empty set.
+    case; it lists as absent and contributes nothing.
     """
-    live: set[str] = set()
+    live = Liveness()
     for root in sorted(roots):
-        ids = live_object_ids(root, storage_options)
-        if ids is None:
+        found = manifest_liveness(root, storage_options)
+        if found is None:
             return None
-        live |= ids
+        live |= found
     return live
 
 
@@ -362,19 +401,20 @@ def _root_of(location: str, roots: set[str]) -> str | None:
     return None
 
 
-def check(record: dict[str, Any], *, roots: set[str], live_ids: set[str] | None) -> str | None:
+def check(record: dict[str, Any], *, roots: set[str], live: Liveness | None) -> str | None:
     """The refusal ladder — ``None`` to purge this record, else the reason not to. Order matters.
 
     Liveness is checked FIRST because it is the only refusal that protects data someone still has: the
     others protect the estate from a malformed record, this one protects a table the catalog just
-    recovered. Path checks come after, and are skipped entirely for records that name no bytes.
+    recovered. Path checks come after, and are skipped entirely for records that name no bytes; the
+    last asks whether another id now resolves to the location ([[LH-204]]).
     """
     obj_id = str(record.get("id") or "")
     if not obj_id:
         return "the record names no object id"
-    if live_ids is None:
+    if live is None:
         return _MANIFEST_UNREADABLE
-    if obj_id in live_ids:
+    if obj_id in live.ids:
         return _STILL_REGISTERED
     kind = str(record.get("kind") or "table")
     location = str(record.get("location") or "").rstrip("/")
@@ -392,6 +432,9 @@ def check(record: dict[str, Any], *, roots: set[str], live_ids: set[str] | None)
         return f"location {location!r} IS a store root — refusing to delete a whole bucket"
     if crossed := sorted(CONTROL_PREFIXES.intersection(remainder.split("/"))):
         return f"location {location!r} crosses the control prefix(es) {crossed} — refusing to delete the estate's own registries"
+    # After the path checks, which name a malformed record more exactly; a store root holds every live table.
+    if live.resolves_into(location):
+        return _LOCATION_LIVE
     return None
 
 
@@ -609,10 +652,16 @@ async def _delete_bytes_or_refuse(
     # [[LH-279]] The base record goes with the bytes, before the trash record is cleared: left behind, it would
     # sanction its bases for the next table registered at this location, and this is the last step that still
     # knows the location. Both deletes are idempotent, so a failure here is finished by the next tick.
+    # [[LH-204]] The trashed id's claim on the location goes with them too, so the location is free again.
     try:
         await run_in_threadpool(forget_base_record, BaseRegistry(control_root=control_root, storage_options=storage_options), location)
+        await run_in_threadpool(
+            location_claims.release, location_claims.ClaimStore(control_root=control_root, storage_options=storage_options), location, obj_id
+        )
     except Exception as exc:  # noqa: BLE001 — the bytes ARE gone; say so, and keep the trash record for the retry
-        reason = f"deleting {location!r} left its base record ({type(exc).__name__}: {exc}) — the trash record survives and the next tick retries"
+        reason = (
+            f"deleting {location!r} left its base record or location claim ({type(exc).__name__}: {exc}) — the trash record survives and the next tick retries"
+        )
         await _refuse(out, kind=kind, obj_id=obj_id, reason=reason, control_root=control_root, storage_options=storage_options)
         log.error("trash_purge_base_record_not_forgotten", extra={"kind": kind, "id": obj_id, "location": location, "error": str(exc)})
         return None
@@ -624,13 +673,13 @@ async def _recovered_since_the_snapshot(
     out: TrashPurgeReport,
     *,
     roots: set[str],
-    recheck_live: Callable[[], set[str] | None],
+    recheck_live: Callable[[], Liveness | None],
     control_root: str,
     storage_options: StorageOptions,
 ) -> bool:
     """Re-read liveness at the last instant before the first mutation. ``True`` when the record was refused.
 
-    THE REASON THE LADDER IN :func:`check` IS NOT SUFFICIENT ON ITS OWN. ``live_ids`` is ONE snapshot,
+    THE REASON THE LADDER IN :func:`check` IS NOT SUFFICIENT ON ITS OWN. ``live`` is ONE snapshot,
     taken before the loop and shared by every record, so an undrop landing after it is invisible to
     every record processed later in the same tick — and undrop re-registers BEFORE it clears the
     record, which is precisely that window. Re-reading here shrinks what an undrop must win from "this
@@ -648,7 +697,7 @@ async def _recovered_since_the_snapshot(
     """
     kind = str(record.get("kind") or "table")
     obj_id = str(record.get("id") or "")
-    reason = check(record, roots=roots, live_ids=await run_in_threadpool(recheck_live))
+    reason = check(record, roots=roots, live=await run_in_threadpool(recheck_live))
     if reason is None:
         return False
     await _refuse(out, kind=kind, obj_id=obj_id, reason=reason, control_root=control_root, storage_options=storage_options, dry_run=False)
@@ -664,8 +713,8 @@ async def _purge_one(
     storage_options: StorageOptions,
     control_root: str,
     roots: set[str],
-    live_ids: set[str] | None,
-    recheck_live: Callable[[], set[str] | None],
+    live: Liveness | None,
+    recheck_live: Callable[[], Liveness | None],
     fga_client: Any,  # noqa: ANN401 — OpenFgaClient | None
     control: ControlEmitter,
     protected: BaseRefs | None = None,
@@ -682,7 +731,7 @@ async def _purge_one(
     obj_id = str(record.get("id") or "")
     location = str(record.get("location") or "").rstrip("/")
 
-    if (reason := check(record, roots=roots, live_ids=live_ids)) is not None:
+    if (reason := check(record, roots=roots, live=live)) is not None:
         await _refuse(out, kind=kind, obj_id=obj_id, reason=reason, control_root=control_root, storage_options=storage_options, dry_run=dry_run)
         log.warning("trash_purge_refused", extra={"kind": kind, "id": obj_id, "reason": reason})
         return
@@ -826,12 +875,12 @@ async def purge_expired_trash(
 
     # One manifest read per root per tick, shared by every record — and `None` (unreadable) refuses all
     # of them rather than letting a broken index read as "nothing is live".
-    live_ids = await run_in_threadpool(live_ids_across, roots, storage_options) if due else set()
+    live = await run_in_threadpool(liveness_across, roots, storage_options) if due else Liveness()
     # #128d THE PRE-PASS, over every dataset in the maintained estate and BEFORE any delete. A trash
     # record names one path, but nothing in that record says whether a live shallow clone resolves its
     # data files through it — the SOURCE carries no feature flag and no `base_paths` of its own
     # (measured), so only the referring side holds the evidence and only a whole-estate pass finds it.
-    # Computed once per tick and shared by every record, exactly like `live_ids` above.
+    # Computed once per tick and shared by every record, exactly like `live` above.
     try:
         protected = await run_in_threadpool(partial(_estate_base_refs, roots, storage_options, settings=settings)) if due else BaseRefs()
     except UnreadableBaseRecordError as exc:
@@ -847,8 +896,8 @@ async def purge_expired_trash(
             storage_options=storage_options,
             control_root=resolved_control_root,
             roots=roots,
-            live_ids=live_ids,
-            recheck_live=lambda: live_ids_across(roots, storage_options),
+            live=live,
+            recheck_live=lambda: liveness_across(roots, storage_options),
             fga_client=fga_client,
             control=control,
             protected=protected,

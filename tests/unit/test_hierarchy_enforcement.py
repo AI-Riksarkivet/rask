@@ -15,6 +15,7 @@ from typing import Any
 from lance_namespace import NamespaceNotFoundError
 
 from service_kit.lakehouse import base_registry
+from service_kit.lakehouse.location_claims import ClaimStore
 
 
 #: A registry the cascade's record-forget may be pointed at: the double's drops name no location, so it is never read.
@@ -34,6 +35,12 @@ class _RecordingNs:
         if ident not in self._existing:
             raise NamespaceNotFoundError(f"Namespace not found: {ident}")
         return type("R", (), {"model_fields_set": set()})()
+
+    def describe_table(self, request: Any) -> Any:
+        from lance_namespace import DescribeTableResponse
+
+        # No location, as for a declared-only table: the claim check before the drops has nothing to judge.
+        return DescribeTableResponse()
 
     def drop_table(self, request: Any) -> Any:
         from lance_namespace import DropTableResponse
@@ -63,7 +70,7 @@ def test_the_cascade_destroys_BOTTOM_UP_and_never_asks_the_backend_to() -> None:
         ("namespace", ["bronze", "inner"]),
         ("table", ["bronze", "inner", "t2"]),
     ]
-    asyncio.run(_destroy_subtree(ns, ["bronze"], descendants, registry=_NO_RECORDS))
+    asyncio.run(_destroy_subtree(ns, ["bronze"], descendants, registry=_NO_RECORDS, claims=ClaimStore(control_root="/nonexistent/control"), delimiter="$"))
 
     assert "drop_table:bronze$pages" in ns.calls
     assert "drop_table:bronze$inner$t2" in ns.calls
@@ -87,5 +94,9 @@ def test_an_already_absent_child_is_DRIFT_not_an_error() -> None:
             raise TableNotFoundError("Table not found")
 
     ns: Any = _Vanishing()
-    asyncio.run(_destroy_subtree(ns, ["bronze"], [("table", ["bronze", "ghost"])], registry=_NO_RECORDS))
+    asyncio.run(
+        _destroy_subtree(
+            ns, ["bronze"], [("table", ["bronze", "ghost"])], registry=_NO_RECORDS, claims=ClaimStore(control_root="/nonexistent/control"), delimiter="$"
+        )
+    )
     assert "drop_namespace:bronze:restrict" in ns.calls, "one absent child blocked the whole cascade"

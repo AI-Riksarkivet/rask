@@ -78,6 +78,10 @@ class _RecordingNamespace:
     def __init__(self) -> None:
         self.calls: list[str] = []
 
+    def describe_table(self, request: Any) -> Any:
+        # No location, as for a declared-only table: a destructive drop's claim check has nothing to judge.
+        return type("R", (), {"location": None, "model_fields_set": set()})()
+
     def drop_table(self, request: Any) -> Any:
         self.calls.append("drop_table")
         return DropTableResponse()

@@ -118,11 +118,19 @@ def create_json(root_uri: str, storage_options: StorageOptions, key: str, record
         raise NotImplementedError(f"conditional create is not supported for root {root_uri!r} ({type(fs).__name__})")
     target = os.path.join(path.rstrip("/"), key)
     os.makedirs(os.path.dirname(target), exist_ok=True)
+    # Written aside, then LINKED into place: `link` fails when the target exists, so the OS still arbitrates
+    # exactly one winner, and the record appears whole. An `O_EXCL` open followed by a write let a reader
+    # that lost the create read the empty file in between (measured: JSONDecodeError in 1 of ~6 runs of
+    # eight concurrent claims, [[LH-204]]); an S3 PUT is atomic and has no such window.
+    staged = f"{target}.{os.getpid()}.{os.urandom(8).hex()}.tmp"
+    with open(staged, "xb") as fh:
+        fh.write(body)
     try:
-        with open(target, "xb") as fh:  # O_CREAT|O_EXCL — the OS arbitrates exactly one winner
-            fh.write(body)
+        os.link(staged, target)
     except FileExistsError as exc:
         raise RecordExistsError(f"record {key!r} already exists under {root_uri!r}") from exc
+    finally:
+        os.unlink(staged)
 
 
 class RecordChangedError(Exception):
@@ -172,7 +180,12 @@ def read_json(root_uri: str, storage_options: StorageOptions, key: str) -> tuple
     target = os.path.join(path.rstrip("/"), key)
     try:
         with open(target, "rb") as fh:
-            raw = fh.read()
+            # Shared against the conditional replace's exclusive lock, which truncates before it writes.
+            fcntl.flock(fh.fileno(), fcntl.LOCK_SH)
+            try:
+                raw = fh.read()
+            finally:
+                fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
     except FileNotFoundError:
         return None
     return json.loads(raw.decode("utf-8")), hashlib.sha256(raw).hexdigest()
