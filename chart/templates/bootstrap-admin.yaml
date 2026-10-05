@@ -131,34 +131,15 @@ spec:
                       print(f"waiting for store {STORE_NAME!r} ({store_id!r}) to hold this image's model", flush=True)
                       time.sleep(5)
 
-              # The admin's `owner`, then one `reader` per SERVICE principal that must READ the estate.
-              #
-              # Today that is exactly the notifications reconciler, and the grant is not a convenience.
-              # Lineage's `GET /events` is governed — a row comes back only if the CALLER can
-              # can_get_metadata on every dataset it names — so a deployment that forgets this gets a
-              # reconciler that ticks cleanly, logs `lineage_feed_reconciled`, and reconciles nothing.
-              # Measured on local k3s before this existed: `service-ingest` saw 80 events, `service-web`
-              # 4, and `notifications` ZERO, with every pod 2/2 Running.
-              #
-              # `reader`, not `owner`: the service must SEE runs to work out who to tell and no more.
-              # Delivery is re-authorized per recipient at fan-out (can_be_notified) and again at read
-              # (can_get_metadata), so this widens what the SERVICE observes, never what a PERSON gets.
-              #
-              # A RENDER-TIME LITERAL from the one values path `lance.saSubjects` uses to map the
-              # callers' ServiceAccounts at lineage's door, so the subject lineage admits cannot
-              # drift from the one granted here.
+              # The admin's `owner`, then one `reader` per SERVICE principal that must READ governed data.
               #
               # Each grant is checked before it is written, so re-running this hook on every upgrade
               # stays a no-op — and one already-granted subject never short-circuits another that is
               # still missing, which the early `sys.exit(0)` this replaced did: it would have hidden
               # every service grant behind an admin who was already in place.
               {{- $readers := list }}
-              {{- if .Values.services.notifications }}
-              {{- $readers = append $readers ((get (.Values.services.notifications.env | default dict) "RASK_LINEAGE_SERVICE_IDENTITY") | default "notifications") }}
-              {{- end }}
               {{- if and .Values.medallion.enabled .Values.medallion.cascadeLag.bindingName }}
-              {{- /* THE CASCADE-LAG DETECTOR, and it is the same class of grant as the notifications
-                     reconciler above rather than a new one. It reads two governed surfaces — the source
+              {{- /* THE CASCADE-LAG DETECTOR. It reads two governed surfaces — the source
                      tables' `published` tag at the catalog and lineage's `/runs` board — to work out how
                      far a tier has fallen behind. Without the grant both answer 403 and the detector
                      publishes NO POINT for any edge, which is worse than an absent detector: the empty
@@ -244,6 +225,19 @@ spec:
               {{- $stagers = append $stagers ((get (.Values.services.ingest.env | default dict) "RASK_CATALOG_SERVICE_IDENTITY") | default "service-ingest") }}
               {{- end }}
               stagers = {{ $stagers | toJson }}
+              {{- /* EVENT READERS hold `can_read_event_feed` on the estate ROOT ([[CTL-021]]): lineage's run feed
+                     with no per-dataset filter (`GET /events/projection`), which the notifications reconciler
+                     walks to find whom to tell about runs in EVERY warehouse. The governed `/events` shows a
+                     service only the tables its grants reach, so a tenant warehouse's runs would never arrive.
+                     `event_reader` and nothing wider: no tier, no tenant data, no rung that mints a project or
+                     edits a tuple (`model.fga.yaml` pins both halves). Who is told stays gated per person.
+                     The subject is the value `lance.saSubjects` maps the reconciler's ServiceAccount to at
+                     lineage's door, from the same values key, so the two cannot drift. */}}
+              {{- $eventReaders := list }}
+              {{- if .Values.services.notifications }}
+              {{- $eventReaders = append $eventReaders ((get (.Values.services.notifications.env | default dict) "RASK_LINEAGE_SERVICE_IDENTITY") | default "notifications") }}
+              {{- end }}
+              event_readers = {{ $eventReaders | toJson }}
               # The admin grant is the one that really is conditional on the subject: with no
               # `auth.bootstrapAdmin` there is no human to make an owner, and the service rungs below
               # are unaffected by that.
@@ -255,19 +249,19 @@ spec:
               )
               # ESTATE GRANTS — a SHORTER list than the warehouse one, and the difference is the point.
               #
-              # The warehouse rungs above are about DATA: `reader` is how the notifications reconciler
-              # sees the runs it must target, `maintainer` is how the sweep rewrites bytes, and both
-              # reach every tier by cascading down `warehouse -> namespace -> table`. None of that is an
-              # estate privilege and none of it moves here.
+              # The warehouse rungs above are about DATA: `reader` is how the cascade-lag detector reads
+              # versions and runs, `maintainer` is how the sweep rewrites bytes, and both reach every
+              # tier by cascading down `warehouse -> namespace -> table`. None of that is an estate
+              # privilege and none of it moves here.
               #
-              # `admin` reaches every estate rung (`owner`/`writer`/`reader` and the three can_* verbs),
-              # so the first human needs exactly one tuple. `event_stager` is the one SERVICE rung that
-              # really is estate-scoped: `can_stage_events` guards the lineage outbox prefix, which is a
-              # platform control surface rather than anyone's data — which is why it was minted on the
-              # root in the first place and why it is the only service grant that follows the root.
+              # `admin` reaches every estate rung (`owner`/`writer`/`reader` and the can_* verbs), so the
+              # first human needs exactly one tuple. The two SERVICE rungs are estate-scoped because what
+              # they guard is a platform surface rather than anyone's data: `event_stager` the lineage
+              # outbox prefix, `event_reader` the whole run feed.
               estate_grants = (
                   ([(user, "admin")] if subject else [])
                   + [(s if ":" in s else f"user:{s}", "event_stager") for s in stagers]
+                  + [(r if ":" in r else f"user:{r}", "event_reader") for r in event_readers]
               )
 
               for target, pairs in ((obj, grants), (estate_obj, estate_grants)):

@@ -368,9 +368,9 @@ services:
       # reads it; its projected `rask-lineage` token is what authenticates). Remove it and the
       # reconciler maps to the `notifications` default.
       #
-      # Admission is only half of it: the feed is GOVERNED, so this subject sees exactly the rows its
-      # grants allow. A deployment that admits it and grants it nothing gets a reconciler that runs
-      # cleanly and reconciles nothing, the quiet failure this whole lane exists to prevent.
+      # Admission is only half of it: the reconciler reads `/events/projection`, gated on
+      # `can_read_event_feed` at the estate root, and `bootstrap-admin.yaml` grants this same subject
+      # `event_reader` there ([[CTL-021]]). Without the grant every feed page answers 403.
       RASK_LINEAGE_SERVICE_IDENTITY: notifications
     waitFor: []
   gateway:

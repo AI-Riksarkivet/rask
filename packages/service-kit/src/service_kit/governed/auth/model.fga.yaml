@@ -1600,6 +1600,10 @@ tests:
       - user: user:stager
         relation: event_stager
         object: estate:rask
+      # The tuple the chart's bootstrap hook writes for the notifications reconciler ([[CTL-021]]).
+      - user: user:notifications
+        relation: event_reader
+        object: estate:rask
     check:
       # The machine identity: it may create projects, and it reaches that through `operator` rather
       # than by being a principal type of its own.
@@ -1638,6 +1642,35 @@ tests:
           can_stage_events: true
           reader: false
           can_observe_events: false
+      # THE RECONCILER READS THE WHOLE RUN FEED AND NOTHING ELSE ON THE ROOT ([[CTL-021]]). The two
+      # refusals that matter are the doors that mint a tenant (`POST /v1/projects` checks
+      # `can_observe_events`; `can_create_project` is the model's own verb) and the raw tuple editor
+      # (`can_observe_events` too). Each flips if `event_reader` is folded into a rung that carries them.
+      - user: user:notifications
+        object: estate:rask
+        assertions:
+          can_read_event_feed: true
+          can_observe_events: false
+          can_create_project: false
+          can_browse_storage: false
+          can_stage_events: false
+          reader: false
+      # The estate owner keeps it concentrically, as with every other rung here.
+      - user: user:root_admin
+        object: estate:rask
+        assertions:
+          can_read_event_feed: true
+      # A bare estate `reader` (what compute and controlplane gate on) and an operator are both
+      # refused: the feed is read through its own grant, never through a tier someone holds for
+      # another reason. `looker` flips if the rung is widened to `reader`, `provisioner` to `operator`.
+      - user: user:looker
+        object: estate:rask
+        assertions:
+          can_read_event_feed: false
+      - user: user:provisioner
+        object: estate:rask
+        assertions:
+          can_read_event_feed: false
       # A subject with no tuple on the root holds nothing there. Fail-closed, stated.
       - user: user:nobody
         object: estate:rask
@@ -1648,6 +1681,7 @@ tests:
           can_observe_events: false
           can_browse_storage: false
           can_stage_events: false
+          can_read_event_feed: false
       # THE SCOPE FIX, and it is what a separate TYPE buys over a second warehouse. The
       # `can_browse_storage` case above records the arrangement this replaces in its own words: the
       # relation "resolves on ANY warehouse its owner owns — alice owns acme_bucket, so it is true

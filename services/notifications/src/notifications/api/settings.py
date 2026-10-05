@@ -74,17 +74,17 @@ class IngressSettings(SignatureDoorSettings, BaseSettings):
     #: the operator rather than by code, so the default has to be the safe one.
     dlq_topic: str = Field(default="", alias="RASK_NOTIFICATIONS_DLQ_TOPIC")
 
-    #: The lineage service's own base URL — the reconciler's `GET /events` origin. NOT the gateway:
+    #: The lineage service's own base URL — the reconciler's `GET /events/projection` origin. NOT the gateway:
     #: the feed poll authenticates at lineage's SERVICE door, and the gateway is a public front door
     #: whose invocations that door refuses by construction (`dapr_auth.is_public_caller`).
     lineage_url: str = Field(default="http://127.0.0.1:8000", alias="RASK_NOTIFICATIONS_LINEAGE_URL")
 
     #: This pod's projected service-account token for lineage's door (audience `rask-lineage`). Lineage
-    #: maps the verified service account to this service's subject, which must hold the grants whose
-    #: rows the reconciler is expected to see, because the feed is governed. Re-read per request.
+    #: maps the verified service account to this service's subject, which must hold `event_reader` on
+    #: the estate root or every feed page answers 403 ([[CTL-021]]). Re-read per request.
     lineage_identity_token_file: str = Field(default="/var/run/secrets/rask/identity/rask-lineage/token", alias="RASK_LINEAGE_IDENTITY_TOKEN_FILE")
 
-    #: Rows per `GET /events` page. 500 is the server's own hard cap (`runs.py` `_EVENTS_RETURN`), so a
+    #: Rows per `GET /events/projection` page. 500 is the server's own hard cap (`runs.py` `_EVENTS_RETURN`), so a
     #: larger value here would be silently truncated and the walk would think it had reached the floor.
     feed_page_limit: int = Field(default=500, ge=1, le=500, alias="RASK_NOTIFICATIONS_FEED_PAGE_LIMIT")
 

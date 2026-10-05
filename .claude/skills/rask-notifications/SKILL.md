@@ -267,14 +267,20 @@ so it must read as a reason a person would accept; and `notification-center.stor
 
 ## The FGA prerequisite
 
-The feed is **governed**. The reconciler reads it as its own service principal, so *a deployment that
-forgets the grants gets a reconciler that runs cleanly, logs success, and reconciles nothing.* There is
-no retry that helps — the estate's `invokeRetry` never retries a 4xx, because a 403's answer will not
-change. Symmetrically, delivery needs `can_be_notified` and render needs `can_get_metadata` on
-`table:<output name>` per recipient; an FGA outage is fail-closed (RETRY), never a delivery.
+The reconciler reads lineage's `GET /events/projection` as its own service principal ([[CTL-021]]): the
+whole run feed with no per-dataset filter, gated on the estate rung `can_read_event_feed`, which the
+chart's bootstrap hook grants it as `event_reader` on `estate:rask`. Not the governed `/events`: that
+shows a service only the tables its grants reach, so every tenant warehouse's runs would be invisible to
+the lane and the tick would still log success. Each row carries only the targeting view (run id, state,
+time, the `author` and `lance` facets, output names), because addressing people needs nothing more. A
+deployment that forgets the grant gets a 403 on every tick, and no retry helps — the estate's
+`invokeRetry` never retries a 4xx, because a 403's answer will not change. Delivery needs
+`can_be_notified` and render needs `can_get_metadata` on `table:<output name>` per recipient; an FGA
+outage is fail-closed (RETRY), never a delivery.
 
-So a new producer ships **two** grants: notifications' `reader` on the feed, and the recipients' grants
-on the objects your outputs name. See `openfga` — `can_*` relations are never directly assignable.
+So a new producer ships **one** grant: the recipients' grants on the objects its outputs name. The feed
+reaches the reconciler whichever warehouse the run wrote. See `openfga` — `can_*` relations are never
+directly assignable.
 
 ## Testing with no cluster
 

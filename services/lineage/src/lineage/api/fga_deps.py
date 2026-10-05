@@ -149,14 +149,21 @@ async def _require_relation(relation: str, name: str, request: Request, settings
         raise PermissionDeniedError(f"{relation} required on {obj}")
 
 
-async def require_estate_observer(request: Request, settings: LineageSettings, token: Principal | None) -> None:
-    """Gate a WHOLE-ESTATE read on ``can_observe_events`` at the configured root object.
+#: The estate rung that opens the unfiltered run feed (`model.fga`, `type estate`).
+_EVENT_FEED_RELATION: Final = "can_read_event_feed"
+
+
+async def require_event_feed_reader(request: Request, settings: LineageSettings, token: Principal | None) -> None:
+    """Gate the unfiltered run feed on ``can_read_event_feed`` at the configured root object ([[CTL-021]]).
 
     The sibling of :func:`_require_relation` and deliberately not a call into it: that helper composes
     ``<fga_object_type>:<name>``, which on this service is always ``table:``, and an estate privilege is
-    not a relation of any one table. It is checked on `settings.fga_root_object` verbatim — the same
-    object `POST /v1/projects` and `POST /v1/stores` gate on, so "may observe the estate" means one
-    thing everywhere rather than one thing per service.
+    not a relation of any one table. It is checked on `settings.fga_root_object` verbatim, the object
+    every estate privilege is checked on.
+
+    ITS OWN RUNG rather than ``can_observe_events``, which also mints tenants, edits the authorization
+    graph and registers stores: the reconciler that reads this feed holds `event_reader` and nothing that
+    reaches those doors (`model.fga.yaml` pins both halves).
 
     The same fail-closed ladder as every other gate here: FGA off → no-op; unwired client → 503;
     unauthenticated → 401; deny → 403; an OpenFGA outage inside `check` → 503, never allow.
@@ -169,9 +176,9 @@ async def require_estate_observer(request: Request, settings: LineageSettings, t
     if token is None:
         raise UnauthenticatedError("authentication required")
     obj = settings.fga_root_object
-    if not await fga.check(client, user=token.sub, relation="can_observe_events", obj=obj):
-        log.info("access_denied", extra={"sub": token.sub, "relation": "can_observe_events", "object": obj})
-        raise PermissionDeniedError(f"can_observe_events required on {obj}")
+    if not await fga.check(client, user=token.sub, relation=_EVENT_FEED_RELATION, obj=obj):
+        log.info("access_denied", extra={"sub": token.sub, "relation": _EVENT_FEED_RELATION, "object": obj})
+        raise PermissionDeniedError(f"{_EVENT_FEED_RELATION} required on {obj}")
 
 
 async def require_metadata_access(name: str, request: Request, settings: SettingsDep, token: CurrentToken) -> None:

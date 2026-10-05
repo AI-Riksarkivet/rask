@@ -138,6 +138,10 @@ type estate
         # `can_stage_events` is NOT a pure computed userset over `owner` the way its two neighbours
         # are, so it carries its own grantable relation and does not migrate like them.
         define event_stager: [user, role#assignee]
+        # `can_read_event_feed`'s grantable half, the `event_stager` shape. `[user]` alone, narrower than
+        # that precedent: the holder is one machine identity granted by name, and a `role#assignee` here
+        # would let whoever manages a role hand the whole estate's run feed to a persona.
+        define event_reader: [user]
         define can_create_project: admin or operator
         # THE ESTATE-ADMIN RUNG. Checked ONLY on the root object (`fga_root_object`), never on a
         # caller-supplied one, so there is nothing to inject. Owner-tier: authz scope == data scope, and
@@ -152,7 +156,6 @@ type estate
         #     (`endpoints/access_admin.py:199`)
         #   * `POST /v1/stores` and its attach/detach siblings — naming a host the estate will talk to
         #     (`endpoints/stores.py:105,135,197`)
-        #   * lineage's whole-estate projection (`api/fga_deps.py:144` in services/lineage)
         #   * the `estate_admin` flag `/v1/me` reports (`endpoints/me.py:62`) — a display lookup rather
         #     than a door, listed because it is a consumer
         # The viewer and controlplane gate their own estate reads on their own relations and merely CITE
@@ -180,7 +183,7 @@ type estate
         # gate. Per-store granularity lands the day store registration owns its own tuples.
         define can_browse_storage: owner
         # Vending a WRITE credential for the estate's lineage outbox (`_lineage_outbox`), checked ONLY on
-        # the root object like the two estate privileges around it. Owner-tier would be wrong here and the
+        # the root object like the estate privileges around it. Owner-tier would be wrong here and the
         # difference is the point: the holders are SERVICES — the medallion, maintenance and ingest — and a
         # service must never be an estate owner. So this names its own role instead of widening `owner`,
         # the same shape `can_maintain` and `can_update_tag`'s `publisher` were minted for.
@@ -190,6 +193,23 @@ type estate
         # "may append to the recovery log" and nothing else — not the control root around it, and not any
         # tenant's data.
         define can_stage_events: event_stager or owner
+        # Reading lineage's run feed WITHOUT the per-dataset filter (`GET /events/projection`, [[CTL-021]]),
+        # checked ONLY on the root object. The holder is the notifications reconciler, which must see
+        # every warehouse's runs to work out whom to tell: on the governed `/events` a service sees only
+        # the tables its grants reach, so a run in any tenant warehouse it holds nothing on would never
+        # reach it. Disclosure stays gated per person at delivery (`can_be_notified`) and at render
+        # (`can_get_metadata`), so this widens what the SERVICE observes and never what a person receives.
+        #
+        # ITS OWN RUNG, not `can_observe_events` and not `reader`. `can_observe_events` also creates
+        # tenants, edits the authorization graph and registers stores (the consumer list above), so a
+        # reconciler holding it would hold all three; a `reader` here is what compute and controlplane
+        # gate their routers on, so reusing it would hand this feed to every holder of theirs. Lakekeeper
+        # keeps its machine identities on narrow per-purpose relations for the same reason
+        # (docs/audits/2026-09-25/lakekeeper-deep-read/authz.md §8 items 2 and 4).
+        #
+        # What the door sends is narrower than the feed row: the run, its state and time, the `author` and
+        # `lance` facets, and the output names (`lineage/api/v1/endpoints/runs.py::targeting_view`).
+        define can_read_event_feed: owner or event_reader
 
 type warehouse
   relations
@@ -246,17 +266,17 @@ type warehouse
     # so nothing fails until the crash this seam exists for. See `_CONDITIONAL_GRANT_RUNGS`'s rule:
     # decide what the expiry leaves behind, and here it leaves a backstop that looks armed.
     define event_stager: [user, role#assignee]
-    # THE THREE ESTATE PRIVILEGES ARE NOT HERE, and their absence is the governance.
+    # THE ESTATE PRIVILEGES ARE NOT HERE, and their absence is the governance.
     #
-    # `can_observe_events`, `can_browse_storage` and `can_stage_events` live on `type estate`, which is
-    # what `fga_root_object` names ([[LH-055]]). Defining them here too would make them resolve on ANY
-    # warehouse their owner owns, so a tenant admin would hold the estate-admin rung on their own
+    # `can_observe_events`, `can_browse_storage`, `can_stage_events` and `can_read_event_feed` live on
+    # `type estate`, which is what `fga_root_object` names ([[LH-055]]). Defining them here too would
+    # make them resolve on ANY warehouse their owner owns, so a tenant admin would hold the estate-admin rung on their own
     # bucket and the privilege would be estate-scoped only for as long as every call site remembered to
     # name the root object. One caller checking a tenant warehouse would widen it silently. A tenant
     # cannot own an `estate:` object, so keeping them off this type is what makes the scope structural.
     #
     # `event_stager` STAYS, and is not the same thing: it is a grantable role with live tuples, whereas
-    # the three above are computed usersets nothing grants. It confers nothing while no rung reads it.
+    # the four above are computed usersets nothing grants. It confers nothing while no rung reads it.
     # ---- the GRANT axis (separate from the USE rungs above) ----
     # Who may hand out access here, as its own privilege rather than a side-effect of `owner`. Until
     # this existed the two were welded together — the grant routes gate on the owner bar — so
@@ -363,7 +383,6 @@ type warehouse
     #     (`endpoints/access_admin.py:199`)
     #   * `POST /v1/stores` and its attach/detach siblings — naming a host the estate will talk to
     #     (`endpoints/stores.py:105,135,197`)
-    #   * lineage's whole-estate projection (`api/fga_deps.py:144` in services/lineage)
     #   * the `estate_admin` flag `/v1/me` reports (`endpoints/me.py:62`) — a display lookup rather than
     #     a door, listed because it is a consumer
     # The viewer and controlplane gate their own estate reads on their own relations and merely CITE

@@ -1,4 +1,4 @@
-"""The second ingress: lineage's durable `GET /events` feed, walked from a persisted cursor.
+"""The second ingress: lineage's durable run feed (`GET /events/projection`), walked from a persisted cursor.
 
 **The bus is provably incomplete, and that is measured rather than defensive.** The ingest service
 emits lineage over HTTP only and refuses the topic outright; so do Ray TRAIN and every external
@@ -12,13 +12,16 @@ class of run.
 1. `?after=<seq>` pages OLDER, not newer: the SQL is `WHERE seq < %s ORDER BY seq DESC`. So catching
    up is a walk DOWN from the newest row until the stored high-water mark comes into view — there is
    no "give me everything since" call to make.
-2. `summary=true` cannot be used here. It drops the `event` payload at the SQL layer, and the feed's
-   row carries **no `run_id` column in either mode** — the id lives only inside that payload. A
-   summary row therefore cannot produce a notification id at all, so the reconciler asks for the full
-   record and pays for it.
-3. The feed is GOVERNED. It is filtered by the caller's own visibility, so this service sees exactly
-   the rows granted to the subject lineage maps its service account to — and a deployment that
-   forgets those grants gets a reconciler that runs cleanly and reconciles nothing.
+2. Each row's payload is lineage's TARGETING VIEW of the event (`runs.py::targeting_view`): the run id,
+   its `author` and `lance` facets, the state and time, and the output names — exactly what
+   `lineage_events.py` reads, and nothing describing data. The feed row carries no `run_id` column, so
+   the payload is the only place a notification id can come from.
+3. The projection is NOT filtered per dataset; it is gated on the estate rung `can_read_event_feed`,
+   held by the subject lineage maps this service account to through `event_reader`, which the chart's
+   bootstrap hook grants ([[CTL-021]]). The governed `/events` shows a service only the tables its
+   grants reach, so a run in any tenant warehouse it holds nothing on would never reach this lane. An
+   ungranted subject fails every tick with a 403 rather than ticking cleanly over an empty view.
+   Who is TOLD stays gated per person, at delivery (`can_be_notified`) and at render.
 
 **A first-ever tick primes the cursor and notifies nobody.** With no stored cursor, "everything is
 new" would mean replaying the retained feed into people's inboxes on the day the service is deployed
@@ -163,9 +166,9 @@ class LineageCursor(BaseModel):
 
 
 class FeedRecord(BaseModel):
-    """One row of lineage's durable feed. Only `seq` and the raw event are read; the summary columns
-    beside them are lineage's own projection and this plane derives its own from the payload, so that
-    the bus lane and this one cannot disagree about what an event says."""
+    """One row of lineage's run feed: its `seq` and the event's targeting view, which this plane parses
+    with the same projection the bus lane uses, so that the two lanes cannot disagree about what an event
+    says."""
 
     model_config = ConfigDict(frozen=True, extra="ignore")
 
@@ -237,21 +240,17 @@ class LineageFeedClient:
         600 s life (measured, LH-220 probe d). Lineage derives the caller from the verified token, so
         nothing here names a subject. Through Dapr service invocation the sidecar forwards
         `Authorization` unchanged (LH-220 probe e). An unreadable file raises
-        `IdentityTokenUnavailableError` (503) rather than sending an anonymous walk, which lineage
-        would answer with an empty, quietly incomplete feed.
+        `IdentityTokenUnavailableError` (503) rather than sending an anonymous walk, so the failure
+        names the missing token instead of reading as lineage's 401.
         """
         return identity_bearer(self._token_file)
 
     async def page(self, *, after: int | None) -> FeedPage:
-        """One page of the feed, newest first; `after` walks OLDER (`seq < after`).
-
-        `summary=false` is explicit at the wire rather than left to the server's default, because it
-        is the load-bearing half of this call: the summary projection has no run id anywhere in it.
-        """
-        params: dict[str, str] = {"limit": str(self._page_limit), "summary": "false"}
+        """One page of the feed, newest first; `after` walks OLDER (`seq < after`)."""
+        params: dict[str, str] = {"limit": str(self._page_limit)}
         if after is not None:
             params["after"] = str(after)
-        response = await self._client.get(f"{self._base}/events", params=params, headers=self._headers(), timeout=self._timeout)
+        response = await self._client.get(f"{self._base}/events/projection", params=params, headers=self._headers(), timeout=self._timeout)
         response.raise_for_status()
         return FeedPage.model_validate(response.json())
 

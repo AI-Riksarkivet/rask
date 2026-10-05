@@ -4,18 +4,21 @@ Both are **durable** (folded onto AGE / read from Postgres — survive restart, 
 **governed**: each row is shown only if the caller ``can_get_metadata`` on every dataset it references,
 so neither board can enumerate dataset names / creators / errors outside the caller's reach. Auth off →
 pass-through.
+
+The one exception is ``/events/projection``: the same feed with no per-dataset filter, gated instead on
+the estate rung ``can_read_event_feed`` and cut to the fields that decide whom to notify.
 """
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Any, Final
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from lineage.api.dependencies import RepositoryDep, SettingsDep
-from lineage.api.fga_deps import FilterDep, governed, is_external_source, require_estate_observer
+from lineage.api.fga_deps import FilterDep, governed, is_external_source, require_event_feed_reader
 from lineage.api.security import CurrentToken
-from lineage.schemas import Events, RunInputs, Runs, RunStatus
+from lineage.schemas import Events, FeedProjection, ProjectedEvent, RunInputs, Runs, RunStatus
 from lineage.services.repository import EventRecord
 
 
@@ -160,6 +163,57 @@ def _governed_datasets(record: EventRecord) -> set[str]:
     return governed_inputs | outputs | _column_lineage_datasets(record.event)
 
 
+#: The top-level fields of an OpenLineage event that targeting reads: the state, when it happened, and the
+#: producer (half of the id a static change is keyed by, `service_kit.openlineage.static_event_id`).
+_TARGETING_FIELDS: Final = ("eventType", "eventTime", "producer")
+#: The facets that name WHO: the verified author, and rask's own facet carrying the tenant, the originator
+#: and the producer's run id. Every other facet describes the data or the job.
+_TARGETING_FACETS: Final = ("author", "lance")
+#: What names a dataset. Its facets (schema, column lineage, statistics) describe its contents.
+_DATASET_FIELDS: Final = ("namespace", "name")
+
+
+def _facets(bag: object) -> object:
+    return {key: bag[key] for key in _TARGETING_FACETS if key in bag} if isinstance(bag, dict) else bag
+
+
+def _dataset(item: object, *, with_facets: bool) -> object:
+    if not isinstance(item, dict):
+        return item
+    named = {key: item[key] for key in _DATASET_FIELDS if key in item}
+    if with_facets and "facets" in item:
+        named["facets"] = _facets(item["facets"])
+    return named
+
+
+def targeting_view(event: dict[str, Any]) -> dict[str, Any]:
+    """An event cut to what deciding WHOM TO TELL reads, and nothing describing data.
+
+    The one consumer is the notifications reconciler, and what it reads is
+    `notifications/api/lineage_events.py`'s: the run id and its `author` and `lance` facets, the state and
+    time, and the output names; for a static change, the dataset's name, namespace and those two facets,
+    plus `producer`. Inputs, the job, output facets (column lineage among them, which names other tables
+    and their columns) and every other run facet stay in the feed and never cross this door.
+
+    A key absent from the event stays absent and a malformed container passes through unchanged, so a row
+    the reconciler would refuse whole is still refused whole: the cut narrows, it never repairs.
+    """
+    view = {key: event[key] for key in _TARGETING_FIELDS if key in event}
+    if "run" in event:
+        run = event["run"]
+        view["run"] = (
+            {**({"runId": run["runId"]} if "runId" in run else {}), **({"facets": _facets(run["facets"])} if "facets" in run else {})}
+            if isinstance(run, dict)
+            else run
+        )
+    if "outputs" in event:
+        outputs = event["outputs"]
+        view["outputs"] = [_dataset(item, with_facets=False) for item in outputs] if isinstance(outputs, list) else outputs
+    if "dataset" in event:
+        view["dataset"] = _dataset(event["dataset"], with_facets=True)
+    return view
+
+
 @router.get("/events/projection")
 async def get_events_projection(
     request: Request,
@@ -168,37 +222,40 @@ async def get_events_projection(
     token: CurrentToken,
     after: Annotated[int | None, Query(ge=1)] = None,
     limit: Annotated[int, Query(ge=1, le=_EVENTS_RETURN)] = _EVENTS_RETURN,
-    summary: bool = False,
-) -> Events:
-    """The feed WITHOUT the per-dataset filter, for a caller that observes the estate (§ G1).
+) -> FeedProjection:
+    """The run feed WITHOUT the per-dataset filter, for the notifications reconciler ([[CTL-021]]).
 
     WHY A SECOND DOOR RATHER THAN A FLAG ON THE FIRST. `/events` is governed per dataset, which is
     right for a person: an event naming a table you cannot see must not disclose it. It is wrong for a
-    SERVICE that has to reconcile the whole estate, and the wrongness is silent in both directions —
+    SERVICE that has to reconcile the whole estate, and the wrongness is silent in both directions:
     measured on this estate 2026-09-09, a run that demonstrably exists answered **404** to a service
     principal, and its inputs answered **200 with an empty list**. A walker sees "nothing here", and an
     estate with no work looks identical to an estate it cannot see.
 
     THE SERVICE IS NOT THE DISCLOSURE BOUNDARY, and that is what makes this sound rather than a hole.
-    A reconciler reads the feed to decide who to TELL; the telling is gated per subject at delivery
-    (`can_be_notified`), which is the check that actually protects a person's inbox. Filtering the
-    reconciler's own view protects nobody and only guarantees it cannot find the events it exists to
-    catch. `can_be_notified` stays the sole disclosure gate; this door moves the estate-read decision
-    to the rung that means "may observe the estate".
+    A reconciler reads the feed to decide whom to TELL; the telling is gated per subject at delivery
+    (`can_be_notified`) and again at render (`can_get_metadata`), which are the checks that protect a
+    person's inbox. Filtering the reconciler's own view protects nobody and only guarantees it cannot
+    find the events it exists to catch.
 
-    `can_observe_events` ON THE ROOT OBJECT — the same rung `POST /v1/projects` and `POST /v1/stores`
-    already gate on, so an estate privilege means one thing everywhere. It is `owner` on the root in
-    `model.fga`, so nobody holds it by accident and granting it is a deliberate act.
+    GATED ON `can_read_event_feed` AT THE ROOT OBJECT, a rung of its own: `event_reader`, which the
+    chart grants the reconciler by name, or the estate owner. Each row carries only
+    :func:`targeting_view`, because the holder reads the feed to address people and needs nothing more.
 
-    Identical shape to `/events` otherwise — same keyset cursor, same cap, same `summary` — so a caller
-    can move between the two without a second client. `oldest_seq` is reported here too: a walker whose
-    cursor falls below it lost a window to the prune, which is the one signal that distinguishes
-    "caught up" from "rows went past me".
+    The cursor is the `/events` keyset (`after` pages OLDER, `next_cursor` is the last row's seq on a full
+    page), so a walk behaves as it does there. `oldest_seq` is reported here too: a walker whose cursor
+    falls below it lost a window to the prune, which is the one signal that distinguishes "caught up"
+    from "rows went past me". There is no `summary`: the summary drops the payload, and the payload is
+    the only place a run id lives.
     """
-    await require_estate_observer(request, settings, token)
-    records = await repository.list_events(limit=limit, after=after, summary=summary)
+    await require_event_feed_reader(request, settings, token)
+    records = await repository.list_events(limit=limit, after=after, summary=False)
     next_cursor = records[-1].seq if len(records) == limit and records else None
-    return Events(events=records, next_cursor=next_cursor, oldest_seq=await repository.oldest_event_seq())
+    return FeedProjection(
+        events=[ProjectedEvent(seq=record.seq, event=targeting_view(record.event)) for record in records],
+        next_cursor=next_cursor,
+        oldest_seq=await repository.oldest_event_seq(),
+    )
 
 
 @router.get("/events")

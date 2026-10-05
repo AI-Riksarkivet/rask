@@ -820,6 +820,45 @@
         "title": "Events",
         "type": "object"
       },
+      "FeedProjection": {
+        "description": "A page of the run feed with no per-dataset filter, newest first ([[CTL-021]]).\n\nThe keyset cursor and the floor mean exactly what they mean on :class:`Events`, so a walk over either\nbehaves the same; what differs is reach (every warehouse) and width (``ProjectedEvent.event``).",
+        "properties": {
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/ProjectedEvent"
+            },
+            "title": "Events",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          },
+          "oldest_seq": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Oldest Seq"
+          }
+        },
+        "required": [
+          "events"
+        ],
+        "title": "FeedProjection",
+        "type": "object"
+      },
       "GraphEdge": {
         "description": "A dataset-level lineage edge: ``source`` is derived from ``target``.",
         "properties": {
@@ -1231,6 +1270,26 @@
           "producers"
         ],
         "title": "Producers",
+        "type": "object"
+      },
+      "ProjectedEvent": {
+        "description": "One feed row as the unfiltered projection serves it: its seq, and the event cut to what targeting reads.",
+        "properties": {
+          "event": {
+            "additionalProperties": true,
+            "title": "Event",
+            "type": "object"
+          },
+          "seq": {
+            "title": "Seq",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "seq",
+          "event"
+        ],
+        "title": "ProjectedEvent",
         "type": "object"
       },
       "ReaderInfo": {
@@ -3650,7 +3709,7 @@
     },
     "/events/projection": {
       "get": {
-        "description": "The feed WITHOUT the per-dataset filter, for a caller that observes the estate (\u00a7 G1).\n\nWHY A SECOND DOOR RATHER THAN A FLAG ON THE FIRST. `/events` is governed per dataset, which is\nright for a person: an event naming a table you cannot see must not disclose it. It is wrong for a\nSERVICE that has to reconcile the whole estate, and the wrongness is silent in both directions \u2014\nmeasured on this estate 2026-09-09, a run that demonstrably exists answered **404** to a service\nprincipal, and its inputs answered **200 with an empty list**. A walker sees \"nothing here\", and an\nestate with no work looks identical to an estate it cannot see.\n\nTHE SERVICE IS NOT THE DISCLOSURE BOUNDARY, and that is what makes this sound rather than a hole.\nA reconciler reads the feed to decide who to TELL; the telling is gated per subject at delivery\n(`can_be_notified`), which is the check that actually protects a person's inbox. Filtering the\nreconciler's own view protects nobody and only guarantees it cannot find the events it exists to\ncatch. `can_be_notified` stays the sole disclosure gate; this door moves the estate-read decision\nto the rung that means \"may observe the estate\".\n\n`can_observe_events` ON THE ROOT OBJECT \u2014 the same rung `POST /v1/projects` and `POST /v1/stores`\nalready gate on, so an estate privilege means one thing everywhere. It is `owner` on the root in\n`model.fga`, so nobody holds it by accident and granting it is a deliberate act.\n\nIdentical shape to `/events` otherwise \u2014 same keyset cursor, same cap, same `summary` \u2014 so a caller\ncan move between the two without a second client. `oldest_seq` is reported here too: a walker whose\ncursor falls below it lost a window to the prune, which is the one signal that distinguishes\n\"caught up\" from \"rows went past me\".",
+        "description": "The run feed WITHOUT the per-dataset filter, for the notifications reconciler ([[CTL-021]]).\n\nWHY A SECOND DOOR RATHER THAN A FLAG ON THE FIRST. `/events` is governed per dataset, which is\nright for a person: an event naming a table you cannot see must not disclose it. It is wrong for a\nSERVICE that has to reconcile the whole estate, and the wrongness is silent in both directions:\nmeasured on this estate 2026-09-09, a run that demonstrably exists answered **404** to a service\nprincipal, and its inputs answered **200 with an empty list**. A walker sees \"nothing here\", and an\nestate with no work looks identical to an estate it cannot see.\n\nTHE SERVICE IS NOT THE DISCLOSURE BOUNDARY, and that is what makes this sound rather than a hole.\nA reconciler reads the feed to decide whom to TELL; the telling is gated per subject at delivery\n(`can_be_notified`) and again at render (`can_get_metadata`), which are the checks that protect a\nperson's inbox. Filtering the reconciler's own view protects nobody and only guarantees it cannot\nfind the events it exists to catch.\n\nGATED ON `can_read_event_feed` AT THE ROOT OBJECT, a rung of its own: `event_reader`, which the\nchart grants the reconciler by name, or the estate owner. Each row carries only\n:func:`targeting_view`, because the holder reads the feed to address people and needs nothing more.\n\nThe cursor is the `/events` keyset (`after` pages OLDER, `next_cursor` is the last row's seq on a full\npage), so a walk behaves as it does there. `oldest_seq` is reported here too: a walker whose cursor\nfalls below it lost a window to the prune, which is the one signal that distinguishes \"caught up\"\nfrom \"rows went past me\". There is no `summary`: the summary drops the payload, and the payload is\nthe only place a run id lives.",
         "operationId": "get_events_projection_events_projection_get",
         "parameters": [
           {
@@ -3683,16 +3742,6 @@
             }
           },
           {
-            "in": "query",
-            "name": "summary",
-            "required": false,
-            "schema": {
-              "default": false,
-              "title": "Summary",
-              "type": "boolean"
-            }
-          },
-          {
             "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
@@ -3714,7 +3763,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Events"
+                  "$ref": "#/components/schemas/FeedProjection"
                 }
               }
             },

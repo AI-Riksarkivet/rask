@@ -128,25 +128,10 @@ def _store(
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_the_poll_asks_for_the_full_payload_because_the_summary_has_no_run_id() -> None:
-    """`summary=true` drops the `event` column at the SQL layer, and the feed's row carries NO
-    `run_id` column in either mode — the id lives only inside that payload. A summary row therefore
-    cannot produce a notification id at all, so this lane pays for the full record."""
-    route = respx.get(f"{LINEAGE}/events").mock(return_value=httpx.Response(200, json={"events": [], "next_cursor": None}))
-
-    await _feed_client().page(after=None)
-
-    assert route.calls.last.request.url.params["summary"] == "false"
-    assert route.calls.last.request.url.params["limit"] == "500"
-    assert "after" not in route.calls.last.request.url.params
-
-
-@pytest.mark.asyncio
-@respx.mock
 async def test_paging_older_passes_the_cursor_as_after() -> None:
     """`?after=<seq>` walks OLDER (`WHERE seq < %s ORDER BY seq DESC`) — there is no "give me
     everything since" call to make, so catching up is a walk DOWN toward the stored mark."""
-    route = respx.get(f"{LINEAGE}/events").mock(return_value=httpx.Response(200, json={"events": [], "next_cursor": None}))
+    route = respx.get(f"{LINEAGE}/events/projection").mock(return_value=httpx.Response(200, json={"events": [], "next_cursor": None}))
 
     await _feed_client().page(after=42)
 
@@ -159,7 +144,7 @@ async def test_each_poll_presents_the_token_the_kubelet_last_wrote_and_no_claime
     """Lineage derives the caller from the verified service-account token, so the token is the whole
     credential. The kubelet rewrites the projected file at ~515 s of a 600 s life (LH-220 probe d), so
     a client holding the boot-time value is refused ten minutes in."""
-    route = respx.get(f"{LINEAGE}/events").mock(return_value=httpx.Response(200, json={"events": [], "next_cursor": None}))
+    route = respx.get(f"{LINEAGE}/events/projection").mock(return_value=httpx.Response(200, json={"events": [], "next_cursor": None}))
     client = _feed_client()
 
     await client.page(after=None)
@@ -177,7 +162,7 @@ async def test_each_poll_presents_the_token_the_kubelet_last_wrote_and_no_claime
 async def test_an_unreadable_identity_token_fails_the_poll_and_sends_nothing(lineage_identity_token: Path) -> None:
     """An anonymous walk would be answered with an empty governed feed, an inbox quietly incomplete;
     the poll fails (503 at the cron route) instead."""
-    route = respx.get(f"{LINEAGE}/events").mock(return_value=httpx.Response(200, json={"events": [], "next_cursor": None}))
+    route = respx.get(f"{LINEAGE}/events/projection").mock(return_value=httpx.Response(200, json={"events": [], "next_cursor": None}))
     lineage_identity_token.unlink()
 
     with pytest.raises(IdentityTokenUnavailableError):
@@ -199,7 +184,7 @@ async def test_a_transient_failure_is_NOT_retried_in_this_module() -> None:
 
     So a 503 must now propagate on the FIRST attempt. One layer owns redelivery; a second multiplies it.
     """
-    route = respx.get(f"{LINEAGE}/events").mock(return_value=httpx.Response(503))
+    route = respx.get(f"{LINEAGE}/events/projection").mock(return_value=httpx.Response(503))
 
     with pytest.raises(httpx.HTTPStatusError):
         await _feed_client().page(after=None)
@@ -274,7 +259,7 @@ async def test_a_first_ever_tick_primes_the_cursor_and_notifies_nobody() -> None
     """Treating everything as new on a fresh deployment means replaying the retained feed into
     inboxes on day one — the same failure `deliverPolicy: new` prevents on the bus, arriving by the
     other door."""
-    respx.get(f"{LINEAGE}/events").mock(return_value=httpx.Response(200, json={"events": [_event(9), _event(8)], "next_cursor": 8}))
+    respx.get(f"{LINEAGE}/events/projection").mock(return_value=httpx.Response(200, json={"events": [_event(9), _event(8)], "next_cursor": 8}))
     plane = _Plane()
     store, memory = _store(None)
 
@@ -288,7 +273,9 @@ async def test_a_first_ever_tick_primes_the_cursor_and_notifies_nobody() -> None
 @pytest.mark.asyncio
 @respx.mock
 async def test_only_rows_above_the_mark_are_ingested() -> None:
-    respx.get(f"{LINEAGE}/events").mock(return_value=httpx.Response(200, json={"events": [_event(9), _event(8), _event(7), _event(6)], "next_cursor": 6}))
+    respx.get(f"{LINEAGE}/events/projection").mock(
+        return_value=httpx.Response(200, json={"events": [_event(9), _event(8), _event(7), _event(6)], "next_cursor": 6})
+    )
     plane = _Plane()
     store, memory = _store(7)
 
@@ -302,7 +289,7 @@ async def test_only_rows_above_the_mark_are_ingested() -> None:
 @pytest.mark.asyncio
 @respx.mock
 async def test_the_walk_pages_back_until_it_reaches_the_mark() -> None:
-    respx.get(f"{LINEAGE}/events").mock(
+    respx.get(f"{LINEAGE}/events/projection").mock(
         side_effect=[
             httpx.Response(200, json={"events": [_event(9), _event(8)], "next_cursor": 8}),
             httpx.Response(200, json={"events": [_event(7), _event(6)], "next_cursor": 6}),
@@ -324,7 +311,7 @@ async def test_the_walk_pages_back_until_it_reaches_the_mark() -> None:
 async def test_an_exhausted_feed_ends_the_walk() -> None:
     """`next_cursor: null` is the feed's floor — the mark is older than anything retained, and there
     is nothing further down to ask for."""
-    respx.get(f"{LINEAGE}/events").mock(return_value=httpx.Response(200, json={"events": [_event(3), _event(2)], "next_cursor": None}))
+    respx.get(f"{LINEAGE}/events/projection").mock(return_value=httpx.Response(200, json={"events": [_event(3), _event(2)], "next_cursor": None}))
     plane = _Plane()
     store, memory = _store(1)
 
@@ -341,7 +328,7 @@ async def test_a_failed_row_holds_the_mark_where_it_was() -> None:
     """Advancing past a failure is the one thing this lane cannot undo. Re-offering the rows that DID
     land is free — the actor is idempotent on the natural key."""
     page = {"events": [_event(9, author="bob"), _event(8), _event(7)], "next_cursor": 6}
-    respx.get(f"{LINEAGE}/events").mock(return_value=httpx.Response(200, json=page))
+    respx.get(f"{LINEAGE}/events/projection").mock(return_value=httpx.Response(200, json=page))
     plane = _Plane(broken={"bob"})
     store, memory = _store(7)
 
@@ -365,7 +352,7 @@ async def test_a_walk_that_runs_out_of_pages_says_so_and_moves_on() -> None:
     """The page budget covers the feed's whole retention by default, so exhausting it means the rows
     between here and the mark are already pruned: unrecoverable rather than merely unread. Stalling
     would buy nothing and hide it, so the mark advances and the gap is an ERROR in the log."""
-    respx.get(f"{LINEAGE}/events").mock(return_value=httpx.Response(200, json={"events": [_event(90), _event(89)], "next_cursor": 89}))
+    respx.get(f"{LINEAGE}/events/projection").mock(return_value=httpx.Response(200, json={"events": [_event(90), _event(89)], "next_cursor": 89}))
     plane = _Plane()
     store, memory = _store(1)
 
@@ -380,7 +367,7 @@ async def test_a_walk_that_runs_out_of_pages_says_so_and_moves_on() -> None:
 async def test_the_feed_lane_stamps_the_sequence_it_arrived_at() -> None:
     """The one lane that has a sequence number, so a stored row can say which door first told this
     subject about this run."""
-    respx.get(f"{LINEAGE}/events").mock(return_value=httpx.Response(200, json={"events": [_event(9)], "next_cursor": None}))
+    respx.get(f"{LINEAGE}/events/projection").mock(return_value=httpx.Response(200, json={"events": [_event(9)], "next_cursor": None}))
     plane = _Plane()
     store, _memory = _store(8)
 
@@ -471,7 +458,7 @@ async def test_a_walk_cut_off_by_the_budget_parks_where_it_stopped(monkeypatch: 
     # stalls for 30s against a 0.5s budget, so the timeout ALWAYS fires. Neither half is a race, which
     # is what this test needs and what its wall-clock version did not have.
     monkeypatch.setattr("notifications.api.reconciler.ingest_run_event", _ingest_fast_then_stalling(fast_calls=2, stall_seconds=30))
-    respx.get(f"{LINEAGE}/events").mock(side_effect=_descending_pages(top=1000, per_page=2, pages=20))
+    respx.get(f"{LINEAGE}/events/projection").mock(side_effect=_descending_pages(top=1000, per_page=2, pages=20))
     plane = _Plane()
     store, memory = _store(1)
 
@@ -489,7 +476,7 @@ async def test_a_walk_cut_off_by_the_budget_parks_where_it_stopped(monkeypatch: 
 @respx.mock
 async def test_the_next_tick_resumes_the_descent_instead_of_restarting() -> None:
     """A parked cursor makes the following tick continue DOWNWARD from where the last one stopped."""
-    route = respx.get(f"{LINEAGE}/events").mock(return_value=httpx.Response(200, json={"events": [_event(400), _event(399)], "next_cursor": None}))
+    route = respx.get(f"{LINEAGE}/events/projection").mock(return_value=httpx.Response(200, json={"events": [_event(400), _event(399)], "next_cursor": None}))
     plane = _Plane()
     store, _ = _store(1, resume_from=500, pending_high=1000)
 
@@ -502,7 +489,7 @@ async def test_the_next_tick_resumes_the_descent_instead_of_restarting() -> None
 @respx.mock
 async def test_a_completed_walk_settles_the_parked_ceiling_and_clears_it() -> None:
     """Finishing a resumed walk adopts the WHOLE walk's ceiling and leaves nothing parked behind."""
-    respx.get(f"{LINEAGE}/events").mock(return_value=httpx.Response(200, json={"events": [_event(4), _event(3)], "next_cursor": None}))
+    respx.get(f"{LINEAGE}/events/projection").mock(return_value=httpx.Response(200, json={"events": [_event(4), _event(3)], "next_cursor": None}))
     plane = _Plane()
     store, memory = _store(1, resume_from=5, pending_high=9_999)
 
@@ -518,7 +505,7 @@ async def test_a_completed_walk_settles_the_parked_ceiling_and_clears_it() -> No
 async def test_a_retried_row_parks_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
     """Parking past a row that asked for RETRY would step over the failure the mark is held for."""
     monkeypatch.setattr("notifications.api.reconciler.ingest_run_event", _slow_ingest(0.03, status=DAPR_RETRY))
-    respx.get(f"{LINEAGE}/events").mock(side_effect=_descending_pages(top=1000, per_page=2, pages=20))
+    respx.get(f"{LINEAGE}/events/projection").mock(side_effect=_descending_pages(top=1000, per_page=2, pages=20))
     plane = _Plane()
     store, memory = _store(1)
 
@@ -550,7 +537,7 @@ def _watched_event(seq: int, *, project: str, author: str = "bob") -> dict[str, 
 @pytest.mark.asyncio
 @respx.mock
 async def test_the_feed_lane_tells_a_project_watcher_not_only_the_author() -> None:
-    respx.get(f"{LINEAGE}/events").mock(return_value=httpx.Response(200, json={"events": [_watched_event(9, project="p1")], "next_cursor": 8}))
+    respx.get(f"{LINEAGE}/events/projection").mock(return_value=httpx.Response(200, json={"events": [_watched_event(9, project="p1")], "next_cursor": 8}))
     plane = _Plane()
     store, _ = _store(8)
 
@@ -576,7 +563,7 @@ async def test_the_feed_lane_tells_a_project_watcher_not_only_the_author() -> No
 async def test_the_feed_lane_pushes_channels_for_a_row_it_actually_wrote() -> None:
     """Email/Slack for HTTP-emitted runs. `fan_out` only pushes for a row it really wrote, so a
     re-walk cannot produce a second email — the catch-up lane needs no exemption of its own."""
-    respx.get(f"{LINEAGE}/events").mock(return_value=httpx.Response(200, json={"events": [_event(9)], "next_cursor": 8}))
+    respx.get(f"{LINEAGE}/events/projection").mock(return_value=httpx.Response(200, json={"events": [_event(9)], "next_cursor": 8}))
     plane = _Plane()
     store, _ = _store(8)
     pushed: list[str] = []
@@ -615,7 +602,7 @@ async def test_the_feed_lane_pushes_channels_for_a_row_it_actually_wrote() -> No
 @respx.mock
 async def test_a_row_that_committed_late_below_the_mark_is_still_delivered() -> None:
     # Mark at 1001 with a floor well below it; row 1000 only became visible afterwards.
-    respx.get(f"{LINEAGE}/events").mock(return_value=httpx.Response(200, json={"events": [_event(1001), _event(1000)], "next_cursor": 999}))
+    respx.get(f"{LINEAGE}/events/projection").mock(return_value=httpx.Response(200, json={"events": [_event(1001), _event(1000)], "next_cursor": 999}))
     plane = _Plane()
     store, _ = _store(1001, floor=500)
 
@@ -634,7 +621,9 @@ async def test_the_overlap_never_reaches_below_the_floor_a_prime_set() -> None:
     that mark, the next tick delivers the retained backlog to everyone — the exact failure priming
     exists to prevent, arriving one tick later.
     """
-    respx.get(f"{LINEAGE}/events").mock(return_value=httpx.Response(200, json={"events": [_event(1002), _event(1001), _event(1000)], "next_cursor": 999}))
+    respx.get(f"{LINEAGE}/events/projection").mock(
+        return_value=httpx.Response(200, json={"events": [_event(1002), _event(1001), _event(1000)], "next_cursor": 999})
+    )
     plane = _Plane()
     store, _ = _store(1001, floor=1001)  # primed here: everything at or below 1001 is skipped backlog
 
@@ -658,7 +647,7 @@ async def test_the_overlap_never_reaches_below_the_floor_a_prime_set() -> None:
 @pytest.mark.asyncio
 @respx.mock
 async def test_a_permanently_failing_recipient_does_not_block_every_newer_notification() -> None:
-    respx.get(f"{LINEAGE}/events").mock(return_value=httpx.Response(200, json={"events": [_event(9)], "next_cursor": 8}))
+    respx.get(f"{LINEAGE}/events/projection").mock(return_value=httpx.Response(200, json={"events": [_event(9)], "next_cursor": 8}))
     plane = _Plane(broken={"alice"})  # this subject's inbox refuses, every time, forever
     store, memory = _store(8, floor=0)
 
@@ -721,7 +710,7 @@ def test_a_cursor_written_by_a_newer_build_is_still_readable() -> None:
 async def test_a_feed_that_still_HOLDS_the_cursor_reports_no_gap() -> None:
     """The ordinary case, and the one a false positive would ruin: the mark is inside the retained
     window, so nothing was lost and the pass must not cry wolf every tick."""
-    respx.get(f"{LINEAGE}/events").mock(return_value=httpx.Response(200, json={"events": [_event(9000)], "next_cursor": None, "oldest_seq": 1}))
+    respx.get(f"{LINEAGE}/events/projection").mock(return_value=httpx.Response(200, json={"events": [_event(9000)], "next_cursor": None, "oldest_seq": 1}))
     plane = _Plane()
     store, _memory = _store(8990)
 
@@ -736,7 +725,7 @@ async def test_a_feed_that_does_not_REPORT_its_floor_is_not_a_gap() -> None:
     """`oldest_seq` is additive, so a lineage older than this change omits it. Absent must mean "I
     cannot tell", never "a gap" — a detector that fires on every tick against a healthy older
     deployment is one nobody will keep listening to."""
-    respx.get(f"{LINEAGE}/events").mock(return_value=httpx.Response(200, json={"events": [_event(9000)], "next_cursor": None}))
+    respx.get(f"{LINEAGE}/events/projection").mock(return_value=httpx.Response(200, json={"events": [_event(9000)], "next_cursor": None}))
     plane = _Plane()
     store, _memory = _store(5)
 
@@ -751,7 +740,7 @@ async def test_a_gap_still_lets_the_pass_deliver_and_advance() -> None:
     """A gap is a REPORT, not a stall. The rows below the floor are gone whatever this pass does, so
     holding the mark would forfeit every row above them too — the same reasoning the out-of-pages
     branch already applies."""
-    respx.get(f"{LINEAGE}/events").mock(return_value=httpx.Response(200, json={"events": [_event(9000)], "next_cursor": None, "oldest_seq": 8999}))
+    respx.get(f"{LINEAGE}/events/projection").mock(return_value=httpx.Response(200, json={"events": [_event(9000)], "next_cursor": None, "oldest_seq": 8999}))
     plane = _Plane()
     store, memory = _store(5)
 
@@ -782,7 +771,7 @@ async def test_the_SAME_prune_is_reported_ONCE_not_on_every_tick() -> None:
     feed floor INTO the cursor is what turns the report into a one-shot — and it stays honest, because
     a LATER prune raises `oldest_seq` again and is detected on its own terms.
     """
-    respx.get(f"{LINEAGE}/events").mock(return_value=httpx.Response(200, json={"events": [_event(9000)], "next_cursor": None, "oldest_seq": 8999}))
+    respx.get(f"{LINEAGE}/events/projection").mock(return_value=httpx.Response(200, json={"events": [_event(9000)], "next_cursor": None, "oldest_seq": 8999}))
     plane = _Plane()
     store, memory = _store(5)
 
@@ -801,10 +790,10 @@ async def test_a_LATER_prune_is_still_reported_after_an_earlier_one_was_accepted
     the fix for the noise would silently cost the estate every future report of real data loss."""
     plane = _Plane()
     store, _memory = _store(5)
-    respx.get(f"{LINEAGE}/events").mock(return_value=httpx.Response(200, json={"events": [_event(9000)], "next_cursor": None, "oldest_seq": 8999}))
+    respx.get(f"{LINEAGE}/events/projection").mock(return_value=httpx.Response(200, json={"events": [_event(9000)], "next_cursor": None, "oldest_seq": 8999}))
     await reconcile(client=_feed_client(), store=store, visibility=OPEN, open_inbox=plane.open, max_pages=40, budget_seconds=10)
 
-    respx.get(f"{LINEAGE}/events").mock(return_value=httpx.Response(200, json={"events": [_event(20000)], "next_cursor": None, "oldest_seq": 19999}))
+    respx.get(f"{LINEAGE}/events/projection").mock(return_value=httpx.Response(200, json={"events": [_event(20000)], "next_cursor": None, "oldest_seq": 19999}))
     later = await reconcile(client=_feed_client(), store=store, visibility=OPEN, open_inbox=plane.open, max_pages=40, budget_seconds=10)
 
     assert later.gapped is True, "retention moved again and deleted rows 9001..19998 unread"
@@ -820,7 +809,9 @@ async def test_a_malformed_row_the_overlap_RE_OFFERS_is_not_re_reported_every_ti
     First sight is the only sighting that carries news, so it is the only one that reports.
     """
     bad = {"eventType": "FAIL", "seq": 101}  # no `run`, no `job` — cannot be a run event
-    respx.get(f"{LINEAGE}/events").mock(return_value=httpx.Response(200, json={"events": [{"seq": 101, "event": bad}], "next_cursor": None, "oldest_seq": 1}))
+    respx.get(f"{LINEAGE}/events/projection").mock(
+        return_value=httpx.Response(200, json={"events": [{"seq": 101, "event": bad}], "next_cursor": None, "oldest_seq": 1})
+    )
     plane = _Plane()
     store, _memory = _store(100, floor=100)
 

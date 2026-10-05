@@ -167,7 +167,7 @@ def _row(seq: int) -> dict[str, Any]:
 async def test_a_row_whose_event_is_garbage_is_dropped_and_the_walk_carries_on(plane: _Plane) -> None:
     """The contrast that makes the test above a gap rather than a preference: when the ROW parses, a
     payload that will never parse costs exactly that one notification."""
-    respx.get(f"{LINEAGE}/events").mock(
+    respx.get(f"{LINEAGE}/events/projection").mock(
         return_value=httpx.Response(200, json={"events": [_row(9), {"seq": 8, "event": {"nonsense": True}}, _row(7)], "next_cursor": None})
     )
     memory = _MemoryCursor(5)
@@ -196,7 +196,7 @@ async def test_a_lineage_that_answers_slowly_fails_this_tick_instead_of_stacking
         await asyncio.sleep(0.2)
         return httpx.Response(200, json={"events": [_row(9)], "next_cursor": 9})
 
-    respx.get(f"{LINEAGE}/events").mock(side_effect=_slow)
+    respx.get(f"{LINEAGE}/events/projection").mock(side_effect=_slow)
     memory = _MemoryCursor(1)
 
     with pytest.raises(LineageFeedBudgetExceeded):
@@ -217,7 +217,7 @@ async def test_a_lineage_that_answers_slowly_fails_this_tick_instead_of_stacking
 async def test_a_feed_whose_cursor_never_advances_is_bounded_by_the_page_budget(plane: _Plane) -> None:
     """A feed that keeps handing back the same `next_cursor` is a loop with no exit of its own. The page
     budget is the exit, and the walk says it truncated rather than pretending it finished."""
-    route = respx.get(f"{LINEAGE}/events").mock(return_value=httpx.Response(200, json={"events": [_row(9), _row(8)], "next_cursor": 9}))
+    route = respx.get(f"{LINEAGE}/events/projection").mock(return_value=httpx.Response(200, json={"events": [_row(9), _row(8)], "next_cursor": 9}))
     memory = _MemoryCursor(1)
 
     result = await reconcile(

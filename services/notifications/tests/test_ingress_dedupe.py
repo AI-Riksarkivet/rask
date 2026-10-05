@@ -116,7 +116,7 @@ def test_an_envelope_with_no_event_is_dropped(bus: TestClient, plane: _Plane) ->
 
 async def _feed_tick(plane: _Plane, *, seq: int, cursor: int, token_file: Path) -> Any:
     """One reconciler pass over a feed holding exactly the run above."""
-    respx.get(f"{LINEAGE}/events").mock(return_value=httpx.Response(200, json={"events": [{"seq": seq, "event": RUN_EVENT}], "next_cursor": None}))
+    respx.get(f"{LINEAGE}/events/projection").mock(return_value=httpx.Response(200, json={"events": [{"seq": seq, "event": RUN_EVENT}], "next_cursor": None}))
     feed = LineageFeedClient(
         client=httpx.AsyncClient(),
         base_url=LINEAGE,

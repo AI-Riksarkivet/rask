@@ -329,6 +329,25 @@ class Events(BaseModel):
     oldest_seq: int | None = None
 
 
+class ProjectedEvent(BaseModel):
+    """One feed row as the unfiltered projection serves it: its seq, and the event cut to what targeting reads."""
+
+    seq: int
+    event: dict[str, Any]
+
+
+class FeedProjection(BaseModel):
+    """A page of the run feed with no per-dataset filter, newest first ([[CTL-021]]).
+
+    The keyset cursor and the floor mean exactly what they mean on :class:`Events`, so a walk over either
+    behaves the same; what differs is reach (every warehouse) and width (``ProjectedEvent.event``).
+    """
+
+    events: list[ProjectedEvent]
+    next_cursor: int | None = None
+    oldest_seq: int | None = None
+
+
 class DlqEvent(BaseModel):
     """One staged-but-not-yet-drained lineage event in the transactional outbox (#83 ops view).
 

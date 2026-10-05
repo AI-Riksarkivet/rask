@@ -122,7 +122,7 @@ def feed(lineage_identity_token: Path) -> LineageFeedClient:
 
 
 def _feed_page(*records: tuple[int, dict[str, Any]]) -> None:
-    respx.get(f"{LINEAGE}/events").mock(
+    respx.get(f"{LINEAGE}/events/projection").mock(
         return_value=httpx.Response(200, json={"events": [{"seq": seq, "event": event} for seq, event in records], "next_cursor": None}),
     )
 

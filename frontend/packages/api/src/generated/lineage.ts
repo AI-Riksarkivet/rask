@@ -572,30 +572,30 @@ export interface paths {
         };
         /**
          * Get Events Projection
-         * @description The feed WITHOUT the per-dataset filter, for a caller that observes the estate (§ G1).
+         * @description The run feed WITHOUT the per-dataset filter, for the notifications reconciler ([[CTL-021]]).
          *
          *     WHY A SECOND DOOR RATHER THAN A FLAG ON THE FIRST. `/events` is governed per dataset, which is
          *     right for a person: an event naming a table you cannot see must not disclose it. It is wrong for a
-         *     SERVICE that has to reconcile the whole estate, and the wrongness is silent in both directions —
+         *     SERVICE that has to reconcile the whole estate, and the wrongness is silent in both directions:
          *     measured on this estate 2026-09-09, a run that demonstrably exists answered **404** to a service
          *     principal, and its inputs answered **200 with an empty list**. A walker sees "nothing here", and an
          *     estate with no work looks identical to an estate it cannot see.
          *
          *     THE SERVICE IS NOT THE DISCLOSURE BOUNDARY, and that is what makes this sound rather than a hole.
-         *     A reconciler reads the feed to decide who to TELL; the telling is gated per subject at delivery
-         *     (`can_be_notified`), which is the check that actually protects a person's inbox. Filtering the
-         *     reconciler's own view protects nobody and only guarantees it cannot find the events it exists to
-         *     catch. `can_be_notified` stays the sole disclosure gate; this door moves the estate-read decision
-         *     to the rung that means "may observe the estate".
+         *     A reconciler reads the feed to decide whom to TELL; the telling is gated per subject at delivery
+         *     (`can_be_notified`) and again at render (`can_get_metadata`), which are the checks that protect a
+         *     person's inbox. Filtering the reconciler's own view protects nobody and only guarantees it cannot
+         *     find the events it exists to catch.
          *
-         *     `can_observe_events` ON THE ROOT OBJECT — the same rung `POST /v1/projects` and `POST /v1/stores`
-         *     already gate on, so an estate privilege means one thing everywhere. It is `owner` on the root in
-         *     `model.fga`, so nobody holds it by accident and granting it is a deliberate act.
+         *     GATED ON `can_read_event_feed` AT THE ROOT OBJECT, a rung of its own: `event_reader`, which the
+         *     chart grants the reconciler by name, or the estate owner. Each row carries only
+         *     :func:`targeting_view`, because the holder reads the feed to address people and needs nothing more.
          *
-         *     Identical shape to `/events` otherwise — same keyset cursor, same cap, same `summary` — so a caller
-         *     can move between the two without a second client. `oldest_seq` is reported here too: a walker whose
-         *     cursor falls below it lost a window to the prune, which is the one signal that distinguishes
-         *     "caught up" from "rows went past me".
+         *     The cursor is the `/events` keyset (`after` pages OLDER, `next_cursor` is the last row's seq on a full
+         *     page), so a walk behaves as it does there. `oldest_seq` is reported here too: a walker whose cursor
+         *     falls below it lost a window to the prune, which is the one signal that distinguishes "caught up"
+         *     from "rows went past me". There is no `summary`: the summary drops the payload, and the payload is
+         *     the only place a run id lives.
          */
         get: operations["get_events_projection_events_projection_get"];
         put?: never;
@@ -1188,6 +1188,21 @@ export interface components {
             oldest_seq?: number | null;
         };
         /**
+         * FeedProjection
+         * @description A page of the run feed with no per-dataset filter, newest first ([[CTL-021]]).
+         *
+         *     The keyset cursor and the floor mean exactly what they mean on :class:`Events`, so a walk over either
+         *     behaves the same; what differs is reach (every warehouse) and width (``ProjectedEvent.event``).
+         */
+        FeedProjection: {
+            /** Events */
+            events: components["schemas"]["ProjectedEvent"][];
+            /** Next Cursor */
+            next_cursor?: number | null;
+            /** Oldest Seq */
+            oldest_seq?: number | null;
+        };
+        /**
          * GraphEdge
          * @description A dataset-level lineage edge: ``source`` is derived from ``target``.
          */
@@ -1363,6 +1378,18 @@ export interface components {
             dataset: string;
             /** Producers */
             producers: components["schemas"]["ProducerInfo"][];
+        };
+        /**
+         * ProjectedEvent
+         * @description One feed row as the unfiltered projection serves it: its seq, and the event cut to what targeting reads.
+         */
+        ProjectedEvent: {
+            /** Event */
+            event: {
+                [key: string]: unknown;
+            };
+            /** Seq */
+            seq: number;
         };
         /**
          * ReaderInfo
@@ -2454,7 +2481,6 @@ export interface operations {
             query?: {
                 after?: number | null;
                 limit?: number;
-                summary?: boolean;
             };
             header?: {
                 "dapr-caller-app-id"?: string | null;
@@ -2470,7 +2496,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Events"];
+                    "application/json": components["schemas"]["FeedProjection"];
                 };
             };
             /** @description Validation Error */
