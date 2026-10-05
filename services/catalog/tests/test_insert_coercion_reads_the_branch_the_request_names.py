@@ -20,8 +20,8 @@ the wrong schema — and then succeeds. The caller is told nothing; the rows lan
 
 IT IS THE FAMILY THIS CODEBASE KEEPS REPRODUCING. `test_branch_scoped_mutations_hit_the_branch.py`
 records `update` and `delete` rewriting MAIN; `test_a_declared_branch_is_never_silently_dropped.py`
-gates every DOOR that accepts a branch. That gate could not see this one: `coerce_insert_arrow` is a
-helper, not a door building a branched request model, so it sits in the blind spot between the two.
+probes every DOOR that hands a branched request to the upstream op. Neither reaches this one:
+`coerce_insert_arrow` is a helper inside a door that serves the branch, so it sits between the two.
 """
 
 from __future__ import annotations

@@ -140,6 +140,32 @@ def test_the_lineage_edge_is_stamped_with_the_branch_version_and_schema(branched
     assert "on_dev" in names, captured  # read off the branch's schema, not main's
 
 
+def test_restore_on_a_branch_rewinds_the_branch_and_stamps_its_lineage(branched: tuple[TestClient, str], monkeypatch: pytest.MonkeyPatch) -> None:
+    """``restore`` honours ``branch``: the branch rewinds, main stays put, and the RESTORE edge names the branch.
+
+    The upstream ``dir`` op restores the named ref (measured on pylance 12.0.0: a branch at v3 restored to
+    v2 went to v4 and main stayed at its version), so what the door adds is the read-back. Read off main,
+    the edge records main's version for a commit main never received.
+    """
+    client, location = branched
+    deleted = client.post("/v1/table/b1$t/delete", json={"branch": "dev", "predicate": "id = 1"})
+    assert deleted.status_code == 200, deleted.text
+    captured: dict[str, object] = {}
+
+    async def _capture(_emitter: object, _segments: object, **kwargs: object) -> None:
+        captured.update(kwargs)
+
+    monkeypatch.setattr("catalog.api.lineage_deps.emit_write_event", _capture)
+
+    r = client.post("/v1/table/b1$t/restore", json={"branch": "dev", "version": 1})
+    assert r.status_code == 200, r.text
+
+    dev = lance.dataset(location).checkout_version(("dev", None))
+    assert (dev.version, dev.count_rows()) == (3, 3)
+    assert lance.dataset(location).version == 1
+    assert (captured["operation"], captured["branch"], captured["version"]) == ("restore_table", "dev", 3), captured
+
+
 def test_omitting_branch_still_writes_main(branched: tuple[TestClient, str]) -> None:
     """The negative twin: branch is OPTIONAL, and the default target is main. Without this, threading the
     parameter as a required value — or defaulting it to a branch — would pass every test above."""

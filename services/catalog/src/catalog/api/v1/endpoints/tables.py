@@ -1282,9 +1282,17 @@ async def restore_table(
 
     segments = parse_identifier(id, settings.delimiter)
     body.id = reconcile_body_id(segments, body.id)
+    # THE BRANCH IS SERVED, and the upstream op is what serves it: measured on pylance 12.0.0, the `dir`
+    # `restore_table` restores the named ref (a branch at v3 restored to v2 went to v4, main kept its
+    # version). It reports a missing branch as TableNotFound (code 4) with a storage path in the text, so
+    # the ref is opened here first: a missing branch answers 22 and a version the branch lacks answers
+    # 11, the codes `_open_ref` mints for every other door. Unchecked, because a restore reads no row.
+    if body.branch is not None:
+        await run_in_threadpool(partial(open_dataset_unchecked, ns, so, segments, version=body.version, branch=body.branch))
     response: RestoreTableResponse = await run_in_threadpool(native.call, ns, "restore_table", body)
     # The response carries only a transaction_id — the shared trailer reads the new current version + its
-    # schema off one reopen (best-effort: a readback failure never fails the already-committed restore).
+    # schema off one reopen of the ref the restore committed to (best-effort: a readback failure never
+    # fails the already-committed restore).
     await lineage_deps.emit_measured_write(
         emitter,
         segments,
@@ -1294,6 +1302,7 @@ async def restore_table(
         token=token,
         operation=RESTORE_TABLE,
         authorization=authorization,
+        branch=body.branch,
     )
     await converge.remember(200, response)
     return response
