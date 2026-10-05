@@ -25,10 +25,12 @@ let a caller do.
 
 from __future__ import annotations
 
+import json
 from typing import Any, cast
 
 import pytest
 from lance_namespace import InvalidInputError
+from moto.iam.access_control import IAMPolicy, PermissionResult
 
 from catalog.core.vending import build_session_policy
 
@@ -52,12 +54,32 @@ def _actions(policy: dict[str, object], sid: str) -> list[str]:
     return list(cast(list[str], _statement(policy, sid)["Action"]))
 
 
-def test_a_branch_WRITE_may_write_only_the_branch_prefix() -> None:
-    policy = build_session_policy(BUCKET, PREFIX, "write", branch="feature-a")
+#: Without the `$`: moto's evaluator turns a Resource into a regex without escaping it, so the `$` in
+#: PREFIX would read as an end anchor and deny everything (measured, moto's `IAMPolicy`).
+EVALUATED_PREFIX = "3c099c25_acme-silver"
 
-    branch = _statement(policy, "BranchObjects")
-    assert branch["Resource"] == f"arn:aws:s3:::{BUCKET}/{PREFIX}/tree/feature-a/*"
-    assert "s3:PutObject" in _actions(policy, "BranchObjects")
+
+def _may_put(policy: dict[str, object], key: str) -> bool:
+    """Evaluated by moto's IAM policy engine, so the answer is IAM's wildcard semantics rather than a
+    string comparison this file would have to get right itself."""
+    verdict = IAMPolicy(json.dumps(policy)).is_action_permitted("s3:PutObject", f"arn:aws:s3:::{BUCKET}/{EVALUATED_PREFIX}/{key}")
+    return verdict == PermissionResult.PERMITTED
+
+
+@pytest.mark.parametrize(
+    ("key", "allowed"),
+    [
+        pytest.param("tree/a/_versions/1.manifest", True, id="own-manifest"),
+        pytest.param("tree/a/data/frag.lance", True, id="own-data"),
+        pytest.param("_versions/9.manifest", False, id="main"),
+        # [[LH-203]] `a/b` lays its files at `tree/a/b/`, inside `tree/a/`: a grant on `tree/a/*` reached it.
+        pytest.param("tree/a/b/_versions/1.manifest", False, id="nested-branch"),
+    ],
+)
+def test_a_branch_WRITE_may_write_only_that_branchs_own_files(key: str, allowed: bool) -> None:
+    policy = build_session_policy(BUCKET, EVALUATED_PREFIX, "write", branch="a")
+
+    assert _may_put(policy, key) is allowed
 
 
 def test_a_branch_name_that_CLIMBS_OUT_is_refused_AS_A_CLIENT_ERROR() -> None:

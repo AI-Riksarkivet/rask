@@ -22,7 +22,7 @@ import json
 import logging
 import re
 import threading
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager, suppress
 from functools import partial
@@ -63,6 +63,7 @@ from lance_namespace import (
     InsertIntoTableRequest,
     InsertIntoTableResponse,
     InvalidInputError,
+    InvalidTableStateError,
     LanceNamespace,
     LanceNamespaceError,
     ListTableBranchesRequest,
@@ -100,7 +101,7 @@ from catalog.core.namespace import judged_native_version, open_dataset, open_dat
 from catalog.services import changes, client_fragments, native, table_bases, warehouse_credentials
 from catalog.services.base_credentials import compose_base_store_params
 from catalog.services.cast_size import bytes_after_cast
-from service_kit.lakehouse import base_registry, commit_runs
+from service_kit.lakehouse import base_registry, branch_layout, commit_runs
 from service_kit.lakehouse.features import VersionedDataFile, describe_foreign_data_file_versions, manifest_base_path_refs
 from service_kit.lakehouse.objectfs import StorageOptions, credential_of, s3_filesystem
 from service_kit.lakehouse.schema import SchemaFields, facet_fields
@@ -2457,6 +2458,37 @@ def refuse_a_branch_name_the_backend_cannot_use(name: str) -> None:
         raise InvalidInputError(f"invalid branch name {name!r}: a path-traversal segment is not a branch name")
 
 
+def refuse_a_branch_name_that_shadows_the_layout(name: str) -> None:
+    """Refuse a branch name with a segment Lance uses as a directory name ([[LH-203]]).
+
+    Lance's grammar accepts ``_`` in a segment, so ``a/_versions`` is a valid branch name, and the format
+    joins it verbatim onto ``tree/``: its files land in ``tree/a/_versions/``, which is branch ``a``'s own
+    version directory. That makes it the estate's rule rather than Lance's, so it is refused here as the
+    caller's input (13), whether or not a branch ``a`` exists yet: once one does, the two share files.
+    """
+    if (segment := branch_layout.reserved_segment(name)) is not None:
+        raise InvalidInputError(
+            f"invalid branch name {name!r}: the segment {segment!r} is a directory name in a Lance dataset's layout, so the branch's files would land "
+            "inside another ref's"
+        )
+
+
+def refuse_a_branch_name_that_nests_with_another(name: str, branches: Iterable[str]) -> None:
+    """Refuse a name whose directory would lie inside an existing branch's, or contain one (409, code 19).
+
+    `a/b` lives at ``tree/a/b/``, inside ``tree/a/``. Lance then treats ``a/b``'s files as part of ``a``'s
+    directory: a delete of ``a`` leaves its files behind, and a vend or reclaim for ``a`` reaches ``a/b``.
+    The name is well formed, so this is the table's state refusing it, which is the spec's 19
+    InvalidTableState rather than 13.
+    """
+    existing = list(branches)
+    if clash := branch_layout.branches_enclosing(name, existing) or branch_layout.branches_inside(name, existing):
+        raise InvalidTableStateError(
+            f"branch {name!r} cannot be created: its directory would nest with branch {clash[0]!r}'s, and a branch's directory holds only its own "
+            "files. Choose a name that is not a '/'-prefix of an existing branch and has none"
+        )
+
+
 def _classify_ref_error(exc: Exception, *, kind: str, name: str, invalid_name: str | None = None) -> Exception:
     """Map a pylance tag/branch failure onto the Lance Namespace spec's coded error.
 
@@ -2604,11 +2636,13 @@ def create_branch(ns: LanceNamespace, so: StorageOptions, req: CreateTableBranch
     # Names the backend cannot use are refused BEFORE the listing read: `main` is absent from
     # `branches.list()` (the default ref is implicit), so the collision check below cannot see it.
     refuse_a_branch_name_the_backend_cannot_use(req.name)
+    refuse_a_branch_name_that_shadows_the_layout(req.name)
     table_id = _table_id(req)
     dataset = open_dataset(ns, so, table_id)
     branches = dataset.branches.list()
     if req.name in branches:
         raise TableBranchAlreadyExistsError(f"branch {req.name!r} already exists")
+    refuse_a_branch_name_that_nests_with_another(req.name, branches)
     # THE SOURCE IS ESTABLISHED BY READING TOO, and here the message leaves no choice: pylance renders
     # a missing source BRANCH and a missing source VERSION with the same object-store text, so a
     # classifier reading it alone answers 11 for a branch that does not exist — the wrong code, and a
@@ -2630,10 +2664,57 @@ def create_branch(ns: LanceNamespace, so: StorageOptions, req: CreateTableBranch
 
 
 def delete_branch(ns: LanceNamespace, so: StorageOptions, req: DeleteTableBranchRequest) -> DeleteTableBranchResponse:
-    """Delete a branch from the table."""
-    with _ref_errors("branch", req.name):
-        open_dataset_unchecked(ns, so, _table_id(req)).branches.delete(req.name)
+    """Delete a branch from the table, and every branch whose directory lies inside its own ([[LH-203]]).
+
+    THROUGH THE NESTED BRANCHES FIRST. Lance keeps a directory another branch lives in, so deleting
+    ``a`` while ``a/b`` exists removed only ``a``'s ref and left ``tree/a``'s manifests, transactions and
+    data behind for nothing to reclaim (measured on pylance 12.0.0). Deleting deepest first and ``a``
+    last lets each delete remove its whole directory. The create door refuses a name that nests, so
+    only a table that predates that refusal can carry such a pair.
+
+    A branch that lies inside ANOTHER branch's files is refused instead (409): Lance removes the
+    branch's directory recursively, so deleting ``a/_versions`` deletes ``tree/a/_versions``, which is
+    ``a``'s whole history, and ``a`` stops opening. Deleting ``a`` removes both.
+    """
+    dataset = open_dataset_unchecked(ns, so, _table_id(req))
+    listed = dataset.branches.list()
+    branches = list(listed)
+    # Read before anything is deleted: a missing `a` with an `a/b` would otherwise delete `a/b` and then fail.
+    if req.name not in branches:
+        raise TableBranchNotFoundError(f"branch {req.name!r} not found")
+    holders = [parent for parent in branch_layout.branches_enclosing(req.name, branches) if branch_layout.lies_in_files_of(req.name, parent)]
+    if holders:
+        raise InvalidTableStateError(
+            f"branch {req.name!r} lies inside the files of branch {holders[0]!r}: deleting it would delete {holders[0]!r}'s files too. "
+            f"Delete {holders[0]!r}, which deletes {req.name!r} with it. Nothing was deleted"
+        )
+    doomed = [*branch_layout.branches_inside(req.name, branches), req.name]
+    # A BRANCH CUT FROM ONE OF THEM pins it: pylance refuses to delete a branch another is forked from
+    # ("Ref conflict error: Branch a is referenced by [("c", 1)]", measured on 12.0.0). Asked before the
+    # first delete, so the cascade never removes `a/b` and then stops at `a`.
+    forks = sorted(child for child, meta in listed.items() if child not in doomed and (meta or {}).get("parent_branch") in doomed)
+    if forks:
+        raise _forked_from(req.name, forks)
+    deleted: list[str] = []
+    for name in doomed:
+        try:
+            with _ref_errors("branch", name):
+                dataset.branches.delete(name)
+        except TableBranchAlreadyExistsError as exc:
+            # The ref-conflict marker here is a fork pin made after the read above, not a name collision.
+            raise InvalidTableStateError(
+                f"deleting branch {req.name!r} stopped at {name!r}: a branch forked from it since the check pins it ({exc.__cause__}). "
+                f"Deleted before stopping: {deleted}"
+            ) from exc
+        deleted.append(name)
     return DeleteTableBranchResponse()
+
+
+def _forked_from(name: str, forks: Sequence[str]) -> InvalidTableStateError:
+    return InvalidTableStateError(
+        f"branch {name!r} cannot be deleted: {', '.join(repr(f) for f in forks)} is forked from it or from a branch inside it, and a fork "
+        "pins its parent. Delete the fork first. Nothing was deleted"
+    )
 
 
 def ensure_merge_key_index(ns: LanceNamespace, segments: list[str], on: str | None, *, so: StorageOptions | None = None, branch: str | None = None) -> None:

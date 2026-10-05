@@ -260,14 +260,6 @@ def test_create_branch_from_main_uses_no_reference(client: TestClient, monkeypat
     dataset.create_branch.assert_called_once_with("exp", None)  # neither → latest of main
 
 
-def test_delete_branch_routes_to_dataset(client: TestClient, monkeypatch) -> None:
-    dataset = MagicMock()
-    monkeypatch.setattr("catalog.services.dataplane.open_dataset_unchecked", lambda *a, **k: dataset)
-    resp = client.post("/v1/table/db$t/branches/delete", json={"name": "exp"})
-    assert resp.status_code == 200
-    dataset.branches.delete.assert_called_once_with("exp")
-
-
 def test_insert_stamps_the_real_version_on_lineage(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
     # Insert's native response carries only a transaction_id; the shared trailer reopens the dataset for
     # the version it produced and stamps it on the WROTE edge — it used to emit version=None.

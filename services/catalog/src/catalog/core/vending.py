@@ -50,6 +50,7 @@ from catalog.core.base_judge import BaseJudge, require_sanctioned_bases
 from catalog.core.config import shared_lance_session
 from service_kit.lakehouse.base_refs import location_within
 from service_kit.lakehouse.base_registry import BaseJudgement, BaseRole, BaseStanding
+from service_kit.lakehouse.branch_layout import BRANCH_FILE_DIRS
 from service_kit.lakehouse.features import BasePathRef
 from service_kit.lakehouse.objectfs import lance_storage_options
 
@@ -534,12 +535,17 @@ def build_session_policy(
         },
     ]
     if branch_write:
+        # THE BRANCH'S OWN DIRECTORIES, never `tree/<branch>/*` ([[LH-203]]). The format lays a nested
+        # branch inside its parent's directory (`a/b` at `tree/a/b/`), so a string-prefix grant on
+        # `tree/a/*` was a write credential for every branch named under `a`. Naming the five
+        # directories a branch writes into (`branch_layout.BRANCH_FILE_DIRS`) stops at `a`'s own files.
+        branch_root = f"{bucket}/{prefix}/tree/{branch}" if prefix else f"{bucket}/tree/{branch}"
         statements.append(
             {
                 "Sid": "BranchObjects",
                 "Effect": "Allow",
                 "Action": list(_WRITE_ACTIONS),
-                "Resource": f"arn:aws:s3:::{bucket}/{prefix}/tree/{branch}/*" if prefix else f"arn:aws:s3:::{bucket}/tree/{branch}/*",
+                "Resource": [f"arn:aws:s3:::{branch_root}/{directory}/*" for directory in BRANCH_FILE_DIRS],
             }
         )
     n = 0

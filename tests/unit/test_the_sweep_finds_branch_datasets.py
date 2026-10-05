@@ -32,8 +32,11 @@ it already was rather than by a new rule here.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, cast
 
+import lance
+import pyarrow as pa
 import pyarrow.fs as pafs
 
 from maintenance.services.optimize import discover_datasets
@@ -60,36 +63,23 @@ class _FakeFS:
         return pafs.FileInfo(selector, pafs.FileType.NotFound)
 
 
-def _estate() -> _FakeFS:
-    """One table with two branches, plus a plain table — the shape 85 live tables have."""
-    return _FakeFS(
-        {
-            "lance-catalog": [_dir("lance-catalog/abcd_ns$t1"), _dir("lance-catalog/efgh_ns$t2")],
-            "lance-catalog/abcd_ns$t1": [
-                _dir("lance-catalog/abcd_ns$t1/_versions"),
-                _dir("lance-catalog/abcd_ns$t1/_transactions"),
-                _dir("lance-catalog/abcd_ns$t1/data"),
-                _dir("lance-catalog/abcd_ns$t1/tree"),
-            ],
-            "lance-catalog/abcd_ns$t1/tree": [
-                _dir("lance-catalog/abcd_ns$t1/tree/work"),
-                _dir("lance-catalog/abcd_ns$t1/tree/experiment"),
-            ],
-            "lance-catalog/abcd_ns$t1/tree/work": [_dir("lance-catalog/abcd_ns$t1/tree/work/_versions")],
-            "lance-catalog/abcd_ns$t1/tree/experiment": [_dir("lance-catalog/abcd_ns$t1/tree/experiment/_versions")],
-            "lance-catalog/efgh_ns$t2": [_dir("lance-catalog/efgh_ns$t2/_versions")],
-        }
-    )
+def test_every_branch_the_refs_name_is_discovered_as_its_own_dataset(tmp_path: Path) -> None:
+    """The headline: a branch has its own `_versions/`, so it is a dataset the sweep must maintain.
 
+    [[LH-203]] Named BY THE REFS. A name may contain `/`, so `a/b` sits inside `tree/a/` and `x/y` under a
+    `tree/x/` that is no branch at all; a walk of `tree/`'s children found `tree/a` and missed both.
+    Planted through pylance, which accepts both names (the catalog's create door now refuses `a/b`).
+    """
+    location = str(tmp_path / "bkt" / "t.lance")
+    lance.write_dataset(pa.table({"id": [1, 2]}), location)
+    for name in ("a", "a/b", "x/y"):
+        lance.dataset(location).create_branch(name)
+    fs = pafs.SubTreeFileSystem(str(tmp_path), pafs.LocalFileSystem())
 
-def test_a_branch_under_tree_is_discovered_as_its_own_dataset() -> None:
-    """The headline: a branch has its own `_versions/`, so it is a dataset the sweep must maintain."""
-    uris = discover_datasets(cast(Any, _estate()), "lance-catalog").uris
+    uris = discover_datasets(fs, "bkt").uris
 
-    assert "s3://lance-catalog/abcd_ns$t1/tree/work" in uris, (
-        "the sweep did not find a branch — every branch in the estate is unmaintained, its versions growing without bound"
-    )
-    assert "s3://lance-catalog/abcd_ns$t1/tree/experiment" in uris, "a SECOND branch on the same table was missed"
+    root = "s3://bkt/t.lance"
+    assert sorted(uris) == [root, f"{root}/tree/a", f"{root}/tree/a/b", f"{root}/tree/x/y"]
 
 
 def test_a_datasets_own_internals_are_NOT_walked() -> None:

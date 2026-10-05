@@ -61,13 +61,13 @@ async def vend_credentials(
     web_identity_token: RawBearerToken,
     tier: Annotated[Tier, Query()] = "read",
     # [[LH-055]] WHICH branch this credential is for. Naming one narrows the grant rather than widening
-    # it — write lands on `<table>/tree/<branch>/*` and main drops to read — which is the isolation
+    # it — write lands on that branch's own directories under `<table>/tree/<branch>/` (`_versions`, `_transactions`, `_deletions`, `_indices`, `data`) and main drops to read — which is the isolation
     # `lancemultibasebranchingblobv2.md` says the `tree/` layout exists to give: "storage ACLs can be
     # read-only on main and write-only on the branch". Absent = main, exactly as before.
     branch: Annotated[
         str,
         Query(
-            description="The branch this credential is for. Naming one NARROWS the grant: write lands on `<table>/tree/<branch>/*` and main drops to read-only. Omit for main."
+            description="The branch this credential is for. Naming one NARROWS the grant: write lands on that branch's own directories under `<table>/tree/<branch>/` (`_versions`, `_transactions`, `_deletions`, `_indices`, `data`) and main drops to read-only. Omit for main."
         ),
     ] = "",
 ) -> CredentialResponse:

@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Any, Final, Protocol, TypedDict
 from lance_namespace import InvalidInputError, InvalidTableStateError, UnsupportedOperationError
 
 from catalog.services.dataplane import recorded_branch
+from service_kit.lakehouse import branch_layout
 from service_kit.lakehouse.base_refs import BaseRefs
 from service_kit.lakehouse.features import (
     FLAG_BASE_PATHS,
@@ -355,16 +356,34 @@ def preview_gc(ds: VersionedDataset, *, branch: str | None, retention_days: int 
     }
 
 
-def run_gc(ds: ReclaimableDataset, *, retention_days: int | None, retain_versions: int | None, protected: BaseRefs | None = None) -> GcRunData:
+def refuse_a_reclaim_over_nested_branches(ds: VersionedDataset, branch: str | None) -> None:
+    """Refuse reclaiming a branch that has another branch inside its directory (409, [[LH-203]]).
+
+    A branch handle lists what lies under ``tree/<branch>/_versions/`` as its own history, so branch
+    ``a/_versions``'s manifests read as ``a``'s versions and a reclaim of ``a`` deletes them: measured on
+    pylance 12.0.0, a cold read of ``a/_versions`` then fails ``Not found``. The create door refuses such
+    names, so only a table that predates that refusal carries one. Main has no such directory.
+    """
+    ref = recorded_branch(branch)
+    if ref is not None and (nested := branch_layout.branches_inside(ref, ds.branches.list())):
+        raise InvalidTableStateError(
+            f"refused: branches {nested} lie inside branch {ref!r}'s directory, and a reclaim of {ref!r} would delete their files. Nothing was deleted"
+        )
+
+
+def run_gc(
+    ds: ReclaimableDataset, *, retention_days: int | None, retain_versions: int | None, protected: BaseRefs | None = None, branch: str | None = None
+) -> GcRunData:
     """Reclaim old versions (DESTRUCTIVE). Tagged versions are exempt, exactly like the compaction sweep.
 
     THE STEP THAT ACTUALLY DELETES, which is why ``protected`` matters most here: measured, compaction
     adds the merged file and removes nothing, and it is this call that then removes the obsoleted
     originals a shallow clone still resolves through. See :func:`require_reclaimable`, which gates
     this door on the sweep's own root-scoped gate — the same one the cron applies to the same dataset
-    every tick.
+    every tick. ``branch`` is the ref ``ds`` opens, for :func:`refuse_a_reclaim_over_nested_branches`.
     """
     require_reclaimable(ds, protected)
+    refuse_a_reclaim_over_nested_branches(ds, branch)
     older_than = timedelta(days=retention_days) if retention_days else timedelta(0)
     stats: Any = ds.cleanup_old_versions(older_than=older_than, retain_versions=retain_versions, error_if_tagged_old_versions=False)
     return {
@@ -423,6 +442,7 @@ def delete_versions(ds: VersionDeletableDataset, *, ranges: Sequence[tuple[int, 
     """
     targets = versions_in_ranges(ranges, current=int(ds.version))
     require_reclaimable(ds, protected)
+    refuse_a_reclaim_over_nested_branches(ds, branch)
     _refuse_pinned_versions(ds, branch, targets)
     try:
         stats: Any = ds.cleanup_old_versions(versions=targets, error_if_tagged_old_versions=True)

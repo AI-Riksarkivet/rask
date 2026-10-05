@@ -579,6 +579,17 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   entirely (feature flag 16). Any "list the prefix, subtract what is referenced" logic reports both
   as garbage. Branches are caught by the `tree/` directory probe; base_paths by TWO checks, and both
   are needed — the consequence (a referenced path not present locally) plus the MANIFEST FLAG.
+- **A branch's directory holds only that branch's files, and that is rask's rule, not Lance's**
+  ([[LH-203]], `service_kit.lakehouse.branch_layout`). The format joins the name verbatim, so `a/b`
+  lives inside `tree/a/` and `a/_versions` inside `a`'s own version directory, and Lance reads
+  whatever lies under a branch's directory as that branch's (measured on pylance 12.0.0: a reclaim of
+  `a` deleted `a/_versions`'s manifests; deleting `a/_versions` deleted `a`'s history). So the create
+  door refuses a layout segment (400) and a name that nests with an existing branch (409, code 19); a
+  branch-write vend grants only `tree/<b>/{_versions,_transactions,_deletions,_indices,data}/*`;
+  delete goes through nested branches deepest first, refused whole (409) when a branch outside them is
+  forked from one; every reclaim (the sweep's `nested_branch` gate,
+  `maintenance/run`, `version/delete`) refuses a branch with another inside it; and the sweep lists
+  branches from `_refs/branches`, never by walking `tree/`.
 - **The manifest's feature flags ARE reachable, and they are the refusal gate (#64).**
   `packages/service-kit/src/service_kit/lakehouse/features.py` reads
   `reader_feature_flags`/`writer_feature_flags` as varints at

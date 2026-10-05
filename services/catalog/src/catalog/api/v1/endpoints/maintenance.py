@@ -152,6 +152,7 @@ async def run_maintenance(
         retention_days=body.retention_days,
         retain_versions=body.retain_versions,
         protected=protected,
+        branch=branch,
     )
     return GcRunResult(**result)
 

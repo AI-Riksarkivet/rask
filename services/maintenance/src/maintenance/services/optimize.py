@@ -33,6 +33,7 @@ from maintenance.services.compaction_executor import (
 from maintenance.services.index_health import inspect_indices
 from maintenance.services.rewrite_slot import record_committed_rewrite, resident_bytes, rewrite_slot
 from service_kit.lakehouse.base_refs import BaseRefs, containment_of
+from service_kit.lakehouse.branch_layout import BRANCH_CONTAINER, BRANCH_REFS_DIR, branch_name_from_ref_file, branch_named_by, branches_inside
 from service_kit.lakehouse.features import (
     FLAG_BASE_PATHS,
     describe_compaction_unsupported_flags,
@@ -88,7 +89,8 @@ class DatasetResult(BaseModel):
     refused: str | None = None
     #: WHICH GATE refused it: ``protected_base`` (another dataset resolves its files through this
     #: location), ``manifest_flags`` (this manifest sets a feature this pass cannot correctly rewrite),
-    #: ``invalid_ref`` (a branch directory whose NAME Lance will not parse), ``governed_elsewhere`` (the
+    #: ``invalid_ref`` (a branch directory whose NAME Lance will not parse), ``nested_branch`` (another
+    #: branch lies inside this branch's directory, so a reclaim here would delete its files), ``governed_elsewhere`` (the
     #: catalog vended for this unit's table id at a location that does not cover this dataset),
     #: ``unauthenticated`` (either door's 401: maintenance's own service credential), or one of the catalog's
     #: answers for the table id (:data:`~maintenance.core.metrics.CatalogRefusal`): ``vend_denied`` (the vend
@@ -99,7 +101,9 @@ class DatasetResult(BaseModel):
     #: stays refused forever, a manifest flag is a pylance upgrade away from being supported, a bad branch
     #: name clears when somebody removes a directory — and the sweep's one WARNING carries this breakdown in
     #: place of a line per dataset. A closed set: it is a metric label.
-    refused_by: Literal["protected_base", "manifest_flags", "invalid_ref", "governed_elsewhere", "unauthenticated"] | CatalogRefusal | None = None
+    refused_by: Literal["protected_base", "manifest_flags", "invalid_ref", "nested_branch", "governed_elsewhere", "unauthenticated"] | CatalogRefusal | None = (
+        None
+    )
     #: The id the catalog refused, on one of its refusals (`CatalogRefusal`): the id this unit vended or
     #: planned under. A rename leaves the id the location carries naming no table, so this is what
     #: `compaction.tables.parked` labels and an operator greps for. ``None`` for every other gate, including
@@ -181,11 +185,6 @@ class Discovery(BaseModel):
     truncated: list[str] = []
 
 
-#: Lance's own name for the directory a dataset keeps its branches in — `<dataset>/tree/<branch>/`,
-#: each a full dataset with its own `_versions/`. Named rather than inlined so the discovery walk and
-#: any future branch-aware pass cannot disagree about the spelling.
-_BRANCH_CONTAINER = "tree"
-
 #: Control-plane bookkeeping the walk never enters. No dataset is ever written under one, so descending
 #: costs S3 round-trips on the hot discovery path and, worse, MANUFACTURES coverage gaps: a subtree the
 #: walk stops inside becomes an `IncompleteScan`, which blocks `purge.report_is_clean` for a gap that
@@ -241,12 +240,30 @@ def _may_hide_a_dataset(fs: pafs.FileSystem, path: str) -> bool:
     return any(child.type == pafs.FileType.Directory for child in children)
 
 
+def _branch_refs(fs: pafs.FileSystem, root: str) -> list[str]:
+    """The branches ``root``'s ``_refs/branches`` names, sorted ([[LH-203]]).
+
+    THE REFS, NOT THE ``tree/`` DIRECTORY. A branch name may contain ``/`` and the format lays ``a/b`` at
+    ``tree/a/b/`` (`file_format.md` § "Branch Dataset Layout"), so a walk of ``tree/``'s children found
+    ``tree/a`` and never ``a/b`` inside it, and found ``tree/a`` again after ``a`` was deleted, from
+    the files Lance leaves behind while ``a/b`` exists. The refs are the format's own list of branches
+    (`file_format.md` § "Branch Metadata Path", one ``<name>.json`` per branch with ``/`` written
+    ``%2F``), read with one listing, which is what the ``tree/`` probe cost.
+
+    A listing that fails raises rather than answering "no branches": both callers catch per bucket and
+    report it, where an empty answer would leave every branch of this dataset unmaintained in silence.
+    """
+    selector = pafs.FileSelector(f"{root}/{BRANCH_REFS_DIR}", recursive=False, allow_not_found=True)
+    names = (branch_name_from_ref_file(info.base_name) for info in fs.get_file_info(selector) if info.type == pafs.FileType.File)
+    return sorted(name for name in names if name is not None)
+
+
 def discover_datasets(fs: pafs.FileSystem, bucket: str, *, max_depth: int = 3) -> Discovery:
     """Lance datasets under ``bucket`` — a directory IS a dataset iff it has a ``_versions/`` child
     (the Lance table-layout marker); any other directory is a namespace prefix and is recursed into
-    (bounded by ``max_depth``). A dataset's own ``tree/`` is descended into as well, because a BRANCH
-    is a full dataset the parent contains rather than part of it; none of a dataset's other children
-    is walked. Skips ``__`` bookkeeping dirs (the catalog's ``__manifest``) and the
+    (bounded by ``max_depth``). Every branch a dataset's ``_refs/branches`` names is listed as well, at
+    ``<dataset>/tree/<branch>``, because a BRANCH is a full dataset the parent contains rather than part
+    of it; none of a dataset's children is walked. Skips ``__`` bookkeeping dirs (the catalog's ``__manifest``) and the
     control-plane registries (``_warehouses``, ``_policies``, ``_protection``, ``_trash``) — no dataset ever
     lives under them, and probing them is wasted S3 round-trips on the hot discovery path.
 
@@ -290,18 +307,16 @@ def discover_datasets(fs: pafs.FileSystem, bucket: str, *, max_depth: int = 3) -
                 # so it accumulates versions with nothing ever reclaiming them. Measured 2026-09-07:
                 # 85 of the deployed estate's 250 tables carry at least one.
                 #
-                # ONLY `tree/`, never the dataset's other children. `data/`, `_indices/`, `_deletions/`
-                # and `_transactions/` are not datasets, and probing each for a marker is a wasted round
-                # trip per directory per dataset on the hot discovery path.
+                # From the REFS, never by walking the dataset's children (`_branch_refs`). `data/`,
+                # `_indices/`, `_deletions/` and `_transactions/` are not datasets, and `tree/`'s
+                # children are directories, not branches: a branch named `a/b` sits two levels down.
                 #
-                # Descending buys exactly the maintenance that is SAFE on a branch, and buys it without
-                # a new rule: a branch sets `base_paths` (measured (16, 16), data files identical to the
-                # parent's at `base_id` 0, no `data/` of its own), so compaction and the orphan scan
-                # already refuse it on that flag while root-scoped `cleanup_old_versions` and
+                # Finding branches buys exactly the maintenance that is SAFE on a branch, and buys it
+                # without a new rule: a branch sets `base_paths` (measured (16, 16), data files identical
+                # to the parent's at `base_id` 0, no `data/` of its own), so compaction and the orphan
+                # scan already refuse it on that flag while root-scoped `cleanup_old_versions` and
                 # `optimize_indices` already permit it via `SUPPORTED_FOR_GC`.
-                branches = fs.get_file_info(f"{info.path}/{_BRANCH_CONTAINER}")
-                if branches.type == pafs.FileType.Directory:
-                    _walk(branches.path, depth + 1)
+                found.uris.extend(f"s3://{info.path}/{BRANCH_CONTAINER}/{name}" for name in _branch_refs(fs, info.path))
             elif depth < max_depth:
                 _walk(info.path, depth + 1)
             elif _may_hide_a_dataset(fs, info.path):
@@ -703,6 +718,43 @@ def _record_plan_door_refusal(result: DatasetResult, exc: MaintenanceDenied | Ta
             result.park(str(exc), gate="plan_denied", table_id=table_id)
 
 
+def _branches_inside(ds: lance.LanceDataset, uri: str) -> list[str]:
+    """The branches whose directory lies inside the one ``uri`` opens, when ``uri`` is a branch ([[LH-203]]).
+
+    A dataset opened at ``<root>/tree/a`` lists what lies under ``tree/a/_versions/`` as its own
+    versions, so branch ``a/_versions`` reads as part of ``a``'s history: measured on pylance 12.0.0,
+    ``cleanup_old_versions`` through ``tree/a`` deleted that branch's manifests and a cold read of it
+    failed ``Not found``. LH-203's probes measured ``a/data`` and ``a/_indices`` lost to the 7-day
+    unverified-file rule the same way. So a
+    branch with anything nested inside it is not reclaimed at all; the create door refuses such names,
+    so only a table that predates that refusal carries one.
+
+    ``branches.list()`` answers the ROOT's refs from a branch handle too (measured), so one read gives
+    both the name ``uri`` is and the names under it. A location no ref names is answered with nothing.
+    """
+    if f"/{BRANCH_CONTAINER}/" not in uri:
+        return []
+    names = list(ds.branches.list())
+    own = branch_named_by(uri, names)
+    return [] if own is None else branches_inside(own, names)
+
+
+def _refuse_a_branch_with_branches_inside(ds: lance.LanceDataset, uri: str, *, data_storage_version: str | None, mixed: bool) -> DatasetResult | None:
+    """The ``nested_branch`` refusal for ``uri``, an error when its refs cannot be read, or ``None`` to proceed."""
+    try:
+        nested = _branches_inside(ds, uri)
+    except Exception as exc:
+        # The refs could not be read, so whether a reclaim here reaches another branch is unknown.
+        return DatasetResult(
+            uri=uri, error=f"refs: {exc}", error_type=type(exc).__name__, data_storage_version=data_storage_version, mixed_data_file_versions=mixed
+        )
+    if not nested:
+        return None
+    why = f"branches {nested} lie inside this branch's directory; Lance reads their files as this branch's, so reclaiming here would delete them"
+    log.warning("maintenance_refused_nested_branch", extra={"uri": uri, "nested": nested})
+    return DatasetResult(uri=uri, refused=why, refused_by="nested_branch", data_storage_version=data_storage_version, mixed_data_file_versions=mixed)
+
+
 def compact_one(
     uri: str,
     storage_options: dict[str, str],
@@ -793,6 +845,8 @@ def compact_one(
             opened_as_mixed = mixes_data_file_versions(flags_from_open_error(exc) or 0)
             return DatasetResult(uri=uri, refused=refusal, refused_by="manifest_flags", mixed_data_file_versions=opened_as_mixed)
         return DatasetResult(uri=uri, error=f"open: {exc}", error_type=type(exc).__name__)
+    if (nested_refusal := _refuse_a_branch_with_branches_inside(ds, uri, data_storage_version=table_version, mixed=mixed)) is not None:
+        return nested_refusal
     # TWO GATES, because the three operations do not share a hazard. This was ONE blanket refusal, and
     # the cost was measured: 17 of the estate's datasets were refused on flag 16 and they were exactly
     # the ones with multiple fragments and version history, while the 9 the sweep did maintain needed
