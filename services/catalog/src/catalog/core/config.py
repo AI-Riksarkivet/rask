@@ -409,9 +409,8 @@ class Settings(
     # buckets, manifest stays in the primary root, reads fan out). A per-request ``data_base`` MUST be on
     # this list — a caller can never point a base at an arbitrary bucket (data-exfil / rogue-write door).
     # Empty (default) = the feature is off and every create is byte-identical to today.
-    # INVARIANT (operator's responsibility): every base here MUST share the catalog's S3 endpoint + creds.
-    # The read path vends only the top-level storage_options to all bases, so a base on a different endpoint
-    # or needing different creds would accept writes but be UNREADABLE. (See dataplane._write_blob.)
+    # Every base here shares the catalog's S3 ENDPOINT: a base's own credential
+    # (`LANCE_MULTIBASE_BASE_CREDENTIAL_REFS`) replaces the key pair and never the address.
     multibase_data_bases: str = Field(default="", alias="LANCE_MULTIBASE_DATA_BASES")
 
     @property
@@ -423,9 +422,10 @@ class Settings(
     # separated. A NAME, never material — the reference identifies a key in the Dapr secret store, which
     # is what lets this live in configuration at all under the estate's secrets rule.
     #
-    # This is what retires the obligation the allowlist comment above used to carry. A base with a
-    # reference here is opened with its own credential at both doors (`dataplane._write_blob` composes
-    # it, `core.namespace.open_dataset` forwards it), so it no longer has to share the estate's.
+    # A base with a reference here, and every table directory beneath it, is written with its own
+    # credential (`dataplane._write_blob`) and opened with it at every pylance open
+    # (`core.namespace.open_location`, composed from the manifest's base paths). The native data doors
+    # cannot carry it and refuse such a table (`core.namespace.judged_native_version`).
     # Empty (default) = every base keeps the estate's options and every write is byte-identical.
     multibase_base_credential_refs: str = Field(default="", alias="LANCE_MULTIBASE_BASE_CREDENTIAL_REFS")
 
@@ -440,6 +440,8 @@ class Settings(
         vanishes leaves its base on the estate credential and looks correct — which is exactly the
         failure this whole axis exists to prevent. A repeated base raises for the same reason one step
         on: answering "which of these two secrets" by ordering is not an answer an estate should give.
+        A reference for a base off ``LANCE_MULTIBASE_DATA_BASES`` raises too: no create can register
+        that base, so the reference is configuration that does nothing.
         """
         parsed: dict[str, str] = {}
         for entry in (e.strip() for e in self.multibase_base_credential_refs.split(",")):
@@ -452,6 +454,8 @@ class Settings(
             if base in parsed:
                 raise ValueError(f"base {base!r} is given a credential reference more than once; one base has one secret")
             parsed[base] = ref
+        if unlisted := sorted(set(parsed) - set(self.multibase_data_base_list)):
+            raise ValueError(f"{unlisted} is not on LANCE_MULTIBASE_DATA_BASES; a credential reference for a base no create can register does nothing")
         return parsed
 
     # #3-A per-warehouse physical multi-tenancy (admin control plane). When enabled, an admin API

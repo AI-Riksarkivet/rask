@@ -50,7 +50,7 @@ def test_write_threads_data_bases_into_write_dataset() -> None:
         )
     assert captured["initial_bases"] is not None and len(captured["initial_bases"]) == 2  # both registered
     assert captured["target_bases"] == ["b1", "b2-data"]  # round-robin targets, referenced by derived NAME
-    assert set(captured["base_store_params"]) == {"s3://b1", "s3://b2/data"}  # per-base runtime creds
+    assert captured["base_store_params"] is None  # no credential reference -> every base on the top-level options
     # #5a invariant MUST survive multi-base (the whole point of routing creates through this 2.2 path):
     assert captured["enable_stable_row_ids"] is True
     assert captured["data_storage_version"] == "2.2"

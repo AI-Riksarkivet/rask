@@ -149,6 +149,11 @@ _CREDENTIAL_ALIASES: tuple[tuple[str, str], ...] = (
     ("aws_session_token", "session_token"),
 )
 
+#: Every key a credential may be spelled under. A caller REPLACING the credential in a dict removes all
+#: of them first: object_store reads either spelling, so a dict carrying the estate's ``access_key_id``
+#: beside another store's ``aws_access_key_id`` names two identities and which one signs is not defined.
+CREDENTIAL_KEYS: frozenset[str] = frozenset(alias for aliases in _CREDENTIAL_ALIASES for alias in aliases)
+
 
 def credential_of(storage_options: StorageOptions) -> tuple[str | None, str | None, str | None]:
     """The (access key, secret, session token) a storage-options dict carries, under either spelling.

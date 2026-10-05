@@ -83,6 +83,10 @@ def _settings() -> SimpleNamespace:
         models_root="",
         model_artifacts_root="",
         reserved_bucket_set=frozenset(),
+        # [[LH-273]] Each data base's credential reference; none here.
+        multibase_base_credential_ref_map={},
+        dapr_secret_store="",
+        dapr_secret_s3_field="",
     )
 
 
@@ -164,12 +168,12 @@ def test_an_UNREADABLE_branch_registry_refuses_rather_than_admits(table: str, mo
     when a caller would most like the benefit of the doubt. Mutation-checked: flipping that arm to
     `True` left every other assertion in this file green.
     """
-    from catalog.core import vending
+    from catalog.core import namespace
 
     def _unreadable(*_a: Any, **_k: Any) -> Any:  # noqa: ANN401 — a stand-in that only ever raises
         raise RuntimeError("the branch registry is unreadable")
 
-    monkeypatch.setattr(vending, "shared_lance_session", _unreadable)
+    monkeypatch.setattr(namespace, "shared_lance_session", _unreadable)
     vendor = _Vendor()
     with pytest.raises(TableBranchNotFoundError):
         asyncio.run(

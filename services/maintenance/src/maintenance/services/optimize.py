@@ -32,14 +32,16 @@ from maintenance.services.compaction_executor import (
 )
 from maintenance.services.index_health import inspect_indices
 from maintenance.services.rewrite_slot import record_committed_rewrite, resident_bytes, rewrite_slot
-from service_kit.lakehouse.base_refs import BaseRefs, containment_of
+from service_kit.lakehouse.base_refs import BaseRefs, containment_of, location_in_store
 from service_kit.lakehouse.branch_layout import BRANCH_CONTAINER, BRANCH_REFS_DIR, branch_name_from_ref_file, branch_named_by, branches_inside
 from service_kit.lakehouse.features import (
     FLAG_BASE_PATHS,
+    data_file_base_paths,
     describe_compaction_unsupported_flags,
     describe_gc_unsupported_flags,
     flags_from_open_error,
     gather_compaction_bases,
+    manifest_base_path_refs,
     manifest_feature_flags,
     mixes_data_file_versions,
     unsupported_features_from_open_error,
@@ -90,7 +92,9 @@ class DatasetResult(BaseModel):
     #: WHICH GATE refused it: ``protected_base`` (another dataset resolves its files through this
     #: location), ``manifest_flags`` (this manifest sets a feature this pass cannot correctly rewrite),
     #: ``invalid_ref`` (a branch directory whose NAME Lance will not parse), ``nested_branch`` (another
-    #: branch lies inside this branch's directory, so a reclaim here would delete its files), ``governed_elsewhere`` (the
+    #: branch lies inside this branch's directory, so a reclaim here would delete its files), ``foreign_data_base`` (data
+    #: files live on a data base outside the table's root, which may be read only under that base's own credential —
+    #: [[LH-273]]), ``governed_elsewhere`` (the
     #: catalog vended for this unit's table id at a location that does not cover this dataset),
     #: ``unauthenticated`` (either door's 401: maintenance's own service credential), or one of the catalog's
     #: answers for the table id (:data:`~maintenance.core.metrics.CatalogRefusal`): ``vend_denied`` (the vend
@@ -101,9 +105,11 @@ class DatasetResult(BaseModel):
     #: stays refused forever, a manifest flag is a pylance upgrade away from being supported, a bad branch
     #: name clears when somebody removes a directory — and the sweep's one WARNING carries this breakdown in
     #: place of a line per dataset. A closed set: it is a metric label.
-    refused_by: Literal["protected_base", "manifest_flags", "invalid_ref", "nested_branch", "governed_elsewhere", "unauthenticated"] | CatalogRefusal | None = (
-        None
-    )
+    refused_by: (
+        Literal["protected_base", "manifest_flags", "invalid_ref", "nested_branch", "foreign_data_base", "governed_elsewhere", "unauthenticated"]
+        | CatalogRefusal
+        | None
+    ) = None
     #: The id the catalog refused, on one of its refusals (`CatalogRefusal`): the id this unit vended or
     #: planned under. A rename leaves the id the location carries naming no table, so this is what
     #: `compaction.tables.parked` labels and an operator greps for. ``None`` for every other gate, including
@@ -758,6 +764,37 @@ def _refuse_a_branch_with_branches_inside(ds: lance.LanceDataset, uri: str, *, d
     return DatasetResult(uri=uri, refused=why, refused_by="nested_branch", data_storage_version=data_storage_version, mixed_data_file_versions=mixed)
 
 
+def _refuse_a_foreign_data_base(ds: lance.LanceDataset, uri: str, *, data_storage_version: str | None, mixed: bool) -> DatasetResult | None:
+    """The ``foreign_data_base`` refusal for ``uri``, an error when its bases cannot be read, or ``None`` to proceed ([[LH-273]]).
+
+    A DATA BASE MAY BE READ ONLY UNDER ITS OWN CREDENTIAL. The catalog opens a table whose fragments sit
+    on a data base with that base's ``base_store_params``, composed from the operator's credential
+    references; this pass holds no reference and no secret, so every read, rewrite or delete it made
+    there would be signed by its own key — refused where that key has no grant on the base, and done
+    under an identity nobody configured for the base where it has one. Which data bases carry a
+    reference is the catalog's configuration, which this service does not hold, so EVERY data file on a
+    plain base outside the table's own root refuses: fail closed rather than guess which identity a base
+    wants. A branch's base on its parent and a clone's dataset-root base are not data bases and are
+    judged by the gates below. Unreadable bases are an error, never a pass.
+    """
+    try:
+        declared = {ref.path: ref for ref in manifest_base_path_refs(ds)}
+        through = data_file_base_paths(ds)
+    except Exception as exc:
+        return DatasetResult(
+            uri=uri, error=f"bases: {exc}", error_type=type(exc).__name__, data_storage_version=data_storage_version, mixed_data_file_versions=mixed
+        )
+    foreign = sorted(path for path in through if path in declared and not declared[path].is_dataset_root and not location_in_store(uri, path))
+    if not foreign:
+        return None
+    why = (
+        f"data files live on the data base(s) {foreign} outside this table's root; a data base is read only under its own credential, "
+        "which this pass does not hold, so it touches nothing here"
+    )
+    log.warning("maintenance_refused_foreign_data_base", extra={"uri": uri, "bases": foreign})
+    return DatasetResult(uri=uri, refused=why, refused_by="foreign_data_base", data_storage_version=data_storage_version, mixed_data_file_versions=mixed)
+
+
 def compact_one(
     uri: str,
     storage_options: dict[str, str],
@@ -852,6 +889,8 @@ def compact_one(
     disarm = _disarm_commit_path_cleanup(ds, uri=uri)
     if (nested_refusal := _refuse_a_branch_with_branches_inside(ds, uri, data_storage_version=table_version, mixed=mixed)) is not None:
         return disarm.onto(nested_refusal)
+    if (foreign_refusal := _refuse_a_foreign_data_base(ds, uri, data_storage_version=table_version, mixed=mixed)) is not None:
+        return disarm.onto(foreign_refusal)
     # TWO GATES, because the three operations do not share a hazard. This was ONE blanket refusal, and
     # the cost was measured: 17 of the estate's datasets were refused on flag 16 and they were exactly
     # the ones with multiple fragments and version history, while the 9 the sweep did maintain needed

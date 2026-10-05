@@ -264,7 +264,9 @@ def test_compaction_refuses_a_base_that_HOLDS_this_datasets_data_files(tmp_path:
     3,540 -> 5,991 bytes, the base's three data files left behind as garbage, every surviving
     `base_id` None.
 
-    So `DataFile.base_id` is a third, independent signal, and the gate refuses on it.
+    So `DataFile.base_id` is a third, independent signal. A plain base outside the root holding data
+    files is a DATA base, which may be read only under its own credential ([[LH-273]]), so the pass
+    refuses it before the compaction gate is asked and touches nothing.
     """
     alt = tmp_path / "altbase"
     alt.mkdir()
@@ -279,7 +281,7 @@ def test_compaction_refuses_a_base_that_HOLDS_this_datasets_data_files(tmp_path:
     result = compact_one(uri, {}, older_than=timedelta(0))
 
     assert result.refused is not None, "a dataset whose data files live under a base must be REFUSED"
-    assert "16" in result.refused and "base_paths" in result.refused, f"the refusal must name the flag: {result.refused}"
+    assert result.refused_by == "foreign_data_base", f"the refusal must name its gate: {result}"
     assert result.error is None
     assert result.fragments_removed == 0 and result.fragments_added == 0
     assert lance.dataset(uri).version == version_before, "a base-resident dataset was rewritten anyway"

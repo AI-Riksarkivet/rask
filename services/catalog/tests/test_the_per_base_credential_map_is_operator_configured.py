@@ -1,18 +1,15 @@
 """The base -> secret-reference map an operator configures, parsed in one place ([[LH-067]]).
 
-The allowlist beside it carries an operator OBLIGATION in its own comment — "every base here MUST
-share the catalog's S3 endpoint + creds" — because the read path could not carry per-base options.
-That is now retired at both doors, so an operator needs a way to say WHICH secret a base uses. This is
-that setting, and it holds a NAME rather than material, which is what lets it live in configuration at
-all.
+An operator says WHICH secret a data base uses, and the setting holds a NAME rather than material,
+which is what lets it live in configuration at all.
 
 PARSED HERE RATHER THAN AT THE CALLER, for the reason the list beside it is: a second place that
 splits this string is a second place that can disagree about the separator, about whitespace, or about
 what an empty entry means.
 
-A REFERENCE FOR AN UNLISTED BASE IS REFUSED AT COMPOSITION, not here — `compose_base_store_params`
-knows which bases a given write actually registers, and this setting does not. Keeping the check where
-the knowledge is avoids a guard that can only be approximately right.
+A REFERENCE FOR A BASE OFF THE ALLOWLIST IS REFUSED HERE: no create can register that base, so the
+reference is configuration that does nothing, and the map is estate-wide, so this is the one place
+that holds both lists.
 """
 
 from __future__ import annotations
@@ -27,7 +24,7 @@ _REQUIRED = {"LANCE_ROOT": "s3://root", "LANCE_S3_ACCESS_KEY_ID": "k", "LANCE_S3
 
 
 def _settings(value: str) -> Settings:
-    return Settings.model_validate({**_REQUIRED, "LANCE_MULTIBASE_BASE_CREDENTIAL_REFS": value})
+    return Settings.model_validate({**_REQUIRED, "LANCE_MULTIBASE_DATA_BASES": "s3://a/data,s3://b/data", "LANCE_MULTIBASE_BASE_CREDENTIAL_REFS": value})
 
 
 def test_several_pairs_parse_and_whitespace_is_tolerated() -> None:
@@ -50,3 +47,9 @@ def test_a_REPEATED_base_is_refused_rather_than_last_one_wins() -> None:
     """Two references for one base is a question the estate must not answer by ordering."""
     with pytest.raises(ValueError, match="more than once"):
         _ = _settings("s3://a/data=ref-a,s3://a/data=ref-b").multibase_base_credential_ref_map
+
+
+def test_a_reference_for_a_base_OFF_the_allowlist_is_refused() -> None:
+    """An operator typo must not pass silently as "no per-base credential configured"."""
+    with pytest.raises(ValueError, match="not on LANCE_MULTIBASE_DATA_BASES"):
+        _ = _settings("s3://typo/data=x").multibase_base_credential_ref_map

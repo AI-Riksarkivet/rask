@@ -47,7 +47,7 @@ from lance_namespace import InvalidInputError, ServiceUnavailableError
 from pydantic import BaseModel, Field
 
 from catalog.core.base_judge import BaseJudge, require_sanctioned_bases
-from catalog.core.config import shared_lance_session
+from catalog.core.namespace import base_store_params_for, open_location
 from service_kit.lakehouse.base_refs import location_within
 from service_kit.lakehouse.base_registry import BaseJudgement, BaseRole, BaseStanding
 from service_kit.lakehouse.branch_layout import BRANCH_CONTAINER, BRANCH_FILE_DIRS
@@ -343,6 +343,9 @@ class VendFacts(BaseModel):
     base_uris: tuple[str, ...] = ()
     #: Fields carrying :data:`CLASSIFICATION_KEY` ([[LH-058]]).
     classified: tuple[str, ...] = ()
+    #: A declared base is read under its OWN credential ([[LH-273]]). The vend's STS credential is the
+    #: estate role's, so it would read that base under an identity nobody configured for it.
+    own_credential: bool = False
 
 
 def dataset_facts(location: str, storage_options: dict[str, str], *, branch: str = "") -> VendFacts:
@@ -355,7 +358,9 @@ def dataset_facts(location: str, storage_options: dict[str, str], *, branch: str
     refused compaction because the maintainer could not probe a declared base).
 
     All three come off the same handle deliberately: this read already existed for the version, and a
-    second open to learn the bases would double the manifest reads on every vend.
+    second open to learn the bases would double the manifest reads on every vend. The handle is
+    :func:`catalog.core.namespace.open_location`'s, so a table with a base under its own credential is
+    opened with that base's ``base_store_params`` like every other read of it ([[LH-273]]).
 
     ``branch`` IS THE REF THE CREDENTIAL IS FOR ([[LH-279]]), so it is the ref these facts describe: a
     base planted on ``tree/<b>`` is invisible from main (lh279 m7), and a branch credential read through
@@ -372,15 +377,11 @@ def dataset_facts(location: str, storage_options: dict[str, str], *, branch: str
         ServiceUnavailableError: The dataset opened and its base list could not be read. Answering "no
             bases" here would vend without judging them, which the base judge exists to refuse.
     """
-    import lance  # lazy, matching this module's STS-client style: pylance loads only where vending runs
-
     from service_kit.lakehouse.features import manifest_base_path_refs
     from service_kit.lakehouse.objectfs import same_store_uri
 
     try:
-        ds = lance.dataset(location, storage_options=storage_options, session=shared_lance_session())
-        if branch:
-            ds = ds.checkout_version((branch, None))
+        ds = open_location(location, storage_options, branch=branch or None)
     except (ValueError, OSError):
         return VendFacts()
     try:
@@ -389,7 +390,13 @@ def dataset_facts(location: str, storage_options: dict[str, str], *, branch: str
     except Exception as exc:
         log.warning("vend_base_paths_unreadable", extra={"location": location, "branch": branch}, exc_info=True)
         raise ServiceUnavailableError("the table's declared bases could not be read, so no credential was vended for it") from exc
-    return VendFacts(read_version=int(ds.version), bases=refs, base_uris=uris, classified=classified_columns(ds))
+    return VendFacts(
+        read_version=int(ds.version),
+        bases=refs,
+        base_uris=uris,
+        classified=classified_columns(ds),
+        own_credential=base_store_params_for(ds, storage_options) is not None,
+    )
 
 
 def require_vendable_bases(location: str, facts: VendFacts, judge: BaseJudge) -> tuple[str, ...]:
@@ -439,10 +446,8 @@ def table_has_branch(location: str, storage_options: dict[str, str], branch: str
     refuses rather than waving the name through — the same fail-closed direction the classification
     and base checks take.
     """
-    import lance  # lazy, matching this module's STS-client style: pylance loads only where vending runs
-
     try:
-        return branch in lance.dataset(location, storage_options=storage_options, session=shared_lance_session()).branches.list()
+        return branch in open_location(location, storage_options).branches.list()
     except Exception:
         # ONE ARM, CATCHING ANYTHING, because every way of failing has the same right answer. A branch
         # set this cannot determine must not read as "this branch exists": refusing costs a caller one

@@ -458,6 +458,8 @@ def describe_table(
         # vendable: the field-to-file mapping is write-order dependent, so no policy can exclude a column.
         if facts.classified:
             return response  # a classified column cannot be excluded from an object-store grant — server-mediated only
+        if facts.own_credential:
+            return response  # [[LH-273]] a base under its own credential is read only through the catalog — server-mediated only
         if unsanctioned_bases(response.location, bases, settings.multibase_data_base_list):
             return response  # a sanctioned base the session policy cannot address — only the catalog's root creds reach it
         creds = vendor.vend(table_location=response.location, tier="read", bases=bases)

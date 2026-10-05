@@ -14,6 +14,10 @@ on and ``LANCE_EXTERNAL_BLOB_BASES``, the same two values the create and registe
 against. A door that holds ``Settings`` builds its own through :meth:`BaseJudge.from_settings` — the same
 constructor — and the dataset seam in :mod:`catalog.core.namespace`, which takes no settings, reads the
 installed one. A dataset declaring only bases inside its own root is answered without either.
+
+The judge also carries each data base's credential reference ([[LH-273]]): the seam that judges a
+table's declared bases is the seam that opens it, and a base under its own identity must be opened with
+that identity's ``base_store_params``, at every open.
 """
 
 from __future__ import annotations
@@ -27,6 +31,7 @@ from botocore.exceptions import BotoCoreError, ClientError
 from lance_namespace import InvalidTableStateError, ServiceUnavailableError
 from pydantic import BaseModel
 
+from catalog.services.base_credentials import BaseCredentials
 from service_kit.lakehouse import base_refs, base_registry
 from service_kit.lakehouse.base_refs import BaseRefs
 from service_kit.lakehouse.features import BasePathRef
@@ -85,6 +90,9 @@ class BaseJudge(BaseModel):
     #: Where a configured base earns no standing ([[LH-209]]): a plain base inside a configured entry that
     #: covers governed storage is sanctioned only by the table's record. ``None`` judges configuration alone.
     governed: GovernedStorage | None = None
+    #: Each data base's own credential ([[LH-273]]): every open of a table declaring a base under a
+    #: referenced one carries that base's ``base_store_params``. Empty answers every base with the estate's.
+    credentials: BaseCredentials = BaseCredentials()
 
     def read_record(self, location: str) -> base_registry.BaseRecord | None:
         """The base record of the table rooted at ``location``; ``None`` when it has none.
@@ -118,6 +126,7 @@ class BaseJudge(BaseModel):
             registry=base_registry.BaseRegistry(control_root=settings.registry_root, storage_options=settings.storage_options()),
             configured=settings.external_blob_base_list,
             governed=GovernedStorage.from_settings(settings),
+            credentials=BaseCredentials.from_settings(settings),
         )
 
     def judge(self, location: str, refs: Sequence[BasePathRef]) -> list[base_registry.BaseJudgement]:

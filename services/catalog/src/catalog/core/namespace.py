@@ -18,11 +18,12 @@ from lance_namespace import (
     TableBranchNotFoundError,
     TableNotFoundError,
     TableVersionNotFoundError,
+    UnsupportedOperationError,
     connect,
 )
 from pydantic import BaseModel, Field
 
-from catalog.core.base_judge import require_sanctioned_bases
+from catalog.core.base_judge import installed_judge, require_sanctioned_bases
 from catalog.core.config import Settings, shared_lance_session
 from catalog.core.store_endpoint import require_estate_store
 from service_kit.lakehouse.features import BasePathRef, flags_from_open_error, manifest_base_path_refs, manifest_feature_flags, mixes_data_file_versions
@@ -115,7 +116,6 @@ def open_dataset(
     *,
     version: int | None = None,
     branch: str | None = None,
-    base_store_params: dict[str, dict[str, str]] | None = None,
 ) -> lance.LanceDataset:
     """Open the table's Lance dataset on the ref the request names, refusing one declaring a base nothing sanctioned.
 
@@ -127,13 +127,14 @@ def open_dataset(
 
     Every door that reads or writes a table's ROWS opens through here. A door that reads or changes only
     its version and ref metadata — the repairs an operator needs on exactly such a table — opens through
-    :func:`open_dataset_unchecked`.
+    :func:`open_dataset_unchecked`. Both carry each data base's own ``base_store_params``
+    (:func:`open_location`).
 
     Raises:
         InvalidTableStateError: The opened ref declares a base the catalog did not sanction.
     """
     location = _table_location(ns, table_id)
-    dataset = _open_ref(location, storage_options, table_id, version=version, branch=branch, base_store_params=base_store_params)
+    dataset = _open_ref(location, storage_options, table_id, version=version, branch=branch)
     require_sanctioned_bases(location, manifest_base_path_refs(dataset), judge=None)
     return dataset
 
@@ -153,7 +154,7 @@ def open_dataset_unchecked(
     would leave no way out but a drop. None of them reads a data file, so none of them reads through the
     base, and a door that does read rows must not call this.
     """
-    return _open_ref(_table_location(ns, table_id), storage_options, table_id, version=version, branch=branch, base_store_params=None)
+    return _open_ref(_table_location(ns, table_id), storage_options, table_id, version=version, branch=branch)
 
 
 def judged_native_version(ns: LanceNamespace, storage_options: dict[str, str], table_id: list[str], *, version: int | None) -> int:
@@ -167,10 +168,68 @@ def judged_native_version(ns: LanceNamespace, storage_options: dict[str, str], t
     shared session also carries the manifest the native open reads next (lh279 m2: query 5 -> 4
     requests), so the pre-open costs about what it saves.
 
+    A TABLE WITH A BASE UNDER ITS OWN CREDENTIAL IS REFUSED HERE ([[LH-273]]). The native open takes the
+    namespace's storage options and no ``base_store_params``, so it would read that base with the
+    estate's key: refused outright where the estate key has no grant on the base, and served under an
+    identity nobody configured for it where the key does. The pylance-served doors — ``/changes`` and
+    every door through :func:`open_dataset` — read the same table under each base's own key; the vend
+    answers ``server_mediated`` for it, because an STS credential is the estate role's.
+
     Raises:
         InvalidTableStateError: That version declares a base the catalog did not sanction.
+        UnsupportedOperationError: That version keeps data on a base under its own credential.
     """
-    return int(open_dataset(ns, storage_options, table_id, version=version).version)
+    dataset = open_dataset(ns, storage_options, table_id, version=version)
+    if base_store_params_for(dataset, storage_options) is not None:
+        raise UnsupportedOperationError(
+            f"table {'.'.join(table_id)} keeps data on a base opened under its own credential, which this door's native reader cannot "
+            "carry; read it through the catalog's /changes door"
+        )
+    return int(dataset.version)
+
+
+def base_store_params_for(dataset: lance.LanceDataset, storage_options: dict[str, str]) -> dict[str, dict[str, str]] | None:
+    """The ``base_store_params`` the bases ``dataset``'s manifest declares need, or ``None`` when none needs its own.
+
+    Keyed by each base's path exactly as the manifest states it, because pylance matches the key against
+    that string and nothing else (measured, :mod:`catalog.services.base_credentials`). The credential
+    references come from the installed judge (:func:`catalog.core.base_judge.installed_judge`), the same
+    deployment configuration the bases are judged against; a process with no judge installed answers
+    ``None``, and :func:`open_dataset` then refuses the foreign base before any row is read.
+    """
+    paths = [ref.path for ref in manifest_base_path_refs(dataset)]
+    if not paths:
+        return None
+    try:
+        credentials = installed_judge().credentials
+    except ServiceUnavailableError:
+        return None
+    return credentials.store_params(paths, storage_options)
+
+
+def open_location(location: str, storage_options: dict[str, str], *, version: int | None = None, branch: str | None = None) -> lance.LanceDataset:
+    """Open the dataset at ``location`` on the ref named, with each declared base under its own credential ([[LH-273]]).
+
+    A base's ``base_store_params`` are known only once its manifest is read, so the first open carries
+    none: it reads the manifest from the table's own root and no data file. When a declared base lies
+    under a referenced one, the dataset is opened again with the composed map, on the shared session
+    that already holds that manifest. A branch is checked out from that handle, which carries the map on
+    (measured on pylance 12.0.0: the checkout of a handle opened with a base's entry reads that base's
+    rows, and the checkout of one opened without it is refused), and the map is composed from the
+    BRANCH's manifest, whose base list is its own.
+
+    Raises whatever pylance raises — a caller translates it (:func:`_open_ref`) or degrades on it
+    (:func:`catalog.core.vending.dataset_facts`).
+    """
+    first = lance.dataset(location, storage_options=storage_options, version=None if branch else version, session=shared_lance_session())
+    ref = first.checkout_version((branch, version)) if branch else first
+    params = base_store_params_for(ref, storage_options)
+    if params is None:
+        return ref
+    reopened = lance.dataset(
+        location, storage_options=storage_options, version=None if branch else version, session=shared_lance_session(), base_store_params=params
+    )
+    return reopened.checkout_version((branch, version)) if branch else reopened
 
 
 def _table_location(ns: LanceNamespace, table_id: list[str]) -> str:
@@ -181,74 +240,39 @@ def _table_location(ns: LanceNamespace, table_id: list[str]) -> str:
     return str(location)
 
 
-def _open_ref(
-    location: str,
-    storage_options: dict[str, str],
-    table_id: list[str],
-    *,
-    version: int | None,
-    branch: str | None,
-    base_store_params: dict[str, dict[str, str]] | None,
-) -> lance.LanceDataset:
-    """Open ``location`` on the ref named — on ``branch`` when one is, otherwise on main.
+def _open_ref(location: str, storage_options: dict[str, str], table_id: list[str], *, version: int | None, branch: str | None) -> lance.LanceDataset:
+    """:func:`open_location`, with pylance's bare failures translated into the spec's codes.
 
     A named branch is a whole parallel dataset under ``tree/{branch}/`` with its own version history, and
-    ``lance.dataset(uri)`` opens ONLY main — so a request carrying ``branch`` used to be answered by a write
-    to main (verified live: ``add_columns`` with ``branch=dev`` returned 200 with the column on main and
-    ``dev`` untouched). ``checkout_version((branch, version))`` is pylance's own branch reference — the same
-    tuple form ``dataplane._tag_reference`` uses — and the handle it returns is WRITABLE: schema evolution
-    through it commits to the branch and leaves main at its version. ``version`` pins within whichever ref
-    is selected (branch-local numbering when a branch is named).
-
-    ``base_store_params`` carries the object-store options for a registered data base needing DIFFERENT
-    credentials or endpoint from the estate's ([[LH-067]]). Without it, a base written with its own
-    credentials is unreadable — `dataplane._write_blob` composes these on the write side and records
-    that consequence in its own comment, which is the worst shape a storage bug takes: the write
-    succeeds and the data is unreachable later by a component that looks correct.
-
-    Keyed by BASE PATH URI and **runtime-only** — pylance 11.0.0 states these are "not persisted to the
-    manifest", which is what makes this the only form a credential may take here, as against the
-    `base_<id>.<key>` spelling in ``storage_options`` which carries no such guarantee. ``None`` is
-    byte-identical to passing nothing: pylance falls back to the top-level options for any base with no
-    entry.
+    ``lance.dataset(uri)`` opens ONLY main, so a branch is reached through
+    ``checkout_version((branch, version))`` — pylance's own branch reference, the same tuple form
+    ``dataplane._tag_reference`` uses — and the handle it returns is WRITABLE: schema evolution through
+    it commits to the branch and leaves main at its version. ``version`` pins within whichever ref is
+    selected (branch-local numbering when a branch is named).
     """
     if branch is None:
         try:
-            return lance.dataset(
-                location,
-                storage_options=storage_options,
-                version=version,
-                session=shared_lance_session(),
-                base_store_params=base_store_params,
-            )
+            return open_location(location, storage_options, version=version)
         except ValueError as exc:
             # pylance raises a bare ValueError for BOTH "no dataset here" and "no such version", and
-            # letting either through produced a 500 — which says "the catalog is broken" when the
-            # catalog is fine. Measured live: a table registered at a retired warehouse 500'd every
-            # publish, sending whoever was on call to the wrong system.
+            # letting either through answered 500 — which says "the catalog is broken" when the catalog
+            # is fine. Measured live: a table registered at a retired warehouse 500'd every publish,
+            # sending whoever was on call to the wrong system.
             #
             # The two are DIFFERENT facts and keep different codes: a missing version is
             # `TableVersionNotFoundError` (the table is fine, that version is not), a missing dataset
-            # is `TableNotFoundError` — the same error this function already raises when the
-            # registration names no location at all, found one step later.
-            #
-            # The location rides the message, because knowing the table is missing does not tell
-            # anyone which bucket to go and look at.
-            # Same wording and same split as `dataplane.py`, which had this conversion at ONE caller
-            # while every other caller — `publish` among them — leaked the ValueError as a 500. Doing
-            # it here covers them all; the message is kept identical so nothing that already depended
-            # on it moves.
+            # is `TableNotFoundError` — the same error this function raises when the registration names
+            # no location at all, found one step later. The location rides the message, because knowing
+            # the table is missing does not tell anyone which bucket to go and look at.
             message = str(exc).lower()
             if version is not None and "_versions/" in message and ".manifest" in message:
                 raise TableVersionNotFoundError(f"table version {version} was not found") from exc
             raise TableNotFoundError(f"table has no readable dataset at its declared location ({location!r})") from exc
-    # BOTH LEGS, because a branch read opens the dataset before checking out — forwarding on only the
-    # main leg would leave branch reads of a foreign-credentialled base failing exactly as before.
-    dataset = lance.dataset(location, storage_options=storage_options, session=shared_lance_session(), base_store_params=base_store_params)
+    main = lance.dataset(location, storage_options=storage_options, session=shared_lance_session())
     try:
-        return dataset.checkout_version((branch, version))
+        return open_location(location, storage_options, version=version, branch=branch)
     except (ValueError, OSError) as exc:
-        error = _branch_checkout_error(dataset, table_id, branch, version, exc)
+        error = _branch_checkout_error(main, table_id, branch, version, exc)
         if error is exc:
             raise
         raise error from exc

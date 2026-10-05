@@ -72,6 +72,7 @@ from catalog.core.lineage_emit import OVERWRITE_TABLE, InputPin, InputRef, Linea
 from catalog.core.lineage_metadata import build_lineage_metadata, stamp_lineage_metadata
 from catalog.core.modes import CreateMode
 from catalog.services import dataplane, native, table_bases
+from catalog.services.base_credentials import BaseCredentials
 from service_kit.control_emit import ControlEmitter, emit_control
 from service_kit.governed import fga
 from service_kit.lakehouse import base_registry, protection
@@ -282,11 +283,8 @@ async def create_governed_table(
         data_bases=data_base or None,
         # [[LH-067]] WHICH secret each base's credential comes from. The map holds NAMES; the material
         # is fetched at composition through the Dapr store the catalog already uses for its own S3
-        # secret, so nothing secret passes through here. Empty by default, which renders exactly
-        # today's map.
-        base_credential_refs=settings.multibase_base_credential_ref_map,
-        secret_store=settings.dapr_secret_store,
-        secret_field=settings.dapr_secret_s3_field,
+        # secret, so nothing secret passes through here.
+        base_credentials=BaseCredentials.from_settings(settings),
         registry=registry,
     )
 

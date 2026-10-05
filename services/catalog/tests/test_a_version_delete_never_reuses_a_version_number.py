@@ -79,6 +79,10 @@ def client(ns: LanceNamespace, tmp_path: Path) -> Iterator[TestClient]:
         models_root="",
         model_artifacts_root="",
         reserved_bucket_set=frozenset(),
+        # [[LH-273]] Each data base's credential reference; none here.
+        multibase_base_credential_ref_map={},
+        dapr_secret_store="",
+        dapr_secret_s3_field="",
     )
     application.dependency_overrides[SettingsDep.__metadata__[0].dependency] = lambda: settings
     application.dependency_overrides[NamespaceDep.__metadata__[0].dependency] = lambda: ns

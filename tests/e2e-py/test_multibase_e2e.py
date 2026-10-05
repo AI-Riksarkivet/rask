@@ -130,7 +130,8 @@ def test_multibase_redirects_data_and_reads_fan_out(catalog_ns: str) -> None:
     assert a or b, f"the table's data did not land in any approved data base: a={a} b={b}"
 
     # Fan-out read: opening the dataset resolves the manifest (primary root) TOGETHER with the fragment in
-    # the data base → all rows. Proves the multi-base layout is readable, not just written.
+    # the data base, and the ROWS read back are the rows written. A count would pass on a read that
+    # returned the right number of wrong or duplicated rows.
     so = {
         "endpoint": S3,
         "access_key_id": "minioadmin",
@@ -138,4 +139,5 @@ def test_multibase_redirects_data_and_reads_fan_out(catalog_ns: str) -> None:
         "region": "",
         "allow_http": "true",
     }
-    assert lance.dataset(location, storage_options=so).count_rows() == 4000
+    read = lance.dataset(location, storage_options=so).to_table(columns=["id", "v"]).sort_by("id")
+    assert read.to_pydict() == {"id": list(range(4000)), "v": [str(i) for i in range(4000)]}

@@ -100,8 +100,8 @@ from catalog.core.base_judge import require_sanctioned_bases
 from catalog.core.config import shared_lance_session
 from catalog.core.modes import CreateMode, InsertMode
 from catalog.core.namespace import judged_native_version, open_dataset, open_dataset_unchecked
-from catalog.services import changes, client_fragments, native, table_bases, table_claims, warehouse_credentials
-from catalog.services.base_credentials import compose_base_store_params
+from catalog.services import changes, client_fragments, native, table_bases, table_claims
+from catalog.services.base_credentials import BaseCredentials
 from catalog.services.cast_size import bytes_after_cast
 from service_kit.lakehouse import base_registry, branch_layout, commit_runs, location_claims
 from service_kit.lakehouse.base_refs import decoded_path
@@ -329,9 +329,7 @@ def _write_blob(
     external_blob_bases: list[str],
     data_bases: list[str] | None = None,
     properties: dict[str, str] | None = None,
-    base_credential_refs: dict[str, str] | None = None,
-    secret_store: str = "",
-    secret_field: str = "",
+    base_credentials: BaseCredentials | None = None,
 ) -> lance.LanceDataset:
     """Write a table at file format 2.2 with stable row ids.
 
@@ -364,35 +362,12 @@ def _write_blob(
     # /insert append route which has no data_base param) concentrates its NEW fragments in the primary root —
     # create-time distribution is the firm guarantee; per-write distribution needs the bases re-supplied.
     target_bases = data_names or None
-    # base_store_params: each base's object-store options at RUNTIME (pylance does NOT persist these to
-    # the manifest — verified against the write_dataset/dataset docstrings, which also state they take
-    # precedence over `base_<id>.<key>` in storage_options; that non-persistence is what makes this the
-    # only form a CREDENTIAL may take here).
-    #
-    # PER BASE NOW, NOT ONE DICT FOR ALL ([[LH-067]]). A base with a configured credential REFERENCE
-    # gets its own entry, resolved through the Dapr secret store; a base without one is OMITTED, and
-    # pylance's documented fallback ("when a base has no explicit entry here, the top-level
-    # storage_options is used") makes that byte-identical to sending the estate options explicitly. So
-    # an estate configuring no references renders `{}` and behaves exactly as before.
-    #
-    # The READ path forwards these too now (`core/namespace.open_dataset`), which is what retires the
-    # operator obligation this comment used to carry: a base needing different credentials no longer
-    # "writes OK but is unreadable".
-    base_store_params = (
-        (
-            compose_base_store_params(
-                bases=data_bases,
-                storage_options=so,
-                refs=base_credential_refs or {},
-                resolve=warehouse_credentials.resolve,
-                store=secret_store,
-                field=secret_field,
-            )
-            or None
-        )
-        if data_bases
-        else None
-    )
+    # base_store_params: each base's object-store options at RUNTIME — pylance does not persist them to
+    # the manifest, which is what makes this the only form a CREDENTIAL may take here. A base under a
+    # configured credential reference gets its own entry, resolved through the Dapr secret store; with
+    # none referenced the map is `None` and every base reads and writes on the top-level options. The
+    # read side composes the same map from the manifest at every open (`core.namespace.open_location`).
+    base_store_params = (base_credentials or BaseCredentials()).store_params(data_bases, so) if data_bases else None
     try:
         return lance.write_dataset(  # noqa: TID251
             table,
@@ -478,9 +453,7 @@ def create_table(
     allow_external_blobs: bool = False,
     external_blob_bases: list[str] | None = None,
     data_bases: list[str] | None = None,
-    base_credential_refs: dict[str, str] | None = None,
-    secret_store: str = "",
-    secret_field: str = "",
+    base_credentials: BaseCredentials | None = None,
     registry: base_registry.BaseRegistry | None,
 ) -> CreateTableResponse:
     """Create a table at file format 2.2 with stable row ids — the ONLY create path (audit 2026-07-14).
@@ -534,9 +507,7 @@ def create_table(
                 external_blob_bases=external_blob_bases,
                 data_bases=data_bases,
                 properties=properties,
-                base_credential_refs=base_credential_refs,
-                secret_store=secret_store,
-                secret_field=secret_field,
+                base_credentials=base_credentials,
             )
             return CreateTableResponse(location=existing, version=dataset.version, properties=properties)
         if normalized is CreateMode.EXIST_OK:  # keep it untouched, just report its current version
@@ -555,9 +526,7 @@ def create_table(
             allow_external=allow_external,
             external_blob_bases=external_blob_bases,
             data_bases=data_bases,
-            base_credential_refs=base_credential_refs,
-            secret_store=secret_store,
-            secret_field=secret_field,
+            base_credentials=base_credentials,
             registry=registry,
         )
 
@@ -574,9 +543,7 @@ def create_table(
         allow_external=allow_external,
         external_blob_bases=external_blob_bases,
         data_bases=data_bases,
-        base_credential_refs=base_credential_refs,
-        secret_store=secret_store,
-        secret_field=secret_field,
+        base_credentials=base_credentials,
         registry=registry,
     )
 
@@ -592,9 +559,7 @@ def _write_blob_into(
     allow_external: bool,
     external_blob_bases: list[str],
     data_bases: list[str] | None = None,
-    base_credential_refs: dict[str, str] | None = None,
-    secret_store: str = "",
-    secret_field: str = "",
+    base_credentials: BaseCredentials | None = None,
     registry: base_registry.BaseRegistry | None,
 ) -> CreateTableResponse:
     """Write the blob table's first data version into an already-declared ``location``, rolling the declare
@@ -620,9 +585,7 @@ def _write_blob_into(
             external_blob_bases=external_blob_bases,
             data_bases=data_bases,
             properties=properties,
-            base_credential_refs=base_credential_refs,
-            secret_store=secret_store,
-            secret_field=secret_field,
+            base_credentials=base_credentials,
         )
     except Exception:
         with suppress(Exception):  # best-effort rollback; re-raise the real write error

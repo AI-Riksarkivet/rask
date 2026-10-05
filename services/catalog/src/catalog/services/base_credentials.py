@@ -1,20 +1,21 @@
-"""Give each registered data base ITS credentials, rather than the estate's ([[LH-067]]).
+"""Give each data base ITS credential, at every open and every write, rather than the estate's ([[LH-067]], [[LH-273]]).
 
-`_write_blob` composes `{uri: dict(so)}` — the same options for every base — and `core/config.py`
-turns that into an operator obligation in the allowlist's own comment: "every base here MUST share the
-catalog's S3 endpoint + creds". That invariant is what this removes. A data base is an arbitrary
-approved S3 URI, and requiring it to share the estate's credential is exactly the coupling multi-base
-exists to avoid.
+A data base is an approved S3 location that may live under another identity than the estate's, and
+pylance carries a base's own object-store options only as ``base_store_params`` — runtime-only, "not
+persisted to the manifest" (pylance 12.0.0 docstring), keyed by BASE PATH URI. Measured on pylance
+12.0.0 over a moto server enforcing per-key bucket policies: a read of a table whose fragments sit on a
+base under a second key, opened with the estate options alone, fails "lacked the necessary privileges";
+opened with that base's own entry it returns every row. The key must be the manifest's exact base path:
+the same path with a trailing slash, or its parent, is not matched and the read fails the same way.
 
-REFERENCES, NEVER MATERIAL. What an operator configures is base URI -> secret NAME. The material is
-fetched through the Dapr secret-store door the catalog already uses for its own S3 secret, so nothing
-secret is ever in configuration, in a record, or in an environment variable.
+REFERENCES, NEVER MATERIAL. What an operator configures is base URI -> secret NAME
+(``LANCE_MULTIBASE_BASE_CREDENTIAL_REFS``). The material is fetched through the Dapr secret-store door
+the catalog already uses for its own S3 secret, so nothing secret is in configuration, in a record, or
+in an environment variable.
 
-EVERY BASE GETS AN ENTRY, and one WITHOUT a reference gets the estate's own options. pylance would
-fall back to the top-level `storage_options` for an omitted base, so omitting would behave the same
-today — but it makes this code's correctness depend on an upstream fallback for no benefit, and it is
-the write path's existing shape (pinned by `tests/unit/test_multibase.py`). Being explicit costs
-nothing and keeps "which options does this base use" answerable from the map alone.
+A CONFIGURED BASE COVERS WHAT LIES BENEATH IT. A table's manifest registers its own directory under the
+configured base, so the reference applies to every declared base path at or under the configured URI,
+on a path boundary and in the same store (:func:`service_kit.lakehouse.base_refs.location_in_store`).
 
 A CREDENTIAL IS NOT AN ADDRESS. A referenced base keeps the estate's endpoint unless something else
 moves it; swapping the key must not silently relocate where the base is read and written.
@@ -23,6 +24,17 @@ moves it; swapping the key must not silently relocate where the base is read and
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
+from typing import TYPE_CHECKING
+
+from pydantic import BaseModel, Field
+
+from catalog.services import warehouse_credentials
+from service_kit.lakehouse.base_refs import location_in_store
+from service_kit.lakehouse.objectfs import CREDENTIAL_KEYS
+
+
+if TYPE_CHECKING:
+    from catalog.core.config import Settings
 
 
 def compose_base_store_params(
@@ -33,32 +45,64 @@ def compose_base_store_params(
     resolve: Callable[..., Mapping[str, str] | None],
     store: str,
     field: str,
-) -> dict[str, dict[str, str]]:
-    """`base_store_params` for `lance.write_dataset` / `lance.dataset`, per base.
+) -> dict[str, dict[str, str]] | None:
+    """``base_store_params`` for ``lance.write_dataset`` / ``lance.dataset`` over the declared ``bases``.
 
-    Raises when a reference names a base the write does not register: configuration that does nothing
-    is the shape this row is about, because the write then succeeds against the estate credential and
-    looks correct. Raises when a reference does not RESOLVE, for the stronger version of the same
-    reason — falling back to the estate key would put the caller's bytes in a store under an identity
-    they did not choose, and report success.
+    ``None`` when no base lies under a referenced one: pylance falls back to the top-level options for
+    a base with no entry, so the open is then byte-identical to passing nothing, and a caller can tell
+    from ``None`` alone that no second identity is involved. Otherwise EVERY base gets an entry — the
+    estate's options for an unreferenced one — so "which options does this base use" is answerable from
+    the map alone rather than from an upstream fallback.
+
+    ``refs`` is the estate-wide map, so a reference naming a base this table does not declare is the
+    ordinary case and is ignored; whether a reference names an approved base at all is judged where the
+    map is parsed (``Settings.multibase_base_credential_ref_map``).
+
+    Raises when a reference does not RESOLVE: falling back to the estate key would read or write the
+    caller's bytes in a store under an identity nobody chose, and report success.
     """
-    registered = list(bases)
-    unknown = sorted(set(refs) - set(registered))
-    if unknown:
-        raise ValueError(f"{unknown} is not a registered data base; a per-base credential for a base nothing writes to is configuration that does nothing")
-
     params: dict[str, dict[str, str]] = {}
-    for uri in registered:
-        ref = refs.get(uri, "")
+    referenced = False
+    for path in bases:
+        ref = next((secret for configured, secret in refs.items() if secret and location_in_store(configured, path)), "")
         if not ref:
-            params[uri] = dict(storage_options)
+            params[path] = dict(storage_options)
             continue
         pair = resolve(store=store, ref=ref, field=field)
         if not pair:
-            raise ValueError(f"per-base credential reference {ref!r} for {uri!r} resolved to nothing")
-        # BOTH HALVES OR NEITHER. A credential is a PAIR, and replacing only the secret leaves the
-        # estate's key id signing with another store's secret — `SignatureDoesNotMatch` on every write,
-        # measured live 2026-09-21 and already paid for once in the Ray lane. The endpoint and the rest
-        # do NOT move: a credential is not an address, and swapping the key must not relocate the base.
-        params[uri] = {**dict(storage_options), **dict(pair)}
-    return params
+            raise ValueError(f"per-base credential reference {ref!r} for {path!r} resolved to nothing")
+        # BOTH HALVES OR NEITHER, AND NONE OF THE ESTATE'S. A credential is a PAIR, and replacing only
+        # the secret leaves the estate's key id signing with another store's secret —
+        # `SignatureDoesNotMatch` on every write, measured live 2026-09-21. Every spelling of the
+        # estate's key goes first: the catalog's options say `access_key_id` and the pair says
+        # `aws_access_key_id`, and object_store reads both, so an entry holding the two named two
+        # identities — measured over moto with per-key bucket policies, the same write landed under the
+        # second key on one run and was refused under the estate key on the next. The endpoint and the
+        # rest do NOT move: a credential is not an address.
+        params[path] = {**{k: v for k, v in storage_options.items() if k not in CREDENTIAL_KEYS}, **dict(pair)}
+        referenced = True
+    return params if referenced else None
+
+
+class BaseCredentials(BaseModel):
+    """Which secret each configured data base's credential comes from, and the store holding it."""
+
+    #: ``{configured base URI: secret reference}`` — names, never material.
+    refs: dict[str, str] = Field(default_factory=dict)
+    #: The Dapr secret store the references are fetched from.
+    store: str = ""
+    #: The bundle field holding the secret access key; the key id rides the same bundle.
+    field: str = ""
+
+    @classmethod
+    def from_settings(cls, settings: Settings) -> BaseCredentials:
+        """The credentials a catalog configured by ``settings`` opens and writes its data bases with."""
+        return cls(refs=settings.multibase_base_credential_ref_map, store=settings.dapr_secret_store, field=settings.dapr_secret_s3_field)
+
+    def store_params(self, bases: Iterable[str], storage_options: Mapping[str, str]) -> dict[str, dict[str, str]] | None:
+        """:func:`compose_base_store_params` over ``bases``, resolving through the catalog's secret door."""
+        if not self.refs:
+            return None
+        return compose_base_store_params(
+            bases=bases, storage_options=storage_options, refs=self.refs, resolve=warehouse_credentials.resolve, store=self.store, field=self.field
+        )

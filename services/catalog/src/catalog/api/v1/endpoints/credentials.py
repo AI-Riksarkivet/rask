@@ -151,6 +151,13 @@ async def vend_credentials(
     if facts.classified:
         log.info("vend_server_mediated_classified_columns", extra={"location": described.location, "columns": list(facts.classified)})
         return CredentialResponse(mode="server_mediated")
+    # [[LH-273]] A BASE UNDER ITS OWN CREDENTIAL IS READ ONLY THROUGH THE CATALOG. The STS credential is
+    # minted from the estate role, so a direct client would read that base under the estate identity —
+    # the identity the base's credential reference exists to keep off it. The catalog's own reads open
+    # it with the base's `base_store_params` (`core.namespace.open_location`).
+    if facts.own_credential:
+        log.info("vend_server_mediated_own_credential_base", extra={"location": described.location})
+        return CredentialResponse(mode="server_mediated")
     # #3-B ⊥ #2, NARROWED to the bases the policy would actually miss ([[LH-057]]). Every base here is
     # already one the catalog sanctioned (above); what remains is whether the session policy can ADDRESS
     # it — `build_session_policy` grants each allowlisted base a `ListBase<n>`/`BaseObjects<n>` pair, so the
