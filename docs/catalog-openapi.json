@@ -6433,7 +6433,7 @@
           },
           "complete": {
             "default": false,
-            "description": "True only when no surface failed or was skipped, `verify` among them. It can be True beside `dangling:` surfaces, which hold no subject data but stay listed and fail to read. A caller reporting completion to a data subject reads this, never the status code.",
+            "description": "True only when no surface failed, was skipped or is held, `verify` among them. It can be True beside `dangling:` surfaces, which hold no subject data but stay listed and fail to read. A caller reporting completion to a data subject reads this, never the status code.",
             "title": "Complete",
             "type": "boolean"
           },
@@ -8818,19 +8818,6 @@
       "PolicyRequest": {
         "description": "The maintenance policy for one table, namespace or project \u2014 every field optional-with-defaults.\n\n``retention_days`` / ``retain_versions`` override the sweep's global old-version cleanup (Lance\nkeeps tag-pinned versions regardless); ``compact_enabled=False`` opts the target out of maintenance\nentirely; ``compact_interval_hours`` bounds how often the sweep maintains it.\n\n**Resolution is WINNER-TAKES-ALL, not field-by-field.** An exact table match shadows the namespace\nrecord which shadows the project record \u2014 the winning record supplies EVERY field, and a field the\nwinner leaves unset falls to the sweep's global default rather than to the record it shadowed.\nAny surface that displays an effective policy has to say so: an inherited value rendered\nidentically to a set one is how nobody can tell what is actually governing their data.",
         "properties": {
-          "auto_cleanup_interval_commits": {
-            "anyOf": [
-              {
-                "maximum": 1000000.0,
-                "minimum": 1.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Auto Cleanup Interval Commits"
-          },
           "cleanup_enabled": {
             "default": true,
             "title": "Cleanup Enabled",
@@ -8961,17 +8948,6 @@
       },
       "PolicyResponse": {
         "properties": {
-          "auto_cleanup_interval_commits": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Auto Cleanup Interval Commits"
-          },
           "buckets": {
             "anyOf": [
               {
@@ -11014,12 +10990,12 @@
             "type": "string"
           },
           "outcome": {
-            "description": "What the estate did there: `deleted`, `untagged`, `retained`, `rewritten`, `reclaimed`, `clean`, `failed`, `skipped` \u2014 not attempted because an earlier step on that ref did not go through, so it would destroy history while the subject stays \u2014 or `dangling` \u2014 a listed version that fails to read and is proved not to hold the subject; it stays listed until what its detail names lets go.",
+            "description": "What the estate did there: `deleted`, `untagged`, `retained`, `rewritten`, `rebuilt`, `reclaimed`, `clean`, `failed`, `skipped` \u2014 not attempted because an earlier step on that ref did not go through, so it would destroy history while the subject stays \u2014 `held` \u2014 the subject's bytes stay in files this erasure neither rewrites nor deletes, named in the detail \u2014 or `dangling` \u2014 a listed version that fails to read and is proved not to hold the subject; it stays listed until what its detail names lets go.",
             "title": "Outcome",
             "type": "string"
           },
           "surface": {
-            "description": "`branch:<name>`, `tag:<name>`, `main`, `compact:<ref>`, `history:<ref>`, `dangling:<ref>@<version>`, `branches` or `verify`.",
+            "description": "`branch:<name>`, `tag:<name>`, `main`, `compact:<ref>`, `index:<ref>`, `history:<ref>`, `dangling:<ref>@<version>`, `branches`, `verify`, or a surface outside the table's own files: `data_base:<name>`, `external_base:<name>`, `mem_wal`, `bases:<ref>`.",
             "title": "Surface",
             "type": "string"
           }
@@ -15852,13 +15828,13 @@
             }
           },
           {
-            "description": "The branch this credential is for. Naming one NARROWS the grant: write lands on `<table>/tree/<branch>/*` and main drops to read-only. Omit for main.",
+            "description": "The branch this credential is for. Naming one NARROWS the grant: write lands on that branch's own directories under `<table>/tree/<branch>/` (`_versions`, `_transactions`, `_deletions`, `_indices`, `data`) and main drops to read-only. Omit for main.",
             "in": "query",
             "name": "branch",
             "required": false,
             "schema": {
               "default": "",
-              "description": "The branch this credential is for. Naming one NARROWS the grant: write lands on `<table>/tree/<branch>/*` and main drops to read-only. Omit for main.",
+              "description": "The branch this credential is for. Naming one NARROWS the grant: write lands on that branch's own directories under `<table>/tree/<branch>/` (`_versions`, `_transactions`, `_deletions`, `_indices`, `data`) and main drops to read-only. Omit for main.",
               "title": "Branch",
               "type": "string"
             }
@@ -15933,7 +15909,7 @@
     },
     "/management/v1/table/{id}/erasure": {
       "post": {
-        "description": "Remove every row matching the predicate from every ref, then reclaim what no longer pins it.\n\nOwner-gated (``can_drop``) \u2014 it destroys history, which is a stronger claim than the drop rung\nguards, and there is no rung above it.\n\n**THE RESPONSE IS THE POINT, and a 200 is not the answer.** `complete` is False whenever a retained\nversion of any ref still answers the predicate after every step ran \u2014 which happens when a retained\nbranch version still stands on the files of the version it was cut from ([[LH-178]]). The residual\nis named per ref (`main@2`, `work@3`) with what keeps it: `pinned_by` the tags, and a branch only\nwhen its head stands on the residual's files, in an order Lance accepts; `held_by_retention` what\nthe `retain_days` window keeps. A caller reporting completion to a data subject reads `complete`; a\ncaller reading the status code reports the wrong thing. The one status that does answer is the refusal\nbefore anything is touched: 400 for a predicate Lance refuses, 503 when the store cannot plan it.\n\n`complete` can be True beside `dangling:<ref>@<n>` surfaces. Each is a version that stays listed and\nfails to read, because a branch standing on some of its files kept its manifest when the rest were\nreclaimed; no fragment of it that still reads holds the subject. It stays listed, and time travel to\nit fails, until what its detail names lets go: that branch deleted or its head rewritten.\n\n`complete` is evidence about every retained version of every ref, and about nothing else: a data\nfile no version references that is younger than 7 days, an aborted write's residue, is neither\nreclaimed nor probed, because Lance keeps it as possibly an in-flight write's\n(`lance_docs/lance_sdk.md` cleanup_old_versions `delete_unverified`).\n\nA table a shallow clone resolves its files through is neither rewritten nor reclaimed, because the\nclone would break: its `compact:` and `history:` surfaces fail and `complete` is False.\n\n``branch`` is accepted and IGNORED rather than refused, and the description says so on the wire.\nRefusing would suggest a per-ref erasure exists; honouring it would let a caller believe they had\nerased a subject when they had narrowed the operation to one ref.",
+        "description": "Remove every row matching the predicate from every ref, then reclaim what no longer pins it.\n\nOwner-gated (``can_drop``) \u2014 it destroys history, which is a stronger claim than the drop rung\nguards, and there is no rung above it.\n\n**THE RESPONSE IS THE POINT, and a 200 is not the answer.** `complete` is False whenever a retained\nversion of any ref still answers the predicate after every step ran \u2014 which happens when a retained\nbranch version still stands on the files of the version it was cut from ([[LH-178]]). The residual\nis named per ref (`main@2`, `work@3`) with what keeps it: `pinned_by` the tags, and a branch only\nwhen its head stands on the residual's files, in an order Lance accepts; `held_by_retention` what\nthe `retain_days` window keeps. A caller reporting completion to a data subject reads `complete`; a\ncaller reading the status code reports the wrong thing. The one status that does answer is the refusal\nbefore anything is touched: 400 for a predicate Lance refuses, 503 when the store cannot plan it.\n\n`complete` can be True beside `dangling:<ref>@<n>` surfaces. Each is a version that stays listed and\nfails to read, because a branch standing on some of its files kept its manifest when the rest were\nreclaimed; no fragment of it that still reads holds the subject. It stays listed, and time travel to\nit fails, until what its detail names lets go: that branch deleted or its head rewritten.\n\n`complete` is evidence about every retained version of every ref, and about nothing else: a data\nfile no version references that is younger than 7 days, an aborted write's residue, is neither\nreclaimed nor probed, because Lance keeps it as possibly an in-flight write's\n(`lance_docs/lance_sdk.md` cleanup_old_versions `delete_unverified`).\n\nA table a shallow clone resolves its files through is neither rewritten nor reclaimed, because the\nclone would break: its `compact:` and `history:` surfaces fail and `complete` is False. The subject's\nbytes outside the table's own files, an external payload, a data file under a data base or a MemWAL\nshard, are named by a `held` surface and never touched, and `complete` is False while they stay.\n\n``branch`` is accepted and IGNORED rather than refused, and the description says so on the wire.\nRefusing would suggest a per-ref erasure exists; honouring it would let a caller believe they had\nerased a subject when they had narrowed the operation to one ref.",
         "operationId": "erase_subject_management_v1_table__id__erasure_post",
         "parameters": [
           {
@@ -22661,7 +22637,7 @@
     },
     "/v1/table/{id}/create": {
       "post": {
-        "description": "Create a Lance table from an Arrow-IPC stream \u2014 ``create_table``; seeds ownership + lineage.\n\n``properties`` is the spec-0.9 JSON-encoded query parameter. Client-supplied ``storage_options``\nare deliberately NOT accepted: storage access is the catalog's to vend (two-tier secret model),\nso callers can't redirect writes or splice credentials.\n\n``data_base`` (#3-B, repeatable) spreads the table's fragments across the named approved buckets (Lance\nmulti-base). Each MUST be on the ``LANCE_MULTIBASE_DATA_BASES`` allowlist \u2014 a caller can never point a\nbase at an arbitrary bucket. Omitted \u2192 a single-location table exactly as before.\n\nDerived-write lineage (S4, optional \u2014 the same metadata ``merge_insert`` has always taken):\n``source`` + ``source_version`` record the version-pinned upstream this table DERIVES FROM\n(an annotation publish from ``transcripts@N``, a Ray job's first write), surfaced as a\nversion-pinned INPUT on the CREATE RunEvent; the ``X-Lance-Run-Facets`` header carries producer\nrun metadata (e.g. the ``annotationProject`` facet) verbatim onto the same event. Before S4,\nevery FIRST write of a derived table was emitted with no pin and no facet \u2014 only later merges\ncould carry provenance.",
+        "description": "Create a Lance table from an Arrow-IPC stream \u2014 ``create_table``; seeds ownership + lineage.\n\n``mode=Overwrite`` over an existing table writes a new version of it ([[LH-242]],\n``table_create``'s module docstring): a protected table refuses it 409 unless ``force=true``, which\nturns the protection lock only, as on drop.\n\n``properties`` is the spec-0.9 JSON-encoded query parameter. Client-supplied ``storage_options``\nare deliberately NOT accepted: storage access is the catalog's to vend (two-tier secret model),\nso callers can't redirect writes or splice credentials.\n\n``data_base`` (#3-B, repeatable) spreads the table's fragments across the named approved buckets (Lance\nmulti-base). Each MUST be on the ``LANCE_MULTIBASE_DATA_BASES`` allowlist \u2014 a caller can never point a\nbase at an arbitrary bucket. Omitted \u2192 a single-location table exactly as before.\n\n``external_blob_base`` ([[LH-209]]) asks to register ONE external blob base, so the table's blob\ncolumns may hold ``Blob.from_uri`` pointers under it. It must lie inside a ``LANCE_EXTERNAL_BLOB_BASES``\nentry and outside governed storage (``table_bases.requested_external_blob_base``). Omitted \u2192 no\nexternal base, and a pointer in the rows is refused.\n\nDerived-write lineage (S4, optional \u2014 the same metadata ``merge_insert`` has always taken):\n``source`` + ``source_version`` record the version-pinned upstream this table DERIVES FROM\n(an annotation publish from ``transcripts@N``, a Ray job's first write), surfaced as a\nversion-pinned INPUT on the CREATE RunEvent; the ``X-Lance-Run-Facets`` header carries producer\nrun metadata (e.g. the ``annotationProject`` facet) verbatim onto the same event. Before S4,\nevery FIRST write of a derived table was emitted with no pin and no facet \u2014 only later merges\ncould carry provenance.",
         "operationId": "create_table_v1_table__id__create_post",
         "parameters": [
           {
@@ -24594,7 +24570,7 @@
     },
     "/v1/table/{id}/insert": {
       "post": {
-        "description": "Append Arrow-IPC rows \u2014 ``insert_into_table``; emits an INSERT lineage event.\n``branch`` targets a non-main branch (spec 0.9 query param for Arrow-IPC-body ops).",
+        "description": "Append Arrow-IPC rows \u2014 ``insert_into_table``; emits an INSERT lineage event.\n``branch`` targets a non-main branch (spec 0.9 query param for Arrow-IPC-body ops).\n\n``mode=overwrite`` removes every row on the ref before inserting (spec.yaml InsertIntoTableRequest.mode),\nso a protected table refuses it 409 unless ``force=true``, on any branch \u2014 the protection record is the\ntable's \u2014 and it is recorded as ``overwrite_table`` with the ``OVERWRITE`` lifecycle state ([[LH-242]]).",
         "operationId": "insert_into_table_v1_table__id__insert_post",
         "parameters": [
           {
@@ -25278,7 +25254,7 @@
     },
     "/v1/table/{id}/rename": {
       "post": {
-        "description": "Rename the table at ``id`` by moving its POINTER, then migrate its FGA ownership and emit lineage.\n\nLance has no format-level rename (table rename is a namespace-layer remap, not a data-plane commit) and\nthe ``dir`` backend's ``rename_table`` is a hard 501, which is also off-spec \u2014 the Namespace REST spec\nmakes rename a first-class Metadata op. It is served here as what the spec describes: the destination id\nis registered at the SOURCE's existing location and the source id is deregistered. **No data byte is\nread, written or deleted**, so the cost is O(1) rather than the dataset's size \u2014 see\n``dataplane.rename_table`` for the lance-ns V2 naming rule that makes this correct and for the one\nshape (a V1 root-namespace table) it refuses.\n\nThe caller must hold ``can_drop`` on the source (owner tier, gated by the router ``authorize``) AND\n``can_create_table`` on the DESTINATION parent \u2014 else a source owner could plant their table into a\nnamespace/tenant they lack create rights on. FGA tuples migrate from the old id to the new; a\nversionless REGISTER marker records the attachment at the new id so the destination appears in the\ngraph with its provenance (#23 reconcile back-fills its on-disk version). Source missing \u2192 404\n``TableNotFound``; destination name taken \u2192 409 ``TableAlreadyExists``.",
+        "description": "Rename the table at ``id`` by moving its POINTER, then migrate its FGA ownership and emit lineage.\n\nLance has no format-level rename (table rename is a namespace-layer remap, not a data-plane commit) and\nthe ``dir`` backend's ``rename_table`` is a hard 501, which is also off-spec \u2014 the Namespace REST spec\nmakes rename a first-class Metadata op. It is served here as what the spec describes: the destination id\nis registered at the SOURCE's existing location and the source id is deregistered. **No data byte is\nread, written or deleted**, so the cost is O(1) rather than the dataset's size \u2014 see\n``dataplane.rename_table`` for the lance-ns V2 naming rule that makes this correct and for the one\nshape (a V1 root-namespace table) it refuses.\n\nThe caller must hold ``can_drop`` on the source (owner tier, gated by the router ``authorize``) AND\n``can_create_table`` on the DESTINATION parent \u2014 else a source owner could plant their table into a\nnamespace/tenant they lack create rights on. FGA tuples migrate from the old id to the new; a\nversionless REGISTER marker records the attachment at the new id so the destination appears in the\ngraph with its provenance (#23 reconcile back-fills its on-disk version). Source missing \u2192 404\n``TableNotFound``; destination name taken \u2192 409 ``TableAlreadyExists``; the location held by a\nconcurrent rename or registration \u2192 409 ``ConcurrentModification`` (code 14, [[LH-204]]).",
         "operationId": "rename_table_v1_table__id__rename_post",
         "parameters": [
           {
@@ -25564,7 +25540,7 @@
     },
     "/v1/table/{id}/schema_metadata/update": {
       "post": {
-        "description": "Upsert the table's schema-level metadata map \u2014 a ``null`` value DELETES that key; emits an\nUPDATE_SCHEMA_METADATA event (the response omits the version, so it is read back best-effort).\n\nThe op MERGES, whatever the spec's \"Replace\" wording says (probed against a real ``dir`` backend:\nposting ``{owner}`` over ``{owner, tier}`` leaves ``tier`` standing). Omitting a key therefore cannot\nremove it, and the spec's request model types ``metadata`` as a strict ``{str: str}`` that cannot carry\na null \u2014 so ``{\"key\": null}`` is a rask EXTENSION, routed to the dataplane's pylance\n``update_schema_metadata`` (the same ``None``-deletes dialect ``update_field_metadata`` already speaks).\nA body with no nulls stays on the native spec op, transaction id and all.",
+        "description": "Upsert the table's schema-level metadata map \u2014 a ``null`` value DELETES that key; emits an\nUPDATE_SCHEMA_METADATA event at the version the update committed (the response omits it, so the event resolves it from the commit).\n\nThe op MERGES, whatever the spec's \"Replace\" wording says (probed against a real ``dir`` backend:\nposting ``{owner}`` over ``{owner, tier}`` leaves ``tier`` standing). Omitting a key therefore cannot\nremove it, and the spec's request model types ``metadata`` as a strict ``{str: str}`` that cannot carry\na null \u2014 so ``{\"key\": null}`` is a rask EXTENSION, routed to the dataplane's pylance\n``update_schema_metadata`` (the same ``None``-deletes dialect ``update_field_metadata`` already speaks).\nA body with no nulls stays on the native spec op, transaction id and all.\n\nKeys under ``lineage.*`` and ``rask.*`` are the platform's and are refused 400, set or null alike.",
         "operationId": "update_table_schema_metadata_v1_table__id__schema_metadata_update_post",
         "parameters": [
           {

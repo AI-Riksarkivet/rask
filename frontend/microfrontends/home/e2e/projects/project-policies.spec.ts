@@ -190,7 +190,6 @@ test('Save posts ONLY the knobs the form touched — an omitted field means inhe
 		'compact_interval_hours',
 		'target_rows_per_fragment',
 		'scan_batch_size',
-		'auto_cleanup_interval_commits',
 	])
 		expect(body).not.toHaveProperty(absent);
 });

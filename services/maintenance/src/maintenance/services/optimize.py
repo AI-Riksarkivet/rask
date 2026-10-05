@@ -134,10 +134,11 @@ class DatasetResult(BaseModel):
     #: #60 — what `optimize_indices()` could not put right on this dataset. Empty on a healthy pass.
     #: Serialized dicts rather than models so the sweep's summary stays a plain JSON-able report.
     index_findings: list[dict[str, Any]] = Field(default_factory=list)
-    #: True when this pass handed version reclamation to the DATASET (#58) instead of sweeping it.
-    #: Distinguishes "reclaimed nothing" from "the writer reclaims this one" — which read identically
-    #: on ``old_versions_removed=0`` alone.
-    auto_cleanup_configured: bool = False
+    #: True when this pass found Lance's commit-path auto-cleanup armed on the dataset and removed every
+    #: ``lance.auto_cleanup.*`` key ([[LH-245]]). The sweep is the one reclamation owner, so an armed
+    #: table is one whose next ordinary append could delete versions outside a hold, a protected base
+    #: and the audit trail; counting the disarm says where that lane had been switched on.
+    auto_cleanup_disarmed: bool = False
     #: The catalog id every event, audit record and door names this dataset by, or None. The id its
     #: PATH resolves to comes first; the producer's `lineage.dataset_id` answers only where the path
     #: names nothing, which is every medallion tier (`medallion/bronze` is both `bronze$events` and
@@ -585,9 +586,8 @@ def _reclaim_versions(
     older_than: timedelta | None,
     retain_versions: int | None,
     cleanup_enabled: bool,
-    auto_cleanup_interval_commits: int | None,
 ) -> None:
-    """STEP 3 — reclaim superseded versions, or hand that job to the dataset itself (#58)."""
+    """STEP 3 — reclaim superseded versions. The sweep is the only reclaimer; see :func:`_disarm_commit_path_cleanup`."""
     # error_if_tagged_old_versions=False: tagged versions are EXEMPT from GC (they survive until the tag
     # is deleted). The default (True) RAISES once any tag ages past older_than — which, since the catalog
     # creates long-lived promotion tags, would permanently stall GC for that dataset (the raise is caught
@@ -598,65 +598,68 @@ def _reclaim_versions(
     # `cleanup_enabled=False` keeps the ENTIRE version history: a tier under legal hold, or one
     # whose time-travel window is the product. Compaction may still run — it changes layout, not
     # history — so this is a real per-step choice rather than an all-or-nothing opt-out.
-    #
-    # #58: when the DATASET owns version reclamation, configure it here and do not also sweep.
-    # Applied AFTER compaction so a failure to configure can never cost us the compaction that
-    # already succeeded, and recorded on the result so an operator can see which owner ran.
-    # ORDER MATTERS, and it used to be wrong. This was `if auto_cleanup … elif cleanup_enabled …
-    # else`, which made `cleanup_enabled=False` UNREACHABLE whenever a policy also set
-    # `auto_cleanup_interval_commits` — so a tier under legal hold handed its own commit path a
-    # standing instruction to delete the versions the hold existed for. A hold must beat a
-    # convenience, so the disable is checked FIRST and nothing below can override it.
     if not cleanup_enabled:
-        if auto_cleanup_interval_commits is not None:
-            # Reported, not silently dropped: the policy asks for two contradictory things, and the
-            # operator needs to know which one won.
-            log.warning(
-                "auto_cleanup_suppressed_by_cleanup_disabled",
-                extra={"uri": uri, "interval_commits": auto_cleanup_interval_commits},
-            )
         log.info("cleanup_disabled_by_policy", extra={"uri": uri})
-    elif auto_cleanup_interval_commits is not None:
-        try:
-            from lance.dataset import AutoCleanupConfig
+        return
+    stats: Any = ds.cleanup_old_versions(older_than=older_than, retain_versions=retain_versions, error_if_tagged_old_versions=False)
+    result.old_versions_removed = int(getattr(stats, "old_versions", 0))
+    result.bytes_removed = int(getattr(stats, "bytes_removed", 0))
 
-            # AutoCleanupConfig is a TypedDict keyed in SECONDS, not a timedelta — the 14-day
-            # fallback mirrors what pylance substitutes when neither bound is given.
-            older_than_seconds = int((older_than or timedelta(days=14)).total_seconds())
-            # ONLY WRITE WHEN IT WOULD CHANGE SOMETHING. `enable_auto_cleanup` is `update_config`,
-            # which is a Lance TRANSACTION even when the config is byte-identical — measured on
-            # pylance 9.0.0: three identical calls took a dataset from version 1 to 4. This runs on
-            # every policied dataset every 120s, so the reclaimer was the estate's most prolific
-            # VERSION PRODUCER: it manufactured exactly the history it exists to remove, and each
-            # new version resets that dataset's age-based cleanup window.
-            # `config` is a METHOD on pylance 9.0.0, not a property — read defensively so a future
-            # release flipping it either way cannot turn "already configured" into a silent rewrite.
-            raw = getattr(ds, "config", None)
-            current = dict((raw() if callable(raw) else raw) or {})
-            already = (
-                current.get("lance.auto_cleanup.interval") == str(auto_cleanup_interval_commits)
-                and current.get("lance.auto_cleanup.older_than") == f"{older_than_seconds}s"
-            )
-            if already:
-                result.auto_cleanup_configured = True
-            else:
-                ds.optimize.enable_auto_cleanup(
-                    AutoCleanupConfig(interval=auto_cleanup_interval_commits, older_than_seconds=older_than_seconds),
-                )
-                result.auto_cleanup_configured = True
-        except Exception as exc:
-            # Not fatal: the dataset keeps whatever cleanup config it had, and the NEXT pass retries.
-            # It IS reported, because silently falling back to no cleanup at all is how a tier grows
-            # versions forever while its policy says it is being reclaimed.
-            log.warning("auto_cleanup_enable_failed", extra={"uri": uri, "error": str(exc)})
-            result.error = f"auto_cleanup: {exc}"
-            result.error_type = type(exc).__name__
-    else:
-        # cleanup_enabled is necessarily True here — the disable is handled first, above — so this
-        # is the sweep-owned reclamation path and needs no second check.
-        stats: Any = ds.cleanup_old_versions(older_than=older_than, retain_versions=retain_versions, error_if_tagged_old_versions=False)
-        result.old_versions_removed = int(getattr(stats, "old_versions", 0))
-        result.bytes_removed = int(getattr(stats, "bytes_removed", 0))
+
+#: Every manifest config key Lance's commit-path auto-cleanup reads. A PREFIX, not the two keys
+#: `disable_auto_cleanup` deletes: measured on pylance 12.0.0, that call removes only `.interval` and
+#: `.older_than` and leaves `.retain_versions` standing, so a table it "disabled" still carries a
+#: retention instruction the next `enable` or `update_config` re-arms.
+AUTO_CLEANUP_PREFIX = "lance.auto_cleanup."
+
+
+class DisarmOutcome(BaseModel):
+    """What :func:`_disarm_commit_path_cleanup` did, carried onto whichever result the pass returns."""
+
+    disarmed: bool = False
+    error: str | None = None
+    error_type: str | None = None
+
+    def onto(self, result: DatasetResult) -> DatasetResult:
+        result.auto_cleanup_disarmed = self.disarmed
+        if self.error is not None and result.error is None:
+            result.error, result.error_type = self.error, self.error_type
+        return result
+
+
+def _disarm_commit_path_cleanup(ds: lance.LanceDataset, *, uri: str) -> DisarmOutcome:
+    """Remove every ``lance.auto_cleanup.*`` key, so no commit but the sweep's reclaims a version ([[LH-245]]).
+
+    Lance runs cleanup INSIDE the commit of whoever writes, every N commits, from these manifest keys
+    (`lance_docs/guide.md:3857-3923`). Measured on pylance 12.0.0: with `interval=1, older_than=0s`, one
+    ordinary `write_dataset(mode="append")` took a table from versions 1..7 to 7..8, and
+    `LanceDataset.commit` of an `Append` — the catalog's own `/commit` shape — did the same. That
+    deletion answers to none of the sweep's gates: a legal hold (`cleanup_enabled=False`) and a
+    protected base both return before reclamation, the writer may hold no delete right (Lance then
+    only logs the hook's failure), nothing records it, and pylance 12's Python `write_dataset` has no
+    `skip_auto_cleanup` a writer could opt out with. So the sweep is the one reclaimer and this lane is
+    closed rather than governed.
+
+    Called right after the open, BEFORE every refusal gate: the hold and the protected base are exactly
+    the tables whose history the lane would delete, and a refusal that returned first would leave the
+    keys standing. The write is a config-only commit — no data file is touched — so it is safe on a
+    table the pass then declines to rewrite.
+
+    WRITES ONLY WHEN A KEY IS PRESENT. `delete_config_keys` commits a version even when there is
+    nothing to delete (measured on 12.0.0: `disable_auto_cleanup` on a key-free table moved it 12 -> 13),
+    and this runs on every dataset every tick. A failure is reported on the result, never raised: the
+    dataset stays armed, which an operator must see, and the next tick retries.
+    """
+    try:
+        armed = sorted(key for key in ds.config() if key.startswith(AUTO_CLEANUP_PREFIX))
+        if not armed:
+            return DisarmOutcome()
+        ds.delete_config_keys(armed)
+    except Exception as exc:  # noqa: BLE001 — reported on the result; the pass continues
+        log.warning("auto_cleanup_disarm_failed", extra={"uri": uri, "error": str(exc)})
+        return DisarmOutcome(error=f"auto_cleanup: {exc}", error_type=type(exc).__name__)
+    log.warning("auto_cleanup_disarmed", extra={"uri": uri, "keys": armed})
+    return DisarmOutcome(disarmed=True)
 
 
 #: The prefix pylance puts on every ref-name rejection. Matched as a PREFIX rather than by enumerating
@@ -779,7 +782,6 @@ def compact_one(
     #: How many rewrites may be resident at once. Defaults to 1 so a caller that does not care
     #: (a test, a one-off) is bounded rather than unbounded; the service passes its setting.
     rewrite_slots: int = 1,
-    auto_cleanup_interval_commits: int | None = None,
     protected: BaseRefs | None = None,
     index_columns: list[str] | None = None,
     rewrite: Rewriter | None = None,
@@ -811,9 +813,9 @@ def compact_one(
     default to safe values in ``MaintenanceSettings`` (#93); ``None`` here means "let Lance decide",
     which is only correct for a caller that has bounded memory some other way.
 
-    ``auto_cleanup_interval_commits`` hands version reclamation to the DATASET (#58) — Lance's own
-    commit-path auto-cleanup — and, having done so, SKIPS this pass's cleanup step. One owner, never
-    two: both running is not additive, it is two processes racing to delete the same manifests.
+    Version reclamation has ONE owner, this pass: before any gate can return, an armed commit-path
+    auto-cleanup is switched off (:func:`_disarm_commit_path_cleanup`), so no writer's commit deletes
+    a version behind a hold, a protected base or the audit trail.
 
     A dataset whose manifest sets a feature flag this pass cannot correctly rewrite is REFUSED before
     any rewrite (#64, :mod:`service_kit.lakehouse.features`) — see :attr:`DatasetResult.refused`. The
@@ -845,8 +847,11 @@ def compact_one(
             opened_as_mixed = mixes_data_file_versions(flags_from_open_error(exc) or 0)
             return DatasetResult(uri=uri, refused=refusal, refused_by="manifest_flags", mixed_data_file_versions=opened_as_mixed)
         return DatasetResult(uri=uri, error=f"open: {exc}", error_type=type(exc).__name__)
+    # FIRST, ahead of every refusal below: the held and the protected tables are the ones whose history
+    # an armed commit path would delete.
+    disarm = _disarm_commit_path_cleanup(ds, uri=uri)
     if (nested_refusal := _refuse_a_branch_with_branches_inside(ds, uri, data_storage_version=table_version, mixed=mixed)) is not None:
-        return nested_refusal
+        return disarm.onto(nested_refusal)
     # TWO GATES, because the three operations do not share a hazard. This was ONE blanket refusal, and
     # the cost was measured: 17 of the estate's datasets were refused on flag 16 and they were exactly
     # the ones with multiple fragments and version history, while the 9 the sweep did maintain needed
@@ -886,7 +891,9 @@ def compact_one(
     gc_refusal = describe_gc_unsupported_flags(reader_flags, writer_flags)
     if gc_refusal is not None:
         log.warning("maintenance_refused_unsupported_features", extra={"uri": uri, "reason": gc_refusal})
-        return DatasetResult(uri=uri, refused=gc_refusal, refused_by="manifest_flags", data_storage_version=table_version, mixed_data_file_versions=mixed)
+        return disarm.onto(
+            DatasetResult(uri=uri, refused=gc_refusal, refused_by="manifest_flags", data_storage_version=table_version, mixed_data_file_versions=mixed)
+        )
     compact_refusal = describe_compaction_unsupported_flags(
         reader_flags,
         writer_flags,
@@ -946,13 +953,15 @@ def compact_one(
         # `refusals` map still names every dataset with its reason, and
         # `compaction_datasets_refused_total` still counts them.
         log.debug("maintenance_refused_protected_base", extra={"uri": uri, "reason": why, "relation": relation, "root": root})
-        return DatasetResult(uri=uri, refused=why, refused_by="protected_base", data_storage_version=table_version, mixed_data_file_versions=mixed)
+        return disarm.onto(DatasetResult(uri=uri, refused=why, refused_by="protected_base", data_storage_version=table_version, mixed_data_file_versions=mixed))
     # Read the producer's DECLARED name while the dataset is open — the emit path downstream holds only
     # a URI, and for the cascade's own tiers a URI cannot be resolved to a name at all. Never fatal: a
     # dataset with no declared id simply falls back to the URI derivation, which is the common case
     # until producers stamp it and remains the case for every dataset already on disk.
-    result = DatasetResult(
-        uri=uri, table_id=table_id or table_id_from_uri(uri) or declared_table_id(ds), data_storage_version=table_version, mixed_data_file_versions=mixed
+    result = disarm.onto(
+        DatasetResult(
+            uri=uri, table_id=table_id or table_id_from_uri(uri) or declared_table_id(ds), data_storage_version=table_version, mixed_data_file_versions=mixed
+        )
     )
     # The id the catalog's doors are asked under; see the precedence at `_compact_files` below.
     addressed = result.table_id
@@ -1005,7 +1014,6 @@ def compact_one(
             older_than=older_than,
             retain_versions=retain_versions,
             cleanup_enabled=cleanup_enabled,
-            auto_cleanup_interval_commits=auto_cleanup_interval_commits,
         )
     except (MaintenanceDenied, TableNotGoverned) as exc:
         # The plan door said NO. The WHOLE dataset, raised from step 1 so steps 2 and 3 never run: an index

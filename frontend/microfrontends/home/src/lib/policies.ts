@@ -10,11 +10,11 @@ import type { components } from '@rask/api/generated/catalog';
 /** `PolicyRequest` — the catalog's full set body, from the generated client. */
 export type PolicyRequest = components['schemas']['PolicyRequest'];
 
-/** The knobs THIS form owns. The per-tier tuning the catalog also accepts (`scan_batch_size`,
- *  `auto_cleanup_interval_commits`) is deliberately absent: both are sized against a specific tier's
- *  row shape — a bronze page-image row is ~1.8 MB and a feature row is not — so a tenant-wide value
- *  for either is a guess, and they belong on the table/namespace cards that know the data. Omitting
- *  them from the body is what leaves an existing value standing. */
+/** The knobs THIS form owns. The per-tier tuning the catalog also accepts (`scan_batch_size`) is
+ *  deliberately absent: it is sized against a specific tier's row shape — a bronze page-image row is
+ *  ~1.8 MB and a feature row is not — so a tenant-wide value is a guess, and it belongs on the
+ *  table/namespace cards that know the data. Omitting it from the body is what leaves an existing
+ *  value standing. */
 type FormKnob =
 	| 'compact_enabled'
 	| 'cleanup_enabled'
@@ -45,7 +45,6 @@ export const PolicyResponseSchema = v.object({
 	cleanup_enabled: v.optional(v.boolean(), true),
 	optimize_indices_enabled: v.optional(v.boolean(), true),
 	scan_batch_size: v.optional(v.nullable(v.number())),
-	auto_cleanup_interval_commits: v.optional(v.nullable(v.number())),
 });
 
 /** The project-scoped LIST. `incomplete`/`skipped_bindings` are not diagnostics: a namespace→warehouse
@@ -89,8 +88,8 @@ export interface PolicyDraft {
  * **An omitted knob means INHERIT, and that is enforced here rather than believed.** `put_policy`
  * overwrites the whole record, and the catalog's `_record` merge only keeps a field the caller did
  * not SET — so sending `null` for an untouched field is not a no-op, it writes an explicit nothing
- * over a value that was governing real data (`scan_batch_size` bounds compaction memory;
- * `auto_cleanup_interval_commits` owns version reclamation, and neither has a control on this form).
+ * over a value that was governing real data (`scan_batch_size` bounds compaction memory and has no
+ * control on this form).
  * Absent, therefore, never null.
  *
  * The three step flags follow the form's single `enabled` toggle: one switch means "maintenance on

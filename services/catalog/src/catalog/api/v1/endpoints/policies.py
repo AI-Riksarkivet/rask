@@ -89,7 +89,7 @@ def _record(kind: str, canonical_id: str, path: str, body: PolicyRequest, existi
     `put_policy` overwrites the whole object, so `model_dump()` alone made every set a full replace:
     a client that read a policy, changed one knob and sent it back wrote the model's DEFAULTS over
     every field it had not mentioned — silently clearing `scan_batch_size` (the compaction memory
-    bound) and `auto_cleanup_interval_commits` (which owns version reclamation). The lakehouse form
+    bound) and re-enabling a `cleanup_enabled=False` legal hold. The lakehouse form
     does exactly that, and its own comment states the belief this now makes true: "an omitted knob
     means inherit".
 

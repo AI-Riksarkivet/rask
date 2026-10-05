@@ -152,7 +152,7 @@ FLAG_FRAGMENT_REUSE_INDEX = 1024
 SUPPORTED = FLAG_DELETION_FILES | FLAG_STABLE_ROW_IDS | FLAG_USE_V2_FORMAT_DEPRECATED | FLAG_TABLE_CONFIG
 
 #: The same whitelist plus ``base_paths``, for the operations that are ROOT-SCOPED and therefore safe on
-#: a shallow clone: ``cleanup_old_versions``, ``enable_auto_cleanup`` and ``optimize_indices``.
+#: a shallow clone: ``cleanup_old_versions``, ``delete_config_keys`` and ``optimize_indices``.
 #:
 #: A SECOND mask rather than a widening of ``SUPPORTED``, because that constant is also consumed by
 #: ``maintenance/services/orphans.py`` and ``catalog/services/maintenance.py`` — and for the orphan scan

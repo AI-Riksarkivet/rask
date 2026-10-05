@@ -44,7 +44,7 @@ from maintenance.core.metrics import (
     record_unrecorded_bases,
 )
 from maintenance.services import catalog_compaction, compaction_executor, credentials, purge
-from maintenance.services.optimize import DatasetResult, Rewriter, compact_one, discover_datasets, summarize_refusals
+from maintenance.services.optimize import AUTO_CLEANUP_PREFIX, DatasetResult, Rewriter, compact_one, discover_datasets, summarize_refusals
 from maintenance.services.tiers import target_rows_for
 from service_kit.governed import fga
 from service_kit.governed.audit import SUCCESS, audit
@@ -566,8 +566,6 @@ def _resolve_plan(
             plan.max_source_bytes = int(str(policy["max_source_bytes"]))
         if policy.get("repack_mode"):
             plan.repack_mode = str(policy["repack_mode"])  # ty: ignore[invalid-assignment] — the policy record is a str map; the Literal is validated at the catalog door
-        if policy.get("auto_cleanup_interval_commits"):
-            plan.auto_cleanup_interval_commits = int(str(policy["auto_cleanup_interval_commits"]))
         if policy.get("index_columns"):
             declared = policy["index_columns"]
             plan.index_columns = [str(c) for c in declared] if isinstance(declared, list) else None
@@ -714,6 +712,8 @@ def _probe_before_vending(uri: str, options: dict[str, str], *, cleanup_enabled:
             data_storage_version=ds.data_storage_version,
             mixed_data_file_versions=mixes_data_file_versions(manifest_feature_flags(ds)[0]),
         )
+        if any(key.startswith(AUTO_CLEANUP_PREFIX) for key in ds.config()):
+            return replace(found, may_write=True)  # the commit path is armed, and disarming it commits
         if len(ds.get_fragments()) > 1:
             return replace(found, may_write=True)  # compaction can merge them
         if cleanup_enabled and len(ds.versions()) > 1:
@@ -789,7 +789,6 @@ def _maintain_one(
             # The MEMORY bound on the in-pod path, matching the distributed one above.
             rewrite_slots=settings.max_concurrent_compactions,
             protected=protected,
-            auto_cleanup_interval_commits=plan.auto_cleanup_interval_commits,
             index_columns=plan.index_columns,
             table_id=table_id,
         )
@@ -1279,7 +1278,7 @@ async def emit_sweep_lineage(emitter: MaintenanceEmitter, results: list[DatasetR
     * material work, under any error but ``maintain:`` or ``open:`` → the **COMPLETE** event; no-op
       ticks skipped.
       A ``compaction:`` error skipped or cut short the rewrite (a refused plan, a partial compaction)
-      and an ``auto_cleanup:`` one missed a config write, but the versions reclaimed or fragments
+      and an ``auto_cleanup:`` one failed to disarm the commit path, but the versions reclaimed or fragments
       merged changed the table all the same.
     * URI not the catalog's ``<uuid>_<table_id>`` layout → skipped either way (no id to key on). This is
       the DOCUMENTED blind spot for the medallion-nested datasets (``s3://<bucket>/medallion/<ns>`` has no
@@ -1352,9 +1351,9 @@ def summarize(results: list[DatasetResult]) -> dict[str, Any]:
         # discarded the number while reporting three counts that do not answer the question. "How much
         # did we get back" is the one thing a reclaimer exists to tell you.
         "bytes_removed": sum(r.bytes_removed for r in results),
-        # #58 — which datasets hand version reclamation to THEMSELVES instead of being swept. Without
-        # it "reclaimed nothing" and "the writer reclaims this one" read identically on a zero.
-        "auto_cleanup_configured": sum(1 for r in results if r.auto_cleanup_configured),
+        # [[LH-245]] — the datasets whose commit path this tick found armed and switched off. Non-zero
+        # means a writer armed Lance's auto-cleanup on that many datasets since the last tick.
+        "auto_cleanup_disarmed": sum(1 for r in results if r.auto_cleanup_disarmed),
         # #60 — what `optimize_indices()` could NOT put right: rows left unindexed, delta
         # proliferation, params drift, a dropped index. This was computed on every tick — a
         # `describe_indices` + `index_stats` pass per index per dataset, the call that PANICS and needed

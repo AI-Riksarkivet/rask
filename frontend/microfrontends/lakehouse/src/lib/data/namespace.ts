@@ -121,7 +121,6 @@ export const PolicyResponseSchema = v.object({
 	cleanup_enabled: v.optional(v.boolean(), true),
 	optimize_indices_enabled: v.optional(v.boolean(), true),
 	scan_batch_size: v.optional(v.nullable(v.number())),
-	auto_cleanup_interval_commits: v.optional(v.nullable(v.number())),
 });
 export type NamespacePolicy = v.InferOutput<typeof PolicyResponseSchema>;
 

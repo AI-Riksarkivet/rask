@@ -933,7 +933,9 @@ export interface paths {
          *     (`lance_docs/lance_sdk.md` cleanup_old_versions `delete_unverified`).
          *
          *     A table a shallow clone resolves its files through is neither rewritten nor reclaimed, because the
-         *     clone would break: its `compact:` and `history:` surfaces fail and `complete` is False.
+         *     clone would break: its `compact:` and `history:` surfaces fail and `complete` is False. The subject's
+         *     bytes outside the table's own files, an external payload, a data file under a data base or a MemWAL
+         *     shard, are named by a `held` surface and never touched, and `complete` is False while they stay.
          *
          *     ``branch`` is accepted and IGNORED rather than refused, and the description says so on the wire.
          *     Refusing would suggest a per-ref erasure exists; honouring it would let a caller believe they had
@@ -2660,6 +2662,10 @@ export interface paths {
          * Create Table
          * @description Create a Lance table from an Arrow-IPC stream — ``create_table``; seeds ownership + lineage.
          *
+         *     ``mode=Overwrite`` over an existing table writes a new version of it ([[LH-242]],
+         *     ``table_create``'s module docstring): a protected table refuses it 409 unless ``force=true``, which
+         *     turns the protection lock only, as on drop.
+         *
          *     ``properties`` is the spec-0.9 JSON-encoded query parameter. Client-supplied ``storage_options``
          *     are deliberately NOT accepted: storage access is the catalog's to vend (two-tier secret model),
          *     so callers can't redirect writes or splice credentials.
@@ -2667,6 +2673,11 @@ export interface paths {
          *     ``data_base`` (#3-B, repeatable) spreads the table's fragments across the named approved buckets (Lance
          *     multi-base). Each MUST be on the ``LANCE_MULTIBASE_DATA_BASES`` allowlist — a caller can never point a
          *     base at an arbitrary bucket. Omitted → a single-location table exactly as before.
+         *
+         *     ``external_blob_base`` ([[LH-209]]) asks to register ONE external blob base, so the table's blob
+         *     columns may hold ``Blob.from_uri`` pointers under it. It must lie inside a ``LANCE_EXTERNAL_BLOB_BASES``
+         *     entry and outside governed storage (``table_bases.requested_external_blob_base``). Omitted → no
+         *     external base, and a pointer in the rows is refused.
          *
          *     Derived-write lineage (S4, optional — the same metadata ``merge_insert`` has always taken):
          *     ``source`` + ``source_version`` record the version-pinned upstream this table DERIVES FROM
@@ -3029,6 +3040,10 @@ export interface paths {
          * Insert Into Table
          * @description Append Arrow-IPC rows — ``insert_into_table``; emits an INSERT lineage event.
          *     ``branch`` targets a non-main branch (spec 0.9 query param for Arrow-IPC-body ops).
+         *
+         *     ``mode=overwrite`` removes every row on the ref before inserting (spec.yaml InsertIntoTableRequest.mode),
+         *     so a protected table refuses it 409 unless ``force=true``, on any branch — the protection record is the
+         *     table's — and it is recorded as ``overwrite_table`` with the ``OVERWRITE`` lifecycle state ([[LH-242]]).
          */
         post: operations["insert_into_table_v1_table__id__insert_post"];
         delete?: never;
@@ -3142,7 +3157,8 @@ export interface paths {
          *     namespace/tenant they lack create rights on. FGA tuples migrate from the old id to the new; a
          *     versionless REGISTER marker records the attachment at the new id so the destination appears in the
          *     graph with its provenance (#23 reconcile back-fills its on-disk version). Source missing → 404
-         *     ``TableNotFound``; destination name taken → 409 ``TableAlreadyExists``.
+         *     ``TableNotFound``; destination name taken → 409 ``TableAlreadyExists``; the location held by a
+         *     concurrent rename or registration → 409 ``ConcurrentModification`` (code 14, [[LH-204]]).
          */
         post: operations["rename_table_v1_table__id__rename_post"];
         delete?: never;
@@ -3184,7 +3200,7 @@ export interface paths {
         /**
          * Update Table Schema Metadata
          * @description Upsert the table's schema-level metadata map — a ``null`` value DELETES that key; emits an
-         *     UPDATE_SCHEMA_METADATA event (the response omits the version, so it is read back best-effort).
+         *     UPDATE_SCHEMA_METADATA event at the version the update committed (the response omits it, so the event resolves it from the commit).
          *
          *     The op MERGES, whatever the spec's "Replace" wording says (probed against a real ``dir`` backend:
          *     posting ``{owner}`` over ``{owner, tier}`` leaves ``tier`` standing). Omitting a key therefore cannot
@@ -3192,6 +3208,8 @@ export interface paths {
          *     a null — so ``{"key": null}`` is a rask EXTENSION, routed to the dataplane's pylance
          *     ``update_schema_metadata`` (the same ``None``-deletes dialect ``update_field_metadata`` already speaks).
          *     A body with no nulls stays on the native spec op, transaction id and all.
+         *
+         *     Keys under ``lineage.*`` and ``rask.*`` are the platform's and are refused 400, set or null alike.
          */
         post: operations["update_table_schema_metadata_v1_table__id__schema_metadata_update_post"];
         delete?: never;
@@ -6778,7 +6796,7 @@ export interface components {
             bytes_reclaimed?: number;
             /**
              * Complete
-             * @description True only when no surface failed or was skipped, `verify` among them. It can be True beside `dangling:` surfaces, which hold no subject data but stay listed and fail to read. A caller reporting completion to a data subject reads this, never the status code.
+             * @description True only when no surface failed, was skipped or is held, `verify` among them. It can be True beside `dangling:` surfaces, which hold no subject data but stay listed and fail to read. A caller reporting completion to a data subject reads this, never the status code.
              * @default false
              */
             complete?: boolean;
@@ -7887,8 +7905,6 @@ export interface components {
          *     identically to a set one is how nobody can tell what is actually governing their data.
          */
         PolicyRequest: {
-            /** Auto Cleanup Interval Commits */
-            auto_cleanup_interval_commits?: number | null;
             /**
              * Cleanup Enabled
              * @default true
@@ -7923,8 +7939,6 @@ export interface components {
         };
         /** PolicyResponse */
         PolicyResponse: {
-            /** Auto Cleanup Interval Commits */
-            auto_cleanup_interval_commits?: number | null;
             /** Buckets */
             buckets?: string[] | null;
             /**
@@ -8863,12 +8877,12 @@ export interface components {
             detail?: string;
             /**
              * Outcome
-             * @description What the estate did there: `deleted`, `untagged`, `retained`, `rewritten`, `reclaimed`, `clean`, `failed`, `skipped` — not attempted because an earlier step on that ref did not go through, so it would destroy history while the subject stays — or `dangling` — a listed version that fails to read and is proved not to hold the subject; it stays listed until what its detail names lets go.
+             * @description What the estate did there: `deleted`, `untagged`, `retained`, `rewritten`, `rebuilt`, `reclaimed`, `clean`, `failed`, `skipped` — not attempted because an earlier step on that ref did not go through, so it would destroy history while the subject stays — `held` — the subject's bytes stay in files this erasure neither rewrites nor deletes, named in the detail — or `dangling` — a listed version that fails to read and is proved not to hold the subject; it stays listed until what its detail names lets go.
              */
             outcome: string;
             /**
              * Surface
-             * @description `branch:<name>`, `tag:<name>`, `main`, `compact:<ref>`, `history:<ref>`, `dangling:<ref>@<version>`, `branches` or `verify`.
+             * @description `branch:<name>`, `tag:<name>`, `main`, `compact:<ref>`, `index:<ref>`, `history:<ref>`, `dangling:<ref>@<version>`, `branches`, `verify`, or a surface outside the table's own files: `data_base:<name>`, `external_base:<name>`, `mem_wal`, `bases:<ref>`.
              */
             surface: string;
         };
@@ -10964,7 +10978,7 @@ export interface operations {
         parameters: {
             query?: {
                 tier?: "read" | "write";
-                /** @description The branch this credential is for. Naming one NARROWS the grant: write lands on `<table>/tree/<branch>/*` and main drops to read-only. Omit for main. */
+                /** @description The branch this credential is for. Naming one NARROWS the grant: write lands on that branch's own directories under `<table>/tree/<branch>/` (`_versions`, `_transactions`, `_deletions`, `_indices`, `data`) and main drops to read-only. Omit for main. */
                 branch?: string;
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;

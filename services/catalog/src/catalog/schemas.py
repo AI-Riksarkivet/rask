@@ -541,18 +541,9 @@ class PolicyRequest(BaseModel):
     # uniformly-encoded fragments can binary-copy where a tier that has evolved its schema cannot, and
     # `try_binary_copy` falls back rather than failing. None = Lance's re-encode, today's behaviour.
     repack_mode: Literal["reencode", "try_binary_copy", "force_binary_copy"] | None = None
-    # #58 — WHO reclaims old versions. Lance ships its own auto-cleanup ON THE COMMIT PATH
-    # (`lance.auto_cleanup.interval` / `.older_than`), so a tier that writes often may need no cron of
-    # ours at all: the writer reclaims as it goes, and our sweep's cleanup step is redundant work
-    # against the same versions. Set this to hand version reclamation to the DATASET.
-    #
-    # It is not free, and that is why it is a choice rather than a default: auto-cleanup runs inside
-    # the commit, so it needs delete permission on the store and it adds latency to every Nth write.
-    # A tier that writes rarely is better served by the sweep, which costs the writer nothing.
-    #
-    # Turning it on DISABLES the sweep's own cleanup for that target — one owner, never two. Both
-    # running is not additive, it is two processes racing to delete the same manifests.
-    auto_cleanup_interval_commits: int | None = Field(default=None, ge=1, le=1_000_000)
+    # NO FIELD hands version reclamation to Lance's commit-path auto-cleanup (`lance.auto_cleanup.*`).
+    # That lane deletes inside whichever writer commits, past a legal hold and a protected base and with
+    # no record, so the sweep is the one reclaimer and disarms those keys on every tick ([[LH-245]]).
     # #60 — the columns this target's queries DEPEND ON having an index for. Reporting only: the sweep
     # never builds or drops an index, it says when one it expected is absent.
     #
@@ -597,14 +588,12 @@ class PolicyResponse(BaseModel):
     # These four were MISSING while PolicyRequest accepted them, and the omission was destructive
     # rather than cosmetic: `put_policy` overwrites the whole record, so a client that read a policy,
     # edited one field and sent it back wrote NULL over every field the response never mentioned —
-    # silently removing the compaction memory bound and flipping version-reclamation ownership back
-    # to the sweep. The comment above this class already warned about exactly this; it was not heeded.
+    # silently removing the compaction memory bound and turning the step flags back on.
     cleanup_enabled: bool = True
     optimize_indices_enabled: bool = True
     scan_batch_size: int | None = None
     max_source_bytes: int | None = None
     repack_mode: str | None = None
-    auto_cleanup_interval_commits: int | None = None
 
 
 class PolicyDeleteResponse(BaseModel):

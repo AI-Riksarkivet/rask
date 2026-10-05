@@ -271,13 +271,13 @@ def test_a_partial_policy_update_preserves_fields_it_did_not_mention(tmp_path: A
     """The destructive round-trip an audit found: `put_policy` overwrites the whole record, so a
     client that read a policy, changed one knob and sent it back wrote the model's DEFAULTS over
     every field it never mentioned — silently clearing `scan_batch_size` (the compaction memory
-    bound, ~15 GB/thread without it on bronze page rows) and `auto_cleanup_interval_commits` (which
-    owns version reclamation). The lakehouse form does exactly that, and its own comment states the
-    belief this makes true: an omitted knob means INHERIT."""
+    bound, ~15 GB/thread without it on bronze page rows) and a `cleanup_enabled=False` legal hold.
+    The lakehouse form does exactly that, and its own comment states the belief this makes true: an
+    omitted knob means INHERIT."""
     from catalog.api.v1.endpoints.policies import _record
     from catalog.schemas import PolicyRequest
 
-    stored = _record("table", "bronze$pages", "bkt/pages", PolicyRequest(scan_batch_size=64, auto_cleanup_interval_commits=10))
+    stored = _record("table", "bronze$pages", "bkt/pages", PolicyRequest(scan_batch_size=64, cleanup_enabled=False))
     assert stored["scan_batch_size"] == 64
 
     # A later save that only flips compaction off — exactly what the form sends.
@@ -285,7 +285,7 @@ def test_a_partial_policy_update_preserves_fields_it_did_not_mention(tmp_path: A
 
     assert updated["compact_enabled"] is False, "the field the caller DID set must apply"
     assert updated["scan_batch_size"] == 64, "the memory bound was silently cleared"
-    assert updated["auto_cleanup_interval_commits"] == 10, "version-reclamation ownership was flipped back"
+    assert updated["cleanup_enabled"] is False, "the legal hold was silently lifted"
 
 
 # --- #93 the compaction READ bound -----------------------------------------------------------------

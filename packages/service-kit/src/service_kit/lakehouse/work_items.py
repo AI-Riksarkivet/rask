@@ -56,7 +56,6 @@ class DatasetPlan(BaseModel):
     #: `DatasetResult.compaction_mode` already means in-pod vs distributed. `None` = Lance's default
     #: (`reencode`), which is today's behaviour and stays it unless an estate opts in.
     repack_mode: Literal["reencode", "try_binary_copy", "force_binary_copy"] | None = None
-    auto_cleanup_interval_commits: int | None = None
     index_columns: list[str] | None = None
     cleanup_enabled: bool = True
     optimize_indices_enabled: bool = True
