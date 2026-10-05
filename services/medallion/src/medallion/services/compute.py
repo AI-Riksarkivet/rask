@@ -24,19 +24,18 @@ from typing import Any, cast
 
 import lance
 import pyarrow as pa
-from lance import blob_array
-from lance.indices.builder import IndexConfig
 from pydantic import BaseModel, Field
 
 from lineage_kit.consume import LineageDoc, LineageEdge, as_json_rows
 from medallion.core.config import shared_lance_session
 from medallion.services.derivers import ARTIFACT_COLUMNS, derive_artifacts, is_derivable
-from service_kit.lakehouse import auto_cleanup, blobs, schema
+from service_kit.lakehouse import auto_cleanup, blobs, schema, tier_write
+from service_kit.lakehouse.commit_marker import CommitMarker
 
 # ONE implementation, shared with the Ray driver — the same reason the stage stamp itself lives
 # there. A second copy is how the two drivers came to disagree about `stage`'s column position,
 # and this key decides a more expensive question: which dataset a maintenance run is filed against.
-from service_kit.lakehouse.stage_stamp import declare_dataset_id, ensure_declared_dataset_id
+from service_kit.lakehouse.stage_stamp import ONE_TO_ONE, declare_dataset_id, ensure_declared_dataset_id
 
 
 _STAGE_COLUMN = "stage"
@@ -48,10 +47,6 @@ _STAGE_COLUMN = "stage"
 #: gold alone): silver's copy is what lets gold's chain reach bronze with no graph query — each stage
 #: prepends its own hop to the chain it read off its upstream's cell.
 _LINEAGE_COLUMN = "lineage"
-#: The JSONB path the promotion indexes — ``run_id`` is the join key back to the lineage graph, so a
-#: consumer filtering ``json_get_string(lineage, 'run_id') = …`` gets an index, not a full scan.
-_LINEAGE_INDEX_PATH = "run_id"
-_LINEAGE_INDEX_NAME = "lineage_run_id_idx"
 #: Columns a stage RE-STAMPS rather than carries forward: ``stage`` names THIS tier and ``lineage``
 #: describes THIS run, so inheriting either would label the output with its parent's provenance.
 _RESTAMPED_COLUMNS = frozenset({_STAGE_COLUMN, _LINEAGE_COLUMN})
@@ -178,25 +173,14 @@ def measure_stage(from_uri: str, to_uri: str, storage_options: dict[str, str], *
     is IDENTITY, an artifact column that does not is TRANSFORMATION from the blob column the deriver
     dispatches on. Schema-only — no payload is re-read.
 
-    The Ray job writes the ``lineage`` JSONB column itself (the stage runner hands it the document as
-    ``LINEAGE_JSON``), so provenance lands in the job's own commit exactly as in-process; what does NOT
-    survive the DISTRIBUTED write is the JSON scalar index, which is (re)built here — the one step that
-    must happen after that write and can only be done by whoever measures it. The in-process stages became
-    full-sync merges 2026-09-06 and KEEP their indices (measured: an overwrite leaves `list_indices()` empty,
-    a merge leaves `id_idx` standing); the Ray lane still overwrites, which is why this rebuild remains.
+    The job writes through the same `service_kit.lakehouse.tier_write` as the in-process lane, so the
+    ``lineage`` JSONB column, its JSON scalar index and the run's commit marker all land in the job's own
+    commits; nothing here writes. ``version`` is the marked data commit, which the index build follows: a
+    newest-version read would name that `CreateIndex` instead (measured 2026-09-11: all 253 stage-authored
+    producer edges in the estate sat on a `CreateIndex` version).
     """
     upstream_schema = lance.dataset(from_uri, storage_options=storage_options, session=shared_lance_session()).schema
-    target = lance.dataset(to_uri, storage_options=storage_options, session=shared_lance_session())
-    # THE DATA COMMIT'S VERSION, captured BEFORE the index rebuild below — an index build commits a
-    # `CreateIndex` version of its own, so measuring afterwards named it instead of the write. Measured
-    # 2026-09-11: all 253 stage-authored producer edges in the estate sat on a `CreateIndex` version,
-    # and four datasets had no producer edge on ANY retained data version.
-    data_version = int(target.version) if version is None else version
-    if _LINEAGE_COLUMN in target.schema.names:
-        _index_lineage(to_uri, storage_options)
-    # Everything BUT the version is read after the rebuild, from one open: an index changes no row and
-    # no column, so rows/bytes/schema are unaffected and a second open would buy nothing.
-    result = measure(to_uri, storage_options, version=version).model_copy(update={"version": data_version})
+    result = measure(to_uri, storage_options, version=version)
     # result.fields IS the written schema (facet_fields of the just-measured dataset) — its names are all
     # the edge reconstruction needs on the output side, so the target is opened once, not twice.
     written_columns = [field["name"] for field in result.fields]
@@ -282,22 +266,6 @@ def _lineage_column(doc: LineageDoc, rows: int) -> pa.Array:
     return pa.array(as_json_rows(doc, rows), pa.json_())
 
 
-def _index_lineage(uri: str, storage_options: dict[str, str]) -> None:
-    """Build the JSON scalar index over ``lineage -> run_id`` (R26's "indexable" half).
-
-    A Lance JSON index is a scalar index on ONE JSONB path: ``IndexConfig(index_type="json")`` with
-    ``target_index_type`` naming the underlying index and ``path`` the key. It must be (re)built after
-    the DISTRIBUTED stage write, which overwrites and so drops the dataset's indices. The in-process stages
-    merge and keep theirs, so this is a no-op re-create there rather than a repair.
-    """
-    ds = open_to_commit(uri, storage_options)
-    ds.create_scalar_index(
-        _LINEAGE_COLUMN,
-        IndexConfig(index_type="json", parameters={"target_index_type": "btree", "path": _LINEAGE_INDEX_PATH}),
-        name=_LINEAGE_INDEX_NAME,
-    )
-
-
 log = logging.getLogger(__name__)
 
 
@@ -319,166 +287,55 @@ def existing_row_count(uri: str, storage_options: dict[str, str]) -> int | None:
 
 
 def transform_stage(
-    from_uri: str, to_uri: str, storage_options: dict[str, str], *, stage: str, lineage: LineageDoc | None = None, dataset_id: str | None = None
+    from_uri: str,
+    to_uri: str,
+    storage_options: dict[str, str],
+    *,
+    stage: str,
+    lineage: LineageDoc | None = None,
+    dataset_id: str | None = None,
+    version_floor: int | None = None,
+    cardinality: str = ONE_TO_ONE,
+    marker: CommitMarker | None = None,
 ) -> WriteResult:
-    """Read the upstream Lance dataset, transform, write the downstream dataset (the generic stage).
+    """Read the upstream Lance dataset, transform it in this process, and land it on the downstream tier.
 
-    Every stage stamps the ``stage`` provenance column (set, not appended twice, so re-running over an
-    already-stamped upstream replaces the value), threads the row-level ``source_rowid`` provenance column
-    (minted at the first derive from the bronze ``_rowid``, carried forward thereafter — so a gold row names
-    the exact bronze row it descends from), carries blob columns of ANY media kind through intact
-    (``_carry_forward``), and derives whatever the blob CONTENT supports (``derive_artifacts`` — image →
-    thumbnail+embedding, unrecognised → untouched, tabular → no-op). Returns the new downstream Lance
-    version + the measured output statistics (rows + on-disk bytes) for the emit.
+    THE ROWS ARE THIS ENGINE'S; THE WRITE IS THE CASCADE'S. This function produces the transformed table in memory:
+    every stage stamps the ``stage`` provenance column in place, threads ``source_rowid`` (minted at the first derive
+    from the bronze ``_rowid``, carried thereafter), carries blob columns of any media kind through intact
+    (``_carry_forward``), derives what the blob content supports (``derive_artifacts``), and stamps this run's
+    ``lineage`` document as a column of the same table, so provenance lands in the same commit as the data (R26).
+    Everything from that table to the run's one marked commit is `service_kit.lakehouse.tier_write`, the module the
+    Ray stage job writes through too: the window decision, create-or-converge, widening, the declared dataset id, the
+    governance labels, the lineage index and the stage contract.
 
-    ``lineage`` (R26) stamps the consume-layer ``lineage`` JSONB column and builds its JSON scalar index.
-    It is a column of the table this call writes, so the provenance lands in the SAME Lance commit as the
-    data it describes; the index is a second commit on the lane that overwrites, which is why the version this
-    returns — the one the emit records — is read AFTER both.
+    ``version_floor`` is the order's delta boundary: when `tier_write.plan_window` keeps it, only the upstream rows
+    changed since it are read and merged, and the upstream's deletions in the window are retracted. ``marker`` is the
+    run's commit marker, carried by its last data commit.
 
-    SINGLE-BASE BY DESIGN (P2.1, docs/DECISIONS.md #p21--single-base-cascade-write): the cascade writes
-    to ONE root per stage — it does NOT distribute a stage table across #3-B multi-base
-    ``data_bases``. That is a
-    deliberate boundary, not an omission: multi-base registers its bases at CREATE time only
-    (``initial_bases``), a tier is created once and merged into thereafter, and the medallion already distributes physically at
-    the per-ZONE bucket level. #3-B stays REST-create-only (an explicit client signal) until a gold/training
-    table demonstrably needs per-table fan-out AND the real Ray distributed-write path lands — see
-    docs/DECISIONS.md #p21--single-base-cascade-write.
+    Returns the marked data version plus the measured output statistics for the emit; an empty delta, which commits
+    no data, reports the destination's current version.
+
+    SINGLE-BASE BY DESIGN (P2.1, docs/DECISIONS.md #p21--single-base-cascade-write): the cascade writes to ONE root per
+    stage and does not distribute a stage table across #3-B multi-base ``data_bases``. Multi-base registers its bases
+    at create time only (``initial_bases``), a tier is created once and merged into thereafter, and the medallion
+    already distributes physically at the per-zone bucket level.
     """
     ds = lance.dataset(from_uri, storage_options=storage_options, session=shared_lance_session())
-    # BEFORE the overwrite: what the destination holds now is the band's only honest comparison point.
+    # BEFORE the write: what the destination holds now is the promotion band's only honest comparison point.
     previous_rows = existing_row_count(to_uri, storage_options)
-    out, blob_payloads = _carry_forward(ds, stage)
+    target = tier_write.TierTarget(uri=to_uri, storage_options=storage_options, dataset_id=dataset_id or "", cardinality=cardinality, marker=marker)
+    window = tier_write.plan_window(ds, target, version_floor, session=shared_lance_session())
+    out, blob_payloads = _carry_forward(ds, stage, row_filter=window.row_filter)
     out = derive_artifacts(out, blob_payloads)
     if lineage is not None:
-        # In the SAME commit as the data (R26): a governed row must never be readable without its
-        # provenance, so the JSONB is a column of the table being written, not an add_columns after it.
         out = out.append_column(pa.field(_LINEAGE_COLUMN, pa.json_()), _lineage_column(lineage, out.num_rows))
-    # 2.2 + stable row ids like seed_bronze: every dataset the cascade writes is on the current format (so a blob
-    # column never trips "Blob v2 requires file version >= 2.2" mid-cascade) and keeps durable row identity.
-    #
-    # EVERY RUN WRITES WHAT ITS UPSTREAM HOLDS NOW. Matching row identity is not matching content: a
-    # row corrected in place keeps its stable `_rowid` and moves only its `_row_last_updated_at_version`
-    # (`lance_docs/file_format.md:4270-4298`), so a re-run cannot skip the write on identity alone
-    # without leaving the corrected value, and this run's lineage, out of the tier ([[LH-213]]).
-    #
-    # THE TARGET MUST REGISTER THE SAME BASE, or every carried pointer is refused at write.
-    #
-    # `initial_bases` is create-mode only, so it is supplied on the FIRST write of a tier and never
-    # afterwards — correct, because a tier that already exists already registered it.
-    #
-    # THE RE-DERIVATION IS A FULL-SYNC MERGE, NOT AN OVERWRITE. The semantics are the ones this stage
-    # always had — the run's output IS the whole tier, and a row it no longer produces is removed
-    # (`when_not_matched_by_source_delete`) — but overwrite re-minted every `_rowid` on the way, and
-    # the tier above resolves its `source_rowid` against exactly those. Measured on the deployed
-    # estate 2026-09-06: silver's 8 `source_rowid` values named bronze rows that no longer existed,
-    # 8 of 8, because bronze had been overwritten 20 times.
-    carried_base = blobs.external_base_of(ds)
-    if dataset_exists(to_uri, storage_options):
-        # `merge_insert` refuses a source with a column the target lacks ("Append with different
-        # schema", pylance 12.0.0), so a run that produces a new column widens the tier first.
-        _add_new_columns_by_id(out, to_uri, storage_options)
-        open_to_commit(to_uri, storage_options).merge_insert(
-            "id"
-        ).when_matched_update_all().when_not_matched_insert_all().when_not_matched_by_source_delete().execute(declare_dataset_id(out, dataset_id))
-        ensure_declared_dataset_id(to_uri, dataset_id or "", storage_options, session=shared_lance_session())
-        _carry_governance_labels(ds.schema, to_uri, storage_options)
-    else:
-        lance.write_dataset(  # noqa: TID251
-            declare_dataset_id(out, dataset_id),
-            to_uri,
-            mode="create",
-            storage_options=storage_options,
-            data_storage_version="2.2",
-            enable_stable_row_ids=True,
-            initial_bases=[lance.DatasetBasePath(carried_base, _EXTERNAL_BASE_NAME)] if carried_base else None,
-        )
-    # Same rule as `measure_stage`: the edge must name the version the ROWS landed at, not the
-    # `CreateIndex` the rebuild below commits.
-    data_version = int(lance.dataset(to_uri, storage_options=storage_options, session=shared_lance_session()).version)
-    if lineage is not None:
-        _index_lineage(to_uri, storage_options)
-    result = measure(to_uri, storage_options).model_copy(update={"previous_row_count": previous_rows, "version": data_version})
+    written = tier_write.write_tier(ds, out, window, target, session=shared_lance_session())
+    result = measure(to_uri, storage_options, version=written.version).model_copy(update={"previous_row_count": previous_rows})
     # Declare the input→output column edges for the columnLineage facet (#1) — blob_payloads' keys ARE this
     # stage's blob columns (the deriver source). The stage runner attaches the single upstream dataset identity.
     result.column_map = _column_map(ds.schema, out.column_names, set(blob_payloads))
     return result
-
-
-#: How many times a widening re-reads the tier after another commit passed the version it read. A
-#: maintenance compaction is the expected concurrent writer, and it does not land three times in one run.
-_WIDEN_ATTEMPTS = 3
-
-
-#: The field-metadata namespace the estate acts on ([[LH-058]]): `rask.classification` decides whether a
-#: table's bytes may be vended raw (`catalog.core.vending.CLASSIFICATION_KEY`).
-_GOVERNANCE_FIELD_PREFIX = "rask."
-
-
-def _carry_governance_labels(upstream: pa.Schema, to_uri: str, storage_options: dict[str, str]) -> None:
-    """Copy the upstream's `rask.*` field labels onto the same-named target fields that lack them.
-
-    A label set on bronze AFTER silver exists is the usual order (ingest, cascade, then classify), and
-    a re-run keeps the target's schema (the full-sync `merge_insert` and the by-id widening `merge`,
-    measured on pylance 12.0.0), so without this step the label reaches no tier above and silver stays vendable raw while
-    bronze is restricted ([[LH-217]]).
-
-    ADD-ONLY. A key the target already holds is never replaced or removed, whatever its value: the
-    estate defines no order between classification values (the vocabulary is delegated, [[LH-055]]),
-    and vending refuses on a label's presence (`classified_columns`), so the only change known to be
-    tighter is absent -> present. No `can_classify` check is asked for: the catalog's classify door
-    gates that rung because a writer could otherwise CLEAR a label, and this copies one a classifier
-    already put on the upstream, which can only make the target less vendable.
-
-    Top-level fields only, which is where the classify door's labels on the cascade's tiers live.
-    """
-    target = open_to_commit(to_uri, storage_options)
-    updates: dict[str, dict[str, str | None]] = {}
-    for field in upstream:
-        if field.name not in target.schema.names:
-            continue
-        held = target.schema.field(field.name).metadata or {}
-        missing: dict[str, str | None] = {
-            key.decode(): value.decode()
-            for key, value in (field.metadata or {}).items()
-            if key.decode().startswith(_GOVERNANCE_FIELD_PREFIX) and key not in held
-        }
-        if missing:
-            updates[field.name] = missing
-    if updates:
-        target.update_field_metadata(updates)
-        log.info("medallion_stage_carried_governance_labels", extra={"to_uri": to_uri, "fields": sorted(updates)})
-
-
-def _add_new_columns_by_id(out: pa.Table, to_uri: str, storage_options: dict[str, str]) -> None:
-    """Add the columns this run produces and the tier lacks, joined on ``id``, through the handle that chose them.
-
-    ``LanceDataset.merge`` joins on the key, so no value depends on where its row sits in the tier,
-    and it commits a Merge whose read version is the version this handle read the schema at. Lance
-    refuses that Merge when another commit has passed it (measured on pylance 12.0.0: "This Merge
-    transaction was preempted by concurrent transaction Update"), so the decision and the write can
-    never describe two different tiers. A refused attempt re-reads the tier and decides again: the
-    concurrent writer may already have added the columns.
-
-    The values written here are re-written by the full-sync merge that follows; this step exists so
-    that merge's source and target agree on the schema.
-    """
-    for attempt in range(1, _WIDEN_ATTEMPTS + 1):
-        target = open_to_commit(to_uri, storage_options)
-        new = [name for name in out.column_names if name not in target.schema.names]
-        if not new:
-            return
-        try:
-            target.merge(out.select(["id", *new]), left_on="id")
-        except OSError:
-            # pylance raises a conflict here as a bare OSError, so the tier's own version decides
-            # whether this was one: a write nobody preempted failed for a reason a retry cannot fix.
-            if attempt == _WIDEN_ATTEMPTS or target.latest_version == target.version:
-                raise
-            log.info("medallion_stage_widen_preempted", extra={"to_uri": to_uri, "attempt": attempt, "read_version": target.version})
-            continue
-        log.info("medallion_stage_added_columns", extra={"to_uri": to_uri, "columns": new})
-        return
 
 
 def _column_map(in_schema: pa.Schema, out_names: list[str], blob_cols: set[str]) -> list[tuple[str, str, str]]:
@@ -508,7 +365,7 @@ def _column_map(in_schema: pa.Schema, out_names: list[str], blob_cols: set[str])
     return deps
 
 
-def _carry_forward(ds: lance.LanceDataset, stage: str) -> tuple[pa.Table, dict[str, list[bytes | None]]]:
+def _carry_forward(ds: lance.LanceDataset, stage: str, *, row_filter: str | None = None) -> tuple[pa.Table, dict[str, list[bytes | None]]]:
     """Read the upstream table and stamp the ``stage`` column, carrying any blob-v2 column through intact.
 
     A plain ``to_table()`` demotes a blob column to its descriptions struct (tagged with the legacy
@@ -524,10 +381,15 @@ def _carry_forward(ds: lance.LanceDataset, stage: str) -> tuple[pa.Table, dict[s
     two-scan shape hard-failed the whole stage on a single un-harvested page with an opaque
     ``ArrowInvalid: … expected length 3 but got length 2`` — routed as a TRANSIENT error into a RETRY
     storm and the DLQ. A null payload now carries forward AS null and the cascade proceeds.
+
+    ``row_filter`` is the delta window's predicate (`tier_write.Window.row_filter`). A blob upstream always converges
+    whole (`tier_write.plan_window`), so only the tabular read takes one.
     """
     blob_cols = blobs.blob_field_names(ds.schema)
     if not blob_cols:
-        return _stamp_stage(_drop_inherited_lineage(ds.to_table(with_row_id=True)), stage, stable_row_ids=ds.has_stable_row_ids), {}
+        return _stamp_stage(_drop_inherited_lineage(ds.to_table(with_row_id=True, filter=row_filter)), stage, stable_row_ids=ds.has_stable_row_ids), {}
+    if row_filter is not None:
+        raise ValueError(f"a blob upstream converges whole; {ds.uri} was read under the window {row_filter!r}")
 
     # EXTERNAL UPSTREAM: FORWARD THE POINTER, DO NOT RE-PERSIST THE BYTES (§4.1/§4.2, change 3).
     #
@@ -556,6 +418,7 @@ def _carry_forward(ds: lance.LanceDataset, stage: str) -> tuple[pa.Table, dict[s
         with_row_id=True,
     )
     rows = aligned.num_rows
+    row_ids = aligned.column("_rowid").to_pylist()
     columns: dict[str, Any] = {}
     fields: list[pa.Field] = []
     blob_payloads: dict[str, list[bytes | None]] = {}
@@ -565,11 +428,8 @@ def _carry_forward(ds: lance.LanceDataset, stage: str) -> tuple[pa.Table, dict[s
         if f.name in blob_cols:
             payloads = aligned.column(f.name).to_pylist()
             blob_payloads[f.name] = payloads
-            # The UPSTREAM field, not a fresh `blob_field(name)`: Blob V2 thresholds and
-            # `rask.classification` are this field's metadata (lance_docs/guide.md, blob v2), and a
-            # rebuilt field creates the tier above declassified and on default placement ([[LH-217]]).
-            fields.append(f)
-            columns[f.name] = blob_array(payloads)
+            field, columns[f.name] = tier_write.carried_blob_column(ds, f.name, payloads, row_ids, None)
+            fields.append(field)
         else:
             fields.append(aligned.schema.field(f.name))
             columns[f.name] = aligned.column(f.name)
@@ -581,10 +441,6 @@ def _carry_forward(ds: lance.LanceDataset, stage: str) -> tuple[pa.Table, dict[s
 #: the tier. Larger than 1 so a prefix of failed harvests (null blobs, R27) does not force the
 #: fallback on a healthy tier.
 _DERIVE_PROBE_ROWS = 64
-
-#: The manifest name a cascade tier registers its inherited external base under. One base per
-#: dataset, matching what ingest registers, so a descriptor's `blob_id` stays unambiguous.
-_EXTERNAL_BASE_NAME = "source"
 
 
 def open_to_commit(uri: str, storage_options: dict[str, str]) -> lance.LanceDataset:
@@ -641,9 +497,8 @@ def _carry_forward_external(ds: lance.LanceDataset, stage: str, blob_cols: list[
         if f.name in _RESTAMPED_COLUMNS:
             continue
         if f.name in blob_cols:
-            carried = blobs.carried_blob_values(ds, f.name, table.column(f.name).to_pylist(), row_ids, external_base)
-            fields.append(f)  # the upstream field and its metadata, as on the managed path
-            columns[f.name] = blob_array(carried)
+            field, columns[f.name] = tier_write.carried_blob_column(ds, f.name, table.column(f.name).to_pylist(), row_ids, external_base)
+            fields.append(field)
         else:
             fields.append(table.schema.field(f.name))
             columns[f.name] = table.column(f.name)

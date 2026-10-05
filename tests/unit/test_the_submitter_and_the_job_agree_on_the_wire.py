@@ -64,6 +64,7 @@ NOT_FROM_THE_ORDER = frozenset(
         "S3_SECRET",
         "RAY_ADDRESS",
         "RASK_STAGE_MEDIA_BATCH_ROWS",
+        "RASK_STAGE_MEDIA_IO_BUFFER_BYTES",
     }
 )
 

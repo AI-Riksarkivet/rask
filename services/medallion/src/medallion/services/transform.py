@@ -56,6 +56,7 @@ from medallion.services.engine_names import IN_PROCESS_ENGINE
 from medallion.services.engine_registry import executor_for
 from medallion.services.gate_decision import GateOutcome, gate_decision, promotion_status_for, refusal_message
 from medallion.services.promotion import promotion_lineage
+from medallion.services.stage_submit import build_work_order
 from medallion.services.transform_spec import UndeclaredTransformError, resolve_transform_async
 from medallion.services.trigger_guards import StageTrigger, parse_stage_trigger, uri_within
 from service_kit import dapr_publish
@@ -63,7 +64,6 @@ from service_kit.governed import fga
 from service_kit.lakehouse.executor import Capability, RunState
 from service_kit.lakehouse.naming import CATALOG_DELIMITER
 from service_kit.lakehouse.quality import Assertion, assert_quality
-from service_kit.lakehouse.stage_stamp import ONE_TO_ONE
 from service_kit.lakehouse.task_registry import TaskRegistration
 from service_kit.lakehouse.transform_specs import TransformSpec
 from service_kit.lakehouse.warehouse_registry import (
@@ -73,7 +73,6 @@ from service_kit.lakehouse.warehouse_registry import (
     project_gold_root,
     project_root,
 )
-from service_kit.lakehouse.work_order import WorkDestination, WorkIdentity, WorkOrder, WorkSource, WorkStamp, derive_idempotency_key
 
 
 log = logging.getLogger(__name__)
@@ -734,45 +733,6 @@ class StageWrite(BaseModel):
     assertions: list[Assertion] = Field(default_factory=list)
 
 
-def _work_order(
-    settings: MedallionSettings,
-    *,
-    identity: StageIdentity,
-    from_uri: str,
-    to_uri: str,
-    lineage_doc: LineageDoc,
-    token: str | None,
-    declared: TransformSpec | None,
-    project: str,
-) -> WorkOrder:
-    """This run, stated so that ANY engine could take it — §7.4 step 1's whole point.
-
-    Every field is the platform's own: where to read, where to write, what to stamp, whose run it is.
-    Nothing here names an engine, and `credential_ref` NAMES a credential rather than carrying one —
-    the executor resolves it, so an order is safe to log, queue or replay.
-
-    `idempotency_key` is the run's identity to a synchronous engine, the way a deterministic
-    submission id is to Ray: it is what makes a redelivered order re-attach to a recorded outcome
-    instead of doing the work twice. Its `code_version` comes from the SAME source as the Ray lane's
-    (`stage_submit.build_stage_order`): the declaration when there is one, the chart otherwise, so a
-    redeclared build is a new run on either engine.
-    """
-    code_version = declared.code_version if declared else settings.ray_code_version
-    return WorkOrder(
-        task=declared.task if declared else settings.to_namespace,
-        source=WorkSource(uri=from_uri, table_id=identity.from_dataset),
-        destination=WorkDestination(uri=to_uri, table_id=identity.to_dataset),
-        stamp=WorkStamp(
-            stage=settings.to_namespace,
-            cardinality=declared.cardinality if declared else ONE_TO_ONE,
-            lineage_document=lineage_doc.to_json(),
-        ),
-        identity=WorkIdentity(run_id=lineage_doc.run_id, project=project, code_version=code_version),
-        params=declared.params if declared else settings.ray_job_params,
-        idempotency_key=derive_idempotency_key(stage=settings.to_namespace, token=token, from_uri=from_uri, to_uri=to_uri, code_version=code_version),
-    )
-
-
 async def _run_in_process(
     settings: MedallionSettings,
     *,
@@ -783,8 +743,14 @@ async def _run_in_process(
     token: str | None,
     declared: TransformSpec | None,
     project: str,
+    from_version: int | None,
+    originator: str,
 ) -> WriteResult:
     """Run the stage on the IN-PROCESS engine, through the platform's `Executor` port (§7.4 step 2).
+
+    THE ORDER IS THE RAY LANE'S ORDER. `stage_submit.build_work_order` builds it for both lanes, so the trigger's
+    ``from_version`` reaches this engine as the order's version floor and the stage converges only the window, the
+    lane's declared cardinality is checked, and the run key marks the run's last commit, exactly as on Ray.
 
     The port is what makes this a contract rather than a description of Ray: `submit` runs the work
     and hands back a handle, `status` answers from the recorded outcome, and `cancel` refuses because
@@ -809,7 +775,21 @@ async def _run_in_process(
     made the measurement, rather than on which class this line happened to name.
     """
     executor = executor_for(IN_PROCESS_ENGINE, storage_options=settings.storage_options)
-    order = _work_order(settings, identity=identity, from_uri=from_uri, to_uri=to_uri, lineage_doc=lineage_doc, token=token, declared=declared, project=project)
+    order = build_work_order(
+        settings,
+        spec=declared,
+        from_uri=from_uri,
+        to_uri=to_uri,
+        stage=settings.to_namespace,
+        token=token,
+        lineage_json=lineage_doc.to_json(),
+        originator=originator,
+        project=project,
+        from_version=from_version,
+        from_id=identity.from_dataset,
+        to_id=identity.to_dataset,
+        run_id=lineage_doc.run_id,
+    )
     # The command an in-process engine runs is its own call, NAMED rather than parsed — the rule the
     # registry states for every engine: the platform forwards a command and never interprets one.
     registration = TaskRegistration(task=order.task, engine=IN_PROCESS_ENGINE, command="medallion.transform_stage")
@@ -915,7 +895,16 @@ async def _write_stage(
     else:
         span.set_attribute("lance.medallion.compute", "in_process")
         result = await _run_in_process(
-            settings, identity=identity, from_uri=from_uri, to_uri=to_uri, lineage_doc=lineage_doc, token=token, declared=declared, project=project
+            settings,
+            identity=identity,
+            from_uri=from_uri,
+            to_uri=to_uri,
+            lineage_doc=lineage_doc,
+            token=token,
+            declared=declared,
+            project=project,
+            from_version=trigger.from_version,
+            originator=trigger.originator or "",
         )
     # GOVERNANCE IS THE CASCADE'S, NOT ONE LANE'S. Every branch above that WROTE
     # converges here (the dispatch branch returned before writing), so this is the

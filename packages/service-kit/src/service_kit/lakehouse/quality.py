@@ -101,7 +101,7 @@ def tier_contract_violations(schema: pa.Schema, *, has_stable_row_ids: bool | No
     # `lineage` IS TYPED, and the type is the whole reason the column is worth having. `stamp_stage`
     # and the medallion both mint `pa.json_()` — the Arrow JSON extension Lance persists as JSONB —
     # because that is what makes the cell queryable IN PLACE (`json_get_string` / `json_extract` in a
-    # filter) and indexable: `compute._index_lineage` builds a JSON scalar index over `lineage -> run_id`,
+    # filter) and indexable: `tier_write.index_lineage` builds a JSON scalar index over `lineage -> run_id`,
     # and lance 11 refuses one on anything else — *"A JSON index can only be created on a Binary or
     # LargeBinary field"* (measured 2026-09-09, both types driven). A `pa.string()` column holding the
     # same bytes is a DIFFERENT column wearing the right name: it reads back, it is never null, and the

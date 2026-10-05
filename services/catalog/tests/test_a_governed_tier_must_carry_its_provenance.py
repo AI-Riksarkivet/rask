@@ -11,10 +11,9 @@ The platform verifies NONE of them at publish today, and the omission is not the
 `{id, source_rowid: int64, checksum, word_count, embedding}` — no `stage`, no `lineage`, and the
 wrong width for the one provenance column it does carry (the platform mints `uint64`).
 
-The job-side check cannot cover this, and that is the load-bearing detail. `_assert_stage_contract`
-refuses parentless rows — but it counts them as
-``out.count_rows(filter="source_rowid IS NULL") if SOURCE_ROWID_COLUMN in out.schema.names else 0``.
-A table that omits the column entirely therefore reports ZERO parentless rows and passes. The
+The job-side check cannot cover this, and that is the load-bearing detail. `tier_write.assert_stage_contract`
+refuses parentless rows, but it runs only inside the platform's own stage write: a lane that writes its tier
+through anything else never reaches it. The
 contract is bypassed by dropping the column it exists to check, which is exactly what a second
 executor did.
 
@@ -191,7 +190,7 @@ def test_a_lineage_of_the_wrong_TYPE_is_REFUSED(tmp_path: Path, monkeypatch: pyt
     """`pa.string()` where the platform mints `pa.json_()` — the same shape as the `source_rowid` width.
 
     Lance persists the Arrow JSON extension as JSONB, and that is what the platform INDEXES:
-    `compute._index_lineage` builds a JSON scalar index over `lineage -> run_id`. lance 11 refuses one
+    `tier_write.index_lineage` builds a JSON scalar index over `lineage -> run_id`. lance 11 refuses one
     on anything else — "A JSON index can only be created on a Binary or LargeBinary field" (measured
     2026-09-09, both types driven against a real dataset). A string column holding the same bytes reads
     back, is never null, and quietly cannot carry the index the tier is supposed to have.

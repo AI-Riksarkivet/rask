@@ -202,7 +202,7 @@ class Discovery(BaseModel):
 #: The outbox is also the one that is DRAINED continuously, so walking it races the drain — a depth-4
 #: walk died `FileNotFoundError` on an entry that was gone by the time it was opened.
 #: `_staging` is where a DISTRIBUTED stage run lands its output before the one merge that converges it
-#: into the tier (LH-007, `scripts/ray_stage_job.py::_land_staged`). It is a real Lance dataset while it
+#: into the tier (LH-007, `scripts/ray_stage_job.py::_distributed_rows`). It is a real Lance dataset while it
 #: exists, so without this it would be discovered, compacted and counted among the estate's governed
 #: tables. Once the destination exists the set is already unreachable — the walk descends a dataset
 #: root's children only into `tree/` — but on the run that CREATES the destination the parent is still a

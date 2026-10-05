@@ -35,6 +35,7 @@ from fastapi.concurrency import run_in_threadpool
 
 from medallion.services import engine_names
 from medallion.services.compute import transform_stage
+from service_kit.lakehouse.commit_marker import CommitMarker
 from service_kit.lakehouse.executor import Capability, RunFailure, RunHandle, RunState, SubmitOutcome, WrongEngineError
 from service_kit.lakehouse.task_registry import TaskRegistration
 from service_kit.lakehouse.work_order import WorkOrder
@@ -112,6 +113,12 @@ class InProcessExecutor:
                 stage=order.stamp.stage,
                 lineage=_lineage_of(order),
                 dataset_id=order.destination.table_id or None,
+                # THE ORDER'S OWN WINDOW, CONTRACT AND NAME, read as the Ray stage job reads them from `to_env()`:
+                # a floor runs the delta converge, the cardinality is checked after the write, and the key marks
+                # the run's last commit (CP-029 D-5).
+                version_floor=order.source.version_floor,
+                cardinality=order.stamp.cardinality,
+                marker=CommitMarker(action_id=order.idempotency_key, run_id=order.identity.run_id) if order.idempotency_key else None,
             )
         except Exception as exc:  # noqa: BLE001 — classified into the port's own vocabulary below
             self._state[handle.handle] = RunState.FAILED

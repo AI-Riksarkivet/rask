@@ -200,7 +200,7 @@ extend-select = ["TID251", "FAST001"]
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
 "dataclasses.dataclass".msg = "Structured values are pydantic BaseModel (CLAUDE.md, writing-python)."
 "boto3".msg = "Build S3/STS clients through storage.s3_client / storage.sts_client: a raw boto3 client carries no timeouts."
-"lance.write_dataset".msg = "Lance is written only at the registered write doors (catalog dataplane, ingest lander, medallion compute/ingest)."
+"lance.write_dataset".msg = "Lance is written only at the registered write doors (catalog dataplane, ingest lander, the stage write service_kit.lakehouse.tier_write, medallion compute/ingest)."
 "lance.fragment.write_fragments".msg = "Lance is written only at the registered write doors (catalog dataplane, ingest lander, medallion compute/ingest)."
 "catalog.services.warehouses.put_warehouse".msg = "An unconditional registry put lifts a quarantine; write through the conditional (CAS) path."
 "catalog.services.projects.put_project".msg = "An unconditional registry put lifts a quarantine; write through the conditional (CAS) path."

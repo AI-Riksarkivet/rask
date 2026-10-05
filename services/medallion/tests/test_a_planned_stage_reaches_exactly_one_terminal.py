@@ -38,7 +38,7 @@ from medallion.services.compute import seed_bronze
 from medallion.services.transform import handle_stage
 from service_kit.exceptions import register_handlers
 from service_kit.governed.machine_identity import ServiceAccountVerifier
-from service_kit.lakehouse.commit_marker import CommitMarker
+from service_kit.lakehouse.commit_marker import CommitMarker, marked_version
 from service_kit.lakehouse.executor import Capability, Executor, RunFailure, RunHandle, RunState, SubmitOutcome
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 from service_kit.lakehouse.outbox import list_events
@@ -46,6 +46,7 @@ from service_kit.lakehouse.run_outcomes import OutcomeReport
 from service_kit.lakehouse.run_plans import PlanDocument
 from service_kit.lakehouse.stage_stamp import ONE_TO_ONE
 from service_kit.lakehouse.task_registry import TaskRegistration
+from service_kit.lakehouse.tier_write import StageContractError
 from service_kit.lakehouse.work_order import WorkOrder
 
 
@@ -194,6 +195,11 @@ def _job_commits(plan: PlanDocument, *, cardinality: str = ONE_TO_ONE) -> None:
     )
 
 
+def _marked(plan: PlanDocument) -> int | None:
+    """The destination version whose commit carries the run's marker: the run's data commit, not the index after it."""
+    return marked_version(plan.to_uri, {}, action_id=plan.action_id, above=None)
+
+
 def _sweep(settings: MedallionSettings, bus: _Bus, engine: _Engine) -> None:
     asyncio.run(stage_plans.sweep(settings, bus, executor=cast(Executor, engine)))
 
@@ -253,7 +259,7 @@ def test_an_unnotified_run_publishes_no_FAIL_and_keeps_its_input_to_output_edge(
     client, bus = door
     plan = _pass_one(settings, bus, {"token": "tok-1"})
     _job_commits(plan)
-    committed = lance.dataset(settings.to_uri).version
+    committed = _marked(plan)
     bus.refuse = {OWN_TOPIC}
 
     refused = _report(client, sa_issuer, plan, OutcomeReport(status="succeeded", committed_version=committed))
@@ -296,7 +302,7 @@ def test_an_abandoned_stage_whose_destination_carries_the_marker_wakes_the_next_
     assert closed.outcome is not None and closed.outcome.status == "succeeded"
     (handed_off,) = bus.on(OWN_TOPIC)
     assert handed_off["ray_job_done"] is True
-    assert handed_off["ray_committed_version"] == lance.dataset(settings.to_uri).version
+    assert handed_off["ray_committed_version"] == _marked(plan)
     assert engine.submitted == [], "a run whose marker landed was submitted again"
 
 
@@ -318,9 +324,9 @@ def test_a_job_that_commits_and_then_fails_names_the_version_its_marker_records(
     (registry / "wh-acme.json").write_text(json.dumps({"id": "wh-acme", "project": "acme", "root_uri": str(warehouse), "status": "active"}))
     client, bus = door
     plan = _pass_one(settings, bus, {"token": "tok-1", "originator": "alice", "project": "acme"})
-    with pytest.raises(SystemExit, match="unknown stage cardinality"):
+    with pytest.raises(StageContractError, match="unknown stage cardinality"):
         _job_commits(plan, cardinality="not-a-cardinality")
-    committed = lance.dataset(plan.to_uri).version
+    committed = _marked(plan)
     bus.refuse = {LINEAGE_TOPIC}
     traceback = "Traceback (most recent call last): SystemExit: unknown stage cardinality 'not-a-cardinality'" + " in frame" * 300
 

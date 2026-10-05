@@ -108,6 +108,8 @@ async def _drive(settings: MedallionSettings) -> WriteResult:
         token=None,
         declared=None,
         project="acme",
+        from_version=None,
+        originator="",
     )
 
 

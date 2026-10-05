@@ -429,8 +429,8 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   pylance 10.0.0 every maintenance sweep prints `thread '<unnamed>' panicked at
   lance-index/src/scalar/json.rs:95:9: not yet implemented`, twice, once per Json index. The
   reproducing call is `ds.stats.index_stats("lineage_run_id_idx")` against either cascade tier
-  (`s3://lance-catalog/medallion/{silver,gold}`), whose index `medallion/services/compute.py::
-  _index_lineage` (:250) creates as `IndexConfig(index_type="json", parameters={"target_index_type":
+  (`s3://lance-catalog/medallion/{silver,gold}`), whose index `service_kit/lakehouse/tier_write.py::
+  index_lineage` (the stage write both engines land through) creates as `IndexConfig(index_type="json", parameters={"target_index_type":
   "btree", "path": ...})`. It is a PROVENANCE index, not a search one — the indexed path is
   `lineage -> run_id` on the R26 consume-layer document, so a governed row can be filtered back to the
   run that wrote it; nothing in it serves text or vector search. (The name here was

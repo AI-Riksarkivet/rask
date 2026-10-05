@@ -93,7 +93,7 @@ class, exactly the kind this estate's gates exist to catch.
    included, and it returns the tabular columns in the SAME scan, so alignment holds by construction with
    no mask to maintain. In this repo that is `service_kit.lakehouse.blobs.read_aligned_table`, and it is
    what the medallion cascade (`compute._carry_forward`) and the Ray media stage
-   (`ray_stage_job._media_transform`) both use.
+   (`ray_stage_job._media_rows`) both use.
 2. Key off the row address the API already returns — `read_blobs` yields `(row_address, payload)` and
    `read_blob_ranges` yields `(request_index, row_address, payload)`; map results back by that
    identifier rather than by position.
