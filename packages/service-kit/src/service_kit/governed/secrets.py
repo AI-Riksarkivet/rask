@@ -114,15 +114,20 @@ def fetch_dapr_secret(
     return {}  # unreachable; keeps the type-checker's every-path-returns view honest
 
 
-def fetch_required_secrets(store: str, key: str, *, require: str) -> dict[str, str]:
+def fetch_required_secrets(store: str, key: str, *, require: str, timeout: float = 5.0, retries: int = 10, backoff: float = 3.0) -> dict[str, str]:
     """Fetch the secret bundle, FAILING CLOSED (raise) if ``require`` is absent.
+
+    ``timeout``, ``retries`` and ``backoff`` are :func:`fetch_dapr_secret`'s, defaulting to its BOOT
+    policy (worst case about two minutes, waiting out a store that is still seeding). A caller on a
+    request path passes its own bound instead: a store that is not answering then fails the request in
+    seconds rather than holding a worker through the boot budget.
 
     When a service consumes secrets from the store, the store is the STRICT sole source — the chart ships
     no plaintext env for the sensitive value — so a miss must NOT silently boot on an empty key. Returns
     the full bundle (callers read the fields they need, e.g. the S3 secret + the DB password). This is the
     one place the fail-closed rule lives; catalog / lineage / compaction all call it (their previous
     copy-pasted fetch+raise blocks could drift)."""
-    bundle = fetch_dapr_secret(store, key)
+    bundle = fetch_dapr_secret(store, key, timeout=timeout, retries=retries, backoff=backoff)
     if not bundle.get(require):
         raise RuntimeError(f"secret {require!r} unavailable from Dapr store {store!r}/{key!r} — failing closed (store is the sole source)")
     return bundle

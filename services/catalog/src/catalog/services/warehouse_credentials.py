@@ -37,6 +37,15 @@ from service_kit.governed.secrets import fetch_required_secrets
 #: credential is a pair and half of one signs nothing — `SignatureDoesNotMatch`, measured 2026-09-21.
 _KEY_ID_FIELD: Final = "aws_access_key_id"
 
+#: The fetch policy on the REQUEST path: two attempts of one second each and a quarter-second backoff,
+#: so a store that cannot answer fails the open in about 2.5 s. ``fetch_dapr_secret``'s own defaults are
+#: the BOOT policy, sized to wait out a seeding store; on an open they held the catalog worker in the
+#: retry loop past the client's 60 s timeout — measured live 2026-10-05 against a reference whose
+#: OpenBao entry was gone (Dapr 500, waits of 12.4 s, 15 s, 15 s, ... from 18:35:19 to 18:36:16Z).
+_REQUEST_TIMEOUT: Final = 1.0
+_REQUEST_RETRIES: Final = 2
+_REQUEST_BACKOFF: Final = 0.25
+
 
 @lru_cache(maxsize=256)
 def resolve(*, store: str, ref: str, field: str) -> Mapping[str, str] | None:
@@ -50,7 +59,7 @@ def resolve(*, store: str, ref: str, field: str) -> Mapping[str, str] | None:
     """
     if not ref:
         return None
-    bundle = fetch_required_secrets(store, ref, require=field)
+    bundle = fetch_required_secrets(store, ref, require=field, timeout=_REQUEST_TIMEOUT, retries=_REQUEST_RETRIES, backoff=_REQUEST_BACKOFF)
     pair = {"aws_secret_access_key": bundle[field]}
     # The key id rides the SAME bundle. Absent, the estate's own id stays in force and is paired with
     # a foreign secret — so its absence is refused rather than defaulted.

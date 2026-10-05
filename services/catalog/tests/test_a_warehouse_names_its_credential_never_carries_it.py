@@ -38,7 +38,7 @@ def test_the_reference_resolves_through_the_dapr_store_door(monkeypatch: pytest.
 
     calls: list[tuple[str, str, str]] = []
 
-    def _fetch(store: str, key: str, *, require: str) -> dict[str, str]:
+    def _fetch(store: str, key: str, *, require: str, timeout: float = 5.0, retries: int = 10, backoff: float = 3.0) -> dict[str, str]:
         calls.append((store, key, require))
         # The WHOLE bundle: a credential is a pair, and a bundle carrying only the secret leaves the
         # estate's key id signing with it — SignatureDoesNotMatch, measured live 2026-09-21.
@@ -62,7 +62,7 @@ def test_a_reference_the_store_cannot_satisfy_REFUSES_rather_than_falling_back(m
     """
     from catalog.services import warehouse_credentials
 
-    def _fetch(_store: str, _key: str, *, require: str) -> dict[str, str]:
+    def _fetch(_store: str, _key: str, *, require: str, timeout: float = 5.0, retries: int = 10, backoff: float = 3.0) -> dict[str, str]:
         raise RuntimeError(f"secret {require!r} unavailable — failing closed")
 
     monkeypatch.setattr(warehouse_credentials, "fetch_required_secrets", _fetch)
@@ -99,7 +99,9 @@ def test_a_bundle_carrying_only_the_SECRET_is_refused(monkeypatch: pytest.Monkey
     """
     from catalog.services import warehouse_credentials
 
-    monkeypatch.setattr(warehouse_credentials, "fetch_required_secrets", lambda _s, _k, *, require: {require: "only-the-secret"})
+    monkeypatch.setattr(
+        warehouse_credentials, "fetch_required_secrets", lambda _s, _k, *, require, timeout=5.0, retries=10, backoff=3.0: {require: "only-the-secret"}
+    )
     warehouse_credentials.resolve.cache_clear()
 
     with pytest.raises(RuntimeError, match="half a credential signs nothing"):

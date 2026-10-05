@@ -142,7 +142,7 @@ def two_store_catalog(two_stores: TwoStores, monkeypatch: pytest.MonkeyPatch) ->
     }.items():
         monkeypatch.setenv(key, value)
 
-    def _secret_store(store: str, ref: str, *, require: str) -> dict[str, str]:
+    def _secret_store(store: str, ref: str, *, require: str, timeout: float = 5.0, retries: int = 10, backoff: float = 3.0) -> dict[str, str]:
         assert ref == SECOND_REF, f"the catalog asked the secret store for {ref!r}"
         return {require: two_stores.second.aws_secret_access_key, "aws_access_key_id": two_stores.second.aws_access_key_id}
 

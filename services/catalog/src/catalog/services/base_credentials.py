@@ -26,6 +26,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Mapping
 from typing import TYPE_CHECKING
 
+from lance_namespace import ServiceUnavailableError
 from pydantic import BaseModel, Field
 
 from catalog.services import warehouse_credentials
@@ -35,6 +36,21 @@ from service_kit.lakehouse.objectfs import CREDENTIAL_KEYS
 
 if TYPE_CHECKING:
     from catalog.core.config import Settings
+
+
+class BaseCredentialUnavailableError(ServiceUnavailableError):
+    """A data base's credential reference did not resolve, so the table was not opened (503, retryable).
+
+    A 5xx's ``detail`` is redacted estate-wide (``ns_errors.problem_detail``), so what the caller needs to
+    act on rides as RFC 9457 extension members: the base, the reference and the store — operator
+    configuration names, never a secret value.
+    """
+
+    problem_extra: dict[str, object]
+
+    def __init__(self, message: str, *, base: str, reference: str, store: str) -> None:
+        super().__init__(message)
+        self.problem_extra = {"data_base": base, "credential_reference": reference, "secret_store": store}
 
 
 def compose_base_store_params(
@@ -60,6 +76,10 @@ def compose_base_store_params(
 
     Raises when a reference does not RESOLVE: falling back to the estate key would read or write the
     caller's bytes in a store under an identity nobody chose, and report success.
+
+    Raises:
+        BaseCredentialUnavailableError: The secret store did not answer for a reference, or answered
+            without the credential (503, retryable once the store holds it).
     """
     params: dict[str, dict[str, str]] = {}
     referenced = False
@@ -68,7 +88,16 @@ def compose_base_store_params(
         if not ref:
             params[path] = dict(storage_options)
             continue
-        pair = resolve(store=store, ref=ref, field=field)
+        try:
+            pair = resolve(store=store, ref=ref, field=field)
+        except RuntimeError as exc:
+            raise BaseCredentialUnavailableError(
+                f"the credential reference {ref!r} for data base {path!r} could not be resolved from secret store {store!r}, "
+                "so the table was not opened under any other identity",
+                base=path,
+                reference=ref,
+                store=store,
+            ) from exc
         if not pair:
             raise ValueError(f"per-base credential reference {ref!r} for {path!r} resolved to nothing")
         # BOTH HALVES OR NEITHER, AND NONE OF THE ESTATE'S. A credential is a PAIR, and replacing only

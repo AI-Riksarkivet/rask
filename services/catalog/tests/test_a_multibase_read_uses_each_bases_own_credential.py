@@ -14,12 +14,18 @@ Driven on two stores that each answer only their own key (``conftest.two_stores`
 
 from __future__ import annotations
 
+import time
 import uuid
 
+import httpx
 import pyarrow as pa
 import pyarrow.ipc as ipc
 import pytest
+import respx
 from fastapi.testclient import TestClient
+
+from catalog.services import warehouse_credentials
+from service_kit.governed import secrets
 
 
 ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
@@ -81,3 +87,42 @@ def test_a_read_of_a_table_on_a_second_store_uses_that_stores_credential(
     else:
         assert response.status_code == 200, response.text
         assert response.json()["mode"] == expected, response.text
+
+
+@pytest.mark.parametrize(
+    ("door", "body"),
+    [
+        pytest.param("/management/v1/table/{table}/changes", {"begin_version": 0, "end_version": 1, "kind": "inserted"}, id="read"),
+        pytest.param("/management/v1/table/{table}/credentials", None, id="vend"),
+        pytest.param("/v1/table/{table}x/create?data_base={base}", "rows", id="create"),
+    ],
+)
+def test_a_base_credential_the_secret_store_cannot_answer_fails_the_request_fast_and_typed(
+    two_store_catalog: TestClient, second_base: str, monkeypatch: pytest.MonkeyPatch, door: str, body: dict[str, object] | str | None
+) -> None:
+    """A reference whose secret the store cannot answer fails the request with 503 in seconds, naming the base and the reference.
+
+    Measured live 2026-10-05: the OpenBao entry behind a reference was gone, Dapr answered 500, and every
+    open of a table on that base sat in the boot retry policy (waits of 12.4 s, 15 s, 15 s, ...) past the
+    client's 60 s timeout. Here the real fetch runs against a sidecar answering 500, and nothing falls
+    back to the estate key.
+    """
+    table = f"mb${uuid.uuid4().hex[:12]}"
+    created = two_store_catalog.post(f"/v1/table/{table}/create?data_base={second_base}", content=_ipc(ROWS), headers=ARROW)
+    assert created.status_code == 200, created.text
+    monkeypatch.setattr(warehouse_credentials, "fetch_required_secrets", secrets.fetch_required_secrets)
+    monkeypatch.setenv("DAPR_HTTP_PORT", "3599")
+    warehouse_credentials.resolve.cache_clear()
+    url = door.format(table=table, base=second_base)
+
+    with respx.mock(assert_all_called=True) as sidecar:
+        sidecar.get("http://localhost:3599/v1.0/secrets/lance-secrets/second-store").mock(return_value=httpx.Response(500))
+        started = time.monotonic()
+        response = two_store_catalog.post(url, content=_ipc(ROWS), headers=ARROW) if body == "rows" else two_store_catalog.post(url, json=body)
+        elapsed = time.monotonic() - started
+
+    assert response.status_code == 503, response.text
+    problem = response.json()
+    assert (problem["credential_reference"], problem["secret_store"]) == ("second-store", "lance-secrets"), response.text
+    assert problem["data_base"].startswith(f"{second_base}/"), response.text
+    assert elapsed < 6, f"the request held its worker {elapsed:.1f} s on a secret store that cannot answer"
