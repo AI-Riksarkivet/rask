@@ -86,6 +86,11 @@ spec:
         app.kubernetes.io/component: minio
     spec:
       serviceAccountName: {{ include "lance.fullname" . }}-sa-minio
+      {{- /* The estate builds this image from pinned upstream source (.docker/minio.dockerfile), so it takes the pull secrets. */}}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       {{- if .Values.security.infraContexts.enabled }}
       {{- /*
          uid 1000 is the minio image's built-in `minio-user`, which owns the on-disk data. A mismatched
@@ -103,7 +108,8 @@ spec:
       {{- end }}
       containers:
         - name: minio
-          image: {{ .Values.minio.image | quote }}
+          image: {{ include "rask.image" (list . "minio") | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
           args:
             {{- /*
                One server, N drives: MinIO derives its erasure set from the drive list, and unlike the

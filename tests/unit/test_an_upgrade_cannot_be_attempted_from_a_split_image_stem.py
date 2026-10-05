@@ -74,7 +74,12 @@ def test_a_split_stem_is_refused_with_both_tags_named() -> None:
 
 
 def test_a_converged_estate_passes_and_says_so() -> None:
-    """Without this the guard could pass by refusing everything, which is the other way to be useless."""
+    """Without this the guard could pass by refusing everything, which is the other way to be useless.
+
+    The Docker Hub short form `minio/minio:...` is third-party although its path head has no dot; read as
+    first-party it becomes a second `minio` tag beside the estate's own build and a converged estate is refused
+    ([[XC-075]]).
+    """
     fake = REPO / "tests" / "unit" / "_fake_kubectl_converged.sh"
     fake.write_text(
         "#!/usr/bin/env bash\n"
@@ -83,7 +88,11 @@ def test_a_converged_estate_passes_and_says_so() -> None:
         '{"metadata":{"name":"rask-catalog"},"spec":{"template":{"spec":{"containers":['
         '{"image":"localhost:5000/lance-rest-catalog:tag-one"}]}}}},\n'
         '{"metadata":{"name":"rask-viewer"},"spec":{"template":{"spec":{"containers":['
-        '{"image":"localhost:5000/lance-rest-catalog:tag-one"}]}}}}\n'
+        '{"image":"localhost:5000/lance-rest-catalog:tag-one"}]}}}},\n'
+        '{"metadata":{"name":"rask-minio"},"spec":{"template":{"spec":{"containers":['
+        '{"image":"localhost:5000/minio:lakehouse-0123abcd"}]}}}},\n'
+        '{"metadata":{"name":"upstream-store"},"spec":{"template":{"spec":{"containers":['
+        '{"image":"minio/minio:RELEASE.2025-04-22T22-12-26Z"}]}}}}\n'
         "]}\nJSON\n",
         encoding="utf-8",
     )

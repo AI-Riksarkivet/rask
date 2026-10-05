@@ -678,7 +678,9 @@ KUBECTL ?= KUBECONFIG=$(KUBECONFIG) kubectl
 # lance-rest-catalog is the ONE lakehouse image (catalog + lineage + medallion + maintenance +
 # media trio — chart `image.catalog`); the default render runs 8 containers from it, so the
 # build/import set must carry it or kind/k3s deploys ImagePullBackOff on every lakehouse pod.
-K3S_IMAGES = $(COMPOSE_IMAGES) $(ZONES:%=web-%) ray-cluster lance-rest-catalog
+# minio is the object store's server and the `mc` its scoped-users hook runs, compiled from pinned upstream
+# source because the upstream images refuse anonymous pulls ([[XC-075]]).
+K3S_IMAGES = $(COMPOSE_IMAGES) $(ZONES:%=web-%) ray-cluster lance-rest-catalog minio
 
 # Subchart repos (Chart.yaml dependencies). OCI deps (kueue) need no repo add.
 K3S_DEP_REPOS = nvdp=https://nvidia.github.io/k8s-device-plugin \
@@ -709,6 +711,7 @@ k3s-build: ## Build all fleet + frontend zone + ray-cluster images as :dev (via 
 	# The lakehouse fleet image — dockerfile name (rest-catalog) != image name, so it can't
 	# ride the COMPOSE_IMAGES loop. Same build scripts/e2e_stack.sh does.
 	bash scripts/dagger-image.sh --name rest-catalog --tag lance-rest-catalog:dev
+	bash scripts/dagger-image.sh --name minio --tag minio:dev
 
 k3s-import: ## Side-load :dev images into k3s containerd
 	@for s in $(K3S_IMAGES); do \

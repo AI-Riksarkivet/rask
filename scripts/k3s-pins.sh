@@ -90,11 +90,12 @@ for item in json.load(sys.stdin)["items"]:
         ref = c["image"]
         # FIRST-PARTY ONLY. `image.tags` feeds `rask.image`, which renders only the images this repo
         # builds; dex, greptimedb, cloudnative-pg and friends come from their own values and pinning
-        # them here would be noise that looks authoritative. The test is the registry host: a
-        # third-party ref names a real one (docker.io, ghcr.io, quay.io — anything with a dot), ours
-        # is either bare (side-loaded) or the local registry.
+        # them here would be noise that looks authoritative. Ours is either bare (side-loaded) or under
+        # the local registry (localhost / 172.*). ANY other path head is third-party, including Docker
+        # Hub short forms with no dot: `minio/minio:RELEASE...` was recorded as component `minio`, and
+        # once the estate built its own `minio` that pin rendered an image no registry holds.
         head = ref.split("/", 1)[0] if "/" in ref else ""
-        if "." in head and not head.startswith("localhost") and not head.startswith("172."):
+        if head and not head.startswith("localhost") and not head.startswith("172."):
             continue
         # Strip the registry: the chart supplies it from image.repository, and a pin that carried it
         # would fight that value instead of complementing it.
