@@ -654,7 +654,7 @@ async def _delete_bytes_or_refuse(
     # knows the location. Both deletes are idempotent, so a failure here is finished by the next tick.
     # [[LH-204]] The trashed id's claim on the location goes with them too, so the location is free again.
     try:
-        await run_in_threadpool(forget_base_record, BaseRegistry(control_root=control_root, storage_options=storage_options), location)
+        await run_in_threadpool(partial(forget_base_record, BaseRegistry(control_root=control_root, storage_options=storage_options), location, table=obj_id))
         await run_in_threadpool(
             location_claims.release, location_claims.ClaimStore(control_root=control_root, storage_options=storage_options), location, obj_id
         )

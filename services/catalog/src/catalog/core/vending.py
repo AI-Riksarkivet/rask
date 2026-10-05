@@ -234,7 +234,9 @@ def _base_is_sanctioned(base: tuple[str, str], table: tuple[str, str], sanctione
     legitimate only because an OPERATOR said so: ``LANCE_MULTIBASE_DATA_BASES`` is the estate's existing
     allowlist for exactly this, and its own config note states the rule — "a caller can never point a
     base at an arbitrary bucket (data-exfil / rogue-write door)". The create door enforced that list and
-    the vend door did not, which is the asymmetry this closes.
+    the vend door did not, which is the asymmetry this closes. An allowlist entry sanctions a directory
+    BENEATH it and never itself (:func:`_location_strictly_within`): each table registers its own
+    directory there, and the entry's whole prefix is every table's.
 
     The alternative considered and rejected was resolving each base to a catalog table and checking the
     caller's read rung on it. There is no location->table index, so that costs either a walk of the
@@ -244,7 +246,18 @@ def _base_is_sanctioned(base: tuple[str, str], table: tuple[str, str], sanctione
     """
     if _location_within(table, base):
         return True
-    return any(_location_within(split_s3_location(entry), base) for entry in sanctioned_bases)
+    return any(_location_strictly_within(split_s3_location(entry), base) for entry in sanctioned_bases)
+
+
+def _location_strictly_within(outer: tuple[str, str], inner: tuple[str, str]) -> bool:
+    """True iff ``inner`` lies BENEATH ``outer`` — the approved base itself is not a table's directory ([[LH-252]]).
+
+    Every table on an approved data base registers its own directory under it
+    (``dataplane.table_data_bases``), so a grant at the approved base is a grant on every sibling's
+    fragments. A manifest declaring the approved base itself is therefore granted nothing: the vend
+    reaches one table's directory or no part of the base.
+    """
+    return _location_within(outer, inner) and inner[1].rstrip("/") != outer[1].rstrip("/")
 
 
 def unsanctioned_bases(table_location: str, bases: Sequence[str], sanctioned_bases: Sequence[str] = ()) -> tuple[str, ...]:
@@ -491,7 +504,7 @@ def build_session_policy(
 
     ``bases`` are the base paths the table's manifest declares, granted READ and never write, at either
     tier, and only when :func:`_base_is_sanctioned` allows it — inside the table's own vended scope, or
-    on the operator's ``sanctioned_bases`` allowlist. A table whose fragments carry a ``base_id``
+    one table's directory beneath an entry of the operator's ``sanctioned_bases`` allowlist. A table whose fragments carry a ``base_id``
     resolves them THROUGH those paths, so a credential that cannot read them is scoped to less than the
     table actually is — measured 2026-09-08 as 69 datasets a tick refused compaction because the
     maintainer could not probe a declared base (§ H12).

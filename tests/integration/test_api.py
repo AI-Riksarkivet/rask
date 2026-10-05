@@ -117,6 +117,7 @@ def test_create_delegates_to_dataplane_create_table(client: TestClient, fake_ns:
         data_bases=None,
         base_credentials=None,
         registry=None,
+        holder="",
     ) -> CreateTableResponse:
         seen["segments"] = segments
         seen["registry"] = registry  # [[LH-279]] the door hands the write the control root to record its bases in

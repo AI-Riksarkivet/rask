@@ -47,6 +47,26 @@ def holder_is_gone(ns: LanceNamespace, store: ClaimStore, claim: LocationClaim) 
         return False
 
 
+def data_directory_holder_is_gone(ns: LanceNamespace, store: ClaimStore, claim: LocationClaim) -> bool:
+    """Whether a data directory's holder no longer exists ([[LH-252]]).
+
+    Unlike a table location, a data directory is never the holder's described location, so the holder
+    is judged by existence alone: a table the namespace still describes, or one in the trash awaiting
+    undrop, keeps its directory. Any read that fails answers "not gone", so an outage never frees one.
+    """
+    try:
+        if trash.get(store.control_root, store.storage_options, claim.table) is not None:
+            return False
+        try:
+            native.call(ns, "describe_table", DescribeTableRequest(id=claim.segments))
+        except TableNotFoundError:
+            return True
+        return False
+    except Exception as exc:  # noqa: BLE001 — an unreadable holder is a live one
+        log.warning("data_directory_holder_unreadable", extra={"table": claim.table, "location": claim.location, "error": str(exc)[:300]})
+        return False
+
+
 def take(
     ns: LanceNamespace, store: ClaimStore, location: str, table: str, segments: list[str], *, previous: str | None = None, token: str | None = None
 ) -> None:

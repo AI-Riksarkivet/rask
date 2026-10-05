@@ -603,7 +603,7 @@ async def _destroy_subtree(
         with suppress(TableNotFoundError):
             dropped: DropTableResponse = await run_in_threadpool(native.call, ns, "drop_table", DropTableRequest(id=child))
             if dropped.location:
-                await run_in_threadpool(base_registry.forget_base_record, registry, dropped.location)
+                await run_in_threadpool(base_registry.forget_base_record, registry, dropped.location, table=delimiter.join(child))
                 await run_in_threadpool(location_claims.release, claims, dropped.location, delimiter.join(child))
     for child in [*child_namespaces, segments]:
         with suppress(NamespaceNotFoundError):

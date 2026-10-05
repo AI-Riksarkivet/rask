@@ -576,7 +576,7 @@ async def drop_table(
         # location's claim goes too ([[LH-204]]).
         if response.location:
             registry = base_registry.BaseRegistry(control_root=settings.registry_root, storage_options=settings.storage_options())
-            await run_in_threadpool(base_registry.forget_base_record, registry, response.location)
+            await run_in_threadpool(partial(base_registry.forget_base_record, registry, response.location, table=canonical))
             await run_in_threadpool(location_claims.release, table_claims.claim_store(settings), response.location, canonical)
     else:
         response = DropTableResponse()
@@ -786,6 +786,7 @@ async def register_table(
         configured=settings.external_blob_base_list,
         data_allowlist=settings.multibase_data_base_list,
         governed=GovernedStorage.from_settings(settings),
+        holder=fga.canonical_object_id(parse_identifier(id, settings.delimiter), delimiter=settings.delimiter),
     )
     body.location = table_bases.require_registrable_location(
         body.location,
@@ -873,6 +874,14 @@ async def register_table(
                 if unsanctioned:
                     log.warning("register_converge_refused_unrecorded_bases", extra={"table": id, "location": registered})
                     raise
+                # [[LH-252]] A data directory another table holds is never converged into this one's record.
+                held = False
+                try:
+                    await run_in_threadpool(table_bases.claim_registered_directories, ns, context.registry, entries, context.holder, segments)
+                except InvalidInputError:
+                    held = True
+                if held:
+                    raise
                 await run_in_threadpool(base_registry.claim_bases, context.registry, registered, entries)
             await fga_deps.seed_ownership(client, settings, token, resource="table", segments=segments, may_grant_owner=False)
             log.info("register_converged_governance", extra={"table": id, "location": registered})
@@ -927,6 +936,7 @@ async def register_table(
         await _detach()
         if verdict.claim is not None:
             await run_in_threadpool(base_registry.release_claim, context.registry, verdict.claim)
+        await run_in_threadpool(base_registry.release_data_directories, context.registry, verdict.directories, context.holder)
 
     await fga_deps.seed_ownership_or_compensate(client, settings, token, resource="table", segments=segments, undo=_undo_register)
     # RESOLVED, not echoed — `response.location` is the caller's own relative path and a relative

@@ -41,6 +41,11 @@ class TwoStores(BaseModel):
         """The data base the second key owns, approved on the catalog with a credential reference."""
         return f"s3://{self.second_bucket}/data"
 
+    @property
+    def plain_base(self) -> str:
+        """An approved data base with NO credential reference: the estate key reads it, and a vend may grant it."""
+        return f"s3://{self.estate_bucket}/shared-data"
+
 
 def _user_on(iam: Any, user: str, bucket: str) -> Key:  # noqa: ANN401 — a boto3 IAM client
     iam.create_user(UserName=user)
@@ -103,6 +108,12 @@ def second_base(two_stores: TwoStores) -> str:
 
 
 @pytest.fixture
+def plain_base(two_stores: TwoStores) -> str:
+    """The approved data base ``two_store_catalog`` reads with the estate's own key."""
+    return two_stores.plain_base
+
+
+@pytest.fixture
 def two_store_catalog(two_stores: TwoStores, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     """The real catalog app on the estate key, with the second store's ``data`` base approved and referenced to its key.
 
@@ -120,7 +131,7 @@ def two_store_catalog(two_stores: TwoStores, monkeypatch: pytest.MonkeyPatch) ->
         "LANCE_S3_ENDPOINT": two_stores.url,
         "LANCE_S3_ACCESS_KEY_ID": two_stores.estate.aws_access_key_id,
         "LANCE_S3_SECRET_ACCESS_KEY": two_stores.estate.aws_secret_access_key,
-        "LANCE_MULTIBASE_DATA_BASES": two_stores.second_base,
+        "LANCE_MULTIBASE_DATA_BASES": f"{two_stores.second_base},{two_stores.plain_base}",
         "LANCE_MULTIBASE_BASE_CREDENTIAL_REFS": f"{two_stores.second_base}={SECOND_REF}",
         "LANCE_CONTROL_EMIT_ENABLED": "false",
         "LANCE_VENDING_MODE": "sts",

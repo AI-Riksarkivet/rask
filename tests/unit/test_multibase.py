@@ -46,10 +46,11 @@ def test_write_threads_data_bases_into_write_dataset() -> None:
             mode="create",
             allow_external=False,
             external_blob_bases=[],
-            data_bases=["s3://b1", "s3://b2/data"],
+            data_bases=dataplane.table_data_bases(["s3://b1", "s3://b2/data"], "t-1"),
         )
-    assert captured["initial_bases"] is not None and len(captured["initial_bases"]) == 2  # both registered
-    assert captured["target_bases"] == ["b1", "b2-data"]  # round-robin targets, referenced by derived NAME
+    # [[LH-252]] each base registers the TABLE'S OWN directory beneath it, never the approved base itself
+    assert [base.path for base in captured["initial_bases"]] == ["s3://b1/t-1", "s3://b2/data/t-1"]
+    assert captured["target_bases"] == ["b1", "b2-data"]  # round-robin targets, referenced by the approved base's NAME
     assert captured["base_store_params"] is None  # no credential reference -> every base on the top-level options
     # #5a invariant MUST survive multi-base (the whole point of routing creates through this 2.2 path):
     assert captured["enable_stable_row_ids"] is True
@@ -66,7 +67,7 @@ def test_external_and_data_bases_compose() -> None:
             mode="create",
             allow_external=False,
             external_blob_bases=["s3://media"],
-            data_bases=["s3://b1"],
+            data_bases=dataplane.table_data_bases(["s3://b1"], "t-1"),
         )
     assert len(captured["initial_bases"]) == 2  # external-blob base + data base both registered
     assert captured["target_bases"] == ["b1"]  # only the DATA base is a write target
@@ -85,7 +86,7 @@ def test_overwrite_registers_none_but_targets_when_resupplied() -> None:
             mode="overwrite",
             allow_external=False,
             external_blob_bases=[],
-            data_bases=["s3://b1"],
+            data_bases=[dataplane.DataBase(path="s3://b1/t-1", name="b1")],
         )
     assert captured["initial_bases"] is None  # registration is create-only (pylance rejects re-register)
     assert captured["target_bases"] == ["b1"]  # ...but the write still targets the registered base
@@ -94,34 +95,13 @@ def test_overwrite_registers_none_but_targets_when_resupplied() -> None:
 def test_colliding_data_base_names_rejected() -> None:
     # audit F2: two DISTINCT approved URIs that collapse to the same lossy _base_name must be rejected loudly,
     # not silently misroute fragments (one base becomes unaddressable / target resolution ambiguous).
-    _, fake_write = _capture_write()
-    with patch.object(lance, "write_dataset", fake_write), pytest.raises(InvalidInputError):
-        dataplane._write_blob(
-            _table(),
-            "s3://root/tbl",
-            _SO,
-            mode="create",
-            allow_external=False,
-            external_blob_bases=[],
-            data_bases=["s3://bkt/a/c", "s3://bkt/a-c"],  # both → base name "bkt-a-c"
-        )
+    with pytest.raises(InvalidInputError):
+        dataplane.table_data_bases(["s3://bkt/a/c", "s3://bkt/a-c"], "t-1")  # both → base name "bkt-a-c"
 
 
 def test_duplicate_data_base_is_deduped() -> None:
     # audit F2: a repeated base must not double-register / double-target the round-robin.
-    captured, fake_write = _capture_write()
-    with patch.object(lance, "write_dataset", fake_write):
-        dataplane._write_blob(
-            _table(),
-            "s3://root/tbl",
-            _SO,
-            mode="create",
-            allow_external=False,
-            external_blob_bases=[],
-            data_bases=["s3://b1", "s3://b1"],
-        )
-    assert captured["target_bases"] == ["b1"]  # deduped, not ["b1", "b1"]
-    assert len(captured["initial_bases"]) == 1
+    assert dataplane.table_data_bases(["s3://b1", "s3://b1"], "t-1") == [dataplane.DataBase(path="s3://b1/t-1", name="b1")]
 
 
 def test_the_vend_door_reads_a_real_multibase_manifest_and_decides_on_its_bases(tmp_path: Any) -> None:

@@ -91,11 +91,12 @@ def test_a_base_at_a_bucket_root_is_refused(base: str) -> None:
         build_session_policy(BUCKET, PREFIX, "read", (base,))
 
 
-def test_a_base_the_operator_sanctioned_is_granted() -> None:
-    """The other half: multi-base distribution is a supported layout and a guard that broke it would be
-    worse than the hole. The allowlist is how an operator says a foreign bucket is legitimate."""
-    assert _base_resources("s3://data-bases/acme") == ["arn:aws:s3:::data-bases/acme/*"]
+def test_a_tables_directory_beneath_a_sanctioned_base_is_granted_and_the_base_itself_is_not() -> None:
+    """Multi-base distribution is a supported layout and a guard that broke it would be worse than the
+    hole: one table's directory beneath an allowlisted base is granted. The allowlisted base itself is
+    every table's prefix ([[LH-252]]), so a manifest declaring it is granted nothing."""
     assert _base_resources("s3://data-bases/acme/part-0") == ["arn:aws:s3:::data-bases/acme/part-0/*"]
+    assert _base_resources("s3://data-bases/acme") == []
 
 
 def test_nothing_is_sanctioned_by_default() -> None:
@@ -107,8 +108,8 @@ def test_nothing_is_sanctioned_by_default() -> None:
 def test_the_dropped_base_does_not_renumber_the_ones_that_survive() -> None:
     """Sids are positional. Dropping the first of two must not leave a `BaseObjects1` with no
     `BaseObjects0`, which would read as a missing statement to anyone diffing a rendered policy."""
-    resources = _base_resources("s3://other-bucket/nope", "s3://data-bases/acme")
-    assert resources == ["arn:aws:s3:::data-bases/acme/*"]
-    policy = build_session_policy(BUCKET, PREFIX, "read", ("s3://other-bucket/nope", "s3://data-bases/acme"), sanctioned_bases=SANCTIONED)
+    resources = _base_resources("s3://other-bucket/nope", "s3://data-bases/acme/t-1")
+    assert resources == ["arn:aws:s3:::data-bases/acme/t-1/*"]
+    policy = build_session_policy(BUCKET, PREFIX, "read", ("s3://other-bucket/nope", "s3://data-bases/acme/t-1"), sanctioned_bases=SANCTIONED)
     base_sids = sorted(str(s["Sid"]) for s in _statements(policy) if "Base" in str(s["Sid"]))
     assert base_sids == ["BaseObjects0", "ListBase0"], f"surviving bases must be numbered from zero, got {base_sids}"

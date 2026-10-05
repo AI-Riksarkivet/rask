@@ -695,6 +695,7 @@ def _created(root: Path, table: Callable[[Path], pa.Table], *, external: bool) -
         payload,
         mode="create",
         registry=base_registry.BaseRegistry(control_root=str(_control(root))),
+        holder="$".join(_TABLE_ID),
         external_blob_bases=bases if external else None,
         data_bases=None if external else bases,
     )

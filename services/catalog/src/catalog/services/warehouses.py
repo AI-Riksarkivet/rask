@@ -604,7 +604,7 @@ def _clear_trash_under(control_root: str, storage_options: StorageOptions, wareh
             # the record never sees the table — so a table registered at the same location in a re-created
             # warehouse would inherit bases nobody judged for it. Forget-first is fail-safe: a store blip
             # here aborts the loop with the trash record intact, and the retry forgets it again.
-            base_registry.forget_base_record(registry, location)
+            base_registry.forget_base_record(registry, location, table=str(entry.get("id") or ""))
             if trash.clear(control_root, storage_options, str(entry.get("id") or ""), kind=str(entry.get("kind") or "table")):
                 cleared += 1
     except Exception as exc:  # noqa: BLE001 — tidying must never outrank the delete it follows

@@ -22,14 +22,14 @@ import lance
 import pyarrow as pa
 import pyarrow.fs as pafs
 from lance_namespace import DescribeTableRequest, DescribeTableResponse, InvalidInputError, LanceNamespace, ServiceUnavailableError, TableNotFoundError
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from catalog.core.base_judge import BaseJudge, GovernedStorage
 from catalog.core.config import shared_lance_session
 from catalog.core.namespace import registered_dataset_facts
-from catalog.services import native
-from service_kit.lakehouse import base_registry, blobs
-from service_kit.lakehouse.base_refs import decoded_segments, location_in_store, location_within, names_a_location, normalise, store_of
+from catalog.services import native, table_claims
+from service_kit.lakehouse import base_registry, blobs, location_claims
+from service_kit.lakehouse.base_refs import decoded_segments, location_in_store, location_within, names_a_location, normalise
 from service_kit.lakehouse.features import FLAG_MIXED_DATA_FILE_VERSIONS, BasePathRef
 from service_kit.lakehouse.objectfs import StorageOptions, fs_and_base
 
@@ -226,10 +226,13 @@ def entries_for_registration(
 
     A base is admitted when it is inside the table's own root, inside a configured external blob base and
     outside ``governed`` storage (recorded as ``external_blob``; [[LH-209]]: a configured base over the
-    model-artifact tree is not recorded on the dataset's word), or already in the table's record. A plain base equal to an
-    approved multi-base data base (``LANCE_MULTIBASE_DATA_BASES``), path and store, is admitted as ``data`` only while
+    model-artifact tree is not recorded on the dataset's word), or already in the table's record. A plain base BENEATH an
+    approved multi-base data base (``LANCE_MULTIBASE_DATA_BASES``), in its store, is admitted as ``data`` only while
     the table has NO record yet: the allowlist is a gate at the moment the record is first written, and
-    once written the record is the authority — an allowlisted base appearing later is a plant.
+    once written the record is the authority — an allowlisted base appearing later is a plant. The approved
+    base itself is refused ([[LH-252]]): it is every table's prefix, and a table declaring it reads every
+    sibling's fragments. So is a directory deeper than one level beneath it, and a directory another table
+    holds is refused when its claim is taken (:func:`judge_registered_table`).
 
     Raises:
         InvalidInputError: A declared base is sanctioned by none of those.
@@ -244,7 +247,6 @@ def entries_for_registration(
         return state["record"]
 
     judged = judge.judge(location, bases)
-    approved = {(store_of(base), normalise(base)) for base in data_allowlist}
     entries: list[base_registry.RecordedBase] = []
     refused: list[str] = []
     for judgement in judged:
@@ -255,7 +257,7 @@ def entries_for_registration(
             )
         elif judgement.standing is base_registry.BaseStanding.UNRECORDED:
             first_record = (state["record"] if "record" in state else _load()) is None
-            if first_record and not ref.is_dataset_root and names_a_location(ref.path) and (store_of(ref.path), normalise(ref.path)) in approved:
+            if first_record and not ref.is_dataset_root and names_a_location(ref.path) and _beneath_an_approved_base(ref.path, data_allowlist):
                 entries.append(
                     base_registry.RecordedBase(path=ref.path, role=base_registry.BaseRole.DATA, name=ref.name, origin=base_registry.BaseOrigin.REGISTER)
                 )
@@ -272,6 +274,21 @@ def entries_for_registration(
     return entries
 
 
+def _beneath_an_approved_base(path: str, data_allowlist: Sequence[str]) -> bool:
+    """Whether ``path`` is ONE directory beneath an approved data base, in its store — a table's directory, never the base.
+
+    One level, the shape a create mints (``dataplane.table_data_bases``): every table's directory is then
+    a sibling of every other's, so whether two tables overlap is whether they name the same directory —
+    the question the directory's location claim answers exactly ([[LH-252]]).
+    """
+    inner = decoded_segments(path)
+    for base in data_allowlist:
+        outer = decoded_segments(base)
+        if outer is not None and inner is not None and location_in_store(base, path) and len(inner) == len(outer) + 1:
+            return True
+    return False
+
+
 class RegistrationContext(BaseModel):
     """What the register door judges a registration against, resolved once per request."""
 
@@ -285,6 +302,8 @@ class RegistrationContext(BaseModel):
     data_allowlist: list[str]
     #: Where a configured base earns no standing ([[LH-209]]); ``None`` judges configuration alone.
     governed: GovernedStorage | None = None
+    #: The registering table's canonical id: the holder of the data directories it is admitted with ([[LH-252]]).
+    holder: str
 
 
 class RegistrationVerdict(BaseModel):
@@ -293,6 +312,8 @@ class RegistrationVerdict(BaseModel):
     location: str
     #: ``None`` when no dataset is at the location — there were no bases to judge or record.
     claim: base_registry.BaseClaim | None = None
+    #: The data directories claimed for the table ([[LH-252]]), released by the door's undo.
+    directories: list[str] = Field(default_factory=list)
 
 
 def judge_registered_table(ns: LanceNamespace, so: dict[str, str], segments: list[str], relative: str, context: RegistrationContext) -> RegistrationVerdict:
@@ -354,4 +375,32 @@ def judge_registered_table(ns: LanceNamespace, so: dict[str, str], segments: lis
     entries = entries_for_registration(
         location, facts.bases, registry=context.registry, configured=context.configured, data_allowlist=context.data_allowlist, governed=context.governed
     )
-    return RegistrationVerdict(location=location, claim=base_registry.claim_bases(context.registry, location, entries))
+    directories = claim_registered_directories(ns, context.registry, entries, context.holder, segments)
+    try:
+        claim = base_registry.claim_bases(context.registry, location, entries)
+    except Exception:
+        base_registry.release_data_directories(context.registry, directories, context.holder)
+        raise
+    return RegistrationVerdict(location=location, claim=claim, directories=directories)
+
+
+def claim_registered_directories(
+    ns: LanceNamespace, registry: base_registry.BaseRegistry, entries: Sequence[base_registry.RecordedBase], holder: str, segments: list[str]
+) -> list[str]:
+    """Claim each admitted data directory for ``holder``, refusing one another live table holds ([[LH-252]]).
+
+    Raises:
+        InvalidInputError: Another table holds one of the directories — a registration declaring it would
+            read that table's fragments and be vended GET on them.
+    """
+    store = location_claims.ClaimStore(control_root=registry.control_root, storage_options=registry.storage_options)
+    try:
+        return base_registry.claim_data_directories(
+            registry, entries, holder, segments, is_gone=lambda held: table_claims.data_directory_holder_is_gone(ns, store, held)
+        )
+    except location_claims.LocationHeldError as held:
+        log.warning("register_refused_held_data_directory", extra={"table": holder, "directory": held.claim.location, "holder": held.claim.table})
+        raise InvalidInputError(
+            f"the dataset declares the data directory {held.claim.location!r}, which table {held.claim.table!r} holds; a table's data "
+            "directory is its own, so the catalog does not admit a second table reading through it"
+        ) from None

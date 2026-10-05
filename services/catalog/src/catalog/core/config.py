@@ -409,6 +409,8 @@ class Settings(
     # buckets, manifest stays in the primary root, reads fan out). A per-request ``data_base`` MUST be on
     # this list — a caller can never point a base at an arbitrary bucket (data-exfil / rogue-write door).
     # Empty (default) = the feature is off and every create is byte-identical to today.
+    # A table registers its OWN directory beneath each base it names (`<base>/<directory>`,
+    # `dataplane.table_data_bases`), and a vend grants that directory and never the base ([[LH-252]]).
     # Every base here shares the catalog's S3 ENDPOINT: a base's own credential
     # (`LANCE_MULTIBASE_BASE_CREDENTIAL_REFS`) replaces the key pair and never the address.
     multibase_data_bases: str = Field(default="", alias="LANCE_MULTIBASE_DATA_BASES")

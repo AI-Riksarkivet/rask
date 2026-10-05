@@ -453,12 +453,12 @@ def test_a_recorded_clone_source_is_still_protected(estate: _Estate) -> None:
 
 
 def _registered(estate: _Estate, table: str, location: str) -> str:
-    """A dataset written at ``location`` with the approved data base, registered as ``table``, and the record that earned."""
+    """A dataset written at ``location`` with its own directory beneath the approved data base, registered as ``table``, and the record that earned."""
     uri = f"{estate.root}/{location}"
     lance.write_dataset(
         _MINE,
         uri,
-        initial_bases=[lance.DatasetBasePath(f"{estate.root}/second/data", name="second", is_dataset_root=False)],
+        initial_bases=[lance.DatasetBasePath(f"{estate.root}/second/data/{location}", name="second", is_dataset_root=False)],
         storage_options=estate.key,
         data_storage_version="2.2",
         enable_stable_row_ids=True,

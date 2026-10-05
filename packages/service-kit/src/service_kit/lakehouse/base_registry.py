@@ -34,7 +34,7 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from service_kit.lakehouse import records
+from service_kit.lakehouse import location_claims, records
 from service_kit.lakehouse.base_refs import decoded_path, location_in_store, names_a_location, normalise, store_of
 from service_kit.lakehouse.features import BasePathRef
 from service_kit.lakehouse.objectfs import StorageOptions
@@ -310,13 +310,63 @@ def release_claim(registry: BaseRegistry, claim: BaseClaim) -> None:
         return
 
 
-def forget_base_record(registry: BaseRegistry, location: str) -> bool:
-    """Remove the whole record for a table whose bytes are gone; ``False`` when there was none.
+def forget_base_record(registry: BaseRegistry, location: str, *, table: str) -> bool:
+    """Remove the whole record for a table whose bytes are gone, and ``table``'s claims on its data directories; ``False`` when there was no record.
 
     The one removal that is not a claim's undo: a record outliving the manifest it describes would
     sanction those bases for whatever is next written at the location.
+
+    THE DATA DIRECTORIES GO FIRST ([[LH-252]]). Each ``data`` entry names the table's own directory
+    beneath an approved data base, held for ``table`` by a location claim on the same control root
+    (:func:`claim_data_directories`); the record is the one place that still lists them, so they are
+    released before it is deleted. A claim another table holds is left alone
+    (:func:`~service_kit.lakehouse.location_claims.release`).
     """
+    record = read_base_record(registry, location)
+    claims = location_claims.ClaimStore(control_root=registry.control_root, storage_options=registry.storage_options)
+    for entry in record.entries if record is not None else []:
+        if entry.role is BaseRole.DATA:
+            location_claims.release(claims, entry.path, table)
     return delete_record(registry.control_root, registry.storage_options, record_key_for(location))
+
+
+def claim_data_directories(
+    registry: BaseRegistry, entries: Sequence[RecordedBase], table: str, segments: list[str], *, is_gone: Callable[[location_claims.LocationClaim], bool]
+) -> list[str]:
+    """Make ``table`` the one holder of every ``data`` entry's directory, put-if-not-exists ([[LH-252]]).
+
+    A data base's directory is one table's: its fragments live there and a vend grants exactly that
+    prefix. A manifest is a writer's claim, so a second table declaring a directory another holds would
+    read the holder's fragments through it and be vended GET on them. The store arbitrates the holder
+    as it does for a table location ([[LH-204]]); the claims sit beside them under ``_locations/`` on the
+    control root, and :func:`forget_base_record` releases them with the record. All or nothing: a
+    directory another table holds releases the ones this call took.
+
+    Returns:
+        The directories claimed, for the caller's undo.
+
+    Raises:
+        location_claims.LocationHeldError: Another table holds one of the directories.
+    """
+    claims = location_claims.ClaimStore(control_root=registry.control_root, storage_options=registry.storage_options)
+    taken: list[str] = []
+    try:
+        for entry in entries:
+            if entry.role is not BaseRole.DATA:
+                continue
+            location_claims.take(claims, entry.path, table, segments, is_gone=is_gone)
+            taken.append(entry.path)
+    except Exception:
+        release_data_directories(registry, taken, table)
+        raise
+    return taken
+
+
+def release_data_directories(registry: BaseRegistry, directories: Sequence[str], table: str) -> None:
+    """Release ``table``'s claims on ``directories`` — the undo of :func:`claim_data_directories`."""
+    claims = location_claims.ClaimStore(control_root=registry.control_root, storage_options=registry.storage_options)
+    for directory in directories:
+        location_claims.release(claims, directory, table)
 
 
 def _standing_without_a_read(table_root: str, ref: BasePathRef, configured: Sequence[str]) -> BaseStanding | None:

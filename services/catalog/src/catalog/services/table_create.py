@@ -286,6 +286,7 @@ async def create_governed_table(
         # secret, so nothing secret passes through here.
         base_credentials=BaseCredentials.from_settings(settings),
         registry=registry,
+        holder=table_id,
     )
 
     # Make the caller owner of a table this request brought into being + link it to its parent so it
@@ -313,7 +314,7 @@ async def create_governed_table(
         # The bytes are gone with the table, so its base record goes too: a record that outlives the
         # manifest it describes would vouch for bases nothing declares.
         if response.location:
-            await run_in_threadpool(base_registry.forget_base_record, registry, response.location)
+            await run_in_threadpool(base_registry.forget_base_record, registry, response.location, table=table_id)
 
     # The revoke-then-drop pair moved into `seed_ownership_or_compensate` (diff2 F3) because it was
     # ONE try block here: the revoke is an OpenFGA call, so on the outage this compensation exists

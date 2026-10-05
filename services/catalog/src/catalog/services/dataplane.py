@@ -319,6 +319,53 @@ def _apply_encoding(table: pa.Table, properties: dict[str, str] | None) -> pa.Ta
     return pa.Table.from_arrays(table.columns, schema=schema)
 
 
+class DataBase(BaseModel):
+    """A data base as ONE table registers it: that table's own directory under an approved base ([[LH-252]])."""
+
+    #: ``<approved base>/<table directory>`` — the path the manifest records and every read resolves through.
+    path: str
+    #: The name ``target_bases`` routes fragments by, derived from the APPROVED base so a re-sent
+    #: ``data_base`` names the same registered base on every write.
+    name: str
+
+
+def table_data_bases(approved: Sequence[str], directory: str) -> list[DataBase]:
+    """The data bases a CREATE registers: one directory per approved base, all named ``directory``.
+
+    A TABLE'S OWN DIRECTORY, never the approved base itself. Registered at the base, every table naming
+    it round-robined its fragments into one flat ``<base>/``, and a vend for one table granted READ on
+    ``<base>/*`` — every sibling's fragments. Under ``<base>/<directory>/`` a table's files are a prefix
+    no other table writes, so the session policy can grant exactly that prefix. Measured on pylance
+    12.0.0: ``DatasetBasePath(<base>/<dir>, is_dataset_root=False)`` writes its fragments under
+    ``<dir>/`` and reads them back (``file_format.md`` § Base Path System: a non-root base "points
+    directly to the file directory").
+    """
+    approved = list(dict.fromkeys(approved))
+    names = [_base_name(uri) for uri in approved]
+    # _base_name is lossy (s3://b/a/c and s3://b/a-c both → b-a-c). A collision would silently make one
+    # approved base unaddressable + make target resolution ambiguous — reject it loudly, never misroute.
+    if len(set(names)) != len(names):
+        raise InvalidInputError(f"data_base paths collide on base name {names}; use distinct base paths")
+    return [DataBase(path=f"{uri.rstrip('/')}/{directory}", name=name) for uri, name in zip(approved, names, strict=True)]
+
+
+def registered_data_bases(approved: Sequence[str], dataset: lance.LanceDataset) -> list[DataBase]:
+    """The data bases an OVERWRITE targets: each approved base's directory as the table's manifest registered it.
+
+    Bases register at create only, so the names a re-sent ``data_base`` derives must match a base the
+    manifest already holds; an approved base this table never registered is refused here rather than
+    reaching pylance as an unknown target name.
+    """
+    registered = {ref.name: ref.path for ref in manifest_base_path_refs(dataset) if ref.name}
+    bases: list[DataBase] = []
+    for uri in dict.fromkeys(approved):
+        name = _base_name(uri)
+        if name not in registered:
+            raise InvalidInputError(f"data_base {uri!r} is not registered on this table; a table's data bases register when it is created")
+        bases.append(DataBase(path=registered[name], name=name))
+    return bases
+
+
 def _write_blob(
     table: pa.Table,
     uri: str,
@@ -327,7 +374,7 @@ def _write_blob(
     mode: str,
     allow_external: bool,
     external_blob_bases: list[str],
-    data_bases: list[str] | None = None,
+    data_bases: list[DataBase] | None = None,
     properties: dict[str, str] | None = None,
     base_credentials: BaseCredentials | None = None,
 ) -> lance.LanceDataset:
@@ -336,38 +383,32 @@ def _write_blob(
     ``allow_external`` opts into ``Blob.from_uri`` columns ANYWHERE outside the dataset root (blanket bypass);
     ``external_blob_bases`` registers approved base URIs so external pointers UNDER a registered base are
     accepted with the bypass left off — the safer allowlist posture (lance_docs/guide.md). ``data_bases``
-    (#3-B) are approved DATA-distribution bases the fragments round-robin across (the Uber pattern).
-    Bases register on a fresh CREATE; an overwrite reuses the bases the table registered at create."""
+    (#3-B) are the table's own directories under approved DATA-distribution bases, which the fragments
+    round-robin across (the Uber pattern): :func:`table_data_bases` on a create,
+    :func:`registered_data_bases` on an overwrite, which reuses the bases the table registered at create."""
     is_create = mode == "create"
     table = _apply_encoding(table, properties)
-    # De-dup: a repeated data_base must not double-register / double-target the round-robin.
-    data_bases = list(dict.fromkeys(data_bases or []))
-    # _base_name is lossy (s3://b/a/c and s3://b/a-c both → b-a-c). A collision would silently make one
-    # approved base unaddressable + make target resolution ambiguous — reject it loudly, never misroute.
-    data_names = [_base_name(u) for u in data_bases]
-    if len(set(data_names)) != len(data_names):
-        raise InvalidInputError(f"data_base paths collide on base name {data_names}; use distinct base paths")
-    # DatasetBasePath registers each approved base (is_dataset_root=False = a raw data location, not a nested
+    data_bases = data_bases or []
+    # DatasetBasePath registers each base (is_dataset_root=False = a raw data location, not a nested
     # dataset). initial_bases REGISTERS the bases in the manifest — CREATE-only (an overwrite/append reuses
     # the already-registered set; re-registering on overwrite is rejected by pylance).
     external_paths = [lance.DatasetBasePath(b, is_dataset_root=False) for b in external_blob_bases]
-    data_paths = [lance.DatasetBasePath(u, is_dataset_root=False, name=n) for u, n in zip(data_bases, data_names, strict=True)]
+    data_paths = [lance.DatasetBasePath(base.path, is_dataset_root=False, name=base.name) for base in data_bases]
     _has_bases = bool(external_blob_bases or data_bases)
     initial_bases = (external_paths + data_paths) if is_create and _has_bases else None
     # target_bases is the WRITE TARGET: it round-robins the FRAGMENT writes across the data bases while the
     # manifest + _versions stay in the primary root (relative-path portable — a relocation moves the base
     # URIs, not 10M file paths). Applied on ANY mode when data_bases is SUPPLIED, so a re-supplied overwrite
-    # ALSO distributes (the names must match the manifest's registered bases — deterministic _base_name makes
-    # a re-sent same list match). CAVEAT: a mutation that does NOT re-send data_base (a bare overwrite, or the
+    # ALSO distributes. CAVEAT: a mutation that does NOT re-send data_base (a bare overwrite, or the
     # /insert append route which has no data_base param) concentrates its NEW fragments in the primary root —
     # create-time distribution is the firm guarantee; per-write distribution needs the bases re-supplied.
-    target_bases = data_names or None
+    target_bases = [base.name for base in data_bases] or None
     # base_store_params: each base's object-store options at RUNTIME — pylance does not persist them to
     # the manifest, which is what makes this the only form a CREDENTIAL may take here. A base under a
     # configured credential reference gets its own entry, resolved through the Dapr secret store; with
     # none referenced the map is `None` and every base reads and writes on the top-level options. The
     # read side composes the same map from the manifest at every open (`core.namespace.open_location`).
-    base_store_params = (base_credentials or BaseCredentials()).store_params(data_bases, so) if data_bases else None
+    base_store_params = (base_credentials or BaseCredentials()).store_params([base.path for base in data_bases], so) if data_bases else None
     try:
         return lance.write_dataset(  # noqa: TID251
             table,
@@ -455,6 +496,7 @@ def create_table(
     data_bases: list[str] | None = None,
     base_credentials: BaseCredentials | None = None,
     registry: base_registry.BaseRegistry | None,
+    holder: str = "",
 ) -> CreateTableResponse:
     """Create a table at file format 2.2 with stable row ids — the ONLY create path (audit 2026-07-14).
 
@@ -497,15 +539,15 @@ def create_table(
     if existing is not None and not only_declared:  # a written, readable table already lives here
         if normalized is CreateMode.OVERWRITE:
             # A new version of the same table, so the table's provenance rides onto it ([[LH-242]]).
-            current = lance.dataset(existing, storage_options=so, session=shared_lance_session()).schema
+            current = lance.dataset(existing, storage_options=so, session=shared_lance_session())
             dataset = _write_blob(
-                provenance_guard.keep_provenance(current, table),
+                provenance_guard.keep_provenance(current.schema, table),
                 existing,
                 so,
                 mode="overwrite",
                 allow_external=allow_external,
                 external_blob_bases=external_blob_bases,
-                data_bases=data_bases,
+                data_bases=registered_data_bases(data_bases, current) if data_bases else None,
                 properties=properties,
                 base_credentials=base_credentials,
             )
@@ -528,6 +570,7 @@ def create_table(
             data_bases=data_bases,
             base_credentials=base_credentials,
             registry=registry,
+            holder=holder,
         )
 
     location = ns.declare_table(DeclareTableRequest(id=segments, properties=properties)).location
@@ -545,7 +588,13 @@ def create_table(
         data_bases=data_bases,
         base_credentials=base_credentials,
         registry=registry,
+        holder=holder,
     )
+
+
+def _claim_store(registry: base_registry.BaseRegistry) -> location_claims.ClaimStore:
+    """The location claims beside ``registry``'s base records, on the same control root and credential."""
+    return location_claims.ClaimStore(control_root=registry.control_root, storage_options=registry.storage_options)
 
 
 def _write_blob_into(
@@ -561,6 +610,7 @@ def _write_blob_into(
     data_bases: list[str] | None = None,
     base_credentials: BaseCredentials | None = None,
     registry: base_registry.BaseRegistry | None,
+    holder: str = "",
 ) -> CreateTableResponse:
     """Write the blob table's first data version into an already-declared ``location``, rolling the declare
     back with ``drop_table`` on failure so the name stays retryable rather than stuck declared-but-unreadable.
@@ -570,11 +620,24 @@ def _write_blob_into(
     catalog's record before the manifest that declares them exists, so no reader ever meets the table
     declaring a base its record lacks. A failed write releases exactly what it claimed; a record that
     outlived its write would vouch for a base no manifest names.
+
+    EACH DATA DIRECTORY IS CLAIMED FOR ``holder`` FIRST OF ALL ([[LH-252]]), put-if-not-exists, so no other
+    table — a registration declaring the same directory — can be admitted to it while this one exists.
+    ``holder`` is the table's canonical id, required whenever ``registry`` is given.
     """
+    if registry is not None and not holder:
+        raise ValueError("a governed create names the table that holds its data directories")
     claim: base_registry.BaseClaim | None = None
+    directories: list[str] = []
     try:
+        # ONE DIRECTORY PER TABLE under each approved base ([[LH-252]]), minted here because the record
+        # below and the manifest must name the same path.
+        own_bases = table_data_bases(data_bases or [], uuid.uuid4().hex)
         if registry is not None:
-            entries = table_bases.create_entries(external_blob_bases, [(base, _base_name(base)) for base in dict.fromkeys(data_bases or [])])
+            entries = table_bases.create_entries(external_blob_bases, [(base.path, base.name) for base in own_bases])
+            directories = base_registry.claim_data_directories(
+                registry, entries, holder, segments, is_gone=lambda held: table_claims.data_directory_holder_is_gone(ns, _claim_store(registry), held)
+            )
             claim = base_registry.claim_bases(registry, location, entries)
         dataset = _write_blob(
             table,
@@ -583,16 +646,18 @@ def _write_blob_into(
             mode="create",
             allow_external=allow_external,
             external_blob_bases=external_blob_bases,
-            data_bases=data_bases,
+            data_bases=own_bases,
             properties=properties,
             base_credentials=base_credentials,
         )
     except Exception:
         with suppress(Exception):  # best-effort rollback; re-raise the real write error
             ns.drop_table(DropTableRequest(id=segments))
-        if registry is not None and claim is not None:
+        if registry is not None:
             try:
-                base_registry.release_claim(registry, claim)
+                if claim is not None:
+                    base_registry.release_claim(registry, claim)
+                base_registry.release_data_directories(registry, directories, holder)
             except Exception as release_exc:  # noqa: BLE001 — the write error is what the caller is told
                 log.error("create_base_record_release_failed", extra={"location": location, "error": str(release_exc)[:300]})
         raise
