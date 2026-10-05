@@ -117,8 +117,8 @@ def put_warehouse(control_root: str, storage_options: StorageOptions, record: di
 #: the caller read it, which is the whole of diff2 F4.
 #:
 #: ``endpoint`` is OPTIONAL and non-secret ([[LH-067]]): the object-store address this warehouse's
-#: bucket lives at, when it is not the estate's. Absent means the estate default, which is every
-#: warehouse today. **No credential field belongs beside it** — material never travels in a record;
+#: bucket lives at. Absent means the estate default, and the create door admits no other store
+#: ([[LH-205]], ``catalog.core.store_endpoint``). **No credential field belongs beside it** — material never travels in a record;
 #: the estate resolves its S3 secret from the Dapr secret store, and a second store's key belongs
 #: behind that same door with the record naming a reference.
 _CALLER_OWNED = frozenset({"id", "bucket", "root_uri", "project", "endpoint", "credential_ref"})

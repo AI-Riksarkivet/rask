@@ -53,6 +53,7 @@ from catalog.core.lineage_emit import DROP_TABLE, REGISTER_TABLE, emit_write_eve
 # them drift apart again the moment one is tuned.
 from catalog.core.modes import CreateMode, DropBehavior, DropMode
 from catalog.core.namespace import warn_if_mixed_file_versions
+from catalog.core.store_endpoint import require_estate_store
 from catalog.schemas import ProtectionResponse, SetProtectionRequest, TrashEntry
 from catalog.services import native, warehouses
 from service_kit.control_emit import emit_control
@@ -803,6 +804,9 @@ async def undrop_namespace(
             raise PermissionDeniedError(
                 f"warehouse {warehouse_id!r} is deactivated (quarantined); namespace {segments[0]!r} cannot be recovered into it until it is reactivated"
             )
+        # [[LH-205]] Before the binding is written, so a record naming another store refuses the undrop
+        # whole instead of leaving a binding behind for the connection builder to refuse.
+        require_estate_store(warehouse.get("endpoint"), estate=settings.s3_endpoint, subject=f"warehouse {warehouse_id!r}")
         await run_in_threadpool(
             warehouses.bind_namespace,
             settings.registry_root,

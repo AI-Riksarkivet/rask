@@ -41,10 +41,11 @@ UserStateStoreDep = Annotated[UserStateStore | None, Depends(get_user_state_stor
 async def _resolve_warehouse_root(request: Request, settings: Settings, top_ns: str) -> tuple[str, str | None] | None:
     """The bound warehouse's ``(root_uri, endpoint)`` for ``top_ns`` (#3-A), or ``None`` → default root.
 
-    The ENDPOINT rides along because the same live record read already answers it ([[LH-067]]): a
-    warehouse whose bucket is in another object store names it, and a connection built without it is
-    opened against the estate's store — a wrong-bucket read that looks like a missing table. ``None``
-    for the endpoint means the estate default, which is every warehouse today.
+    The ENDPOINT rides along because the same live record read already answers it ([[LH-067]]), and
+    the connection builder JUDGES it: a record naming another object store is refused there
+    ([[LH-205]]) instead of being opened with the estate's key, and dropping it here would instead open
+    the estate's store, a wrong-bucket read that looks like a missing table. ``None`` for the endpoint
+    means the estate default.
 
     FAILS CLOSED. A registry read ERROR raises ``ServiceUnavailableError`` (503) — it is NOT swallowed to
     ``None``. Swallowing it would route a possibly-BOUND tenant's table to the shared default bucket on a

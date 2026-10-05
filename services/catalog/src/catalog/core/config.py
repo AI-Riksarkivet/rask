@@ -611,32 +611,29 @@ class Settings(
             )
         return self
 
-    def namespace_properties(self, *, root: str | None = None, endpoint: str | None = None) -> dict[str, str]:
+    def namespace_properties(self, *, root: str | None = None) -> dict[str, str]:
         """Return properties for ``lance_namespace.connect(impl, properties)``.
 
-        ``root`` and ``endpoint`` let a WAREHOUSE-rooted connection differ from the estate default
-        ([[LH-067]]). Both overrides live here rather than at the call site so the ``storage.`` property
-        vocabulary is spelled in one module — a caller composing these names itself is how one of them
-        drifts.
+        ``root`` lets a WAREHOUSE-rooted connection differ from the estate default; the ``storage.``
+        property vocabulary is spelled here once, because a caller composing these names itself is how
+        one of them drifts.
 
-        ``allow_http`` is DERIVED from whichever endpoint is in force, never carried from the estate's.
-        It is a function of the scheme, so an override that changed the endpoint and left this reading
-        `self.s3_endpoint` would give an ``http://`` warehouse behind an ``https://`` estate
-        ``allow_http=false`` — every open failing with a TLS error that names the store rather than the
-        configuration.
+        THE ENDPOINT IS NOT OVERRIDABLE, and that is the [[LH-205]] invariant stated as a signature: these
+        properties carry the estate's own key pair, so the only store they may address is the estate's.
+        A warehouse record naming another store is refused before a connection is built
+        (``catalog.core.store_endpoint``); its credential would belong behind the Dapr secret store
+        with the record naming a reference, and no door consumes one yet.
 
-        CREDENTIALS ARE NOT OVERRIDABLE, deliberately: material never travels in a warehouse record. A
-        second store's key belongs behind the Dapr secret store this estate already resolves its own S3
-        secret from, with the record naming a reference.
+        ``allow_http`` is derived from the endpoint's scheme, never set on its own, so a TLS endpoint
+        cannot keep permission to fall back to plaintext.
         """
-        target = endpoint or self.s3_endpoint
         return {
             "root": root or self.root,
-            f"{_STORAGE_PREFIX}endpoint": target,
+            f"{_STORAGE_PREFIX}endpoint": self.s3_endpoint,
             f"{_STORAGE_PREFIX}access_key_id": self.s3_access_key_id,
             f"{_STORAGE_PREFIX}secret_access_key": self.s3_secret_access_key.get_secret_value(),
             f"{_STORAGE_PREFIX}region": self.s3_region,
-            f"{_STORAGE_PREFIX}allow_http": allow_http_for(target),
+            f"{_STORAGE_PREFIX}allow_http": allow_http_for(self.s3_endpoint),
             f"{_STORAGE_PREFIX}virtual_hosted_style_request": str(self.s3_virtual_hosted).lower(),
         }
 

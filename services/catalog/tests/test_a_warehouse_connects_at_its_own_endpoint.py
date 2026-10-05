@@ -1,23 +1,16 @@
-"""A warehouse record may name its own object-store endpoint, and the connection must use it.
+"""A warehouse record's endpoint reaches the connection builder, and the builder answers for the store it opens.
 
-[[LH-067]]. `build_namespace_for_root` swapped ONLY `root` off `settings.namespace_properties()`, so
-every warehouse — whatever bucket it named — was reached at the estate's single endpoint with the
-estate's single credential. Its docstring said the quiet part: "the creds are bucket-agnostic on the
-S3 target", which is true of one target and is the assumption that makes a second one unreachable.
+The warehouse record carries an optional `endpoint` ([[LH-067]]) that the resolver threads to
+`build_namespace_for_root`, and the builder JUDGES it rather than applying it ([[LH-205]]): the
+connection signs with the estate's own key pair, so a record naming another store is refused before
+anything connects. That refusal, at every door that builds a warehouse connection, is pinned through
+the real app by `tests/integration/test_a_foreign_store_is_refused_until_its_credential_is_consumed.py`.
+What stays here is the builder's own behaviour and the resolver handing it the record's endpoint.
 
-`allow_http` IS THE LEG THAT MATTERS, and it is not symmetry. The property is DERIVED from the
-endpoint's scheme, so an override that changes the endpoint and leaves the derivation reading the
-estate's default produces the wrong-but-plausible failure: an `http://` warehouse behind an `https://`
-estate gets `allow_http=false` and every open fails with a TLS error naming the store rather than the
-configuration. Deriving it from the endpoint actually being used is the fix, and the test pins the
-mixed-scheme pair rather than a matching one, because a matching pair passes either way.
-
-CREDENTIALS ARE DELIBERATELY NOT HERE. The row asked for "per-warehouse endpoint/credential fields on
-the warehouse record", and the credential half of that phrasing is refused by the estate's standing
-secrets rule — material never travels in a record. The catalog already resolves its own S3 secret from
-the Dapr secret store (`dapr_secret_store`/`dapr_secret_key`/`dapr_secret_s3_field`), so a second
-store's material belongs behind the same door under its own key, with the record naming a REFERENCE.
-The endpoint is not a secret and is what a second store needs first.
+CREDENTIALS ARE DELIBERATELY NOT HERE. Material never travels in a record. The catalog resolves its own
+S3 secret from the Dapr secret store (`dapr_secret_store`/`dapr_secret_key`/`dapr_secret_s3_field`), so
+a second store's material belongs behind the same door under its own key, with the record naming a
+REFERENCE.
 """
 
 from __future__ import annotations
@@ -109,49 +102,6 @@ async def test_the_resolver_carries_the_RECORDS_endpoint(
     assert resolved == ("s3://tenant-bucket", expected)
 
 
-def test_the_connection_cache_keys_on_the_ENDPOINT_too(settings: Settings, captured: list[dict[str, str]]) -> None:
-    """A root-only key would serve the OLD store's connection for the life of the process."""
-    from catalog.api import dependencies
-
-    request = cast(Request, _Req())
-    dependencies.namespace_for_root(request, settings, "s3://tenant-bucket", endpoint="http://old.store:9000")
-    dependencies.namespace_for_root(request, settings, "s3://tenant-bucket", endpoint="http://new.store:9000")
-
-    assert [p["storage.endpoint"] for p in captured] == ["http://old.store:9000", "http://new.store:9000"]
-
-
-def test_every_namespace_for_root_CALLER_passes_an_endpoint() -> None:
-    """A warehouse-rooted connection built without the record's endpoint opens the ESTATE's store.
-
-    DERIVED from the source rather than listed: a new door resolving a warehouse connection inherits
-    this without an edit here. Three callers were found ignoring the endpoint after the resolver already threaded it — the
-    create-namespace door, the delete cascade and the undrop — and none of them failed loudly: each
-    opened the estate's store, where the warehouse's namespaces simply are not, so a cascade would
-    report a clean delete having dropped nothing.
-
-    Matched on the AST's keywords, not on source text, so a docstring naming the parameter cannot
-    satisfy it.
-    """
-    import ast
-    import pathlib
-
-    import catalog
-
-    offenders: list[str] = []
-    for path in sorted(pathlib.Path(catalog.__file__).parent.rglob("*.py")):
-        tree = ast.parse(path.read_text())
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Call):
-                continue
-            name = node.func.id if isinstance(node.func, ast.Name) else getattr(node.func, "attr", "")
-            if name != "namespace_for_root":
-                continue
-            if not any(kw.arg == "endpoint" for kw in node.keywords):
-                offenders.append(f"{path.name}:{node.lineno}")
-
-    assert offenders == [], f"{offenders} build a warehouse connection without the record's `endpoint`, so they open the ESTATE's store"
-
-
 def test_an_UNREACHABLE_store_is_503_naming_it_not_a_500(settings: Settings, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     """A store that will not answer is an OUTAGE, and a 500 says the catalog is broken when it is fine.
 
@@ -176,9 +126,9 @@ def test_an_UNREACHABLE_store_is_503_naming_it_not_a_500(settings: Settings, mon
     monkeypatch.setattr(namespace_module, "connect", _boom)
 
     with pytest.raises(ServiceUnavailableError) as caught, caplog.at_level("WARNING"):
-        namespace_module.build_namespace_for_root(settings, "s3://tenant-bucket", endpoint="http://tenant.store:9000")
+        namespace_module.build_namespace_for_root(settings, "s3://tenant-bucket")
 
-    assert "http://tenant.store:9000" in str(caught.value), f"the refusal does not name the store: {caught.value}"
+    assert "https://estate.example:9000" in str(caught.value), f"the refusal does not name the store: {caught.value}"
 
 
 def test_a_NON_TRANSPORT_construction_failure_is_left_alone(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:

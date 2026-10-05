@@ -738,11 +738,11 @@ class CreateWarehouseRequest(BaseModel):
     # Absent (default) keeps every existing record byte-identical; a re-POST carries an existing flag
     # forward, exactly as `serving` and `protected` do.
     primary: bool = False
-    # [[LH-067]] THE OBJECT STORE THIS WAREHOUSE'S BUCKET LIVES AT, when it is not the estate's. Absent
-    # (default) means the estate endpoint, which is every warehouse today, and keeps existing records
-    # byte-identical. Settable HERE rather than only in the registry for the reason the `primary`
-    # comment above records: a field the record honours and no door can set is hardening an operator
-    # cannot apply.
+    # [[LH-067]] THE OBJECT STORE THIS WAREHOUSE'S BUCKET LIVES AT. Absent (default) means the estate's
+    # and keeps existing records byte-identical; an explicit empty string re-points a record at the
+    # estate's. Any other store is refused 400 ([[LH-205]]): the catalog signs every connection with the
+    # estate's own key pair and consumes no per-warehouse credential, so admitting one would sign that
+    # key toward a host the caller chose. A respelling of the estate's endpoint is the estate's.
     #
     # NON-SECRET, and there is deliberately no credential beside it. Material never travels in a
     # record; the estate resolves its S3 secret from the Dapr secret store, and a second store's key
@@ -767,12 +767,12 @@ class WarehouseResponse(BaseModel):
     # [[LH-067]] Which object store this warehouse is reached at. Readable back for the same reason
     # `primary` is: an operator who set it must be able to confirm what the record now says, and
     # "which store" is the field whose being wrong looks like a missing table rather than like
-    # misconfiguration. None on records using the estate endpoint (every one today).
+    # misconfiguration. None on records using the estate endpoint.
     endpoint: str | None = None
-    # [[LH-067]] The NAME of the secret holding this warehouse's credential, never the credential.
-    # Readable back for the same reason `endpoint` is — an operator who set it must be able to confirm
-    # what the record says — and safe to expose precisely because it is a reference: it identifies a
-    # key in the Dapr secret store, and holding it grants nothing without access to that store.
+    # [[LH-067]] The NAME of the secret holding this warehouse's credential, never the credential, and
+    # safe to expose precisely because it is a reference: it identifies a key in the Dapr secret store,
+    # and holding it grants nothing without access to that store. No request sets it and no door reads
+    # it ([[LH-205]]), which is why a record naming another store is refused rather than served.
     credential_ref: str | None = None
     created_at: str | None = None
 

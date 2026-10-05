@@ -64,6 +64,7 @@ from catalog.api.security import CurrentToken, Principal
 from catalog.api.v1.endpoints import namespaces as namespaces_api
 from catalog.core.config import Settings
 from catalog.core.identifiers import parse_identifier
+from catalog.core.store_endpoint import names_the_estate_store, require_estate_store
 from catalog.core.vending import CredentialVendor
 from catalog.schemas import (
     CreateWarehouseNamespaceRequest,
@@ -151,6 +152,16 @@ async def create_warehouse(
     # matches (an unroutable warehouse), so it is rejected up front like a malformed id.
     if body.serving is not None and body.serving != "gold":
         raise InvalidInputError(f"invalid serving {body.serving!r}: only 'gold' is supported")
+    # [[LH-205]] Another store needs a credential the catalog resolves and consumes on every open,
+    # provision and vend, and no door consumes one: the request has no `credential_ref` and nothing
+    # reads the record's. Admitting the endpoint would have the estate's own key signed toward a host
+    # this caller chose, so it is refused here, before the bucket is claimed or provisioned.
+    if not names_the_estate_store(body.endpoint, estate=settings.s3_endpoint):
+        raise InvalidInputError(
+            f"endpoint {body.endpoint!r} is not the estate's object store. A warehouse in another store needs a credential "
+            "reference the catalog consumes on every open, provision and vend, and none is consumed yet, so the catalog "
+            "would sign with the estate's own key toward that host. Omit `endpoint` to use the estate's store."
+        )
 
     so = settings.storage_options()
     # The project must exist — layer-3 invariant, from the PROJECT REGISTRY (Decision 1), checked before
@@ -170,6 +181,12 @@ async def create_warehouse(
     existing = await run_in_threadpool(warehouses.get_warehouse, settings.registry_root, so, warehouse_id)
     if existing is not None and existing.get("project") != project:
         raise NamespaceAlreadyExistsError(f"warehouse {warehouse_id!r} is already registered to another project")
+    # [[LH-205]] A re-POST that names no endpoint carries the live one forward, and `provision_bucket`
+    # below always reaches the ESTATE's store. For a record naming another store that would create its
+    # bucket in the wrong store and keep the record pointing at the foreign one, so the re-POST is
+    # refused unless it re-points the warehouse itself (an explicit endpoint, judged above).
+    if existing is not None and body.endpoint is None:
+        require_estate_store(existing.get("endpoint"), estate=settings.s3_endpoint, subject=f"warehouse {warehouse_id!r}")
 
     # Reserved-bucket guard (audit 2026-07-23, the Mallory scenario's first door): the shared catalog
     # root/registry bucket and the medallion zone buckets are PLATFORM storage — a warehouse claiming one
@@ -213,12 +230,11 @@ async def create_warehouse(
         # from the existing record; reactivation goes ONLY through the explicit /activate endpoint.
         "status": existing.get("status", "active") if existing is not None else "active",
         "created_at": (existing.get("created_at") if existing is not None else None) or datetime.now(UTC).isoformat(),
-        # [[LH-067]] Which object store this bucket is reached at. CALLER-OWNED, so unlike the
-        # arm-never-disarm fields above a re-POST may correct it — a warehouse that moved store must be
-        # re-pointable, and the alternative is a record only a hand-edited JSON can fix. Omitted from
-        # the request means "unchanged": the key is absent, so `_CALLER_OWNED`'s merge carries the live
-        # value forward. An explicit empty string is how a warehouse returns to the estate endpoint,
-        # which `_resolve_warehouse_root` reads as None.
+        # [[LH-067]] Which object store this bucket is reached at, and only the estate's passes the
+        # judgement above ([[LH-205]]). CALLER-OWNED, so unlike the arm-never-disarm fields a re-POST
+        # may correct it: a record naming another store is re-pointed at the estate with an explicit
+        # empty string, which `_resolve_warehouse_root` reads as None. Omitted from the request means
+        # "unchanged": the key is absent, so `_CALLER_OWNED`'s merge carries the live value forward.
         **({"endpoint": body.endpoint} if body.endpoint is not None else {}),
     }
     # Serving carries FORWARD on an idempotent re-create (same rationale as status above): a GitOps
@@ -691,7 +707,9 @@ async def unbind_warehouse_namespace(
     if binding is None or binding.get("warehouse_id") != warehouse_id:
         raise TableNotFoundError(f"namespace {top_ns!r} is not bound to warehouse {warehouse_id!r}")
 
-    ns = await run_in_threadpool(namespace_for_root, request, settings, str(binding["root_uri"]))
+    # The record's endpoint, so the emptiness probe reads the store the warehouse names and a record
+    # naming another store is refused at the builder ([[LH-205]]) rather than probed at the estate's.
+    ns = await run_in_threadpool(namespace_for_root, request, settings, str(binding["root_uri"]), endpoint=record.get("endpoint") or None)
     tables = await run_in_threadpool(_tables_in_namespace, ns, top_ns)
     if tables:
         raise NamespaceNotEmptyError(
@@ -918,6 +936,14 @@ async def delete_warehouse(
         records = await run_in_threadpool(warehouses.list_warehouses, settings.registry_root, so)
         _require_bucket_purgeable(settings, records, record, warehouse_id)
 
+    # [[LH-205]] The cascade opens the warehouse's store and the purge empties a bucket through the
+    # ESTATE's client, so for a record naming another store the one would sign toward that host with the
+    # estate's key and the other would delete the estate's same-named bucket. Refused here, before the
+    # first step lands, so the caller gets the refusal and not a partial-delete report. A plain delete
+    # touches no store and stays open: it is how such a record is retired.
+    if bound or purge_bucket:
+        require_estate_store(record.get("endpoint"), estate=settings.s3_endpoint, subject=f"warehouse {warehouse_id!r}")
+
     root_uri = record["root_uri"]
     dropped: list[str] = []
     revoked = 0
@@ -1062,6 +1088,9 @@ async def validate_warehouse_credentials(
         await fga_deps.require_can_create_warehouse(client, settings, token, project=record["project"])
     except PermissionDeniedError as exc:
         raise TableNotFoundError(f"warehouse not found: {warehouse_id}") from exc
+    # [[LH-205]] The probe vends through the estate's STS and writes through the estate's client, so for
+    # a record naming another store it would vend and write against the wrong store entirely.
+    require_estate_store(record.get("endpoint"), estate=settings.s3_endpoint, subject=f"warehouse {warehouse_id!r}")
 
     checks = await run_in_threadpool(_run_scope_probe, str(record["root_uri"]), vendor, so)
     return summarize_probe(checks)

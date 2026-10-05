@@ -24,6 +24,7 @@ from pydantic import BaseModel, Field
 
 from catalog.core.base_judge import require_sanctioned_bases
 from catalog.core.config import Settings, shared_lance_session
+from catalog.core.store_endpoint import require_estate_store
 from service_kit.lakehouse.features import BasePathRef, flags_from_open_error, manifest_base_path_refs, manifest_feature_flags, mixes_data_file_versions
 from service_kit.lancekit.absence import reads_as_absent
 
@@ -38,26 +39,23 @@ def build_namespace(settings: Settings) -> LanceNamespace:
 def build_namespace_for_root(settings: Settings, root_uri: str, *, endpoint: str | None = None) -> LanceNamespace:
     """A namespace backend rooted at ``root_uri`` instead of the default ``settings.root`` (#3-A).
 
-    Same impl and object-store CREDENTIALS as the default connection; ``endpoint`` overrides the target
-    when the warehouse record names one ([[LH-067]]). Without it a warehouse is reachable only at the
-    estate's single endpoint — fine while every bucket lives in one store, and the reason a second one
-    could not be registered at all.
+    Same impl, endpoint and CREDENTIALS as the default connection. ``endpoint`` is the warehouse
+    record's ([[LH-067]]), and it is JUDGED here rather than applied ([[LH-205]]): the connection carries
+    the estate's own key pair, so a record naming another store is refused before anything connects,
+    or every open under that warehouse would sign toward a host a project admin chose. Every
+    warehouse-rooted connection is built here, so this is the one place the refusal has to hold.
 
-    ``allow_http`` IS RE-DERIVED from whichever endpoint is actually used, and that is the half worth
-    stating: the property is a function of the scheme, so leaving it on the estate's default gives an
-    ``http://`` warehouse behind an ``https://`` estate ``allow_http=false``, and every open fails with
-    a TLS error that names the store rather than the configuration.
+    Callers cache the result per (root, endpoint), so a corrected endpoint is judged again rather than
+    served from the connection built before the correction.
 
-    CREDENTIALS ARE NOT OVERRIDABLE HERE, deliberately. Material never travels in a warehouse record —
-    the estate resolves its S3 secret from the Dapr secret store, and a second store's material belongs
-    behind that same door under its own key, with the record naming a reference rather than carrying a
-    key pair. An endpoint is not a secret, and it is what a second store needs first.
-
-    Callers cache the result per (root, endpoint) — a warehouse's root never changes, but its endpoint
-    is caller-owned and may be corrected."""
-    target = endpoint or settings.s3_endpoint
+    Raises:
+        UnsupportedOperationError: ``endpoint`` names a store other than the estate's.
+        ServiceUnavailableError: The estate's store did not answer the connection.
+    """
+    require_estate_store(endpoint, estate=settings.s3_endpoint, subject=f"the warehouse rooted at {root_uri!r}")
+    target = settings.s3_endpoint
     try:
-        return connect(settings.impl, settings.namespace_properties(root=root_uri, endpoint=endpoint))
+        return connect(settings.impl, settings.namespace_properties(root=root_uri))
     except ValueError as exc:
         # A STORE THAT WILL NOT ANSWER IS AN OUTAGE, NOT A BROKEN CATALOG. pylance raises a bare
         # `ValueError` for every construction failure, so an unreachable warehouse store surfaced as
