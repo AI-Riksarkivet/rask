@@ -13,22 +13,20 @@ Scope (owner, 2026-09-29): catalog, lineage, medallion, maintenance, controlplan
 second; search, the viewer, the annotator and flows are ignored for now. Order (owner, 2026-10-02): the
 **Production short list** below and the criterion-3 rows CP-029 and LH-226 come first, with their enablers; every
 other Phase 1 row waits in **PHASE 1 · AFTER LAUNCH** and is taken earlier only as the stated enabler of a short-list
-row (XC-049, for one, only if a short-list chart fix needs release space). Items 1-3 keep the order adopted on
+row (XC-049, for one, only if a short-list chart fix needs release space). Items 1-2 keep the order adopted on
 2026-09-30 from `docs/audits/2026-09-30/lakehouse-dataflow.md`.
 
 Beside the order (owner, 2026-10-02): prune pass 2 runs in parallel.
 
 1. **CP-029** with **LH-226**.
    Why: criterion 3, kept first by the owner; the default cascade learns a stage's outcome only through Dapr workflows on Ray, and CP-029's outcome door precedes LH-226's workflow half.
-2. **CTL-021**.
-   Why: criterion 4; the reconciler is the only lane that carries HTTP-only runs (ingest, Ray TRAIN, external producers) to a person.
-3. The other 28 short-list rows, in four batches that can run in parallel worktrees (owner, 2026-09-29: batch and parallelize):
+2. The other 28 short-list rows, in four batches that can run in parallel worktrees (owner, 2026-09-29: batch and parallelize):
    a. Commit and change-feed integrity: **LH-211**, **LH-202**, **LH-214**, **LH-216**, **LH-213**, **LH-217**, **LH-241**.
    b. Erasure and governance: **LH-263**, **LH-245**, **LH-242**, **LH-037**, **LH-194**, **LH-208**, **LH-272**.
    c. Storage isolation and table identity: **LH-205**, **LH-209**, **LH-252**, **LH-273**, **LH-203**, **LH-204**.
    d. Infrastructure authentication and resilience: **XC-003**, **XC-077**, **XC-004**, **XC-075**, **LH-247**, **CP-041**, **CP-051**, **LH-243**.
    Why: each makes a criterion false on a production deployment (the production triage, second-reviewed).
-4. **XC-090** with **XC-096** and its proof legs **XC-091** to **XC-095**, its harness built now as a failing test, closing last.
+3. **XC-090** with **XC-096** and its proof legs **XC-091** to **XC-095**, its harness built now as a failing test, closing last.
    Why: all five criteria. XC-090 closes only with its proof legs, so they stay beside it as its enablers. Their own preconditions are listed in each leg; one of them, LH-282 (XC-091's branch reconcile), is a parked finding, so XC-090 cannot close until the owner admits LH-282 or narrows XC-091, and XC-092's erasure end state needs LH-178, which is blocked on D4.
 <!-- FOCUS:END -->
 
@@ -43,7 +41,7 @@ Approved by the owner on 2026-10-02: the Phase 1 rows that, left unfixed, make a
 - Criterion 5, resilience (9): LH-203, LH-204, LH-211, LH-247, CP-041, CP-051, LH-243, LH-273, XC-075.
 - The gate (1): XC-090.
 
-Closed since the approval: LH-281 and LH-210 (helm rev 260), XC-076, LH-220's enabler (helm rev 261), LH-220 (helm rev 262), LH-064 (helm revs 263 to 265), and XC-078 (helm revs 266 to 270).
+Closed since the approval: LH-281 and LH-210 (helm rev 260), XC-076, LH-220's enabler (helm rev 261), LH-220 (helm rev 262), LH-064 (helm revs 263 to 265), XC-078 (helm revs 266 to 270), and CTL-021 (helm rev 271).
 
 ## Owner rulings in force
 
@@ -108,13 +106,13 @@ Closed since the approval: LH-281 and LH-210 (helm rev 260), XC-076, LH-220's en
 | --- | --- | --- | --- |
 | **PHASE 1 · LAKEHOUSE** | 26 | 26 | 13 |
 | **PHASE 1 · CROSS-CUTTING** | 11 | 11 | 9 |
-| **PHASE 1 · CONTROLPLANE AND NOTIFICATIONS** | 1 | 1 | 1 |
+| **PHASE 1 · CONTROLPLANE AND NOTIFICATIONS** | 0 | 0 | 0 |
 | **PHASE 1 · AFTER LAUNCH** | 117 | 111 | 19 |
 | **PHASE 2 · COMPUTE** | 19 | 18 | 4 |
 | **FRONTEND** | 7 | 7 | 0 |
 | **LOW PRIORITY** | 37 | 36 | 0 |
 
-**218 open items**, of which **6 are blocked on a decision**, **2 wait on another row or ruling** and **210 can be picked up today**; 46 are HIGH. 51 ids left the register on 2026-09-25 and 42 on 2026-09-29, listed at the foot so nothing vanishes silently. The three Phase 1 sections hold the production short list (30 open rows) with CP-029, LH-226 and their enablers (38 rows); the other 117 Phase 1 rows wait in PHASE 1 · AFTER LAUNCH (owner, 2026-10-02).
+**217 open items**, of which **6 are blocked on a decision**, **2 wait on another row or ruling** and **209 can be picked up today**; 45 are HIGH. 51 ids left the register on 2026-09-25 and 42 on 2026-09-29, listed at the foot so nothing vanishes silently. The three Phase 1 sections hold the production short list (29 open rows) with CP-029, LH-226 and their enablers (37 rows); the other 117 Phase 1 rows wait in PHASE 1 · AFTER LAUNCH (owner, 2026-10-02).
 
 ## PHASE 1 · LAKEHOUSE
 
@@ -396,7 +394,7 @@ Closed since the approval: LH-281 and LH-210 (helm rev 260), XC-076, LH-220's en
 `e2e, lineage, notifications, chart` · **HIGH** · **enabler: XC-090**
 - *What is left:* Capture every event the shared scenario emits: the lineage /events feed filtered by the scenario's run ids, plus a test-only durable consumer on catalog.control.v1, medallion.bronze and the publication-arrival topic. Assert that: (a) each event validates against the OpenLineage JSON schema and the versioned rask facet schemas; (b) each event carries a verifying signature and a notifiable author and project; (c) each run has a START followed by exactly one terminal; (d) replaying the stream creates no second run or edge; (e) the dlq.* streams gained no message, and the dead_lettered delta is 0; (f) the outbox depth and outbox_stranded are both 0; (g) a forged unsigned event, and a raw publish from a pod without the app's credential, are refused; (h) each person the scenario names holds exactly the expected inbox items. Dead-lettering is asserted today only in a unit test (tests/unit/test_lineage_dapr_delivery.py). No tests/e2e-py module reads a DLQ.
 - *Why:* Criterion 4. Delivery durability is partly proven (test_outbox_crash_e2e.py, test_chaos_e2e.py, and test_lineage_e2e.py:749 for event-time ordering), but correctness is not: what is on the bus, whether it verifies, whether a redelivery double-counts, and whether anything parked.
-- *How:* The OpenLineage schema is the contract. rask facets get versioned JSON Schemas through service_kit custom_facet (LH-064 step 3). Observe replay idempotency by re-driving a captured event through the lineage ingest door and checking the edge count. NATS stream info reads the message counts on the `dlq.>` stream (chart/templates/nats-stream-job.yaml:201-212). Mutation-check the module: a dropped signature or a duplicated delivery must turn it red. Preconditions are LH-148, CP-037 and CTL-021 (LH-199, LH-064 and XC-078 are closed).
+- *How:* The OpenLineage schema is the contract. rask facets get versioned JSON Schemas through service_kit custom_facet (LH-064 step 3). Observe replay idempotency by re-driving a captured event through the lineage ingest door and checking the edge count. NATS stream info reads the message counts on the `dlq.>` stream (chart/templates/nats-stream-job.yaml:201-212). Mutation-check the module: a dropped signature or a duplicated delivery must turn it red. Preconditions are LH-148 and CP-037 (LH-199, LH-064, XC-078 and CTL-021 are closed).
 - *Closes when:* The criterion-4 `phase1` module is green on both targets and has been observed red under both mutations.
 - *Evidence:* chart/alerting/rules.yml:132-133 · chart/templates/nats-stream-job.yaml:201-212 · tests/e2e-py/test_lineage_e2e.py:749 · tests/e2e-py/test_chaos_e2e.py:33
 
@@ -418,13 +416,7 @@ Closed since the approval: LH-281 and LH-210 (helm rev 260), XC-076, LH-220's en
 
 ## PHASE 1 · CONTROLPLANE AND NOTIFICATIONS
 
-**CTL-021 · The notifications reconciler never reconciles: the live pod runs a pre-fix image, and the walk reads the per-dataset-governed feed as an asserted identity**
-`notifications, lineage, chart` · **HIGH** · **blocks-prod**
-- *What is left:* (1) values-live-pins.yaml now pins notifications `lakehouse-661140a4` (2026-09-28, after the fc1b8bfd feed_token fix; service_identity.py:50 feed_token is wired at lifespan.py:110); what is left is reading the live pod image and its logs back (on 2026-09-25 it logged 192 lines of 401 in an hour and 0 lineage_feed_reconciled). (2) The walk reads `/events` (filtered per dataset by can_get_metadata) with a `reader` grant on the default warehouse only, so tenant-warehouse runs are invisible, and `/events/projection`, built for it, is unused. (3) is done: the reconciler presents its pod's projected `rask-lineage` token and names nobody (LH-220, helm rev 262).
-- *Why:* Criterion 4: the walk is the only lane for runs the bus never carries (ingest, Ray TRAIN, external producers), dead live and blind to tenants once alive.
-- *How:* Read back the pod image against the pin before the behaviour. Move LineageFeedClient.page to `/events/projection`, gated on a new narrow estate rung (`estate.event_reader: [user]`, `can_read_event_feed: owner or event_reader`, the event_stager precedent at model.fga:140,248), not can_observe_events; grant it and drop the warehouse reader. Present the projected SA token as a bearer under D1 (LH-220), subject `kubernetes~system:serviceaccount:<ns>:<sa>`; measure first whether Authorization survives Dapr invocation. Lakekeeper keeps machines on narrow per-purpose relations (docs/audits/2026-09-25/lakekeeper-deep-read/authz.md §8 items 2 and 4).
-- *Closes when:* The pod runs an image containing fc1b8bfd named by the pins file, every tick answers 200 and logs lineage_feed_reconciled, a tenant-warehouse run is scanned, and the reconciler holds no rung that creates projects or edits tuples.
-- *Evidence:* chart/values-live-pins.yaml:19 · services/notifications/src/notifications/api/reconciler.py:234-258,246 · services/notifications/src/notifications/api/service_identity.py:50-81 · services/lineage/src/lineage/api/v1/endpoints/runs.py:163-255 · services/lineage/src/lineage/api/fga_deps.py:149-171 · chart/templates/bootstrap-admin.yaml:143-171,208-218 · live rs and logs 2026-09-25
+No open row (CTL-021 closed 2026-10-05, helm rev 271).
 
 ## PHASE 1 · AFTER LAUNCH
 
@@ -2157,6 +2149,9 @@ Found by the 2026-10-02 review of LH-064, its fix round and its live readback (h
 - LH-383 · LOW · notifications: the feed reconciler's lane is ungated (its /lineage-events enforcement holds while lineage enforces); NAMED_ACTIONS events with no extra.subject are refused under enforce though the handler ignores them; an exempt (R3/R5) annotator event may name a userset, so one forgery notifies a group · `notifications`
 - LH-384 · LOW · Both maintenance Deployments host /maintenance-arrival, so the dedicated workers plan arrivals too · `maintenance`
 - LH-385 · LOW · A staged control-outbox object naming an unknown kid inside lineage-kit's 30 s refresh window stalls the catalog relay's pass about one tick before it is retired; nothing forged is published · `catalog`
+- LH-389 · LOW · On a release that first narrows a machine identity to a new rung, the model is written pre-upgrade and the grant post-upgrade, so the new lineage refuses the reconciler (403, cursor held, nothing lost) until bootstrap-admin has run; the hook's own header warns against seeding a grant in the release that starts reading it (found reviewing CTL-021) · `chart, notifications`
+- LH-390 · LOW · tests/e2e/verify_notifications_two_users.mjs still seeds `user:notifications reader table:<OUTPUT>` with the governed-feed rationale CTL-021 retired, so each run re-adds a data rung the reconciler no longer uses (the live `reader table:bronze$events` deleted at CTL-021's close is its residue) · `tests/e2e`
+- LH-391 · LOW · model.fga.yaml asserts no `event_stager` holder is refused can_read_event_feed and no `role#assignee` tuple on event_reader is refused, so folding the stager into the feed rung flips no check (found reviewing CTL-021) · `service-kit (FGA model)`
 - LH-386 · LOW · Stale prose: ingest/lineage.py complete() says ingest's COMPLETE fires the bronze head (its _emitter says ingest never publishes to the topic); maintenance/services/arrival.py lists ingest and the annotator among topic writers; scripts/ray_e2e_stack.sh says the store is off; tests/unit/workflow_action_order.json is orphaned · `ingest, maintenance, scripts, tests`
 - XC-117 · LOW · Nothing ties a non-off signature-door mode to a reachable secret store: an enforcing door with no store answers RETRY to every delivery it would act on · `chart, service-kit`
 - XC-118 · LOW · Downstream of the OTel Collector, not to be fixed (owner 2026-10-04: GreptimeDB is being replaced by OpenObserve or the Grafana stack): vmalert v1.106.1 POSTs every query with no Content-Type and GreptimeDB answers 415, so all 59 rules are health=err and no alert fires; a rules change restarts vmalert, resetting `for:` clocks; Alertmanager's config has no checksum · `chart (observability)`
