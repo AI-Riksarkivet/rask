@@ -40,15 +40,24 @@ log = logging.getLogger(__name__)
 tracer = trace.get_tracer(__name__)
 
 
-def _unwind_registration(settings: MedallionSettings, *, table_id: str, token: str, cause: BaseException) -> str:
+def _unwind_registration(
+    settings: MedallionSettings, *, registration: catalog_register.Registration | None, table_id: str, token: str, cause: BaseException
+) -> str:
     """Detach the registration a failed seed left behind, and say which of the two failures happened.
+
+    ONLY A RECORD THIS CALL CREATED ([[LH-194]]). `registration` is what the register answered: ``None`` when
+    this call registered nothing (no catalog), :attr:`~catalog_register.Registration.EXISTING` when the catalog
+    already governed the location. An existing record is another call's and governs the bytes that call
+    seeded, so deregistering it would leave those rows ungoverned, and reporting it as governing no bytes
+    would be false: this call does not know what is there.
 
     BEST-EFFORT AND LOUD. If the deregister fails too the record is genuinely orphaned, so the caller
     is told that rather than only the write error — and the drift report keeps naming it, which is the
     safety net rather than the fix. Swallowing this would hide exactly the state the pair exists to
     prevent.
     """
-    if not (settings.catalog_url and settings.compute_enabled):
+    if registration is not catalog_register.Registration.CREATED:
+        log.exception("medallion_produce_seed_failed", exc_info=cause, extra={"token": token, "dataset": table_id, "registration": registration})
         return f"bronze write failed: {cause}"
     try:
         catalog_register.deregister_dataset(
@@ -181,9 +190,10 @@ async def produce(
         # is the pure-emit shape, which writes no dataset at all — registering there would attach a
         # `table:` object to bytes that never arrive, and would turn a demo that needs no object store
         # into one that fails on a URI it was never going to open.
+        registration: catalog_register.Registration | None = None
         if settings.catalog_url and settings.compute_enabled and bronze_uri:
             try:
-                await run_in_threadpool(
+                registration = await run_in_threadpool(
                     partial(
                         catalog_register.register_written_dataset,
                         catalog_url=settings.catalog_url,
@@ -227,9 +237,9 @@ async def produce(
             # `s3://lance-catalog/medallion/bronze`, reported by the drift report's `absent_datasets`.
             try:
                 result = await run_in_threadpool(partial(seed_bronze, bronze_uri, settings.storage_options(), **seed_kwargs))
-            except Exception as exc:  # noqa: BLE001 — ANY write failure must take its registration with it
+            except Exception as exc:  # noqa: BLE001 — ANY write failure must take back a registration this call made
                 span.set_status(Status(StatusCode.ERROR, "seed_failed"))
-                detail = _unwind_registration(settings, table_id=bronze_dataset_id, token=token, cause=exc)
+                detail = _unwind_registration(settings, registration=registration, table_id=bronze_dataset_id, token=token, cause=exc)
                 return {"status": "seed_failed", "token": token, "detail": detail}
             span.set_attribute("lance.write.version", result.version)
             span.set_attribute("lance.write.row_count", result.row_count)

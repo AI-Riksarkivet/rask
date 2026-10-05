@@ -54,6 +54,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
+from enum import StrEnum
 
 import httpx
 import pyarrow as pa
@@ -91,6 +92,19 @@ class LocationConflictError(RegisterError):
     next tenant whose catalog and head disagree is 503 again." It is the shape § H10 already cost the
     estate once — a refusal answered with advice the caller cannot act on.
     """
+
+
+class Registration(StrEnum):
+    """Which of the two successes :func:`register_written_dataset` had: whether THIS call made the record.
+
+    The difference decides who may take the record back. A writer that registers before it writes unwinds a failed
+    write by deregistering, and that is only its to do when the register created the record: the catalog answers a
+    register of an id it already governs with 409, and that record is another call's, governing bytes another call
+    wrote ([[LH-194]]).
+    """
+
+    CREATED = "created"
+    EXISTING = "existing"
 
 
 def credential(identity_token_file: str) -> dict[str, str]:
@@ -431,7 +445,7 @@ def register_written_dataset(
     identity_token_file: str,
     timeout_seconds: float = 30.0,
     client: httpx.Client | None = None,
-) -> None:
+) -> Registration:
     """Attach the dataset at ``dataset_uri`` to the catalog as ``table_id``; 409 means already governed.
 
     THE DOOR FOR A WRITER THAT OWNS ITS OWN LOCATION — see this module's header for why the cascade
@@ -444,6 +458,9 @@ def register_written_dataset(
     namespace — a top-level parent is the WAREHOUSE's to make, and asking for one is refused 400 by
     `require_warehouse_scoped` before the existence check ever runs, so a lane that tried it
     dead-lettered every hop.
+
+    Returns :attr:`Registration.CREATED` when this call made the record and :attr:`Registration.EXISTING` when the
+    catalog already governed this location, so a caller unwinds only what it made.
 
     Raises :class:`RegisterError` on anything short of success, ``catalog_url`` unset included: a tier
     the catalog cannot govern must not report success.
@@ -466,10 +483,11 @@ def register_written_dataset(
             # location and found nothing. Inside the `with`, so the check reuses this client.
             _require_same_location(client, table_id, location, catalog_root, headers)
             log.info("written_dataset_already_registered", extra={"table_id": table_id, "location": location})
-            return
+            return Registration.EXISTING
         if response.status_code >= 400:
             raise RegisterError(f"catalog refused to register {table_id!r}: HTTP {response.status_code} — {response.text[:300]}")
     log.info("written_dataset_registered", extra={"table_id": table_id, "location": location})
+    return Registration.CREATED
 
 
 def deregister_dataset(
