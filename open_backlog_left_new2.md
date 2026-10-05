@@ -13,24 +13,22 @@ Scope (owner, 2026-09-29): catalog, lineage, medallion, maintenance, controlplan
 second; search, the viewer, the annotator and flows are ignored for now. Order (owner, 2026-10-02): the
 **Production short list** below and the criterion-3 rows CP-029 and LH-226 come first, with their enablers; every
 other Phase 1 row waits in **PHASE 1 · AFTER LAUNCH** and is taken earlier only as the stated enabler of a short-list
-row (XC-049, for one, only if a short-list chart fix needs release space). Items 1-4 keep the order adopted on
+row (XC-049, for one, only if a short-list chart fix needs release space). Items 1-3 keep the order adopted on
 2026-09-30 from `docs/audits/2026-09-30/lakehouse-dataflow.md`.
 
 Beside the order (owner, 2026-10-02): prune pass 2 runs in parallel.
 
-1. **XC-078**.
-   Why: criteria 4 and 1. Slice 1 (the doors verify LH-064's signatures, enforcing) is live at helm rev 268; slice 2 (NATS authenticates every client, credentials by reference from the platform's store) and slice 3 (ingest's raw client gets its own user) are left.
-2. **CP-029** with **LH-226**.
+1. **CP-029** with **LH-226**.
    Why: criterion 3, kept first by the owner; the default cascade learns a stage's outcome only through Dapr workflows on Ray, and CP-029's outcome door precedes LH-226's workflow half.
-3. **CTL-021**.
+2. **CTL-021**.
    Why: criterion 4; the reconciler is the only lane that carries HTTP-only runs (ingest, Ray TRAIN, external producers) to a person.
-4. The other 28 short-list rows, in four batches that can run in parallel worktrees (owner, 2026-09-29: batch and parallelize):
+3. The other 28 short-list rows, in four batches that can run in parallel worktrees (owner, 2026-09-29: batch and parallelize):
    a. Commit and change-feed integrity: **LH-211**, **LH-202**, **LH-214**, **LH-216**, **LH-213**, **LH-217**, **LH-241**.
    b. Erasure and governance: **LH-263**, **LH-245**, **LH-242**, **LH-037**, **LH-194**, **LH-208**, **LH-272**.
    c. Storage isolation and table identity: **LH-205**, **LH-209**, **LH-252**, **LH-273**, **LH-203**, **LH-204**.
    d. Infrastructure authentication and resilience: **XC-003**, **XC-077**, **XC-004**, **XC-075**, **LH-247**, **CP-041**, **CP-051**, **LH-243**.
    Why: each makes a criterion false on a production deployment (the production triage, second-reviewed).
-5. **XC-090** with **XC-096** and its proof legs **XC-091** to **XC-095**, its harness built now as a failing test, closing last.
+4. **XC-090** with **XC-096** and its proof legs **XC-091** to **XC-095**, its harness built now as a failing test, closing last.
    Why: all five criteria. XC-090 closes only with its proof legs, so they stay beside it as its enablers. Their own preconditions are listed in each leg; one of them, LH-282 (XC-091's branch reconcile), is a parked finding, so XC-090 cannot close until the owner admits LH-282 or narrows XC-091, and XC-092's erasure end state needs LH-178, which is blocked on D4.
 <!-- FOCUS:END -->
 
@@ -41,11 +39,11 @@ Approved by the owner on 2026-10-02: the Phase 1 rows that, left unfixed, make a
 - Criterion 1, provenance and lineage (4): LH-208, LH-213, LH-214, LH-272.
 - Criterion 2, catalog, authorization and governance (13): LH-202, LH-205, LH-209, LH-217, LH-263, LH-252, XC-004, LH-194, LH-242, LH-245, XC-003, XC-077, LH-037.
 - Criterion 3, no coupling to an engine (1): LH-241.
-- Criterion 4, events (3): LH-216, CTL-021, XC-078.
+- Criterion 4, events (2): LH-216, CTL-021.
 - Criterion 5, resilience (9): LH-203, LH-204, LH-211, LH-247, CP-041, CP-051, LH-243, LH-273, XC-075.
 - The gate (1): XC-090.
 
-Closed since the approval: LH-281 and LH-210 (helm rev 260), XC-076, LH-220's enabler (helm rev 261), LH-220 (helm rev 262), and LH-064 (helm revs 263 to 265).
+Closed since the approval: LH-281 and LH-210 (helm rev 260), XC-076, LH-220's enabler (helm rev 261), LH-220 (helm rev 262), LH-064 (helm revs 263 to 265), and XC-078 (helm revs 266 to 270).
 
 ## Owner rulings in force
 
@@ -109,14 +107,14 @@ Closed since the approval: LH-281 and LH-210 (helm rev 260), XC-076, LH-220's en
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
 | **PHASE 1 · LAKEHOUSE** | 26 | 26 | 13 |
-| **PHASE 1 · CROSS-CUTTING** | 12 | 12 | 10 |
+| **PHASE 1 · CROSS-CUTTING** | 11 | 11 | 9 |
 | **PHASE 1 · CONTROLPLANE AND NOTIFICATIONS** | 1 | 1 | 1 |
 | **PHASE 1 · AFTER LAUNCH** | 117 | 111 | 19 |
 | **PHASE 2 · COMPUTE** | 19 | 18 | 4 |
 | **FRONTEND** | 7 | 7 | 0 |
 | **LOW PRIORITY** | 37 | 36 | 0 |
 
-**219 open items**, of which **6 are blocked on a decision**, **2 wait on another row or ruling** and **211 can be picked up today**; 47 are HIGH. 51 ids left the register on 2026-09-25 and 42 on 2026-09-29, listed at the foot so nothing vanishes silently. The three Phase 1 sections hold the production short list (31 open rows) with CP-029, LH-226 and their enablers (39 rows); the other 117 Phase 1 rows wait in PHASE 1 · AFTER LAUNCH (owner, 2026-10-02).
+**218 open items**, of which **6 are blocked on a decision**, **2 wait on another row or ruling** and **210 can be picked up today**; 46 are HIGH. 51 ids left the register on 2026-09-25 and 42 on 2026-09-29, listed at the foot so nothing vanishes silently. The three Phase 1 sections hold the production short list (30 open rows) with CP-029, LH-226 and their enablers (38 rows); the other 117 Phase 1 rows wait in PHASE 1 · AFTER LAUNCH (owner, 2026-10-02).
 
 ## PHASE 1 · LAKEHOUSE
 
@@ -362,14 +360,6 @@ Closed since the approval: LH-281 and LH-210 (helm rev 260), XC-076, LH-220's en
 - *Closes when:* An uncredentialed call to the deployed OpenFGA answers 401, the playground is off, and every FGA client presents a projected SA token.
 - *Evidence:* packages/service-kit/src/service_kit/governed/fga.py:668,677,767,787 · packages/service-kit/src/service_kit/governed/auth/write_model.py:46-54 · chart/templates/_helpers.tpl:1306-1310 · chart/values.yaml:761,2960-3080 · docs/audits/2026-09-25/02-lance-and-lakekeeper-practice.md LK01
 
-**XC-078 · NATS authenticates no client and the cascade and control lanes verify no signature, so any pod can start the cascade, forge lineage or notify a named person**
-`chart (nats, dapr components, stream Jobs), medallion, catalog, notifications, service-kit` · **HIGH** · **blocks-prod**
-- *What is left:* Slice 1 (the doors) is live at helm rev 268 and read back (2026-10-04): the cascade heads, notifications' two doors and maintenance's arrival door verify LH-064's signatures before they act and enforce by default; control events are signed at emit and the catalog's control relay republishes only what verifies as its own; at Rev C four forgeries (an unsigned bronze write, an unsigned table_published, a key nobody publishes, a genuine grant altered after signing) were refused at every door they reached and nothing acted. Left, slice 2: the nats subchart configures no auth and the 4222 NetworkPolicy admits every pod; Dapr scopes limit components, not subjects. Its readback must show a connection without the subject's credential refused on the lineage and control subjects, the medallion trigger subjects (the stage runner's /medallion-event acts on medallion.bronze with only the app token, and /promotion-held acts on an unsigned hold whose content the producer then signs) and maintenance.work.v1/maintenance.index.v1 (a forged unit names any URI). Slice 3: ingest's work queue is a raw nats-py client with no credential.
-- *Why:* Criteria 4 and 1, zero trust: a forged table_published starts silver→gold and a forged grant_added notifies a named person. D14(6) puts this outside the no-prod parking.
-- *How:* NATS decentralized JWT auth: the server config carries only public operator and account JWTs in values.yaml; each Dapr app-id gets a user with publish/subscribe permissions enumerated from /v1.0/metadata (`$JS.API.>` included); user JWT and seed live in OpenBao, reaching sidecars through jwt/seedKey secretKeyRef plus auth.secretStore on each pubsub.jetstream component and Jobs through ESO file mounts, never token auth in env. Narrow the 4222 policy to sidecar pods. Then the cascade heads call the lineage-kit verifier and require a signature, and CatalogControlEvent is signed and verified at notifications and the publication head. After LH-064, whose public keys the heads and notifications verify with; XC-049 no longer gates it (the measured additions fit the 28.9 KB headroom at helm rev 262). Lakekeeper's NATS sink authenticates with a creds file (crates/lakekeeper-events-nats/src/lib.rs). Ingest's work queue is a raw nats-py JetStream client that connects with no credential (queue.py:33,234; RASK_NATS_URL, config.py:93) and bypasses ingest's Dapr sidecar, so it gets its own NATS user, permitted on the INGEST stream's subjects, on `dlq.ingest.tasks` (park_poison, queue.py:52,469-470) and on the `$JS.API` calls for the INGEST and DLQ streams only, with its creds file mounted by ESO; XC-109 moves ingest_run behind the saga port and leaves this client in place (2026-09-30 best-practice review).
-- *Closes when:* A publish from a pod without its app's credential is refused on every cascade, control and lineage subject on the deployed estate, and a forged or unsigned trigger or control event is refused at its door, pinned by tests. With auth on, ingest drains a run through its own NATS user, and a pod without that user cannot publish on `ingest.tasks.>`.
-- *Evidence:* chart/values.yaml:2716-2773 · chart/templates/_helpers.tpl:795-797 · chart/templates/network-policy.yaml:311-336 · chart/templates/dapr-component.yaml:21-26,49-67 · services/medallion/src/medallion/api/bronze_arrival.py:1-7,44-62,102-111 · packages/service-kit/src/service_kit/control_events.py:161-181 · services/ingest/src/ingest/queue.py:33,52,234,273-300,469-470 · services/ingest/src/ingest/config.py:93
-
 **XC-090 · Phase 1 has no acceptance proof: nothing defines, drives or schedules the scenario that shows the five criteria hold together on the estate**
 `e2e, ci, scripts, docs` · **HIGH** · **blocks-prod**
 - *What is left:* (0) is done: the register header and docs/DECISIONS.md:2604-2606 state the five criteria in the owner's words (confirmed 2026-09-26). (1) Register a `phase1` pytest marker (pyproject.toml:256) and build the five criterion modules on one shared scenario: XC-091 (criterion 1), XC-092 (2), XC-093 (3), XC-094 (4) and XC-095 (5), all counted rows. The scenario runs on a fresh project and warehouse, with the stock `lance_namespace` client as the actor and Dex identities for an owner, a writer, a reader, an outsider and a tenant-B admin, plus the service identities. It performs create, insert, merge_insert, update, delete, add_columns, a client-direct /commit, a tag, a branch create with branch insert, merge and delete, rename, drop, undrop, one maintenance compaction, one /produce bronze→silver→gold and one erasure. (2) Run the scenario on every push on the kind lane under the no-skip rule. That needs the lanes up (XC-075, XC-096, XC-049). The maintenance and observability legs also need runner capacity the 2-core / 7 GB runner lacks (e2e_stack.sh:13-14), and XC-064 already chose a Dagger lane for the observability proof, so those legs run on a Dagger lane or on the deployed tier until XC-096 lands. (3) Run the scenario on a release installed from empty (`make k3s-purge`, then `make k3s-up` on a node with an empty image cache) through `scripts/e2e_live.sh -m phase1 --require-live`. XC-039 owns the flag and the chaos split; XC-033 owns the host-side schedule. Then hold 24 h with the provenance gauges, the dead-letter counter and the outbox depth flat. (4) Scope cut, stated: the rows under No-prod parking (XC-006, XC-007, XC-008, XC-025, XC-027, XC-030, LH-262, the CNPG cutover) and the parked halves of XC-013, XC-031 and XC-032 are outside this acceptance.
@@ -406,7 +396,7 @@ Closed since the approval: LH-281 and LH-210 (helm rev 260), XC-076, LH-220's en
 `e2e, lineage, notifications, chart` · **HIGH** · **enabler: XC-090**
 - *What is left:* Capture every event the shared scenario emits: the lineage /events feed filtered by the scenario's run ids, plus a test-only durable consumer on catalog.control.v1, medallion.bronze and the publication-arrival topic. Assert that: (a) each event validates against the OpenLineage JSON schema and the versioned rask facet schemas; (b) each event carries a verifying signature and a notifiable author and project; (c) each run has a START followed by exactly one terminal; (d) replaying the stream creates no second run or edge; (e) the dlq.* streams gained no message, and the dead_lettered delta is 0; (f) the outbox depth and outbox_stranded are both 0; (g) a forged unsigned event, and a raw publish from a pod without the app's credential, are refused; (h) each person the scenario names holds exactly the expected inbox items. Dead-lettering is asserted today only in a unit test (tests/unit/test_lineage_dapr_delivery.py). No tests/e2e-py module reads a DLQ.
 - *Why:* Criterion 4. Delivery durability is partly proven (test_outbox_crash_e2e.py, test_chaos_e2e.py, and test_lineage_e2e.py:749 for event-time ordering), but correctness is not: what is on the bus, whether it verifies, whether a redelivery double-counts, and whether anything parked.
-- *How:* The OpenLineage schema is the contract. rask facets get versioned JSON Schemas through service_kit custom_facet (LH-064 step 3). Observe replay idempotency by re-driving a captured event through the lineage ingest door and checking the edge count. NATS stream info reads the message counts on the `dlq.>` stream (chart/templates/nats-stream-job.yaml:201-212). Mutation-check the module: a dropped signature or a duplicated delivery must turn it red. Preconditions are LH-064, XC-078, LH-148, CP-037 and CTL-021 (LH-199 is closed).
+- *How:* The OpenLineage schema is the contract. rask facets get versioned JSON Schemas through service_kit custom_facet (LH-064 step 3). Observe replay idempotency by re-driving a captured event through the lineage ingest door and checking the edge count. NATS stream info reads the message counts on the `dlq.>` stream (chart/templates/nats-stream-job.yaml:201-212). Mutation-check the module: a dropped signature or a duplicated delivery must turn it red. Preconditions are LH-148, CP-037 and CTL-021 (LH-199, LH-064 and XC-078 are closed).
 - *Closes when:* The criterion-4 `phase1` module is green on both targets and has been observed red under both mutations.
 - *Evidence:* chart/alerting/rules.yml:132-133 · chart/templates/nats-stream-job.yaml:201-212 · tests/e2e-py/test_lineage_e2e.py:749 · tests/e2e-py/test_chaos_e2e.py:33
 

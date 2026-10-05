@@ -120,7 +120,7 @@ semantics, so it must not undercut the slowest handler. Either way the window co
    2026-09-26: lineage heard nothing from the bus until its pod restarted). Its first attach replays the
    retained stream into the idempotent ingest; to REBUILD the graph from the stream, remove the durable
    and restart lineage — `nats consumer rm LINEAGE lineage-durable`, then
-   `kubectl rollout restart deploy/rask-lineage` — and the new durable replays from the first message.
+   `kubectl rollout restart deploy/rask-lineage` — and the new durable replays from the first message. With NATS auth on, run it as `admin` ([OPERATORS.md](OPERATORS.md) § 7): nats-box itself runs as the read-only `monitor`.
    Residual: gap #2's poison/no-DLQ window, which durable cursors do not change; and the catalog's own
    broadcast consumer, still ephemeral by design (one per replica), which a NATS restart also removes.
 
@@ -159,7 +159,7 @@ semantics, so it must not undercut the slowest handler. Either way the window co
    rollout 06:53–07:00 UTC → reaped + recreated 07:19–07:20), the sidecars recreate them with the
    new config, and delivery resumes with **no manual intervention**. *Fast cutover (operators):*
    right after the rollout, `nats consumer rm` the `<app>-durable` consumers on
-   LINEAGE/MEDALLION/TRAINING/DLQ — the sidecars recreate them within seconds. Fresh installs and
+   LINEAGE/MEDALLION/TRAINING/DLQ — the sidecars recreate them within seconds. With NATS auth on, run it as `admin` ([OPERATORS.md](OPERATORS.md) § 7): nats-box itself runs as the read-only `monitor`. Fresh installs and
    CI never hit this (the consumers are created right the first time); only config-changing
    upgrades of an already-deployed stack do. **Shipped mitigation:** the stream-provision Job now
    reconciles drift on every `helm upgrade` — it deletes any `*-durable` whose

@@ -252,3 +252,56 @@ exactly the pods whose list changed. HotReload is off and Helm applies a Deploym
 a pod that boots first finds no such object, its daprd exits and the kubelet restarts it until Helm has applied it, so
 no pod boots against the old list. During such an upgrade a rolled pod may show one daprd restart: that is the wait,
 not a fault. Read a pod's Configuration from its `dapr.io/config`, not from the app-id.
+
+## 7 · Bus credentials: one NATS user per app (XC-078)
+
+With `nats.auth.server` on, NATS runs in operator mode: a client connects only with a user JWT signed under the
+operator's account, and each user may publish and subscribe only what its row of `nats.auth.users` (values.yaml)
+grants. There is one user per Dapr app-id with a pub/sub component, plus `admin` (the stream Job), `monitor` (nats-box,
+read-only: stream and consumer state, no messages) and `ingest` (its raw work-queue client). A grant only a flag's
+component uses sits under `nats.auth.flagged` and is issued only while that flag is on. Each user's credential is
+`nats-user-<user>` in the store (fields `jwt`, `seed`); every pub/sub Component names its own app's user by
+`secretKeyRef` through `lance-secrets`, every app's Dapr Configuration denies every `nats-user-*` (ingest reads only its
+own, through its sidecar), and the stream Job and nats-box take theirs as files written by ExternalSecrets.
+
+**Production (owner ruling R1): the platform runs NATS and its store; rask owns no trust root.** Create
+`nats-user-<user>` for every user the chart's table issues and, while this chart runs the NATS cluster, `nats-route`
+(fields `user`, `password`) and `nats-server` (fields `operator`, `system_account`, `resolver_preload`); then
+`--set nats.auth.provisioned=true`. Until then a non-dev render (openbao.devMode=false, openbao.externalAddr or
+nats.externalUrl) fails and names every secret it needs.
+
+**The dev OpenBao mints the trust root.** Its seed carries `nats-root` (operator and account keys) and `nats-route` from
+the outgoing pod over a surge rollout, re-issues every user under that root, and writes the users before its readiness
+key. A replacement with no outgoing pod mints a new root: a server in operator mode then refuses every client until the
+NATS pods restart onto the new `nats-server`, and that restart starts an empty JetStream. Restart the NATS pods, rerun
+the stream Job and restart every credentialed client after any non-surge OpenBao replacement.
+
+**Switching it on (or after a trust-root change)** takes the bus down for a few minutes, because a reload cannot change
+the operator or the system account and a pod restarted alone into operator mode cannot join the others: quiesce (no
+Ray job, outboxes at depth 0, ingest idle); `kubectl scale statefulset/rask-nats --replicas=0` and wait until no NATS
+pod exists; run the upgrade with `--set nats.auth.server=true`, which restores the three replicas together (each waits
+for ESO's `rask-nats-auth`) and runs the stream Job as `admin`, recreating the nine streams empty; then
+`kubectl rollout restart` every Deployment with a credentialed pub/sub component and `rask-ingest`.
+
+**A consumer removal** (RESILIENCE.md gaps #7 and the lineage rebuild) needs `admin`, because nats-box runs as `monitor`.
+Write a creds file into the nats-box pod from the store, without printing it:
+
+```
+JWT=$(kubectl exec deploy/rask-openbao -c openbao -- sh -c 'BAO_TOKEN=root bao kv get -field=jwt secret/nats-user-admin')
+SEED=$(kubectl exec deploy/rask-openbao -c openbao -- sh -c 'BAO_TOKEN=root bao kv get -field=seed secret/nats-user-admin')
+printf -- '-----BEGIN NATS USER JWT-----\n%s\n------END NATS USER JWT------\n\n-----BEGIN USER NKEY SEED-----\n%s\n------END USER NKEY SEED------\n' "$JWT" "$SEED" \
+  | kubectl exec -i deploy/rask-nats-box -- sh -c 'umask 077; cat > /tmp/admin.creds'
+kubectl exec deploy/rask-nats-box -- nats --no-context --server nats://rask-nats:4222 --creds /tmp/admin.creds consumer rm <STREAM> <durable> -f
+kubectl exec deploy/rask-nats-box -- rm -f /tmp/admin.creds
+```
+
+**Reading it back.** On each node's monitoring port, `/connz?auth=true` lists every client connection with an
+authorized user and none anonymous; `/connz?state=closed&auth=true` keeps short-lived ones (an ingest run). A publish
+with no credential is refused ("Authorization Violation") and one with another app's credential on a subject that app
+does not own is refused ("Permissions Violation"), each leaving the stream's last sequence unchanged.
+
+**Residuals, named.** `_INBOX.>` is shared within the account, so a client could read another's replies (Dapr exposes no
+inbox prefix). The catalog's ack on CATALOG_CONTROL is stream-wide because its broadcast consumer's name is the
+server's, so a compromised catalog could ack or terminate the producer's and notifications' control deliveries, a lesser
+power than the one it holds as the signer of every control event. Port 8222 is unauthenticated by design. Anything
+holding OpenBao's dev root token reads the store (XC-079).

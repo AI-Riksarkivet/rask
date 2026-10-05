@@ -198,7 +198,7 @@ catalog/lineage.
   which delivery resumes on its own. The chart's stream-provision Job now reconciles this automatically at
   every `helm upgrade` (drifted `*-durable` consumers are deleted; sidecars recreate them within
   seconds); manual fast cutover — `nats consumer rm` the `<app>-durable` consumers on
-  LINEAGE/MEDALLION/TRAINING/DLQ — is only needed when upgrading with a chart older than that Job.
+  LINEAGE/MEDALLION/TRAINING/DLQ — is only needed when upgrading with a chart older than that Job. With NATS auth on, run it as `admin` ([OPERATORS.md](OPERATORS.md) § 7): nats-box itself runs as the read-only `monitor`.
   Fresh installs never hit this. Details: [`RESILIENCE.md`](RESILIENCE.md) gap #7.
 - **Control-plane change-events (`catalog.controlEmit`, default on):** the catalog broadcasts its own
   control-plane mutations (create/drop/grant/…) on a **dedicated group-less pubsub component**

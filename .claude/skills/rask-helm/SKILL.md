@@ -207,6 +207,11 @@ catalog, lineage, maintenance, the medallion, OpenBao and Dex ran as `default` w
   and lineage after a non-surge replacement rather than waiting (docs/OPERATORS.md § 6). values.yaml
   `signing:` holds the tiers, the rotation and the store-loss cases, and a sealed or external store is
   refused at render until `signing.provisioned` attests that an operator created them.
+- **The dev OpenBao also mints the NATS trust root** ([[XC-078]]): the seed carries `nats-root` and `nats-route` over a
+  surge and re-issues every `nats-user-<user>` of the issued table (`lance.natsTable`: values.yaml `nats.auth.users` plus
+  each `nats.auth.flagged` grant whose flag is on) before its readiness key; a non-dev store waits for
+  `nats.auth.provisioned`. With `nats.auth.server` on, a non-surge OpenBao replacement mints a new root that the operator-mode
+  server refuses until the NATS pods restart, which empties JetStream: docs/OPERATORS.md § 7 has the switch-over and recovery.
 - **A Dapr Configuration edit reaches a sidecar only when its pod restarts** (HotReload is off), and Helm
   applies a Deployment before the Configuration it names, so an edit under an unchanged name is loaded
   stale by a pod that boots first, for its life. A per-app Configuration is therefore NAMED by the hash of
