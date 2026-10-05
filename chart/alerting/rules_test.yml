@@ -312,7 +312,7 @@ tests:
         exp_alerts: []
 
   # 14. The feed lane processing NOTHING for 30m → ALERT. This is the silent one: an ungranted or
-  #     unadmitted reconciler ticks perfectly and reconciles zero, with a Ready pod throughout.
+  #     unadmitted reconciler is refused on every page, with a Ready pod throughout.
   - interval: 1m
     input_series:
       - series: 'notifications_ingress_events_total{lance_notifications_lane="feed",app="notifications"}'
@@ -325,7 +325,7 @@ tests:
               severity: warning
               service: notifications
             exp_annotations:
-              summary: "The notifications /events reconciler has processed nothing for 30m"
+              summary: "The notifications feed reconciler has processed nothing for 30m"
               description: "The feed lane has ingested no events for 30m. On an idle estate that is correct; on a busy one it means the reconciler is running and seeing nothing — check that RASK_LINEAGE_SERVICE_IDENTITY is in lineage's RASK_SA_SUBJECTS map AND that the subject holds event_reader on the estate root; missing either, every feed page answers 401 or 403. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled"
 
   # 15. A reconciler that IS reconciling → NO alert, even at a slow trickle. One event every ten

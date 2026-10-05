@@ -608,8 +608,8 @@ groups:
       # 3. The RECONCILER GONE QUIET — the one that catches a plane which looks healthy and is not.
       #    The feed lane covers every producer that emits lineage over HTTP only (ingest, Ray TRAIN,
       #    external OpenLineage), and its two silent failure modes both leave a Ready pod: the service
-      #    identity is not in lineage's allowlist (every tick 403s, and a 403 is deliberately not
-      #    retried), or it is admitted and granted nothing (every tick runs clean and reconciles zero).
+      #    identity is not in lineage's allowlist, or it is admitted without the `event_reader` rung on the
+      #    estate root; either way every page answers 401/403, and a refusal is deliberately not retried.
       #    Either way the cron ticks and the counter never moves. Absence is the signal, so this alerts
       #    on the RATE being zero rather than on any error.
       #    THE LABEL NAME IS DERIVED, NOT CHOSEN. The instrument attribute is `lance.notifications.lane`
@@ -636,7 +636,7 @@ groups:
           severity: warning
           service: notifications
         annotations:
-          summary: "The notifications /events reconciler has processed nothing for 30m"
+          summary: "The notifications feed reconciler has processed nothing for 30m"
           description: >-
             The feed lane has ingested no events for 30m. On an idle estate that is correct; on a busy one it
             means the reconciler is running and seeing nothing — check that RASK_LINEAGE_SERVICE_IDENTITY is

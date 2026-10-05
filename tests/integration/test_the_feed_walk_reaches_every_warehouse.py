@@ -208,3 +208,12 @@ async def test_the_walk_reaches_a_tenant_warehouse_run_and_is_sent_only_what_tar
         },
         "outputs": [{"namespace": "acme-gold", "name": "acme-gold$catalog"}],
     }
+
+    # The rung IS the gate: an unfiltered feed of every warehouse's runs answers a verified caller that holds
+    # nothing on the estate root with 403, so a refactor that drops the check fails here rather than shipping.
+    lineage.dependency_overrides[authenticate] = lambda: ServicePrincipal(subject="service-ingest", service_account="system:serviceaccount:rask:rask-sa-ingest")
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=lineage)) as http:
+        stranger = LineageFeedClient(client=http, base_url="http://lineage.test", token_file=str(token), timeout_seconds=5.0, page_limit=500)
+        with pytest.raises(httpx.HTTPStatusError) as refused:
+            await stranger.page(after=None)
+    assert refused.value.response.status_code == 403
