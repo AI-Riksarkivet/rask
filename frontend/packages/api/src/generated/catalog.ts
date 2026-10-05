@@ -744,10 +744,9 @@ export interface paths {
          * Table Changes
          * @description Rows that changed in ``(begin_version, end_version]`` — Arrow-IPC, like ``query``.
          *
-         *     Composes the predicate `lance_docs/file_format.md:4270-4300` documents; the scan is
-         *     `dataplane.read_changes`, which is its OWN scan and not the query door's — `QueryTableRequest`
-         *     requires `k` and `vector`, so reusing that door would mean inventing a vector to ask a question
-         *     with nothing to do with similarity. What the two doors DO share is the framing they answer in.
+         *     Answers the change data feed `lance_docs/file_format.md:4270-4298` documents, from one snapshot at
+         *     the window's end, and refuses a window the version columns cannot describe; the rules and the
+         *     consumer contract live in `catalog.services.changes`, the read in `dataplane.read_changes`.
          *
          *     A CHANGE FEED IS A READ, which settles both policy questions: it is gated like one and audited like
          *     one (§ J1), because following every row a table ever received is the most disclosing read
