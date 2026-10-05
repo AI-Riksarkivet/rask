@@ -357,17 +357,16 @@ def test_the_stamp_PRESERVES_other_schema_metadata(tmp_path: Any) -> None:
     assert metadata["lineage.run_id"] == "r-1" and metadata["owner"] == "data_eng", "the stamp destroyed existing metadata"
 
 
-def test_the_DECLARED_name_is_what_the_sweep_EMITS_under(tmp_path: Any) -> None:
-    """The read half was DEAD CODE until this wiring: `declared_table_id` existed and nothing called it.
+def test_a_pass_is_named_by_its_path_and_by_the_stamp_only_where_the_path_is_silent(tmp_path: Any) -> None:
+    """[[LH-208]]: a maintenance pass never names a table other than the one its path resolves to.
 
-    `compact_one` holds the open dataset, so it reads the declaration there and carries it on the
-    result; the emit path downstream has only a URI. That matters because for the cascade's own tiers a
-    URI cannot be resolved to a name at all — `medallion/bronze` is both `bronze$events` and
-    `bronze$pages` — so without the carry those datasets still emit nothing and T6 is unfinished while
-    looking finished.
+    `lineage.dataset_id` is schema metadata, so a writer could re-point it at another table, and while
+    the stamp outranked the path this pass's RunEvents and audit records were filed against that table.
+    The stamp still answers where the path cannot: `medallion/<tier>` names more than one table, which
+    is why the cascade stamps it at all.
 
-    Asserted end to end through `compact_one`, not on the helper, because the helper passing while the
-    sweep ignores it is exactly the failure this closes.
+    Driven through `compact_one` on real pylance into the sweep's own emit, because the name is resolved
+    in one and spent in the other.
     """
     from datetime import timedelta
 
@@ -377,32 +376,19 @@ def test_the_DECLARED_name_is_what_the_sweep_EMITS_under(tmp_path: Any) -> None:
     from maintenance.services.optimize import compact_one
     from service_kit.lakehouse.stage_stamp import declare_dataset_id
 
-    uri = str(tmp_path / "medallion-gold.lance")
-    lance.write_dataset(declare_dataset_id(pa.table({"v": [1, 2, 3]}), "gold$catalog"), uri)
+    forged = "victim$payroll"
+    flat = str(tmp_path / "deadbeef_silver$plain")
+    composed = str(tmp_path / "medallion" / "gold")
+    for uri in (flat, composed):
+        lance.write_dataset(declare_dataset_id(pa.table({"v": [1]}), forged), uri, mode="create")
+        lance.write_dataset(pa.table({"v": [2]}), uri, mode="append")  # a second fragment, so the pass compacts
 
-    result = compact_one(uri, {}, timedelta(days=7))
+    results = [compact_one(uri, {}, timedelta(days=7)) for uri in (flat, composed)]
+    assert [(r.error, r.fragments_removed) for r in results] == [(None, 2), (None, 2)], results
 
-    assert result.error is None
-    assert result.declared_table_id == "gold$catalog", "the sweep did not pick up the producer's declaration"
-
-
-def test_an_UNDECLARED_dataset_still_falls_back_to_the_uri(tmp_path: Any) -> None:
-    """Every dataset already on disk carries no key — the fallback must stay intact, not become None."""
-    from datetime import timedelta
-
-    import lance
-    import pyarrow as pa
-
-    from maintenance.core.lineage_emit import table_id_from_uri
-    from maintenance.services.optimize import compact_one
-
-    uri = str(tmp_path / "deadbeef_silver$plain.lance")
-    lance.write_dataset(pa.table({"v": [1]}), uri)
-
-    result = compact_one(uri, {}, timedelta(days=7))
-
-    assert result.declared_table_id is None
-    assert table_id_from_uri(result.uri) == "silver$plain.lance", "the URI derivation must still answer for undeclared datasets"
+    emitter = _RecordingEmitter()
+    asyncio.run(emit_sweep_lineage(cast(Any, emitter), results, delimiter="$"))
+    assert emitter.calls == [("silver$plain", "silver"), (forged, "victim")], "a pass was named by a stamp its path contradicts"
 
 
 def test_the_maintenance_emitter_STAGES_the_event_rather_than_publishing_it_bare(monkeypatch: pytest.MonkeyPatch) -> None:

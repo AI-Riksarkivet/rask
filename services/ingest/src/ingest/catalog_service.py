@@ -272,10 +272,12 @@ class CatalogServiceClient:
     def ensure(self, namespace: str, dataset: str, external_base: str | None = None) -> str:
         """Create the namespace and the table if absent; return the location the catalog vends.
 
-        ``external_base`` registers the root this dataset's blob descriptors may point at. It is
-        stamped into the SCHEMA at creation — the same mechanism `lander.create_empty` uses — because
-        the catalog's create door takes an Arrow schema and nothing else, and the base has to be
-        recorded before the first fragment lands.
+        ``external_base`` changes nothing on this path, and is accepted so both sides of the seam take
+        the same call. The catalog's create registers every approved external base
+        (`LANCE_EXTERNAL_BLOB_BASES`) in the new table's manifest, which is the only place a stage
+        runner reads a base from; `runtime.approved_external_base` has already refused one outside
+        that list. A base cannot ride the create payload: its schema metadata is the platform's
+        reserved namespace and the door refuses it ([[LH-208]]).
 
         The parameter existed on `LocalCatalog.ensure` and not here, so `runtime.py`'s call worked in
         every unit test and died in-cluster with `unexpected keyword argument \'external_base\'` at
@@ -306,7 +308,7 @@ class CatalogServiceClient:
         self._ensure_namespace(namespace)
         # The create's OWN response carries the location, so the happy path costs one call, not two —
         # and more importantly it does not re-ask a read door the question the read door cannot answer.
-        created = self._create_empty(namespace, dataset, external_base)
+        created = self._create_empty(namespace, dataset)
         if created is not None:
             return self._contracted(namespace, dataset, created)
 
@@ -528,7 +530,7 @@ class CatalogServiceClient:
                 )
             raise CatalogError(f"catalog refused namespace {namespace!r} ({response.status_code}): {response.text[:300]}")
 
-    def _create_empty(self, namespace: str, dataset: str, external_base: str | None = None) -> str | None:
+    def _create_empty(self, namespace: str, dataset: str) -> str | None:
         """Step 1 of the creation two-step — zero rows, so no data byte transits the catalog.
 
         Returns the location the catalog vends, or None when the table already existed (409).
@@ -541,15 +543,9 @@ class CatalogServiceClient:
         bronze table impossible to create at all.
         """
         from ingest.http import shared_client
-        from service_kit.lakehouse import blobs
         from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 
-        # Stamp the approved external base onto the schema before the create, exactly as the local
-        # path does — the catalog's door carries a schema and nothing else, so this is where the base
-        # has to ride.
-        schema = blobs.stamp_external_base(self._schema, external_base) if external_base else self._schema
-
-        body = encode_arrow_stream(schema.empty_table())
+        body = encode_arrow_stream(self._schema.empty_table())
 
         url = f"{self._base}/v1/table/{self.table_id(namespace, dataset)}/create"
         try:

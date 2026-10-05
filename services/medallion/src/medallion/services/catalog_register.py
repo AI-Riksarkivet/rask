@@ -288,6 +288,10 @@ def ensure_stage_output(
     and governs a URI, and the stage runner's `overwrite` replaces the schema wholesale afterwards. A stage
     does not know its output schema until it has computed, and does not need to.
 
+    SENT WITHOUT ITS SCHEMA METADATA. Callers pass the UPSTREAM's schema, which carries the upstream's
+    `lineage.*` stamp, and the catalog refuses a create payload naming a reserved key ([[LH-208]]). The
+    stamp names the upstream in any case, so it would be a false claim about this table.
+
     Never falls back to a composed path. A catalog that vends no location is an error — guessing one
     is precisely the defect this replaces.
     """
@@ -318,7 +322,7 @@ def ensure_stage_output(
             # alone, never `owner`, so a no-op create can still not seize somebody's table.
             created = client.post(
                 f"/v1/table/{table_id}/create?mode=exist_ok",
-                content=encode_arrow_stream(schema.empty_table()),
+                content=encode_arrow_stream(schema.remove_metadata().empty_table()),
                 headers={**headers, "Content-Type": ARROW_STREAM_MEDIA_TYPE, "x-lance-table-id": delimiter.join(segments)},
             )
         except httpx.HTTPError as exc:

@@ -27,7 +27,6 @@ from service_kit.lancekit.blobs import BLOB_V2_EXTENSION_NAME, blob_field_names,
 #: surface, so ruff must not read them as unused.
 __all__ = [
     "BLOB_V2_EXTENSION_NAME",
-    "EXTERNAL_BASE_KEY",
     "EXTERNAL_KIND",
     "blob_column_resolves",
     "blob_field_names",
@@ -37,7 +36,6 @@ __all__ = [
     "is_blob_field",
     "read_aligned_table",
     "schema_has_blob",
-    "stamp_external_base",
 ]
 
 if TYPE_CHECKING:
@@ -57,30 +55,6 @@ log = logging.getLogger(__name__)
 #: Measured, not documented: 0 inline, 1 packed, 2 dedicated, 3 external.
 EXTERNAL_KIND = 3
 
-#: Schema-metadata key naming the external base a dataset's blob URIs are relative to.
-#:
-#: THE MANIFEST IS THE AUTHORITATIVE ANSWER AND THIS IS THE FALLBACK. `ds._ds.base_paths()` returns
-#: every registered base with its name, path and `is_dataset_root` flag, and survives a reopen —
-#: probed on pylance 10.0.0: `{1: DatasetBasePath(id=1, name=Some("source"), path=…, is_dataset_root=false)}`.
-#:
-#: The two answer different questions and that is why both exist. The manifest says which bases this
-#: dataset REGISTERED; the stamp says which base its `blob_uri` values are RELATIVE to. They coincide
-#: for every dataset the estate writes (one external base, named `source`), and the manifest is the
-#: half that cannot lie: it is written by the same commit as the data, whereas the stamp travels with
-#: a schema COPY — `transform_stage` forwards upstream schema metadata downstream, so an inherited
-#: stamp can name a base this dataset never registered. The manifest is therefore asked first.
-#:
-#: The stamp still answers for a dataset written before this landed, and must: a pointer that cannot
-#: be resolved is a blob that cannot be read. A scanned descriptor's `blob_uri` is BASE-RELATIVE, and
-#: carrying one into another dataset verbatim is refused with "outside registered external bases", so
-#: a stage runner cannot forward a pointer it cannot resolve.
-#:
-#: Stamped into the SCHEMA rather than kept in config for the same reason #21 puts the lineage
-#: coordinates there: the data becomes self-describing, and a stage runner that has never met the service
-#: that wrote it can still resolve the pointer from the dataset alone. Verified to survive both
-#: `create` and `append`.
-EXTERNAL_BASE_KEY = b"rask.blob.external_base"
-
 
 def external_base_of(ds: lance.LanceDataset) -> str | None:
     """The external base this dataset's blob URIs are relative to, or None if it owns its bytes.
@@ -89,17 +63,18 @@ def external_base_of(ds: lance.LanceDataset) -> str | None:
     Arrow-IPC fragment landed by `lance-append`, a source whose lifecycle is not the estate's) must
     own them, and a caller reading None should copy rather than refuse.
 
-    THE MANIFEST FIRST, the stamp second — see :data:`EXTERNAL_BASE_KEY` for why the order is
-    load-bearing rather than a preference. A dataset that registered a base answers from its own
-    manifest even when it carries a stamp inherited from an upstream schema; a dataset written before
-    the manifest was read answers from its stamp.
+    THE MANIFEST ONLY. Bases are manifest state (`lance_docs/file_format.md` § Base Path System),
+    written by the same commit as the data; `ds._ds.base_paths()` returns every registered base with
+    its name, path and `is_dataset_root` flag and survives a reopen (probed on pylance 10.0.0). A
+    schema-metadata key naming a base is not read ([[LH-208]]): schema metadata travels with a schema
+    copy and any table writer could set it, and a forged one made the in-process cascade null every
+    payload and register the forged base on the tier above.
     """
     for base in (_registered_bases(ds) or {}).values():
         path = getattr(base, "path", None)
         if path:
             return str(path)
-    raw = (ds.schema.metadata or {}).get(EXTERNAL_BASE_KEY)
-    return raw.decode() if raw else None
+    return None
 
 
 def _registered_bases(ds: lance.LanceDataset) -> dict[int, object] | None:
@@ -107,27 +82,16 @@ def _registered_bases(ds: lance.LanceDataset) -> dict[int, object] | None:
 
     Reached through `_ds` because pylance exposes no public wrapper — the same private tier
     `service_kit.lakehouse.features` already relies on for `serialized_manifest()`. Guarded rather
-    than assumed: a pylance upgrade that renames or removes it must degrade to the stamp, not break
-    every blob-carrying stage runner.
+    than assumed: a pylance upgrade that renames or removes it degrades to the managed answer, which
+    copies the bytes rather than breaking every blob-carrying stage runner.
     """
     accessor = getattr(getattr(ds, "_ds", None), "base_paths", None)
     if accessor is None:
         return None
     try:
         return accessor()
-    except Exception:  # noqa: BLE001 — any failure here means "ask the stamp", never "no base"
+    except Exception:  # noqa: BLE001 — any failure here means "managed", never a failed stage
         return None
-
-
-def stamp_external_base(schema: pa.Schema, base: str | None) -> pa.Schema:
-    """`schema` carrying `base` in its metadata — the write half of :func:`external_base_of`.
-
-    Merges rather than replaces: the estate stamps other self-describing coordinates into the same
-    map (#21's `lineage.*`), and a replace here would silently destroy them.
-    """
-    if not base:
-        return schema
-    return schema.with_metadata({**(schema.metadata or {}), EXTERNAL_BASE_KEY: base.encode()})
 
 
 def carry_external_descriptor(descriptor: object, base: str) -> object | None:

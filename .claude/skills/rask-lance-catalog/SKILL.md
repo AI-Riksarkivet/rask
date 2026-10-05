@@ -269,9 +269,19 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   the key: no-null bodies stay on the native spec op, a body with any null routes to
   `dataplane.update_schema_metadata` (pylance's `update_schema_metadata`, the same dialect
   `update_field_metadata` already speaks). **Never `replace=True`** — the map a caller holds came from
-  `read_schema_metadata`, which excludes `lineage.*`, so a replace silently destroys the #21
-  self-describing coordinates. `description` is the one RESERVED key (the lakehouse renders it under the
-  table name); everything else in that map is opaque user data.
+  `read_schema_metadata`, which excludes `lineage.*` and `rask.*`, so a replace silently destroys the #21
+  self-describing coordinates. **Those two namespaces are the platform's** ([[LH-208]],
+  `catalog/core/provenance_guard.py`): a set or a null of any `lineage.*` / `rask.*` key is refused 400 at
+  this door before the route split, in a create payload's schema metadata, in create `properties` and in an
+  `insert?mode=overwrite` payload (whose body then carries the table's own schema and field metadata); the
+  platform writes them with pylance directly, and a producer creating from an upstream's schema strips its
+  schema metadata first (`medallion.services.catalog_register.ensure_stage_output`). `description` is the one user-facing reserved key (the
+  lakehouse renders it under the table name); everything else in that map is opaque user data.
+- **`drop_columns` / `alter_columns` refuse to drop, rename or re-type provenance** ([[LH-208]]): the
+  columns `stage`, `lineage`, `source_rowid` by name, and every field carrying
+  `lance-schema:unenforced-primary-key` plus its ancestors, by metadata, in any table. Measured on pylance
+  12.0.0, Lance itself accepts all of those (a re-type strips the key); it refuses only `nullable=True` on
+  the key (mapped to 400 in `_column_op`) and changes to the key's field metadata.
 - **`register` judges what it attaches: the location's spelling, its overlaps, reader flag 256 and the
   bases the dataset declares** ([[LH-279]], `catalog/services/table_bases.py`). The `dir` backend
   registers a location without opening it (measured on pylance 12.0.0: a mixed table, an absent location
@@ -416,7 +426,8 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   behaving correctly, not a defect.
 
   **THE CHAIN HAS THREE PARTIES, NOT TWO, AND THE THIRD IS WHERE IT BROKE.** A producer stamping
-  `lineage.dataset_id` and a sweep preferring it are necessary and not sufficient: `lineage.dataset_id`
+  `lineage.dataset_id` and a sweep reading it are necessary and not sufficient (the sweep names a dataset by
+  its PATH first and by the stamp only where the path is silent, [[LH-208]]): `lineage.dataset_id`
   is schema METADATA, and metadata survives `set_column` / `append_column` / `drop_columns`, so every
   DERIVED tier silently inherited its upstream's name (measured 2026-09-09: bronze declaring
   `acme$bronze` produced a stamped silver table, and the empty schema the distributed lane creates its

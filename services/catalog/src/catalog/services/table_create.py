@@ -53,6 +53,7 @@ from pydantic import BaseModel
 
 from catalog.api import fga_deps
 from catalog.api.security import Principal
+from catalog.core import provenance_guard
 from catalog.core.config import Settings
 from catalog.core.formats import reject_unsupported_format
 from catalog.core.identifiers import parse_identifier, require_safe_segments
@@ -151,6 +152,9 @@ def parse_create_shape(
     parsed_properties = _parse_properties(properties)
     # #78 format honesty: reject a client that tries to select another file format (see the helper).
     reject_unsupported_format(parsed_properties)
+    # Create properties are stamped onto the Lance file's schema metadata, so they meet the same
+    # reserved-namespace rule as every other metadata write door ([[LH-208]]).
+    provenance_guard.refuse_reserved_keys(parsed_properties or {}, door="create properties")
     return CreateShape(
         properties=parsed_properties,
         source_pin=merge_source_pin(source, source_version, settings.delimiter),

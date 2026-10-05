@@ -39,7 +39,7 @@ class _Result:
     """
 
     uri = "s3://lance-catalog/medallion/bronze"
-    declared_table_id = "bronze$events"
+    table_id = "bronze$events"
     compaction_mode = "in_pod"
     fragments_removed = 3
     fragments_added = 1

@@ -20,7 +20,7 @@ import pyarrow.fs as pafs
 from pydantic import BaseModel, Field
 
 from maintenance.core.config import DEFAULT_COMPACT_THREADS, DEFAULT_MAX_SOURCE_BYTES, DEFAULT_SCAN_BATCH_SIZE, shared_lance_session
-from maintenance.core.lineage_emit import declared_table_id
+from maintenance.core.lineage_emit import declared_table_id, table_id_from_uri
 from maintenance.core.metrics import CatalogRefusal
 from maintenance.services.compaction_executor import (
     CompactionPlaneUnavailable,
@@ -134,11 +134,14 @@ class DatasetResult(BaseModel):
     #: Distinguishes "reclaimed nothing" from "the writer reclaims this one" — which read identically
     #: on ``old_versions_removed=0`` alone.
     auto_cleanup_configured: bool = False
-    #: The canonical lineage/FGA name a PRODUCER declared on the dataset (`lineage.dataset_id` in its
-    #: schema metadata), or None. Carried here because `compact_one` already holds the open dataset —
-    #: the emit path downstream has only a URI, and for the medallion tiers a URI cannot be resolved
-    #: to a name at all (`medallion/bronze` is both `bronze$events` and `bronze$pages`).
-    declared_table_id: str | None = None
+    #: The catalog id every event, audit record and door names this dataset by, or None. The id its
+    #: PATH resolves to comes first; the producer's `lineage.dataset_id` answers only where the path
+    #: names nothing, which is every medallion tier (`medallion/bronze` is both `bronze$events` and
+    #: `bronze$pages`). Never the other way round ([[LH-208]]): the stamp is schema metadata, and while
+    #: it outranked the path, re-pointing it filed this pass's RunEvents and audit records against
+    #: another table. Carried here because `compact_one` holds the open dataset and the emit path
+    #: downstream has only a URI.
+    table_id: str | None = None
     error: str | None = None
     # Stable identifier for span aggregation (otel attributes.md: set `error.type` whenever the span
     # status is ERROR) — the exception CLASS name, never the message.
@@ -894,9 +897,11 @@ def compact_one(
     # a URI, and for the cascade's own tiers a URI cannot be resolved to a name at all. Never fatal: a
     # dataset with no declared id simply falls back to the URI derivation, which is the common case
     # until producers stamp it and remains the case for every dataset already on disk.
-    result = DatasetResult(uri=uri, declared_table_id=declared_table_id(ds), data_storage_version=table_version, mixed_data_file_versions=mixed)
+    result = DatasetResult(
+        uri=uri, table_id=table_id or table_id_from_uri(uri) or declared_table_id(ds), data_storage_version=table_version, mixed_data_file_versions=mixed
+    )
     # The id the catalog's doors are asked under; see the precedence at `_compact_files` below.
-    addressed = table_id or result.declared_table_id
+    addressed = result.table_id
     try:
         # THE ORDER IS FIXED, and it is the whole reason these three are separate functions rather than
         # a configurable list: compaction leaves its new fragments unindexed, so index optimization must
@@ -915,9 +920,9 @@ def compact_one(
             # The MEMORY bound. Separate from how many UNITS run, because only this step holds bytes.
             rewrite_slots=rewrite_slots,
             rewrite=rewrite,
-            # THE CALLER'S RESOLVED ID FIRST, the producer's stamp only where the caller has none —
-            # the same precedence `sweep.maintain_one_item` applies when it vends this rewrite's
-            # credential, and deliberately not a second derivation of its own. One resolution feeding
+            # THE CALLER'S RESOLVED ID FIRST, then the path's, the producer's stamp only where neither
+            # answers — the same precedence `sweep.maintain_one_item` applies when it vends this
+            # rewrite's credential. One resolution feeding
             # both doors is what keeps the identifier the plan is addressed to and the identifier the
             # bytes are signed for from disagreeing.
             #

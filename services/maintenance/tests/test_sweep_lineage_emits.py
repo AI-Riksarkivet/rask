@@ -49,7 +49,7 @@ class _RecordingEmitter:
 
 def _material(n: int) -> list[DatasetResult]:
     """`n` datasets that each reclaimed something — the COMPLETE lane's trigger."""
-    return [DatasetResult(uri=f"s3://b/{i:04d}_ns.tbl{i}", declared_table_id=f"ns.tbl{i}", fragments_removed=1) for i in range(n)]
+    return [DatasetResult(uri=f"s3://b/{i:04d}_ns.tbl{i}", table_id=f"ns.tbl{i}", fragments_removed=1) for i in range(n)]
 
 
 @pytest.mark.asyncio
@@ -63,7 +63,7 @@ async def test_complete_emits_are_gathered_not_awaited_one_at_a_time() -> None:
 @pytest.mark.asyncio
 async def test_a_raising_complete_publish_does_not_abort_the_emit_phase() -> None:
     """The FAIL lane is documented raise-proof "even for a mis-wired emitter"; the COMPLETE lane was not."""
-    results = [*_material(3), DatasetResult(uri="s3://b/9999_ns.bad", declared_table_id="ns.bad", error="maintain: boom", error_type="RuntimeError")]
+    results = [*_material(3), DatasetResult(uri="s3://b/9999_ns.bad", table_id="ns.bad", error="maintain: boom", error_type="RuntimeError")]
     emitter = _RecordingEmitter(raise_on="ns.tbl1")
     await emit_sweep_lineage(emitter, results, delimiter=".")
     assert sorted(emitter.completed) == ["ns.tbl0", "ns.tbl2"], "a raising publish must not take its siblings down"
@@ -75,13 +75,13 @@ async def test_a_raising_complete_publish_does_not_abort_the_emit_phase() -> Non
     [
         pytest.param(
             DatasetResult(
-                uri="s3://b/0001_ns.t", declared_table_id="ns.t", fragments_removed=4, error="compaction: 1 of 3 task(s) failed", error_type="PartialCompaction"
+                uri="s3://b/0001_ns.t", table_id="ns.t", fragments_removed=4, error="compaction: 1 of 3 task(s) failed", error_type="PartialCompaction"
             ),
             "complete",
             id="a-partial-compaction-that-committed",
         ),
         pytest.param(
-            DatasetResult(uri="s3://b/0001_ns.t", declared_table_id="ns.t", error="compaction: refused", error_type="CompactionPlanRefused"),
+            DatasetResult(uri="s3://b/0001_ns.t", table_id="ns.t", error="compaction: refused", error_type="CompactionPlanRefused"),
             None,
             id="a-skipped-rewrite-that-reclaimed-nothing",
         ),

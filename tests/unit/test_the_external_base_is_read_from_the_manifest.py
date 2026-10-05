@@ -1,26 +1,12 @@
-"""A dataset's registered base is read from the MANIFEST, not only from a schema stamp.
+"""A dataset's external base is read from its MANIFEST, and from nothing else.
 
-`blobs.py` carried this in capitals: "THIS EXISTS BECAUSE PYLANCE EXPOSES NO WAY TO READ A DATASET'S
-REGISTERED BASES. `add_bases` writes them and nothing reads them back; the base path is not
-recoverable from the manifest either (probed on pylance 10.0.0)." `lander.py` repeated it.
+`ds._ds.base_paths()` returns every registered base with its name, path and `is_dataset_root` flag,
+and survives a reopen from disk, which is the case a stage runner actually has (probed on pylance
+10.0.0). Bases are manifest state, written by the same commit as the data.
 
-IT IS FALSE ON THE PINNED LIBRARY. Probed on pylance 10.0.0:
-
-    ds._ds.base_paths()
-    -> {1: DatasetBasePath(id=1, name=Some("blobs"), path=/tmp/…/external, is_dataset_root=false)}
-
-and it survives a reopen from disk, which is the case a stage runner actually has.
-
-WHY THE STAMP STILL EXISTS rather than being deleted: the two answer different questions. The manifest
-says which bases this dataset REGISTERED; the stamp says which base its `blob_uri` values are RELATIVE
-to. They coincide for every dataset the estate writes (one external base, named `source`), and the
-manifest is the AUTHORITATIVE half — it is written by the same commit as the data and cannot be
-carried onto a table by a schema copy, which the stamp can (`transform_stage` forwards upstream schema
-metadata downstream). So the manifest is asked first and the stamp is the fallback for a dataset
-written before this landed.
-
-A stamp that disagrees with the manifest is worth knowing about, so the resolver prefers the manifest
-and this test pins that order.
+A schema-metadata key naming a base is NOT read ([[LH-208]]): schema metadata travels with a schema
+copy and any table writer could set it, and on a managed tier a forged one made the in-process cascade
+null every payload and register the forged base on the tier above.
 """
 
 from __future__ import annotations
@@ -48,14 +34,10 @@ def _dataset_with_base(tmp: Path, base_name: str = "source") -> tuple[lance.Lanc
     return lance.dataset(uri), str(base)
 
 
-def test_the_registered_base_is_recoverable_without_a_stamp(tmp_path: Path) -> None:
-    """The case the capitalised claim said was impossible: a dataset carrying a base and NO stamp."""
+def test_the_registered_base_is_recovered_from_the_manifest(tmp_path: Path) -> None:
+    """A dataset that registered a base answers with it, from a fresh open."""
     ds, base = _dataset_with_base(tmp_path)
-    assert blobs.EXTERNAL_BASE_KEY not in (ds.schema.metadata or {}), "fixture stamped the schema — it must not"
-
-    assert blobs.external_base_of(ds) == base, (
-        "the base was registered in the manifest and the resolver could not see it — the stamp is still the only source of truth"
-    )
+    assert blobs.external_base_of(ds) == base, "the base was registered in the manifest and the resolver could not see it"
 
 
 def test_a_dataset_with_no_base_still_answers_none(tmp_path: Path) -> None:
@@ -65,27 +47,10 @@ def test_a_dataset_with_no_base_still_answers_none(tmp_path: Path) -> None:
     assert blobs.external_base_of(lance.dataset(uri)) is None
 
 
-def test_the_stamp_still_answers_for_a_dataset_written_before_this(tmp_path: Path) -> None:
-    """No backward compatibility does not mean breaking data already on disk: a dataset stamped by an
-    older writer and carrying no registered base must still resolve, or its blob pointers become
-    unreadable."""
-    uri = str(tmp_path / "stamped.lance")
-    schema = blobs.stamp_external_base(pa.schema([pa.field("id", pa.int64())]), "s3://legacy/base")
-    lance.write_dataset(pa.table({"id": pa.array([1], pa.int64())}).cast(schema), uri, data_storage_version="2.2")
-    assert blobs.external_base_of(lance.dataset(uri)) == "s3://legacy/base"
-
-
-def test_the_manifest_wins_over_a_disagreeing_stamp(tmp_path: Path) -> None:
-    """The stamp travels with a schema COPY and the manifest cannot, so a disagreement means the stamp
-    was inherited from an upstream dataset. The dataset's own registration is the truthful answer."""
-    base = tmp_path / "external"
-    base.mkdir(parents=True, exist_ok=True)
-    uri = str(tmp_path / "both.lance")
-    schema = blobs.stamp_external_base(pa.schema([pa.field("id", pa.int64())]), "s3://inherited/from-upstream")
-    lance.write_dataset(
-        pa.table({"id": pa.array([1], pa.int64())}).cast(schema),
-        uri,
-        data_storage_version="2.2",
-        initial_bases=[lance.DatasetBasePath(str(base), "source")],
-    )
-    assert blobs.external_base_of(lance.dataset(uri)) == str(base), "a stamp inherited from an upstream dataset outranked this dataset's own registered base"
+def test_a_schema_key_naming_a_base_is_not_a_base(tmp_path: Path) -> None:
+    """A managed dataset carrying a forged `rask.blob.external_base` stays managed: the key is a claim
+    anyone with write access could make, and only the manifest registers a base."""
+    uri = str(tmp_path / "forged.lance")
+    table = pa.table({"id": pa.array([1], pa.int64())}).replace_schema_metadata({b"rask.blob.external_base": b"s3://other/"})
+    lance.write_dataset(table, uri, data_storage_version="2.2")
+    assert blobs.external_base_of(lance.dataset(uri)) is None

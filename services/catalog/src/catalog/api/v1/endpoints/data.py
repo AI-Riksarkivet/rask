@@ -43,6 +43,7 @@ from catalog.api.dependencies import (
 )
 from catalog.api.rask_params import RaskDataBase, RaskSource, RaskSourceVersion
 from catalog.api.security import CurrentSubject, CurrentToken
+from catalog.core import provenance_guard
 from catalog.core.formats import reject_unsupported_format
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.core.lineage_emit import COMPACT_TABLE, DELETE, INSERT, MERGE_INSERT, UPDATE, merge_source_pin, parse_run_facets
@@ -162,6 +163,9 @@ async def create_table(
     # The body is shape too, read off the loop. The table read here is the one written, so the payload
     # is decoded once.
     table = await run_in_threadpool(dataplane.read_arrow_body, data, max_bytes=settings.max_body_bytes)
+    # The payload's schema metadata becomes the table's, so a reserved key in it is a forged claim
+    # whether or not the lineage stamp would later overwrite it ([[LH-208]]).
+    provenance_guard.refuse_reserved_keys((table.schema.metadata or {}).keys(), door="create payload")
     # OPTIONAL BY SPEC CONSTRAINT (see `catalog.api.idempotency`): a stock Lance client sends no key
     # and is unaffected. A caller that sends one gets the first attempt's answer back rather than a
     # second execution of a door that DROPS AND REWRITES the dataset under `mode=Overwrite`.
@@ -378,7 +382,9 @@ async def insert_into_table(
     # Cast the incoming rows to the table's schema first, so a client that infers loose Arrow types (a
     # browser infers float64 for every JS number) can append to int64 columns — else the native append 500s
     # on the mismatch. A genuinely incompatible payload becomes a clean 400 here, not a 500 downstream.
-    data = await run_in_threadpool(dataplane.coerce_insert_arrow, ns, so, segments, data, branch, max_bytes=settings.max_body_bytes)
+    data = await run_in_threadpool(
+        dataplane.coerce_insert_arrow, ns, so, segments, data, branch, max_bytes=settings.max_body_bytes, overwrite=insert_mode is InsertMode.OVERWRITE
+    )
     req = InsertIntoTableRequest(id=segments, mode=insert_mode.value, branch=branch)
     response: InsertIntoTableResponse = await run_in_threadpool(dataplane.insert_into_table, ns, so, req, data, max_bytes=settings.max_body_bytes)
     # Insert's response carries only a transaction_id, not the Lance version it produced — the shared

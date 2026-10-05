@@ -92,6 +92,7 @@ from lance_namespace import (
 )
 from pydantic import BaseModel
 
+from catalog.core import provenance_guard
 from catalog.core.base_judge import require_sanctioned_bases
 from catalog.core.config import shared_lance_session
 from catalog.core.modes import CreateMode, InsertMode
@@ -1568,9 +1569,11 @@ def _write_schema_errors() -> Iterator[None]:
 #: reds a test rather than silently reverting these paths to 500s.
 _COLUMN_NOT_FOUND = re.compile(r"does not exist in the dataset|field '[^']*' not found", re.IGNORECASE)
 
-#: Client mistakes Lance reports WITHOUT its ``Invalid user input`` marker. Both are refusals of a
-#: well-formed request the caller got wrong, i.e. 400 — never a server fault.
-_COLUMN_BAD_REQUEST = re.compile(r"cannot drop all columns", re.IGNORECASE)
+#: Client mistakes Lance reports WITHOUT its ``Invalid user input`` marker. Each is a refusal of a
+#: well-formed request the caller got wrong, i.e. 400 — never a server fault. The primary-key one is a
+#: ``LanceError(Schema)`` OSError on pylance 12.0.0 for ``nullable=True`` on the key or an ancestor
+#: ([[LH-208]]); it answered 500 Internal before this.
+_COLUMN_BAD_REQUEST = re.compile(r"cannot drop all columns|primary key column and all its ancestors must not be nullable", re.IGNORECASE)
 
 #: Messages that already enumerate the schema for the caller; appending our own list would just repeat it.
 _LISTS_FIELDS = re.compile(r"valid fields|available fields", re.IGNORECASE)
@@ -1917,6 +1920,7 @@ def alter_columns(ns: LanceNamespace, so: StorageOptions, req: AlterTableAlterCo
             alteration["data_type"] = _json_arrow_to_pa_type(dt if isinstance(dt, dict) else dt.model_dump())
         alterations.append(alteration)
     dataset = open_dataset(ns, so, table_id, branch=req.branch)
+    provenance_guard.refuse_provenance_alter(dataset.schema, alterations)
     with _column_op("alter_columns", dataset.schema.names):
         # pylance accepts plain dict alterations at runtime; its stub types them as
         # AlterColumn (a TypedDict), which ty can't match from dict[str, object].
@@ -1927,9 +1931,11 @@ def alter_columns(ns: LanceNamespace, so: StorageOptions, req: AlterTableAlterCo
 def drop_columns(ns: LanceNamespace, so: StorageOptions, req: AlterTableDropColumnsRequest) -> AlterTableDropColumnsResponse:
     """Drop the named columns from the table."""
     table_id = _table_id(req)
+    columns = list(req.columns or [])
     dataset = open_dataset(ns, so, table_id, branch=req.branch)
+    provenance_guard.refuse_provenance_drop(dataset.schema, columns)
     with _column_op("drop_columns", dataset.schema.names):
-        dataset.drop_columns(list(req.columns or []))
+        dataset.drop_columns(columns)
     return AlterTableDropColumnsResponse(version=dataset.version)
 
 
@@ -2103,18 +2109,14 @@ def read_deleted_row_ids(
     return _arrow_file_chunks(schema, first, batches)
 
 
-#: Schema-metadata keys the catalog writes for itself. They are the coordinates that make the Lance file
-#: self-describing, not user properties, so no door may hand them back as one.
-_INTERNAL_METADATA_PREFIX = "lineage."
-
-
 def filter_internal_metadata(metadata: dict[str, str]) -> dict[str, str]:
-    """Drop the catalog's own bookkeeping keys from a metadata map a caller will see.
+    """Drop the platform's reserved keys (`provenance_guard.RESERVED_METADATA_PREFIXES`) from a map a caller will see.
 
-    The map a caller holds is the map it saves back, and `update_schema_metadata` can only promise not
-    to destroy these because it MERGES. Handing them out invites a caller to treat them as its own.
+    They are the coordinates that make the Lance file self-describing, not user properties. The map a
+    caller holds is the map it saves back, and every write door refuses a reserved key, so handing them
+    out would hand the caller a map it cannot save.
     """
-    return {k: v for k, v in metadata.items() if not k.startswith(_INTERNAL_METADATA_PREFIX)}
+    return {k: v for k, v in metadata.items() if not provenance_guard.is_reserved_key(k)}
 
 
 def read_schema_metadata(ns: LanceNamespace, so: StorageOptions, table_id: list[str]) -> dict[str, str]:
@@ -2123,7 +2125,7 @@ def read_schema_metadata(ns: LanceNamespace, so: StorageOptions, table_id: list[
     pylance 8.0.0's ``describe_table`` leaves ``DescribeTableResponse.metadata`` unpopulated, so the #74
     Table Properties UI could WRITE a property but never SEE it back (the editor always seeded empty — found
     by driving the real UI in a browser, 2026-07-21). The catalog fills the gap: read ``schema.metadata``
-    (Arrow bytes keys/values → str) directly. Internal ``lineage.*`` bookkeeping keys are excluded — they're
+    (Arrow bytes keys/values → str) directly. The reserved ``lineage.*`` / ``rask.*`` keys are excluded — they're
     not user properties, and the update path MERGES, so hiding them never drops them on a UI save.
     """
     meta = open_dataset_unchecked(ns, so, table_id).schema.metadata or {}
@@ -2147,16 +2149,20 @@ def update_schema_metadata(
     lie until this existed.
 
     NEVER ``replace=True``. The map a caller holds came from :func:`read_schema_metadata`, which EXCLUDES
-    the internal ``lineage.*`` keys — so replacing would silently drop the #21 coordinates that make the
-    Lance file self-describing. Merge + explicit null-delete is the only shape that can't destroy them.
+    the reserved ``lineage.*`` / ``rask.*`` keys — so replacing would silently drop the #21 coordinates that make
+    the Lance file self-describing. Merge + explicit null-delete is the only shape that can't destroy them.
+    ``values`` naming a reserved key is the DOOR's to refuse (``provenance_guard.refuse_reserved_keys``):
+    this function is also how the platform itself writes them.
 
-    Returns the table's new full map with ``lineage.*`` filtered out, matching what the read twin reports.
+    Returns the table's new full map with the reserved keys filtered out, matching what the read twin reports.
     """
     result = open_dataset(ns, so, table_id, branch=branch).update_schema_metadata(values)
     return filter_internal_metadata(result)
 
 
-def coerce_insert_arrow(ns: LanceNamespace, so: StorageOptions, table_id: list[str], data: bytes, branch: str | None = None, *, max_bytes: int) -> bytes:
+def coerce_insert_arrow(
+    ns: LanceNamespace, so: StorageOptions, table_id: list[str], data: bytes, branch: str | None = None, *, max_bytes: int, overwrite: bool = False
+) -> bytes:
     """Align Arrow-IPC insert rows to the table's schema before the native append.
 
     A client that INFERS types loosely — most importantly the browser's apache-arrow, which infers
@@ -2178,8 +2184,17 @@ def coerce_insert_arrow(ns: LanceNamespace, so: StorageOptions, table_id: list[s
     ``max_bytes`` as the table's types are refused before the cast runs (:mod:`catalog.services.cast_size`),
     so a dictionary decoded once per row cannot allocate past the cap, and neither arm is handed a body
     larger than the one the caller was held to.
+
+    AN ``overwrite`` KEEPS THE TABLE'S PROVENANCE ([[LH-208]]). Lance takes an overwrite's schema from
+    its payload, metadata included, so a payload naming a reserved key would forge one and a payload
+    with none would erase every ``lineage.*`` stamp and the primary key's field metadata (measured on
+    pylance 12.0.0, both arms). A reserved key in the payload is refused, and the body handed on carries
+    the table's own schema and field metadata. An append is left alone: Lance discards an append
+    payload's schema metadata (measured on the same version).
     """
     incoming = read_arrow_body(data, max_bytes=max_bytes)
+    if overwrite:
+        provenance_guard.refuse_reserved_keys((incoming.schema.metadata or {}).keys(), door="insert?mode=overwrite payload")
     # THE REF THE REQUEST NAMES, never main. This alignment DROPS columns the target does not have, so
     # aligning a branch-targeted insert to main's schema silently deletes any column the branch has and
     # main does not — and then the insert succeeds, reporting rows it quietly rewrote. A branch whose
@@ -2189,7 +2204,11 @@ def coerce_insert_arrow(ns: LanceNamespace, so: StorageOptions, table_id: list[s
     # walks doors that build a branched request model, and this is a helper.
     target = open_dataset(ns, so, table_id, branch=branch).schema
     if [(f.name, f.type, f.nullable) for f in incoming.schema] == [(f.name, f.type, f.nullable) for f in target]:
-        return data
+        if not overwrite or incoming.schema.equals(target, check_metadata=True):
+            return data
+        body = encode_arrow_stream(pa.Table.from_arrays(incoming.columns, schema=target))
+        _refuse_over_the_cap(len(body), max_bytes)
+        return body
     present = set(incoming.column_names)
     missing = [f.name for f in target if f.name not in present]
     if missing:
@@ -2206,7 +2225,7 @@ def coerce_insert_arrow(ns: LanceNamespace, so: StorageOptions, table_id: list[s
     selected = pa.table({f.name: incoming.column(f.name) for f in target})
     _refuse_over_the_cap(sum(bytes_after_cast(selected.column(f.name), f.type) for f in target), max_bytes)
     try:
-        aligned = selected.cast(pa.schema([pa.field(f.name, f.type, f.nullable) for f in target]))
+        aligned = selected.cast(target if overwrite else pa.schema([pa.field(f.name, f.type, f.nullable) for f in target]))
     except (pa.ArrowInvalid, pa.ArrowTypeError, pa.ArrowNotImplementedError) as exc:
         raise InvalidInputError(f"insert rows don't match the table schema: {exc}") from exc
     body = encode_arrow_stream(aligned)

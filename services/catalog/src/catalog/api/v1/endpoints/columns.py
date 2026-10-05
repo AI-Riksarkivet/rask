@@ -38,6 +38,7 @@ from openfga_sdk import OpenFgaClient
 from catalog.api import fga_deps, lineage_deps
 from catalog.api.dependencies import FgaClientDep, LineageEmitterDep, NamespaceDep, SettingsDep, StorageOptionsDep
 from catalog.api.security import CurrentToken, Principal
+from catalog.core import provenance_guard
 from catalog.core.config import Settings
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.core.lineage_emit import (
@@ -284,6 +285,8 @@ async def update_table_schema_metadata(
     a null — so ``{"key": null}`` is a rask EXTENSION, routed to the dataplane's pylance
     ``update_schema_metadata`` (the same ``None``-deletes dialect ``update_field_metadata`` already speaks).
     A body with no nulls stays on the native spec op, transaction id and all.
+
+    Keys under ``lineage.*`` and ``rask.*`` are the platform's and are refused 400, set or null alike.
     """
     # REST-only: the spec sends the metadata map directly, or wrapped as {"metadata": {...}}.
     segments = parse_identifier(id, settings.delimiter)
@@ -312,6 +315,9 @@ async def update_table_schema_metadata(
         raw = body
     # `str(v)` on a null would write the literal string "None" — the deletion signal must survive intact.
     values: dict[str, str | None] = {str(k): None if v is None else str(v) for k, v in raw.items()}
+    # BEFORE the route split, so neither route can be the one that forgot ([[LH-208]]). A null counts:
+    # deleting `lineage.dataset_id` erases the name maintenance files a medallion tier under.
+    provenance_guard.refuse_reserved_keys(values, door="schema_metadata/update")
     response: UpdateTableSchemaMetadataResponse
     # A BRANCH TAKES THE DATAPLANE PATH WHICHEVER DIALECT THE BODY SPEAKS. Passing `branch` to the
     # native op is not enough and looked like it was: the spec request carries the field, the catalog
@@ -329,8 +335,8 @@ async def update_table_schema_metadata(
     else:
         req = UpdateTableSchemaMetadataRequest(id=segments, metadata={k: v for k, v in values.items() if v is not None}, branch=branch)
         response = await run_in_threadpool(native.call, ns, "update_table_schema_metadata", req)
-        # ONE DOOR, ONE ANSWER. The dataplane route above already hides the catalog's own `lineage.*`
-        # keys; the native op returns them verbatim, so without this the same door described a table
+        # ONE DOOR, ONE ANSWER. The dataplane route above already hides the reserved `lineage.*` /
+        # `rask.*` keys; the native op returns them verbatim, so without this the same door described a table
         # two different ways depending on which route the request happened to take — and the map a
         # caller sees is the map it saves back.
         response.metadata = dataplane.filter_internal_metadata(response.metadata or {})

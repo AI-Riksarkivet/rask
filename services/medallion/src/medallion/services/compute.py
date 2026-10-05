@@ -612,7 +612,7 @@ def _carry_forward_external(ds: lance.LanceDataset, stage: str, blob_cols: list[
         columns[_SOURCE_ROWID_COLUMN] = table.column("_rowid").cast(pa.uint64())
     fields.append(pa.field(_STAGE_COLUMN, pa.string()))
     columns[_STAGE_COLUMN] = pa.array([stage] * rows, pa.string())
-    out = pa.table(columns, schema=blobs.stamp_external_base(pa.schema(fields), external_base))
+    out = pa.table(columns, schema=pa.schema(fields))
     return out, _payloads_if_derivable(ds, blob_cols, rows)
 
 

@@ -64,12 +64,15 @@ honoured, and never silently dropped.
 `allow_external_blob_outside_bases` must stay False. Outside a registered base, lifecycle
 "remains their responsibility" and the pointer can dangle with nothing watching.
 
-### The base has to be recoverable, so it is stamped in the schema
+### The base is recovered from the manifest
 
-A scanned descriptor's `blob_uri` is **base-relative** (`page-000.bin`), and pylance exposes no way
-to read a dataset's registered bases back. So ingest stamps `rask.blob.external_base` into schema
-metadata at create — the #21 self-describing-data precedent — and a stage runner that has never met the
-service that wrote it resolves the pointer from the dataset alone.
+A scanned descriptor's `blob_uri` is **base-relative** (`page-000.bin`), so a stage runner needs the
+base to resolve it. Bases are manifest state, written by the same commit as the data, and
+`service_kit.lakehouse.blobs.external_base_of` reads them back through `ds._ds.base_paths()`: a stage
+runner that has never met the service that wrote a dataset resolves the pointer from the dataset
+alone. No schema-metadata key names a base. Schema metadata travels with a schema copy and any table
+writer can set it, and `rask.*` is a reserved namespace the catalog refuses at every write door
+([[LH-208]]).
 
 Two silent failure modes live between the read and write shapes, both handled in
 `service_kit.lakehouse.blobs.carry_external_descriptor`:

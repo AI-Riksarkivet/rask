@@ -49,10 +49,7 @@ def _resolves(uri: str) -> int:
 
 def _bronze(uri: str, uris: list[str], base: str | None) -> None:
     """A bronze tier in either placement — external when `base` is given, managed otherwise."""
-    schema = blobs.stamp_external_base(
-        pa.schema([pa.field("id", pa.int64()), blob_field("payload", nullable=False)]),
-        base,
-    )
+    schema = pa.schema([pa.field("id", pa.int64()), blob_field("payload", nullable=False)])
     payloads: list[Any] = [Blob.from_uri(u) for u in uris] if base else [Path(u[7:]).read_bytes() for u in uris]
     table = pa.table({"id": pa.array(range(len(uris)), pa.int64()), "payload": blob_array(payloads)}, schema=schema)
     lance.write_dataset(
@@ -192,7 +189,7 @@ class TestTheDerivabilityProbeIsBounded:
         n_null = _DERIVE_PROBE_ROWS + 2
         payloads: list[Any] = [None] * n_null + [Blob.from_uri(u) for u in real_uris]
 
-        schema = blobs.stamp_external_base(pa.schema([pa.field("id", pa.int64()), blob_field("payload", nullable=True)]), str(source))
+        schema = pa.schema([pa.field("id", pa.int64()), blob_field("payload", nullable=True)])
         uri = str(tmp_path / "sparse.lance")
         lance.write_dataset(
             pa.table({"id": pa.array(range(len(payloads)), pa.int64()), "payload": blob_array(payloads)}, schema=schema),
