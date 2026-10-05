@@ -61,6 +61,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   Kueue) is taken only as the stated enabler of a named Phase 1 row.
 - **Owner decisions go through the multi-question tool**, each option with a concrete what, how and
   why — never as a question trailing a report.
+- **Stopping rules (owner, 2026-10-05).** When a step doesn't need the owner's input, keep going. Put
+  status notes in the same message as the next action. Stop and ask only when you cannot continue without
+  the owner, or before anything destructive. Every delegated agent's report marks what it could not
+  confirm and where it looked; a reviewer lists only problems it would block the merge for, each with
+  the file and line, why it is wrong, and how to show it fails.
 
 ## Toolchain rules
 
