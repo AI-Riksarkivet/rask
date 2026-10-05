@@ -60,8 +60,10 @@ class RunFailure(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    #: Adapter-classified: "driver_error" | "oom" | "infra" | "unknown". A free-form log line is not a
-    #: classification, and the platform cannot branch on one.
+    #: Adapter-classified: "driver_error" | "oom" | "infra" | "data" | "unknown". A free-form log line is not a
+    #: classification, and the platform cannot branch on one. "data" is the run's input refusing the
+    #: write it asked for (a merge whose source repeats a key the target holds, [[LH-243]]): the same
+    #: input refuses it every time, so a re-run cannot succeed and the platform holds it for quality.
     kind: str
     message: str
     #: POSIX. 137 is SIGKILL under any engine — a portable fact, unlike a message string.

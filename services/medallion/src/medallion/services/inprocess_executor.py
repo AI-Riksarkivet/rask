@@ -29,7 +29,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Callable
-from typing import Any
+from typing import Any, Final
 
 from fastapi.concurrency import run_in_threadpool
 
@@ -178,6 +178,12 @@ def _lineage_of(order: WorkOrder) -> Any:  # noqa: ANN401 — a LineageDoc, impo
     return LineageDoc.model_validate(json.loads(order.stamp.lineage_document))
 
 
+#: Lance's refusal of a merge whose source carries two rows matching one target row, on pylance 12.0.0:
+#: `Ambiguous merge inserts are prohibited: multiple source rows match the same target row on (id = 2)`.
+#: The upstream holds a repeated key, so every re-run meets the same rows and is refused again ([[LH-243]]).
+_AMBIGUOUS_MERGE: Final = "ambiguous merge inserts are prohibited"
+
+
 def _classify(exc: Exception) -> RunFailure:
     """The engine's own error, in terms the platform can branch on.
 
@@ -186,7 +192,12 @@ def _classify(exc: Exception) -> RunFailure:
     one is a sizing problem, the other a code one.
     """
     text = str(exc)
-    kind = "oom" if isinstance(exc, MemoryError) or "out of memory" in text.lower() else "driver_error"
+    if isinstance(exc, MemoryError) or "out of memory" in text.lower():
+        kind = "oom"
+    elif _AMBIGUOUS_MERGE in text.lower():
+        kind = "data"
+    else:
+        kind = "driver_error"
     # THE ENGINE'S OWN MESSAGE, VERBATIM. It reaches an operator through the run's FAIL lineage event,
     # which has one `errorMessage` field and no room for a classification — so prefixing the type here
     # would push the diagnosis behind a label a machine reads and a person does not need. `kind` is

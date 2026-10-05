@@ -94,6 +94,10 @@ _SUCCESS = {"status": "SUCCESS"}
 _RETRY = {"status": "RETRY"}
 
 
+class RefusedByDataError(RuntimeError):
+    """The engine reported the run's input refusing its write (`RunFailure.kind == "data"`): no re-run can succeed."""
+
+
 def _drop(reason: str) -> dict[str, str]:
     """A DROP that SAYS WHY, using the same string the refusal counter already records.
 
@@ -788,7 +792,9 @@ async def _run_in_process(
     would be a Ray-shaped interface wearing a neutral name.
 
     A failure is RAISED, so the stage runner's own RETRY path owns it exactly as it did when the writer was
-    called directly. The port classifies the error; it does not change who handles it.
+    called directly. The port classifies the error; it does not change who handles it. The one class a
+    retry cannot repair, the input refusing the write (`kind == "data"`), is raised as
+    :class:`RefusedByDataError`, which the stage holds for quality instead ([[LH-243]]).
 
     THE ENGINE IS RESOLVED BY NAME, NEVER CONSTRUCTED BY CLASS. `executor_for` is what turns the
     chosen engine into the thing that runs it; naming `InProcessExecutor` here would make the registry
@@ -813,6 +819,8 @@ async def _run_in_process(
         # THE ENGINE'S MESSAGE, UNWRAPPED. It becomes the run's FAIL `errorMessage`, which is what an
         # operator reads to diagnose — a prefix would push the cause behind a label. The port's
         # classification (`detail.kind`) is a machine's field and rides the executor's own log line.
+        if detail is not None and detail.kind == "data":
+            raise RefusedByDataError(detail.message)
         raise RuntimeError(detail.message if detail else f"the in-process engine reported {state}")
     if Capability.RESULT in executor.capabilities:
         return await executor.result(handle)
@@ -1783,6 +1791,17 @@ async def handle_stage(
             dapr, settings, identity, trigger, label="media_underivable", transition=transition, project=project, token=token, error_message=str(exc)
         )
         return _drop("media_underivable")
+    except RefusedByDataError as exc:
+        # A DATA VERDICT, NOT AN OUTAGE ([[LH-243]]): the upstream repeats a key the tier holds, so the
+        # tier's merge is ambiguous on every redelivery. RETRY would re-read the upstream maxDeliver times
+        # and park the trigger as exhaustion. The run is FAILed (closing the START it opened), then the
+        # stage is held as BLOCKED — no approval repairs the upstream — and the delivery acked.
+        log.warning("medallion_stage_refused_by_data", extra={"transition": transition, "token": token, "error": str(exc)})
+        await _emit_stage_failure(
+            dapr, settings, identity, trigger, label="stage_fail", transition=transition, project=project, token=token, error_message=str(exc)
+        )
+        verdict = PromotionVerdict(blocked=True, blocked_by=GateOutcome.BLOCK, reasons=[str(exc)])
+        return await _report_hold(dapr, settings, trigger, identity, verdict, result=None, project=project, transition=transition, token=token)
     except Exception as exc:
         log.warning("medallion_stage_failed", extra={"transition": transition, "token": token, "error": str(exc)})
         # Record the failed run ONLY if the transform itself failed — i.e. the COMPLETE was never emitted.

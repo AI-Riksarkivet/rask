@@ -100,7 +100,7 @@ from catalog.core.base_judge import require_sanctioned_bases
 from catalog.core.config import shared_lance_session
 from catalog.core.modes import CreateMode, InsertMode
 from catalog.core.namespace import disarm_commit_path_cleanup, judged_native_version, open_dataset, open_dataset_unchecked
-from catalog.services import changes, client_fragments, native, table_bases, table_claims
+from catalog.services import changes, client_fragments, native, primary_keys, table_bases, table_claims
 from catalog.services.base_credentials import BaseCredentials
 from catalog.services.cast_size import bytes_after_cast
 from service_kit.lakehouse import auto_cleanup, base_registry, branch_layout, commit_runs, location_claims
@@ -541,6 +541,8 @@ def create_table(
             # A new version of the same table, so the table's provenance rides onto it ([[LH-242]]).
             # Disarmed first ([[LH-245]]): an overwrite carries the table's config forward, keys included.
             current = disarm_commit_path_cleanup(lance.dataset(existing, storage_options=so, session=shared_lance_session()), segments)
+            # The table's key, not the payload's: a key is fixed once set (`lance_docs/file_format.md:2893`).
+            primary_keys.refuse_repeats_within(table, primary_keys.key_columns(current.lance_schema), door="create")
             dataset = _write_blob(
                 provenance_guard.keep_provenance(current.schema, table),
                 existing,
@@ -558,6 +560,8 @@ def create_table(
             return CreateTableResponse(location=existing, version=version, properties=properties)
         # `create` against a written table → let declare surface the canonical TableAlreadyExists conflict.
 
+    # BEFORE the declare, so a refused create leaves no name behind ([[LH-243]]).
+    primary_keys.refuse_repeats_within(table, primary_keys.declared_key(table.schema), door="create")
     if existing is not None and only_declared:  # declared, no data yet → write into it (all modes)
         return _write_blob_into(
             ns,
@@ -1121,15 +1125,17 @@ def commit_appended_fragments(
 
     The fragments are a claim and the data files are the authority (:mod:`catalog.services.client_fragments`):
     nothing an append cannot carry, each file at its declared size, and each footer agreeing with the
-    fragment's rows, columns, field ids and file version. A table with blob columns is committed detached
-    first, so every blob sidecar its descriptors point into is read before the version is published.
+    fragment's rows, columns, field ids and file version. A table with blob columns or a declared primary key
+    is committed detached first, so every blob sidecar its descriptors point into is read, and no appended
+    key repeats within the append or one the table holds ([[LH-243]]), before the version is published.
     ``external_blob_bases`` is the catalog's record of the external blob bases the table's create
     authorized ([[LH-209]]); an external descriptor resolving through any other base is refused.
 
     Raises:
         InvalidInputError: Malformed fragments, no fragments (and no recorded run commit), a based data
             file, a foreign file version, a data file missing under the table or at another size, a
-            footer or blob sidecar that contradicts the fragment, or metadata an append cannot carry.
+            footer or blob sidecar that contradicts the fragment, metadata an append cannot carry, or a
+            primary-key value that repeats within the append or is already held.
         ServiceUnavailableError: The object store or the control root could not be read or written.
     """
     if read_version < 0:
@@ -1170,8 +1176,10 @@ def commit_appended_fragments(
     # Disarmed before the commit ([[LH-245]]): the Append rebases onto the config-only commit, so neither deletes a version.
     ref = disarm_commit_path_cleanup(_open_on_ref(location, so, version=None, branch=branch), [location])
     target: str | lance.LanceDataset = location if branch is None else ref
-    if columns := client_fragments.blob_columns(judged_against):
-        _verify_blob_sidecars(target, ref_location, so, op, frags, read_version=judged_version, columns=columns, external_bases=external_blob_bases)
+    columns = client_fragments.blob_columns(judged_against)
+    keys = primary_keys.key_columns(judged_against.lance_schema)
+    if columns or keys:
+        _verify_detached(target, ref_location, so, op, frags, ref, read_version=judged_version, columns=columns, keys=keys, external_bases=external_blob_bases)
     try:
         dataset = lance.LanceDataset.commit(target, op, read_version=judged_version, storage_options=so)
     except OSError as exc:
@@ -1316,18 +1324,28 @@ def _verify_fragment_data_files(location: str, so: StorageOptions, fragments: li
         )
 
 
-def _verify_blob_sidecars(
+def _verify_detached(
     target: str | lance.LanceDataset,
     ref_location: str,
     so: StorageOptions,
     op: lance.LanceOperation.Append,
     frags: Sequence[lance.FragmentMetadata],
+    base: lance.LanceDataset,
     *,
     read_version: int,
     columns: Sequence[str],
+    keys: Sequence[str],
     external_bases: Sequence[base_registry.RecordedBase],
 ) -> None:
-    """Commit ``op`` DETACHED, read every blob sidecar its descriptors point into, then discard the detached version.
+    """Commit ``op`` DETACHED, judge what only a readable version can show, then discard the detached version.
+
+    Two judgements need the appended rows readable through a dataset: every blob sidecar the ``columns``'
+    descriptors point into, and the primary key ``keys`` names ([[LH-243]]), whose values the fragments
+    carry in their data files and nowhere else. The appended rows are the ones in ``frags``' own data files:
+    the detached commit rebases onto the latest version, so a fragment a compaction rewrote after
+    ``read_version`` is new to the detached version too, and holds the table's rows, not the append's.
+    They are judged within themselves and against ``base``, the ref's latest version opened before the
+    detached commit, by :mod:`catalog.services.primary_keys`.
 
     A detached commit never becomes the latest version (pylance's ``LanceDataset.commit``), so the
     table's readers never see it. Lance's own cleanup does not remove a detached manifest: after
@@ -1342,7 +1360,14 @@ def _verify_blob_sidecars(
     except OSError as exc:
         raise _classify_commit_error(exc) from exc
     try:
-        client_fragments.verify_blob_sidecars(detached, frags, columns, external_bases=external_bases, object_sizes=partial(_object_sizes, so=so))
+        if columns:
+            client_fragments.verify_blob_sidecars(detached, frags, columns, external_bases=external_bases, object_sizes=partial(_object_sizes, so=so))
+        if keys:
+            own = {data_file.path for frag in frags for data_file in frag.files}
+            appended = [fragment for fragment in detached.get_fragments() if any(data_file.path in own for data_file in fragment.metadata.files)]
+            rows = detached.scanner(columns=list(dict.fromkeys(key.split(".", 1)[0] for key in keys)), fragments=appended).to_table()
+            primary_keys.refuse_repeats_within(rows, keys, door="commit")
+            primary_keys.refuse_keys_held(base, rows, keys, door="commit")
     finally:
         _discard_detached_manifest(ref_location, so, int(detached.version))
 
@@ -1907,6 +1932,10 @@ def insert_into_table(ns: LanceNamespace, so: StorageOptions, req: InsertIntoTab
     The handle is opened through the checked open ([[LH-279]]), so the manifest the write builds on is
     the one judged. `mode` is read through `InsertMode`, whose two values are pylance's own spellings of
     the spec's two modes.
+
+    On a table declaring a primary key, rows repeating a key among themselves are refused, and an append
+    lands through Lance's `merge_insert(...).when_matched_fail().when_not_matched_insert_all()`, refused
+    when the table holds one of its keys as it commits ([[LH-243]], :mod:`catalog.services.primary_keys`).
     """
     # Validated here as well as at the door's coercion: this hands pyarrow's buffers to Lance in-process,
     # and Lance writes whatever an unvalidated offset points at.
@@ -1916,8 +1945,16 @@ def insert_into_table(ns: LanceNamespace, so: StorageOptions, req: InsertIntoTab
     # spec's: it takes `create`, which the spec does not give this door, and refuses an unknown value with
     # a bare ValueError that would answer 500. The parse is idempotent, so a mode the door already parsed
     # passes through unchanged.
+    mode = InsertMode.parse(req.mode)
+    keys = primary_keys.key_columns(dataset.lance_schema)
+    primary_keys.refuse_repeats_within(rows, keys, door="insert")
     with _write_schema_errors():
-        dataset.insert(rows, mode=InsertMode.parse(req.mode).value)
+        if mode is InsertMode.APPEND and primary_keys.joinable(rows, keys):
+            # Lance's own enforcement, on the same handle: refused when the key is held as it lands, and
+            # re-planned when another commit wins the race, so a racing insert of the same key is refused ([[LH-243]]).
+            primary_keys.append_new_keys(dataset, rows, keys, door="insert")
+        else:
+            dataset.insert(rows, mode=mode.value)
     # The rows this request wrote, read off its own payload: a row count diff across the commit would
     # include whatever a concurrent writer appended in between.
     return InsertIntoTableResponse(version=int(dataset.version), num_inserted_rows=rows.num_rows)
@@ -1944,10 +1981,11 @@ def merge_insert_into_table(
     refuse_an_unbounded_boolean_chain(req.when_matched_update_all_filt, field="when_matched_update_all_filt")
     refuse_an_unbounded_boolean_chain(req.when_not_matched_by_source_delete_filt, field="when_not_matched_by_source_delete_filt")
     rows = read_arrow_body(data, max_bytes=max_bytes)
-    if req.branch is None:
-        disarm_commit_path_cleanup(open_dataset(ns, so, _table_id(req)), _table_id(req))
-        return cast(MergeInsertIntoTableResponse, native.call(ns, "merge_insert_into_table", req, data))
     dataset = disarm_commit_path_cleanup(open_dataset(ns, so, _table_id(req), branch=req.branch), _table_id(req))
+    # A source repeating a key either inserts every copy (unmatched) or is ambiguous (matched); both arms ([[LH-243]]).
+    primary_keys.refuse_repeats_within(rows, primary_keys.key_columns(dataset.lance_schema), door="merge_insert")
+    if req.branch is None:
+        return cast(MergeInsertIntoTableResponse, native.call(ns, "merge_insert_into_table", req, data))
     # THE BUILDER IS CONSTRUCTED INSIDE THE GUARD, and that placement is the fix rather than a tidy-up:
     # `merge_insert(on)` is where Lance rejects a key column that does not exist, and it sat outside
     # `caller_sql`, so the one door whose whole job is matching on that column reported `Internal 18`
