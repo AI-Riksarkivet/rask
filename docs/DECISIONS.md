@@ -3199,6 +3199,7 @@ Not covered: the takeover path after the lease has no committed test (exercised 
 branch on a local root).
 
 
+
 ## A namespace Overwrite replaces only an empty namespace, and a Skip drop finishes the trailer (LH-037, 2026-10-05)
 
 `CreateNamespaceRequest.mode` Overwrite (`lance_docs/ns_catalog/spec.yaml`: "the existing namespace is dropped and a
@@ -3207,6 +3208,10 @@ namespace needs what `POST /v1/namespace/{id}/drop` needs — `can_delete` on it
 the create-on-parent rung the router already checked; its tuples, protection and maintenance policy are removed and
 the caller is seeded as owner of the new one. Its warehouse binding stays: the new namespace lives where the old one
 did. A namespace holding a table or a child namespace answers 409 code 3 (NamespaceNotEmpty) naming them. A cascade
+
+did. So an Overwrite of a BOUND top-level id passes the generic door's warehouse requirement (`LANCE_WAREHOUSES_ENABLED`,
+on in the chart) and seeds the replacement's parent edge to that binding's warehouse; only a new, unbound top-level
+namespace is still sent to `POST /v1/warehouses/{id}/namespaces`. A namespace holding a table or a child namespace answers 409 code 3 (NamespaceNotEmpty) naming them. A cascade
 is not offered on a create door: destroying a subtree, with its trash records and descendant grants, is asked for on
 the drop door with `behavior=Cascade`.
 

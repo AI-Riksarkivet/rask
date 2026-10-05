@@ -16,10 +16,8 @@ on that path — otherwise any caller who may create a namespace can pass `mode=
 someone else's and acquire it. The table door already carries exactly this flag
 (`table_create.py`'s `existok_kept_existing` gating the seed); this mirrors it.
 
-`Overwrite` is NOT implemented here and is refused naming itself. Dropping a namespace means the #96
-cascade trashing a whole SUBTREE, interacting with `require_no_live_trash` and the existing tuples —
-destructive, and an owner ruling rather than an implementation. Refusing 400 is the honest answer; the
-409 it used to give means "it already exists", which is not why the request was declined.
+`Overwrite` drops the empty namespace and creates it afresh; its route tests run on the real app in
+`tests/integration/test_a_namespace_mode_does_what_the_spec_says.py`.
 
 A mode that is none of the three is refused too, as InvalidInput naming it, and before the backend is
 reached — the closed-vocabulary rule `modes.py` states for every mode the catalog reads (owner ruling
@@ -33,7 +31,7 @@ from typing import Any, cast
 from unittest.mock import MagicMock
 
 import pytest
-from lance_namespace import CreateNamespaceRequest, CreateNamespaceResponse, InvalidInputError, NamespaceAlreadyExistsError
+from lance_namespace import CreateNamespaceRequest, CreateNamespaceResponse, NamespaceAlreadyExistsError
 
 from catalog.api.v1.endpoints import namespaces as ns_ep
 from catalog.core.config import Settings
@@ -69,8 +67,18 @@ async def _create(
     monkeypatch.setattr(ns_ep.fga_deps, "require_namespace_depth", lambda *a, **k: None)
     monkeypatch.setattr(ns_ep.fga_deps, "require_no_live_trash", _ok)
 
-    async def _seed(_client: Any, _settings: Any, _token: Any, *, resource: str, segments: list[str], undo: Any) -> None:
-        del undo
+    async def _seed(
+        _client: Any,
+        _settings: Any,
+        _token: Any,
+        *,
+        resource: str,
+        segments: list[str],
+        undo: Any,
+        parent_object: str | None = None,
+        may_grant_owner: bool = True,
+    ) -> None:
+        del undo, parent_object, may_grant_owner
         seeded.append((resource, *segments))
 
     monkeypatch.setattr(ns_ep.fga_deps, "seed_ownership_or_compensate", _seed)
@@ -135,16 +143,3 @@ async def test_the_default_mode_still_conflicts_and_seeds_nothing(monkeypatch: p
     with pytest.raises(NamespaceAlreadyExistsError):
         await _create(mode=None, exists=True, monkeypatch=monkeypatch, seeded=seeded, created=[])
     assert seeded == []
-
-
-@pytest.mark.parametrize("mode", ["Overwrite"])
-@pytest.mark.anyio
-async def test_overwrite_is_refused_naming_itself_rather_than_answering_a_conflict(mode: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A 409 means "it already exists", which is not why this request is declined."""
-    created: list[str] = []
-    with pytest.raises(InvalidInputError) as exc:
-        await _create(mode=mode, exists=True, monkeypatch=monkeypatch, seeded=[], created=created)
-
-    detail = str(exc.value)
-    assert "overwrite" in detail.lower(), f"the refusal must name the mode it refuses: {detail}"
-    assert created == [], "a refused mode must not reach the backend at all"

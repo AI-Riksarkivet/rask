@@ -31,6 +31,7 @@ from lance_namespace import (
     ListTablesResponse,
     NamespaceAlreadyExistsError,
     NamespaceExistsRequest,
+    NamespaceNotEmptyError,
     NamespaceNotFoundError,
     PermissionDeniedError,
     RegisterTableRequest,
@@ -38,6 +39,7 @@ from lance_namespace import (
     TableAlreadyExistsError,
     TableNotFoundError,
 )
+from openfga_sdk import OpenFgaClient
 
 from catalog.api import fga_deps
 from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, LineageEmitterDep, NamespaceDep, SettingsDep, namespace_for_root
@@ -138,32 +140,28 @@ async def create_namespace(
     # where a client sets a DEFAULT format for the tables created under it — so accepting one here
     # would let the ruling be bypassed one level up from the door that enforces it.
     reject_unsupported_format(body.properties if body else None)
-    # WHAT `mode` ACTUALLY MEANS HERE, refused at the SHAPE rung before anything is written. The
-    # generated model states three: "Create: the operation fails with 409. ExistOk: the operation
-    # succeeds and the existing namespace is kept. Overwrite: the existing namespace is dropped and a
-    # new empty namespace with this name is created." This door honours the first two and cannot
-    # honour the third: dropping a namespace is the #96 cascade taking a whole SUBTREE, entangled with
-    # `require_no_live_trash` and the existing tuples, which is an owner ruling rather than an
-    # implementation. Refusing names the mode; the 409 it used to answer means "it already exists",
-    # which is not why the request is declined.
-    #
-    # A value that is none of the three is refused by the parse itself, as InvalidInput naming it — the
-    # closed-vocabulary rule `modes.py` states for every mode this catalog reads.
+    # WHAT `mode` MEANS HERE, from spec.yaml's CreateNamespaceRequest: "Create: the operation fails
+    # with 409. ExistOk: the operation succeeds and the existing namespace is kept. Overwrite: the
+    # existing namespace is dropped and a new empty namespace with this name is created." The backend
+    # honours none of them (it answers NamespaceAlreadyExists for every mode), so this door supplies all
+    # three. A value that is none of the three is refused by the parse itself, as InvalidInput naming
+    # it — the closed-vocabulary rule `modes.py` states for every mode this catalog reads.
     create_mode = CreateMode.parse(body.mode if body else None)
-    if create_mode is CreateMode.OVERWRITE:
-        raise InvalidInputError(
-            "mode 'Overwrite' is not supported on this door: dropping a namespace cascades to its whole subtree "
-            "and interacts with the recoverable trash, so it needs an explicit decision rather than a silent drop. "
-            "Use 'Create' (the default) or 'ExistOk', or drop the namespace explicitly first."
-        )
     segments = parse_identifier(id, settings.delimiter)
     # A wildcard (`*`/`?`) in a segment would widen the vended STS policy to sibling objects once a table
     # lands under this namespace — refused at SHAPE, before the namespace is created.
     require_safe_segments(segments, delimiter=settings.delimiter)
-    # A top-level namespace needs a warehouse to live in. This door cannot name one, so it is refused
-    # here and the caller is sent to the warehouse-scoped route; checked BEFORE the native create, so a
-    # refusal leaves nothing half-made. Nested namespaces inherit their parent's binding and pass.
-    fga_deps.require_warehouse_scoped(segments, delimiter=settings.delimiter, warehouses_enabled=settings.warehouses_enabled)
+    # A top-level namespace needs a warehouse to live in. This door cannot name one, so a NEW top-level
+    # namespace is refused here and the caller is sent to the warehouse-scoped route; checked BEFORE the
+    # native create, so a refusal leaves nothing half-made. Nested namespaces inherit their parent's
+    # binding and pass. An Overwrite of a top-level id that already has a binding passes too: the
+    # replacement is created where the binding routes it (`NamespaceDep` resolves through it) and hangs
+    # off that binding's warehouse, so it belongs to a warehouse exactly as the namespace it replaces did.
+    binding: dict[str, str] | None = None
+    if create_mode is CreateMode.OVERWRITE and settings.warehouses_enabled and len(segments) == 1:
+        binding = await run_in_threadpool(warehouses.binding_for_namespace, settings.registry_root, settings.storage_options(), segments[0])
+    if binding is None:
+        fga_deps.require_warehouse_scoped(segments, delimiter=settings.delimiter, warehouses_enabled=settings.warehouses_enabled)
     # And it must not nest deeper than the authz model can resolve. Both read walkers have capped depth
     # for a while; nothing capped CREATION, so the estate could be driven into a shape where
     # Check(can_get_metadata, warehouse:X) errors instead of answering — taking browsing down for the
@@ -186,6 +184,9 @@ async def create_namespace(
     # answer that cannot be stale.
     if create_mode is CreateMode.EXIST_OK:
         response, kept_existing = await create_or_keep_namespace(ns, segments, req)
+    elif create_mode is CreateMode.OVERWRITE:
+        response = await _create_or_replace_empty_namespace(ns, settings, token, client, segments, req)
+        kept_existing = False
     else:
         response = await run_in_threadpool(native.call, ns, "create_namespace", req)
         kept_existing = False
@@ -208,7 +209,16 @@ async def create_namespace(
     # control stream. Nothing changed, so the honest control event is none. A namespace this call
     # really created still gets both, which is why the condition is the flag rather than the mode.
     if not kept_existing:
-        await fga_deps.seed_ownership_or_compensate(client, settings, token, resource="namespace", segments=segments, undo=_undo_create)
+        await fga_deps.seed_ownership_or_compensate(
+            client,
+            settings,
+            token,
+            resource="namespace",
+            segments=segments,
+            undo=_undo_create,
+            # A bound top-level namespace hangs off its warehouse, as the warehouse door seeds it.
+            parent_object=f"warehouse:{binding['warehouse_id']}" if binding is not None else None,
+        )
         await emit_control(
             control,
             action="namespace_created",
@@ -291,6 +301,67 @@ async def create_or_keep_namespace(ns: LanceNamespace, segments: list[str], req:
     except NamespaceAlreadyExistsError:
         described = await run_in_threadpool(native.call, ns, "describe_namespace", DescribeNamespaceRequest(id=segments))
         return CreateNamespaceResponse(properties=getattr(described, "properties", None)), True
+
+
+async def _forget_namespace(settings: Settings, client: OpenFgaClient | None, token: Principal | None, segments: list[str], *, unbind: bool) -> None:
+    """Remove every governance record a dropped namespace leaves keyed by its id: protection, maintenance
+    policy, the warehouse binding (``unbind``, top-level only) and its FGA tuples.
+
+    Each step is idempotent — an absent record or tuple is already the post-condition — so a retry over a
+    half-finished drop converges. A record left behind is inherited by the next namespace created at the id.
+    """
+    so = settings.storage_options()
+    canonical = fga.canonical_object_id(segments, delimiter=settings.delimiter)
+    await run_in_threadpool(protection.clear_protection, settings.registry_root, so, "namespace", canonical)
+    await run_in_threadpool(maintenance_policies.delete_policy, settings.registry_root, so, "namespace", canonical)
+    if unbind and len(segments) == 1:
+        await run_in_threadpool(warehouses.unbind_namespace, settings.registry_root, so, segments[0])
+    await fga_deps.revoke_ownership(client, settings, resource="namespace", segments=segments, token=token)
+
+
+async def _create_or_replace_empty_namespace(
+    ns: LanceNamespace,
+    settings: Settings,
+    token: Principal | None,
+    client: OpenFgaClient | None,
+    segments: list[str],
+    req: CreateNamespaceRequest,
+) -> CreateNamespaceResponse:
+    """``mode=Overwrite``: create the namespace, or drop the EMPTY one at the id and create it afresh.
+
+    Spec (CreateNamespaceRequest.mode): "the existing namespace is dropped and a new empty namespace with
+    this name is created". The drop is a RESTRICT drop, never a cascade: a create request is not where a
+    caller decides to destroy a subtree, and the cascade's trash and descendant grants have no place on a
+    create door. A namespace holding anything is refused 409 code 3 (NamespaceNotEmpty), naming what it
+    holds, so the caller can empty it or drop it with ``behavior=Cascade`` deliberately.
+
+    The drop clears the bar ``POST /v1/namespace/{id}/drop`` does: ``can_delete`` on the namespace (the
+    router already checked create-on-parent) and its deletion protection. The old namespace's tuples,
+    protection and policy go with it, so the creator is seeded on a clean id; its binding stays, because
+    the new namespace lives where the old one did.
+
+    Catching rather than pre-checking, as in :func:`create_or_keep_namespace`: a create that wins needs no
+    drop, and a concurrent create between the drop and the re-create answers the ordinary 409.
+    """
+    try:
+        return await run_in_threadpool(native.call, ns, "create_namespace", req)
+    except NamespaceAlreadyExistsError:
+        pass
+    canonical = fga.canonical_object_id(segments, delimiter=settings.delimiter)
+    await fga_deps.require_relation(client, settings, token, relation="can_delete", obj=f"namespace:{canonical}")
+    guard = await run_in_threadpool(protection.get_protection, settings.registry_root, settings.storage_options(), "namespace", canonical)
+    fga_deps.require_not_protected(guard or {}, kind="namespace", obj_id=canonical, force=False)
+    _, tables = await _drain_tables(ns, segments, include_declared=True)
+    _, children = await _drain_namespaces(ns, segments)
+    if tables or children:
+        raise NamespaceNotEmptyError(
+            f"cannot overwrite namespace '{canonical}': Overwrite drops only an empty namespace, and it holds "
+            f"tables {tables} and namespaces {children}. Drop or move them first, or drop the namespace with behavior=Cascade."
+        )
+    # A table landing between the listing and this drop is refused by the backend's own Restrict check.
+    await run_in_threadpool(native.call, ns, "drop_namespace", DropNamespaceRequest(id=segments))
+    await _forget_namespace(settings, client, token, segments, unbind=False)
+    return await run_in_threadpool(native.call, ns, "create_namespace", req)
 
 
 def _merge_bound_top_namespaces(names: list[str], bound: Iterable[Mapping[str, str]]) -> list[str]:
@@ -564,6 +635,29 @@ async def _require_descendants_unprotected(settings: Settings, descendants: list
         fga_deps.require_not_protected(record or {}, kind=resource, obj_id=canonical, force=False)
 
 
+async def _skip_absent_namespace(settings: Settings, client: OpenFgaClient | None, token: Principal | None, segments: list[str]) -> DropNamespaceResponse:
+    """``mode=Skip`` on a namespace that is not there: succeed, after finishing the trailer a previous drop left.
+
+    Skip is the retry lever, and the retry it exists for is a drop that removed the namespace and failed
+    before its trailer ran. Answering success without the trailer left that drop's tuples, protection,
+    policy and binding on the id for the next namespace created there to inherit, so the trailer runs
+    here: every step is idempotent, and on an id that never existed each one finds nothing.
+
+    Not after a RECOVERABLE drop. A live namespace trash record means the grants and the binding are kept
+    on purpose (the owner needs them to undrop, #96), and the create door refuses the id until the trash
+    is purged, so nothing can inherit them meanwhile.
+
+    The answer is 200 with a DropNamespaceResponse body, not the 204 the mode's prose names: spec.yaml's
+    DropNamespace operation declares only 200, and pylance 12.0.0's RestNamespace refuses a 204 ("Failed
+    to parse response: EOF while parsing a value", measured 2026-10-05). Nothing was dropped by this call,
+    so nothing is announced on the control stream.
+    """
+    canonical = fga.canonical_object_id(segments, delimiter=settings.delimiter)
+    if await run_in_threadpool(trash.get, settings.registry_root, settings.storage_options(), canonical, kind="namespace") is None:
+        await _forget_namespace(settings, client, token, segments, unbind=True)
+    return DropNamespaceResponse()
+
+
 @router.post("/{id}/drop", response_model_exclude_none=True)
 async def drop_namespace(
     id: str,
@@ -635,7 +729,7 @@ async def drop_namespace(
         except NamespaceNotFoundError:
             if drop_mode is not DropMode.SKIP:
                 raise
-            return DropNamespaceResponse()
+            return await _skip_absent_namespace(settings, client, token, segments)
         # Protection is a property of the SUBTREE, so it is checked against every id about to die, and
         # the refusal NAMES the protected descendant — "something in here is protected" is not an
         # answer anyone can act on. `force` turns this lock exactly as it does at the named rung.
@@ -658,10 +752,7 @@ async def drop_namespace(
         except NamespaceNotFoundError:
             if drop_mode is not DropMode.SKIP:
                 raise
-            # RETURNS BEFORE THE TRAILER, deliberately. Nothing was dropped, so there is no protection
-            # record to clear and no `namespace_dropped` to announce — emitting one would tell every
-            # subscriber of the control stream that an object died when none did.
-            return DropNamespaceResponse()
+            return await _skip_absent_namespace(settings, client, token, segments)
     # The record dies with the object — a reused id must not inherit protection nobody set on it.
     if guard:  # only when one existed — see the table doors
         await run_in_threadpool(protection.clear_protection, settings.registry_root, settings.storage_options(), "namespace", canonical)

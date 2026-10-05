@@ -24,8 +24,8 @@ value outside it is refused as InvalidInput naming it, before the door reads any
 recoverably and is reported as the purge it was not.
 
 A SKIPPED DROP ANNOUNCES NOTHING. Nothing was dropped, so emitting `namespace_dropped` would tell every
-subscriber of the control stream that an object died when none did — the same false-event rule the
-`ExistOk` keep path follows on the create door.
+subscriber of the control stream that an object died when none did. What a Skip over an absent namespace
+cleans up is pinned on the real app in `tests/integration/test_a_namespace_mode_does_what_the_spec_says.py`.
 """
 
 from __future__ import annotations
@@ -118,17 +118,6 @@ def test_the_drop_vocabulary_is_its_own_closed_set() -> None:
     for outside in ("nonsense", "Overwrite", "PURGE"):
         with pytest.raises(InvalidInputError):
             DropMode.parse(outside)
-
-
-@pytest.mark.parametrize("mode", ["Skip"])
-@pytest.mark.anyio
-async def test_skip_makes_dropping_an_absent_namespace_succeed(mode: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    """THE GATE. This is what makes a drop safe to retry."""
-    announced: list[str] = []
-    response = await _drop(mode=mode, exists=False, behavior=None, monkeypatch=monkeypatch, announced=announced)
-
-    assert isinstance(response, DropNamespaceResponse)
-    assert announced == [], "nothing was dropped, so nothing may be announced as dropped"
 
 
 @pytest.mark.anyio
