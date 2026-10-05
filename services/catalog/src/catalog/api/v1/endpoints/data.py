@@ -220,7 +220,13 @@ async def commit_fragments(
     run = (
         CommitRun(control_root=settings.registry_root, storage_options=settings.storage_options(), subject=subject, run_id=body.run_id) if body.run_id else None
     )
-    version, row_count = await run_in_threadpool(dataplane.commit_appended_fragments, described.location, so, body.fragments, body.read_version, run=run)
+    version, row_count = await run_in_threadpool(
+        partial(dataplane.commit_appended_fragments, run=run, external_blob_bases=settings.external_blob_base_list),
+        described.location,
+        so,
+        body.fragments,
+        body.read_version,
+    )
     # Reuse the shared measured-write emitter (reopens once for version + schema), same as /insert — so the
     # WROTE edge + columnLineage-ready schema land identically whether the append was byte-proxy or direct.
     await lineage_deps.emit_measured_write(

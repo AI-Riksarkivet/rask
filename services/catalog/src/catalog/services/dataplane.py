@@ -25,6 +25,7 @@ import threading
 from collections.abc import Callable, Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager, suppress
+from functools import partial
 from typing import Any, Final, cast
 
 import lance
@@ -95,17 +96,18 @@ from catalog.core.base_judge import require_sanctioned_bases
 from catalog.core.config import shared_lance_session
 from catalog.core.modes import CreateMode, InsertMode
 from catalog.core.namespace import judged_native_version, open_dataset, open_dataset_unchecked
-from catalog.services import changes, native, table_bases, warehouse_credentials
+from catalog.services import changes, client_fragments, native, table_bases, warehouse_credentials
 from catalog.services.base_credentials import compose_base_store_params
 from catalog.services.cast_size import bytes_after_cast
 from service_kit.lakehouse import base_registry, commit_runs
 from service_kit.lakehouse.features import VersionedDataFile, describe_foreign_data_file_versions, manifest_base_path_refs
-from service_kit.lakehouse.objectfs import StorageOptions, s3_filesystem
+from service_kit.lakehouse.objectfs import StorageOptions, credential_of, s3_filesystem
 from service_kit.lakehouse.schema import SchemaFields, facet_fields
 from service_kit.lancekit.absence import reads_as_absent
 from service_kit.lancekit.arrow_ipc import ArrowBodyError, ArrowBodyTooLargeError, decode_arrow_stream, encode_arrow_stream
 from service_kit.lancekit.commit_verdict import CommitVerdict, classify_commit_failure
 from service_kit.lancekit.versions import committed_at
+from storage import s3_client, split_s3_uri
 
 
 log = logging.getLogger(__name__)
@@ -905,7 +907,13 @@ def _prior_run_commit(
 
 
 def commit_appended_fragments(
-    location: str, so: StorageOptions, fragments: list[dict[str, Any]], read_version: int, *, run: commit_runs.CommitRun | None = None
+    location: str,
+    so: StorageOptions,
+    fragments: list[dict[str, Any]],
+    read_version: int,
+    *,
+    run: commit_runs.CommitRun | None = None,
+    external_blob_bases: Sequence[str] = (),
 ) -> tuple[int, int]:
     """Commit client-written fragments as an APPEND — the catalog as the governed commit coordinator (#2).
 
@@ -928,9 +936,15 @@ def commit_appended_fragments(
     Returns:
         ``(version, row_count)``: the committed version and the table's row count at it.
 
+    The fragments are a claim and the data files are the authority (:mod:`catalog.services.client_fragments`):
+    nothing an append cannot carry, each file at its declared size, and each footer agreeing with the
+    fragment's rows, columns, field ids and file version. A table with blob columns is committed detached
+    first, so every blob sidecar its descriptors point into is read before the version is published.
+
     Raises:
         InvalidInputError: Malformed fragments, no fragments (and no recorded run commit), a based data
-            file, a foreign file version, or a data file missing under the table.
+            file, a foreign file version, a data file missing under the table or at another size, a
+            footer or blob sidecar that contradicts the fragment, or metadata an append cannot carry.
         ServiceUnavailableError: The object store or the control root could not be read or written.
     """
     if read_version < 0:
@@ -951,14 +965,20 @@ def commit_appended_fragments(
     if not frags:
         raise InvalidInputError("no fragments to commit")
     _refuse_based_data_files(fragments)
-    judged_version = _refuse_foreign_file_versions(location, so, frags, read_version)
+    client_fragments.refuse_forged_metadata(frags)
+    judged_version, judged_against = _refuse_foreign_file_versions(location, so, frags, read_version)
+    client_fragments.refuse_files_the_table_holds(frags, judged_against)
     # HIGH (audit 2026-07-14): Lance's commit validates NEITHER data-file existence NOR the declared row
     # count, so a client whose direct write landed under a DIFFERENT prefix than the catalog-resolved
     # location (no malice required) could otherwise commit a 200-OK-but-UNREADABLE current version that
     # breaks reads for EVERY reader until an operator restores. Pre-verify the files exist under the table
     # location; a failed check leaves the table untouched (400) instead of poisoning its current version.
     _verify_fragment_data_files(location, so, fragments)
+    # The files exist at their declared sizes; their footers now say whether they hold what is declared ([[LH-211]]).
+    client_fragments.verify_against_footers(location, so, frags, judged_against)
     op = lance.LanceOperation.Append(frags)
+    if columns := client_fragments.blob_columns(judged_against):
+        _verify_blob_sidecars(location, so, op, frags, read_version=judged_version, columns=columns, external_bases=external_blob_bases)
     try:
         dataset = lance.LanceDataset.commit(location, op, read_version=judged_version, storage_options=so)
     except OSError as exc:
@@ -999,8 +1019,13 @@ def _refuse_based_data_files(fragments: list[dict[str, Any]]) -> None:
         )
 
 
-def _refuse_foreign_file_versions(location: str, so: StorageOptions, frags: Sequence[lance.FragmentMetadata], read_version: int) -> int:
-    """Refuse fragments whose data files would mix the table's file versions; return the version judged.
+def _refuse_foreign_file_versions(
+    location: str, so: StorageOptions, frags: Sequence[lance.FragmentMetadata], read_version: int
+) -> tuple[int, lance.LanceDataset]:
+    """Refuse fragments whose data files would mix the table's file versions.
+
+    Returns the version the commit is made at, and the table version the files' declared format matched,
+    which their footers are then held to.
 
     pylance 12.0.0 commits them and stamps reader flag 256, which no operation removes, so the refusal
     has to come before the commit. The table is judged at ``read_version``, the version the caller built
@@ -1022,11 +1047,11 @@ def _refuse_foreign_file_versions(location: str, so: StorageOptions, frags: Sequ
     files = [data_file for frag in frags for data_file in frag.files]
     reason = describe_foreign_data_file_versions(base.data_storage_version, files)
     if reason is None:
-        return int(base.version)
-    if read_version and _matches_the_latest_version(location, so, files):
+        return int(base.version), base
+    if read_version and (latest := _latest_if_it_matches(location, so, files)) is not None:
         # Written after an Overwrite moved the table to their version: Lance's own non-retryable
         # conflict is the true answer, and it refuses the commit without setting the flag.
-        return int(base.version)
+        return int(base.version), latest
     log.warning(
         "catalog_commit_refused_foreign_file_version",
         extra={
@@ -1042,10 +1067,10 @@ def _refuse_foreign_file_versions(location: str, so: StorageOptions, frags: Sequ
     )
 
 
-def _matches_the_latest_version(location: str, so: StorageOptions, files: Sequence[VersionedDataFile]) -> bool:
-    """Whether ``files`` are all at the table's LATEST version. Read only on the refusal path."""
+def _latest_if_it_matches(location: str, so: StorageOptions, files: Sequence[VersionedDataFile]) -> lance.LanceDataset | None:
+    """The table's LATEST version when ``files`` are all at its file version, else ``None``. Read only on the refusal path."""
     latest = lance.dataset(location, storage_options=dict(so) if so else None, session=shared_lance_session())
-    return describe_foreign_data_file_versions(latest.data_storage_version, files) is None
+    return latest if describe_foreign_data_file_versions(latest.data_storage_version, files) is None else None
 
 
 def _verify_fragment_data_files(location: str, so: StorageOptions, fragments: list[dict[str, Any]]) -> None:
@@ -1054,25 +1079,91 @@ def _verify_fragment_data_files(location: str, so: StorageOptions, fragments: li
     Each fragment's ``files[].path`` is a bare filename under the dataset's ``data/`` dir: a file naming a
     base was already refused by :func:`_refuse_based_data_files`. A missing file means the client's direct
     write targeted the wrong prefix — committing it would publish an unreadable version, so raise 400 and
-    leave the table as-is.
+    leave the table as-is. A declared ``file_size_bytes`` must be the object's size: Lance reads the footer
+    at the declared size, so a larger one failed every read of the table (measured, [[LH-211]]). An absent
+    size is legitimate, and Lance asks the store.
     """
     fs, base = _dataset_fs(location, so)
     prefix = base.rstrip("/") + "/data/"
     # Collect every root-relative data file first, then resolve them in ONE batched lookup: pyarrow's
     # list overload runs the object-store lookups concurrently, so an N-fragment commit costs one round
     # trip instead of N serial HEADs on the commit hot path.
-    rels = [
-        str(rel)
+    declared = [
+        (str(rel), data_file.get("file_size_bytes"))
         for frag in fragments
         for data_file in (frag.get("files") if isinstance(frag, dict) else None) or []
         if isinstance(data_file, dict) and (rel := data_file.get("path"))
     ]
-    infos = fs.get_file_info([prefix + rel for rel in rels]) if rels else []
-    missing = [rel for rel, info in zip(rels, infos, strict=True) if info.type == pafs.FileType.NotFound]
+    infos = fs.get_file_info([prefix + rel for rel, _ in declared]) if declared else []
+    missing = [rel for (rel, _), info in zip(declared, infos, strict=True) if info.type == pafs.FileType.NotFound]
     if missing:
         raise InvalidInputError(
             f"commit references {len(missing)} data file(s) not present under the table location (did the direct write target the wrong prefix?): {missing[:5]}"
         )
+    resized = [(rel, size, info.size) for (rel, size), info in zip(declared, infos, strict=True) if size is not None and size != info.size]
+    if resized:
+        raise InvalidInputError(
+            f"commit refused: {len(resized)} data file(s) declare a file_size_bytes the object does not have, as (path, declared, actual): {resized[:5]}"
+        )
+
+
+def _verify_blob_sidecars(
+    location: str,
+    so: StorageOptions,
+    op: lance.LanceOperation.Append,
+    frags: Sequence[lance.FragmentMetadata],
+    *,
+    read_version: int,
+    columns: Sequence[str],
+    external_bases: Sequence[str],
+) -> None:
+    """Commit ``op`` DETACHED, read every blob sidecar its descriptors point into, then discard the detached version.
+
+    A detached commit never becomes the latest version (pylance's ``LanceDataset.commit``), so the
+    table's readers never see it. Lance's own cleanup does not remove a detached manifest: after
+    ``cleanup_old_versions(older_than=0)`` the ``_versions/d<version>.manifest`` was still there while
+    the commit's ``.txn`` was gone (measured on 12.0.0), so the door deletes the manifest itself.
+    """
+    try:
+        detached = lance.LanceDataset.commit(location, op, read_version=read_version, storage_options=so, detached=True)
+    except OSError as exc:
+        raise _classify_commit_error(exc) from exc
+    try:
+        client_fragments.verify_blob_sidecars(detached, frags, columns, external_bases=external_bases, object_sizes=partial(_object_sizes, so=so))
+    finally:
+        _discard_detached_manifest(location, so, int(detached.version))
+
+
+def _object_sizes(uris: Sequence[str], *, so: StorageOptions) -> list[int | None]:
+    """Each object's size, ``None`` for one that is absent: one batched lookup per filesystem, as :func:`_verify_fragment_data_files` does."""
+    if so.get("endpoint") and all(uri.startswith("s3://") for uri in uris):
+        infos = s3_filesystem(so).get_file_info([uri.removeprefix("s3://") for uri in uris])
+    else:
+        infos = [fs.get_file_info(path) for fs, path in (_dataset_fs(uri, so) for uri in uris)]
+    return [None if info.type != pafs.FileType.File else int(info.size) for info in infos]
+
+
+def _discard_detached_manifest(location: str, so: StorageOptions, version: int) -> None:
+    """Delete ``_versions/d<version>.manifest``, writing nothing else.
+
+    S3 goes through the storage seam's plain DeleteObject: pyarrow's ``S3FileSystem.delete_file`` PUTs
+    the parent's directory marker after the delete, which left a ``_versions/`` object beside the
+    table's manifests (measured on moto). The ``d`` prefix keeps the name apart from every manifest on
+    the version line. A delete that fails leaves an unreachable manifest, never a wrong table, so it is
+    logged rather than raised.
+    """
+    relative = f"_versions/d{version}.manifest"
+    try:
+        if location.startswith("s3://") and so.get("endpoint"):
+            bucket, prefix = split_s3_uri(location.rstrip("/"))
+            access_key, secret_key, session_token = credential_of(so)
+            client = s3_client(so["endpoint"], access_key=access_key, secret_key=secret_key, session_token=session_token, region=so.get("region"))
+            client.delete_object(Bucket=bucket, Key=f"{prefix}/{relative}")
+        else:
+            fs, base = _dataset_fs(location, so)
+            fs.delete_file(f"{base.rstrip('/')}/{relative}")
+    except Exception:
+        log.warning("catalog_commit_detached_manifest_left", extra={"location": location, "manifest": relative}, exc_info=True)
 
 
 #: pylance's stub declares neither ``CompactionTask.json()`` nor ``RewriteResult.from_json()``, though

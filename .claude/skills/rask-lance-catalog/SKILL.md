@@ -299,7 +299,11 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
 - **Four doors commit client-produced data, and all four judge its file versions.** `/commit`
   (`dataplane.commit_appended_fragments`), `/compaction_commit` (`commit_compaction`), `register`, and
   ingest's own `Lander.commit_fragments` refuse data files at another version than the table's
-  (`service_kit.lakehouse.features.describe_foreign_data_file_versions`). The spec's version-TRACKING
+  (`service_kit.lakehouse.features.describe_foreign_data_file_versions`). `/commit` judges the FOOTER
+  too, because the declared version is the writer's word: `catalog.services.client_fragments` holds
+  each fragment to its data files (sizes, footer row and column counts, version, the field ids the
+  footer's columns are) and, on a table with blob columns, reads every sidecar on a detached commit
+  first ([[LH-211]]). The spec's version-TRACKING
   doors (`version/create`, `version/batch-create`, `batch-commit`) would move a client-staged manifest
   into the version slot unjudged, so they answer 406 while `managed_versioning` is never advertised
   ([[LH-206]]). Advertising it is a design change, not a flag: those doors would first need the
