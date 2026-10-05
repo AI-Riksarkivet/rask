@@ -14,11 +14,21 @@ The steps, and the order, are exactly what the door ran, because the ORDER is th
 2. the parent-exists and live-trash guards — round trips, still strictly BEFORE the write;
 3. the derived-write pin, authorized before the write rather than after it;
 4. the #21 lineage stamp into the decoded table's schema metadata;
-5. the pre-existence probe and its owner-tier drop gate, which is what stops a namespace writer
-   seizing a table through Overwrite;
+5. the pre-existence probe, and for an Overwrite of an existing table its owner-tier drop gate and
+   its deletion-protection guard;
 6. the data-plane write;
-7. the ACL reset for an Overwrite, then seed-with-compensation;
-8. the schema read-back, the lineage emit and the control emit.
+7. seed-with-compensation, which grants owner only on a table this request brought into being;
+8. the schema read-back, the lineage emit (``overwrite_table`` for an Overwrite of an existing table)
+   and the control emit.
+
+**An Overwrite of an existing table is a new version of the same table** ([[LH-242]]). The spec's
+words are "the existing table is dropped and a new table with this name is created" (spec.yaml
+CreateTableRequest.mode), and the backend writes a Lance overwrite on the same dataset, whose earlier
+versions stay readable by time travel. The catalog takes the second meaning whole: the id keeps its
+grants (revoking them while the history they guard stays readable gave the overwriter that history and
+took it from everyone else), its provenance (``provenance_guard.keep_provenance``) and its protection
+(a protected table refuses the Overwrite unless ``force=true``, as its drop does). The spec's "dropped"
+survives as the owner-tier ``can_drop`` gate: the tip's schema and rows are replaced.
 
 **Why this is a service module and not a second endpoint helper.** The compensation rules — never drop
 for ExistOk, never drop an Overwrite that replaced a table — are the highest-consequence decisions in
@@ -58,13 +68,13 @@ from catalog.core.base_judge import GovernedStorage
 from catalog.core.config import Settings
 from catalog.core.formats import reject_unsupported_format
 from catalog.core.identifiers import parse_identifier, require_safe_segments
-from catalog.core.lineage_emit import InputPin, InputRef, LineageEmitter, merge_source_pin, parse_run_facets
+from catalog.core.lineage_emit import OVERWRITE_TABLE, InputPin, InputRef, LineageEmitter, merge_source_pin, parse_run_facets
 from catalog.core.lineage_metadata import build_lineage_metadata, stamp_lineage_metadata
 from catalog.core.modes import CreateMode
 from catalog.services import dataplane, native, table_bases
 from service_kit.control_emit import ControlEmitter, emit_control
 from service_kit.governed import fga
-from service_kit.lakehouse import base_registry
+from service_kit.lakehouse import base_registry, protection
 from service_kit.lakehouse.objectfs import StorageOptions
 
 
@@ -75,18 +85,18 @@ def compensation_allowed(mode: CreateMode, overwrote_existing: bool) -> bool:
     """Whether a failed owner grant may compensate by DROPPING the table — only for a FRESH id.
 
     Never for ExistOk (it may have KEPT a pre-existing table this request never wrote) and never for
-    an Overwrite that REPLACED an existing table (the id still holds the prior incarnation's
-    time-travel history; dropping would escalate a transient FGA blip into irreversible data loss —
-    review 2026-07-10). Pure so the Overwrite arm is unit-testable (it needs FGA on, unreachable in
-    the moto harness).
+    an Overwrite that REPLACED an existing table (the id still holds the table's time-travel history;
+    dropping would escalate a transient FGA blip into irreversible data loss — review 2026-07-10).
+    Pure so the Overwrite arm is unit-testable (it needs FGA on, unreachable in the moto harness).
     """
     return mode is not CreateMode.EXIST_OK and not overwrote_existing
 
 
 def table_exists(ns: LanceNamespace, segments: list[str]) -> bool:
     """True if a table already lives at ``segments`` (declared-only counts — it already holds an owner
-    grant). Used to decide whether a create ``mode=Overwrite`` is destroying an EXISTING table (which then
-    needs an owner-tier gate) vs creating a fresh one. Blocking native call → run in a threadpool."""
+    grant). Used to decide whether a create ``mode=Overwrite`` replaces an EXISTING table (which then
+    needs the owner-tier gate and the protection guard, and is recorded as ``overwrite_table``) or
+    creates a fresh one. Blocking native call → run in a threadpool."""
     try:
         native.call(ns, "describe_table", DescribeTableRequest(id=segments, check_declared=True))
         return True
@@ -182,6 +192,7 @@ async def create_governed_table(
     shape: CreateShape,
     data_base: list[str],
     authorization: str | None,
+    force: bool = False,
 ) -> CreateTableResponse:
     """Create a Lance table from an Arrow-IPC stream, governed end to end.
 
@@ -190,7 +201,8 @@ async def create_governed_table(
     ``dataplane.read_arrow_body``); four decisions below turn on
     the mode — the pre-existence guards, the ownership seed, the schema read-back and the compensation
     rule. The derived-write pin is AUTHORIZED here, after the round trips and before the write — see
-    the module docstring.
+    the module docstring. ``force`` releases deletion protection for an Overwrite of an existing table,
+    and nothing else.
     """
     # THE ROUND TRIPS COME AFTER THE FREE CHECKS (catalog-api-19). These two both dial out — a
     # describe against the namespace backend and a trash-registry read on the object store — and they
@@ -233,25 +245,25 @@ async def create_governed_table(
     # enabled: when off we don't stamp a create_run_id the graph never receives.
     if settings.lineage_emit_enabled:
         table = stamp_lineage_metadata(table, build_lineage_metadata(table_id=table_id, namespace=namespace, run_id=run_id))
-    # mode=Overwrite is spec-defined as "the existing table is DROPPED and a new table created" (lance
-    # namespace.md). ``authorize`` only gated this create at writer-tier can_create_table on the PARENT — but
-    # a DROP needs owner-tier can_drop. So if an Overwrite is about to DESTROY an existing table, require
-    # owner-tier on it FIRST (before the irreversible write) — else a mere namespace writer could overwrite
-    # and, via the ownership reset below, seize another user's table. Fresh-id Overwrite creates nothing to
-    # gate. FGA-off skips it (no ACL to protect).
-    # Pre-existence (declared-only counts — it already holds an owner grant), computed BEFORE the write and
-    # only when FGA is on (the ACLs it protects exist only then). It feeds TWO owner-tier guards:
-    #   · Overwrite of an EXISTING table is a DROP → needs owner-tier can_drop first, else a namespace writer
-    #     could overwrite and, via the ownership reset below, SEIZE another user's table.
-    #   · ExistOk that KEEPS an existing table wrote NOTHING — so seeding the caller `owner` would let ANY
+    # Pre-existence, computed BEFORE the write (declared-only counts — it already holds an owner grant).
+    # An Overwrite always probes: whether it replaces a table decides its protection guard and its lineage
+    # record, and neither depends on FGA. An ExistOk probes only with FGA on, for its one FGA question:
+    #   · Overwrite of an EXISTING table replaces the tip's schema and rows, the spec's "dropped" — so it
+    #     clears the owner-tier can_drop a real drop needs, not only the writer-tier can_create_table the
+    #     router applied on the parent, and a protected table refuses it unless force=true.
+    #   · ExistOk that KEPT an existing table wrote NOTHING — so seeding the caller `owner` would let ANY
     #     authenticated user (or namespace-writer) SEIZE ownership of an already-owned table via a no-op
     #     create (audit: CRITICAL). We must never grant owner on a table this request did not create.
-    # The describe (table_exists) runs only for Overwrite/ExistOk with FGA on.
-    pre_existed = mode is not CreateMode.CREATE and settings.fga_enabled and client is not None and await run_in_threadpool(table_exists, ns, segments)
+    probe = mode is CreateMode.OVERWRITE or (mode is CreateMode.EXIST_OK and settings.fga_enabled and client is not None)
+    pre_existed = probe and await run_in_threadpool(table_exists, ns, segments)
     overwrote_existing = pre_existed and mode is CreateMode.OVERWRITE
     existok_kept_existing = pre_existed and mode is CreateMode.EXIST_OK
     if overwrote_existing:
         await fga_deps.require_can_drop_table(client, settings, token, segments=segments)
+        # After the authz gate, as on the drop door: a caller who may not drop the table learns nothing
+        # about its protection.
+        guard = await run_in_threadpool(protection.get_protection, settings.registry_root, settings.storage_options(), "table", table_id)
+        fga_deps.require_not_protected(guard or {}, kind="table", obj_id=table_id, force=force)
     # [[LH-279]] Where the create records the bases it registers — the catalog's control root, written
     # with the catalog's own credential and never through a vend.
     registry = base_registry.BaseRegistry(control_root=settings.registry_root, storage_options=settings.storage_options())
@@ -277,14 +289,10 @@ async def create_governed_table(
         secret_field=settings.dapr_secret_s3_field,
         registry=registry,
     )
-    # An Overwrite that replaced an EXISTING table (owner-authorized above) resets its ACL: revoke the prior
-    # incarnation's grants (any reader/writer/validator that must not survive onto the reused id) before
-    # re-seeding the overwriter. Only when we actually overwrote — a fresh create has nothing to revoke, and
-    # revoking on a non-owner path is what the audit flagged as an eviction vector (now gated out).
-    if overwrote_existing:
-        await fga_deps.revoke_ownership(client, settings, resource="table", segments=segments, token=token)
 
-    # Make the caller owner + link the new table to its parent so it inherits the cascade.
+    # Make the caller owner of a table this request brought into being + link it to its parent so it
+    # inherits the cascade. An Overwrite of an existing table keeps every grant the table holds, the owner's
+    # included, and grants the overwriter nothing: it already cleared can_drop, and the table is not new.
     # COMPENSATION (§4 dual-write): if the grant fails here (FGA outage → 503), the table exists on
     # storage but has NO owner tuple — the client's retry would hit "already exists", stranding it
     # forever. Best-effort delete what THIS request wrote so the retry starts clean — but ONLY for a
@@ -298,8 +306,9 @@ async def create_governed_table(
     # Residual (documented): a process CRASH between the write and the grant still strands the table
     # (no in-process compensation can cover it); the deeper fix is a declare→grant→write reorder.
     # Seed ownership ONLY for a table THIS request actually created. An ExistOk that KEPT an already-existing
-    # table wrote nothing, so granting the caller `owner` would seize another user's table (audit: CRITICAL) —
-    # the existing owner (or the /declare-r of a declared-only table) keeps ownership. Skipping the seed also
+    # table wrote nothing, and an Overwrite of one wrote a version of a table someone else brought into being,
+    # so granting the caller `owner` on either would seize it (audit: CRITICAL) — the existing owner (or the
+    # /declare-r of a declared-only table) keeps ownership. Skipping the seed also
     # skips the compensation (there is nothing this request wrote to compensate).
     async def _undo_create() -> None:
         await run_in_threadpool(native.call, ns, "drop_table", DropTableRequest(id=segments))
@@ -328,7 +337,7 @@ async def create_governed_table(
     #
     # `undo` stays conditional. Compensation undoes what THIS request created, and an ExistOk that kept
     # an existing table created nothing to undo.
-    seeding_a_new_table = not existok_kept_existing
+    seeding_a_new_table = not pre_existed
     await fga_deps.seed_ownership_or_compensate(
         client,
         settings,
@@ -346,13 +355,13 @@ async def create_governed_table(
     # Inline-await (NOT BackgroundTasks — no retry, dies with the worker; fastapi anti-pattern) so the event
     # reaches the durable Dapr/JetStream transport before the response. emit_create is best-effort internally,
     # so it never fails the create; JetStream + the consumer's idempotent MERGE-on-run_id give durability.
-    # The per-version column schema (blob/vector-aware) for the WROTE edge (#24). A create/Overwrite writes
+    # The per-version column schema (blob/vector-aware) for the WROTE edge (#24). A fresh create writes
     # exactly the request's table, so the payload schema IS the table's schema — read in memory, no
-    # describe + dataset reopen round trip. ExistOk is the exception: it may have KEPT an existing table
-    # (nothing written, response.version = the existing version), so the payload schema could belong to a
-    # table that was never created — read the true schema back PINNED at that version instead. Best-effort
-    # either way (failure → []).
-    if mode is CreateMode.EXIST_OK:
+    # describe + dataset reopen round trip. Two exceptions read the true schema back PINNED at the version:
+    # ExistOk may have KEPT an existing table (nothing written, response.version = the existing version),
+    # and an Overwrite of an existing table wrote the table's provenance fields and metadata over the
+    # payload's. Best-effort either way (failure → []).
+    if mode is CreateMode.EXIST_OK or overwrote_existing:
         _, schema_fields, _location = await run_in_threadpool(dataplane.read_version_and_schema, ns, so, segments, response.version, None)
     else:
         schema_fields = dataplane.payload_schema_fields(table.schema, segments)
@@ -369,22 +378,39 @@ async def create_governed_table(
         if source_pin is not None
         else None
     )
-    await emitter.emit_create(
-        table_id=table_id,
-        namespace=namespace,
-        author=created_by,
-        version=response.version or 1,
-        run_id=run_id,
-        authorization=authorization,
-        source_uri=response.location,  # the real Lance URI → #23 reconcile can read the on-disk file
-        schema_fields=schema_fields,
-        inputs=input_refs,
-        extra_run_facets=shape.run_facets,
-    )
+    if overwrote_existing:
+        # Not a creation: the table, its creator and its CREATED edge all predate this request.
+        await emitter.emit_write(
+            table_id=table_id,
+            namespace=namespace,
+            author=created_by,
+            version=response.version,
+            operation=OVERWRITE_TABLE,
+            run_id=run_id,
+            authorization=authorization,
+            source_uri=response.location,
+            schema_fields=schema_fields,
+            inputs=input_refs,
+            extra_run_facets=shape.run_facets,
+        )
+    else:
+        await emitter.emit_create(
+            table_id=table_id,
+            namespace=namespace,
+            author=created_by,
+            version=response.version or 1,
+            run_id=run_id,
+            authorization=authorization,
+            source_uri=response.location,  # the real Lance URI → #23 reconcile can read the on-disk file
+            schema_fields=schema_fields,
+            inputs=input_refs,
+            extra_run_facets=shape.run_facets,
+        )
     # Only a real creation emits — an ExistOk request that KEPT a pre-existing table wrote nothing and
     # created nothing (same guard that skips ownership seeding above), so a `table_created` here would be a
-    # spurious event announcing a creation-by-caller that never happened. A fresh create + an Overwrite
-    # (drop+recreate) still emit.
+    # spurious event announcing a creation-by-caller that never happened. A fresh create emits, and so does
+    # an Overwrite of an existing table: it changed the table, and `extra.mode` is what tells the two apart
+    # in a vocabulary that has no overwrite verb.
     if not existok_kept_existing:
         await emit_control(
             control,

@@ -147,3 +147,46 @@ def refuse_provenance_alter(schema: pa.Schema, alterations: Sequence[Mapping[str
     }
     if hits:
         _refuse("alter_columns", "rename or re-type", hits)
+
+
+def _bare(data_type: pa.DataType) -> pa.DataType:
+    """``data_type`` with every struct child's metadata and nullability dropped, so two shapes compare by type alone."""
+    if pa.types.is_struct(data_type):
+        return pa.struct([pa.field(data_type.field(i).name, _bare(data_type.field(i).type)) for i in range(data_type.num_fields)])
+    return data_type
+
+
+def keep_provenance(table_schema: pa.Schema, payload: pa.Table) -> pa.Table:
+    """The rows a create ``mode=Overwrite`` writes over an EXISTING table: the payload's, carrying the table's provenance.
+
+    rask serves that Overwrite as a new Lance version of the same table ([[LH-242]]): the id, its grants
+    and its time-travel history all continue, so its provenance must continue too. Lance takes an
+    overwrite's schema from the payload, metadata included (measured on pylance 12.0.0: a payload with
+    no metadata erased ``lineage.*`` and the primary key at top level and inside a struct). So:
+
+    * each top-level column :func:`protected_paths` names (a provenance column, a key field, or an
+      ancestor of a nested key) must be in the payload with the table's type, ignoring metadata and
+      nullability, and is written as the table's own field, which carries the key back;
+    * schema metadata under the reserved namespaces is the table's, whatever the payload stamped; the
+      payload's other keys are its own to set.
+
+    Every other column is the payload's to add, drop or re-type, which is what distinguishes this door
+    from ``insert?mode=overwrite``, whose rows always take the table's whole schema.
+
+    Raises:
+        InvalidInputError: The payload lacks a protected column, or gives one another type.
+    """
+    protected = {path: why for path, why in protected_paths(table_schema).items() if "." not in path}
+    names = set(payload.schema.names)
+    hits = {
+        path: why
+        for path, why in protected.items()
+        if path not in names or not _bare(payload.schema.field(path).type).equals(_bare(table_schema.field(path).type))
+    }
+    if hits:
+        _refuse("create?mode=overwrite", "drop or re-type", hits)
+    fields = [table_schema.field(field.name) if field.name in protected else field for field in payload.schema]
+    columns = [payload.column(field.name).cast(field.type) if field.name in protected else payload.column(field.name) for field in fields]
+    metadata = {key: value for key, value in (payload.schema.metadata or {}).items() if not is_reserved_key(key)}
+    metadata |= {key: value for key, value in (table_schema.metadata or {}).items() if is_reserved_key(key)}
+    return pa.Table.from_arrays(columns, schema=pa.schema(fields, metadata=metadata or None))

@@ -82,6 +82,12 @@ CASES: dict[str, tuple[str, Any]] = {
     "rask.* in a create payload": ("create", _rows({b"rask.blob.external_base": b"s3://other/"})),
     "lineage.* in create properties": ("create?properties=" + json.dumps({"lineage.dataset_id": "victim$payroll"}), _rows()),
     "lineage.* in an insert overwrite payload": ("/v1/table/m$t/insert?mode=overwrite", _rows({b"lineage.dataset_id": b"victim$payroll"})),
+    # [[LH-242]] A create overwrite of an existing table is a new version of it, so it keeps the provenance columns.
+    "a create overwrite without the primary key": ("/v1/table/m$t/create?mode=overwrite", _rows().drop_columns(["id"])),
+    "a create overwrite re-typing source_rowid": (
+        "/v1/table/m$t/create?mode=overwrite",
+        _rows().set_column(4, pa.field("source_rowid", pa.int64()), pa.array([0, 1], pa.int64())),
+    ),
     "drop the primary key": ("/v1/table/m$t/drop_columns", {"columns": ["id"]}),
     "drop a struct holding a key field": ("/v1/table/m$t/drop_columns", {"columns": ["st"]}),
     "drop a nested key field": ("/v1/table/m$t/drop_columns", {"columns": ["st.k"]}),
@@ -124,13 +130,22 @@ def _ref(location: str, branch: str | None) -> lance.LanceDataset:
     return dataset.checkout_version((branch, None)) if branch else dataset
 
 
-@pytest.mark.parametrize("loose", [False, True], ids=["exact-types", "cast"])
-@pytest.mark.parametrize("branch", [None, "work"])
-def test_an_insert_overwrite_keeps_the_tables_provenance(tier: tuple[TestClient, str], branch: str | None, loose: bool) -> None:
+@pytest.mark.parametrize(
+    ("door", "branch", "loose"),
+    [
+        pytest.param("insert", None, False, id="insert-main-exact-types"),
+        pytest.param("insert", None, True, id="insert-main-cast"),
+        pytest.param("insert", "work", False, id="insert-branch-exact-types"),
+        pytest.param("insert", "work", True, id="insert-branch-cast"),
+        pytest.param("create", None, False, id="create-main"),
+    ],
+)
+def test_an_overwrite_keeps_the_tables_provenance(tier: tuple[TestClient, str], door: str, branch: str | None, loose: bool) -> None:
     """An overwrite whose payload carries no metadata is a legal write, and it must not erase the stamp
-    or the primary key: Lance takes an overwrite's schema from its payload. Both arms of the door, the
-    native one (main) and the in-process one (a branch), and both coercions: a payload already in the
-    table's types, and one the door casts (a browser sends float64 for every number)."""
+    or the primary key: Lance takes an overwrite's schema from its payload. Both arms of the insert door,
+    the native one (main) and the in-process one (a branch), and both coercions: a payload already in the
+    table's types, and one the door casts (a browser sends float64 for every number). The create door
+    takes no branch and casts nothing: its payload's types are the table's new schema ([[LH-242]])."""
     client, location = tier
     query = "mode=overwrite"
     if branch:
@@ -141,7 +156,7 @@ def test_an_insert_overwrite_keeps_the_tables_provenance(tier: tuple[TestClient,
         payload = payload.set_column(0, pa.field("id", pa.float64(), nullable=False), pa.array([1.0, 2.0]))
     before = _ref(location, branch).schema
 
-    response = client.post(f"/v1/table/m$t/insert?{query}", content=_ipc(payload), headers=ARROW)
+    response = client.post(f"/v1/table/m$t/{door}?{query}", content=_ipc(payload), headers=ARROW)
 
     assert response.status_code == 200, response.text
     after = _ref(location, branch)

@@ -81,6 +81,7 @@ _ALL_DDL = (
     "drop_index",
     "update_schema_metadata",
     "rename_table",
+    "overwrite_table",
 )
 
 

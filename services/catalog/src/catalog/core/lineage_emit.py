@@ -116,6 +116,11 @@ COMPACT_TABLE = "compact_table"
 #: Restore moves the table's current version to a prior one — a real version-state change, recorded as a
 #: versioned WROTE at the new (restored) version.
 RESTORE_TABLE = "restore_table"
+#: A create or an insert in Overwrite mode that replaced an EXISTING table's contents ([[LH-242]]): a new
+#: version of the same table, its history and grants intact. Distinct from ``create_table`` because no table
+#: came into being, so it keys no ``(:User)-[:CREATED]->(:Dataset)`` edge, and from ``insert`` because the
+#: rows before it are gone from the tip; it carries the standard ``OVERWRITE`` lifecycle state.
+OVERWRITE_TABLE = "overwrite_table"
 #: Declare reserves a table id with no data yet (versionless); register attaches an existing storage
 #: location. Both are "the table came into existence in this catalog" events, so — like ``create_table`` —
 #: they key a ``(:User)-[:CREATED]->(:Dataset)`` edge (see ``lineage/repository.py`` ``_CREATE_OPS``).
@@ -198,8 +203,12 @@ def _is_ddl(operation: str) -> bool:
     the standard lifecycle facet, and a second list is a second place for a new operation to be
     forgotten — it would keep emitting a run, and the phantom it mints is invisible until someone
     counts Job nodes.
+
+    ``OVERWRITE`` is not DDL here: an overwrite committed rows at a version, and only a run's ``WROTE``
+    edge records the version a write made (``ingest_dataset_event`` mints no run and writes none).
     """
-    return bool(lifecycle_state(operation))
+    state = lifecycle_state(operation)
+    return state is not None and state != "OVERWRITE"
 
 
 def _as_dataset_event(*, output: dict[str, Any], run_facets: dict[str, Any], event_time: str) -> dict[str, Any]:

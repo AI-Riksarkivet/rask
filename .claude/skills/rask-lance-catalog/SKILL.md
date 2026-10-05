@@ -167,7 +167,9 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   were lost.
 - **Protection covers EVERY rung since #73** (2026-08-04): warehouses/projects carry `protected` on
   their registry records; tables/namespaces carry it as a **control-root `_protection/` record**
-  (`service_kit.lakehouse.protection`) gating drop/deregister/rename (table) and drop (namespace) —
+  (`service_kit.lakehouse.protection`) gating drop/deregister/rename and both Overwrite modes,
+  `create?mode=Overwrite` over an existing table and `insert?mode=overwrite` on any branch ([[LH-242]]),
+  (table) and drop (namespace) —
   deliberately NOT schema metadata, so unprotect is never reachable through the properties door,
   toggling never creates a table version, and the guard answers even for a corrupted dataset. Set
   via `POST /management/v1/table/{id}/protection` / `/management/v1/namespace/{id}/protection`,
@@ -281,7 +283,11 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   self-describing coordinates. **Those two namespaces are the platform's** ([[LH-208]],
   `catalog/core/provenance_guard.py`): a set or a null of any `lineage.*` / `rask.*` key is refused 400 at
   this door before the route split, in a create payload's schema metadata, in create `properties` and in an
-  `insert?mode=overwrite` payload (whose body then carries the table's own schema and field metadata); the
+  `insert?mode=overwrite` payload (whose body then carries the table's own schema and field metadata) and a
+  `create?mode=Overwrite` over an existing table, which must keep each provenance column and key field at
+  its type and is written with the table's own fields and reserved metadata
+  (`provenance_guard.keep_provenance`, [[LH-242]]: the Overwrite is a new version of the same table, its
+  grants and history intact, recorded as `overwrite_table` with lifecycle state `OVERWRITE`); the
   platform writes them with pylance directly, and a producer creating from an upstream's schema strips its
   schema metadata first (`medallion.services.catalog_register.ensure_stage_output`). `description` is the one user-facing reserved key (the
   lakehouse renders it under the table name); everything else in that map is opaque user data.

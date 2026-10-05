@@ -127,7 +127,8 @@ LIFECYCLE_FACET_SCHEMA_URL = "https://openlineage.io/spec/facets/1-0-1/Lifecycle
 #: meaning "wrote rows", so `insert`, `delete`, `merge_insert`, `update`, `compaction`, `transform`,
 #: `training` and the medallion's lane verbs get nothing — mapping them to `OVERWRITE` would tell a
 #: reader the table was replaced. Their row-level story is the output statistics and version facets
-#: that already ride the same event.
+#: that already ride the same event. `overwrite_table` is the one write that DID replace the table's
+#: contents (a create or an insert in Overwrite mode over an existing table, [[LH-242]]), so it says so.
 _LIFECYCLE_BY_OPERATION: Final[dict[str, str]] = {
     "create_table": "CREATE",
     "declare_table": "CREATE",
@@ -141,6 +142,7 @@ _LIFECYCLE_BY_OPERATION: Final[dict[str, str]] = {
     "drop_index": "ALTER",
     "update_schema_metadata": "ALTER",
     "rename_table": "RENAME",
+    "overwrite_table": "OVERWRITE",
 }
 
 
@@ -150,7 +152,8 @@ def lifecycle_state(operation: str) -> str | None:
     Split out of :func:`lifecycle_facet` because the same question — did this change the table's
     DEFINITION rather than its rows — also decides whether the catalog emits a ``DatasetEvent``. Two
     lists would be two places for a new operation to be forgotten, and the one that keeps emitting a
-    run mints a Job node nobody sees until they count.
+    run mints a Job node nobody sees until they count. ``OVERWRITE`` is the one state that also wrote
+    rows, so the catalog keeps it a run (``catalog.core.lineage_emit._is_ddl``).
     """
     return _LIFECYCLE_BY_OPERATION.get(operation.lower())
 

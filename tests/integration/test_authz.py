@@ -33,7 +33,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from types import SimpleNamespace
 from typing import cast
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, create_autospec
 
 import pyarrow as pa
 from fastapi.testclient import TestClient
@@ -578,32 +578,29 @@ def test_rename_table_seeds_destination_then_revokes_source(client: TestClient, 
     assert order == ["grant:db1$u2", "revoke:table:db1$users"]
 
 
-def test_overwrite_by_owner_revokes_prior_grants_then_seeds(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
-    """CONTRACT: an Overwrite of an EXISTING table BY ITS OWNER (can_drop passes) is drop+recreate, so the
-    prior grants are revoked BEFORE the overwriter is re-seeded (``table:db1$users``), revoke before grant."""
+def test_overwrite_by_owner_keeps_every_grant_and_grants_the_overwriter_no_ownership(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
+    """CONTRACT ([[LH-242]]): an Overwrite of an EXISTING table writes a new version of the same table, whose
+    history stays readable, so the table's grants survive it: nothing is revoked, and the overwriter (who
+    cleared can_drop) is not made owner. Only the idempotent parent edge is written."""
     fake_ns.describe_table.return_value = DescribeTableResponse(location="s3://b/db1$users")  # table exists
     _stub_create(monkeypatch, response=CreateTableResponse(location="s3://b/db1$users", version=2))
     _wire(client)
     monkeypatch.setattr(fga_module, "check", _fake_check([], allow=True))  # owner → can_drop passes
-    order: list[str] = []
-
-    async def _revoke(_c: object, obj: str, **_k: object) -> list[SimpleNamespace]:
-        order.append(f"revoke:{obj}")
-        return [_revoked_tuple(obj=obj)]
-
-    async def _grant(_c: object, **kw: object) -> None:
-        order.append(f"grant:{kw['obj_id']}")
-
-    monkeypatch.setattr(fga_module, "revoke_object_tuples", _revoke)
-    monkeypatch.setattr(fga_module, "grant_on_create", _grant)
+    revoke = create_autospec(fga_module.revoke_object_tuples, return_value=[])
+    grant = create_autospec(fga_module.grant_on_create, return_value=None)
+    monkeypatch.setattr(fga_module, "revoke_object_tuples", revoke)
+    monkeypatch.setattr(fga_module, "grant_on_create", grant)
 
     resp = client.post(
         "/v1/table/db1$users/create?mode=overwrite",
         content=ARROW_BODY,
         headers={"Authorization": "Bearer t", **ARROW_STREAM},
     )
-    assert resp.status_code == 200
-    assert order == ["revoke:table:db1$users", "grant:db1$users"]
+    assert resp.status_code == 200, resp.text
+    revoke.assert_not_awaited()
+    grant.assert_awaited_once()
+    assert grant.await_args is not None and grant.await_args.kwargs["obj_id"] == "db1$users"
+    assert grant.await_args.kwargs["grant_owner"] is False
 
 
 def test_overwrite_of_existing_table_by_non_owner_is_denied_and_revokes_nothing(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:

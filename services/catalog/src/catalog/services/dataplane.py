@@ -500,8 +500,9 @@ def create_table(
     ``data_bases`` (#3-B) spreads the table's fragments across N approved buckets (Lance multi-base);
     empty (the default) → a single-base write.
 
-    Honours the create ``mode`` against a *written* table (``ExistOk`` keeps it, ``Overwrite`` replaces its
-    data, ``Create`` conflicts). A *declared-only* table — one that exists in the namespace but was never
+    Honours the create ``mode`` against a *written* table (``ExistOk`` keeps it, ``Overwrite`` writes a new
+    version of it that keeps the table's provenance — :func:`provenance_guard.keep_provenance` — while its
+    history stays readable, ``Create`` conflicts). A *declared-only* table — one that exists in the namespace but was never
     written (a bare ``POST /declare``, or a declare→write that crashed before the write) — has no readable
     dataset, so every mode simply lands the first data version into its already-declared location; this keeps
     the multi-step create idempotent and crash-safe, and never opens a table that isn't there (which 500'd).
@@ -522,8 +523,10 @@ def create_table(
 
     if existing is not None and not only_declared:  # a written, readable table already lives here
         if normalized is CreateMode.OVERWRITE:
+            # A new version of the same table, so the table's provenance rides onto it ([[LH-242]]).
+            current = lance.dataset(existing, storage_options=so, session=shared_lance_session()).schema
             dataset = _write_blob(
-                table,
+                provenance_guard.keep_provenance(current, table),
                 existing,
                 so,
                 mode="overwrite",

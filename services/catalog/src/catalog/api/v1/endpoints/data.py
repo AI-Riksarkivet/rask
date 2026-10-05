@@ -41,13 +41,13 @@ from catalog.api.dependencies import (
     SettingsDep,
     StorageOptionsDep,
 )
-from catalog.api.rask_params import RaskDataBase, RaskExternalBlobBase, RaskSource, RaskSourceVersion
+from catalog.api.rask_params import RaskDataBase, RaskExternalBlobBase, RaskFlag, RaskSource, RaskSourceVersion
 from catalog.api.security import CurrentSubject, CurrentToken
 from catalog.core import provenance_guard
 from catalog.core.base_judge import BaseJudge
 from catalog.core.formats import reject_unsupported_format
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
-from catalog.core.lineage_emit import COMPACT_TABLE, DELETE, INSERT, MERGE_INSERT, UPDATE, merge_source_pin, parse_run_facets
+from catalog.core.lineage_emit import COMPACT_TABLE, DELETE, INSERT, MERGE_INSERT, OVERWRITE_TABLE, UPDATE, merge_source_pin, parse_run_facets
 from catalog.core.modes import CreateMode, InsertMode
 from catalog.core.namespace import judged_native_version
 from catalog.core.serialization import dump
@@ -62,7 +62,9 @@ from catalog.schemas import (
     publish_the_plan_body_as_required,
 )
 from catalog.services import blob_serving, changes, dataplane, native, table_create
+from service_kit.governed import fga
 from service_kit.governed.audit import audit_read
+from service_kit.lakehouse import protection
 from service_kit.lakehouse.commit_runs import CommitRun
 from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE
 
@@ -130,8 +132,13 @@ async def create_table(
     run_facets_json: Annotated[str | None, Header(alias="X-Lance-Run-Facets")] = None,
     authorization: Annotated[str | None, Header()] = None,
     idempotency_key: idem.IdempotencyKeyHeader = None,
+    force: RaskFlag = False,
 ) -> CreateTableResponse:
     """Create a Lance table from an Arrow-IPC stream — ``create_table``; seeds ownership + lineage.
+
+    ``mode=Overwrite`` over an existing table writes a new version of it ([[LH-242]],
+    ``table_create``'s module docstring): a protected table refuses it 409 unless ``force=true``, which
+    turns the protection lock only, as on drop.
 
     ``properties`` is the spec-0.9 JSON-encoded query parameter. Client-supplied ``storage_options``
     are deliberately NOT accepted: storage access is the catalog's to vend (two-tier secret model),
@@ -195,6 +202,7 @@ async def create_table(
         shape=shape,
         data_base=data_base,
         authorization=authorization,
+        force=force,
     )
     # AFTER the door succeeded, and only then: a failure raises past this line, leaving the claim
     # in-flight until its lease expires rather than recording an outcome the caller never received.
@@ -383,14 +391,23 @@ async def insert_into_table(
     mode: str | None = None,
     branch: Annotated[str | None, Query(description="The ref to insert into. Omit for main.")] = None,
     authorization: Annotated[str | None, Header()] = None,
+    force: RaskFlag = False,
 ) -> InsertIntoTableResponse:
     """Append Arrow-IPC rows — ``insert_into_table``; emits an INSERT lineage event.
-    ``branch`` targets a non-main branch (spec 0.9 query param for Arrow-IPC-body ops)."""
+    ``branch`` targets a non-main branch (spec 0.9 query param for Arrow-IPC-body ops).
+
+    ``mode=overwrite`` removes every row on the ref before inserting (spec.yaml InsertIntoTableRequest.mode),
+    so a protected table refuses it 409 unless ``force=true``, on any branch — the protection record is the
+    table's — and it is recorded as ``overwrite_table`` with the ``OVERWRITE`` lifecycle state ([[LH-242]])."""
     segments = parse_identifier(id, settings.delimiter)
     # PARSED HERE, ONCE: pylance's `LanceDataset.insert` refuses a value outside Append/Overwrite with a
     # bare ValueError or OSError (500, measured on pylance 12.0.0), where the spec answers InvalidInput.
     # Ahead of the coerce because that opens the dataset, and a shape refusal costs no round trip.
     insert_mode = InsertMode.parse(mode)
+    if insert_mode is InsertMode.OVERWRITE:
+        canonical = fga.canonical_object_id(segments, delimiter=settings.delimiter)
+        guard = await run_in_threadpool(protection.get_protection, settings.registry_root, settings.storage_options(), "table", canonical)
+        fga_deps.require_not_protected(guard or {}, kind="table", obj_id=canonical, force=force)
     # Cast the incoming rows to the table's schema first, so a client that infers loose Arrow types (a
     # browser infers float64 for every JS number) can append to int64 columns — else the append 500s on
     # the mismatch. A genuinely incompatible payload becomes a clean 400 here, not a 500 downstream.
@@ -408,7 +425,7 @@ async def insert_into_table(
         so=so,
         settings=settings,
         token=token,
-        operation=INSERT,
+        operation=OVERWRITE_TABLE if insert_mode is InsertMode.OVERWRITE else INSERT,
         authorization=authorization,
         pin_version=response.version,
         # A branch has its own version sequence; reading this write back off main pins the edge to a
