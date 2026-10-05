@@ -20,7 +20,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import timedelta
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import lance
 import lance_namespace
@@ -28,16 +28,19 @@ import pyarrow as pa
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from lance.dataset import DatasetOptimizer
 from lance_namespace import LanceNamespace
 
 import catalog.services.erasure as erasure_module
 from catalog.api.dependencies import get_namespace, get_storage_options
 from catalog.api.v1.endpoints import erasure as door
+from catalog.core import base_judge
 from catalog.core.config import Settings, get_settings
 from catalog.core.namespace import open_dataset
 from catalog.services.dataplane import create_table, read_arrow_body
 from catalog.services.erasure import ErasureReport, erase
 from catalog.services.maintenance import COMPACTION_BOUND
+from service_kit.lakehouse import base_registry
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 
@@ -328,10 +331,22 @@ def _subject_in_a_fragment_no_rewrite_takes(uri: str) -> None:
     lance.write_dataset(_rows("dan"), uri, mode="append")
 
 
+def _keep_fragment_zero_out_of_every_rewrite(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Exclude fragment 0 from every `compact_files` call, the erasure's two passes included, as a store
+    that cannot rewrite one fragment would."""
+    compact = DatasetOptimizer.compact_files
+
+    def _without_zero(self: DatasetOptimizer, **options: Any) -> Any:
+        kwargs: dict[str, Any] = {**options, "excluded_fragment_ids": sorted({0, *(options.get("excluded_fragment_ids") or [])})}
+        return compact(self, **kwargs)
+
+    monkeypatch.setattr(DatasetOptimizer, "compact_files", _without_zero)
+
+
 def test_a_version_unreadable_whole_is_a_residual_while_one_of_its_fragments_answers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     uri = str(tmp_path / "subjects")
     _subject_in_a_fragment_no_rewrite_takes(uri)
-    monkeypatch.setattr(erasure_module, "COMPACTION_BOUND", {**COMPACTION_BOUND, "excluded_fragment_ids": [0], "max_source_bytes": 2 * 1024 * 1024})
+    _keep_fragment_zero_out_of_every_rewrite(monkeypatch)
 
     report = erase(
         lance.dataset(uri), storage_options={}, protected=None, reopen=lambda: lance.dataset(uri), table="t", predicate=_PREDICATE, retention=timedelta(0)
@@ -600,8 +615,8 @@ class _ResolvesOnce(_Forwarding):
 
 
 @contextmanager
-def _door(namespace: Any) -> Iterator[TestClient]:
-    settings = Settings(LANCE_S3_ACCESS_KEY_ID="k", LANCE_S3_SECRET_ACCESS_KEY="s")
+def _door(namespace: Any, settings: Settings | None = None) -> Iterator[TestClient]:
+    settings = settings or Settings(LANCE_S3_ACCESS_KEY_ID="k", LANCE_S3_SECRET_ACCESS_KEY="s")
     application = FastAPI()
     install_problem_handlers(application, logging.getLogger(__name__))
     application.include_router(door.router)
@@ -649,6 +664,114 @@ _IDENTIFIER = "alice-19700101-1234"
 _UNDER_THE_THRESHOLD = _rows(*(f"person-{i}" for i in range(19)), _IDENTIFIER)
 
 
+def _indexed(kind: Literal["BTREE", "BITMAP"]) -> Callable[[Path], LanceNamespace]:
+    """The subject under the rewrite threshold, ``pii`` indexed: a segment keeps a key through compaction."""
+
+    def build(root: Path) -> LanceNamespace:
+        ns = _table(root, _UNDER_THE_THRESHOLD)
+        open_dataset(ns, {}, _TABLE_ID).create_scalar_index("pii", kind)
+        return ns
+
+    return build
+
+
+def _created(root: Path, table: Callable[[Path], pa.Table], *, external: bool) -> LanceNamespace:
+    """``subjects`` created through the catalog's create path with one base beside it, outside its location,
+    recorded on the control root the test's base judge reads ([[LH-279]], [[LH-209]]): its external blob base,
+    or else its data base."""
+    ns = lance_namespace.connect("dir", {"root": str(root)})
+    base = root / "bases" / "payloads"
+    base.mkdir(parents=True)
+    body = table(base)
+    sink = pa.BufferOutputStream()
+    with pa.ipc.new_stream(sink, body.schema) as writer:
+        writer.write_table(body)
+    payload = read_arrow_body(sink.getvalue().to_pybytes(), max_bytes=_BODY_LIMIT)
+    bases = [str(base)]
+    create_table(
+        ns,
+        {},
+        _TABLE_ID,
+        payload,
+        mode="create",
+        registry=base_registry.BaseRegistry(control_root=str(_control(root))),
+        external_blob_bases=bases if external else None,
+        data_bases=None if external else bases,
+    )
+    return ns
+
+
+def _control(root: Path) -> Path:
+    return root.parent / "control"
+
+
+def _payloads(base: Path) -> pa.Table:
+    names = [*(f"person-{i}" for i in range(19)), _IDENTIFIER]
+    for name in names:
+        (base / f"{name}.bin").write_bytes(name.encode() * 4)
+    return pa.table({"pii": pa.array(names), "scan": lance.blob_array([str(base / f"{name}.bin") for name in names])})
+
+
+def _external_payloads(root: Path) -> LanceNamespace:
+    """Each row's blob-v2 value names a payload under the table's registered external base."""
+    return _created(root, _payloads, external=True)
+
+
+def _data_base(root: Path) -> LanceNamespace:
+    """The table's data files land under an approved data base."""
+    return _created(root, lambda _: _UNDER_THE_THRESHOLD, external=False)
+
+
+def _external_payloads_deleted_first(compacted: bool) -> Callable[[Path], LanceNamespace]:
+    """The delete door removed the subject before the erasure, and a materialising compaction too when
+    ``compacted``: the head no longer points at the subject's payload, a retained version does."""
+
+    def build(root: Path) -> LanceNamespace:
+        ns = _external_payloads(root)
+        dataset = open_dataset(ns, {}, _TABLE_ID)
+        dataset.delete(f"pii = '{_IDENTIFIER}'")
+        if compacted:
+            dataset.optimize.compact_files(materialize_deletions_threshold=0.0)
+        return ns
+
+    return build
+
+
+def _tagged_before_the_subject_arrived(root: Path) -> LanceNamespace:
+    """A run's tag names a BTREE-indexed version the subject never touched; it arrives after, and the index
+    is optimized over it."""
+    ns = _table(root, _rows(*(f"person-{i}" for i in range(20))))
+    dataset = open_dataset(ns, {}, _TABLE_ID)
+    dataset.create_scalar_index("pii", "BTREE")
+    dataset.tags.create("trained", dataset.version)
+    dataset.insert(_rows(_IDENTIFIER))
+    dataset.optimize.optimize_indices()
+    return ns
+
+
+def _through_a_mem_wal_shard(root: Path) -> LanceNamespace:
+    """The subject arrives through a MemWAL shard writer, so the base table never holds it."""
+    ns = _table(root, _rows(*(f"person-{i}" for i in range(19))))
+    dataset = open_dataset(ns, {}, _TABLE_ID)
+    dataset.initialize_mem_wal(unsharded=True)
+    writer = open_dataset(ns, {}, _TABLE_ID).mem_wal_writer("6f1d9a52-3c1e-4c5e-9a43-0b6f3c2d7e10")
+    writer.put(_rows(_IDENTIFIER))
+    writer.close()
+    return ns
+
+
+def _tagged_over_a_stale_index_segment(root: Path) -> LanceNamespace:
+    """The delete door and a materialising compaction removed the subject's row and kept the BTREE segment
+    holding its key, cleanup reclaimed every earlier version, and a run's tag names the result."""
+    ns = _indexed("BTREE")(root)
+    dataset = open_dataset(ns, {}, _TABLE_ID)
+    dataset.delete(f"pii = '{_IDENTIFIER}'")
+    dataset.optimize.compact_files(materialize_deletions_threshold=0.0)
+    dataset.cleanup_old_versions(timedelta(0))
+    dataset.tags.create("trained", dataset.version)
+    return ns
+
+
 def _tagged_after_a_plain_delete(root: Path) -> LanceNamespace:
     """The delete door removed the subject at v2, behind a deletion vector, and a run's tag names v2."""
     ns = _table(root, _UNDER_THE_THRESHOLD)
@@ -660,40 +783,74 @@ def _tagged_after_a_plain_delete(root: Path) -> LanceNamespace:
 @pytest.mark.parametrize(
     ("build", "bound", "expected"),
     [
-        pytest.param(lambda root: _table(root, _UNDER_THE_THRESHOLD), None, (True, True, []), id="under-the-rewrite-threshold"),
+        pytest.param(lambda root: _table(root, _UNDER_THE_THRESHOLD), None, (True, True, [], []), id="under-the-rewrite-threshold"),
         pytest.param(
             lambda root: _table(root, _rows(*(f"person-{i}" for i in range(10))), _rows(_IDENTIFIER, _IDENTIFIER)),
             None,
-            (True, True, []),
+            (True, True, [], []),
             id="a-whole-fragment",
         ),
         pytest.param(
             lambda root: _table(root, _rows(*(f"x-{i}" for i in range(60_000))), _rows(_IDENTIFIER, "carol")),
             64 * 1024,
-            (True, True, []),
+            (True, True, [], []),
             id="beside-a-fragment-over-the-bound",
         ),
-        pytest.param(_tagged_after_a_plain_delete, None, (False, False, ["pinned_by"]), id="a-tag-over-an-earlier-plain-delete"),
+        pytest.param(
+            lambda root: _table(root, _rows(*(f"x-{i}" for i in range(20_000)), _IDENTIFIER)),
+            64 * 1024,
+            (True, True, [], []),
+            id="in-a-fragment-over-the-bound",
+        ),
+        pytest.param(_indexed("BTREE"), None, (True, True, [], []), id="a-btree-indexed-column"),
+        pytest.param(_indexed("BITMAP"), None, (True, True, [], []), id="a-bitmap-indexed-column"),
+        pytest.param(_tagged_before_the_subject_arrived, None, (True, True, [], []), id="a-tag-over-an-indexed-version-the-subject-never-touched"),
+        pytest.param(_tagged_after_a_plain_delete, None, (False, False, ["pinned_by"], ["verify"]), id="a-tag-over-an-earlier-plain-delete"),
+        pytest.param(_tagged_over_a_stale_index_segment, None, (False, False, ["pinned_by"], ["verify"]), id="a-tag-over-a-stale-index-segment"),
+        pytest.param(_external_payloads, None, (False, False, ["external_base"], []), id="an-external-payload"),
+        pytest.param(_external_payloads_deleted_first(False), None, (False, False, ["external_base"], []), id="an-external-payload-deleted-first"),
+        pytest.param(_external_payloads_deleted_first(True), None, (False, False, ["external_base"], []), id="an-external-payload-deleted-and-compacted-first"),
+        pytest.param(_data_base, None, (False, False, ["data_base"], ["compact:main", "history:main", "verify"]), id="a-data-base"),
+        pytest.param(_through_a_mem_wal_shard, None, (False, False, ["mem_wal"], []), id="a-mem-wal-shard"),
     ],
 )
 def test_no_object_under_the_table_root_holds_the_identifier_or_the_report_names_what_keeps_it(
-    tmp_path: Path, build: Callable[[Path], LanceNamespace], bound: int | None, expected: tuple[bool, bool, list[str]], monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    build: Callable[[Path], LanceNamespace],
+    bound: int | None,
+    expected: tuple[bool, bool, list[str], list[str]],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Lance records a delete's filter in its transaction and the head manifest, its default rewrite threshold
     leaves a fragment holding one subject row as it was, and the compact door's byte bound caps a whole run,
     so a small fragment beside a large one was never rewritten ([[LH-281]]); each kept the identifier on
-    storage under `complete: true`. A tag over a version whose subject row a deletion vector hides keeps
-    those bytes: the report says so and names the tag."""
+    storage under `complete: true`. So did a fragment larger than that bound, and an index segment, which
+    compaction keeps with the subject's key ([[LH-263]]). A tag over a version whose subject row a deletion
+    vector hides keeps those bytes, and so do an external payload, a data file under a data base and a
+    MemWAL shard, none of which the erasure rewrites, deleted before the erasure or not: the report says so and
+    names what keeps them, beside surfaces that say why nothing else failed. A tag over an indexed version the
+    subject never touched keeps nothing of it.
+
+    The bases sit outside the table's location and are judged by the catalog's own base judge over the record
+    the create wrote, as the deployed lifespan installs it."""
     root = tmp_path / "data"
     if bound is not None:
         monkeypatch.setattr(erasure_module, "COMPACTION_BOUND", {**COMPACTION_BOUND, "max_source_bytes": bound})
-    with _door(build(root)) as client:
-        response = client.post("/management/v1/table/subjects/erasure", json={"predicate": f"pii = '{_IDENTIFIER}'"})
+    settings = Settings(LANCE_S3_ACCESS_KEY_ID="k", LANCE_S3_SECRET_ACCESS_KEY="s", LANCE_CONTROL_ROOT=str(_control(root)))
+    base_judge.install(base_judge.BaseJudge.from_settings(settings))
+    try:
+        with _door(build(root), settings) as client:
+            response = client.post("/management/v1/table/subjects/erasure", json={"predicate": f"pii = '{_IDENTIFIER}'"})
+    finally:
+        base_judge.install(None)
 
     assert response.status_code == 200, response.text
     report = response.json()
     holders = sorted(str(path.relative_to(root)) for path in root.rglob("*") if path.is_file() and _IDENTIFIER.encode() in path.read_bytes())
-    assert (holders == [], report["complete"], [field for field in ("held_by_retention", "pinned_by") if report[field]]) == expected, (holders, report)
+    named = [field for field in ("held_by_retention", "pinned_by") if report[field]]
+    named += sorted({s["surface"].split(":", 1)[0] for s in report["surfaces"] if s["outcome"] == "held"})
+    unclean = sorted(s["surface"] for s in report["surfaces"] if s["outcome"] in ("failed", "skipped"))
+    assert (holders == [], report["complete"], named, unclean) == expected, (holders, report)
 
 
 def _history(location: str) -> tuple[dict[str, Any], list[int], list[int], int]:

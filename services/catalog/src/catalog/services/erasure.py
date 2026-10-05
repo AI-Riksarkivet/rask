@@ -29,8 +29,9 @@ reclaimed after the branches standing on it have let go. (Compaction runs in the
 order changes nothing measured.)
 
 **A BRANCH'S REWRITE COPIES WHAT IT INHERITS, deliberately.** Compacting through a branch handle writes
-the inherited fragments it selects into `tree/<name>/data/` — up to `COMPACTION_BOUND`'s 64 MiB per ref —
-not only the fragments that held the subject, and each `compact:<ref>` surface reports the bytes. The
+the inherited fragments it selects into `tree/<name>/data/` — up to `COMPACTION_BOUND`'s 64 MiB of source
+per ref, the owner's cap (2026-09-26) — beside the fragments that hold the subject, which it rewrites
+whatever their size (owner, 2026-10-05: an erasure may rewrite past that cap), and each `compact:<ref>` surface reports the bytes. The
 compact door refuses that materialisation as a COST (`maintenance.require_compactable`); here it is what
 releases the fork pin, because the parent's cleanup takes the subject's version only once no branch
 version stands on its files.
@@ -47,9 +48,11 @@ mixed file versions, anything unknown) is not compacted, and a shallow clone is 
 own root; neither is then reclaimed (below). The one allowance is a branch's bases inside this table,
 which its rewrite copies from on purpose (above; :func:`_compaction_refusal`).
 
+    0. every ref             — record the subject's bytes no step below reaches (:func:`_record_held`)
     1. every branch          — delete on its head, because a branch is a separate dataset with its own rows
     2. main                  — the same delete
-    3. rewrite every ref     — compact, so the subject's bytes leave the live data files
+    3. rewrite every ref     — compact, so the subject's bytes leave the live data files, and rebuild every
+       index from the rewritten data, so they leave its segments
     4. every tag pinning the SUBJECT — remove it, or the version it holds can never be reclaimed;
        a tag over a version the subject never appeared in is a reproducibility pointer and is KEPT
     5. reclaim every ref     — now that nothing the erasure controls pins them
@@ -70,19 +73,27 @@ holding a few of the subject's rows behind a deletion vector with their bytes st
 (measured: a 20-row fragment holding one subject row rewrote nothing), so the rewrite materialises every
 deletion. The compact door's byte bound caps a whole compaction run, not one fragment (measured: beside
 three 150 KB fragments, a 349-byte fragment holding the subject was not rewritten under a 64 KiB bound), so a
-second pass rewrites the fragments still holding the subject with every other fragment excluded, within what
-the first pass left of the bound.
+second pass rewrites the fragments still holding the subject with every other fragment excluded and the
+bound raised to their size: a bound below it leaves those bytes in a live file behind a deletion vector.
 
-**THE VERIFICATION COUNTS ROWS A DELETION VECTOR HIDES.** A version whose data file still holds the subject
-behind a deletion vector reads clean to a filter (measured on pylance 12.0.0), so every probe also counts
-deleted rows: such a version is a residual. A tag over one is kept, since the data it records never held
-the subject, and is named in `pinned_by`.
+**THE VERIFICATION READS BYTES, NOT VISIBILITY.** Two surfaces hold the subject while a filter reads every
+version clean (both measured on pylance 12.0.0). A data file holding a row behind a deletion vector: every
+probe counts deleted rows too, so such a version is a residual. An index segment: segments are immutable and
+compaction keeps them, so a BTREE or BITMAP segment carries the subject's key after its row is gone. A
+segment is proved clean only by provenance, as one this erasure built from the rewritten data; a version
+keeping any other segment whose files are still on storage is a residual. A tag over either is kept, since
+the data it records never held the subject, and is named in `pinned_by`.
+
+**WHAT LIES OUTSIDE THE TABLE'S OWN FILES IS REPORTED, NEVER TOUCHED** (:func:`_record_held`). An external
+blob-v2 payload under a registered base, a data file under a data base, and a MemWAL shard each keep the
+subject's bytes through every step here, and each is a `held` surface naming the files, so `complete` is
+False while they stay.
 
 **AN ERASURE THAT CANNOT ERASE DESTROYS NOTHING** ([[LH-210]]). The predicate is planned on main before any
 ref is touched, so one Lance refuses or cannot evaluate (an unknown column, a syntax slip, a literal of the
 wrong type, a cast that fails, an aggregate) answers 400 with every tag and version intact. A ref whose delete
-did not go through is neither rewritten nor reclaimed, a ref whose rewrite failed or was refused is not
-reclaimed, and no tag is dropped unless every ref was deleted and rewritten: each would destroy history,
+did not go through is neither rewritten nor reclaimed, a ref whose rewrite or index rebuild failed or was refused
+is not reclaimed, and no tag is dropped unless every ref was deleted and rewritten: each would destroy history,
 reproducibility tags included, while the subject's rows stay. Those surfaces are `skipped`, which keeps the
 erasure incomplete.
 
@@ -97,9 +108,8 @@ invisible to it ([[LH-094]]). This reports what it reclaimed rather than asserti
 and a caller who needs that guarantee needs the floor raised first. Nor does it reclaim a file no
 version references that is younger than 7 days — an aborted write's residue — because Lance cannot
 tell it from an in-flight write's (`lance_docs/lance_sdk.md` cleanup_old_versions `delete_unverified`).
-Nor does it rewrite fragments holding the subject beyond the compact door's byte bound, one larger than
-the bound among them: the verification reports each such version as holding the subject behind a deletion
-vector ([[LH-263]]).
+And the external payloads it names are those a version retained when the erasure starts points at; one
+only an already-reclaimed version pointed at is beyond what the table still records.
 """
 
 from __future__ import annotations
@@ -110,12 +120,15 @@ from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Any, Final, Protocol
 
+import pyarrow.fs as pafs
 from lance_namespace import InvalidInputError, ServiceUnavailableError, UnsupportedOperationError
 from pydantic import BaseModel, Field
 
 from catalog.services.dataplane import MAIN_BRANCH, caller_sql, clean_lance_message, recorded_branch, refuse_an_unbounded_boolean_chain
-from catalog.services.maintenance import COMPACTION_BOUND, refuse_a_referring_datasets_source
+from catalog.services.index_specs import describe_index_for_rebuild
+from catalog.services.maintenance import COMPACTION_BOUND, rebuild_index_now, refuse_a_referring_datasets_source
 from service_kit.lakehouse.base_refs import BaseRefs, normalise
+from service_kit.lakehouse.blobs import EXTERNAL_KIND, blob_field_names
 from service_kit.lakehouse.features import (
     FLAG_BASE_PATHS,
     CompactionBases,
@@ -125,7 +138,8 @@ from service_kit.lakehouse.features import (
     gather_compaction_bases,
     manifest_feature_flags,
 )
-from service_kit.lakehouse.objectfs import StorageOptions, dataset_root_probe
+from service_kit.lakehouse.objectfs import StorageOptions, dataset_root_probe, fs_and_base
+from service_kit.lakehouse.work_items import IndexWorkItem
 from service_kit.lancekit.commit_verdict import CommitVerdict, classify_commit_failure
 
 
@@ -137,14 +151,17 @@ class SurfaceResult(BaseModel):
     which half, because the remainder is a legal obligation and not a retry."""
 
     surface: str = Field(
-        description="`branch:<name>`, `tag:<name>`, `main`, `compact:<ref>`, `history:<ref>`, `dangling:<ref>@<version>`, `branches` or `verify`."
+        description=(
+            "`branch:<name>`, `tag:<name>`, `main`, `compact:<ref>`, `index:<ref>`, `history:<ref>`, `dangling:<ref>@<version>`, `branches`, "
+            "`verify`, or a surface outside the table's own files: `data_base:<name>`, `external_base:<name>`, `mem_wal`, `bases:<ref>`."
+        )
     )
     outcome: str = Field(
         description=(
-            "What the estate did there: `deleted`, `untagged`, `retained`, `rewritten`, `reclaimed`, `clean`, `failed`, `skipped` — not "
-            "attempted because an earlier step on that ref did not go through, so it would destroy history while the subject stays — or "
-            "`dangling` — a listed version that fails to read and is proved not to hold the subject; it stays listed until what its detail "
-            "names lets go."
+            "What the estate did there: `deleted`, `untagged`, `retained`, `rewritten`, `rebuilt`, `reclaimed`, `clean`, `failed`, `skipped` — "
+            "not attempted because an earlier step on that ref did not go through, so it would destroy history while the subject stays — "
+            "`held` — the subject's bytes stay in files this erasure neither rewrites nor deletes, named in the detail — or `dangling` — a "
+            "listed version that fails to read and is proved not to hold the subject; it stays listed until what its detail names lets go."
         )
     )
     detail: str = Field(default="", description="Why, in words: the error, what a rewrite cost, what a residual needs.")
@@ -203,7 +220,7 @@ class ErasureReport(BaseModel):
     complete: bool = Field(
         default=False,
         description=(
-            "True only when no surface failed or was skipped, `verify` among them. It can be True beside `dangling:` surfaces, which hold "
+            "True only when no surface failed, was skipped or is held, `verify` among them. It can be True beside `dangling:` surfaces, which hold "
             "no subject data but stay listed and fail to read. A caller reporting completion to a data subject reads this, never the status code."
         ),
     )
@@ -235,6 +252,12 @@ class _Dataset(Protocol):
     def get_fragments(self) -> Any: ...
     def tracked_files(self, *, min_version: int | None = None) -> Any: ...
     def all_files(self) -> Any: ...
+    @property
+    def schema(self) -> Any: ...
+    def describe_indices(self) -> Any: ...
+    def read_transaction(self, version: int) -> Any: ...
+    def create_index(self, column: str, *, index_type: str, **kwargs: Any) -> Any: ...
+    def create_scalar_index(self, column: str, *, index_type: str, **kwargs: Any) -> Any: ...
 
 
 def erase(
@@ -283,6 +306,10 @@ def erase(
             SurfaceResult(surface="branches", outcome="failed", detail="the branch list could not be read, so no branch was erased, reclaimed or verified")
         )
     branches = listed or {}
+    # 0. WHAT NO STEP BELOW REACHES, read before the deletes hide the subject's rows: the payloads and data
+    #    files they name under a base outside the table, and the MemWAL shards beside it. Each is a `held`
+    #    surface, so the erasure reports itself incomplete while those bytes stay.
+    _record_held(report, dataset, [*branches, None], predicate, storage_options)
     deleted: set[str | None] = set()
     for ref in [*branches, None]:
         if _delete_subject(report, dataset, ref, predicate=predicate):
@@ -308,6 +335,7 @@ def erase(
     if referred is not None:
         log.warning("erasure_refused_referred_source", extra={"table": table, "reason": referred})
     rewritten: set[str | None] = set()
+    rebuilt: set[str] = set()
     for ref in deepest_first:
         surface = f"compact:{_label(ref)}"
         if referred is not None:
@@ -325,10 +353,19 @@ def erase(
                 )
                 continue
             report.surfaces.append(SurfaceResult(surface=surface, outcome="rewritten", detail=_compact(handle, predicate)))
-            rewritten.add(ref)
         except Exception as exc:  # noqa: BLE001
             log.warning("erasure_compact_failed", extra={"table": table, "ref": _label(ref), "error": str(exc)})
             report.surfaces.append(SurfaceResult(surface=surface, outcome="failed", detail=f"{exc} — the subject's bytes may remain in a live data file"))
+            continue
+        # 3b. REBUILD EVERY INDEX ON THE REWRITTEN REF. A segment is immutable and compaction keeps it: measured
+        #     on pylance 12.0.0, a BTREE and a BITMAP segment kept its UUID and the subject's key through the
+        #     materialising rewrite, its fragment bitmap remapped onto the new fragment, and still held the
+        #     identifier after cleanup; a rebuild with `replace=True` mints a new segment from the rewritten
+        #     data, and cleanup then takes the old one. `optimize_indices(retrain=True)` is no substitute: it
+        #     left every scalar segment's UUID unchanged. A ref whose rebuild fails is not reclaimed (step 5).
+        if (segments := _rebuild_indices(report, dataset, ref, table)) is not None:
+            rewritten.add(ref)
+            rebuilt |= segments
 
     # 4. TAGS THAT PIN THE SUBJECT — and ONLY those, and only once every ref was deleted and rewritten. A
     #    tag holds a VERSION, so there is nothing to delete from it; the row becomes unreachable once the tag
@@ -379,7 +416,7 @@ def erase(
             report.surfaces.append(SurfaceResult(surface=surface, outcome="failed", detail=f"{referred} Not reclaimed."))
             continue
         if ref not in rewritten:
-            detail = "not reclaimed: this ref was not rewritten, so its history would go while the subject's bytes stay in its live data files"
+            detail = "not reclaimed: this ref's rewrite or index rebuild did not go through, so its history would go while the subject's bytes stay in its live files"
             report.surfaces.append(SurfaceResult(surface=surface, outcome="skipped", detail=detail))
             continue
         try:
@@ -421,9 +458,9 @@ def erase(
         detail = f"the verification could not open the table on a fresh session: {exc}; nothing was verified"
         report.surfaces.append(SurfaceResult(surface="verify", outcome="failed", detail=detail))
     else:
-        _verify(report, _History(cold, cutoffs), first_listing=listed, predicate=predicate)
+        _verify(report, _History(cold, cutoffs, frozenset(rebuilt)), first_listing=listed, predicate=predicate)
 
-    report.complete = all(surface.outcome not in {"failed", "skipped"} for surface in report.surfaces)
+    report.complete = all(surface.outcome not in {"failed", "skipped", "held"} for surface in report.surfaces)
     return report
 
 
@@ -514,7 +551,8 @@ def _verify(report: ErasureReport, history: _History, *, first_listing: Mapping[
     branches = first_listing or {}
     relisted = _branches(history.cold)
     current = branches if relisted is None else relisted
-    found = _versions_still_matching(history, [None, *sorted({*branches, *current})], predicate)
+    history.refs = [None, *sorted({*branches, *current})]
+    found = _versions_still_matching(history, history.refs, predicate)
     found.relist_failed = relisted is None
     found.late = sorted(set(current) - set(branches)) if first_listing is not None else []
     report.residual_versions = found.residual
@@ -526,7 +564,7 @@ def _verify(report: ErasureReport, history: _History, *, first_listing: Mapping[
         SurfaceResult(surface=f"dangling:{name}", outcome="dangling", detail=_dangling_detail(_holders(_parse(name), history, forks, tags)))
         for name in found.dangling
     )
-    account = _account(found.residual, found.hidden, history, forks, tags)
+    account = _account(found.residual, found.hidden, found.indexed, history, forks, tags)
     account.unforked = sorted(name for name, fork in current.items() if fork is None) if found.residual else []
     report.pinned_by, report.held_by_retention = account.pins, account.held_by_retention
     if found.residual or found.unlisted or found.relist_failed:
@@ -546,6 +584,8 @@ class _Verification(BaseModel):
     unreadable: list[str] = Field(default_factory=list)
     #: The part of `residual` whose only matching rows a deletion vector hides: the bytes stay in its data files.
     hidden: list[str] = Field(default_factory=list)
+    #: The part of `residual` whose data is clean but whose index segments this erasure did not build, with files on storage.
+    indexed: list[str] = Field(default_factory=list)
     #: Listed versions that cannot be read whole, proved not to hold the subject fragment by fragment.
     dangling: list[str] = Field(default_factory=list)
     #: Refs whose versions could not be listed, so none of them was probed.
@@ -583,6 +623,7 @@ def _dangling_detail(held: _Holders) -> str:
 class _Verdict(StrEnum):
     ANSWERS = "answers"
     HIDDEN = "hidden"
+    INDEXED = "indexed"
     CLEAN = "clean"
     DANGLING = "dangling"
     UNREADABLE = "unreadable"
@@ -608,7 +649,7 @@ def _versions_still_matching(history: _History, refs: Sequence[str | None], pred
             continue
         for version in versions:
             name = _name((ref, version))
-            verdict = _probe((ref, version), history.cold, predicate, listing)
+            verdict = _probe((ref, version), history, predicate, listing)
             if verdict is _Verdict.DANGLING:
                 found.dangling.append(name)
             elif verdict is not _Verdict.CLEAN:
@@ -617,31 +658,78 @@ def _versions_still_matching(history: _History, refs: Sequence[str | None], pred
                 found.unreadable.append(name)
             if verdict is _Verdict.HIDDEN:
                 found.hidden.append(name)
+            if verdict is _Verdict.INDEXED:
+                found.indexed.append(name)
     return found
 
 
-def _probe(reference: _Reference, cold: _Dataset, predicate: str, listing: _StorageListing) -> _Verdict:
-    """Whether one version holds the subject, read whole first and fragment by fragment if that fails."""
+def _probe(reference: _Reference, history: _History, predicate: str, listing: _StorageListing) -> _Verdict:
+    """Whether one version holds the subject, read whole first and fragment by fragment if that fails, then
+    whether its index segments are proved free of it (:func:`_unproved_segments`)."""
     try:
-        handle = cold.checkout_version(reference)
+        handle = history.cold.checkout_version(reference)
     except Exception as exc:  # noqa: BLE001
         log.warning("erasure_verify_failed", extra={"reference": _name(reference), "error": str(exc)})
         return _Verdict.UNREADABLE
+    verdict: _Verdict | None = None
     try:
         # COUNTED, not materialised. The question is "does this version still hold the subject", and
         # building the matching rows to read `.num_rows` sizes the PROOF by the erasure — paid once per
         # retained version, and worst exactly when the subject has the most rows. Rows a deletion vector
         # hides are counted first: their bytes are still in the version's data files.
-        if not _held(handle, predicate):
-            return _Verdict.CLEAN
-        return _Verdict.ANSWERS if handle.count_rows(filter=predicate) else _Verdict.HIDDEN
+        if _held(handle, predicate):
+            return _Verdict.ANSWERS if handle.count_rows(filter=predicate) else _Verdict.HIDDEN
+        verdict = _Verdict.CLEAN
     except Exception as exc:  # noqa: BLE001
         log.warning("erasure_verify_failed", extra={"reference": _name(reference), "error": str(exc)})
+    if verdict is None:
+        try:
+            verdict = _probe_fragments(handle, reference[1], predicate, listing)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("erasure_verify_fragments_failed", extra={"reference": _name(reference), "error": str(exc)})
+            return _Verdict.UNREADABLE
+        if verdict not in {_Verdict.CLEAN, _Verdict.DANGLING}:
+            return verdict
     try:
-        return _probe_fragments(handle, reference[1], predicate, listing)
+        unproved = _unproved_segments(handle, history, listing, data_clean=verdict is _Verdict.CLEAN)
     except Exception as exc:  # noqa: BLE001
-        log.warning("erasure_verify_fragments_failed", extra={"reference": _name(reference), "error": str(exc)})
+        log.warning("erasure_verify_indices_failed", extra={"reference": _name(reference), "error": str(exc)})
         return _Verdict.UNREADABLE
+    return _Verdict.INDEXED if unproved else verdict
+
+
+def _unproved_segments(handle: _Dataset, history: _History, listing: _StorageListing, *, data_clean: bool) -> list[str]:
+    """The user index segments of ``handle``'s version that may still hold the subject's keys.
+
+    A segment is immutable and keeps keys of rows a later deletion or rewrite removed (`lance_docs/
+    file_format.md` "Handling deleted and invalidated rows"), so a clean data probe alone proves nothing about
+    it. Measured on pylance 12.0.0: a materialising compaction remaps a BTREE or BITMAP segment's fragment
+    bitmap onto the new fragment and keeps the deleted row's key, and an `optimize_indices` merge of a BITMAP
+    segment carries that key into the new one. So a segment is proved by PROVENANCE, two ways:
+
+    * this erasure built it from the rewritten data (``history.rebuilt``);
+    * a retained `CreateIndex` commit built it FRESH — its `dataset_version` is the commit's read version, which
+      a merge does not set, since it keeps the merged segment's — over exactly the fragments it covers in this
+      version, every one still present, and this version's data, deleted rows included, reads clean. Those
+      fragments' files are immutable, so the rows the build read are rows the probe counted.
+
+    Any other segment is unproved while a file of it is on storage; one whose base lies outside the table
+    cannot be compared with the listing, so it stays unproved.
+    """
+    bases = {int(base_id): str(base.path) for base_id, base in handle._ds.base_paths().items()}
+    root = str(handle.uri)
+    present = {int(fragment.fragment_id) for fragment in handle.get_fragments()}
+    unproved: list[str] = []
+    for uuid, (base_id, covered) in _segments(handle).items():
+        if uuid in history.rebuilt:
+            continue
+        if base_id is None or _inside(bases.get(int(base_id), ""), root):
+            if not listing.holds_index(uuid):
+                continue
+            if data_clean and (built := history.fresh_build(uuid)) is not None and built == covered and built <= present:
+                continue
+        unproved.append(uuid)
+    return sorted(unproved)
 
 
 def _probe_fragments(handle: _Dataset, version: int, predicate: str, listing: _StorageListing) -> _Verdict:
@@ -689,25 +777,60 @@ class _StorageListing:
         self._cold = cold
         self._present: set[str] | None = None
         self._bases: set[str] = set()
+        self._index_dirs: set[str] = set()
+
+    def holds_index(self, uuid: str) -> bool:
+        """Whether any object under the table's root lies in the index segment directory ``_indices/<uuid>/``.
+
+        Matched by UUID anywhere under the root, because the directory is the ref's own (`tree/<name>/` on a
+        branch) or an ancestor's, and a segment UUID names one segment.
+        """
+        self._load()
+        return uuid in self._index_dirs
 
     def gone(self, location: str | None) -> bool:
         """True only when ``location`` lies under the listed root and the listing does not hold it."""
+        present = self._load()
+        if location is None or not any(location.startswith(f"{base}/") for base in self._bases):
+            return False
+        return location not in present
+
+    def _load(self) -> set[str]:
         if self._present is None:
             rows = self._cold.all_files().read_all().to_pylist()
             self._bases = {str(row["base_uri"]).rstrip("/") for row in rows}
             self._present = {f"{str(row['base_uri']).rstrip('/')}/{row['path']}" for row in rows}
-        if location is None or not any(location.startswith(f"{base}/") for base in self._bases):
-            return False
-        return location not in self._present
+            self._index_dirs = {part.split("/", 1)[0] for row in rows for part in str(row["path"]).split("_indices/")[1:]}
+        return self._present
 
 
 class _History:
     """Each ref's retained versions and each version's data files, read from the cold handle once."""
 
-    def __init__(self, cold: _Dataset, cutoffs: Mapping[str | None, datetime]) -> None:
+    def __init__(self, cold: _Dataset, cutoffs: Mapping[str | None, datetime], rebuilt: frozenset[str] = frozenset()) -> None:
         self.cold, self._cutoffs = cold, cutoffs
+        #: The index segments this erasure built from rewritten data.
+        self.rebuilt = rebuilt
+        #: Refs whose retained commits :meth:`fresh_build` reads; the verification sets them.
+        self.refs: list[str | None] = [None]
+        self._builds: dict[str, frozenset[int] | None] | None = None
         self._versions: dict[str | None, dict[int, datetime | None]] = {}
         self._files: dict[_Reference, frozenset[str]] = {}
+
+    def fresh_build(self, uuid: str) -> frozenset[int] | None:
+        """The fragments a retained `CreateIndex` commit built segment ``uuid`` over from data, or None when no
+        retained commit did: a merged segment, or one whose commit is gone, has no provenance to read."""
+        if self._builds is None:
+            self._builds = {}
+            for ref in self.refs:
+                head = _head(self.cold, ref)
+                for version in self.versions(ref):
+                    transaction = head.read_transaction(version)
+                    built = getattr(getattr(transaction, "operation", None), "new_indices", None) or []
+                    for index in built:
+                        fresh = transaction is not None and int(index.dataset_version) == int(transaction.read_version)
+                        self._builds[str(index.uuid)] = frozenset(int(fragment_id) for fragment_id in index.fragment_ids) if fresh else None
+        return self._builds.get(uuid)
 
     def reclaimed(self, ref: str | None) -> bool:
         """Whether ``ref``'s cleanup ran: when it did not, nothing else is needed to explain a survivor."""
@@ -810,6 +933,8 @@ class _Account(BaseModel):
     heads: list[str] = Field(default_factory=list)
     #: Residual heads whose subject rows a deletion vector hides: the rewrite did not take their fragments.
     unrewritten_heads: list[str] = Field(default_factory=list)
+    #: Residual heads whose data is clean and whose index segments this erasure did not build.
+    unindexed_heads: list[str] = Field(default_factory=list)
     #: Residuals kept because a ref's reclaim did not run, and those refs (see their `history:` surfaces).
     unreclaimed: list[str] = Field(default_factory=list)
     unreclaimed_refs: set[str] = Field(default_factory=set)
@@ -820,7 +945,12 @@ class _Account(BaseModel):
 
 
 def _account(
-    residual: Sequence[str], hidden: Collection[str], history: _History, forks: Mapping[str, _Reference], tags: Mapping[str, _Reference | None]
+    residual: Sequence[str],
+    hidden: Collection[str],
+    indexed: Collection[str],
+    history: _History,
+    forks: Mapping[str, _Reference],
+    tags: Mapping[str, _Reference | None],
 ) -> _Account:
     """``pinned_by`` and the rest of what keeps ``residual``, in an order Lance accepts.
 
@@ -841,7 +971,7 @@ def _account(
         except Exception:  # noqa: BLE001 — an unlistable ref is already reported by the verification
             is_head = False
         if is_head:
-            (account.unrewritten_heads if name in hidden else account.heads).append(name)
+            (account.unrewritten_heads if name in hidden else account.unindexed_heads if name in indexed else account.heads).append(name)
             continue
         held = _holders(reference, history, forks, tags)
         named |= held.tags
@@ -872,10 +1002,12 @@ def _with_descendants(branches: set[str], forks: Mapping[str, _Reference]) -> se
 
 def _verify_detail(found: _Verification, account: _Account) -> str:
     """The failed verify surface's detail: what is left, and what finishing takes."""
-    answering = [version for version in found.residual if version not in found.unreadable and version not in found.hidden]
+    answering = [version for version in found.residual if version not in {*found.unreadable, *found.hidden, *found.indexed}]
     parts = [f"{answering} still answer this predicate"] if answering else []
     if found.hidden:
         parts.append(f"{found.hidden} still hold the subject's rows behind a deletion vector")
+    if found.indexed:
+        parts.append(f"{found.indexed} keep index segments this erasure did not build from rewritten data, so their keys may hold the subject")
     if found.unreadable:
         parts.append(f"{found.unreadable} could not be read")
     if found.unlisted:
@@ -892,6 +1024,8 @@ def _verify_detail(found: _Verification, account: _Account) -> str:
         parts.append(f"{account.heads} are heads the delete did not reach: erase again")
     if account.unrewritten_heads:
         parts.append(f"{account.unrewritten_heads} are heads whose rewrite did not take the subject's fragments: see their compact surfaces")
+    if account.unindexed_heads:
+        parts.append(f"{account.unindexed_heads} are heads whose index segments this erasure did not rebuild: see their index surfaces")
     if account.unreclaimed:
         parts.append(f"{account.unreclaimed} remain because the reclaim of {sorted(account.unreclaimed_refs)} did not run: see their history surfaces")
     if account.unexplained:
@@ -990,24 +1124,179 @@ def _compact(handle: _Dataset, predicate: str) -> str:
     """Rewrite ``handle``'s ref and say what it cost: the bytes of the data files the rewrite added,
     which on a branch are the inherited fragments it copied.
 
-    THE SAME BOUND THE COMPACT DOOR CARRIES, imported rather than restated: this pod has more than one
-    button that reaches `compact_files`, and an erasure runs over exactly the tables most likely to hold
-    a blob column — so the unbounded default is not the cheaper path here. The bound caps a run's source
-    bytes, so the second pass, over only the fragments still holding the subject, gets what the first left
-    of it: on a branch, the 64 MiB of source per erasure the owner allowed (2026-09-26).
+    THE FIRST PASS CARRIES THE COMPACT DOOR'S BOUND, imported rather than restated: it rewrites whatever
+    compaction selects, on a branch the inherited fragments it copies, and the owner capped that copy at
+    64 MiB of source per ref (2026-09-26); an erasure may rewrite past it (owner, 2026-10-05). THE SECOND PASS TAKES EVERY FRAGMENT STILL HOLDING THE SUBJECT,
+    every other fragment excluded, its byte bound raised to their size: those fragments are the erasure, and
+    a bound below their size leaves the subject's bytes in a live data file behind a deletion vector.
     """
-    before, sources = _data_file_sizes(handle), _fragment_sizes(handle)
+    before = _data_file_sizes(handle)
     passes = [handle.optimize.compact_files(**COMPACTION_BOUND, materialize_deletions_threshold=0.0)]
-    taken = sum(size for fragment_id, size in sources.items() if fragment_id not in _fragment_sizes(handle))
-    left = COMPACTION_BOUND["max_source_bytes"] - taken
-    if left > 0 and (holding := {fragment.fragment_id for fragment in handle.get_fragments() if _held(fragment, predicate)}):
-        others = [fragment.fragment_id for fragment in handle.get_fragments() if fragment.fragment_id not in holding]
-        bound = {**COMPACTION_BOUND, "max_source_bytes": left, "excluded_fragment_ids": others}
+    sizes = _fragment_sizes(handle)
+    if holding := {fragment.fragment_id for fragment in handle.get_fragments() if _held(fragment, predicate)}:
+        others = [fragment_id for fragment_id in sizes if fragment_id not in holding]
+        source = sum(size for fragment_id, size in sizes.items() if fragment_id in holding)
+        bound = {**COMPACTION_BOUND, "max_source_bytes": max(source, COMPACTION_BOUND["max_source_bytes"]), "excluded_fragment_ids": others}
         passes.append(handle.optimize.compact_files(**bound, materialize_deletions_threshold=0.0))
     written = sum(size for path, size in _data_file_sizes(handle).items() if path not in before)
     removed = sum(int(getattr(metrics, "fragments_removed", 0) or 0) for metrics in passes)
     added = sum(int(getattr(metrics, "fragments_added", 0) or 0) for metrics in passes)
     return f"{removed} fragments rewritten into {added}, {written} bytes written"
+
+
+def _rebuild_indices(report: ErasureReport, dataset: _Dataset, ref: str | None, table: str) -> frozenset[str] | None:
+    """Rebuild every user index on ``ref``'s head from its own description; the segment UUIDs it built, or
+    None when one could not be rebuilt (recorded as a failed `index:<ref>` surface).
+
+    The parameters are read off the live index (`index_specs.describe_index_for_rebuild`) and the build
+    goes through the reindex door's own call (`maintenance.rebuild_index_now`), so the rebuild neither
+    re-tunes the index nor differs from what that door builds. A ref with no user index records nothing.
+    """
+    surface = f"index:{_label(ref)}"
+    try:
+        handle = _head(dataset, ref)
+        names = _user_indices(handle)
+        if not names:
+            return frozenset()
+        for name in names:
+            spec = describe_index_for_rebuild(handle, name)
+            item = IndexWorkItem(
+                uri=str(handle.uri),
+                branch=ref or "",
+                table_id=table,
+                column=spec.column,
+                kind=spec.kind,
+                index_type=spec.index_type,
+                name=spec.name,
+                replace=True,
+                params=spec.params,
+            )
+            rebuild_index_now(handle, item)
+        segments = _segments(handle)
+    except Exception as exc:  # noqa: BLE001 — one ref's failure must not hide the others
+        log.warning("erasure_index_rebuild_failed", extra={"table": table, "ref": _label(ref), "error": str(exc)})
+        detail = f"{exc} — its index segments may hold the subject's keys, so this ref is not reclaimed"
+        report.surfaces.append(SurfaceResult(surface=surface, outcome="failed", detail=detail))
+        return None
+    report.surfaces.append(SurfaceResult(surface=surface, outcome="rebuilt", detail=f"{names} rebuilt from the rewritten data"))
+    return frozenset(segments)
+
+
+#: The prefix Lance gives its system indices (`__lance_mem_wal`, the fragment reuse index): metadata about
+#: the table, never a copy of a column, and built by Lance rather than through a create door.
+_SYSTEM_INDEX_PREFIX: Final = "__"
+
+
+def _user_indices(handle: _Dataset) -> list[str]:
+    return sorted(str(index.name) for index in handle.describe_indices() if not str(index.name).startswith(_SYSTEM_INDEX_PREFIX))
+
+
+def _segments(handle: _Dataset) -> dict[str, tuple[int | None, frozenset[int]]]:
+    """Every user index segment of the version ``handle`` has open: its UUID mapped to the base it lives under
+    and the fragments it covers."""
+    return {
+        str(segment.uuid): (segment.base_id, frozenset(int(fragment_id) for fragment_id in segment.fragment_ids))
+        for index in handle.describe_indices()
+        if not str(index.name).startswith(_SYSTEM_INDEX_PREFIX)
+        for segment in index.segments
+    }
+
+
+def _record_held(report: ErasureReport, dataset: _Dataset, refs: Sequence[str | None], predicate: str, storage_options: StorageOptions) -> None:
+    """Step 0: record a `held` surface for every place outside the table's own files the subject's bytes sit.
+
+    Read from EVERY retained version of every ref, deleted rows included, before anything is reclaimed: the
+    subject is usually deleted before it is erased, and a row a deletion vector hides, or one only an older
+    version still holds, keeps pointing at its payload (measured on pylance 12.0.0: a delete, or a delete and
+    a materialising compaction, before the erasure left the external payload named by nothing on the head):
+
+    * `external_base:<name>` — the payload an external blob-v2 value names under a registered base (or by
+      absolute URI). The row holds only the pointer; measured on pylance 12.0.0, the payload file under the
+      base survived the delete, the materialising rewrite and `cleanup_old_versions(0)` byte for byte. The
+      base is the source's, so this erasure never deletes there.
+    * `data_base:<name>` — a data file of a fragment holding the subject that lives under a plain base outside
+      the table (`target_bases`). The compact gate refuses that rewrite, and the `compact:` surface says why;
+      this one says where the bytes are.
+    * `mem_wal` — any object under `_mem_wal/`. Measured on pylance 12.0.0, a row put through a MemWAL shard
+      writer sits in the shard's WAL entry and its flushed generation while the base table answers zero for
+      it, and the next merge carries it into the base. A WAL entry is not rewritten here: writer fencing
+      depends on its put-if-not-exists collisions (`lance_docs/file_format.md` MemWAL).
+
+    A ref with a version whose payloads cannot be read is a failed `bases:<ref>` surface: unread is not evidence
+    that the subject's bytes stay inside the table.
+    """
+    held: dict[str, set[str]] = {}
+    for ref in refs:
+        try:
+            for version in sorted(int(entry["version"]) for entry in _head(dataset, ref).versions()):
+                for surface, locations in _held_outside(dataset.checkout_version((ref, version)), predicate).items():
+                    held.setdefault(surface, set()).update(locations)
+        except Exception as exc:  # noqa: BLE001 — one ref's failure must not hide the others
+            log.warning("erasure_bases_unread", extra={"table": report.table, "ref": _label(ref), "error": str(exc)})
+            detail = f"which files outside the table the subject's rows name could not be read: {exc}"
+            report.surfaces.append(SurfaceResult(surface=f"bases:{_label(ref)}", outcome="failed", detail=detail))
+    for surface, locations in sorted(held.items()):
+        detail = f"{len(locations)} files under this base hold the subject's bytes, and this erasure neither rewrites nor deletes them: {_some(locations)}"
+        report.surfaces.append(SurfaceResult(surface=surface, outcome="held", detail=detail))
+    try:
+        shards = _mem_wal_objects(str(dataset.uri), storage_options)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("erasure_mem_wal_unlisted", extra={"table": report.table, "error": str(exc)})
+        report.surfaces.append(SurfaceResult(surface="mem_wal", outcome="failed", detail=f"`_mem_wal/` could not be listed: {exc}"))
+        return
+    if shards:
+        detail = (
+            f"`_mem_wal/` holds {sum(shards.values())} objects across shards {sorted(shards)}: WAL entries and flushed generations this "
+            "erasure neither rewrites nor verifies, so the subject may sit there and reach the base on the next merge"
+        )
+        report.surfaces.append(SurfaceResult(surface="mem_wal", outcome="held", detail=detail))
+
+
+def _held_outside(handle: _Dataset, predicate: str) -> dict[str, set[str]]:
+    """``{surface: locations}`` for the subject's bytes ``handle``'s version keeps outside the table's own files,
+    rows a deletion vector hides included."""
+    bases = {int(base_id): base for base_id, base in handle._ds.base_paths().items()}
+    root = str(handle.uri)
+    held: dict[str, set[str]] = {}
+    for fragment in handle.get_fragments():
+        foreign = [(bases[file.base_id], file.path) for file in fragment.data_files() if file.base_id is not None]
+        foreign = [(base, path) for base, path in foreign if not base.is_dataset_root and not _inside(str(base.path), root)]
+        if foreign and _held(fragment, predicate):
+            for base, path in foreign:
+                held.setdefault(f"data_base:{_base_label(base)}", set()).add(f"{str(base.path).rstrip('/')}/{path}")
+    if blobs := blob_field_names(handle.schema):
+        rows = handle.scanner(columns=blobs, filter=predicate, include_deleted_rows=True, with_row_id=True).to_table()
+        for column in blobs:
+            for value in rows.column(column).to_pylist():
+                if not isinstance(value, Mapping) or value.get("kind") != EXTERNAL_KIND or not value.get("blob_uri"):
+                    continue
+                if base := bases.get(int(value.get("blob_id") or 0)):
+                    held.setdefault(f"external_base:{_base_label(base)}", set()).add(f"{str(base.path).rstrip('/')}/{value['blob_uri']}")
+                else:
+                    held.setdefault("external_base:absolute", set()).add(str(value["blob_uri"]))
+    return held
+
+
+def _base_label(base: Any) -> str:
+    """A base's name in a surface: its manifest name, or its path when the writer gave none."""
+    return str(getattr(base, "name", None) or base.path)
+
+
+def _some(locations: Collection[str], shown: int = 20) -> str:
+    listed = sorted(locations)
+    return f"{listed[:shown]}" + (f" and {len(listed) - shown} more" if len(listed) > shown else "")
+
+
+def _mem_wal_objects(root: str, storage_options: StorageOptions) -> dict[str, int]:
+    """``{shard: object count}`` under the table's `_mem_wal/`, empty when there is none."""
+    fs, base = fs_and_base(root, storage_options)
+    prefix = f"{base}/_mem_wal"
+    counts: dict[str, int] = {}
+    for info in fs.get_file_info(pafs.FileSelector(prefix, recursive=True, allow_not_found=True)):
+        if info.type == pafs.FileType.File:
+            shard = info.path[len(prefix) + 1 :].split("/", 1)[0]
+            counts[shard] = counts.get(shard, 0) + 1
+    return counts
 
 
 def _held(source: Any, predicate: str) -> int:

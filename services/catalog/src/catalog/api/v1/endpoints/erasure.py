@@ -81,7 +81,9 @@ async def erase_subject(
     (`lance_docs/lance_sdk.md` cleanup_old_versions `delete_unverified`).
 
     A table a shallow clone resolves its files through is neither rewritten nor reclaimed, because the
-    clone would break: its `compact:` and `history:` surfaces fail and `complete` is False.
+    clone would break: its `compact:` and `history:` surfaces fail and `complete` is False. The subject's
+    bytes outside the table's own files, an external payload, a data file under a data base or a MemWAL
+    shard, are named by a `held` surface and never touched, and `complete` is False while they stay.
 
     ``branch`` is accepted and IGNORED rather than refused, and the description says so on the wire.
     Refusing would suggest a per-ref erasure exists; honouring it would let a caller believe they had

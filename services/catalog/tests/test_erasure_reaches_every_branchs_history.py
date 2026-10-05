@@ -26,10 +26,9 @@ import lance
 import pyarrow as pa
 import pyarrow.compute as pc
 import pytest
+from lance.dataset import DatasetOptimizer
 
-import catalog.services.erasure as erasure_module
 from catalog.services.erasure import ErasureReport, erase
-from catalog.services.maintenance import COMPACTION_BOUND
 
 
 _SUBJECT = "alice"
@@ -165,6 +164,18 @@ def test_the_subjects_bytes_leave_the_branchs_own_data_files(tmp_path: Path) -> 
     _erase(uri)
 
     assert holding() == []
+
+
+def _keep_fragment_zero_out_of_every_rewrite(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Exclude fragment 0 from every `compact_files` call, the erasure's two passes included, as a store
+    that cannot rewrite one fragment would."""
+    compact = DatasetOptimizer.compact_files
+
+    def _without_zero(self: DatasetOptimizer, **options: Any) -> Any:
+        kwargs: dict[str, Any] = {**options, "excluded_fragment_ids": sorted({0, *(options.get("excluded_fragment_ids") or [])})}
+        return compact(self, **kwargs)
+
+    monkeypatch.setattr(DatasetOptimizer, "compact_files", _without_zero)
 
 
 #: A parent and the branch cut from it. Both orders, because the reclaim and `pinned_by` must run a child
@@ -330,9 +341,8 @@ def _heads_on_the_subjects_file(tmp_path: Path, names: tuple[str, str]) -> str:
 def test_pinned_by_names_what_stands_on_the_residual(
     tmp_path: Path, names: tuple[str, str], rewrites_take_the_file: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """No cleanup takes a head, so when no rewrite can take main v1's file (here a byte bound below its
-    size), only deleting the branches whose heads stand on it frees it — after every descendant and every
-    tag on them, deepest first, because Lance refuses to delete a branch another branch is cut from or a
+    """No cleanup takes a head, so when no rewrite can take main v1's file (here every rewrite keeps
+    it out), only deleting the branches whose heads stand on it frees it — after every descendant and every tag on them, deepest first, because Lance refuses to delete a branch another branch is cut from or a
     tag names. Main's own head then still holds the subject behind a deletion vector, since no rewrite
     takes its fragment either, and the erasure says so rather than completing. When every rewrite takes
     the file, ``parent``'s fork version is reclaimed and the tag on ``child``'s version, which still
@@ -340,7 +350,7 @@ def test_pinned_by_names_what_stands_on_the_residual(
     parent, child = names
     uri = _heads_on_the_subjects_file(tmp_path, names)
     if not rewrites_take_the_file:
-        monkeypatch.setattr(erasure_module, "COMPACTION_BOUND", {**COMPACTION_BOUND, "max_source_bytes": 64 * 1024})
+        _keep_fragment_zero_out_of_every_rewrite(monkeypatch)
 
     report = _erase(uri)
 
