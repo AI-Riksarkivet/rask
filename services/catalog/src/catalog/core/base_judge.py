@@ -19,7 +19,7 @@ installed one. A dataset declaring only bases inside its own root is answered wi
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from functools import partial
 from typing import TYPE_CHECKING
 
@@ -44,12 +44,47 @@ log = logging.getLogger(__name__)
 _NAMED_BASES = 10
 
 
+class GovernedStorage(BaseModel):
+    """Storage the catalog governs, which no external blob base may reach ([[LH-209]]).
+
+    Lance resolves an external pointer relative to its base (``blob_id`` > 0), so a base covering governed
+    bytes lets every pointer through it name them. ``roots`` are the catalog, control, model-registry and
+    model-artifact roots; ``governed_bucket`` answers whether a bucket is reserved or claimed by a warehouse.
+    """
+
+    roots: list[str]
+    governed_bucket: Callable[[str], bool]
+
+    def covers(self, base: str) -> bool:
+        """Whether ``base`` overlaps a governed root (either way) or sits in a governed bucket."""
+        if any(base_refs.location_in_store(root, base) or base_refs.location_in_store(base, root) for root in self.roots if root):
+            return True
+        return base_refs.store_of(base) == "s3" and self.governed_bucket(base.partition("://")[2].split("/", 1)[0])
+
+    @classmethod
+    def from_settings(cls, settings: Settings) -> GovernedStorage:
+        return cls(
+            roots=[settings.root, settings.registry_root, settings.models_root, settings.model_artifacts_root],
+            governed_bucket=partial(_governed_bucket, settings),
+        )
+
+
+def _governed_bucket(settings: Settings, bucket: str) -> bool:
+    # The claim read lives with the warehouse records in `catalog.services`, which imports this module.
+    from catalog.services import warehouses
+
+    return bucket in settings.reserved_bucket_set or warehouses.bucket_claim(settings.registry_root, settings.storage_options(), bucket=bucket) is not None
+
+
 class BaseJudge(BaseModel):
     """What a declared base is judged against: the catalog's record, and the configured external blob bases."""
 
     registry: base_registry.BaseRegistry
     #: ``LANCE_EXTERNAL_BLOB_BASES`` — sanctioned by configuration as plain (pointer) bases.
     configured: list[str]
+    #: Where a configured base earns no standing ([[LH-209]]): a plain base inside a configured entry that
+    #: covers governed storage is sanctioned only by the table's record. ``None`` judges configuration alone.
+    governed: GovernedStorage | None = None
 
     def read_record(self, location: str) -> base_registry.BaseRecord | None:
         """The base record of the table rooted at ``location``; ``None`` when it has none.
@@ -82,7 +117,28 @@ class BaseJudge(BaseModel):
         return cls(
             registry=base_registry.BaseRegistry(control_root=settings.registry_root, storage_options=settings.storage_options()),
             configured=settings.external_blob_base_list,
+            governed=GovernedStorage.from_settings(settings),
         )
+
+    def judge(self, location: str, refs: Sequence[BasePathRef]) -> list[base_registry.BaseJudgement]:
+        """:func:`service_kit.lakehouse.base_registry.judge_bases`, with a configured base that covers governed storage judged by the record alone.
+
+        The chart's default entry is the model-artifact tree, so CONFIGURED standing there would let a holder
+        of a table's write credential ``add_bases`` another model's tree and have the blob door serve its
+        weights. Only the read and register doors that authorize ask this; the maintenance and lineage
+        protection passes keep configuration's standing, which only ever protects bytes from reclaim.
+        """
+        judged = base_registry.judge_bases(location, refs, configured=self.configured, load_record=partial(self.read_record, location))
+        governed = self.governed
+        if governed is None or not any(j.standing is base_registry.BaseStanding.CONFIGURED and governed.covers(j.ref.path) for j in judged):
+            return judged
+        record = self.read_record(location)
+        return [
+            base_registry.judge_base(location, j.ref, configured=(), record=record)
+            if j.standing is base_registry.BaseStanding.CONFIGURED and governed.covers(j.ref.path)
+            else j
+            for j in judged
+        ]
 
 
 class _Installed(BaseModel):
@@ -130,7 +186,7 @@ def require_sanctioned_bases(location: str, refs: Sequence[BasePathRef], *, judg
     if not _foreign(location, refs):
         return [base_registry.BaseJudgement(ref=ref, standing=base_registry.BaseStanding.OWN) for ref in refs]
     resolved = judge or installed_judge()
-    judged = base_registry.judge_bases(location, refs, configured=resolved.configured, load_record=partial(resolved.read_record, location))
+    judged = resolved.judge(location, refs)
     if refused := [judgement.ref.path for judgement in judged if judgement.standing is base_registry.BaseStanding.UNRECORDED]:
         log.warning("table_refused_unrecorded_bases", extra={"location": location, "bases": refused[:_NAMED_BASES]})
         raise InvalidTableStateError(

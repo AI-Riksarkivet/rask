@@ -125,6 +125,10 @@ class UpstreamFacts(BaseModel):
     #: without a second open. Only used on a lane's FIRST run — after that the table exists and the
     #: catalog just states where — and the stage's own full-sync merge converges on it either way.
     schema: Any = None
+    #: The external blob base the upstream's manifest registers, or ``None`` for a managed upstream. The
+    #: stage asks the catalog to register the SAME base when it creates its output table ([[LH-209]]): a
+    #: create registers no base it was not asked for, and every carried pointer is refused under none.
+    external_base: str | None = None
 
 
 def read_upstream(from_uri: str, storage_options: dict[str, str]) -> UpstreamFacts:
@@ -138,7 +142,7 @@ def read_upstream(from_uri: str, storage_options: dict[str, str]) -> UpstreamFac
     if _LINEAGE_COLUMN in ds.schema.names and ds.count_rows():
         cell = ds.to_table(columns=[_LINEAGE_COLUMN], limit=1).column(_LINEAGE_COLUMN)[0].as_py()
         chain = LineageDoc.inherited_chain(cell)
-    return UpstreamFacts(uri=from_uri, version=int(ds.version), chain=chain, schema=ds.schema)
+    return UpstreamFacts(uri=from_uri, version=int(ds.version), chain=chain, schema=ds.schema, external_base=blobs.external_base_of(ds))
 
 
 def measure(uri: str, storage_options: dict[str, str], *, version: int | None = None) -> WriteResult:

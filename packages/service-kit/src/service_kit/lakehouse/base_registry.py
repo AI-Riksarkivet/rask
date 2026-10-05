@@ -172,8 +172,8 @@ class BaseStanding(StrEnum):
 
     #: Inside the table's own root: its branches, a same-root clone. Needs no read.
     OWN = "own"
-    #: Inside an operator-configured external blob base, declared as a plain (non-root) base. Every
-    #: vend already grants READ there, so declaring one adds no access. Needs no read.
+    #: Inside an operator-configured external blob base, declared as a plain (non-root) base: a pointer
+    #: base, which no vend grants (the catalog serves its bytes). Needs no read.
     CONFIGURED = "configured"
     #: Named by the table's base record.
     RECORDED = "recorded"

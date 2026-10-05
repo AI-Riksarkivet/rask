@@ -389,36 +389,20 @@ class Settings(
     # server-side read primitive. Enable only for a trusted producer; Lance's REGISTERED EXTERNAL BASES
     # (approved base paths) are the finer-grained alternative. Managed/inline blobs (bytes in) always work.
     allow_external_blobs: bool = Field(default=False, alias="LANCE_ALLOW_EXTERNAL_BLOBS")
-    # The SAFER external-blob posture: a comma-separated allowlist of approved base URIs. External
-    # ``Blob.from_uri`` pointers are accepted ONLY when they fall under one of these registered bases (Lance
-    # ``initial_bases``), while ``allow_external_blob_outside_bases`` stays False — so a create can reference
-    # a curated media bucket without opening the blanket outside-bases SSRF door. Empty = no external bases.
+    # The SAFER external-blob posture: a comma-separated allowlist of approved base URIs. A create that
+    # names an external base (the door's ``external_blob_base`` parameter) registers that ONE base, and only
+    # when it lies inside one of these and outside every governed root and bucket
+    # (``table_bases.requested_external_blob_base``); a create that names none registers none. External
+    # ``Blob.from_uri`` pointers then resolve only under that base, while
+    # ``allow_external_blob_outside_bases`` stays False. Read beside that by the base judge: a plain base
+    # declared inside one of these is sanctioned for reads and never granted by a vend ([[LH-209]]).
+    # Empty = no external bases.
     external_blob_bases: str = Field(default="", alias="LANCE_EXTERNAL_BLOB_BASES")
 
     @property
     def external_blob_base_list(self) -> list[str]:
         """The registered external-blob base URIs (parsed from the comma-separated allowlist)."""
         return [b.strip() for b in self.external_blob_bases.split(",") if b.strip()]
-
-    @property
-    def vend_sanctioned_bases(self) -> list[str]:
-        """Every approved-base allowlist the VEND door honours, unioned.
-
-        The estate keeps two: ``LANCE_MULTIBASE_DATA_BASES`` (where a create may spread fragments) and
-        ``LANCE_EXTERNAL_BLOB_BASES`` (which external ``Blob.from_uri`` pointers a create may reference).
-        The create door enforces both; the vend door was given only the first, so a base the estate had
-        already approved was dropped from the session policy it issued.
-
-        Measured on the deployed catalog 2026-09-16: the pod carries
-        ``LANCE_EXTERNAL_BLOB_BASES=s3://lance-catalog/models/`` and logged 1,836
-        ``vend_base_path_unsanctioned`` warnings in three hours, all for that base, all with
-        ``sanctioned_count=0``. ``vending.py`` states the cost — the drop "surfaces later as a read denial
-        at the object store, on whoever used the credential, with nothing naming the base".
-
-        This widens nothing an operator did not already declare: both lists default empty, and an
-        unlisted foreign base stays refused, which is the data-exfil door the guard exists to close.
-        """
-        return [*self.multibase_data_base_list, *self.external_blob_base_list]
 
     # #3-B Lance multi-base DATA distribution: a comma-separated ALLOWLIST of approved data-base URIs a
     # create may spread its fragments across (the Uber pattern — one table's data round-robins over N

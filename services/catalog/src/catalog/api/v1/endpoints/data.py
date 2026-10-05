@@ -41,9 +41,10 @@ from catalog.api.dependencies import (
     SettingsDep,
     StorageOptionsDep,
 )
-from catalog.api.rask_params import RaskDataBase, RaskSource, RaskSourceVersion
+from catalog.api.rask_params import RaskDataBase, RaskExternalBlobBase, RaskSource, RaskSourceVersion
 from catalog.api.security import CurrentSubject, CurrentToken
 from catalog.core import provenance_guard
+from catalog.core.base_judge import BaseJudge
 from catalog.core.formats import reject_unsupported_format
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.core.lineage_emit import COMPACT_TABLE, DELETE, INSERT, MERGE_INSERT, UPDATE, merge_source_pin, parse_run_facets
@@ -123,6 +124,7 @@ async def create_table(
     mode: str | None = None,
     properties: str | None = None,
     data_base: RaskDataBase = [],  # noqa: B006 — FastAPI Query default, not mutated
+    external_blob_base: RaskExternalBlobBase = None,
     source: RaskSource = None,
     source_version: RaskSourceVersion = None,
     run_facets_json: Annotated[str | None, Header(alias="X-Lance-Run-Facets")] = None,
@@ -138,6 +140,11 @@ async def create_table(
     ``data_base`` (#3-B, repeatable) spreads the table's fragments across the named approved buckets (Lance
     multi-base). Each MUST be on the ``LANCE_MULTIBASE_DATA_BASES`` allowlist — a caller can never point a
     base at an arbitrary bucket. Omitted → a single-location table exactly as before.
+
+    ``external_blob_base`` ([[LH-209]]) asks to register ONE external blob base, so the table's blob
+    columns may hold ``Blob.from_uri`` pointers under it. It must lie inside a ``LANCE_EXTERNAL_BLOB_BASES``
+    entry and outside governed storage (``table_bases.requested_external_blob_base``). Omitted → no
+    external base, and a pointer in the rows is refused.
 
     Derived-write lineage (S4, optional — the same metadata ``merge_insert`` has always taken):
     ``source`` + ``source_version`` record the version-pinned upstream this table DERIVES FROM
@@ -155,6 +162,7 @@ async def create_table(
         id,
         settings=settings,
         data_base=data_base,
+        external_blob_base=external_blob_base,
         properties=properties,
         source=source,
         source_version=source_version,
@@ -224,8 +232,11 @@ async def commit_fragments(
     run = (
         CommitRun(control_root=settings.registry_root, storage_options=settings.storage_options(), subject=subject, run_id=body.run_id) if body.run_id else None
     )
+    # [[LH-209]] The external blob bases this table's create authorized, from the catalog's own record: the
+    # manifest's list is the writer's, and the configured allowlist is wider than any one table.
+    record = await run_in_threadpool(BaseJudge.from_settings(settings).read_record, described.location)
     version, row_count = await run_in_threadpool(
-        partial(dataplane.commit_appended_fragments, run=run, external_blob_bases=settings.external_blob_base_list),
+        partial(dataplane.commit_appended_fragments, run=run, external_blob_bases=record.entries if record is not None else ()),
         described.location,
         so,
         body.fragments,

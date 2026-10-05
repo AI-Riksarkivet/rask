@@ -501,8 +501,8 @@ class MaintenanceSettings(SignatureDoorSettings, FgaSettings, BaseSettings):
     # only when the catalog's control root has been moved.
     control_root: str = Field(default="", alias="MAINTENANCE_CONTROL_ROOT")
     #: THE CATALOG'S ``LANCE_EXTERNAL_BLOB_BASES``, under the same name the catalog and ingest read ([[LH-279]]).
-    #: A base inside one of these, declared as a plain base, is sanctioned by configuration: every vend
-    #: already grants READ there. The base-reference pre-pass judges each declared base against these
+    #: A base inside one of these, declared as a plain base, is sanctioned by configuration as a pointer
+    #: base, which no vend grants. The base-reference pre-pass judges each declared base against these
     #: and the catalog's base record, so an unset value here turns every table's blob base into a record
     #: read and, for a table with no record, a finding that protects nothing.
     external_blob_bases: str = Field(default="", validation_alias="LANCE_EXTERNAL_BLOB_BASES")

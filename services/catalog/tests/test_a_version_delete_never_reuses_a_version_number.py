@@ -69,7 +69,17 @@ def client(ns: LanceNamespace, tmp_path: Path) -> Iterator[TestClient]:
     application = FastAPI()
     install_problem_handlers(application, logging.getLogger(__name__))
     application.include_router(version_door.router)
-    settings = SimpleNamespace(delimiter="$", storage_options=dict, registry_root=str(tmp_path / "control"), external_blob_base_list=[])
+    # [[LH-209]] The judge also holds a configured base against governed roots and buckets; none here.
+    settings = SimpleNamespace(
+        delimiter="$",
+        storage_options=dict,
+        registry_root=str(tmp_path / "control"),
+        external_blob_base_list=[],
+        root="",
+        models_root="",
+        model_artifacts_root="",
+        reserved_bucket_set=frozenset(),
+    )
     application.dependency_overrides[SettingsDep.__metadata__[0].dependency] = lambda: settings
     application.dependency_overrides[NamespaceDep.__metadata__[0].dependency] = lambda: ns
     application.dependency_overrides[StorageOptionsDep.__metadata__[0].dependency] = lambda: {}

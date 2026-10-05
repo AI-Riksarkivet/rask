@@ -54,7 +54,7 @@ from catalog.api.dependencies import (
 from catalog.api.pagination import paginate
 from catalog.api.rask_params import RaskFlag
 from catalog.api.security import CurrentToken
-from catalog.core.base_judge import BaseJudge
+from catalog.core.base_judge import BaseJudge, GovernedStorage
 from catalog.core.formats import reject_unsupported_format
 from catalog.core.identifiers import MAX_NAMESPACE_DEPTH, parse_identifier, reconcile_body_id, require_safe_segments
 from catalog.core.lineage_emit import (
@@ -449,7 +449,7 @@ def describe_table(
         facts = dataset_facts(response.location, so)
         # [[LH-279]] The vend door's own refusal, off the same read: a base the catalog did not sanction
         # answers 409 rather than a credential that would read through it.
-        require_vendable_bases(response.location, facts, BaseJudge.from_settings(settings))
+        bases = require_vendable_bases(response.location, facts, BaseJudge.from_settings(settings))
         # [[LH-058]] THE SECOND VENDING HOP, and it has to ask the same question. This door vends too, so
         # gating only `POST /credentials` would leave a classified table's raw bytes reachable through
         # `describe` — the same shortfall this block's own comment describes for the bases, one door over.
@@ -457,9 +457,9 @@ def describe_table(
         # vendable: the field-to-file mapping is write-order dependent, so no policy can exclude a column.
         if facts.classified:
             return response  # a classified column cannot be excluded from an object-store grant — server-mediated only
-        if unsanctioned_bases(response.location, facts.base_uris, settings.vend_sanctioned_bases):
+        if unsanctioned_bases(response.location, bases, settings.multibase_data_base_list):
             return response  # a sanctioned base the session policy cannot address — only the catalog's root creds reach it
-        creds = vendor.vend(table_location=response.location, tier="read", bases=facts.base_uris)
+        creds = vendor.vend(table_location=response.location, tier="read", bases=bases)
         if creds is not None:
             # THE EXPIRY GOES INSIDE `storage_options`, which is where the spec puts it and the only
             # place a stock client looks: `lance_docs/ns_catalog/spec.yaml:2878-2880` — *"If the vended
@@ -768,6 +768,7 @@ async def register_table(
         registry=base_registry.BaseRegistry(control_root=settings.registry_root, storage_options=settings.storage_options()),
         configured=settings.external_blob_base_list,
         data_allowlist=settings.multibase_data_base_list,
+        governed=GovernedStorage.from_settings(settings),
     )
     body.location = table_bases.require_registrable_location(
         body.location, root=root, control_root=settings.registry_root, configured=[*context.configured, *context.data_allowlist]

@@ -54,13 +54,14 @@ from pydantic import BaseModel
 from catalog.api import fga_deps
 from catalog.api.security import Principal
 from catalog.core import provenance_guard
+from catalog.core.base_judge import GovernedStorage
 from catalog.core.config import Settings
 from catalog.core.formats import reject_unsupported_format
 from catalog.core.identifiers import parse_identifier, require_safe_segments
 from catalog.core.lineage_emit import InputPin, InputRef, LineageEmitter, merge_source_pin, parse_run_facets
 from catalog.core.lineage_metadata import build_lineage_metadata, stamp_lineage_metadata
 from catalog.core.modes import CreateMode
-from catalog.services import dataplane, native
+from catalog.services import dataplane, native, table_bases
 from service_kit.control_emit import ControlEmitter, emit_control
 from service_kit.governed import fga
 from service_kit.lakehouse import base_registry
@@ -98,6 +99,8 @@ class CreateShape(BaseModel):
 
     #: spec.yaml:3761-3767 types it as an object whose values are strings.
     properties: dict[str, str] | None = None
+    #: The external blob base the create asks to register ([[LH-209]]), judged with settings before the write.
+    external_blob_base: str | None = None
     source_pin: InputPin | None = None
     run_facets: dict[str, Any] | None = None
 
@@ -129,6 +132,7 @@ def parse_create_shape(
     data_base: list[str],
     properties: str | None,
     source: str | None,
+    external_blob_base: str | None = None,
     source_version: int | None,
     run_facets_json: str | None,
 ) -> CreateShape:
@@ -157,6 +161,7 @@ def parse_create_shape(
     provenance_guard.refuse_reserved_keys(parsed_properties or {}, door="create properties")
     return CreateShape(
         properties=parsed_properties,
+        external_blob_base=external_blob_base,
         source_pin=merge_source_pin(source, source_version, settings.delimiter),
         run_facets=parse_run_facets(run_facets_json),
     )
@@ -208,6 +213,15 @@ async def create_governed_table(
     source_pin = shape.source_pin
     if source_pin is not None:
         await fga_deps.require_can_get_metadata(client, settings, token, segments=source_pin.segments)
+    # [[LH-209]] The one external blob base this create may register, judged before the write: none unless
+    # the request names one, and never one that reaches governed storage.
+    external_base = await run_in_threadpool(
+        table_bases.requested_external_blob_base,
+        shape.external_blob_base,
+        table.schema,
+        approved=settings.external_blob_base_list,
+        governed=GovernedStorage.from_settings(settings),
+    )
     segments = parse_identifier(id, settings.delimiter)
     table_id = fga.canonical_object_id(segments, delimiter=settings.delimiter)
     namespace = fga.parent_namespace_id(segments, delimiter=settings.delimiter) or ""
@@ -252,7 +266,7 @@ async def create_governed_table(
         mode=mode,
         properties=shape.properties,
         allow_external_blobs=settings.allow_external_blobs,
-        external_blob_bases=settings.external_blob_base_list,
+        external_blob_bases=[external_base] if external_base else [],
         data_bases=data_base or None,
         # [[LH-067]] WHICH secret each base's credential comes from. The map holds NAMES; the material
         # is fetched at composition through the Dapr store the catalog already uses for its own S3

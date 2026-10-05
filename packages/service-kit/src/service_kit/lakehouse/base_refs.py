@@ -427,8 +427,8 @@ def classify_base_refs(
     owning root — the one predicate the vend, read and register doors share:
 
     - inside the owning root, in its store (a branch naming its parent, a same-root clone): protects;
-    - inside an operator-configured external blob base: protects, and is never a finding — every vend
-      already grants READ there, so declaring one adds nothing;
+    - inside an operator-configured external blob base: protects, and is never a finding — it is a
+      pointer base the operator approved, and no vend grants it;
     - named by the owning root's base record: protects — PINNED (:attr:`BaseRefs.pinned`) when the entry
       is a ``derived_from`` relation carrying its source tag, unconditionally otherwise;
     - anything else: a :class:`BaseFinding`, and NEVER protected. A planted base naming another table

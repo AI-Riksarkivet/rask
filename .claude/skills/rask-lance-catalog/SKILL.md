@@ -306,6 +306,22 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   `main` is judged. Pinned by `tests/unit/test_a_register_refuses_a_table_that_mixes_file_versions.py`
   (flag 256) and `tests/integration/test_a_planted_base_is_refused_and_freezes_nothing.py` (spelling,
   overlaps and bases).
+- **An external blob base is per table, on request, and never vended** ([[LH-209]]). A create registers
+  one only when the request names it in the door's `external_blob_base` query parameter (ingest's
+  catalog client sends it; never a schema or property key, which LH-208 refuses), inside a `LANCE_EXTERNAL_BLOB_BASES` entry and outside every governed root and bucket (catalog,
+  control, model registry and artifact roots, reserved and warehouse-claimed buckets:
+  `table_bases.requested_external_blob_base`); a plain create registers none, so Lance refuses its
+  `Blob.from_uri` rows. `/commit` accepts a kind-3 descriptor only through a base the table's RECORD holds
+  as `external_blob`, never one merely configured or in the manifest. A vend drops every pointer base
+  (judged CONFIGURED, or recorded `external_blob`) from the grant and still vends direct; external bytes
+  are served by the blob door. A plain base inside a configured entry is CONFIGURED at the read/vend/blob doors
+  and the register door only when it covers no governed storage (`BaseJudge.judge`, `GovernedStorage`), so a
+  planted `models/<victim>/` base is sanctioned by the record or by nothing; maintenance and lineage keep the
+  unnarrowed standing for protection. A stage runner's `ensure_stage_output` forwards its upstream's base as
+  `external_blob_base`. `vend_sanctioned_bases` is gone: the vendor's allowlist is
+  `LANCE_MULTIBASE_DATA_BASES` alone. Pinned by
+  `tests/integration/test_an_external_blob_base_is_authorized_per_table.py` and the planted-base case of
+  `test_a_forged_fragment_is_refused_and_the_table_is_unchanged.py`.
 - **Four doors commit client-produced data, and all four judge its file versions.** `/commit`
   (`dataplane.commit_appended_fragments`), `/compaction_commit` (`commit_compaction`), `register`, and
   ingest's own `Lander.commit_fragments` refuse data files at another version than the table's

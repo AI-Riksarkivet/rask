@@ -261,12 +261,18 @@ def ensure_stage_output(
     catalog_url: str,
     table_id: str,
     schema: pa.Schema,
+    external_blob_base: str | None = None,
     delimiter: str = CATALOG_DELIMITER,
     identity_token_file: str,
     timeout_seconds: float = 30.0,
     client: httpx.Client | None = None,
 ) -> str:
     """Ask the catalog where this stage's output lives, creating the table if it does not exist yet.
+
+    ``external_blob_base`` is the upstream's registered external blob base, asked for on the create
+    through the door's ``external_blob_base`` parameter ([[LH-209]]). The stage forwards the upstream's
+    pointers, which resolve only under a base the output registered, and the catalog registers none it
+    was not asked for, so without it every carried pointer is refused at the stage's first write.
 
     THE STAGE RUNNER ASKS INSTEAD OF TELLING, which is rule I2 applied to the write side. `transform.py` says
     the quiet part: I2 was "read from the consuming end. Only the READ side: the stage runner still owns where
@@ -323,6 +329,7 @@ def ensure_stage_output(
             created = client.post(
                 f"/v1/table/{table_id}/create?mode=exist_ok",
                 content=encode_arrow_stream(schema.remove_metadata().empty_table()),
+                params={"external_blob_base": external_blob_base} if external_blob_base else None,
                 headers={**headers, "Content-Type": ARROW_STREAM_MEDIA_TYPE, "x-lance-table-id": delimiter.join(segments)},
             )
         except httpx.HTTPError as exc:

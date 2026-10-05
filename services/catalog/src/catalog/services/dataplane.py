@@ -501,7 +501,7 @@ def _write_blob_into(
     back with ``drop_table`` on failure so the name stays retryable rather than stuck declared-but-unreadable.
 
     THE BASE RECORD IS CLAIMED FIRST ([[LH-279]]): every base this write registers through
-    ``initial_bases`` — the configured external blob bases and the approved data bases — is in the
+    ``initial_bases`` — the external blob base the create asked for and the approved data bases — is in the
     catalog's record before the manifest that declares them exists, so no reader ever meets the table
     declaring a base its record lacks. A failed write releases exactly what it claimed; a record that
     outlived its write would vouch for a base no manifest names.
@@ -914,7 +914,7 @@ def commit_appended_fragments(
     read_version: int,
     *,
     run: commit_runs.CommitRun | None = None,
-    external_blob_bases: Sequence[str] = (),
+    external_blob_bases: Sequence[base_registry.RecordedBase] = (),
 ) -> tuple[int, int]:
     """Commit client-written fragments as an APPEND — the catalog as the governed commit coordinator (#2).
 
@@ -941,6 +941,8 @@ def commit_appended_fragments(
     nothing an append cannot carry, each file at its declared size, and each footer agreeing with the
     fragment's rows, columns, field ids and file version. A table with blob columns is committed detached
     first, so every blob sidecar its descriptors point into is read before the version is published.
+    ``external_blob_bases`` is the catalog's record of the external blob bases the table's create
+    authorized ([[LH-209]]); an external descriptor resolving through any other base is refused.
 
     Raises:
         InvalidInputError: Malformed fragments, no fragments (and no recorded run commit), a based data
@@ -1116,7 +1118,7 @@ def _verify_blob_sidecars(
     *,
     read_version: int,
     columns: Sequence[str],
-    external_bases: Sequence[str],
+    external_bases: Sequence[base_registry.RecordedBase],
 ) -> None:
     """Commit ``op`` DETACHED, read every blob sidecar its descriptors point into, then discard the detached version.
 

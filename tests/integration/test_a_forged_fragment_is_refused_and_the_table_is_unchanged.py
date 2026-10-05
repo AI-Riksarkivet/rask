@@ -53,15 +53,19 @@ class _Estate:
         self.client = client
         self.bucket = bucket
         self.monkeypatch = monkeypatch
-        #: ``LANCE_EXTERNAL_BLOB_BASES``: every table the door creates registers it.
-        self.external_base = f"s3://{bucket}/models/"
+        #: The external blob base a bronze create names, inside the approved corpus bucket ([[LH-209]]).
+        self.external_base = f"s3://{bucket}-corpus/media/pages/"
         self.key = lance_storage_options(url, "test", "test", "us-east-1")
         self.s3: S3Client = boto3.client("s3", endpoint_url=url, aws_access_key_id="test", aws_secret_access_key="test", region_name="us-east-1")
         assert client.post("/v1/namespace/db/create", json={}).status_code == 200
 
-    def create(self, table: str, rows: pa.Table) -> str:
+    def create(self, table: str, rows: pa.Table, external_blob_base: str | None = None) -> str:
+        """The create door, with the external blob base requested the way ingest's catalog client requests it."""
         resp = self.client.post(
-            f"/v1/table/{quote(table, safe='$')}/create", content=encode_arrow_stream(rows), headers={"Content-Type": ARROW_STREAM_MEDIA_TYPE}
+            f"/v1/table/{quote(table, safe='$')}/create",
+            content=encode_arrow_stream(rows),
+            params={"external_blob_base": external_blob_base} if external_blob_base else None,
+            headers={"Content-Type": ARROW_STREAM_MEDIA_TYPE},
         )
         assert resp.status_code == 200, resp.text
         return str(resp.json()["location"])
@@ -69,12 +73,9 @@ class _Estate:
     def open(self, location: str) -> lance.LanceDataset:
         return lance.dataset(location, storage_options=self.key)
 
-    def without_external_bases(self) -> None:
-        """Configure no external blob base, so a table created from here registers none and the door sanctions none."""
-        from catalog.core.config import get_settings
-
-        self.monkeypatch.setenv("LANCE_EXTERNAL_BLOB_BASES", "")
-        get_settings.cache_clear()
+    def put_uri(self, uri: str, body: bytes) -> None:
+        bucket, _, key = uri.removeprefix("s3://").partition("/")
+        self.s3.put_object(Bucket=bucket, Key=key, Body=body)
 
     def ids(self, location: str) -> list[int]:
         return sorted(self.open(location).to_table(columns=["id"]).column("id").to_pylist())
@@ -94,7 +95,9 @@ class _Estate:
 @pytest.fixture
 def estate(moto_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[_Estate]:
     bucket = f"lh211-{uuid.uuid4().hex[:10]}"
-    boto3.client("s3", endpoint_url=moto_url, aws_access_key_id="test", aws_secret_access_key="test", region_name="us-east-1").create_bucket(Bucket=bucket)
+    s3 = boto3.client("s3", endpoint_url=moto_url, aws_access_key_id="test", aws_secret_access_key="test", region_name="us-east-1")
+    for name in (bucket, f"{bucket}-corpus"):
+        s3.create_bucket(Bucket=name)
     for key, value in {
         "LANCE_REST_IMPL": "dir",
         "LANCE_REST_ROOT": f"s3://{bucket}",
@@ -103,7 +106,7 @@ def estate(moto_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[_Estate]:
         "LANCE_S3_ACCESS_KEY_ID": "test",
         "LANCE_S3_SECRET_ACCESS_KEY": "test",
         "LANCE_CONTROL_EMIT_ENABLED": "false",
-        "LANCE_EXTERNAL_BLOB_BASES": f"s3://{bucket}/models/",
+        "LANCE_EXTERNAL_BLOB_BASES": f"s3://{bucket}/models/,s3://{bucket}-corpus/media/",
     }.items():
         monkeypatch.setenv(key, value)
     from catalog.core.config import get_settings
@@ -147,17 +150,27 @@ def _plain(estate: _Estate, **write: Any) -> _Staged:  # noqa: ANN401 — write_
     return _Staged(estate, table, location, json.loads(json.dumps(written[0].to_json())))
 
 
-def _bronze(estate: _Estate) -> _Staged:
+def _bronze(estate: _Estate, *, external_base: str | None = None) -> _Staged:
+    """A bronze table, with the external base, when named, requested as ingest's catalog client requests it."""
     table = f"db$b{uuid.uuid4().hex[:8]}"
-    location = estate.create(table, BRONZE_SCHEMA.empty_table())
+    location = estate.create(table, BRONZE_SCHEMA.empty_table(), external_base)
     batch = units_to_table([(f"file:///page-{i}.tif", payload) for i, payload in enumerate(_PAYLOADS)])
     written = write_unit_fragments(location, batch, storage_options=estate.key)
     return _Staged(estate, table, location, json.loads(written[0]))
 
 
-def _bronze_without_a_base(estate: _Estate) -> _Staged:
-    estate.without_external_bases()
-    return _bronze(estate)
+def _bronze_with_a_base(estate: _Estate) -> _Staged:
+    return _bronze(estate, external_base=estate.external_base)
+
+
+def _bronze_with_a_planted_base(estate: _Estate) -> _Staged:
+    """A bronze table with its own external base, to which the writer then adds another table's source prefix inside the
+    same approved entry: sanctioned by configuration for reads, never recorded for this table."""
+    staged = _bronze_with_a_base(estate)
+    victim = f"s3://{estate.bucket}-corpus/media/victim/"
+    estate.open(staged.location).add_bases([lance.DatasetBasePath(victim, name="planted", is_dataset_root=False)])
+    estate.put_uri(f"{victim}scan.bin", b"VICTIM-SCAN")
+    return staged
 
 
 def _committed(estate: _Estate) -> _Staged:
@@ -180,9 +193,9 @@ def _external(uri: str) -> Callable[[_Staged], list[dict[str, Any]]]:
     """A bronze fragment whose payload names ``uri`` as an external blob, written with Lance's outside-bases bypass."""
 
     def forge(staged: _Staged) -> list[dict[str, Any]]:
-        target = uri.format(bucket=staged.estate.bucket)
+        target = uri.format(bucket=staged.estate.bucket, base=staged.estate.external_base)
         if "secret" in target:
-            staged.estate.s3.put_object(Bucket=staged.estate.bucket, Key=target.removeprefix(f"s3://{staged.estate.bucket}/"), Body=b"SECRET")
+            staged.estate.put_uri(target, b"SECRET")
         batch = units_to_table([(target, b"")], external_base=staged.estate.external_base)
         written = lance.fragment.write_fragments(batch, staged.location, storage_options=staged.estate.key, allow_external_blob_outside_bases=True)
         return [json.loads(json.dumps(written[0].to_json()))]
@@ -273,11 +286,17 @@ def _missing_sidecar(staged: _Staged) -> list[dict[str, Any]]:
         pytest.param(lambda estate: _plain(estate, data_storage_version="2.1"), _declared_2_2, "its footer is file format 2.1", id="footer-2.1-declared-2.2"),
         pytest.param(lambda estate: _plain(estate, data_storage_version="2.3"), _declared_2_2, "its footer is file format 2.3", id="footer-2.3-declared-2.2"),
         pytest.param(_bronze, _missing_sidecar, "points into a blob sidecar that is missing", id="missing-blob-sidecar"),
-        pytest.param(_bronze, _external("s3://{bucket}/elsewhere/secret.bin"), "an external blob is a path relative to", id="external-blob-absolute-uri"),
-        pytest.param(_bronze, _external("s3://{bucket}/models/absent.bin"), "which does not exist", id="external-blob-missing-target"),
         pytest.param(
-            _bronze_without_a_base, _external("s3://{bucket}/elsewhere/secret.bin"), "the table has no external blob base", id="external-blob-without-a-base"
+            _bronze_with_a_base, _external("s3://{bucket}/elsewhere/secret.bin"), "an external blob is a path relative to", id="external-blob-absolute-uri"
         ),
+        pytest.param(_bronze_with_a_base, _external("{base}absent.bin"), "which does not exist", id="external-blob-missing-target"),
+        pytest.param(
+            _bronze_with_a_planted_base,
+            _external("s3://{bucket}-corpus/media/victim/scan.bin"),
+            "an external blob is a path relative to",
+            id="external-blob-at-another-tables-object-through-a-planted-base",
+        ),
+        pytest.param(_bronze, _external("s3://{bucket}/elsewhere/secret.bin"), "the table has no external blob base", id="external-blob-without-a-base"),
         pytest.param(_plain, lambda staged: [staged.copy(), staged.copy()], "names the same file", id="same-file-in-two-fragments"),
         pytest.param(_committed, lambda staged: [staged.copy()], "the table already holds this file", id="re-append-a-held-file-after-a-delete"),
     ],
@@ -299,26 +318,36 @@ def test_a_forged_fragment_is_refused_and_the_table_is_unchanged(
 
 
 def test_ingests_own_blob_fragments_commit_through_every_check(estate: _Estate, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The real writer passes: ingest's managed blobs (inline, packed, dedicated) and an external blob under the table's
-    external base, each written by ingest's own writer and committed through ingest's own catalog client."""
-    staged = _bronze(estate)
-    source = f"{estate.external_base}page-external.tif"
-    estate.s3.put_object(Bucket=estate.bucket, Key=source.removeprefix(f"s3://{estate.bucket}/"), Body=b"external-page")
-    external = write_unit_fragments(
-        staged.location, units_to_table([(source, b"external-page")], external_base=estate.external_base), storage_options=estate.key
-    )
-    before = estate.open(staged.location).version
+    """The real writer passes: a bronze table created by ingest's own catalog client with its approved external base, then
+    ingest's managed blobs (inline, packed, dedicated) and an external blob under that base, each written by ingest's own
+    writer and committed through the same client."""
     token = tmp_path / "rask-catalog-token"
     token.write_text("unauthenticated-estate")
     monkeypatch.setenv("RASK_CATALOG_IDENTITY_TOKEN_FILE", str(token))
     monkeypatch.setattr("ingest.http.shared_client", lambda: estate.client)
-    namespace, table = staged.table.split("$")
-
-    version, rows = CatalogServiceClient(BRONZE_SCHEMA, base_url="http://testserver").commit(
-        namespace, table, [json.dumps(staged.fragment), *external], before, "run-lh211"
+    # mode_b vends nothing, so the client checks the new table's creation contract with the ambient chain.
+    for name, value in {
+        "AWS_ENDPOINT": estate.key["endpoint"],
+        "AWS_ACCESS_KEY_ID": "test",
+        "AWS_SECRET_ACCESS_KEY": "test",
+        "AWS_REGION": "us-east-1",
+        "AWS_ALLOW_HTTP": "true",
+    }.items():
+        monkeypatch.setenv(name, value)
+    ingest = CatalogServiceClient(BRONZE_SCHEMA, base_url="http://testserver")
+    namespace, table = "db", f"b{uuid.uuid4().hex[:8]}"
+    location = ingest.ensure(namespace, table, external_base=estate.external_base)
+    source = f"{estate.external_base}page-external.tif"
+    estate.put_uri(source, b"external-page")
+    managed = write_unit_fragments(
+        location, units_to_table([(f"file:///page-{i}.tif", payload) for i, payload in enumerate(_PAYLOADS)]), storage_options=estate.key
     )
+    external = write_unit_fragments(location, units_to_table([(source, b"external-page")], external_base=estate.external_base), storage_options=estate.key)
+    before = estate.open(location).version
+
+    version, rows = ingest.commit(namespace, table, [*managed, *external], before, "run-lh211")
 
     assert (version, rows) == (before + 1, len(_PAYLOADS) + 1)
-    landed = estate.open(staged.location)
+    landed = estate.open(location)
     assert [payload for _, payload in landed.read_blobs("payload", indices=list(range(len(_PAYLOADS) + 1)))] == [*_PAYLOADS, b"external-page"]
-    assert estate.version_residue(staged.location) == []
+    assert estate.version_residue(location) == []

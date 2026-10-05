@@ -39,8 +39,8 @@ from lance.file import LanceFileReader
 from lance_namespace import InvalidInputError, ServiceUnavailableError
 from pydantic import BaseModel, ConfigDict
 
-from service_kit.lakehouse import blobs
-from service_kit.lakehouse.base_refs import normalise
+from service_kit.lakehouse import base_registry, blobs
+from service_kit.lakehouse.base_refs import normalise, store_of
 from service_kit.lakehouse.features import describe_foreign_data_file_versions
 from service_kit.lakehouse.objectfs import StorageOptions
 
@@ -366,7 +366,7 @@ def verify_blob_sidecars(
     fragments: Sequence[FragmentMetadata],
     columns: Sequence[str],
     *,
-    external_bases: Sequence[str],
+    external_bases: Sequence[base_registry.RecordedBase],
     object_sizes: Callable[[Sequence[str]], list[int | None]],
 ) -> None:
     """Refuse fragments whose blob descriptors point at bytes that are missing, short, or not the table's.
@@ -378,9 +378,12 @@ def verify_blob_sidecars(
     file exists and holds every blob packed into it.
 
     An external blob must name, by ``blob_id``, a base the table registered that is one of
-    ``external_bases`` (``LANCE_EXTERNAL_BLOB_BASES``), with a ``blob_uri`` relative to it, and its object
-    must exist and hold the slice it names; ``object_sizes`` answers every such object in one batch
-    (``None`` for one that is absent).
+    ``external_bases``, with a ``blob_uri`` relative to it, and its object must exist and hold the slice
+    it names; ``object_sizes`` answers every such object in one batch (``None`` for one that is absent).
+    ``external_bases`` is the catalog's record of the external blob bases the create authorized for this
+    table ([[LH-209]]), never the manifest's list or the configured allowlist: a holder of the table's
+    write credential can add any base to the manifest, and a base inside an allowlisted prefix can still
+    cover another tenant's objects.
 
     Raises:
         InvalidInputError: A sidecar is missing or shorter than a descriptor says, or an external blob is
@@ -420,15 +423,15 @@ class _BasePaths(Protocol):
     def base_paths(self) -> dict[int, _BasePath]: ...
 
 
-def _external_bases(table: lance.LanceDataset, configured: Sequence[str]) -> dict[int, str]:
-    """``{base id: base URI}`` of the table's registered non-root bases that are configured external blob bases.
+def _external_bases(table: lance.LanceDataset, recorded: Sequence[base_registry.RecordedBase]) -> dict[int, str]:
+    """``{base id: base URI}`` of the table's registered non-root bases its record holds as external blob bases, by path and store.
 
     ``_ds.base_paths()`` is the library's own answer for the manifest's bases, as
     ``service_kit.lakehouse.features.manifest_base_path_refs`` reads it.
     """
-    allowed = {normalise(base) for base in configured}
+    allowed = {(entry.path, entry.store) for entry in recorded if entry.role is base_registry.BaseRole.EXTERNAL_BLOB and not entry.is_dataset_root}
     declared = cast(_BasePaths, getattr(table, "_ds")).base_paths()  # noqa: B009 — pylance's private handle, typed by the Protocol
-    return {base_id: base.path for base_id, base in declared.items() if not base.is_dataset_root and normalise(base.path) in allowed}
+    return {base_id: base.path for base_id, base in declared.items() if not base.is_dataset_root and (normalise(base.path), store_of(base.path)) in allowed}
 
 
 def _verify_external_blobs(descriptors: pa.Table, column: str, bases: dict[int, str], object_sizes: Callable[[Sequence[str]], list[int | None]]) -> None:

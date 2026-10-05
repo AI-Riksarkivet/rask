@@ -1016,6 +1016,7 @@ async def _run_compute(
                     catalog_url=settings.catalog_url,
                     table_id=to_dataset,
                     schema=upstream.schema,
+                    external_blob_base=upstream.external_base,
                     delimiter=settings.delimiter,
                     identity_token_file=settings.catalog_identity_token_file,
                 )

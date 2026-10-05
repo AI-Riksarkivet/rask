@@ -60,6 +60,11 @@ def _settings(delimiter: str) -> Any:
         max_body_bytes=256 * 1024 * 1024,
         # [[LH-279]] Where the create records the bases it registers; the write is faked here.
         registry_root="",
+        # [[LH-209]] What the create judges a requested external blob base against; this create requests none.
+        root="",
+        models_root="",
+        model_artifacts_root="",
+        reserved_bucket_set=frozenset(),
         storage_options=dict,
     )
 

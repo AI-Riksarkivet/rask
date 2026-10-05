@@ -104,6 +104,11 @@ def app(ns, registry_root: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[Fas
         fga_enabled=False,
         registry_root=registry_root,
         external_blob_base_list=[],
+        # [[LH-209]] What the judge holds a configured base against: governed roots and buckets. None here.
+        root="",
+        models_root="",
+        model_artifacts_root="",
+        reserved_bucket_set=frozenset(),
     )
     application.dependency_overrides[SettingsDep.__metadata__[0].dependency] = lambda: settings
     application.dependency_overrides[NamespaceDep.__metadata__[0].dependency] = lambda: ns

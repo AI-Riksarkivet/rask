@@ -33,3 +33,8 @@ RaskSourceVersion = Annotated[int | None, Query(ge=1, include_in_schema=False)]
 
 #: Approved buckets to spread a table's fragments across (Lance multi-base).
 RaskDataBase = Annotated[list[str], Query(include_in_schema=False)]
+
+#: The one external blob base a create asks to register ([[LH-209]]): a request the catalog judges against
+#: ``LANCE_EXTERNAL_BLOB_BASES`` and governed storage, and records itself. A parameter rather than a schema or
+#: property key, because those are the payload's and a writer-chosen ``rask.*`` key is refused ([[LH-208]]).
+RaskExternalBlobBase = Annotated[str | None, Query(include_in_schema=False)]

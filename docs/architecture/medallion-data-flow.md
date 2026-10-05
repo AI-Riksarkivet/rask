@@ -59,7 +59,10 @@ A source root is CLIENT-SUPPLIED (`options.bucket` comes off the ingest request)
 declared base is untrusted. Ingest reads the same `LANCE_EXTERNAL_BLOB_BASES` allowlist the catalog
 enforces. Without that gate the cascade's own `read_blobs` becomes a server-side read primitive for
 any URI a caller can name. An unapproved base **degrades to managed, loudly**; it is never silently
-honoured, and never silently dropped.
+honoured, and never silently dropped. An approved one is sent as the catalog create door's
+`external_blob_base` parameter, and the catalog judges it again (inside the allowlist, outside every
+governed root and bucket), registers that one base and records it; `/commit` accepts an external
+descriptor only through a recorded base (LH-209).
 
 `allow_external_blob_outside_bases` must stay False. Outside a registered base, lifecycle
 "remains their responsibility" and the pointer can dangle with nothing watching.

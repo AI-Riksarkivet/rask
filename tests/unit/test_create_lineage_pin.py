@@ -43,6 +43,11 @@ class _Settings:
     max_body_bytes = 256 * 1024 * 1024
     # [[LH-279]] Where the create records the bases it registers; the write is faked here, so no record lands.
     registry_root = ""
+    # [[LH-209]] What the create judges a requested external blob base against; these creates request none.
+    root = ""
+    models_root = ""
+    model_artifacts_root = ""
+    reserved_bucket_set: frozenset[str] = frozenset()
 
     def storage_options(self) -> dict[str, str]:
         return {}

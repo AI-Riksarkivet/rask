@@ -164,12 +164,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             kms_key_id=settings.s3_sse_kms_key_id,
             bucket_key_enabled=settings.s3_sse_bucket_key_enabled,
         ),
-        # THE OPERATOR'S allowlists of legitimate foreign base paths — BOTH of them, which is what
-        # `vend_sanctioned_bases` unions. A manifest-declared base outside the table's own vended scope
-        # is granted READ only if it is on one of them; without that, a writer on one table could declare
-        # a base naming another tenant's prefix and read it with their next credential. Both default
-        # empty, so an unlisted foreign base stays refused.
-        sanctioned_bases=settings.vend_sanctioned_bases,
+        # THE OPERATOR'S allowlist of legitimate foreign DATA bases. A manifest-declared base outside the
+        # table's own vended scope is granted READ only if it is on it; without that, a writer on one table
+        # could declare a base naming another tenant's prefix and read it with their next credential. The
+        # external blob bases are not on it ([[LH-209]]): they are pointer bases the blob door serves, and
+        # granting the default one handed every vend every project's model artifacts. Empty by default.
+        sanctioned_bases=settings.multibase_data_base_list,
     )
     # [[LH-279]] WHAT EVERY TABLE READ JUDGES A DECLARED BASE AGAINST: the control root the create and
     # register doors write each table's base record to, and the configured external blob bases. Installed

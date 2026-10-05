@@ -1009,7 +1009,7 @@ vending:
   # the #92 allowlist for #115 registry pointers — plain-path artifacts in the lake's own bucket, no SSRF
   # surface). Overriding REPLACES that default — include the models base yourself or the train registry's
   # external pointers get rejected.
-  # One value, rendered as LANCE_EXTERNAL_BLOB_BASES into every reader of it: the catalog's vend and read
+  # One value, rendered as LANCE_EXTERNAL_BLOB_BASES into every reader of it: the catalog's create and read
   # doors, ingest, maintenance (planner and worker) and lineage. A base inside it needs no base-record
   # entry ([[LH-279]]), so a reader without it would treat each table's blob base as unrecorded.
   externalBlobBases: ""

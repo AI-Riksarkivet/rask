@@ -124,7 +124,7 @@ async def vend_credentials(
     # [[LH-279]] A BASE NOTHING SANCTIONED REFUSES THE VEND, before the classification answer below can
     # route it anywhere: a writer can plant any root in its manifest, and a credential granting READ on
     # it — or a server-mediated read through it — hands over another table's bytes. 409, not a fallback.
-    await run_in_threadpool(require_vendable_bases, described.location, facts, BaseJudge.from_settings(settings))
+    bases = await run_in_threadpool(require_vendable_bases, described.location, facts, BaseJudge.from_settings(settings))
     # [[LH-058]] A CLASSIFIED COLUMN MAKES A TABLE UNVENDABLE RAW, and it is a property of the TABLE
     # rather than of the caller — the same shape as the unsanctioned base below, for a reason that was
     # measured rather than chosen.
@@ -152,7 +152,7 @@ async def vend_credentials(
     # it — `build_session_policy` grants each allowlisted base a `ListBase<n>`/`BaseObjects<n>` pair, so the
     # client reaches its own bytes. A sanctioned base the policy cannot grant is reachable only through
     # the catalog's root credential, which is what the server-mediated answer routes the caller to.
-    if missed := unsanctioned_bases(described.location, facts.base_uris, settings.vend_sanctioned_bases):
+    if missed := unsanctioned_bases(described.location, bases, settings.multibase_data_base_list):
         log.info("vend_server_mediated_unreachable_bases", extra={"location": described.location, "bases": list(missed)})
         return CredentialResponse(mode="server_mediated")
     # The blocking STS call (AssumeRole / AssumeRoleWithWebIdentity) runs in the threadpool. A rejected
@@ -160,7 +160,7 @@ async def vend_credentials(
     # the STS backend is unavailable/misconfigured → 503. Either way a meaningful 4xx/5xx, never a bare 500.
     try:
         creds = await run_in_threadpool(
-            vendor.vend, table_location=described.location, tier=tier, web_identity_token=web_identity_token, bases=facts.base_uris, branch=branch
+            vendor.vend, table_location=described.location, tier=tier, web_identity_token=web_identity_token, bases=bases, branch=branch
         )
     except ClientError as exc:
         # A REJECTED exchange (the STS backend refused the request). Only web_identity re-presents the

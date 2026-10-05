@@ -49,6 +49,7 @@ from pydantic import BaseModel, Field
 from catalog.core.base_judge import BaseJudge, require_sanctioned_bases
 from catalog.core.config import shared_lance_session
 from service_kit.lakehouse.base_refs import location_within
+from service_kit.lakehouse.base_registry import BaseJudgement, BaseRole, BaseStanding
 from service_kit.lakehouse.features import BasePathRef
 from service_kit.lakehouse.objectfs import lance_storage_options
 
@@ -376,8 +377,8 @@ def dataset_facts(location: str, storage_options: dict[str, str], *, branch: str
     return VendFacts(read_version=int(ds.version), bases=refs, base_uris=uris, classified=classified_columns(ds))
 
 
-def require_vendable_bases(location: str, facts: VendFacts, judge: BaseJudge) -> None:
-    """Refuse a vend for a ref declaring a base the catalog did not sanction — both vending doors ask this ([[LH-279]]).
+def require_vendable_bases(location: str, facts: VendFacts, judge: BaseJudge) -> tuple[str, ...]:
+    """The declared bases a vend may grant, refusing a ref declaring a base the catalog did not sanction — both vending doors ask this ([[LH-279]]).
 
     A vended session policy grants READ on every declared base it can address, so vending for a table
     that planted another table's root hands its holder that table's bytes for the credential's lifetime.
@@ -386,11 +387,28 @@ def require_vendable_bases(location: str, facts: VendFacts, judge: BaseJudge) ->
     the policy's own second check (:func:`build_session_policy`), and gate what a create or register may
     record.
 
+    AN EXTERNAL BLOB BASE IS SANCTIONED AND NEVER GRANTED ([[LH-209]]). It is a pointer base — every data
+    file stays under the table's own root, and only blob descriptors name objects through it — and it is
+    authorized per table and per object at the create door, while a credential's unit is a prefix: the
+    default base is the model-artifact tree of every project, so granting it handed every vend every
+    tenant's weights. Its bytes are served by the catalog's blob door instead. So the answer drops each
+    base judged CONFIGURED, or RECORDED as ``external_blob``, from what the policy is asked to grant.
+
+    Returns:
+        The vendable bases, in the spelling and order of ``facts.base_uris``.
+
     Raises:
         InvalidTableStateError: A declared base is sanctioned by none of those (code 19, 409).
         ServiceUnavailableError: The table's record could not be read.
     """
-    require_sanctioned_bases(location, facts.bases, judge=judge)
+    judged = require_sanctioned_bases(location, facts.bases, judge=judge)
+    return tuple(uri for uri, judgement in zip(facts.base_uris, judged, strict=True) if not _is_pointer_base(judgement))
+
+
+def _is_pointer_base(judgement: BaseJudgement) -> bool:
+    if judgement.standing is BaseStanding.CONFIGURED:
+        return True
+    return judgement.entry is not None and judgement.entry.role is BaseRole.EXTERNAL_BLOB
 
 
 def table_has_branch(location: str, storage_options: dict[str, str], branch: str) -> bool:

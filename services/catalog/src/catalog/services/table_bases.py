@@ -19,16 +19,17 @@ import logging
 from collections.abc import Sequence
 
 import lance
+import pyarrow as pa
 import pyarrow.fs as pafs
 from lance_namespace import DescribeTableRequest, DescribeTableResponse, InvalidInputError, LanceNamespace, ServiceUnavailableError, TableNotFoundError
 from pydantic import BaseModel
 
-from catalog.core.base_judge import BaseJudge
+from catalog.core.base_judge import BaseJudge, GovernedStorage
 from catalog.core.config import shared_lance_session
 from catalog.core.namespace import registered_dataset_facts
 from catalog.services import native
-from service_kit.lakehouse import base_registry
-from service_kit.lakehouse.base_refs import decoded_segments, location_within, names_a_location, normalise, store_of
+from service_kit.lakehouse import base_registry, blobs
+from service_kit.lakehouse.base_refs import decoded_segments, location_in_store, location_within, names_a_location, normalise, store_of
 from service_kit.lakehouse.features import FLAG_MIXED_DATA_FILE_VERSIONS, BasePathRef
 from service_kit.lakehouse.objectfs import StorageOptions, fs_and_base
 
@@ -60,6 +61,51 @@ def create_entries(external_blob_bases: Sequence[str], data_bases: Sequence[tupl
     return [*blobs, *data]
 
 
+def requested_external_blob_base(
+    requested: str | None,
+    schema: pa.Schema,
+    *,
+    approved: Sequence[str],
+    governed: GovernedStorage,
+) -> str | None:
+    """The one external blob base a create registers, or ``None`` when it asks for none ([[LH-209]]).
+
+    A base is registered ONLY on request, and the request is the create door's ``external_blob_base``
+    extension parameter (``catalog.api.rask_params.RaskExternalBlobBase``), which ingest's catalog client
+    sends. It is a request the catalog judges and records, never a key the writer stamps on the payload:
+    the table's schema metadata is the catalog's to write ([[LH-208]]). A create that names no base
+    registers none, so its blob columns hold managed bytes and a ``Blob.from_uri`` pointer
+    in its rows is refused by Lance at the write ("outside registered external bases",
+    ``lance_docs/guide.md`` § blob v2: "external blob URIs must map to a registered non-dataset-root base
+    path"). Registering every ``LANCE_EXTERNAL_BLOB_BASES`` entry on every create would let every table
+    point at every object under them, and the default entry is the model-artifact tree of every project.
+
+    The base is authorized by WHERE IT IS as well as by the allowlist, because Lance resolves every
+    pointer as a path relative to it (``blob_id`` > 0), so whatever the base covers, every pointer
+    through it may name. Approval says the operator trusts the prefix as an external source; it does not
+    say the prefix holds no tenant's bytes. So a base is refused when it overlaps a governed root (the
+    catalog root, the control root, the model registry or the model-artifact tree, each either way) or
+    sits in a bucket the catalog governs (a reserved bucket or a warehouse's claimed one): no pointer
+    under a registered base can then reach a table, a model artifact or a record.
+
+    Raises:
+        InvalidInputError: A base is named on a schema with no blob-v2 column, does not name one location,
+            is outside every approved external blob base, or overlaps governed storage. Nothing was written.
+    """
+    if not requested:
+        return None
+    base = requested.strip()
+    if not blobs.schema_has_blob(schema):
+        raise InvalidInputError(f"the create names external blob base {base!r} and the table has no blob column to point through it")
+    if not names_a_location(base) or not any(location_in_store(entry, base) for entry in approved):
+        raise InvalidInputError(f"external blob base {base!r} is not inside an approved external blob base (LANCE_EXTERNAL_BLOB_BASES)")
+    if governed.covers(base):
+        raise InvalidInputError(
+            f"external blob base {base!r} overlaps storage the catalog governs, so a pointer through it could name another table's, model's or tenant's bytes"
+        )
+    return base
+
+
 def require_registrable_location(location: str | None, *, root: str, control_root: str, configured: Sequence[str]) -> str:
     """The relative ``location`` a register names, refused when its shape alone breaks exclusivity.
 
@@ -88,7 +134,7 @@ def require_registrable_location(location: str | None, *, root: str, control_roo
       a table off the records beneath it;
     - it may not equal, contain or sit under a ``configured`` base (the external blob and approved data
       bases). A table containing one is vended write access to the bytes that base's pointers name; a
-      table beneath one is readable through every vend, all of which grant READ on the configured bases.
+      table beneath one is readable through every table that registers that base as its external blob base.
 
     Raises:
         InvalidInputError: The location breaks the rule; the message says which part.
@@ -168,11 +214,13 @@ def entries_for_registration(
     registry: base_registry.BaseRegistry,
     configured: Sequence[str],
     data_allowlist: Sequence[str],
+    governed: GovernedStorage | None = None,
 ) -> list[base_registry.RecordedBase]:
     """The record entries a registered dataset's bases earn — or a refusal naming the ones nothing sanctions.
 
-    A base is admitted when it is inside the table's own root, inside a configured external blob base
-    (recorded as ``external_blob``), or already in the table's record. A plain base equal to an
+    A base is admitted when it is inside the table's own root, inside a configured external blob base and
+    outside ``governed`` storage (recorded as ``external_blob``; [[LH-209]]: a configured base over the
+    model-artifact tree is not recorded on the dataset's word), or already in the table's record. A plain base equal to an
     approved multi-base data base (``LANCE_MULTIBASE_DATA_BASES``), path and store, is admitted as ``data`` only while
     the table has NO record yet: the allowlist is a gate at the moment the record is first written, and
     once written the record is the authority — an allowlisted base appearing later is a plant.
@@ -182,13 +230,14 @@ def entries_for_registration(
         ServiceUnavailableError: The table's existing record could not be read, or its store did not answer.
     """
     state: dict[str, base_registry.BaseRecord | None] = {}
+    judge = BaseJudge(registry=registry, configured=list(configured), governed=governed)
 
     def _load() -> base_registry.BaseRecord | None:
         # The judge's reader: a record that cannot be read, or a store that does not answer, is a typed 503.
-        state["record"] = BaseJudge(registry=registry, configured=list(configured)).read_record(location)
+        state["record"] = judge.read_record(location)
         return state["record"]
 
-    judged = base_registry.judge_bases(location, bases, configured=configured, load_record=_load)
+    judged = judge.judge(location, bases)
     approved = {(store_of(base), normalise(base)) for base in data_allowlist}
     entries: list[base_registry.RecordedBase] = []
     refused: list[str] = []
@@ -228,6 +277,8 @@ class RegistrationContext(BaseModel):
     configured: list[str]
     #: ``LANCE_MULTIBASE_DATA_BASES`` — admitted while the record is first written.
     data_allowlist: list[str]
+    #: Where a configured base earns no standing ([[LH-209]]); ``None`` judges configuration alone.
+    governed: GovernedStorage | None = None
 
 
 class RegistrationVerdict(BaseModel):
@@ -287,5 +338,7 @@ def judge_registered_table(ns: LanceNamespace, so: dict[str, str], segments: lis
             "and pylance 11 and lancedb 0.34 cannot open it. Recreate it into a new dataset written at one data_storage_version, then "
             "register that."
         )
-    entries = entries_for_registration(location, facts.bases, registry=context.registry, configured=context.configured, data_allowlist=context.data_allowlist)
+    entries = entries_for_registration(
+        location, facts.bases, registry=context.registry, configured=context.configured, data_allowlist=context.data_allowlist, governed=context.governed
+    )
     return RegistrationVerdict(location=location, claim=base_registry.claim_bases(context.registry, location, entries))
