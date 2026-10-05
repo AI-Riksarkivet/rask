@@ -13,20 +13,18 @@ Scope (owner, 2026-09-29): catalog, lineage, medallion, maintenance, controlplan
 second; search, the viewer, the annotator and flows are ignored for now. Order (owner, 2026-10-02): the
 **Production short list** below and the criterion-3 rows CP-029 and LH-226 come first, with their enablers; every
 other Phase 1 row waits in **PHASE 1 · AFTER LAUNCH** and is taken earlier only as the stated enabler of a short-list
-row (XC-049, for one, only if a short-list chart fix needs release space). Items 1-2 keep the order adopted on
+row (XC-049, for one, only if a short-list chart fix needs release space). Item 1 keeps the order adopted on
 2026-09-30 from `docs/audits/2026-09-30/lakehouse-dataflow.md`.
 
 Beside the order (owner, 2026-10-02): prune pass 2 runs in parallel.
 
-1. **LH-226**.
-   Why: criterion 3; CP-029 closed (helm rev 272), so the remaining engine coupling is promotion_review behind the raw DaprWorkflowClient, which LH-226's port removes.
-2. The other 28 short-list rows, in four batches that can run in parallel worktrees (owner, 2026-09-29: batch and parallelize):
-   a. Commit and change-feed integrity: **LH-211**, **LH-202**, **LH-214**, **LH-216**, **LH-213**, **LH-217**, **LH-241**.
+1. The other 26 short-list rows, in four batches that can run in parallel worktrees (owner, 2026-09-29: batch and parallelize):
+   a. Commit and change-feed integrity: **LH-202**, **LH-214**, **LH-216**, **LH-213**, **LH-217**, **LH-241**.
    b. Erasure and governance: **LH-263**, **LH-245**, **LH-242**, **LH-037**, **LH-194**, **LH-208**, **LH-272**.
-   c. Storage isolation and table identity: **LH-205**, **LH-209**, **LH-252**, **LH-273**, **LH-203**, **LH-204**.
+   c. Storage isolation and table identity: **LH-209**, **LH-252**, **LH-273**, **LH-203**, **LH-204**.
    d. Infrastructure authentication and resilience: **XC-003**, **XC-077**, **XC-004**, **XC-075**, **LH-247**, **CP-041**, **CP-051**, **LH-243**.
    Why: each makes a criterion false on a production deployment (the production triage, second-reviewed).
-3. **XC-090** with **XC-096** and its proof legs **XC-091** to **XC-095**, its harness built now as a failing test, closing last.
+2. **XC-090** with **XC-096** and its proof legs **XC-091** to **XC-095**, its harness built now as a failing test, closing last.
    Why: all five criteria. XC-090 closes only with its proof legs, so they stay beside it as its enablers. Their own preconditions are listed in each leg; one of them, LH-282 (XC-091's branch reconcile), is a parked finding, so XC-090 cannot close until the owner admits LH-282 or narrows XC-091, and XC-092's erasure end state needs LH-178, which is blocked on D4.
 <!-- FOCUS:END -->
 
@@ -41,7 +39,7 @@ Approved by the owner on 2026-10-02: the Phase 1 rows that, left unfixed, make a
 - Criterion 5, resilience (9): LH-203, LH-204, LH-211, LH-247, CP-041, CP-051, LH-243, LH-273, XC-075.
 - The gate (1): XC-090.
 
-Closed since the approval: LH-281 and LH-210 (helm rev 260), XC-076, LH-220's enabler (helm rev 261), LH-220 (helm rev 262), LH-064 (helm revs 263 to 265), XC-078 (helm revs 266 to 270), CTL-021 (helm rev 271), and CP-029 (helm rev 272).
+Closed since the approval: LH-281 and LH-210 (helm rev 260), XC-076, LH-220's enabler (helm rev 261), LH-220 (helm rev 262), LH-064 (helm revs 263 to 265), XC-078 (helm revs 266 to 270), CTL-021 (helm rev 271), CP-029 (helm rev 272), and LH-205, LH-211 and LH-226 (helm revs 273 and 274).
 
 ## Owner rulings in force
 
@@ -104,7 +102,7 @@ Closed since the approval: LH-281 and LH-210 (helm rev 260), XC-076, LH-220's en
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 25 | 25 | 12 |
+| **PHASE 1 · LAKEHOUSE** | 22 | 22 | 10 |
 | **PHASE 1 · CROSS-CUTTING** | 11 | 11 | 9 |
 | **PHASE 1 · CONTROLPLANE AND NOTIFICATIONS** | 0 | 0 | 0 |
 | **PHASE 1 · AFTER LAUNCH** | 117 | 111 | 19 |
@@ -112,7 +110,7 @@ Closed since the approval: LH-281 and LH-210 (helm rev 260), XC-076, LH-220's en
 | **FRONTEND** | 7 | 7 | 0 |
 | **LOW PRIORITY** | 37 | 36 | 0 |
 
-**216 open items**, of which **6 are blocked on a decision**, **2 wait on another row or ruling** and **208 can be picked up today**; 44 are HIGH. 51 ids left the register on 2026-09-25 and 42 on 2026-09-29, listed at the foot so nothing vanishes silently. The three Phase 1 sections hold the production short list (29 open rows) with LH-226 and its enablers (36 rows); the other 117 Phase 1 rows wait in PHASE 1 · AFTER LAUNCH (owner, 2026-10-02).
+**213 open items**, of which **6 are blocked on a decision**, **2 wait on another row or ruling** and **205 can be picked up today**; 42 are HIGH. 51 ids left the register on 2026-09-25 and 42 on 2026-09-29, listed at the foot so nothing vanishes silently. The three Phase 1 sections hold the production short list (27 open rows) with their enablers (33 rows); the other 117 Phase 1 rows wait in PHASE 1 · AFTER LAUNCH (owner, 2026-10-02).
 
 ## PHASE 1 · LAKEHOUSE
 
@@ -140,14 +138,6 @@ Closed since the approval: LH-281 and LH-210 (helm rev 260), XC-076, LH-220's en
 - *Closes when:* Live, barrier-threaded renames leave one live id per location, and purge never deletes bytes a live id resolves to.
 - *Evidence:* services/catalog/src/catalog/api/v1/endpoints/tables.py:717-800,1107,1134-1148 · services/catalog/src/catalog/services/dataplane.py:644-660 · services/catalog/src/catalog/services/table_bases.py:139-161,274 · services/maintenance/src/maintenance/services/purge.py:307-376 · docs/audits/2026-09-25/03-lance-docs-full-audit.md LD20
 
-**LH-205 · A warehouse's endpoint redirects the catalog's opens but never its credential, so the estate key is signed toward a store a project admin chose**
-`catalog` · **HIGH** · **blocks-prod**
-- *What is left:* `credential_ref` is on the warehouse record but nothing reads it and no request sets it, so every open under a foreign-endpoint warehouse signs with the estate's static pair, provision_bucket creates the bucket on the estate store, and the vend AssumeRoles at the estate STS.
-- *Why:* Zero trust: catalog egress to an arbitrary host carrying the estate's access-key id, and a store that can feed the catalog crafted manifests.
-- *How:* Now: refuse at create any endpoint other than the estate's unless a resolvable credential_ref comes with it, and make every existing foreign-endpoint record fail closed at open until a ref is consumed end to end. Per-base credentials are Lance's own mechanism (BasePath carries locations; credentials arrive as base_store_params / base_<id>.*, lance_docs/file_format.md:3079-3110). Lakekeeper validates the storage credential at warehouse create (crates/lakekeeper/src/api/management/v1/warehouse/mod.rs:97-110); keep rask's reference-only model.
-- *Closes when:* No open, provision or vend signs with the estate pair toward a non-estate endpoint, refused at create and fail-closed at open under test.
-- *Evidence:* services/catalog/src/catalog/schemas.py:738-747,768-773 · services/catalog/src/catalog/services/warehouses.py:124 · services/catalog/src/catalog/api/v1/endpoints/warehouses.py:156,205,223,567,930 · services/catalog/src/catalog/core/config.py:652-665
-
 **LH-208 · A writer can rewrite the provenance a governed table carries: reserved lineage.* and rask.* metadata keys, and the tier's provenance columns**
 `catalog, maintenance, medallion` · **HIGH** · **blocks-prod**
 - *What is left:* schema_metadata/update runs at the writer rung and filters lineage.* only on the response: setting `lineage.dataset_id` to another table makes maintenance's RunEvents and audit records land on the victim, a null deletes the stamp, and a forged `rask.blob.external_base` makes the in-process cascade null every payload and register the forged base downstream. No guard stops a writer dropping, renaming or re-typing source_rowid, lineage, stage or id. Measured on 12.0.0 with the ingest schema, where `id` carries `lance-schema:unenforced-primary-key` (ingest/runtime.py:164; medallion/services/ingest.py:52). Lance itself refuses only nullable=True ('Primary key column and all its ancestors must not be nullable') and metadata changes on the key. drop_columns(['id']) is accepted and leaves only payload. alter data_type, even int64→int64, is accepted, strips the key metadata and re-mints the field id (0→2). Rename keeps the key. The alter and drop doors forward all of these (dataplane.py:1628-1657). The strip breaks spec-valid key-less merges: the merge door's `on` is optional (data.py:404; spec.yaml:3067-3073), and merge_insert(None) matches on the unenforced key before the strip but raises 'A merge insert operation requires join keys' after it. ensure_merge_key_index returns early when `on` is None (dataplane.py:2351-2352). The cascade names 'id' explicitly (ingest/runtime.py:160-163), so its own merges survive a re-type but not a drop.
@@ -171,14 +161,6 @@ Closed since the approval: LH-281 and LH-210 (helm rev 260), XC-076, LH-220's en
 - *How:* Compact matched fragments with materialize_deletions_threshold=0.0 and no byte cap below their size (lance_docs/guide.md:3428-3434,3770-3772); rebuild every user index with replace=True before reclaim; verify on bytes, not visibility; report external and data-base payloads as retained surfaces with complete=False; run the shallow-clone guard (base_refs containment, as maintenance does; file_format.md:3152-3187) and treat each referring clone as a surface or refuse. Rewrite erasure.py:77-80.
 - *Closes when:* RED fixtures (branch-local subject, sub-threshold fragment, indexed column, external base, clone, `_mem_wal/`) each end with no version on any ref answering the predicate and no file holding the subject's bytes, or with complete=False naming the surface.
 - *Evidence:* services/catalog/src/catalog/services/erasure.py:77-80,161-188,199-253 · packages/service-kit/src/service_kit/lakehouse/base_refs.py:1-50 · skeptic01/probe_branch_history.py, probe_branch_bytes.py · docs/audits/2026-09-25/03-lance-docs-full-audit.md LD06, LD09 · the branch-own-history clause closed in eb07fe33 and ef9d1e8e: tags are probed on their own ref, and every ref is compacted, reclaimed and verified deepest-first (erasure.py:227-240,260-372), per-ref flag gates run (:343-346) and the shallow-clone refusal form exists (:216); 4 + 21 test functions (about 32 parametrized cases) pass in test_erasure_probes_a_tag_on_the_branch_it_names.py and test_erasure_reaches_every_branchs_history.py · unverified-claims-a/m5b.py, m4.py · txn-types-memwal/m3_memwal.py
-
-**LH-211 · The client-direct /commit door trusts client fragment metadata beyond the file version**
-`catalog` · **HIGH** · **blocks-prod**
-- *What is left:* `commit_appended_fragments` takes FragmentMetadata.from_json verbatim after a HEAD existence check. False file_size_bytes, over- or under-declared physical_rows, bad column_indices, a copied row_id_meta (duplicate stable ids, so every later delete fails 'row id index corrupt') and a missing .blob sidecar are all published, and the INSERT event carries the false row count. The version guard shipped in 9563eb87 reads the version from the same client JSON, so a 2.1 or 2.3 file declared as 2.2 passes. Measured through commit_appended_fragments on 12.0.0. A fragment whose files list the same .lance twice with fields [0,1] collapses to one file and RE-MINTS EVERY FIELD ID IN THE TABLE ([0,1] → [2,3] on all fragments). With a BTREE on id, list_indices then shows fields ['<unknown>'], and every filtered scan fails with 'Index referenced a field with id 0 which did not exist'. On a clean table, fields [1,0] commits and silently swaps the column values, [5,6] reads the row as NULL, and [0,-2] NULLs b. `/commit` refuses any non-null base_id since 68a07c1 (dataplane.py:902-926). Any control keyed on Lance field ids, including LH-207's proposed label record, is invalidated by the re-mint.
-- *Why:* Criteria 1 and 5, zero trust: one vended writer can corrupt a governed table and its lineage record.
-- *How:* The file footer is the authority (lance_docs/file_format.md:904-922,940-995): refuse non-null row_id_meta, version metas, deletion files and overlays; require bare paths; compare info.size; open each file with `LanceFileReader(path, storage_options).metadata()` and require num_rows == physical_rows, enough columns and a footer version equal to the table's; commit detached and stat blob ids when the schema has blobs. LH-202 is still needed because a write vend can commit around the door. Refuse a fragment whose data files' `fields` intersect or contain -2, and compare each file's footer schema with its declared fields. /commit refuses every non-null base_id (dataplane.py:902-926); if based fragments are ever re-admitted, 'a base the table owns' must mean a base in LH-279's record AND, for a data base, the table's own `<base>/<table-uuid>/` sub-base (LH-252).
-- *Closes when:* Every measured forgery, including a footer version that contradicts the declared one, is refused with the latest version unchanged, RED each.
-- *Evidence:* services/catalog/src/catalog/services/dataplane.py:777-866 · services/catalog/src/catalog/api/v1/endpoints/data.py:171-209 · docs/audits/2026-09-25/03-lance-docs-full-audit.md LD10 · verify-ff-branch-tag-index-layout/probes/v10_commit_fields.py, v11_commit_control.py, v12_commit_dup_index.py, v13_commit_fields_clean.py · unverified-claims-a/m6.py
 
 **LH-213 · The in-process additive fast path drops corrected upstream rows and can misfile every derived value**
 `medallion` · **HIGH** · **blocks-prod**
@@ -243,14 +225,6 @@ Closed since the approval: LH-281 and LH-210 (helm rev 260), XC-076, LH-220's en
 - *How:* Stream: `scanner(columns, with_row_id=True, batch_size=N).to_batches()` bounds scan memory (lance_docs/guide.md:3050-3070,3637-3645); pass merge_insert a RecordBatchReader (installed MergeInsertBuilder.execute takes ReaderLike; measured); probe with the DEFAULT blob handling and `filter="<col> IS NOT NULL", limit=1` (measured: finds row 99 behind 99 nulls and reads no bytes), then take one payload. Rewrite the read_blobs docstrings.
 - *Closes when:* An in-process stage over an upstream larger than the pod limit completes with measured peak RSS bounded by batch size, an all-null probe prefix reads only to the first non-null row, and no docstring claims read_blobs drops nulls.
 - *Evidence:* services/medallion/src/medallion/services/compute.py:341-342,390-392,479-546,555,575-649 · packages/service-kit/src/service_kit/lakehouse/blobs.py:159-189 · services/medallion/src/medallion/services/engine_choice.py:45-46
-
-**LH-226 · The workflow port covers only start/exists, while promotions and the operator routes drive a raw DaprWorkflowClient**
-`medallion, service-kit` · **MEDIUM** · **first: criterion 3**
-- *What is left:* SagaClient exposes start and exists; promotions.py builds its own DaprWorkflowClient, schedules promotion_review directly and re-derives ALREADY_RUNNING; stage_ops.py and api/train.py call get_workflow_state and terminate_workflow on the raw client; the import-linter contract `the-lakehouse-is-not-built-on-a-workflow-engine` allowlists promotions, producer and stage_runner, and it cannot see the raw client stage_ops and train reach through `app.state.workflow_client`.
-- *Why:* Criterion 3: the lakehouse must not depend on a workflow engine.
-- *How:* Give SagaClient `state` (an engine-neutral enum), `terminate` and `signal(instance_id, event, data)`, implemented in dapr_saga.py; move promotions.py, stage_ops.py and api/train.py onto it and delete `_exists`; then drop promotions' lines from that contract's ignore list. Leave workflow.py's orchestration engine-shaped. No Lance surface.
-- *Closes when:* No medallion module outside the Dapr adapter touches DaprWorkflowClient, and `medallion.api.promotions` is out of the .importlinter `the-lakehouse-is-not-built-on-a-workflow-engine` ignore list.
-- *Evidence:* packages/service-kit/src/service_kit/lakehouse/saga.py:61-79 · services/medallion/src/medallion/api/promotions.py:133-207 · services/medallion/src/medallion/api/stage_ops.py:58,67,107 · services/medallion/src/medallion/api/train.py:179,202,227-229 · .importlinter:65-83
 
 **LH-241 · The change-feed contract is wrong: a closed window is answered from the latest snapshot, a Restore inside a window is invisible, and the published contract tells consumers to use _row_created_at_version**
 `catalog, medallion, service-kit, runners/dummy` · **MEDIUM** · **blocks-prod**
@@ -2151,6 +2125,14 @@ Found by the 2026-10-02 review of LH-064, its fix round and its live readback (h
 - LH-396 · LOW · The train sweep's never-registered FAIL can race a Dapr-redelivered submit retry: the retry then trains and COMPLETEs a run already closed failed (found reviewing CP-029; train_plans.py dispatch) · `medallion`
 - LH-397 · LOW · services/maintenance test_two_readings_move_with_the_heap fails intermittently under -n 16 (passes alone; seen twice 2026-10-05 on trees that touch no maintenance code) · `maintenance tests`
 - LH-398 · LOW · The lance.medallion.verdict span attribute and medallion_stage_outcome_total{verdict} lost their only tests with stage_run's suite (found reviewing CP-029) · `medallion tests`
+- LH-399 · LOW · The chart's post-upgrade hook rask-kueue-setup hangs when Kueue's conversion webhook fails TLS verification (`conversion webhook for kueue.x-k8s.io/v1beta2 ... tls: failed to verify certificate`), so helm marks the release failed although every object applied (rev 274, 2026-10-05) · `chart (kueue)`
+- LH-400 · LOW · A project that declares its own review_enabled while the chart's qualityReview is off holds promotions on a producer that hosts no review runtime; since LH-226 the hold is DROPped to the DLQ instead of waiting forever, but the declared review is still not honoured (found building LH-226) · `medallion, chart`
+- LH-401 · LOW · LH-211's detached commit for blob tables leaves one `_transactions/*.txn` per commit, a crash between the detached commit and its DeleteObject leaves a `d<N>.manifest` Lance cleanup does not remove (logged, uncounted), and with an empty endpoint the pyarrow fallback writes a `_versions/` marker (found reviewing LH-211) · `catalog`
+- LH-402 · LOW · LH-211's 400-vs-503 split rests on substring matches of pylance's error wording, pinned only by its tests; footer reads build one object store per file, and blob commits write a full detached manifest plus a boto3 client each (found reviewing LH-211) · `catalog`
+- LH-403 · LOW · /commit does not check file CONTENTS: inline blob descriptors and NULLs in non-nullable columns pass the footer checks (found building LH-211) · `catalog`
+- LH-404 · LOW · The viewer's attached stores (POST /v1/stores, `secret: null`) make the viewer sign the deployment's own env credentials toward a host an estate admin chose (services/viewer objects.py:126-130; viewer ignored for Phase 1) (found reviewing LH-205) · `catalog, viewer`
+- LH-405 · LOW · LH-205's endpoint comparison is exact, so another hostname of the estate store (the cluster-local FQDN, the external name) or a trailing path is refused; it fails closed and nothing sends one today (found reviewing LH-205) · `catalog`
+- XC-120 · OBSERVATION · Upstream, track only: dapr 1.18.1's sidecar panics (nil pointer) on a workflow API call from an app-id with no actor state store in scope, instead of returning an error (measured live 2026-10-05 on the producer; LH-226 made the app not call it) · `dapr (upstream)`
 - LH-386 · LOW · Stale prose: ingest/lineage.py complete() says ingest's COMPLETE fires the bronze head (its _emitter says ingest never publishes to the topic); maintenance/services/arrival.py lists ingest and the annotator among topic writers; scripts/ray_e2e_stack.sh says the store is off; tests/unit/workflow_action_order.json is orphaned · `ingest, maintenance, scripts, tests`
 - XC-117 · LOW · Nothing ties a non-off signature-door mode to a reachable secret store: an enforcing door with no store answers RETRY to every delivery it would act on · `chart, service-kit`
 - XC-118 · LOW · Downstream of the OTel Collector, not to be fixed (owner 2026-10-04: GreptimeDB is being replaced by OpenObserve or the Grafana stack): vmalert v1.106.1 POSTs every query with no Content-Type and GreptimeDB answers 415, so all 59 rules are health=err and no alert fires; a rules change restarts vmalert, resetting `for:` clocks; Alertmanager's config has no checksum · `chart (observability)`
