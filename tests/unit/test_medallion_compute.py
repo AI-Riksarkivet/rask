@@ -17,7 +17,7 @@ import pyarrow as pa
 from dapr.aio.clients import DaprClient
 
 from medallion.core.config import MedallionSettings
-from medallion.services.compute import seed_bronze, transform_stage
+from medallion.services.compute import seed_bronze
 from medallion.services.produce import produce
 from medallion.services.transform import handle_stage
 from service_kit.lakehouse.quality import assert_quality, passed
@@ -26,38 +26,6 @@ from service_kit.lakehouse.quality import assert_quality, passed
 # --------------------------------------------------------------------------- #
 # the compute itself (real Lance read → transform → write)
 # --------------------------------------------------------------------------- #
-
-
-def test_the_version_advances_WITH_THE_DATA_and_not_otherwise(tmp_path: Any) -> None:
-    """A version records a change. A re-run over unchanged rows is not one.
-
-    THIS TEST ASSERTED THE OPPOSITE and the behaviour genuinely moved (§8 change 4), so it is
-    inverted rather than deleted. It read "a re-run (overwrite) produces a NEW Lance version — so the
-    emitted lineage advances with the data", and the clause after the dash is the property that
-    actually mattered. It still holds, and is asserted below: when the DATA advances, the version
-    advances with it.
-
-    What no longer holds is the first clause. Dapr delivers at least once, so a stage runner re-runs a
-    completed stage as a matter of routine; the old shape rewrote the entire tier to reproduce bytes
-    already on disk, dropped the JSON index doing it (see `_index_lineage`), and committed a version
-    that recorded nothing. An audit trail whose versions include "nothing happened, twice" is a worse
-    audit trail, not a more thorough one.
-
-    The alignment guard is what makes the no-op safe, and it is tested exhaustively in
-    `services/medallion/tests/test_additive_stage_adds_columns.py`: anything but an element-wise
-    `source_rowid` match falls back to the overwrite.
-    """
-    bronze, silver = str(tmp_path / "bronze"), str(tmp_path / "silver")
-    seed_bronze(bronze, {}, rows=2)
-
-    v1 = transform_stage(bronze, silver, {}, stage="silver").version
-    v2 = transform_stage(bronze, silver, {}, stage="silver").version
-    assert v2 == v1, "a redelivered trigger committed a version for a tier nothing had changed"
-
-    # …and the half the original test was really protecting: real change still advances the version.
-    seed_bronze(bronze, {}, rows=5)
-    v3 = transform_stage(bronze, silver, {}, stage="silver").version
-    assert v3 > v2, "the tier followed its upstream but did not advance its version"
 
 
 def test_storage_options_empty_for_local_and_s3_when_configured() -> None:

@@ -356,32 +356,12 @@ def transform_stage(
         out = out.append_column(pa.field(_LINEAGE_COLUMN, pa.json_()), _lineage_column(lineage, out.num_rows))
     # 2.2 + stable row ids like seed_bronze: every dataset the cascade writes is on the current format (so a blob
     # column never trips "Blob v2 requires file version >= 2.2" mid-cascade) and keeps durable row identity.
-    # ADDITIVE RE-RUN: ADD THE NEW COLUMNS, DO NOT REWRITE THE TIER (change 4).
     #
-    # `_index_lineage`'s own docstring states the cost this removes: the index "must be (re)built
-    # after every stage write because the cascade writes mode="overwrite", which drops the dataset's
-    # indices". An overwrite also rewrites every carried column to produce bytes identical to the ones
-    # already there. When this run only ADDS columns to rows that are already present, neither is
-    # necessary — `add_columns` appends new data files per fragment and leaves the existing ones
-    # untouched (measured: `scripts/measure_add_columns_on_blob_table.py`).
+    # EVERY RUN WRITES WHAT ITS UPSTREAM HOLDS NOW. Matching row identity is not matching content: a
+    # row corrected in place keeps its stable `_rowid` and moves only its `_row_last_updated_at_version`
+    # (`lance_docs/file_format.md:4270-4298`), so a re-run cannot skip the write on identity alone
+    # without leaving the corrected value, and this run's lineage, out of the tier ([[LH-213]]).
     #
-    # GUARDED ON ROW IDENTITY, NOT ROW COUNT. `add_columns` aligns POSITIONALLY, so attaching derived
-    # values to a tier whose rows have shifted would misfile every one of them — silently, and in a
-    # governed dataset. `source_rowid` is the identity the estate already mints for exactly this
-    # question, so the two are compared element-wise and anything but an exact match falls back to the
-    # overwrite that was always correct.
-    additive = _additive_columns(out, to_uri, storage_options)
-    if additive is not None:
-        if additive:
-            lance.dataset(to_uri, storage_options=storage_options, session=shared_lance_session()).add_columns(out.select(additive))
-        # `add_columns` changes no schema metadata either, and this branch returns before every write
-        # below — so without this the fast path is the one that never declares its own name.
-        ensure_declared_dataset_id(to_uri, dataset_id or "", storage_options, session=shared_lance_session())
-        result = measure(to_uri, storage_options).model_copy(update={"previous_row_count": previous_rows})
-        result.column_map = _column_map(ds.schema, out.column_names, set(blob_payloads))
-        log.info("medallion_stage_added_columns", extra={"to_uri": to_uri, "columns": additive})
-        return result
-
     # THE TARGET MUST REGISTER THE SAME BASE, or every carried pointer is refused at write.
     #
     # `initial_bases` is create-mode only, so it is supplied on the FIRST write of a tier and never
@@ -392,11 +372,12 @@ def transform_stage(
     # (`when_not_matched_by_source_delete`) — but overwrite re-minted every `_rowid` on the way, and
     # the tier above resolves its `source_rowid` against exactly those. Measured on the deployed
     # estate 2026-09-06: silver's 8 `source_rowid` values named bronze rows that no longer existed,
-    # 8 of 8, because bronze had been overwritten 20 times. The `add_columns` fast path above already
-    # preserves identity when the rows line up; this makes the fallback preserve it too, so identity
-    # no longer depends on which branch a run happens to take.
+    # 8 of 8, because bronze had been overwritten 20 times.
     carried_base = blobs.external_base_of(ds)
     if _dataset_exists(to_uri, storage_options):
+        # `merge_insert` refuses a source with a column the target lacks ("Append with different
+        # schema", pylance 12.0.0), so a run that produces a new column widens the tier first.
+        _add_new_columns_by_id(out, to_uri, storage_options)
         lance.dataset(to_uri, storage_options=storage_options, session=shared_lance_session()).merge_insert(
             "id"
         ).when_matched_update_all().when_not_matched_insert_all().when_not_matched_by_source_delete().execute(declare_dataset_id(out, dataset_id))
@@ -423,40 +404,40 @@ def transform_stage(
     return result
 
 
-def _additive_columns(out: pa.Table, to_uri: str, storage_options: dict[str, str]) -> list[str] | None:
-    """The columns to ADD, or ``None`` when this run must overwrite instead.
+#: How many times a widening re-reads the tier after another commit passed the version it read. A
+#: maintenance compaction is the expected concurrent writer, and it does not land three times in one run.
+_WIDEN_ATTEMPTS = 3
 
-    An empty list is a real answer and the most common one: the target already holds every column
-    over exactly these rows, so there is nothing to write at all. That is the at-least-once
-    redelivery case, and before this it rewrote an entire tier to reproduce bytes that were already
-    on disk.
 
-    Every other condition here is a way `add_columns`' POSITIONAL alignment could be wrong, and each
-    falls back rather than guessing:
+def _add_new_columns_by_id(out: pa.Table, to_uri: str, storage_options: dict[str, str]) -> None:
+    """Add the columns this run produces and the tier lacks, joined on ``id``, through the handle that chose them.
 
-    * the target must exist — otherwise there is nothing to add to;
-    * the target's columns must be a SUBSET of this run's. A target holding a column this run does
-      not produce means the shape changed, and only a rewrite can reconcile it;
-    * both sides must carry `source_rowid`, the row identity the estate mints, and it must match
-      ELEMENT-WISE. Equal row counts are not enough: an upstream that replaced one row with another
-      keeps the count and moves the meaning, and an addition would then attach derived values to the
-      wrong rows — silently, in a governed dataset.
+    ``LanceDataset.merge`` joins on the key, so no value depends on where its row sits in the tier,
+    and it commits a Merge whose read version is the version this handle read the schema at. Lance
+    refuses that Merge when another commit has passed it (measured on pylance 12.0.0: "This Merge
+    transaction was preempted by concurrent transaction Update"), so the decision and the write can
+    never describe two different tiers. A refused attempt re-reads the tier and decides again: the
+    concurrent writer may already have added the columns.
 
-    Returns ``None`` on any read failure. A tier that cannot be inspected gets the overwrite, which is
-    what it got before this existed.
+    The values written here are re-written by the full-sync merge that follows; this step exists so
+    that merge's source and target agree on the schema.
     """
-    if _SOURCE_ROWID_COLUMN not in out.column_names:
-        return None
-    try:
+    for attempt in range(1, _WIDEN_ATTEMPTS + 1):
         target = lance.dataset(to_uri, storage_options=storage_options, session=shared_lance_session())
-        existing = set(target.schema.names)
-        if not existing <= set(out.column_names) or _SOURCE_ROWID_COLUMN not in existing:
-            return None
-        if target.to_table(columns=[_SOURCE_ROWID_COLUMN]).column(_SOURCE_ROWID_COLUMN).to_pylist() != out.column(_SOURCE_ROWID_COLUMN).to_pylist():
-            return None
-        return [name for name in out.column_names if name not in existing]
-    except Exception:  # noqa: BLE001 — absent, unreadable, or not a dataset: all mean "overwrite"
-        return None
+        new = [name for name in out.column_names if name not in target.schema.names]
+        if not new:
+            return
+        try:
+            target.merge(out.select(["id", *new]), left_on="id")
+        except OSError:
+            # pylance raises a conflict here as a bare OSError, so the tier's own version decides
+            # whether this was one: a write nobody preempted failed for a reason a retry cannot fix.
+            if attempt == _WIDEN_ATTEMPTS or target.latest_version == target.version:
+                raise
+            log.info("medallion_stage_widen_preempted", extra={"to_uri": to_uri, "attempt": attempt, "read_version": target.version})
+            continue
+        log.info("medallion_stage_added_columns", extra={"to_uri": to_uri, "columns": new})
+        return
 
 
 def _column_map(in_schema: pa.Schema, out_names: list[str], blob_cols: set[str]) -> list[tuple[str, str, str]]:

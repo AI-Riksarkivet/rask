@@ -161,12 +161,16 @@ And what it writes depends on what is already there:
 
 | target state | write |
 | --- | --- |
-| missing columns, rows match | `add_columns` for exactly those columns; indices survive |
-| every column present, rows match | **nothing** — a redelivered trigger writes no version |
-| anything else | overwrite |
+| absent | create: 2.2, stable row ids, the upstream's external base registered |
+| present, this run adds columns | `merge` on `id` for exactly those columns, then the full-sync merge below |
+| present | full-sync `merge_insert` on `id`: update, insert, and delete what the run no longer produces |
 
-Guarded on `source_rowid` **element-wise**, not row count: `add_columns` aligns positionally, and an
-upstream that replaces one row with another keeps the count and moves the meaning.
+Every run writes what the upstream holds NOW. A row corrected in place keeps its stable `_rowid`, so
+matching row identity says nothing about matching content, and a skip decided on it left the corrected
+value and the run's lineage out of the tier ([[LH-213]]). The widening `merge` joins on `id` and commits
+through the handle that read the schema; Lance refuses it when another commit passed that version
+(pylance 12.0.0), and the tier is re-read rather than written by position. Writing only the rows whose
+content changed is [[LH-212]]'s conditioned merge.
 
 **Derivation reads bytes; carrying does not.** `derive_artifacts` dispatches on the first non-null
 payload, so the probe reads a bounded window (64 rows, `_DERIVE_PROBE_ROWS`) rather than the tier.
@@ -227,7 +231,7 @@ turns, a document into chunks — and `source_rowid` is what keeps such a child 
 
 ## 7. Backfill
 
-Backfill and the cascade are the same mechanism: `add_columns`.
+Backfill is `add_columns`. (The cascade adds a column with `merge` on `id`, §6.)
 
 | shape | works | note |
 | --- | --- | --- |
