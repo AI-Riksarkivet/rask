@@ -27,7 +27,15 @@ from typing import Any
 import pytest
 
 from medallion.core.config import MedallionSettings
-from medallion.services import ray_submit, stage_submit
+from medallion.services import ray_submit
+
+
+async def _submit_stage_job(settings: Any, **kwargs: Any) -> None:
+    """The stage lane's submission: the order it builds, posted through the port."""
+    from medallion.services import stage_submit as _stage_submit
+
+    order, registration = await _stage_submit.build_stage_order(settings, **kwargs)
+    await _stage_submit.submit_stage_order(order, registration)
 
 
 class _FakeJobsAPI:
@@ -65,7 +73,7 @@ def _submit(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
     monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector:4318")
     monkeypatch.setenv("OTEL_SERVICE_NAME", "bronze-to-silver")
     settings = MedallionSettings.model_validate({"compute_enabled": True, "ray_enabled": True, "ray_job_params": {"alpha": "1"}})
-    asyncio.run(stage_submit.submit_stage_job(settings, from_uri="s3://lake/b", to_uri="s3://lake/s", stage="silver", token="t", lineage_json="{}"))
+    asyncio.run(_submit_stage_job(settings, from_uri="s3://lake/b", to_uri="s3://lake/s", stage="silver", token="t", lineage_json="{}"))
     return api.posts[0]["runtime_env"]["env_vars"]
 
 

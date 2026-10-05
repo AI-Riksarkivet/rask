@@ -74,6 +74,13 @@ the RECORD rather than `self.id.id` — identical in production, but the actor-r
 exist under a test double, so an emit that used it silently swallowed an `AttributeError` and asserted
 nothing.
 
+Not every control action names a party: `run_planned` (a stage runner or the producer announcing a planned Ray run,
+CP-029) is the bring-your-own-engine seam's, untargeted like `transform_set`, so the lane files it IGNORED and the
+producer's head ignores it; its signer role is `medallion_stage_runner` on a `stage_run:` object and
+`medallion_producer` on a `train_run:` one. A training run's terminal reaches people through lineage: the job's own
+events, or the producer's in the train-watcher shape (author = the producer's identity, `lance.originator` and
+`lance.project` carried) when the job never reported.
+
 Q4 is the sharpest and is why the control lane exists at all: *losing access silently is how someone
 discovers it by hitting a 403 in the middle of work*. That lane deliberately runs **no visibility
 check** — after a revoke the subject can no longer see the object, so a delivery-time check would drop

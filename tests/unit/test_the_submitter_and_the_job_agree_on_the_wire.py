@@ -87,6 +87,7 @@ def _names_the_order_supplies() -> set[str]:
         stamp=WorkStamp(stage="silver", cardinality="1:1", lineage_document="{}"),
         identity=WorkIdentity(run_id="r", project="p", originator="user:someone", code_version="c"),
         idempotency_key="k",
+        outcome_url="http://planner:8000/runs/k/outcome",
     )
     return set(order.to_env())
 

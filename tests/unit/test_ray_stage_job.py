@@ -533,7 +533,7 @@ def test_the_distributed_branch_creates_its_destination_from_the_SAME_constructi
 #
 # D1 — THE DELTA BOUNDARY, AND THE CARDINALITY CONTRACT THAT COMES WITH IT.
 #
-# `submit_stage_job` has always exported `BASE_VERSION`, and the publication event has always carried
+# The submitter has always exported `BASE_VERSION`, and the publication event has always carried
 # the `{from_version, to_version}` range it comes from. The generic stage job never read it: a grep of
 # this script for BASE_VERSION matched NOTHING, so every run — including a backfill that added two
 # rows to a million-row bronze — reopened the whole upstream and rewrote the destination with
@@ -590,22 +590,47 @@ def test_a_delta_run_reprocesses_only_the_rows_added_since_BASE_VERSION(tmp_path
     assert [by_id[i] for i in range(4)] == ["first-pass"] * 4, f"the delta run reprocessed rows it should never have read: {by_id}"
 
 
-def test_a_redelivered_delta_CONVERGES_instead_of_duplicating(tmp_path: Path) -> None:
+def test_a_redelivered_delta_CONVERGES_instead_of_duplicating(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Dapr redelivers. A second run over the same delta must leave the destination unchanged.
 
     `merge_insert` on the key, never `append`: an append would double every row on the redelivery that
     at-least-once delivery guarantees will eventually happen, and nothing downstream would notice.
+
+    The redelivery here also RACES a concurrent marked run: that run's merge commits between the redelivery's plan
+    and its commit, which preempts it (a retryable conflict on real pylance). Both must land, and the redelivery's
+    marker must end on the destination's last commit, or the planner reads a run that wrote as one that did not.
     """
     import lance
+
+    from service_kit.lakehouse.commit_marker import CommitMarker, marked_version
 
     bronze = _bronze_tabular(tmp_path, rows=3)
     silver = str(tmp_path / "silver_converge")
 
     job._run_stage(bronze, silver, "silver", {}, lineage='{"run_id": "r-1"}')
     first = lance.dataset(silver).count_rows()
-    job._run_stage(bronze, silver, "silver", {}, lineage='{"run_id": "r-1"}')
+    before = lance.dataset(silver).version
+
+    real_stamped = job.stamped
+    raced: list[str] = []
+
+    def a_concurrent_run_commits_first(transaction: lance.Transaction, marker: CommitMarker) -> lance.Transaction:
+        if not raced:
+            raced.append(marker.action_id)
+            rows = job._stamp_stage(lance.dataset(bronze).to_table(with_row_id=True), "silver", '{"run_id": "r-1"}', "")
+            job._converge(silver, rows, {}, CommitMarker(action_id="concurrent-run"), full_sync=True)
+        return real_stamped(transaction, marker)
+
+    monkeypatch.setattr(job, "stamped", a_concurrent_run_commits_first)
+    job._run_stage(bronze, silver, "silver", {}, lineage='{"run_id": "r-1"}', marker=CommitMarker(action_id="redelivery", run_id="r-1"))
 
     assert lance.dataset(silver).count_rows() == first == 3, "the redelivery duplicated rows"
+    latest = lance.dataset(silver).version
+    assert raced == ["redelivery"], "the concurrent run never raced the redelivery's commit"
+    assert marked_version(silver, {}, action_id="concurrent-run", above=before) == before + 1, "the concurrent run's merge did not land"
+    assert marked_version(silver, {}, action_id="redelivery", above=before) == latest == before + 2, (
+        "the redelivery that lost the commit race did not re-plan and land on the destination's last commit"
+    )
 
 
 def test_a_FANOUT_lane_is_allowed_and_its_provenance_is_complete() -> None:
@@ -674,24 +699,41 @@ def test_a_declared_cardinality_the_job_cannot_honour_is_refused_at_DECLARATION_
         TransformSpec(name="x", project="acme", from_id="a", to_id="b", task="stage-transform", cardinality="one-to-many")
 
 
-def test_the_submit_path_FORWARDS_the_declared_cardinality_to_the_job() -> None:
+def test_the_submit_path_FORWARDS_the_declared_cardinality_to_the_job(tmp_path: Path) -> None:
     """The link that makes the declaration real. Without it a project can declare a fan-out lane, the
-    catalog stores it, and the job runs under the 1:1 default that refuses the very shape declared."""
-    import inspect
+    catalog stores it, and the job runs under the 1:1 default that refuses the very shape declared.
 
+    Driven through the stage lane's order builder over a REAL declaration on `tmp_path`: the value the job
+    reads as `RASK_CARDINALITY` is the order's stamp (`to_env()`, pinned by
+    `tests/unit/test_the_submitter_and_the_job_agree_on_the_wire.py`), so the stamp is what is asserted.
+    """
+    import asyncio
+
+    from medallion.core.config import MedallionSettings
     from medallion.services import stage_submit
+    from service_kit.lakehouse import task_registry, transform_specs
+    from service_kit.lakehouse.stage_stamp import ONE_TO_MANY
+    from service_kit.lakehouse.task_registry import TaskRegistration
+    from service_kit.lakehouse.transform_specs import TransformSpec
 
-    # THE RESOLVED LANE CARDINALITY REACHES THE ORDER. It no longer has a wire name of its own here:
-    # the submitter builds a `WorkOrder` and `to_env()` serializes the stamp as `RASK_CARDINALITY`,
-    # which is what the job reads (pinned by
-    # `tests/unit/test_the_submitter_and_the_job_agree_on_the_wire.py`). So the link this test guards
-    # is the one step that file cannot see — that the value put on the stamp is the DECLARATION's
-    # cardinality rather than the 1:1 default.
-    source = inspect.getsource(stage_submit.submit_stage_job)
-    assert "cardinality=cardinality" in source, (
-        "submit_stage_job does not put the resolved cardinality on the WorkOrder's stamp, so a declared "
-        "fan-out lane runs under the 1:1 default that refuses the very shape it declared"
+    task_registry.put_task(str(tmp_path), {}, TaskRegistration(task="frames", engine="ray", command="python /home/ray/jobs/ray_stage_job.py"))
+    transform_specs.put_spec(
+        str(tmp_path),
+        {},
+        TransformSpec(name="video", project="acme", from_id="acme-bronze$videos", to_id="acme-silver$frames", task="frames", cardinality=ONE_TO_MANY),
     )
+    settings = MedallionSettings.model_validate(
+        {"compute_enabled": True, "ray_enabled": True, "control_root": str(tmp_path), "transform": "video", "to_namespace": "silver"}
+    )
+
+    order, _registration = asyncio.run(
+        stage_submit.build_stage_order(settings, from_uri="s3://acme/bronze", to_uri="s3://acme/silver", stage="silver", token="t", project="acme")
+    )
+
+    assert order.stamp.cardinality == ONE_TO_MANY, (
+        "the declared fan-out did not reach the order's stamp, so the lane runs under the 1:1 default that refuses the very shape it declared"
+    )
+    assert order.to_env()["RASK_CARDINALITY"] == ONE_TO_MANY
 
 
 def test_a_derived_TIER_declares_ITS_OWN_canonical_name_not_its_parents(tmp_path: Path) -> None:

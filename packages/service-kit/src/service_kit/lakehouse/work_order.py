@@ -137,6 +137,11 @@ class WorkOrder(BaseModel):
     #: starting a second run. **Derive it with :func:`derive_idempotency_key`** — see that function for
     #: why a caller spelling it itself is the defect rather than the convenience.
     idempotency_key: str
+    #: Where the job reports its own terminal state: the outcome door of the service that PLANNED this run, already
+    #: naming the run's key (CP-029 D-3). A URL and never a secret: the job authenticates with its pod's projected
+    #: token. It rides the order rather than the pod, unlike the lineage endpoint, because it is this run's address and
+    #: no pod value could name it. `""` means nobody planned the run, and the job reports nothing.
+    outcome_url: str = ""
 
     def to_env(self) -> dict[str, str]:
         """The ONE serialization, so no adapter hand-rolls it.
@@ -172,6 +177,7 @@ class WorkOrder(BaseModel):
             ("RASK_ORIGINATOR", self.identity.originator),
             ("RASK_CODE_VERSION", self.identity.code_version),
             ("RASK_CREDENTIAL_REF", self.credential_ref),
+            ("RASK_OUTCOME_URL", self.outcome_url),
             ("TRACEPARENT", self.observability.traceparent),
             ("TRACESTATE", self.observability.tracestate),
             ("OTEL_SERVICE_NAME", self.observability.service_name),
@@ -205,9 +211,9 @@ def derive_idempotency_key(*, stage: str, token: str | None, from_uri: str, to_u
     NUL-joined tuple makes absence its own value rather than a word a caller might also pass, and no
     field's content can straddle the separator.
 
-    THIS IS NOT THE RAY JOB'S NAME. `stage_submission_id` still derives that, deliberately: the job id is
-    a live handle the poller re-derives to watch a running job, so changing its shape would orphan every
-    job in flight. Both now honour the same four axes; only this one is the order's identity.
+    IT IS THE RUN'S ONE NAME (CP-029 clause a): the plan document's action id, the engine's submission id
+    (`RayJobsApiExecutor` posts it verbatim) and the outcome door's key are this value, so a redelivery
+    after a deploy that changed ``code_version`` names a different run and submits the new build's job.
     """
     parts = (stage, "\x00" if token is None else token, from_uri, to_uri, code_version)
     return hashlib.sha256("\x00".join(parts).encode("utf-8")).hexdigest()[:40]

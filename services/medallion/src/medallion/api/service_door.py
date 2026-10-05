@@ -1,9 +1,10 @@
 """A service at a medallion door is the Kubernetes service account its projected token names ([[LH-220]], D1).
 
 Two doors read it. The producer's (`produce_auth`) admits a service beside a signed-in person and then
-authorizes both the same way, on FGA. A stage runner's operator routes (`stage_ops`) admit the producer and
-nobody else: the producer is where a person's request is authorized, and the stage runner is reachable over
-its ClusterIP, so admitting any other account would let a caller step round that check.
+authorizes both the same way, on FGA. A stage runner's door maps two accounts and each route admits one: the
+operator routes (`stage_ops`) the producer and nobody else, because the producer is where a person's request is
+authorized and the stage runner is reachable over its ClusterIP; the outcome route (`stage_outcomes`) the compute
+head, whose jobs report how their planned runs ended.
 
 A bearer is routed by the issuer it claims: one claiming the service-account issuer goes to that verifier
 and never to Dex, so a token for another door, an account in another namespace, or one the door's
@@ -96,16 +97,13 @@ def refuse_unauthenticatable_door(settings: MedallionSettings) -> None:
         )
 
 
-async def require_producer(
-    request: Request,
-    settings: SettingsDep,
-    authorization: Annotated[str | None, Header()] = None,
-    dapr_caller_app_id: Annotated[str | None, Header()] = None,
+async def _require_service(
+    request: Request, settings: MedallionSettings, authorization: str | None, caller_app_id: str | None, *, subject: str
 ) -> ServicePrincipal | None:
-    """A stage runner's operator door: the caller is a service its `RASK_SA_SUBJECTS` names, which is the producer.
+    """The caller is the service whose subject is ``subject``, proven by a token this door's `RASK_SA_SUBJECTS` maps.
 
-    The chart maps the producer's account alone at this door, so the map is what binds it: any other
-    account's token, the ingest service's included, verifies and then names nobody here (401). ``None`` is
+    A stage runner's door maps two accounts, the producer's and the compute head's, so the map alone no longer binds a
+    route: each route names the ONE subject it admits, and the other mapped account is refused 403 there. ``None`` is
     the acknowledged-open door, which has no subject to return.
     """
     if getattr(request.app.state, "sa_oidc", None) is None and not settings.sa_issuer:
@@ -117,10 +115,42 @@ async def require_producer(
     token = bearer_token(authorization)
     if not service_issued(request, settings, token):
         audit("authn", FAILURE, resource=request.url.path, reason="invalid_token")
-        raise UnauthenticatedError("this door admits only the producer's service-account token")
-    principal = await verify_service(request, token, caller_app_id=dapr_caller_app_id, resource=request.url.path)
+        raise UnauthenticatedError("this door admits only a service-account token")
+    principal = await verify_service(request, token, caller_app_id=caller_app_id, resource=request.url.path)
+    if principal.subject != subject:
+        audit("authn", DENY, subject=principal.sub, resource=request.url.path, reason="wrong_service")
+        raise PermissionDeniedError(f"{principal.subject!r} may not call this route")
     audit("authn", SUCCESS, subject=principal.sub, resource=request.url.path)
     return principal
 
 
+async def require_producer(
+    request: Request,
+    settings: SettingsDep,
+    authorization: Annotated[str | None, Header()] = None,
+    dapr_caller_app_id: Annotated[str | None, Header()] = None,
+) -> ServicePrincipal | None:
+    """A stage runner's operator door: the caller is the producer (`MEDALLION_PRODUCER_IDENTITY`).
+
+    Any other account's token, the ingest service's included, verifies and then names nobody here (401); the compute
+    head's, which this door maps for the outcome route alone, is refused 403.
+    """
+    return await _require_service(request, settings, authorization, dapr_caller_app_id, subject=settings.producer_identity)
+
+
+async def require_outcome_reporter(
+    request: Request,
+    settings: SettingsDep,
+    authorization: Annotated[str | None, Header()] = None,
+    dapr_caller_app_id: Annotated[str | None, Header()] = None,
+) -> ServicePrincipal | None:
+    """A stage runner's outcome door (CP-029 D-3): the caller is the compute head (`MEDALLION_TRAINER_IDENTITY`).
+
+    Every job on the shared head is the head's one account (LH-220 D1), so this admits any of them; the door narrows
+    what one may say to an OPEN plan of this lane (`run_outcomes`).
+    """
+    return await _require_service(request, settings, authorization, dapr_caller_app_id, subject=settings.trainer_identity)
+
+
 ProducerService = Annotated[ServicePrincipal | None, Depends(require_producer)]
+OutcomeReporter = Annotated[ServicePrincipal | None, Depends(require_outcome_reporter)]

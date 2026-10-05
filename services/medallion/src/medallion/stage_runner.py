@@ -15,7 +15,6 @@ Run: ``uvicorn medallion.stage_runner:app``.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
@@ -27,12 +26,11 @@ from fastapi.concurrency import run_in_threadpool
 
 from medallion.api.events import register_stage_route
 from medallion.api.stage_ops import router as stage_ops_router
+from medallion.api.stage_outcomes import mount_stage_outcomes
 from medallion.core.config import get_settings
 from medallion.core.lineage_publish import start_signing, stop_signing
 from medallion.services.ray_submit import close_ray_client
-from service_kit.activity_loop import run_activity, stop_worker_loop
 from service_kit.draining import arm_drain_on_sigterm
-from service_kit.governed.actor_state_store import probe_actor_state_store
 from service_kit.governed.auth_lifespan import attach_auth
 from service_kit.governed.dapr_auth import assert_app_token_configured
 from service_kit.governed.secrets import apply_dapr_secrets
@@ -83,51 +81,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     app.state.fga = None
     await attach_auth(app, settings, service="medallion-stage-runner", fatal=True)
-    # THIS STAGE RUNNER'S OWN SIGNING KEY, resolved through its own sidecar, and installed BEFORE the workflow runtime
-    # starts and withdrawn AFTER it has shut down. The worker pulls recovered activities the moment it starts and joins the
-    # ones in flight when it stops, and an activity that emits outside the key's lifetime cannot sign. `start_signing`
-    # makes one bounded attempt to resolve the key and does not wait for it to be published, so the probes and the retry
-    # answers are served from the moment the app boots whether or not the key resolved: a stage runner that is waiting for
-    # its key takes no delivery (`retry_until_signed` on its route), reports itself not ready, and heals in place when the
-    # key is published.
+    # THIS STAGE RUNNER'S OWN SIGNING KEY, resolved through its own sidecar. `start_signing` makes one bounded attempt
+    # to resolve the key and does not wait for it to be published, so the probes and the retry answers are served from
+    # the moment the app boots whether or not the key resolved: a stage runner that is waiting for its key takes no
+    # delivery (`retry_until_signed` on its route), reports itself not ready, and heals in place when the key is
+    # published. NO WORKFLOW RUNTIME: a Ray stage is planned and resolved through its outcome door and the plan sweep
+    # (`services/stage_plans.py`, CP-029), so this process hosts no Dapr workflow and needs no actor state store.
     signing = await start_signing(app, settings)
-    # THE WORKFLOW WORKER (S1). Without this the stage runner can SCHEDULE `stage_run` and nothing will ever
-    # execute it: `DaprWorkflowClient` only enqueues, and the runtime is what registers the definitions
-    # and pulls work. Ingest's first in-cluster deploy had the engine running in the sidecar and still
-    # could not run a workflow because the APP side was absent — an asymmetry that looks healthy from
-    # every angle except an actual run. Only started when the Ray lane is on, because that is the only
-    # lane with a job to wait for.
-    app.state.workflow_runtime = None
-    app.state.workflow_client = None
-    if settings.ray_enabled:
-        try:
-            import dapr.ext.workflow as wf
-
-            from medallion.workflow import register
-
-            runtime = wf.WorkflowRuntime()
-            register(runtime)
-            runtime.start()  # spawns the worker's own threads; does not block the event loop
-            app.state.workflow_runtime = runtime
-            # ONE client for the app, read by the operator routes — never one per request, which
-            # re-opens a gRPC channel to the sidecar on every call.
-            app.state.workflow_client = wf.DaprWorkflowClient()
-            log.info("dapr workflow runtime started")
-            # The line above is TRUE and INSUFFICIENT: the runtime starts whether or not this
-            # app-id can reach an actor state store, and without one the first call fails (and,
-            # on dapr 1.18.1, panics the sidecar). Ask the sidecar what it can actually see.
-            await probe_actor_state_store(capability="this stage runner cannot run a stage")
-        except Exception:
-            # Non-fatal, same reasoning as ingest: a service that refuses to start because its sidecar
-            # is not up yet turns an ordering blip into a CrashLoopBackOff. A stage that cannot
-            # schedule fails loudly at dispatch, where an operator can see it.
-            log.warning("dapr workflow runtime unavailable — ray stages cannot wait for their jobs", exc_info=True)
-    else:
-        # ANNOUNCE THE NEGATIVE CASE. `flows` states its inline fallback and `ingest` states its own;
-        # this branch said nothing, so a stage runner hosting ZERO workflow workers looked identical in the log
-        # to one hosting them. The lane is coherently off — `transform.py` gates dispatch on the same
-        # flag — but "off" and "broken" have to be distinguishable without reading the chart.
-        log.info("dapr workflow runtime NOT started — the ray lane is off (MEDALLION_RAY_ENABLED unset)")
     app.state.startup_complete = True
     try:
         # ARMED AT SIGTERM, not at lifespan shutdown. The flag below flips in the `finally`,
@@ -140,9 +100,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     finally:
         _disarm_drain()
         app.state.shutting_down = True
-        if app.state.workflow_runtime is not None:
-            with suppress(Exception):
-                app.state.workflow_runtime.shutdown()
         await stop_signing(signing)
         with suppress(Exception):
             await app.state.dapr.close()
@@ -151,19 +108,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # raises on a already-broken connection must not stop the rest of the teardown.
         with suppress(Exception):
             app.state.catalog_http.close()
-        # And the RAY client, which the workflow activities pool at module level. It cannot live on
-        # `app.state` — an activity has no `Request` and no way to reach it — so it takes the worker's
-        # lifetime instead, and this is where that lifetime ends. Without this the pooling would trade a
-        # per-call teardown for a permanent leak plus an "Unclosed client session" on every stop.
-        #
-        # CLOSED ON THE LOOP THAT OWNS IT, not on this one. The client's pool is bound to the activity
-        # loop (`service_kit.activity_loop`), and tearing an httpx pool down from a foreign loop is the
-        # very cross-loop fault that seam exists to prevent — it would turn every shutdown into the
-        # `Event loop is closed` this estate just stopped logging. `to_thread` because `run_activity`
-        # blocks by contract and this one is still a running loop's coroutine.
+        # And the RAY client the executor pools at module level (`ray_submit.ray_client`). Dispatch, the sweep and
+        # the operator routes all use it on THIS loop, so it is closed here, on the loop that owns its pool.
         with suppress(Exception):
-            await asyncio.to_thread(run_activity, close_ray_client())
-        stop_worker_loop()
+            await close_ray_client()
         if app.state.fga is not None:
             with suppress(Exception):
                 await app.state.fga.close()
@@ -188,7 +136,8 @@ app = build_lance_service_app(
 # The DaprApp wrapper serves GET /dapr/subscribe (read by the sidecar at startup) and routes deliveries
 # of `sub_topic` to /medallion-event. Each stage runner has its own app-id + sub_topic, so no consumer clash.
 register_stage_route(app)
-# The cascade's operator surface (DWF-MGT-002/003). Mounted HERE and not on the producer because both
-# `get_workflow_state` and `terminate_workflow` resolve the instance through the calling app's app-id:
-# the producer would not find it and would accept the call anyway. The producer proxies to this.
+# The cascade's operator surface (DWF-MGT-002/003) over this stage runner's plans, which live under its own identity;
+# the producer authorizes a person and proxies to it.
 app.include_router(stage_ops_router)
+# The planned runs' outcome door (the compute head's jobs report here) and the plan sweep's cron door.
+mount_stage_outcomes(app, sweep_binding_name=_settings.plan_sweep_binding_name)

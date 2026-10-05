@@ -63,7 +63,7 @@ def test_the_WRITER_wins_over_the_carried_count() -> None:
 def test_the_dispatch_path_passes_the_count_through(carried: int | None) -> None:
     """The wire hop: whatever pass 1 injects must survive `model_dump` -> re-publish -> re-parse.
 
-    `publish_stage_ready` re-publishes `dict(spec.trigger)`, so a field that does not round-trip
+    The run's hand-off re-publishes the trigger its plan stored, so a field that does not round-trip
     through the model is silently dropped between the passes and the fix would do nothing.
     """
     dumped = StageTrigger(token="t1", pre_row_count=carried).model_dump()

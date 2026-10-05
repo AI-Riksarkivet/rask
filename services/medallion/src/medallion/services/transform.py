@@ -48,7 +48,7 @@ from medallion.core.metrics import (
     record_transition,
 )
 from medallion.schemas.events import build_run_event
-from medallion.services import catalog_register, engine_choice, promotion_band, promotion_hold
+from medallion.services import catalog_register, engine_choice, promotion_band, promotion_hold, stage_plans
 from medallion.services import gate as gate_svc
 from medallion.services.compute import WriteResult, existing_row_count, measure_stage, read_upstream
 from medallion.services.derivers import UnderivableMediaError
@@ -150,79 +150,6 @@ async def _settle(dapr: DaprClient, settings: MedallionSettings, verdict: dict[s
 _QUALITY_BLOCKED = {"status": "SUCCESS", "reason": "quality_blocked"}
 
 
-def _dispatch_stage_workflow(
-    settings: MedallionSettings,
-    *,
-    from_uri: str,
-    to_uri: str,
-    token: str | None,
-    lineage_json: str,
-    trigger: StageTrigger,
-    event_time: str | None = None,
-    pre_row_count: int | None = None,
-    from_id: str = "",
-    to_id: str = "",
-    run_id: str = "",
-) -> str:
-    """Schedule `stage_run` for this trigger and return its instance id (S1).
-
-    A SEAM over `DaprWorkflowClient`, the same reason ingest has one: a test must be able to assert
-    that the ray branch DISPATCHES rather than measures, and it cannot stand up a sidecar to do it.
-
-    The instance id is deterministic in the work — `stage_submission_id` already hashes `from->to`
-    with the token — so a redelivered trigger re-attaches to the running instance instead of starting
-    a second watcher over the same job. Dapr answers a duplicate `schedule_new_workflow` for a live
-    instance with an error, which is why that is caught and reported as the re-attach it is: the first
-    instance is still watching, and that is the correct outcome, not a failure to dispatch.
-
-    `from_id`/`to_id`/`run_id` are what the JOB emits its own provenance under — the catalog
-    identifiers this hop moves and the run the stage runner already minted for it. They are handed over here
-    because this is the only layer that holds them: `resolve_stage_identity` runs in the handler, and
-    the trigger the workflow round-trips has never carried either. Defaulted empty so the seam stays
-    callable without them, which is also the runner's documented unwired case.
-    """
-    from medallion.services.dapr_saga import DaprSagaClient
-    from medallion.services.ray_submit import stage_submission_id
-    from medallion.workflow import StageJobSpec, stage_run
-    from service_kit.lakehouse.saga import SagaStart
-
-    stage = settings.to_namespace
-    # No id-shape check on this path: the SDK starts the instance over durabletask gRPC, which applies none
-    # (read at dapr v1.18.1 / durabletask-go v0.12.1). Dapr's own workflow API checks only when IT starts
-    # one (`validateInstanceID`: letters, digits, `-`, `_`, <= 64, for key-limited state stores).
-    instance_id = f"stage-{stage_submission_id(stage, token, from_uri, to_uri)}"
-    # R26: pass 1 OWNS the instant and hands it forward, so pass 2 reuses it rather than stamping its
-    # own. Without this the in-dataset `lineage` document and the published COMPLETE disagree.
-    carried = trigger.model_dump()
-    if event_time is not None:
-        carried["event_time"] = event_time
-    # The destination's row count BEFORE the job writes — see `StageTrigger.pre_row_count`. Injected
-    # like `event_time` and for the same reason: pass 2 cannot observe it, because the write it would
-    # be comparing against has already happened by the time it runs.
-    if pre_row_count is not None:
-        carried["pre_row_count"] = pre_row_count
-    spec = StageJobSpec(
-        from_uri=from_uri,
-        to_uri=to_uri,
-        stage=stage,
-        token=token,
-        lineage_json=lineage_json,
-        trigger=carried,
-        from_id=from_id,
-        to_id=to_id,
-        run_id=run_id,
-    )
-    # THROUGH THE PORT (`service_kit.lakehouse.saga`), so this layer names no workflow engine. The
-    # reattach reasoning moved WITH the call into `DaprSagaClient.start`, which is why the port answers
-    # ALREADY_RUNNING rather than a bare success: a schedule failure is two events wearing one
-    # exception — "already watched" (handled) and "nothing is watching" (must raise) — and telling them
-    # apart is the engine adapter's job, not something every caller re-derives.
-    handle = DaprSagaClient().start(saga=stage_run, payload=spec.model_dump(), instance_id=instance_id)
-    if handle.outcome is SagaStart.ALREADY_RUNNING:
-        log.info("medallion_stage_workflow_reattach", extra={"instance_id": instance_id})
-    return instance_id
-
-
 class StageIdentity(NamedTuple):
     """The four names one stage run reads and writes.
 
@@ -253,8 +180,8 @@ def _namespace_of(table_id: str) -> str:
 def resolve_stage_identity(settings: Any, *, spec: Any, project: str) -> StageIdentity:
     """What this run reads and writes: the DECLARED record when there is one, else the env.
 
-    The `stage_run` workflow is already parameterised by `from_uri`/`to_uri`, so this is the only
-    place a stage runner was pinned to a single edge. With a record, a stage runner becomes a worker for whatever
+    The Ray lane's plan is already parameterised by `from_uri`/`to_uri`, so this is the only place a
+    stage runner is pinned to a single edge. With a record, a stage runner becomes a worker for whatever
     that record declares; without one it behaves byte-for-byte as it always did.
 
     Taken WHOLE, never merged: `from_id` carries its own namespace, so both halves come from the same
@@ -306,12 +233,10 @@ async def _emit_start_run(
 ) -> None:
     """Open the run in the graph BEFORE the work starts, and stage-and-publish it through the outbox.
 
-    THE DISPATCH BRANCH ACKS HAVING EMITTED NOTHING, which is what this closes. It submits to Ray and
-    returns `None  # DISPATCHED`, and the one event for the whole run is the terminal the workflow
-    publishes after its wake-up — minutes to hours later. Between the two, no run exists in the graph
-    at all, so a hop that died before its terminal is indistinguishable there from one that never
-    began, and the only other answers live in the Dapr workflow instance and the Ray dashboard, both
-    per-head state `rayjobs_api_executor.py:20-25` explicitly refuses to call durable.
+    THE DISPATCH BRANCH ACKS HAVING EMITTED NOTHING ELSE. It plans and submits the Ray job and returns
+    `None  # DISPATCHED`, and the run's terminal arrives minutes to hours later, when its outcome hands
+    it back. Without this START, no run exists in the graph between the two, so a hop that died before
+    its terminal is indistinguishable there from one that never began.
 
     IT MERGES, it does not add. `run_id` is DERIVED from `(project, operation, token)`
     (`events.py:337`), so this carries the same `runId` the terminal will, and the lineage consumer's
@@ -323,7 +248,7 @@ async def _emit_start_run(
     leaves a staged copy the relay drains rather than losing the only record that the run began.
     """
     # ONCE PER RUN, on the pass that actually begins it. The Ray lane re-enters `handle_stage` with
-    # `ray_job_done` set after the workflow's wake-up, and that re-entry is the SAME run continuing —
+    # `ray_job_done` set once its outcome hands it back, and that re-entry is the SAME run continuing —
     # its terminal follows within milliseconds. Re-emitting there would put a START on the bus after
     # the work finished, immediately before its own COMPLETE: harmless to the graph, since the outbox
     # key is `run_id@eventType` and it overwrites itself, and misleading to anyone reading the stream
@@ -620,8 +545,8 @@ async def _preflight(
         record_refused(transition, "routing_disabled")
         return _drop("routing_disabled")
     # WHAT THIS RUN READS AND WRITES — the declared lane record when there is one, else the env,
-    # project-qualified exactly as before. This is the line that decided a stage runner served one edge:
-    # `stage_run` has always been parameterised by from_uri/to_uri, so the pinning lived here and
+    # project-qualified exactly as before. This is the line that decides a stage runner serves one edge:
+    # the Ray lane's plan is parameterised by from_uri/to_uri, so the pinning lives here and
     # nowhere else. Everything below — the FGA object, the lineage identities, both URIs — reads
     # these four names, so they follow the declaration automatically.
     try:
@@ -793,8 +718,8 @@ def _confine_from_uri(
 class StageWrite(BaseModel):
     """What the compute step produced — or that it handed the work to Ray and there is nothing yet.
 
-    ``dispatched`` is the S1 path: the job was submitted to a durable workflow that will re-publish
-    this trigger when it goes terminal, so this pass has no result to measure and must simply ack.
+    ``dispatched`` is the Ray path: the job was planned and submitted, and its outcome re-publishes this
+    trigger when it lands, so this pass has no result to measure and must simply ack.
     """
 
     model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
@@ -824,8 +749,11 @@ def _work_order(
 
     `idempotency_key` is the run's identity to a synchronous engine, the way a deterministic
     submission id is to Ray: it is what makes a redelivered order re-attach to a recorded outcome
-    instead of doing the work twice.
+    instead of doing the work twice. Its `code_version` comes from the SAME source as the Ray lane's
+    (`stage_submit.build_stage_order`): the declaration when there is one, the chart otherwise, so a
+    redeclared build is a new run on either engine.
     """
+    code_version = declared.code_version if declared else settings.ray_code_version
     return WorkOrder(
         task=declared.task if declared else settings.to_namespace,
         source=WorkSource(uri=from_uri, table_id=identity.from_dataset),
@@ -835,11 +763,9 @@ def _work_order(
             cardinality=declared.cardinality if declared else ONE_TO_ONE,
             lineage_document=lineage_doc.to_json(),
         ),
-        identity=WorkIdentity(run_id=lineage_doc.run_id, project=project, code_version=settings.ray_code_version),
+        identity=WorkIdentity(run_id=lineage_doc.run_id, project=project, code_version=code_version),
         params=declared.params if declared else settings.ray_job_params,
-        idempotency_key=derive_idempotency_key(
-            stage=settings.to_namespace, token=token, from_uri=from_uri, to_uri=to_uri, code_version=settings.ray_code_version
-        ),
+        idempotency_key=derive_idempotency_key(stage=settings.to_namespace, token=token, from_uri=from_uri, to_uri=to_uri, code_version=code_version),
     )
 
 
@@ -898,6 +824,7 @@ async def _run_in_process(
 
 
 async def _write_stage(
+    dapr: DaprClient,
     settings: MedallionSettings,
     trigger: StageTrigger,
     span: Span,
@@ -924,20 +851,16 @@ async def _write_stage(
     use_ray = await engine_choice.engine_for_async(settings, spec=declared) == engine_choice.RAY_ENGINE
     span.set_attribute("lance.medallion.engine_source", "declaration" if declared is not None else "chart")
     if use_ray and not trigger.ray_job_done:
-        # S1 — DISPATCH, and return. This branch used to submit and then measure on the
-        # very next line, which is the defect `medallion.workflow` exists to close:
-        # `submit_stage_job` returns the instant Ray ACCEPTS the submission, so the
-        # measure opened the destination before the job had written it. When the
-        # destination survived from a prior run that measure SUCCEEDED, and the run
-        # emitted a COMPLETE stamped with a version and row count this job never
-        # produced, then fired the next tier off it — with nothing red anywhere.
+        # DISPATCH, and return. `submit_stage_order` returns the instant Ray ACCEPTS the
+        # submission, so measuring here would open the destination before the job wrote it —
+        # and against a destination surviving from a prior run that measure SUCCEEDS, so the
+        # run would emit a COMPLETE for a write it never made and fire the next tier off it.
         #
-        # The waiting now lives in a workflow: it submits, polls to a terminal state on
-        # a DURABLE timer, and only on SUCCEEDED re-publishes this trigger with
-        # `ray_job_done`, which re-enters this handler through the `elif` below. The
-        # handler still acks in milliseconds, so A13's objection — a poll holding an ack
-        # across the job's runtime until the redelivery window is exhausted — does not
-        # apply to it.
+        # The run is PLANNED instead (`stage_plans.dispatch`, CP-029): the job reports its own
+        # terminal through this stage runner's outcome door, the sweep resolves one whose report
+        # never arrives, and only a run that succeeded re-publishes this trigger with
+        # `ray_job_done`, re-entering this handler through the branch below. The handler acks in
+        # milliseconds, so nothing holds an ack across the job's runtime (A13).
         span.set_attribute("lance.medallion.compute", "ray")
         span.set_attribute("lance.medallion.ray_phase", "dispatched")
         # MEASURED HERE, before the job is submitted, because this is the last moment
@@ -945,42 +868,38 @@ async def _write_stage(
         # unreadable destination, which the band reads as FIRST_PROMOTION and asks about
         # — the same safe direction it takes everywhere else.
         pre_rows = await run_in_threadpool(existing_row_count, to_uri, settings.storage_options())
-        instance_id = _dispatch_stage_workflow(
+        action_id = await stage_plans.dispatch(
             settings,
+            dapr,
+            trigger=trigger,
             from_uri=from_uri,
             to_uri=to_uri,
-            token=token,
-            lineage_json=lineage_doc.to_json(),
-            trigger=trigger,
-            event_time=event_time,
-            pre_row_count=pre_rows,
-            # WHAT the job is moving, not merely where. These are the names the graph
-            # and the FGA objects use, and the run the job's own events must MERGE
-            # onto — all three resolved here and, until now, dropped here: the job
-            # fell back to the URI's stem, naming a node no grant matches, so a
-            # distributed hop's provenance reached nobody while acking SUCCESS.
+            # WHAT the job is moving, not merely where: the names the graph and the FGA objects
+            # use. Without them the job names its output by the URI's stem, a node no grant matches.
             from_id=from_dataset,
             to_id=to_dataset,
-            run_id=lineage_doc.run_id,
+            lineage_doc=lineage_doc,
+            event_time=event_time,
+            pre_row_count=pre_rows,
+            project=project,
         )
-        log.info(
-            "medallion_stage_dispatched_to_workflow",
-            extra={"transition": transition, "instance_id": instance_id, "to_uri": to_uri},
-        )
-        return None  # DISPATCHED: the workflow owns the rest of this run and will re-publish the trigger
+        log.info("medallion_stage_planned", extra={"transition": transition, "action_id": action_id, "to_uri": to_uri})
+        return None  # DISPATCHED: the run's outcome re-publishes the trigger when it lands
     if use_ray:
-        # The job is TERMINAL-OK — the workflow read SUCCEEDED before re-publishing — so
-        # the destination exists and measuring it is now a question about this run's
-        # output rather than a race with it.
+        # The job SUCCEEDED — its outcome was resolved before this trigger was re-published — so
+        # the destination exists and measuring it is a question about this run's output rather
+        # than a race with it.
         span.set_attribute("lance.medallion.compute", "ray")
         span.set_attribute("lance.medallion.ray_phase", "completed")
         if trigger.ray_submission_id:
             span.set_attribute("lance.medallion.ray_submission_id", trigger.ray_submission_id)
         # measure_stage, not a bare measure: the Ray job transformed out-of-process, so the
         # column edges are RECONSTRUCTED from the upstream + written schemas — otherwise the
-        # columnLineage facet would be empty on exactly the path production runs.
+        # columnLineage facet would be empty on exactly the path production runs. Measured AT the
+        # version the run's commit marker named when the outcome found one, so a commit landing
+        # between the job and this pass (a compaction) is not described as this run's write.
         result = await run_in_threadpool(
-            measure_stage,
+            partial(measure_stage, version=trigger.ray_committed_version),
             from_uri,
             to_uri,
             settings.storage_options(),
@@ -1155,6 +1074,7 @@ async def _run_compute(
                     project=project,
                 )
                 result = await _write_stage(
+                    dapr,
                     settings,
                     trigger,
                     span,
@@ -1169,7 +1089,7 @@ async def _run_compute(
                     project=project,
                 )
                 if result is None:
-                    # S1 — the job is on the cluster and the workflow owns the rest of this run.
+                    # The job is on the cluster, and its plan owns the rest of this run.
                     return StageWrite(dispatched=True, to_uri=to_uri)
             # THE STAGE RUNNER MEASURES; IT DOES NOT RULE. Under one door the catalog decides whether a
             # version may be promoted, so these assertions no longer gate anything — see
@@ -1214,13 +1134,10 @@ def _build_stage_event(
     elapsed_seconds = time.perf_counter() - t0
     # B10: ONE duration, resolved BEFORE it is emitted. On the Ray lane this handler runs twice —
     # pass 1 submits and returns, the stage runs on the cluster for minutes-to-hours, and pass 2 is
-    # the measure-and-emit wake-up. `elapsed_seconds` is pass 2's own wall time, so emitting it put
-    # SECONDS in the graph for a stage that ran for hours, while the metric below already preferred
-    # the watcher's measured span. The graph is the durable audit trail, so the authoritative record
-    # was the wrong one and the metric that matched reality was the one treated as approximate.
-    #
-    # The value existed; it was simply computed after the event that needed it. Resolved here and
-    # read twice, so the two cannot drift apart again.
+    # the measure-and-emit wake-up. `elapsed_seconds` is pass 2's own wall time, which would put
+    # SECONDS in the graph for a stage that ran for hours; the plan's span from submit to outcome rides
+    # the re-published trigger instead. Resolved here and read twice — by this event and by the metric
+    # in `_report_success` — so the graph and the metric carry one number.
     stage_seconds = trigger.ray_duration_seconds if (trigger.ray_job_done and trigger.ray_duration_seconds is not None) else elapsed_seconds
     run_event = build_run_event(
         operation=settings.operation,
@@ -1668,10 +1585,10 @@ def _report_success(
     record_transition(transition)
     # Volume is recorded only when the compute MEASURED the write — a stage that committed nothing
     # reports its latency and no rows/bytes, rather than a zero a reader would take for a real result.
-    # THE RAY LANE'S DURATION IS THE WATCHER'S, NOT THIS HANDLER'S. On the Ray path this is pass 2 —
-    # the wake-up after the job went terminal — so `elapsed_seconds` here covers only the measure and
-    # emit, and recording it would report a multi-hour Ray stage as a few seconds. `stage_run` measured
-    # the real span from its own deterministic clock and handed it back on the trigger.
+    # THE RAY LANE'S DURATION IS THE PLAN'S, NOT THIS HANDLER'S. On the Ray path this is pass 2 —
+    # the wake-up after the job landed — so `elapsed_seconds` here covers only the measure and emit,
+    # and recording it would report a multi-hour Ray stage as a few seconds. The resolved outcome
+    # measured submit-to-outcome and handed it back on the trigger.
     record_stage_completion(
         transition,
         duration_seconds=stage_seconds,

@@ -108,7 +108,7 @@ spec:
             {{- end }}
             {{- $transformsDeclared := false }}
             {{- range .Values.medallion.stageRunners }}{{- if .transform }}{{- $transformsDeclared = true }}{{- end }}{{- end }}
-            {{- if or .Values.medallion.projectsEnabled $transformsDeclared }}
+            {{- if or .Values.medallion.projectsEnabled $transformsDeclared .Values.medallion.ray }}
             {{- /*
                #84 per-tenant routing (opt-in): the catalog's warehouse-registry root. A `project`-carrying
                /produce resolves that project's ACTIVE warehouse and seeds <root>/medallion/bronze there;
@@ -149,6 +149,11 @@ spec:
                is stamped by the registering plane, not by this list).
             */}}
             - { name: MEDALLION_RAY_TASKS, value: {{ .Values.medallion.rayTasks | toJson | quote }} }
+            {{- end }}
+            {{- /* CP-029: a training run's job reports to this Service; its plan lives in MEDALLION_CONTROL_ROOT. */}}
+            - { name: MEDALLION_OUTCOME_URL_BASE, value: "http://{{ include "lance.fullname" . }}-medallion-producer:{{ $port }}" }
+            {{- if and .Values.dapr.enabled .Values.dapr.sidecars .Values.medallion.planSweep.bindingName }}
+            - { name: MEDALLION_PLAN_SWEEP_BINDING_NAME, value: {{ .Values.medallion.planSweep.bindingName | quote }} }
             {{- end }}
             {{- end }}
             {{- if .Values.medallion.inprocessTasks }}
@@ -530,7 +535,8 @@ spec:
             */}}
             - { name: MEDALLION_TRANSFORM, value: {{ .transform | quote }} }
             {{- end }}
-            {{- if or $root.Values.medallion.projectsEnabled .transform }}
+            {{- /* Also for the Ray lane: its runs' plans live in this root (CP-029). */}}
+            {{- if or $root.Values.medallion.projectsEnabled .transform $root.Values.medallion.ray }}
             {{- /*
                #84 per-tenant routing (opt-in): a `project`-carrying stage trigger resolves this stage's
                from/to URIs off the warehouse registry (<project-root>/medallion/<namespace>) instead of
@@ -620,6 +626,16 @@ spec:
             */}}
             - { name: MEDALLION_RAY_ENTRYPOINT, value: {{ .stageJob | quote }} }
             {{- end }}
+            {{- /* CP-029: a planned run's job reports to this runner's Service; its plan is announced on the control
+                 lane; the sweep's cron is one string with the Component's name and the route. */}}
+            - { name: MEDALLION_OUTCOME_URL_BASE, value: "http://{{ include "lance.fullname" $root }}-{{ .name }}:{{ $port }}" }
+            - { name: MEDALLION_TRAINER_IDENTITY, value: {{ $root.Values.medallion.train.trainerIdentity | quote }} }
+            {{- if $root.Values.catalog.controlEmit }}
+            - { name: MEDALLION_CONTROL_PUBSUB, value: "{{ $root.Values.pubsub.controlName | default "catalog-control-pubsub" }}-{{ .daprAppId }}" }
+            {{- end }}
+            {{- if and $root.Values.dapr.enabled $root.Values.dapr.sidecars $root.Values.medallion.planSweep.bindingName }}
+            - { name: MEDALLION_PLAN_SWEEP_BINDING_NAME, value: {{ $root.Values.medallion.planSweep.bindingName | quote }} }
+            {{- end }}
             {{- end }}
             {{- end }}
             {{- /*
@@ -689,6 +705,7 @@ spec:
                  refused it while the job exited SUCCEEDED. Only the required action above belongs to the
                  authorization toggle. */}}
             - { name: MEDALLION_FGA_SERVICE_IDENTITY, value: {{ .serviceIdentity | quote }} }
+            - { name: MEDALLION_PRODUCER_IDENTITY, value: {{ $root.Values.medallion.producer.serviceIdentity | quote }} }
             {{- with include "lance.signingEnv" (list $root .daprAppId) }}{{ . | nindent 12 }}{{- end }}
             {{- include "lance.saVerifier" (list $root "env" "stage") | nindent 12 }}
           {{- include "lance.appProbes" $root | nindent 10 }}
@@ -702,11 +719,9 @@ spec:
         {{- include "lance.identityTokens" (list "volumes" "rask-catalog" "rask-lineage") | nindent 8 }}
         {{- include "lance.saVerifier" (list $root "volumes" "stage") | nindent 8 }}
 ---
-{{- /* A stage runner is BUS-ONLY and stays that way: no gateway row, no Ingress. This Service exists for one
-       caller — the producer, which proxies the cascade's operator routes (`/stage-runners/{name}/stages/...`)
-       here. It has to be the stage runner that runs them, because `terminate_workflow` resolves the instance
-       through the CALLING app's app-id, and a producer-hosted terminate would find nothing and accept
-       the call anyway. ClusterIP only; the stage runner authenticates the producer by the app token. */}}
+{{- /* A stage runner is BUS-ONLY: no gateway row, no Ingress. This ClusterIP has two callers, each admitted by its
+       projected token on its own routes: the producer, proxying the operator routes onto the runs this runner planned,
+       and the Ray head's jobs, reporting their outcome (CP-029). */}}
 apiVersion: v1
 kind: Service
 metadata:

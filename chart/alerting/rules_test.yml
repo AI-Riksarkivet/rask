@@ -1116,11 +1116,10 @@ tests:
         alertname: WorkflowActivitiesFailing
         exp_alerts: []
 
-  # THE RUN-LEVEL VERDICT. Dapr's own status label reads `success` for these runs, which is why the
-  # estate has to record the verdict itself.
+  # THE RUN-LEVEL VERDICT, recorded when a planned stage run's plan closes; no engine metric carries it.
   - interval: 1m
     input_series:
-      - series: 'medallion_stage_outcome_total{lance_medallion_verdict="abandoned"}'
+      - series: 'medallion_stage_outcome_total{lance_medallion_verdict="failed"}'
         values: "0+1x40"
     alert_rule_test:
       - eval_time: 35m
@@ -1130,8 +1129,8 @@ tests:
               severity: warning
               service: medallion
             exp_annotations:
-              summary: "Medallion stage runs are ending badly — failed, abandoned or unnotified"
-              description: "A stage watch reached a terminal verdict other than `succeeded`. `abandoned` means the job was still RUNNING at the watch ceiling — not a failure, but the estate stopped looking; `unnotified` means the outcome reached the graph and no person. Split by `lance_medallion_verdict` to tell them apart. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled"
+              summary: "Medallion stage runs are failing"
+              description: "A planned stage run closed `failed`: its job reported failure, Ray ended it FAILED or STOPPED, or the head lost it and two resubmits never landed a commit marker. Each failure is a FAIL in the graph naming the version the run committed, when it committed one. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled"
 
   # Succeeded runs must not page — the label filter is the whole rule.
   - interval: 1m
@@ -1158,8 +1157,8 @@ tests:
               severity: warning
               service: dapr
             exp_annotations:
-              summary: "Workflow orchestration turns are firing but nothing completes — a wedged continue_as_new"
-              description: "The engine's internal reminders keep firing while no workflow execution completes, which is a watch loop taking turns forever. `stage_run` and `train_run` both continue_as_new on every poll, so a job that never reaches a terminal status turns indefinitely and looks healthy from every angle except this one. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled"
+              summary: "Workflow orchestration turns are firing but nothing completes — a wedged orchestration"
+              description: "The engine's internal reminders keep firing while no workflow execution completes: an orchestration taking turns forever, which looks healthy from every angle except this one. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled"
 
   # Turns firing AND executions completing is a healthy busy estate — must not page.
   - interval: 1m

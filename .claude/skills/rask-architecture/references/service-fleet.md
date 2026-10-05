@@ -58,7 +58,7 @@ rather than 404** — naming a backend as broken instead of the path as absent. 
 doors are exactly `POST /produce`, `POST /ingest-media` and `POST /train`, all root-mounted and
 token-guarded — that rule bounds what may LAND data, and adding a protocol-specific fourth would make
 that protocol privileged. It does not bound the router surface, which is seven: those three plus
-`promotions` (the quality gate's third answer), `stage_runner_ops` (`/stage-runners/*`, workflow terminate),
+`promotions` (the quality gate's third answer), `stage_runner_ops` (`/stage-runners/*`, show and terminate of a planned stage run),
 `rerun` (`POST /stage-runners/stages/rerun`, the cascade's edge-addressed repair verb, 2026-09-04) and
 `cascade_lag_read` (`GET /cascade/stalled`). `stage_runner_ops` and `rerun` share one prefix,
 `stage_runner_ops.STAGE_RUNNERS_PREFIX`, which the gateway's `/api/stage-runners` row forwards to. Those

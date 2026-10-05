@@ -33,6 +33,14 @@ from medallion.core.config import MedallionSettings
 from medallion.services import ray_submit, stage_submit
 
 
+async def _submit_stage_job(settings: Any, **kwargs: Any) -> None:
+    """The stage lane's submission: the order it builds, posted through the port."""
+    from medallion.services import stage_submit as _stage_submit
+
+    order, registration = await _stage_submit.build_stage_order(settings, **kwargs)
+    await _stage_submit.submit_stage_order(order, registration)
+
+
 _SCRIPTS = Path(__file__).parents[2] / "scripts"
 
 
@@ -93,7 +101,7 @@ def test_stage_submission_carries_the_active_spans_traceparent(monkeypatch: pyte
     )
     tracer = TracerProvider().get_tracer("test")
     with tracer.start_as_current_span("stage-runner") as span:
-        asyncio.run(stage_submit.submit_stage_job(settings, from_uri="a", to_uri="b", stage="bronze", token="t"))
+        asyncio.run(_submit_stage_job(settings, from_uri="a", to_uri="b", stage="bronze", token="t"))
     env = captured[0]["runtime_env"]["env_vars"]
     ctx = span.get_span_context()
     assert env["TRACEPARENT"].startswith(f"00-{ctx.trace_id:032x}-{ctx.span_id:016x}-")

@@ -103,6 +103,7 @@ _DEPLOYED_ROUTE_SETTINGS = {
     "MEDALLION_CONTROL_PUBSUB": "pubsub-control-medallion-producer",  # catalog.controlEmit
     "MEDALLION_DLQ_TOPIC": "dlq.medallion-producer",  # dapr.resiliency.enabled
     "MEDALLION_CASCADE_LAG_BINDING_NAME": "medallion-cascade-lag-cron",  # medallion.cascadeLag.bindingName
+    "MEDALLION_PLAN_SWEEP_BINDING_NAME": "medallion-plan-sweep-cron",  # medallion.planSweep.bindingName, under medallion.ray
 }
 
 #: Producer operations with no gateway row, and why each has none.
@@ -117,6 +118,9 @@ _NOT_PUBLISHED_AT_THE_EDGE: dict[tuple[str, str], str] = {
     ("post", "/dlq-event"): "pub/sub delivery of the producer's dead letters, behind require_dapr_token",
     ("post", "/medallion-cascade-lag-cron"): "the lag cron's input binding, delivered by the sidecar at the pod root",
     ("options", "/medallion-cascade-lag-cron"): "the sidecar's probe of that binding before it delivers",
+    ("post", "/runs/{action_id}/outcome"): "a training job's outcome report, from the compute head over the producer's ClusterIP",
+    ("post", "/medallion-plan-sweep-cron"): "the plan sweep's input binding, delivered by the sidecar at the pod root",
+    ("options", "/medallion-plan-sweep-cron"): "the sidecar's probe of that binding before it delivers",
     ("post", "/ingest-media"): "synchronous and capped; docs/DECISIONS.md keeps it a service seam, and /api/ingest is the edge's ingest door",
 }
 
@@ -214,7 +218,7 @@ def _as_daprd_delivers(app: ASGIApp, *, app_token: str) -> ASGIApp:
 @pytest.mark.parametrize(
     ("method", "public"),
     [
-        ("post", "/api/trains/train-ray-train-tok-1/terminate"),
+        ("post", "/api/trains/ray-train-tok-1/terminate"),
         ("get", "/api/cascade/stalled"),
         ("get", "/api/stage-runners"),
     ],
@@ -238,39 +242,6 @@ def test_a_public_caller_is_refused_by_the_door_behind_the_row(gw, monkeypatch: 
 
     assert response.status_code == 403, response.text
     assert "invalid or missing produce credential" in response.text, response.text
-
-
-class _HostedWorkflows:
-    """The producer's engine hosting ONE held promotion — `DaprWorkflowClient`'s two calls, its signatures."""
-
-    def __init__(self) -> None:
-        self.terminated: list[str] = []
-
-    def get_workflow_state(self, instance_id: str, *, fetch_payloads: bool = True) -> object:
-        raise AssertionError(f"a training door asked the engine about {instance_id!r}, which no training watch can be")
-
-    def terminate_workflow(self, instance_id: str, *, output: object = None, recursive: bool = True) -> None:
-        self.terminated.append(instance_id)
-
-
-@pytest.mark.parametrize("method", ["post"])
-def test_a_HELD_PROMOTION_is_not_a_training_watch_through_the_row(gw, monkeypatch: pytest.MonkeyPatch, method: str) -> None:
-    """`/api/trains` publishes a door on an engine that also hosts `promotion_review`; its own door is
-    `/api/promotions`, on `can_promote`. The caller is one the door decided whole, so only the kind of
-    instance can refuse it."""
-    from medallion.api.produce_auth import ProducerCaller, admit_caller
-    from medallion.producer import app as producer
-
-    engine = _HostedWorkflows()
-    monkeypatch.setitem(producer.dependency_overrides, admit_caller, ProducerCaller)
-    monkeypatch.setattr(producer.state, "workflow_client", engine, raising=False)
-    public = "/api/trains/promotion-tok-of-tenant-beta" + ("/terminate" if method == "post" else "")
-    with TestClient(gw.app) as client:
-        gw.app.state.http = httpx.AsyncClient(transport=httpx.ASGITransport(app=producer))
-        response = client.request(method, public)
-
-    assert response.status_code == 404, response.text
-    assert engine.terminated == []
 
 
 def test_a_rerun_sent_to_the_gateway_is_answered_by_the_rerun_verb(gw) -> None:

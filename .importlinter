@@ -81,7 +81,6 @@ ignore_imports =
     medallion.api.promotions -> dapr.ext.workflow.workflow_state
     medallion.producer -> dapr.ext.workflow
     medallion.services.dapr_saga -> dapr.ext.workflow
-    medallion.stage_runner -> dapr.ext.workflow
 allow_indirect_imports = True
 
 [importlinter:contract:settings-import-no-web-stack]

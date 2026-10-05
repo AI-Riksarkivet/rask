@@ -30,7 +30,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 #: The cascade token: ``[A-Za-z0-9._-]`` with no ``..`` anywhere, 1 to :data:`SAFE_TOKEN_MAX_LENGTH` long.
 #: It admits the machine-minted shapes the cascade carries (a ``uuid4().hex``, a dashed UUID) and
 #: excludes path separators, ``$``, whitespace, control characters and a traversal. The token seeds
-#: the lineage run id, rides the ``lance`` run facet, and names the stage's workflow instance.
+#: the lineage run id, rides the ``lance`` run facet, and is one axis of the stage run's action id.
 #:
 #: The no-``..`` rule is spelled as dot-separated runs rather than a lookahead because the doors hand
 #: this string to pydantic, whose default regex engine refuses look-around; the length lives beside it
@@ -122,15 +122,14 @@ class StageTrigger(BaseModel):
     cascade_id: str | None = None
     from_uri: str | None = None
 
-    #: S1: the Ray stage job for this trigger reached SUCCEEDED, so the destination is written and the
-    #: stage runner may measure it. Set ONLY by `medallion.workflow.publish_stage_ready`, after a terminal
-    #: status read — never by an upstream producer, which has no way to know.
+    #: The Ray stage job for this trigger SUCCEEDED, so the destination is written and the stage runner
+    #: may measure it. Set ONLY by the run's resolved outcome (`stage_plans.StageOutcomeLane.hand_off`),
+    #: never by an upstream producer, which has no way to know.
     #:
     #: This is a CLAIM like every other field on this model, and it is deliberately not treated as
     #: privileged: the re-published trigger re-enters through this same guard, and the worst a forged
-    #: `ray_job_done` can do is make the stage runner measure a destination early — precisely the pre-S1
-    #: behaviour, not an escalation. What it must NOT do is skip the submit silently, which is why the
-    #: handler logs the branch it took.
+    #: `ray_job_done` can do is make the stage runner measure a destination early, not an escalation.
+    #: What it must NOT do is skip the submit silently, which is why the handler logs the branch it took.
     ray_job_done: bool = False
     #: Rows the DESTINATION held before the Ray job was dispatched — pass 1's answer to a question
     #: pass 2 can no longer ask. The Ray job writes out-of-process, so by the time the stage runner measures,
@@ -148,17 +147,19 @@ class StageTrigger(BaseModel):
     #: production — 8 -> 200 and 200 -> 1000 both published without asking, because the delta was
     #: structurally zero.
     pre_row_count: int | None = None
-    #: Seconds the RAY WATCH took, measured by `stage_run` from its own deterministic workflow clock
-    #: and handed back on the wake-up trigger. Pass 2 records THIS as the stage duration rather than
-    #: its own elapsed time, which would measure only the measure/emit tail and report a multi-hour
-    #: Ray job as a few seconds. One recording site, one number — recording in both the watcher and
-    #: the handler would double-count every Ray stage in the histogram.
+    #: Seconds from the run's plan to its outcome, handed back on the pass-2 trigger. Pass 2 records
+    #: THIS as the stage duration rather than its own elapsed time, which would measure only the
+    #: measure/emit tail and report a multi-hour Ray job as a few seconds. One recording site, one number.
     #:
     #: BOUNDED because the trigger is untrusted input: a negative or absurd value is discarded rather
     #: than recorded, so a malformed payload cannot poison the series. 30 days is far beyond any real
-    #: stage and comfortably above the watch ceiling.
+    #: stage.
     ray_duration_seconds: float | None = Field(default=None, ge=0.0, le=2_592_000.0)
     ray_submission_id: str | None = None
+    #: The destination version the run's commit marker named when its outcome found one (CP-029): pass 2
+    #: measures THAT commit, so a commit landing after the job is not described as this run's write.
+    #: A claim like the rest; a wrong one makes pass 2 measure another existing version or fail its open.
+    ray_committed_version: int | None = Field(default=None, ge=0)
 
     #: R26's ONE INSTANT, carried from the dispatch pass to the completed pass. `transform.py` stamps
     #: `datetime.now(UTC)` at the top of the handler, so the two-pass Ray lane stamped TWICE: pass 1's

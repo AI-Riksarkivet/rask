@@ -11,7 +11,7 @@ from it by hand — not-yet-registered, record-lost, and a transport blip — wi
 `never_registered` and a poll ceiling. A port answering `None` forces every caller to re-derive that,
 and a caller that gets it wrong either resubmits live work or waits 24 hours on a job that is gone.
 
-`DURABLE_RECORD` IS WHAT A RESUBMIT HAS TO ASK ABOUT. The medallion's `MAX_UNSEEN_POLLS` and
+`DURABLE_RECORD` IS WHAT A RESUBMIT HAS TO ASK ABOUT. The medallion's `MAX_UNSEEN_TICKS` and
 `MAX_RESUBMITS` are justified by an engine-specific durability defect it names outright: Ray's GCS is
 not fault-tolerant in this estate (no external Redis, a standing rule), so a head restart takes every
 job record with it. Against an engine that advertises `DURABLE_RECORD` the same machinery is a spurious

@@ -23,7 +23,7 @@ import medallion.services.transform as stage_runner
 from lineage_kit.consume import LineageDoc
 from medallion.core.config import MedallionSettings
 from medallion.schemas.events import build_run_event
-from medallion.services import inprocess_executor, stage_submit
+from medallion.services import inprocess_executor, stage_plans, stage_submit
 from medallion.services.compute import UpstreamFacts, WriteResult
 from medallion.services.ingest_trigger import handle_bronze_arrival
 from medallion.services.produce import produce
@@ -123,19 +123,19 @@ def test_stage_runner_ray_branch_submits_job_then_emits_measured_lineage(monkeyp
 
     dispatched: dict[str, Any] = {}
 
-    def fake_dispatch(
+    async def fake_dispatch(
         _settings: Any,
+        _dapr: object,
         *,
+        trigger: Any,
         from_uri: str,
         to_uri: str,
-        token: str | None,
-        lineage_json: str,
-        trigger: Any,
-        event_time: str | None = None,
-        pre_row_count: int | None = None,
-        from_id: str = "",
-        to_id: str = "",
-        run_id: str = "",
+        from_id: str,
+        to_id: str,
+        lineage_doc: LineageDoc,
+        event_time: str,
+        pre_row_count: int | None,
+        project: str,
     ) -> str:
         # `pre_row_count` is RECORDED, not merely tolerated: the dispatch pass measuring the
         # destination before the Ray job overwrites it is the only way that lane can ever compare row
@@ -147,29 +147,29 @@ def test_stage_runner_ray_branch_submits_job_then_emits_measured_lineage(monkeyp
             {
                 "from": from_uri,
                 "to": to_uri,
-                "token": token,
-                "lineage": lineage_json,
+                "token": trigger.token,
+                "lineage": lineage_doc.to_json(),
                 "trigger": trigger,
                 "pre_row_count": pre_row_count,
                 "from_id": from_id,
                 "to_id": to_id,
-                "run_id": run_id,
+                "run_id": lineage_doc.run_id,
             }
         )
-        return "stage-ray-silver-tok-abc"
+        return "a" * 40
 
-    monkeypatch.setattr(stage_runner, "_dispatch_stage_workflow", fake_dispatch)
+    monkeypatch.setattr(stage_plans, "dispatch", fake_dispatch)
     _fake_upstream(monkeypatch)
     measured = WriteResult(version=7, row_count=5, size_bytes=99, column_map=[("id", "id", "IDENTITY")])
     measured_uris: dict[str, str] = {}
 
-    def fake_measure_stage(from_uri: str, to_uri: str, _so: dict[str, str]) -> WriteResult:
+    def fake_measure_stage(from_uri: str, to_uri: str, _so: dict[str, str], *, version: int | None = None) -> WriteResult:
         measured_uris.update({"from": from_uri, "to": to_uri})
         return measured
 
     monkeypatch.setattr(stage_runner, "measure_stage", fake_measure_stage)
 
-    # PASS 1 — the trigger arrives. S1: the handler DISPATCHES a watcher and returns; it must NOT
+    # PASS 1 — the trigger arrives. The handler PLANS and submits the run and returns; it must NOT
     # measure, because the job it just asked for has not run. Measuring here is the defect.
     first = _FakeDapr()
     status = asyncio.run(stage_runner.handle_stage(cast(Any, first), _RAY_STAGE_RUNNER, {"data": {"token": "tok"}}))
@@ -189,8 +189,8 @@ def test_stage_runner_ray_branch_submits_job_then_emits_measured_lineage(monkeyp
     kinds = [c["data"]["eventType"] for c in first.calls if c["topic"] == _RAY_STAGE_RUNNER.lineage_topic]
     assert kinds == ["START"], f"dispatch emitted {kinds or 'nothing'} — it must open the run and emit no terminal for a job that has not run"
 
-    # PASS 2 — the workflow read SUCCESSED and re-published the trigger with `ray_job_done`. NOW the
-    # destination exists, so the measure is a question about this run's output rather than a race.
+    # PASS 2 — the run's outcome resolved SUCCEEDED and re-published the trigger with `ray_job_done`. NOW
+    # the destination exists, so the measure is a question about this run's output rather than a race.
     dapr = _FakeDapr()
     status = asyncio.run(stage_runner.handle_stage(cast(Any, dapr), _RAY_STAGE_RUNNER, {"data": {"token": "tok", "ray_job_done": True}}))
 
@@ -217,24 +217,20 @@ def test_stage_runner_ray_branch_submits_job_then_emits_measured_lineage(monkeyp
     )
 
 
-def test_stage_runner_ray_branch_retries_when_the_watcher_cannot_be_dispatched(monkeypatch: pytest.MonkeyPatch) -> None:
-    """S1 moved WHERE a ray failure surfaces, and this is the case that must not be swallowed.
+def test_stage_runner_ray_branch_retries_when_the_run_cannot_be_planned(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A run with no plan has no outcome door and no sweep, so nothing would ever resolve it.
 
-    The Ray job is now submitted by the workflow, so a failure to DISPATCH the workflow means no job
-    is ever submitted at all. Acking that would lose the work silently — the pre-S1 version of this
-    test caught the same class of loss one layer down (`submit_stage_job` raising), and the layer moved.
-
-    The likeliest real cause is the state store not being scoped to `medallion` (values.yaml scopes it
-    for exactly this, and daprd cannot hot-reload an actor state store), which produces a schedule
-    error on EVERY delivery — the shape a blanket swallow would render as permanent silent success.
+    Acking a delivery whose plan could not be written would lose the work silently, on every delivery
+    while the control root refuses it; the trigger is redelivered instead. (A SUBMIT failure is
+    different and is acked: the plan exists, and the sweep owns the resubmit budget.)
     """
 
-    def fake_dispatch(*_a: Any, **_k: Any) -> str:
-        raise RuntimeError("the state store is not configured to use the actor runtime")
+    async def fake_dispatch(*_a: Any, **_k: Any) -> str:
+        raise OSError("the control root refused the plan")
 
-    monkeypatch.setattr(stage_runner, "_dispatch_stage_workflow", fake_dispatch)
+    monkeypatch.setattr(stage_plans, "dispatch", fake_dispatch)
     status = asyncio.run(stage_runner.handle_stage(cast(Any, _FakeDapr()), _RAY_STAGE_RUNNER, {"data": {"token": "t"}}))
-    assert status == {"status": "RETRY"}  # nothing is watching and nothing was submitted → redeliver
+    assert status == {"status": "RETRY"}
 
 
 def test_stage_runner_write_is_single_flight_under_concurrent_delivery(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -513,6 +509,12 @@ class _FakeJobsAPI:
         return httpx.Response(200, json={"submission_id": "sub-1"}, request=httpx.Request("POST", "http://ray"))
 
 
+async def _submit_stage(settings: MedallionSettings, **kwargs: Any) -> None:
+    """The stage lane's submission: the order it builds, posted through the port."""
+    order, registration = await stage_submit.build_stage_order(settings, **kwargs)
+    await stage_submit.submit_stage_order(order, registration)
+
+
 def test_a_lane_cannot_reach_a_platform_variable_by_colliding_on_its_name(monkeypatch: pytest.MonkeyPatch) -> None:
     """THE PREFIX IS A GUARD, NOT A CONVENTION.
 
@@ -532,7 +534,7 @@ def test_a_lane_cannot_reach_a_platform_variable_by_colliding_on_its_name(monkey
             "ray_job_params": {"S3_SECRET": "stolen", "RASK_LINEAGE_DOCUMENT": "forged", "OTEL_SERVICE_NAME": "spoofed"},
         }
     )
-    asyncio.run(stage_submit.submit_stage_job(settings, from_uri="s3://lake/b", to_uri="s3://lake/s", stage="silver", token="t", lineage_json="{}"))
+    asyncio.run(_submit_stage(settings, from_uri="s3://lake/b", to_uri="s3://lake/s", stage="silver", token="t", lineage_json="{}"))
     env = api.posts[0]["runtime_env"]["env_vars"]
     # STRONGER than the original assertion. This checked the real credential SURVIVED the collision
     # (`env["S3_SECRET"] == "the-real-secret"`); since the Jobs-API-echo P0 fix the credential does
@@ -567,7 +569,7 @@ def test_no_blank_value_rides_the_submission(monkeypatch: pytest.MonkeyPatch) ->
         monkeypatch.delenv(name, raising=False)
     settings = MedallionSettings.model_validate({"compute_enabled": True, "ray_enabled": True})
 
-    asyncio.run(stage_submit.submit_stage_job(settings, from_uri="s3://lake/b", to_uri="s3://lake/s", stage="silver", token="t", lineage_json="{}"))
+    asyncio.run(_submit_stage(settings, from_uri="s3://lake/b", to_uri="s3://lake/s", stage="silver", token="t", lineage_json="{}"))
 
     env = api.posts[0]["runtime_env"]["env_vars"]
     blank = sorted(k for k, v in env.items() if v == "")
@@ -620,7 +622,7 @@ def test_a_DECLARED_lane_overrides_the_charts_entrypoint_and_params(monkeypatch:
         }
     )
 
-    asyncio.run(stage_submit.submit_stage_job(settings, from_uri="s3://lake/b", to_uri="s3://lake/s", stage="silver", token="t", project="acme"))
+    asyncio.run(_submit_stage(settings, from_uri="s3://lake/b", to_uri="s3://lake/s", stage="silver", token="t", project="acme"))
 
     body = api.posts[0]
     assert body["entrypoint"] == "python /home/ray/jobs/ray_dummy_job.py", "the REGISTERED command for the declared task must win over the chart's"
@@ -652,7 +654,7 @@ def test_a_NAMED_but_UNDECLARED_lane_SUBMITS_NOTHING(monkeypatch: pytest.MonkeyP
     )
 
     with pytest.raises(UndeclaredTransformError, match="never-declared"):
-        asyncio.run(stage_submit.submit_stage_job(settings, from_uri="s3://lake/b", to_uri="s3://lake/s", stage="silver", token="t", project="acme"))
+        asyncio.run(_submit_stage(settings, from_uri="s3://lake/b", to_uri="s3://lake/s", stage="silver", token="t", project="acme"))
 
     assert api.posts == [], "a job was submitted for a lane nobody declared"
 
@@ -676,9 +678,7 @@ def test_the_stage_job_gets_the_ORIGINATOR_in_its_OWN_env_not_only_ray_metadata(
     monkeypatch.setattr(ray_submit.httpx, "AsyncClient", lambda **_kw: api)
     settings = MedallionSettings.model_validate({"compute_enabled": True, "ray_enabled": True, "to_namespace": "silver"})
 
-    asyncio.run(
-        stage_submit.submit_stage_job(settings, from_uri="s3://lake/b", to_uri="s3://lake/s", stage="silver", token="t", originator="alice-sub", project="acme")
-    )
+    asyncio.run(_submit_stage(settings, from_uri="s3://lake/b", to_uri="s3://lake/s", stage="silver", token="t", originator="alice-sub", project="acme"))
 
     env = api.posts[0]["runtime_env"]["env_vars"]
     assert env["RASK_ORIGINATOR"] == "alice-sub", "the job cannot name the person in its own events without this"
@@ -697,14 +697,14 @@ def test_a_service_triggered_stage_sends_NO_blank_identity(monkeypatch: pytest.M
     when it is empty; and a job that asks "was I told who this is for?" by testing the key's PRESENCE
     reads a blank as yes (`WorkOrder.to_env`). So the only passing shape is the key's absence.
 
-    `originator=""` is passed explicitly because it is exactly what the workflow activity hands the
-    submitter when the trigger names nobody (`workflow.submit_stage`).
+    `originator=""` is passed explicitly because it is exactly what the plan dispatch hands the
+    submitter when the trigger names nobody (`stage_plans.dispatch`).
     """
     api = _FakeJobsAPI()
     monkeypatch.setattr(ray_submit.httpx, "AsyncClient", lambda **_kw: api)
     settings = MedallionSettings.model_validate({"compute_enabled": True, "ray_enabled": True, "to_namespace": "silver"})
 
-    asyncio.run(stage_submit.submit_stage_job(settings, from_uri="s3://lake/b", to_uri="s3://lake/s", stage="silver", token="t", originator=""))
+    asyncio.run(_submit_stage(settings, from_uri="s3://lake/b", to_uri="s3://lake/s", stage="silver", token="t", originator=""))
 
     env = api.posts[0]["runtime_env"]["env_vars"]
     assert "RASK_ORIGINATOR" not in env, f"a service-run cascade must send no principal, neither blank nor fabricated: {env.get('RASK_ORIGINATOR')!r}"

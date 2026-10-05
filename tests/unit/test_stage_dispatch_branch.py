@@ -1,22 +1,15 @@
-"""S1 at the DEFECT SITE: the ray branch must dispatch, and must not measure until the job is done.
+"""The two fields that steer the Ray lane's two passes are untrusted input, refused rather than coerced.
 
-`services/medallion/tests/test_stage_workflow.py` proves the workflow's own ordering. This proves the
-half that ordering is worth nothing without: that `handle_stage` actually ROUTES through it, and that
-the branch which measures is reachable only once a terminal status has been read.
-
-Asserted by observing which collaborator is called, because that IS the defect. The old code called
-`submit_stage_job` and `measure_stage` in the same breath; the fix is that the first delivery calls
-neither measure nor submit directly, and the second — the one carrying `ray_job_done` — measures
-without submitting again.
+`ray_job_done` routes a delivery to pass 2 (measure the destination the job wrote) and `event_time` is pass 1's
+instant, carried so the dataset's lineage document and the published COMPLETE name one eventTime (R26). Both ride a
+trigger re-parsed through `parse_stage_trigger` like any bus arrival.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-import pytest
-
-from medallion.services.trigger_guards import StageTrigger, parse_stage_trigger
+from medallion.services.trigger_guards import parse_stage_trigger
 
 
 def _event(**data: Any) -> dict[str, Any]:
@@ -32,208 +25,9 @@ def test_a_NON_BOOL_ray_job_done_is_refused_rather_than_coerced() -> None:
     assert parse_stage_trigger(_event(ray_job_done="not-a-bool")) is None
 
 
-@pytest.mark.parametrize("pair", [("a.b", "a-b"), ("a.b-c", "a-b.c")], ids=["dotted-and-verbatim", "both-dotted"])
-def test_two_tokens_the_lane_accepts_are_two_instances_not_one(monkeypatch: pytest.MonkeyPatch, pair: tuple[str, str]) -> None:
-    """Two keys a head accepts for the same edge that fold alike are two cascades — one verbatim and
-    one dotted, or both dotted.
-
-    The job is submitted BY the instance, so two tokens on one instance id is one job: the second
-    dispatch is answered as a re-attach and its own hop never runs. Driven through the real seam and
-    the real saga port, against an engine that refuses a duplicate id the way Dapr does.
-    """
-    from medallion.core.config import get_settings
-    from medallion.services import transform
-
-    class _Engine:
-        def __init__(self) -> None:
-            self.instances: dict[str, dict[str, Any]] = {}
-
-        def schedule_new_workflow(self, *, workflow: object, input: dict[str, Any], instance_id: str) -> None:  # noqa: A002 — the SDK's own keyword
-            if instance_id in self.instances:
-                raise RuntimeError("instance already exists")
-            self.instances[instance_id] = input
-
-        def get_workflow_state(self, instance_id: str) -> object:
-            return self.instances.get(instance_id)
-
-    import dapr.ext.workflow as wf
-
-    engine = _Engine()
-    monkeypatch.setattr(wf, "DaprWorkflowClient", lambda *a, **k: engine)
-
-    for token in pair:
-        transform._dispatch_stage_workflow(
-            get_settings(),
-            from_uri="s3://wh/p-bronze/pages.lance",
-            to_uri="s3://wh/p-silver/pages.lance",
-            token=token,
-            lineage_json="{}",
-            trigger=StageTrigger(token=token),
-        )
-
-    assert sorted(spec["token"] for spec in engine.instances.values()) == sorted(pair)
-
-
-def test_the_dispatch_seam_reports_a_LIVE_INSTANCE_as_handled_not_failed(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A duplicate schedule for an instance already watching this job is the correct outcome.
-
-    Dapr raises on `schedule_new_workflow` for a live instance id. Treating that as a dispatch failure
-    would RETRY, and the sidecar would redeliver into the same refusal forever while the first instance
-    quietly did the work.
-    """
-    from medallion.core.config import get_settings
-    from medallion.services import transform
-
-    class _AlreadyRunning:
-        """Refuses the schedule AND confirms the instance exists — a genuine re-attach."""
-
-        def schedule_new_workflow(self, **_: object) -> None:
-            raise RuntimeError("instance already exists")
-
-        def get_workflow_state(self, _instance_id: str) -> object:
-            return object()
-
-    import dapr.ext.workflow as wf
-
-    monkeypatch.setattr(wf, "DaprWorkflowClient", lambda *a, **k: _AlreadyRunning())
-
-    instance_id = transform._dispatch_stage_workflow(
-        get_settings(),
-        from_uri="s3://wh/p-bronze/pages.lance",
-        to_uri="s3://wh/p-silver/pages.lance",
-        token="tok-1",
-        lineage_json="{}",
-        trigger=StageTrigger(token="tok-1"),
-    )
-
-    assert instance_id.startswith("stage-ray-"), "the instance id must name the job it watches"
-
-
-def test_a_schedule_failure_with_NO_live_instance_RAISES_rather_than_acking(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The other half, and the one that loses data if it is wrong.
-
-    A schedule error is two events wearing one exception. "Already exists" means a watcher is on the
-    job and acking is right. Anything else — no sidecar, state store not scoped to `medallion`, engine
-    down — means NOTHING is watching, and since the Ray job is submitted BY the workflow, no workflow
-    means no job at all. Swallowing that would ack a trigger whose work never starts, permanently and
-    on every delivery, while the logs read "reattach".
-
-    The first draft of `_dispatch_stage_workflow` did exactly that. This is the assertion that keeps it
-    honest: the existence of the instance is CHECKED, not assumed from the fact of an error.
-    """
-    from medallion.core.config import get_settings
-    from medallion.services import transform
-
-    class _NoEngine:
-        def schedule_new_workflow(self, **_: object) -> None:
-            raise RuntimeError("the state store is not configured to use the actor runtime")
-
-        def get_workflow_state(self, _instance_id: str) -> object:
-            raise RuntimeError("no sidecar")
-
-    import dapr.ext.workflow as wf
-
-    monkeypatch.setattr(wf, "DaprWorkflowClient", lambda *a, **k: _NoEngine())
-
-    with pytest.raises(RuntimeError):
-        transform._dispatch_stage_workflow(
-            get_settings(),
-            from_uri="s3://wh/p-bronze/pages.lance",
-            to_uri="s3://wh/p-silver/pages.lance",
-            token="tok-1",
-            lineage_json="{}",
-            trigger=StageTrigger(token="tok-1"),
-        )
-
-
-def test_the_scheduled_input_ROUND_TRIPS_the_trigger_for_republication(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The workflow re-publishes this trigger when the job lands, so anything dropped here is lost.
-
-    `project` in particular: losing it would make the completed-pass resolve the DEFAULT roots and
-    transform the wrong tenant's data while emitting real-looking lineage for it — the exact failure
-    the stage runner's fail-closed project handling exists to prevent.
-    """
-    from medallion.core.config import get_settings
-    from medallion.services import transform
-    from medallion.workflow import StageJobSpec
-
-    captured: dict[str, Any] = {}
-
-    class _Client:
-        def schedule_new_workflow(self, *, workflow: Any, input: Any, instance_id: str) -> None:  # noqa: A002
-            captured["input"] = input
-            captured["instance_id"] = instance_id
-
-    import dapr.ext.workflow as wf
-
-    monkeypatch.setattr(wf, "DaprWorkflowClient", lambda *a, **k: _Client())
-
-    transform._dispatch_stage_workflow(
-        get_settings(),
-        from_uri="s3://wh/acme-bronze/pages.lance",
-        to_uri="s3://wh/acme-silver/pages.lance",
-        token="tok-1",
-        lineage_json='{"run_id": "r1"}',
-        trigger=StageTrigger(token="tok-1", dataset="pages", project="acme"),
-    )
-
-    spec = StageJobSpec.model_validate(captured["input"])
-    assert spec.trigger["project"] == "acme", "the project fell off the round trip — the completed pass would target the wrong tenant"
-    assert spec.trigger["dataset"] == "pages"
-    assert spec.lineage_json == '{"run_id": "r1"}', "the R26 provenance document must reach the job's own commit"
-    assert spec.from_uri.endswith("acme-bronze/pages.lance")
-
-
-def test_BOTH_passes_name_the_SAME_instant(monkeypatch: pytest.MonkeyPatch) -> None:
-    """R26's one-instant rule, which S1's two-pass split broke on every Ray-lane run.
-
-    `transform.py:277` states it: "ONE instant for the whole run: the `lineage` JSONB written into the
-    dataset (R26) and the event published to the graph must name the same eventTime, or the two
-    provenance records disagree on the only field a consumer can join runs by time on."
-
-    That held while the ray branch was ONE pass. S1 made it two, and `event_time = datetime.now(UTC)`
-    runs at the top of each — so pass 1 stamps instant A into the `lineage` document the Ray job
-    writes INTO the dataset, and pass 2 stamps instant B onto the COMPLETE published to the graph. The
-    dataset and the graph then disagree, permanently, on every distributed run.
-
-    The instant therefore rides the re-published trigger: pass 1 owns it, pass 2 reuses it.
-    """
-    from medallion.core.config import get_settings
-    from medallion.services import transform
-    from medallion.workflow import StageJobSpec
-
-    captured: dict[str, Any] = {}
-
-    class _Client:
-        def schedule_new_workflow(self, *, workflow: Any, input: Any, instance_id: str) -> None:  # noqa: A002
-            captured["input"] = input
-
-    import dapr.ext.workflow as wf
-
-    monkeypatch.setattr(wf, "DaprWorkflowClient", lambda *a, **k: _Client())
-
-    transform._dispatch_stage_workflow(
-        get_settings(),
-        from_uri="s3://wh/p-bronze/pages.lance",
-        to_uri="s3://wh/p-silver/pages.lance",
-        token="tok-1",
-        lineage_json='{"run_id": "r1"}',
-        trigger=StageTrigger(token="tok-1"),
-        event_time="2026-08-15T12:00:00+00:00",
-    )
-
-    spec = StageJobSpec.model_validate(captured["input"])
-    assert spec.trigger.get("event_time") == "2026-08-15T12:00:00+00:00", (
-        "pass 1's instant did not ride the trigger — pass 2 will stamp its own, and the dataset's "
-        "lineage document and the published COMPLETE will disagree on eventTime"
-    )
-
-
 def test_the_carried_instant_is_REFUSED_if_malformed() -> None:
     """The trigger is untrusted input like every other field. A garbage eventTime would produce a
     spec-invalid RunEvent, and the emit would fail AFTER the data landed — the worst moment."""
-    from medallion.services.trigger_guards import parse_stage_trigger
-
     assert parse_stage_trigger({"data": {"token": "t", "event_time": "not-a-timestamp"}}) is None
     ok = parse_stage_trigger({"data": {"token": "t", "event_time": "2026-08-15T12:00:00+00:00"}})
     assert ok is not None and ok.event_time == "2026-08-15T12:00:00+00:00"

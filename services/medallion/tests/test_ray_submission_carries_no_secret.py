@@ -30,6 +30,14 @@ from medallion.core.config import MedallionSettings
 from medallion.services import ray_submit, stage_submit
 
 
+async def _submit_stage_job(settings: Any, **kwargs: Any) -> None:
+    """The stage lane's submission: the order it builds, posted through the port."""
+    from medallion.services import stage_submit as _stage_submit
+
+    order, registration = await _stage_submit.build_stage_order(settings, **kwargs)
+    await _stage_submit.submit_stage_order(order, registration)
+
+
 SECRET = "the-platform-s3-secret"
 APP_TOKEN = "the-estate-service-credential"
 
@@ -85,7 +93,7 @@ def train_body(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
 
 @pytest.mark.asyncio
 async def test_the_stage_submission_carries_no_secret_material(stage_body: dict[str, Any]) -> None:
-    await stage_submit.submit_stage_job(_settings(), from_uri="s3://acme/bronze", to_uri="s3://acme/silver", stage="silver", token="tok-1")
+    await _submit_stage_job(_settings(), from_uri="s3://acme/bronze", to_uri="s3://acme/silver", stage="silver", token="tok-1")
     env = stage_body["body"]["runtime_env"]["env_vars"] if "body" in stage_body else stage_body["runtime_env"]["env_vars"]
     assert "S3_SECRET" not in env, "the S3 secret still rides runtime_env, which the Jobs API echoes to any reader"
     assert "LINEAGE_SERVICE_TOKEN" not in env, "the estate's service credential still rides runtime_env"

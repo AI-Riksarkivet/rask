@@ -5,13 +5,9 @@ could not fire for Ray, because hosting was asserted by a constant
 (`HOSTED_ENGINES = frozenset({RAY_ENGINE, IN_PROCESS_ENGINE})`) that contains Ray whether or not this
 deployment runs the Ray lane. A control that cannot fire, in the file whose job is choosing.
 
-WHAT IT COSTS IS WORSE THAN AN ERROR. `stage_runner.py` starts the Dapr Workflow runtime only
-`if settings.ray_enabled` — "the only lane with a job to wait for" — while `_dispatch_stage_workflow`
-builds a `DaprSagaClient`, which only ENQUEUES. So on a Ray-OFF deployment a declared Ray task passed
-the check, was scheduled, and was never executed: no failure, no DLQ, no refusal. `stage_runner.py`
-names this asymmetry from ingest's first in-cluster deploy — "the engine running in the sidecar and
-still could not run a workflow because the APP side was absent — an asymmetry that looks healthy from
-every angle except an actual run."
+WHAT IT COSTS IS WORSE THAN AN ERROR. On a Ray-OFF deployment no Ray head is addressed and no plan
+sweep is wired, so a declared Ray task that passed the check would be planned and never resolved: no
+failure, no DLQ, no refusal — an asymmetry that looks healthy from every angle except an actual run.
 
 THE ROOT IS ONE FLAG DOING TWO JOBS. `ray_enabled` is both the chart's DEFAULT engine for an estate
 that has declared nothing, and whether this deployment HOSTS the Ray runtime. Those are different

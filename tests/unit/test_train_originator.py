@@ -140,7 +140,7 @@ def test_the_head_omits_the_originator_when_there_is_no_person(monkeypatch: pyte
 # ── link 3: the consumer forwards it to the submitter ────────────────────────────────────────────
 
 
-def test_the_consumer_forwards_the_originator_to_the_ray_submission(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_consumer_forwards_the_originator_to_the_ray_submission(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """The trigger arrives off the bus, so the originator is an untrusted CLAIM — carried, never
     trusted. It authorizes nothing here and is re-checked against visibility at delivery, the same
     posture `StageTrigger.originator` already documents."""
@@ -152,7 +152,8 @@ def test_the_consumer_forwards_the_originator_to_the_ray_submission(monkeypatch:
 
     monkeypatch.setattr(train.ray_submit, "submit_train_job", fake_submit)
     event = {"data": {"token": "t1", "model": "churn", "features": [{"dataset": "silver$features", "version": 7}], "originator": "alice"}}
-    assert asyncio.run(train.handle_train_trigger(_settings(), event)) == {"status": "SUCCESS"}
+    local = _settings(MEDALLION_BRONZE_URI=f"{tmp_path}/medallion/bronze", MEDALLION_CONTROL_ROOT=f"{tmp_path}/control")
+    assert asyncio.run(train.handle_train_trigger(local, event, dapr=_FakeDapr())) == {"status": "SUCCESS"}
     assert seen["originator"] == "alice"
 
 

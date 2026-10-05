@@ -182,15 +182,11 @@
                     secretKeyRef:
                       name: {{ include "lance.fullname" . }}-infra-credentials
                       key: ray-compute-secret-key
-                {{- /* PRE-STAGED for P7b, and inert today — stated plainly so nobody reads it as wiring
-                     that already works. This image is built solely from runners/htr's own lock
-                     (.docker/ray-cluster.dockerfile), and lineage-kit is deliberately NOT a dependency
-                     there, so nothing in this container can call build_emitter() at all. The env is
-                     rendered now so the transport is present the day the actor seam lands, rather than
-                     that day beginning with a silent NoopEmitter; wiring the emission itself is P7b's
-                     job. Workers inherit the raylet's environment, and workerGroupSpecs is empty today.
-                     The head authenticates to lineage as `-sa-ray` through its projected `rask-lineage`
-                     token below, which lineage maps to `trainerIdentity` alone ([[LH-220]]). */}}
+                {{- /* The lineage transport for the jobs that emit (ray_train_job.py through lineage-kit,
+                     which packages/ray-cluster-env carries); the stage job emits nothing and reports its
+                     outcome to its planner's door instead (CP-029). The head is ONE account, `-sa-ray`:
+                     lineage maps its `rask-lineage` token, and a stage runner's outcome door its
+                     `rask-medallion` one, to `trainerIdentity` ([[LH-220]] D1). */}}
                 {{- include "lance.lineageEmitEnv" (list .) | nindent 16 }}
               ports:
                 - {containerPort: 6379, name: gcs}
@@ -232,14 +228,14 @@
                 - {name: RAY_gcs_storage_path, value: /var/lib/ray-gcs}
               {{- end }}
               volumeMounts:
-                {{- include "lance.identityTokens" (list "mounts" "rask-lineage") | nindent 16 }}
+                {{- include "lance.identityTokens" (list "mounts" "rask-lineage" "rask-medallion") | nindent 16 }}
                 - {name: dshm, mountPath: /dev/shm}
                 - {name: hf-cache, mountPath: /cache/hf}
                 {{- if .Values.ray.cluster.gcsFaultTolerance.enabled }}
                 - {name: gcs-store, mountPath: /var/lib/ray-gcs}
                 {{- end }}
           volumes:
-            {{- include "lance.identityTokens" (list "volumes" "rask-lineage") | nindent 12 }}
+            {{- include "lance.identityTokens" (list "volumes" "rask-lineage" "rask-medallion") | nindent 12 }}
             - name: dshm
               emptyDir:
                 medium: Memory

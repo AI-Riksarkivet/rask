@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -39,6 +40,11 @@ def _settings(**overrides: Any) -> MedallionSettings:
     }
     values.update(overrides)
     return MedallionSettings.model_validate(values)
+
+
+def _local(root: Path) -> dict[str, str]:
+    """A consumer plans each run into a control root and reads its registry's version first (CP-029): both local."""
+    return {"MEDALLION_BRONZE_URI": f"{root}/medallion/bronze", "MEDALLION_CONTROL_ROOT": f"{root}/control"}
 
 
 def test_an_UNREGISTERED_dataset_keeps_the_composed_path(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -66,7 +72,7 @@ def test_a_CATALOG_OUTAGE_falls_back_rather_than_refusing_the_submission(monkeyp
     assert train.feature_uri_for(settings, "silver$features") == "s3://lake/medallion/silver"
 
 
-def test_the_ray_JOB_is_given_the_location_the_door_RESOLVED(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_ray_JOB_is_given_the_location_the_door_RESOLVED(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """The hop the legs above cannot see: validation asks the catalog, the submission composed a path.
 
     `feature_uri_for` is correct and was called in exactly one place — `_resolve_version`, which opens
@@ -90,13 +96,14 @@ def test_the_ray_JOB_is_given_the_location_the_door_RESOLVED(monkeypatch: pytest
     monkeypatch.setattr(train.ray_submit, "submit_train_job", fake_submit)
     event = {"data": {"token": "t1", "model": "churn", "features": [{"dataset": "silver$features", "version": 7}]}}
 
-    outcome = asyncio.run(train.handle_train_trigger(_settings(MEDALLION_CATALOG_URL="http://catalog:2333"), event))
+    local = _settings(MEDALLION_CATALOG_URL="http://catalog:2333", **_local(tmp_path))
+    outcome = asyncio.run(train.handle_train_trigger(local, event, dapr=object()))
 
     assert outcome == {"status": "SUCCESS"}
     assert seen["features"] == [{"dataset": "silver$features", "version": 7, "uri": "s3://tenant-wh/90fabc"}]
 
 
-def test_an_unregistered_feature_still_reaches_the_job_by_its_composed_path(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_an_unregistered_feature_still_reaches_the_job_by_its_composed_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """The fallback has to survive the same hop — the demo shape trains from the composed layout."""
     seen: dict[str, Any] = {}
 
@@ -107,5 +114,5 @@ def test_an_unregistered_feature_still_reaches_the_job_by_its_composed_path(monk
     monkeypatch.setattr(train.ray_submit, "submit_train_job", fake_submit)
     event = {"data": {"token": "t1", "model": "churn", "features": [{"dataset": "silver$features", "version": 7}]}}
 
-    assert asyncio.run(train.handle_train_trigger(_settings(), event)) == {"status": "SUCCESS"}
-    assert seen["features"] == [{"dataset": "silver$features", "version": 7, "uri": "s3://lake/medallion/silver"}]
+    assert asyncio.run(train.handle_train_trigger(_settings(**_local(tmp_path)), event, dapr=object())) == {"status": "SUCCESS"}
+    assert seen["features"] == [{"dataset": "silver$features", "version": 7, "uri": f"{tmp_path}/medallion/silver"}]

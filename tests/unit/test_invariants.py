@@ -759,55 +759,6 @@ def test_the_ray_address_names_a_service_the_chart_actually_creates() -> None:
             assert host in services, f"{host} is not a Service this chart creates"
 
 
-def test_every_stage_runner_that_hosts_a_workflow_is_scoped_to_the_actor_state_store() -> None:
-    """The general property the notifications test above only covers one instance of.
-
-    S1 put a Dapr Workflow inside `stage_runner.py`, so with the Ray lane on EVERY stage runner hosts a workflow —
-    and each has its own `daprAppId` from `medallion.stageRunners[]` (`bronze-to-silver`, `silver-to-gold`,
-    …). There is no `medallion` app-id anywhere in the estate, and a hand-written scope entry for one
-    was inert while looking entirely correct in review.
-
-    THE FAILURE IS INVISIBLE IN THE SIDECAR LOG, which is why this is a test and not a convention.
-    Measured live 2026-08-15 on an unscoped `bronze-to-silver`, in this order:
-
-        "Actor state store not configured - actor hosting disabled, but invocation enabled"
-        "Workflow engine started"
-
-    The second line is the one an operator greps for and it is TRUE — the engine does start. Dispatch
-    then fails on every delivery. After scoping, the first line is gone and the sidecar reports
-    "Connected to placement service" instead.
-
-    Asserted against the RENDERED stage runners rather than a hardcoded list, so adding a stage runner to
-    `medallion.stageRunners` cannot produce one that silently fails to dispatch.
-    """
-    docs = _rendered_docs("medallion.ray=true")
-    stores = [
-        doc
-        for doc in docs
-        if doc.get("kind") == "Component"
-        and any(m.get("name") == "actorStateStore" and str(m.get("value")).lower() == "true" for m in (doc["spec"].get("metadata") or []))
-    ]
-    assert len(stores) == 1, f"expected exactly one actor state store, found {[d['metadata']['name'] for d in stores]}"
-    scopes = set(stores[0].get("scopes") or [])
-
-    # Filtered rather than `- {None}`: subtracting the sentinel does not narrow the ELEMENT type, so
-    # the set stays `str | None` and `sorted` has nothing to compare. Narrow at the comprehension.
-    stage_runners = {
-        app_id
-        for doc in docs
-        if doc.get("kind") == "Deployment" and "-to-" in ((doc.get("metadata") or {}).get("name") or "")
-        if (app_id := (doc["spec"]["template"]["metadata"].get("annotations") or {}).get("dapr.io/app-id")) is not None
-    }
-    assert stage_runners, "no stage_runners rendered with medallion.ray=true — the fixture cannot prove anything"
-
-    missing = sorted(stage_runners - scopes)
-    assert not missing, (
-        f"these stage runners host a workflow but are not scoped to the actor state store: {missing}. "
-        f"Their sidecars will log 'Workflow engine started' and disable actor hosting, so every "
-        f"dispatch fails on a pod that reports itself healthy."
-    )
-
-
 # `test_the_kubelet_probes_the_inbox_on_a_path_the_service_actually_serves` lived here and is GONE,
 # subsumed rather than deleted for tidiness: `tests/unit/test_probe_paths_are_served.py` asks the same
 # question — is every path the chart probes one the app actually mounts — of every first-party app in

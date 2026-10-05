@@ -13,6 +13,13 @@ publishes per the D4 crash-safe order:
    the dataset's external-blob base). The commit IS the atomic registration: a crash between (1) and
    (2) leaves orphan files, never a half-registered model. Model version N == Lance version N.
 
+That one commit carries the run's COMMIT MARKER (CP-029, `service_kit.lakehouse.commit_marker`): the run's id
+(`RASK_IDEMPOTENCY_KEY`, the producer's plan and the Ray submission id) in its transaction properties, so the
+producer can tell from the registry's Lance history alone whether a run whose job vanished published its model.
+After its own terminal event LANDED, the job reports that terminal to the producer's outcome door
+(`RASK_OUTCOME_URL`); a job whose terminal emit failed reports nothing, and the producer's plan sweep records the
+terminal instead, so a lost emit never leaves a run without one.
+
 No ``services/`` imports — this is baked into the ray image and must not reach the fleet. It DOES
 import ``lineage_kit``, which is not a service: ``packages/ray-cluster-env`` declares it precisely so
 the compute plane can emit through one authority (LIN-001, owner ruling 2026-09-18), and its run-id
@@ -21,7 +28,8 @@ Its storage options and artifact filesystem come from ``service_kit.lakehouse.ob
 env declares too.
 
 Env: MODEL FEATURES(json [{dataset,version,uri}]) CONFIG TOKEN MODELS_NAMESPACE REGISTRY_URI
-     ARTIFACT_BASE [LINEAGE_URL] [LINEAGE_TOKEN] S3_ENDPOINT S3_KEY S3_SECRET [S3_REGION]
+     ARTIFACT_BASE [LINEAGE_URL] [LINEAGE_TOKEN] [RASK_IDEMPOTENCY_KEY RASK_OUTCOME_URL]
+     S3_ENDPOINT S3_KEY S3_SECRET [S3_REGION]
      [TRACEPARENT TRACESTATE OTEL_*] — trace continuity across the Ray boundary (prod-readiness P3):
      when the submitting consumer injected its span + OTLP config, the job runs under one root span
      parented on that trace; absent → untraced, exactly as before.
@@ -61,7 +69,9 @@ from lineage_kit.schemas import (
     SchemaField,
     custom_facet,
 )
+from service_kit.lakehouse.commit_marker import CommitMarker
 from service_kit.lakehouse.objectfs import StorageOptions, lance_storage_options, s3_filesystem
+from service_kit.lakehouse.run_outcomes import OutcomeReport, report_outcome
 
 
 #: The lane's own job facet. Everything ELSE about the envelope — the producer URI, every
@@ -166,8 +176,9 @@ def build_event(
     )
 
 
-def emit(event: RunEvent) -> None:
-    """Send the event to the lineage ingest. Best-effort — provenance must never crash the training.
+def emit(event: RunEvent) -> bool:
+    """Send the event to the lineage ingest and answer whether it landed. Best-effort — provenance must never crash
+    the training, and a terminal that did not land is not reported to the producer, whose sweep records it instead.
 
     THE CREDENTIAL RULES ARE `lineage-kit`'s, not this file's. It takes the endpoint from the head's
     ``RASK_LINEAGE_ENDPOINT`` (or the submission's ``LINEAGE_URL``) and presents the head's projected
@@ -176,6 +187,8 @@ def emit(event: RunEvent) -> None:
     """
     if not build_emitter().emit(event):
         print(f"lineage emit failed for {event.job.name}", file=sys.stderr)
+        return False
+    return True
 
 
 def emit_metrics(model: str, metrics: dict[str, Any], *, reader: Any = None) -> None:
@@ -349,6 +362,7 @@ def publish_registry(
     artifact_uris: dict[str, str],
     meta: dict[str, Any],
     storage_options: dict[str, str] | None,
+    marker: CommitMarker | None = None,
 ) -> int:
     """STEP 2 (the atomic registration): ONE Lance commit of pointer rows into ``models$<model>``.
 
@@ -360,6 +374,10 @@ def publish_registry(
     misclassified append-time failures as "first publish" and masked the real error behind a
     'Dataset already exists' from the fallback create). A create that loses the concurrent
     first-publish CAS race converges as an append instead of terminally failing the run.
+
+    ``marker`` rides the commit's transaction properties on every path (create, append and the race's append alike;
+    both modes take them, measured on pylance 12.0.0 2026-10-05). This commit is the run's ONLY write to the
+    registry, so a marker found in the registry's history means the whole registration landed.
     """
     import lance
     import pyarrow as pa
@@ -375,8 +393,10 @@ def publish_registry(
         }
     )
 
+    properties = marker.properties() if marker is not None else None
+
     def _append() -> int:
-        return int(lance.write_dataset(table, registry_uri, mode="append", storage_options=storage_options).version)
+        return int(lance.write_dataset(table, registry_uri, mode="append", storage_options=storage_options, transaction_properties=properties).version)
 
     try:  # scope: ONLY the existence probe — a failing append must surface its own error
         lance.dataset(registry_uri, storage_options=storage_options)
@@ -393,6 +413,7 @@ def publish_registry(
                 enable_stable_row_ids=True,
                 initial_bases=[DatasetBasePath(artifact_base.rstrip("/") + "/")],
                 storage_options=storage_options,
+                transaction_properties=properties,
             ).version
         )
     except OSError as exc:
@@ -413,11 +434,22 @@ def main() -> None:
     # Continue the submitting consumer's trace (P3): the whole training run is one child span of the
     # submitting trace (a FAIL below re-raises through the span, marking it ERROR before the flush);
     # without a handed-over context it runs exactly as before.
+    # THE RUN'S ONE NAME AND ITS DOOR (CP-029). A submission with no id marks nothing; one with no door reports nothing,
+    # and the producer's plan sweep resolves the run from Ray's state and the registry's history.
+    action_id = os.environ.get("RASK_IDEMPOTENCY_KEY", "").strip()
+    marker = CommitMarker(action_id=action_id, run_id=run_id_for(f"train-{token}")) if action_id else None
+    outcome_url = os.environ.get("RASK_OUTCOME_URL", "").strip()
     with _traced_root("ray.train_job", {"lance.model": model}):
-        _run_train(model, token)
+        _run_train(model, token, marker=marker, outcome_url=outcome_url)
 
 
-def _run_train(model: str, token: str) -> None:
+def _terminal(event: RunEvent, outcome_url: str, report: OutcomeReport) -> None:
+    """Emit the run's terminal event, then report it to the producer's door, but only when the event landed."""
+    if emit(event) and outcome_url:
+        report_outcome(outcome_url, report)
+
+
+def _run_train(model: str, token: str, *, marker: CommitMarker | None = None, outcome_url: str = "") -> None:
     namespace = os.environ.get("MODELS_NAMESPACE", "models")
     registry_uri = os.environ.get("REGISTRY_URI", "")
     features: list[dict[str, Any]] = []
@@ -443,7 +475,8 @@ def _run_train(model: str, token: str) -> None:
         artifact_base = os.environ["ARTIFACT_BASE"]
         so = _storage_options() if registry_uri.startswith("s3://") else None
     except Exception as exc:
-        emit(event(event_type="FAIL", error=f"train config: {exc}"))
+        error = f"train config: {exc}"
+        _terminal(event(event_type="FAIL", error=error), outcome_url, OutcomeReport(status="failed", error=error[:4000]))
         raise
 
     emit(event(event_type="START"))
@@ -463,13 +496,14 @@ def _run_train(model: str, token: str) -> None:
         )
         emit(event(event_type="RUNNING", progress=(len(features) + 1, len(features) + 1)))
         meta = {"config": config, "features": features, "metrics": metrics, "token": token}
-        version = publish_registry(registry_uri, artifact_base, artifact_uris, meta, so)
-        emit(event(event_type="COMPLETE", version=version))
-        emit_metrics(model, metrics)  # telemetry → OTLP → GreptimeDB → Perses (best-effort)
-        print(f"model {namespace}${model} published at registry version {version}")
+        version = publish_registry(registry_uri, artifact_base, artifact_uris, meta, so, marker=marker)
     except Exception as exc:
-        emit(event(event_type="FAIL", error=f"train: {exc}"))
+        error = f"train: {exc}"
+        _terminal(event(event_type="FAIL", error=error), outcome_url, OutcomeReport(status="failed", error=error[:4000]))
         raise
+    _terminal(event(event_type="COMPLETE", version=version), outcome_url, OutcomeReport(status="succeeded", committed_version=version))
+    emit_metrics(model, metrics)  # telemetry → OTLP → GreptimeDB → Perses (best-effort)
+    print(f"model {namespace}${model} published at registry version {version}")
 
 
 if __name__ == "__main__":

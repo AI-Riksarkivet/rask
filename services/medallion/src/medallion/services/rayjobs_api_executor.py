@@ -7,10 +7,10 @@ workflow, and `engine_registry.executor_for` had zero production callers. A port
 a decision record describing an architecture that does not exist, which is the condition the estate's
 own rule about falsified prose exists to prevent.
 
-**THIS IS THE COMPUTE ENGINE'S ADAPTER, AND IT DOES NOT REPLACE DAPR WORKFLOW.** The owner's BYO ruling
-(2026-09-15) separates two axes — bring your own WORKFLOW engine, bring your own COMPUTE engine — so
-the workflow orchestrates and CALLS an executor rather than being one. That composition is why this
-adapter can exist without the Ray lane losing the durable run record the workflow gives it.
+**THIS IS THE COMPUTE ENGINE'S ADAPTER, NOT THE RUN RECORD.** The owner's BYO ruling (2026-09-15)
+separates two axes — bring your own WORKFLOW engine, bring your own COMPUTE engine. The durable run
+record is the stage's plan (`stage_plans`, CP-029): the planner and its sweep CALL this executor to
+submit, read status, read a failure's cause and stop a job, and keep the outcome in the plan.
 
 **IT WRAPS; IT DOES NOT REIMPLEMENT.** Every method delegates to the functions the lane already uses —
 `submit_or_reattach`, `job_status`, `job_failure`. A second implementation of "what does a Ray job's
@@ -170,8 +170,16 @@ class RayJobsApiExecutor:
         return RunFailure(kind=kind, message=raw.message or "", exit_code=raw.driver_exit_code)
 
     async def cancel(self, handle: RunHandle) -> None:
-        """Stop the job by deleting it, which is what `CANCEL` promises."""
-        await (await self._http()).delete(f"/api/jobs/{handle.handle}")
+        """Stop the job, which is what `CANCEL` promises: the Jobs API's `POST /api/jobs/{id}/stop`.
+
+        Not a DELETE: Ray deletes only a job that is already terminal, so a delete answers a running job with an error
+        and stops nothing. A refused stop raises, so an operator is never told a running job was stopped.
+
+        Raises:
+            httpx.HTTPError: the dashboard could not be reached or refused the stop.
+        """
+        response = await (await self._http()).post(f"/api/jobs/{handle.handle}/stop")
+        response.raise_for_status()
 
     async def result(self, handle: RunHandle) -> Any:  # noqa: ANN401 — the port's own return shape; see executor.py
         """Refused, because this engine does not advertise `Capability.RESULT`.

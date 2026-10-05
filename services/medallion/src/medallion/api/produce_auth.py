@@ -189,7 +189,7 @@ async def admit_caller(
 ) -> ProducerCaller:
     """The door of a route acting on an EXISTING resource: authentication, and no ``?project=`` at all.
 
-    Owner ruling 2026-09-25, "Authorize on the resource". The tenant of a stage run, a training watch or
+    Owner ruling 2026-09-25, "Authorize on the resource". The tenant of a stage run, a training run or
     a stalled cell is recorded on it, so the route reads the resource and authorizes on the project it
     names (`require_project_admin` / `administered_projects`). A ``?project=`` here would hand that
     choice to the caller — an admin of one project naming their own to read or stop another's, measured

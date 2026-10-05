@@ -27,7 +27,8 @@ distributed path must not produce a dataset the in-process path would have stamp
 (the pre-R26 shape), so the job stays runnable by hand.
 
 Env: RASK_SOURCE_URI RASK_DEST_URI RASK_STAGE [RASK_LINEAGE_DOCUMENT RASK_VERSION_FLOOR
-     RASK_CARDINALITY]  S3_ENDPOINT S3_KEY S3_SECRET [S3_REGION]
+     RASK_CARDINALITY RASK_IDEMPOTENCY_KEY RASK_RUN_ID RASK_OUTCOME_URL]  S3_ENDPOINT S3_KEY S3_SECRET [S3_REGION]
+     — the last three name the run (its commit marker) and the planner's outcome door it reports to (CP-029).
      [TRACEPARENT TRACESTATE OTEL_*] — trace continuity across the Ray boundary (prod-readiness P3):
      when the submitting stage runner injected its span + OTLP config, the job runs under one root span
      parented on that trace; absent → untraced, exactly as before.
@@ -52,6 +53,7 @@ from typing import Any
 import lance
 import pyarrow as pa
 from lance import blob_array, blob_field
+from lance.commit import CommitConflictError
 
 # lance_ray ships in the Ray image, NOT our services' venv — imported LAZILY (inside the tabular branch
 # of main) so the deriver primitives below stay importable in the unit venv for the drift-pin test
@@ -66,8 +68,65 @@ from lance import blob_array, blob_field
 # `service-kit[media]` extra, which the ray-cluster image installs.
 from service_kit.lakehouse import media
 from service_kit.lakehouse.blobs import blob_field_names
+from service_kit.lakehouse.commit_marker import CommitMarker, stamped
 from service_kit.lakehouse.objectfs import StorageOptions, fs_and_base, lance_storage_options, s3_filesystem
+from service_kit.lakehouse.run_outcomes import OutcomeReport, report_outcome
 from service_kit.lakehouse.stage_stamp import CARDINALITIES, LINEAGE_COLUMN, ONE_TO_ONE, SOURCE_ROWID_COLUMN, STAGE_COLUMN, ensure_declared_dataset_id
+
+
+# --- the commit marker (CP-029 D-5) ----------------------------------------------------------------
+# Every lane ends on ONE markable destination commit and orders every commit it cannot mark (a delete, a schema-metadata
+# stamp) before it, so "the run's marker is in the destination's history" implies "every write of the run landed".
+# `write_dataset` carries the marker in its own transaction properties; a merge carries it through
+# `execute_uncommitted` and a stamped `LanceDataset.commit` (measured on pylance 12.0.0, `commit_marker`'s docstring).
+
+
+#: How many times a marked merge that lost a race is planned again against the newer version. The same bound
+#: `MergeInsertBuilder.conflict_retries` defaults to ("Default is 10", pylance 12.0.0), so a marked merge survives the
+#: contention an unmarked `.execute()` survives.
+MERGE_CONFLICT_RETRIES = 10
+
+
+def _properties(marker: CommitMarker | None) -> dict[str, str] | None:
+    return marker.properties() if marker is not None else None
+
+
+def _converge(
+    to_uri: str, table: pa.Table | lance.LanceDataset, so: StorageOptions, marker: CommitMarker | None, *, retract: str | None = None, full_sync: bool = False
+) -> None:
+    """Merge ``table`` (a table, or a dataset the merge streams) into the destination on `id`, as ONE commit carrying ``marker``.
+
+    ``full_sync`` deletes every destination row the source does not carry; ``retract`` deletes only those of them that
+    also match the predicate (the media lane's "not written by this run", folded into its last batch's merge so the
+    retraction and the marker are one commit).
+
+    A MARKED MERGE RE-PLANS ITSELF WHEN IT LOSES A RACE. `.execute()` re-runs a merge preempted by a concurrent commit
+    (`conflict_retries`); `execute_uncommitted` plus `LanceDataset.commit` does not, because the commit's own
+    `max_retries` only rebases a transaction that CAN be rebased. A merge that a concurrent merge, compaction or delete
+    preempted raises `lance.commit.CommitConflictError` with ``retryable=True`` (measured on pylance 12.0.0, against a
+    concurrent merge and a concurrent `compact_files`), which `lance_docs/file_format.md` § Conflict Resolution defines
+    as "re-execute at the application level with updated data". So the merge is planned again against the newest
+    version and committed again. An incompatible conflict (``retryable=False``, a concurrent overwrite replaced the
+    table) is raised unchanged: re-planning would merge into contents this run never read.
+    """
+    for attempt in range(MERGE_CONFLICT_RETRIES + 1):
+        builder = lance.dataset(to_uri, storage_options=so).merge_insert("id").when_matched_update_all().when_not_matched_insert_all()
+        if full_sync:
+            builder = builder.when_not_matched_by_source_delete()
+        elif retract is not None:
+            builder = builder.when_not_matched_by_source_delete(retract)
+        if marker is None:
+            builder.execute(table)
+            return
+        transaction, _stats = builder.execute_uncommitted(table)
+        try:
+            lance.LanceDataset.commit(to_uri, stamped(transaction, marker), storage_options=so)
+        except CommitConflictError as exc:
+            if not exc.retryable or attempt == MERGE_CONFLICT_RETRIES:
+                raise
+            print(f"RAY-STAGE merge into {to_uri} lost a commit race (attempt {attempt + 1}); planning it again: {exc}")
+            continue
+        return
 
 
 def _storage_options() -> StorageOptions:
@@ -233,7 +292,9 @@ def _run_id_of(lineage: str) -> str | None:
     return run if isinstance(run, str) and _SAFE_RUN_ID.match(run) else None
 
 
-def _media_transform(from_uri: str, to_uri: str, so: StorageOptions, *, stage: str, lineage: str = "", dataset_id: str = "") -> None:
+def _media_transform(
+    from_uri: str, to_uri: str, so: StorageOptions, *, stage: str, lineage: str = "", dataset_id: str = "", marker: CommitMarker | None = None
+) -> None:
     """The MEDIA path: pylance-native blob round-trip + inline image derivation, then a 2.2 stable-id write.
 
     Same contract as compute.transform_stage + derivers.derive_artifacts: re-materialise each blob column
@@ -255,18 +316,20 @@ def _media_transform(from_uri: str, to_uri: str, so: StorageOptions, *, stage: s
     STREAMED, in ``MEDIA_BATCH_ROWS`` slices. The scan, the derivation and the write are one pass per
     batch, so what the driver holds is bounded by the batch rather than by the run.
 
-    A RERUN MERGES AND THEN RETRACTS ONCE, and that is what preserves row identity. The tier ABOVE
-    stores this tier's stable ``_rowid`` as its ``source_rowid``, so re-creating the target re-mints
-    every parent id it holds — measured on the live estate as silver's 8 ``source_rowid`` values naming
-    bronze rows that no longer existed, 8 of 8. The tabular head became a full-sync merge for exactly
-    that reason, and this lane could not take the same change per batch: a per-batch
-    ``when_not_matched_by_source_delete`` deletes the rows earlier batches just wrote. So the delete is
-    lifted OUT of the batch loop — every batch merges, and ONE pass afterwards retracts whatever this
-    run did not write, keyed on the ``run_id`` each row carries in its own ``lineage`` document. That is
-    only expressible because ``lineage`` is JSONB and therefore filterable in place.
+    A RERUN MERGES AND RETRACTS ONCE, and that is what preserves row identity. The tier ABOVE stores
+    this tier's stable ``_rowid`` as its ``source_rowid``, so re-creating the target re-mints every
+    parent id it holds — measured on the live estate as silver's 8 ``source_rowid`` values naming bronze
+    rows that no longer existed, 8 of 8. A plain per-batch ``when_not_matched_by_source_delete`` would
+    delete the rows earlier batches just wrote, so the retraction is CONDITIONAL and rides the LAST
+    batch's merge alone: it deletes a destination row the last batch does not carry only when that row's
+    own ``lineage`` document names another run. Rows earlier batches wrote name this run and stay. That
+    is only expressible because ``lineage`` is JSONB and therefore filterable in place, and folding it
+    into the last merge makes the retraction and the run's commit marker ONE commit (measured on
+    pylance 12.0.0: the predicate deleted exactly the other run's row the source did not carry).
 
     The first write of a target that does not exist still CREATES it, because ``enable_stable_row_ids``
-    is create-time-only and a merge cannot turn it on.
+    is create-time-only and a merge cannot turn it on. The last batch is held back one step (one batch
+    of lookahead) so its write is the one that carries the marker.
     """
     ds = lance.dataset(from_uri, storage_options=so)
     blob_cols = blob_field_names(ds.schema)
@@ -278,26 +341,43 @@ def _media_transform(from_uri: str, to_uri: str, so: StorageOptions, *, stage: s
     scanner = ds.scanner(columns=carried, blob_handling="all_binary", with_row_id=True, batch_size=MEDIA_BATCH_ROWS)
 
     run = _run_id_of(lineage)
+    # THE RETRACTION'S PREDICATE: every row this run wrote carries this run's id in its own `lineage` document, so
+    # "not written by this run" is a filter rather than a set the driver has to hold. None when the lane is unwired
+    # (`lineage` empty, so `run` is None): with nothing identifying this run, the predicate would match every row and
+    # the retraction would empty the tier — absent provenance must fail SAFE, not destructively.
+    retract = f"json_get_string({LINEAGE_COLUMN}, 'run_id') != '{run}'" if run else None
     fresh = not _dataset_exists(to_uri, so)
     written = 0
-    for batch in scanner.to_batches():
-        out = _media_batch(pa.Table.from_batches([batch]), blob_cols, derive_from, stage=stage, lineage=lineage, dataset_id=dataset_id)
+    held: pa.Table | None = None
+
+    def land(out: pa.Table, *, last: bool) -> None:
+        nonlocal fresh
+        mark = marker if last else None
         if fresh:
             # CREATE, not merge: `enable_stable_row_ids` is create-time-only, so a target that does not
-            # exist yet has to be written into being before anything can merge into it.
-            lance.write_dataset(out, to_uri, mode="overwrite", storage_options=so, data_storage_version="2.2", enable_stable_row_ids=True)
+            # exist yet has to be written into being before anything can merge into it. A created target
+            # holds only this run's rows, so it has nothing to retract.
+            lance.write_dataset(
+                out,
+                to_uri,
+                mode="overwrite",
+                storage_options=so,
+                data_storage_version="2.2",
+                enable_stable_row_ids=True,
+                transaction_properties=_properties(mark),
+            )
             fresh = False
         else:
-            lance.dataset(to_uri, storage_options=so).merge_insert("id").when_matched_update_all().when_not_matched_insert_all().execute(out)
-        written += out.num_rows
+            _converge(to_uri, out, so, mark, retract=retract if last else None)
 
-    if written and run:
-        # THE RETRACTION, ONCE, AFTER THE LAST BATCH. Every row this run wrote carries this run's id in
-        # its own `lineage` document, so "not written by this run" is a filter rather than a set the
-        # driver has to hold. Skipped entirely when the lane is unwired (`lineage` empty, so `run` is
-        # None): with nothing identifying this run, the predicate would match every row and the
-        # retraction would empty the tier — absent provenance must fail SAFE, not destructively.
-        lance.dataset(to_uri, storage_options=so).delete(f"json_get_string({LINEAGE_COLUMN}, 'run_id') != '{run}'")
+    for batch in scanner.to_batches():
+        out = _media_batch(pa.Table.from_batches([batch]), blob_cols, derive_from, stage=stage, lineage=lineage, dataset_id=dataset_id)
+        if held is not None:
+            land(held, last=False)
+        held = out
+        written += out.num_rows
+    if held is not None:
+        land(held, last=True)
 
     if written == 0:
         # An empty source still has to produce the target — an absent dataset is not the same answer
@@ -310,7 +390,15 @@ def _media_transform(from_uri: str, to_uri: str, so: StorageOptions, *, stage: s
             lineage=lineage,
             dataset_id=dataset_id,
         )
-        lance.write_dataset(empty, to_uri, mode="overwrite", storage_options=so, data_storage_version="2.2", enable_stable_row_ids=True)
+        lance.write_dataset(
+            empty,
+            to_uri,
+            mode="overwrite",
+            storage_options=so,
+            data_storage_version="2.2",
+            enable_stable_row_ids=True,
+            transaction_properties=_properties(marker),
+        )
 
 
 def _media_batch(aligned: pa.Table, blob_cols: list[str], derive_from: str | None, *, stage: str, lineage: str, dataset_id: str = "") -> pa.Table:
@@ -470,8 +558,25 @@ def main() -> None:
 
     # Continue the submitting stage runner's trace (P3): the whole stage transform runs as one child span of
     # the stage runner's medallion.transform span; without a handed-over context it runs exactly as before.
-    with _traced_root("ray.stage_job", {"lance.medallion.stage": stage}):
-        _run_stage(from_uri, to_uri, stage, so, lineage=lineage, base_version=base_version, cardinality=cardinality, dataset_id=dataset_id)
+    # THE RUN'S ONE NAME, and where it reports (CP-029). The order's idempotency key is the plan's action id: the job
+    # stamps it on its last commit (the commit marker) and reports its own terminal to the outcome door the order
+    # names. An order with no key marks nothing; one with no door reports nothing, and the plan's sweep resolves it.
+    action_id = os.environ.get("RASK_IDEMPOTENCY_KEY", "").strip()
+    marker = CommitMarker(action_id=action_id, run_id=os.environ.get("RASK_RUN_ID", "").strip()) if action_id else None
+    outcome_url = os.environ.get("RASK_OUTCOME_URL", "").strip()
+    try:
+        with _traced_root("ray.stage_job", {"lance.medallion.stage": stage}):
+            version = _run_stage(
+                from_uri, to_uri, stage, so, lineage=lineage, base_version=base_version, cardinality=cardinality, dataset_id=dataset_id, marker=marker
+            )
+    except BaseException as exc:
+        # A run that committed and THEN failed (a contract check after the write) still reports failed: the planner
+        # reads the destination's history for the marker, so the version it committed is recorded on the FAIL.
+        if outcome_url:
+            report_outcome(outcome_url, OutcomeReport(status="failed", error=f"{type(exc).__name__}: {exc}"[:4000]))
+        raise
+    if outcome_url:
+        report_outcome(outcome_url, OutcomeReport(status="succeeded", committed_version=version))
 
 
 def _assert_stage_contract(*, rows_in: int, rows_out: int, cardinality: str, parentless: int) -> None:
@@ -559,15 +664,15 @@ def _dataset_exists(to_uri: str, so: StorageOptions) -> bool:
     return True
 
 
-def _merge_into(to_uri: str, table: pa.Table, so: StorageOptions) -> None:
-    """Converge this run's rows into the destination on the tier's key.
+def _merge_into(to_uri: str, table: pa.Table, so: StorageOptions, marker: CommitMarker | None = None) -> None:
+    """Converge this run's rows into the destination on the tier's key, as the run's marked commit.
 
     `merge_insert`, never `append`: Dapr delivers at least once, so a redelivered publication event
     WILL re-run this stage over the same delta, and an append would double every row of it with
     nothing downstream noticing. `id` is a tier-contract column (`TIER_COLUMNS`), not a workload
     assumption, so merging on it is the platform's to do.
     """
-    lance.dataset(to_uri, storage_options=so).merge_insert("id").when_matched_update_all().when_not_matched_insert_all().execute(table)
+    _converge(to_uri, table, so, marker)
 
 
 #: Where a distributed run stages its output before the merge that lands it.
@@ -676,7 +781,7 @@ class StagedOutputEmptyError(RuntimeError):
     """The distributed write produced ZERO rows, which a full-sync merge would read as "delete the tier"."""
 
 
-def _land_staged(to_uri: str, staged_uri: str, so: StorageOptions) -> int:
+def _land_staged(to_uri: str, staged_uri: str, so: StorageOptions, marker: CommitMarker | None = None) -> int:
     """Converge a STAGED distributed output into the destination, preserving the tier's row identity.
 
     WHY A STAGING DATASET AT ALL. `lance_ray.write_lance` offers only create/append/overwrite — there is
@@ -712,9 +817,8 @@ def _land_staged(to_uri: str, staged_uri: str, so: StorageOptions) -> int:
             f"the distributed write produced ZERO rows into {staged_uri!r} — refusing to land it, because a "
             f"full-sync merge of an empty source retracts every row of {to_uri!r}"
         )
-    lance.dataset(to_uri, storage_options=so).merge_insert(
-        "id"
-    ).when_matched_update_all().when_not_matched_insert_all().when_not_matched_by_source_delete().execute(staged)
+    # The staged DATASET is the source, streamed by the merge rather than materialised on the driver.
+    _converge(to_uri, staged, so, marker, full_sync=True)
     return lance.dataset(to_uri, storage_options=so).count_rows()
 
 
@@ -728,10 +832,15 @@ def _run_stage(
     base_version: int | None = None,
     cardinality: str = ONE_TO_ONE,
     dataset_id: str = "",
-) -> None:
+    marker: CommitMarker | None = None,
+) -> int | None:
+    """Run the stage and answer the destination version it ended on, ``None`` when it wrote nothing (an empty delta).
+
+    Every lane's LAST destination commit carries ``marker``, with every commit it cannot mark ordered before it.
+    """
     upstream = lance.dataset(from_uri, storage_options=so)
-    # THE DELTA BOUNDARY (D1). `submit_stage_job` has always exported BASE_VERSION and this job never
-    # read it, so every run — a two-row backfill included — rescanned and rewrote the whole tier.
+    # THE DELTA BOUNDARY (D1): the order's version floor, so a two-row backfill does not rescan and
+    # rewrite the whole tier.
     delta = _delta_filter(base_version)
     if delta is not None and not _mergeable(to_uri, so):
         delta = None  # see `_mergeable`: rebuild whole rather than write a delta into a wiped table
@@ -750,7 +859,7 @@ def _run_stage(
 
     if blob_field_names(upstream.schema):
         # MEDIA path: the derivers need the payload bytes, so round-trip + derive via pylance (below).
-        _media_transform(from_uri, to_uri, so, stage=stage, lineage=lineage, dataset_id=dataset_id)
+        _media_transform(from_uri, to_uri, so, stage=stage, lineage=lineage, dataset_id=dataset_id, marker=marker)
     elif delta is not None:
         # BACKFILL LANE. The delta is by construction small, so it is stamped and merged on the driver
         # — the same argument the cascade head below already makes for handling the bronze root
@@ -766,15 +875,17 @@ def _run_stage(
         if rows_in == 0:
             # A legitimate no-op, not a failure: a redelivered event whose rows this stage already
             # processed lands here. Writing an empty version would fire a publication event for data
-            # nobody added.
+            # nobody added. It carries NO marker: a retraction above may have committed, and a reader
+            # that finds none resubmits the run, which converges, rather than mistaking it for a write.
             print(f"RAY-STAGE OK stage={stage} lane=delta rows=0 delta_empty=1 retracted={retracted} base_version={base_version}")
-            return
+            return None
         produced = _stamp_stage(source, stage, lineage, dataset_id)
         rows_out = produced.num_rows
-        _merge_into(to_uri, produced, so)
-        # A merge carries ROWS, not schema metadata, so the stamp above reaches the dataset only when
-        # this write CREATED it. See `service_kit.lakehouse.stage_stamp.ensure_declared_dataset_id`.
+        # A merge carries ROWS, not schema metadata, so the stamp reaches the dataset only through
+        # `ensure_declared_dataset_id` (`service_kit.lakehouse.stage_stamp`). That commit cannot carry the marker, so it
+        # lands BEFORE the merge, which can: the merge is then this run's last commit and carries it.
         ensure_declared_dataset_id(to_uri, dataset_id, so)
+        _merge_into(to_uri, produced, so, marker)
     elif "source_rowid" not in upstream.schema.names:
         # CASCADE HEAD (tabular): mint root-provenance source_rowid from the upstream _rowid, as a native
         # pylance overwrite on the driver (the bronze root is small); deeper tabular stages, which already
@@ -790,24 +901,23 @@ def _run_stage(
         # production cascade head and this audit could not run Ray (worker startup fails in the dev
         # sandbox), so it is recorded as a follow-up to prove on kind, not flipped on a signature read.
         _reset_if_legacy(to_uri, so)
-        stamped = _stamp_stage(upstream.to_table(with_row_id=True), stage, lineage, dataset_id)
+        head_rows = _stamp_stage(upstream.to_table(with_row_id=True), stage, lineage, dataset_id)
         # A FULL-SYNC MERGE, NOT AN OVERWRITE — the same change the in-process head took 2026-09-06.
         # Overwrite re-mints every `_rowid`, and the tier above resolves its `source_rowid` against
         # exactly those, so a re-derivation silently detached the whole chain (measured live: 8 of 8
         # silver references naming bronze rows that no longer existed). `when_not_matched_by_source_delete`
         # keeps the semantics — the run's output IS the whole tier — while identity survives.
         if _dataset_exists(to_uri, so):
-            lance.dataset(to_uri, storage_options=so).merge_insert(
-                "id"
-            ).when_matched_update_all().when_not_matched_insert_all().when_not_matched_by_source_delete().execute(stamped)
+            _converge(to_uri, head_rows, so, marker, full_sync=True)
         else:
             lance.write_dataset(
-                stamped,
+                head_rows,
                 to_uri,
                 storage_options=so,
                 mode="create",
                 data_storage_version="2.2",
                 enable_stable_row_ids=True,
+                transaction_properties=_properties(marker),
             )
     else:
         # The destination is created with the schema the transform EMITS (see _target_schema): every
@@ -854,7 +964,7 @@ def _run_stage(
         )
         if _dataset_exists(to_uri, so):
             try:
-                _land_staged(to_uri, staged_uri, so)
+                _land_staged(to_uri, staged_uri, so, marker)
             finally:
                 _drop_staged(staged_uri, so)
         else:
@@ -868,6 +978,7 @@ def _run_stage(
                 mode="create",
                 data_storage_version="2.2",
                 enable_stable_row_ids=True,
+                transaction_properties=_properties(marker),
             )
             _drop_staged(staged_uri, so)
 
@@ -893,6 +1004,7 @@ def _run_stage(
         cardinality=cardinality,
         parentless=parentless,
     )
+    return int(out.version)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,22 @@
+{{- /* THE PLAN SWEEP (CP-029 D-6): one tick per firing on every app that plans Ray runs, over that app's own plans:
+     the producer's training runs, and each stage runner's stage runs under medallion.compute. Each sidecar delivers to
+     its own app at POST /<name>, the string MEDALLION_PLAN_SWEEP_BINDING_NAME carries. No lease: plan writes are CAS. */}}
+{{- if and .Values.dapr.enabled .Values.dapr.sidecars .Values.medallion.enabled .Values.medallion.ray .Values.medallion.planSweep.bindingName }}
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: {{ .Values.medallion.planSweep.bindingName }}
+  labels: {{- include "rask.componentLabels" (list . "medallion") | nindent 4 }}
+spec:
+  type: bindings.cron
+  version: v1
+  metadata:
+    - { name: schedule, value: {{ .Values.medallion.planSweep.schedule | quote }} }
+scopes:
+  - {{ .Values.medallion.producer.daprAppId }}
+{{- if .Values.medallion.compute }}
+{{- range .Values.medallion.stageRunners }}
+  - {{ .daprAppId }}
+{{- end }}
+{{- end }}
+{{- end }}

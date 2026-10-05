@@ -61,6 +61,12 @@ scopes:
 {{- if and .Values.explorer.enabled .Values.explorer.controlEmit }}
 {{- include "lance.publishPubsub" (list . (printf "%s-%s" (.Values.pubsub.controlName | default "catalog-control-pubsub") .Values.explorer.services.annotator.daprAppId) .Values.explorer.services.annotator.daprAppId) }}
 {{- end }}
+{{- /* Each stage runner announces the plans of its Ray stage runs (CP-029 D-2). */}}
+{{- if and .Values.medallion.enabled .Values.medallion.ray .Values.medallion.compute }}
+{{- range .Values.medallion.stageRunners }}
+{{- include "lance.publishPubsub" (list $ (printf "%s-%s" ($.Values.pubsub.controlName | default "catalog-control-pubsub") .daprAppId) .daprAppId) }}
+{{- end }}
+{{- end }}
 {{- if .Values.medallion.enabled }}
 ---
 {{- /*

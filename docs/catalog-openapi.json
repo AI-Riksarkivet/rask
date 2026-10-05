@@ -2670,7 +2670,7 @@
         "type": "object"
       },
       "CatalogControlEvent": {
-        "description": "One control-plane mutation notice. Published AFTER the backend/FGA mutation succeeds; the `actor` is\nthe VERIFIED principal from the OIDC token in scope (never self-asserted \u2014 the pub/sub topic is an\ninternal catalog-only channel, so the subscriber trusts the catalog's stamp, exactly like lineage's\ntrusted `author`).",
+        "description": "One control-plane mutation notice, published AFTER the mutation it announces succeeds.\n\n`actor` is the person the emitting service authenticated (`user:<sub>`), or a service principal or None when a\nservice acts for itself. Several services publish on this topic (`control_signer_role` names the one that signs\neach action), so to a consumer the actor is a claim until the envelope's `rask_signature` proves who stamped it\n(`lineage_kit.signing.verify_control_signature`). The model ignores that member, so a signed and an unsigned\nenvelope parse alike.",
         "properties": {
           "action": {
             "enum": [
@@ -2717,7 +2717,8 @@
               "task_changes_requested",
               "task_dropped",
               "task_lease_expired",
-              "promotion_review_requested"
+              "promotion_review_requested",
+              "run_planned"
             ],
             "title": "Action",
             "type": "string"
@@ -2756,7 +2757,8 @@
               "table",
               "annotation_task",
               "transform",
-              "gate"
+              "gate",
+              "run"
             ],
             "title": "Object Type",
             "type": "string"

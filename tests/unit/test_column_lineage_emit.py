@@ -25,10 +25,10 @@ import pyarrow as pa
 import pytest
 from dapr.aio.clients import DaprClient
 
-import medallion.services.transform as stage_runner
 from lineage.models import Dataset
 from medallion.core.config import MedallionSettings
 from medallion.schemas.events import build_run_event
+from medallion.services import stage_plans
 from medallion.services.compute import measure_stage, seed_bronze, transform_stage
 from medallion.services.transform import handle_stage
 from service_kit.openlineage import column_lineage_facet
@@ -238,32 +238,30 @@ def test_ray_branch_emits_column_edges_reconstructed_from_disk(tmp_path: Any, mo
     seed_bronze(bronze, {}, rows=4)  # columns [id, payload, stage]
     settings = _stage_runner_settings(bronze, silver).model_copy(update={"ray_enabled": True})
 
-    # S1: the handler DISPATCHES a watcher, and the Ray job runs out-of-process. The fake stands in for
-    # the whole of that — the workflow submitting, the cluster writing, the poll reading SUCCEEDED —
-    # so that the second delivery below measures a destination that genuinely exists. Before S1 this
-    # test had the write happening inside the handler's own submit call, which is exactly the ordering
-    # the production code did NOT have: there, `submit_stage_job` returned before the cluster wrote.
-    def fake_dispatch(
+    # The handler PLANS the run, and the Ray job runs out-of-process. The fake stands in for the whole of
+    # that — the plan, the cluster writing, the outcome resolving SUCCEEDED — so that the second delivery
+    # below measures a destination that genuinely exists, written by something other than the handler.
+    async def fake_dispatch(
         _settings: Any,
+        _dapr: object,
         *,
+        trigger: Any,
         from_uri: str,
         to_uri: str,
-        token: str | None,
-        lineage_json: str,
-        trigger: Any,
-        event_time: str | None = None,
-        pre_row_count: int | None = None,
-        from_id: str = "",
-        to_id: str = "",
-        run_id: str = "",
+        from_id: str,
+        to_id: str,
+        lineage_doc: Any,
+        event_time: str,
+        pre_row_count: int | None,
+        project: str,
     ) -> str:
-        # The identity the real dispatch hands the job (`from_id`/`to_id`/`run_id`) is accepted and
-        # unused here: this test is about the column edges the STAGE RUNNER reconstructs after the job, and
+        # The identity the real dispatch hands the job is accepted and unused here: this test is about the
+        # column edges the STAGE RUNNER reconstructs after the job, and
         # `test_the_job_is_told_which_tables_it_moves.py` is where that handover is asserted.
-        _ray_job_write(from_uri, to_uri, settings.to_namespace, lineage_json)
-        return "stage-ray-silver-t1-abc"
+        _ray_job_write(from_uri, to_uri, settings.to_namespace, lineage_doc.to_json())
+        return "a" * 40
 
-    monkeypatch.setattr(stage_runner, "_dispatch_stage_workflow", fake_dispatch)
+    monkeypatch.setattr(stage_plans, "dispatch", fake_dispatch)
 
     dispatch_only = _FakeDapr()
     assert asyncio.run(handle_stage(cast(DaprClient, dispatch_only), settings, {"data": {"token": "t1"}})) == {"status": "SUCCESS"}

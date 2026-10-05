@@ -7,7 +7,7 @@ onto the stage trigger. From there the range dies quietly:
      while that model's own docstring cites `from_version`/`to_version` as its example of the
      additive fields a consumer must tolerate;
   2. `submit_stage` reads only `originator`/`project` off the trigger;
-  3. `submit_stage_job` never exported the floor at all.
+  3. The submitter never exported the floor at all.
 
 The floor now rides `WorkOrder.to_env()` as `RASK_VERSION_FLOOR` — the platform's ONE serialization,
 which every engine's adapter renders, so the boundary reaches the job by the same route whether it was
@@ -60,6 +60,12 @@ def _settings(**over: object) -> Any:
     return MedallionSettings().model_copy(update=over)
 
 
+async def _submit(settings: Any, **kwargs: Any) -> None:
+    """The stage lane's submission: the order it builds, posted through the port."""
+    order, registration = await stage_submit.build_stage_order(settings, **kwargs)
+    await stage_submit.submit_stage_order(order, registration)
+
+
 def test_the_trigger_model_KEEPS_the_range_it_documents_as_its_own_example() -> None:
     """Step 1. `extra="ignore"` silently dropped the two fields the docstring names."""
     trigger = StageTrigger.model_validate({"token": "tok-1", "dataset": "silver$features", "from_version": 7, "to_version": 9})
@@ -77,7 +83,7 @@ async def test_the_range_REACHES_the_submitted_job_as_the_orders_VERSION_FLOOR(c
 
     monkeypatch.setattr(stage_submit, "resolve_transform_async", _resolve)
 
-    await stage_submit.submit_stage_job(
+    await _submit(
         _settings(),
         from_uri="s3://acme/bronze",
         to_uri="s3://acme/silver",
@@ -102,7 +108,7 @@ async def test_NO_floor_is_OMITTED_which_the_job_reads_as_everything(captured: d
 
     monkeypatch.setattr(stage_submit, "resolve_transform_async", _resolve)
 
-    await stage_submit.submit_stage_job(
+    await _submit(
         _settings(),
         from_uri="s3://acme/bronze",
         to_uri="s3://acme/silver",

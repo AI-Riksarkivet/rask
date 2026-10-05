@@ -92,42 +92,14 @@ auth:
   # Which component resolves the secretKeyRef above. Without this Dapr looks in Kubernetes Secrets.
   secretStore: {{ .Values.stateStore.secretStore }}
 {{- end }}
-{{- /* The STAGE RUNNERS' app-ids are DERIVED, not listed. S1's stage watcher (`medallion/workflow.py`) runs in
-       `stage_runner.py`, and each stage runner has its own `daprAppId` from `medallion.stageRunners[]` — there is no
-       `medallion` app-id anywhere in the estate, so a hand-written entry for one is inert. Deriving
-       them also means adding a stage runner cannot silently produce one that fails to dispatch.
-
-       Gated on `medallion.ray` because that is exactly the condition under which a stage runner sets
-       MEDALLION_RAY_ENABLED and therefore starts a workflow runtime at all (medallion.yaml:325).
-
-       THE FAILURE THIS PREVENTS IS INVISIBLE FROM THE SIDECAR LOG. Measured live 2026-08-15 on
-       `bronze-to-silver` while its app-id was unscoped — the sidecar logs, in this order:
-
-         "Actor state store not configured - actor hosting disabled, but invocation enabled"
-         "Workflow engine started"
-
-       The second line reads as health and is the one an operator greps for. Dispatch then fails on
-       every delivery. */}}
+{{- /* No stage runner is in scope: a Ray stage is planned and resolved without a workflow (CP-029), so no stage
+       runner hosts a workflow runtime or an actor. An app-id that hosts one is scoped; unscoped, its sidecar logs
+       "Workflow engine started" after "actor hosting disabled" and every workflow fails (measured live 2026-08-15). */}}
 {{- $scopes := .Values.stateStore.scopes | default list }}
-{{- if .Values.medallion.ray }}
-{{-   range .Values.medallion.stageRunners }}
-{{-     $scopes = append $scopes .daprAppId }}
-{{-   end }}
-{{- end }}
-{{- /* The PRODUCER's app-id, for the same reason and under a different condition. `promotion_review`
-       runs in `producer.py`, not in a stage runner: the approve route and the workflow instance must share a
-       process because `raise_workflow_event` resolves the instance through the calling app's app-id,
-       and only the producer has a gateway row to serve that route from.
-
-       The gate is `qualityReview OR ray`, matching producer.py's lifespan. This comment used to say
-       `NOT medallion.ray, which the producer's runtime does not consult` — true of the lifespan as it
-       was written, and wrong about what the app HOSTS: `schedule_train_watch` starts `train_run` here
-       too, and that answers to `medallion.ray`. Since ray defaults ON and qualityReview defaults OFF,
-       the old gate left the DEFAULT chart unable to watch a single training job.
-
-       Same invisible failure as above: unscoped, the sidecar still logs "Workflow engine started" and
-       every held promotion fails to dispatch. */}}
-{{- if or .Values.medallion.qualityReview .Values.medallion.ray }}
+{{- /* The PRODUCER's app-id under `qualityReview`, the one condition on which producer.py starts a workflow runtime:
+       `promotion_review` runs there, beside the approve route, because `raise_workflow_event` resolves the instance
+       through the calling app's app-id. A training run is a plan (CP-029) and needs no actor. */}}
+{{- if .Values.medallion.qualityReview }}
 {{-   $scopes = append $scopes .Values.medallion.producer.daprAppId }}
 {{- end }}
 {{- if $scopes }}

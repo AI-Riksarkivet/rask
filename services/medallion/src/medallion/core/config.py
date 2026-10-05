@@ -389,6 +389,15 @@ class MedallionSettings(OidcSettings, FgaSettings, SignatureDoorSettings, BaseSe
     #: and the path the producer serves at its pod root. Empty disables the detector: an unnamed binding
     #: means no Component, and an always-live door for it would be a scan surface with nothing behind it.
     cascade_lag_binding_name: str = Field(default="", alias="MEDALLION_CASCADE_LAG_BINDING_NAME")
+    #: The plan sweep's cron binding name (CP-029 D-6): ONE string with the Dapr Component's `metadata.name` and the
+    #: path a stage runner serves at its pod root. Empty mounts no sweep.
+    plan_sweep_binding_name: str = Field(default="", alias="MEDALLION_PLAN_SWEEP_BINDING_NAME")
+    #: This stage runner's own address as the compute pods reach it (its ClusterIP Service). A planned run's outcome
+    #: door is `<base>/runs/<action id>/outcome`; empty plans runs whose jobs report nothing, which the sweep resolves.
+    outcome_url_base: str = Field(default="", alias="MEDALLION_OUTCOME_URL_BASE")
+    #: The producer's subject at a stage runner's service door: the one caller its operator routes admit, so a second
+    #: account the door maps (the compute head, for the outcome door) cannot reach them.
+    producer_identity: str = Field(default="service-medallion-producer", alias="MEDALLION_PRODUCER_IDENTITY")
     #: The projects whose edges the lag tick measures. Empty = a single-tenant estate, one row per lane.
     lag_projects: list[str] = Field(default_factory=list, alias="MEDALLION_LAG_PROJECTS")
     #: Where each declared lane's output lands, by source namespace — read rather than derived from the
@@ -573,6 +582,8 @@ class MedallionSettings(OidcSettings, FgaSettings, SignatureDoorSettings, BaseSe
         default="python /home/ray/jobs/ray_train_job.py",
         alias="MEDALLION_TRAIN_ENTRYPOINT",
     )
+    #: The compute head's ONE subject (LH-220 D1: every job on the shared head is the head's account), named for the
+    #: train lane that first authenticated as it. A stage runner's outcome door admits it and nothing else.
     trainer_identity: str = Field(default="service-trainer", alias="MEDALLION_TRAINER_IDENTITY")
     models_namespace: str = Field(default="models", alias="MEDALLION_MODELS_NAMESPACE")
     # The lineage HTTP ingest the TRAINING JOB posts its own RunEvents to (D2/D3: Ray pods carry no

@@ -1,23 +1,18 @@
 """The producer's door onto a STAGE RUNNER's cascade-stage routes (DWF-MGT-002/003).
 
-Two apps, one operation, and the split is forced by Dapr rather than chosen. `stage_run` executes in
-a stage runner's runtime, and `terminate_workflow` resolves the instance through the CALLING app's app-id —
-so the terminate has to run in the stage runner's process. But a stage runner is bus-only: no gateway row, no
-Ingress, nothing a person can POST to. Hosting only the route there would be a lever nobody can pull.
+Two apps, one operation. A planned stage run's plan lives under the stage runner that planned it, and that stage
+runner stops its job through the compute engine and closes the plan. But a stage runner is bus-only: no gateway
+row, no Ingress, nothing a person can POST to, so a route hosted only there would be a lever nobody can pull.
 
-So: the producer authenticates and AUTHORIZES (it has the gateway row and already runs the dual-auth
-door for `/produce` and `/train`), then forwards to the stage runner's ClusterIP with its own projected
-`rask-medallion` token. The stage runner admits that account alone and does the work under its own app-id.
+So: the producer authenticates and AUTHORIZES (it has the gateway row and already runs the dual-auth door for
+`/produce` and `/train`), then forwards to the stage runner's ClusterIP with its own projected `rask-medallion`
+token. The stage runner admits that account alone on these routes and does the work under its own identity.
 
-AUTHORIZED ON THE RUN, not on a caller-chosen project (owner ruling 2026-09-25). The producer cannot
-read another app's workflow state, so it asks the hosting stage runner first; the stage runner reads
-the tenant off the trigger the instance carries, and `can_administer` is checked on THAT project before
-a status is returned or a terminate is forwarded. An admin of one project gets 403 on another's run —
-as ingest's run doors and the promotion door answer — because these instance ids are content hashes
-(`stage-<submission hash>`), so a 403 confirms only an id the caller already held.
-
-This mirrors the promotion review's reasoning in the opposite direction: there, the workflow was moved
-to the app that owns the door; here the workflow cannot move, so the door reaches it.
+AUTHORIZED ON THE RUN, not on a caller-chosen project (owner ruling 2026-09-25). The producer asks the hosting stage
+runner first; the stage runner reads the tenant off the run's PLAN, and `can_administer` is checked on THAT project
+before a status is returned or a terminate is forwarded. An admin of one project gets 403 on another's run, as
+ingest's run doors and the promotion door answer, because a run's id is a content hash (the plan's 40-hex action
+id), so a 403 confirms only an id the caller already held.
 """
 
 from __future__ import annotations
@@ -92,11 +87,11 @@ async def list_stage_runners(settings: SettingsDep, _caller: ConfigReader) -> St
 
 
 def _run_project(settings: MedallionSettings, state: Any) -> str | None:
-    """The project a stage run belongs to, as its hosting stage runner read it, or ``None`` if unknowable.
+    """The project a stage run belongs to, as its hosting stage runner read it off the run's plan, or ``None`` if unknowable.
 
-    ``""`` is a single-tenant run: its trigger carried no project, which is the cascade `/produce` starts
-    with none, gated there on the configured project. A missing key is a stage runner that cannot say —
-    an unreadable input, or a build that predates the field — and is never read as single-tenant.
+    ``""`` is a single-tenant run: its plan records no project, which is the cascade `/produce` starts
+    with none, gated there on the configured project. A missing key is a stage runner that cannot say,
+    and is never read as single-tenant.
     """
     project = state.get("project") if isinstance(state, dict) else None
     if project == "":
@@ -127,9 +122,8 @@ async def terminate_stage(
     """DWF-MGT-003 for the cascade.
 
     Whoever administers the project a run belongs to may stop it, and the refusal comes before the
-    terminate is forwarded. The stage runner's 202 body — which says the Ray job keeps running — is
-    carried through unchanged, because softening it here is exactly how an operator comes to believe
-    the GPUs are free.
+    terminate is forwarded. The stage runner's 202 body — whether this call stopped the job or found
+    the run already closed — is carried through unchanged.
     """
     await _authorized_run(request, settings=settings, fga_client=fga_client, caller=caller, stage_runner=stage_runner, instance_id=instance_id)
     return await _forward(request, settings, stage_runner=stage_runner, instance_id=instance_id, action="/terminate", method="POST")

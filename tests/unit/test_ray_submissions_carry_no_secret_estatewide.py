@@ -33,6 +33,14 @@ import httpx
 import pytest
 
 
+async def _submit_stage_job(settings: Any, **kwargs: Any) -> None:
+    """The stage lane's submission: the order it builds, posted through the port."""
+    from medallion.services import stage_submit as _stage_submit
+
+    order, registration = await _stage_submit.build_stage_order(settings, **kwargs)
+    await _stage_submit.submit_stage_order(order, registration)
+
+
 #: One distinctive value per credential CLASS the estate holds. Every seam is fed all of them.
 MATERIAL = {
     "AWS_SECRET_ACCESS_KEY": "estatewide-pin-aws-secret",
@@ -115,11 +123,10 @@ def medallion_bodies(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
 
 @pytest.mark.asyncio
 async def test_the_medallion_stage_seam_is_clean(medallion_bodies: dict[str, Any]) -> None:
-    from medallion.services import stage_submit
 
-    await stage_submit.submit_stage_job(_medallion_settings(), from_uri="s3://a/bronze", to_uri="s3://a/silver", stage="silver", token="t1")
+    await _submit_stage_job(_medallion_settings(), from_uri="s3://a/bronze", to_uri="s3://a/silver", stage="silver", token="t1")
     assert "stage" in medallion_bodies, "the stage submission was never captured — the seam moved and this pin is checking nothing"
-    _assert_clean("medallion.submit_stage_job", medallion_bodies["stage"])
+    _assert_clean("medallion.submit_stage_order", medallion_bodies["stage"])
 
 
 @pytest.mark.asyncio

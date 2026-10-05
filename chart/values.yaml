@@ -1225,6 +1225,16 @@ medallion:
     # in five minutes", which `for:` answers. A tighter cadence buys resolution nobody reads and costs
     # a catalog + lineage read per edge per tick.
     schedule: "@every 300s"
+  # THE PLAN SWEEP (CP-029 D-6). One Component, scoped to every app that plans Ray runs: each stage runner resolves its
+  # own open stage plans (a job whose report never arrived, one the head lost and resubmitted under the same key twice
+  # at most, one Ray says ended) and the producer its own training plans (never resubmitted, D2: a lost job is decided
+  # by the registry's commit marker). A RUNNING job is left alone at any age on both lanes. The schedule is the grace a
+  # lost submission gets before it counts as never registered (four ticks), so 30 s keeps that at two minutes. ONE
+  # STRING, like cascadeLag: the Component's name, MEDALLION_PLAN_SWEEP_BINDING_NAME and the route. Empty disables the
+  # sweep, which leaves an unreported run open.
+  planSweep:
+    bindingName: medallion-plan-sweep-cron
+    schedule: "@every 30s"
   stageRunnerReplicas: 1
   # When true, every stage does a REAL in-process Lance read->transform->write (the fake-Ray compute) so the
   # event-driven cascade produces actual versioned data in the object store, not just provenance — the lineage graph
@@ -1278,17 +1288,10 @@ medallion:
   #     ./scripts/helm.sh upgrade rask ./chart -f <live values> \
   #       --set medallion.ray=true \
   #       --set-string medallion.rayAddress=http://ray-lance-head:8265
-  #     kubectl rollout restart deploy/rask-bronze-to-silver deploy/rask-silver-to-gold
   #
-  # THE RESTART IS NOT OPTIONAL AND IT COST TWO FAILED DRIVES TO LEARN. This flag also decides
-  # whether the stage runners appear in `lance-statestore`'s `scopes` (dapr-statestore.yaml derives them from
-  # `medallion.stageRunners` when `medallion.ray`), and **daprd caches the actor state store at sidecar
-  # start and cannot hot-reload it**. Enabling the lane and the Component in one upgrade races: the
-  # sidecars come up against the OLD scope list and every dispatch fails with
-  # `the state store is not configured to use the actor runtime`, which reads as a missing
-  # `actorStateStore: true` rather than as a stale sidecar. Restart the stage runners after the Component
-  # settles. For the same reason `kubectl set env MEDALLION_RAY_ENABLED=true` alone can NEVER work —
-  # it moves the flag without moving the scope.
+  # No stage runner restart is part of it: a Ray stage is planned and resolved without a workflow runtime (CP-029), so
+  # the flag moves no stage runner into `lance-statestore`'s scopes and no sidecar caches a scope it would miss. The
+  # flag's own env (MEDALLION_RAY_ENABLED, the outcome door, the plan sweep's binding) reaches a pod by its rollout.
   #
   # `ray-cluster` is lance-capable since 2026-08-18 (pylance + lance_ray from the ROOT LOCK — named by
   # source rather than by version on purpose, because that is what keeps the image and the fleet on the
@@ -1312,9 +1315,6 @@ medallion:
   # (`stage-ray-silver-3beb0dd2…`) ran as a Dapr Workflow, the watcher polled the head's
   # `/api/jobs/<id>` 200, the orchestration COMPLETED and the stage runner moved the stage.
   #
-  # UPGRADING an existing release from off->on still needs the stage runner restart the block above
-  # describes — the sidecars cached the old `lance-statestore` scope list. A FRESH install is
-  # unaffected: the Component and the flag render together, so the sidecars come up already scoped.
   ray: true
   # DERIVED from the RayService this chart renders, not a hardcoded hostname. `ray-lance-head` was the
   # on-kind demo's raw head and does not exist in a KubeRay deployment — measured 2026-08-15, it fails
@@ -2188,22 +2188,11 @@ stateStore:
     # window open for its other passengers (the medallion-producer rename, the Dapr Configuration/ActorStateTTL
     # decision, the state.postgresql v1→v2 move); ride them together or not at all.
     - notifications
-    # ── S1's stage watcher is NOT listed here, and that is deliberate. ──────────────────────────────
-    # The Ray lane's `stage_run` (`medallion/workflow.py`) runs inside `stage_runner.py`, and each stage runner has
-    # its OWN `daprAppId` from `medallion.stageRunners[]` (`bronze-to-silver`, `silver-to-gold`, …). There is
-    # no `medallion` app-id anywhere in the estate — an entry for one was written here on 2026-08-15
-    # and was completely INERT, which the live sidecar reported as health (see below). The template
-    # derives the stage runners' ids from `medallion.stageRunners` when `medallion.ray` is on, so adding a stage runner
-    # cannot produce one that silently fails to dispatch.
-    #
-    # WHY THE MISTAKE SURVIVED A RESTART: an unscoped app-id logs
+    # No stage runner is listed or derived: a Ray stage is planned and resolved without a workflow (CP-029), so no
+    # stage runner hosts a workflow runtime. An app-id that hosts one and is unscoped logs
     #   "Actor state store not configured - actor hosting disabled, but invocation enabled"
     #   "Workflow engine started"
-    # in that order. The second line is the one an operator greps for, and it is true — the engine
-    # does start. Dispatch then fails on every delivery.
-    #
-    # SAME COORDINATED-ROLLOUT RULE as `notifications` above: daprd refuses to hot-reload an actor
-    # state store, so a running stage runner keeps the OLD scope list until it restarts.
+    # in that order (measured live 2026-08-15), and every workflow it starts fails.
 
 # --- Backups — a FALLBACK for the SELF-CONTAINED in-cluster path only. OFF by default. When you run the
 # managed/operator path (CloudNativePG for AGE — the rask deployment), DISABLE these
@@ -2819,9 +2808,10 @@ nats:
   #   - only admin (the stream Job's own command set, measured) and ingest (on its own work queue) create a stream or delete
   #     a consumer, no app holds $JS.API.>, and monitor reads stream and consumer state but no message and publishes nothing.
   # catalog.control.v1 is published by the catalog, by the medallion PRODUCER (promotion_review's request_approval runs in the
-  # workflow engine the producer hosts), by maintenance under maintenance.controlEmit and by the annotator under
-  # explorer.controlEmit: never by a stage runner, which also never publishes its downstream topic (MEDALLION_PUB_TOPIC only
-  # gates promotion; the catalog's table_published wakes the next tier). A grant that only a flag's component uses sits under
+  # workflow engine the producer hosts, and its training runs' plans, CP-029), by maintenance under maintenance.controlEmit, by the annotator under
+  # explorer.controlEmit, and by each stage runner under medallion.ray (its runs' plans, CP-029). A stage runner never
+  # publishes its downstream topic (MEDALLION_PUB_TOPIC only gates promotion; the catalog's table_published wakes the next
+  # tier). A grant that only a flag's component uses sits under
   # `flagged`, keyed by that flag's value path, and is issued only while the flag is on (lance.natsTable), so with every flag
   # at its default no user holds a grant no call site uses (the broker lane fails a table broader than its call sites). A
   # user's publish and subscribe lists must not be empty: nsc issues an empty list as unrestricted. A missing allowance fails closed and silently (a refused subscribe retries forever while the pod stays
@@ -2877,6 +2867,13 @@ nats:
         annotator:
           publish: [catalog.control.v1]
           subscribe: [_INBOX.>]
+      medallion.ray:
+        bronze-to-silver:
+          publish: [catalog.control.v1]
+        silver-to-gold:
+          publish: [catalog.control.v1]
+        media-to-silver:
+          publish: [catalog.control.v1]
     users:
       admin:
         publish: [$JS.API.INFO, $JS.API.STREAM.LIST, $JS.API.STREAM.NAMES, $JS.API.STREAM.INFO.*, $JS.API.STREAM.CREATE.*, $JS.API.CONSUMER.NAMES.*, $JS.API.CONSUMER.INFO.*.*, $JS.API.CONSUMER.CREATE.*.>, $JS.API.CONSUMER.DELETE.*.*]
@@ -2884,7 +2881,7 @@ nats:
       bronze-to-silver:
         publish:
           - lineage.events.v1
-          - medallion.bronze # its own trigger: the Ray watcher re-wakes the stage
+          - medallion.bronze # its own trigger: a succeeded Ray run's outcome re-wakes the stage
           - medallion.promotion
           - refused.bronze-to-silver
           - dlq.bronze-to-silver
@@ -2973,7 +2970,7 @@ nats:
           - medallion.media
           - medallion.silver
           - training.jobs
-          - catalog.control.v1 # promotion_review_requested
+          - catalog.control.v1 # promotion_review_requested, and its training runs' run_planned
           - dlq.medallion-producer
           - refused.medallion-producer
           - $JS.API.STREAM.NAMES
@@ -3530,7 +3527,9 @@ signing:
   # whose doors take control events (the producer and notifications) also carry RASK_CONTROL_SIGNER_ROLES, a JSON object
   # from each service that emits control events to the identities it signs as (lance.signers' `role`): catalog -> the
   # catalog, maintenance -> maintenance (its purge, under maintenance.controlEmit), medallion_producer -> the producer (it
-  # hosts the promotion_review workflow that asks for a review; no stage runner emits a control action). The keys are
+  # hosts the promotion_review workflow that asks for a review, and announces its training runs' plans, run_planned on a
+  # train_run: object), medallion_stage_runner -> every stage runner (each
+  # announces its Ray runs' plans, run_planned, under medallion.ray with medallion.compute). The keys are
   # exactly service_kit.control_events.ControlSigner, which the services type, so a key they do not know fails their boot;
   # every key is present, and a role whose service is not deployed is an empty list. A door's per-action policy
   # (control_signer_role) resolves an action's allowed signers from it; task_* actions and grants on an annotation project

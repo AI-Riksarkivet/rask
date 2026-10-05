@@ -10,9 +10,9 @@ deployed telemetry, on the estate's flagship flow.
     Every duration — coordinator activity, Ray stage, commit — uses `time.perf_counter` ... and the
     SAME number lands in the lineage run facet so the graph and the metric cannot disagree.
 
-So a derived estimate is not acceptable here even though one was available: the stage watcher carries
-`polls` and a poll interval, and multiplying them would have produced a plausible number that is not
-what the lineage facet says. These pin both halves — measured, and identical in both places.
+So a derived estimate is not acceptable here: the Ray lane's duration is the plan's span from submit to
+outcome, handed to pass 2 on the trigger, and the same number lands in the facet and the histogram. These
+pin both halves — measured, and identical in both places.
 """
 
 from __future__ import annotations
@@ -52,38 +52,6 @@ def test_a_zero_second_stage_still_records_rather_than_vanishing() -> None:
     are exactly the ones a latency histogram's lower buckets are for. Guard on `is not None`."""
     lance = _event(duration_seconds=0.0)["run"]["facets"]["lance"]
     assert lance.get("duration_seconds") == 0.0, "a 0.0s stage lost its duration to a falsy check"
-
-
-def test_the_watch_span_uses_the_DETERMINISTIC_clock_not_a_wall_clock() -> None:
-    """Inside a workflow body, `ctx.current_utc_datetime` is the only legal source of time.
-
-    A wall clock or `perf_counter` returns a different value on every replay, which makes the workflow
-    non-deterministic and is how an instance ends up permanently stuck. It is also why the start stamp
-    rides `StageJobSpec` rather than a counter: a turn can resume in a different pod, where a carried
-    `perf_counter` value means nothing.
-    """
-    from datetime import UTC, datetime
-    from types import SimpleNamespace
-    from typing import cast
-
-    from medallion.workflow import _watch_seconds
-
-    ctx = SimpleNamespace(current_utc_datetime=datetime(2026, 8, 22, 12, 30, tzinfo=UTC))
-    assert _watch_seconds(cast("Any", ctx), datetime(2026, 8, 22, 12, 0, tzinfo=UTC).isoformat()) == 1800.0
-
-
-def test_an_unmeasurable_watch_is_NONE_not_a_fabricated_zero() -> None:
-    """An instance that started before the stamp existed genuinely does not know how long it ran.
-    0.0 would land in the histogram's lowest bucket and read as an instant stage."""
-    from datetime import UTC, datetime
-    from types import SimpleNamespace
-    from typing import cast
-
-    from medallion.workflow import _watch_seconds
-
-    ctx = cast("Any", SimpleNamespace(current_utc_datetime=datetime(2026, 8, 22, 12, 30, tzinfo=UTC)))
-    assert _watch_seconds(ctx, "") is None
-    assert _watch_seconds(ctx, "not-a-timestamp") is None
 
 
 def test_the_trigger_REFUSES_an_absurd_duration_it_was_handed() -> None:

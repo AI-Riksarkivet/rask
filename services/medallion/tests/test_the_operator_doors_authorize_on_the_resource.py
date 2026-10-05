@@ -8,11 +8,12 @@ measured 2026-09-25 on e4e60b60 (the orchestrator's `probe_cross_tenant.py`): al
 `project:mine` only, got 200 on `GET /cascade/stalled?project=mine` listing acme's and other's cells.
 
 Everything below runs the real routers and the real door. Faked: the OIDC verifier (the bearer's text
-IS the sub), OpenFGA (a fixed grant set), the stage runner's workflow engine, the lag tick and the
-edge declaration it measures. A service's token is real: the root conftest's loopback issuer mints it
-and each door verifies it against that issuer. The producer reaches the stage runner over a real ASGI
-hop carrying its own projected token, so the tenant the producer authorizes on is the one the stage
-runner read off the instance it hosts.
+IS the sub), OpenFGA (a fixed grant set), the Ray dashboard behind both executors (an httpx transport), the lag
+tick and the edge declaration it measures. A stage run and a training run are each a real plan in a plan store on
+`tmp_path`. A service's token is real: the root
+conftest's loopback issuer mints it and each door verifies it against that issuer. The producer reaches the
+stage runner over a real ASGI hop carrying its own projected token, so the tenant the producer authorizes on
+is the one the stage runner read off the run's plan.
 """
 
 from __future__ import annotations
@@ -21,12 +22,15 @@ import asyncio
 import json
 import logging
 from collections.abc import Iterator, Sequence
+from datetime import UTC, datetime
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
 import httpx
+import lance
+import pyarrow as pa
 import pytest
-from dapr.ext.workflow.workflow_state import WorkflowStatus
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from openfga_sdk.client.models import ClientTuple
@@ -34,21 +38,25 @@ from openfga_sdk.client.models import ClientTuple
 from medallion.api import cascade_lag_read, produce_auth, stage_ops, stage_runner_ops
 from medallion.api import train as train_api
 from medallion.core.config import MedallionSettings, get_settings
+from medallion.services import ray_submit, stage_plans, train_plans
 from medallion.services import train as train_service
 from medallion.services.cascade_lag import AbsentEdgeMemo, LagTickReport, StalledTier
-from medallion.services.dapr_saga import DaprSagaClient
 from medallion.services.trigger_guards import StageTrigger
-from medallion.workflow import StageJobSpec, TrainJobSpec
 from service_kit.exceptions import register_handlers
 from service_kit.governed.audit import AUDIT_LOGGER, configure_audit
 from service_kit.governed.machine_identity import ServiceAccountVerifier
+from service_kit.lakehouse.commit_marker import CommitMarker
 from service_kit.lakehouse.ns_errors import install_problem_handlers
-from service_kit.lakehouse.saga import SagaHandle, SagaStart
+from service_kit.lakehouse.run_plans import PlanDocument, PlanKind
+from service_kit.lakehouse.work_order import WorkDestination, WorkIdentity, WorkOrder, WorkSource, WorkStamp
 
 
 APP_TOKEN = "the-estate-app-token"
 CONFIGURED = "acme"
 RUNNER = "silver-to-gold"
+#: Where the planned runs read and write: a local path nothing is at, so resolving a stopped run reads its commit
+#: marker as absent. A fake bucket would be a store that cannot answer, which the marker read refuses to read as absent.
+_NOWHERE = "/nonexistent/rask-operator-doors"
 #: alice administers `mine` only, bob the configured `acme` only, carol nothing; the ingest service's
 #: subject administers `mine` only. `other` is a tenant none of them administers.
 GRANTS = frozenset({("alice", "project:mine"), ("bob", "project:acme"), ("service-ingest", "project:mine")})
@@ -57,6 +65,8 @@ GRANTS = frozenset({("alice", "project:mine"), ("bob", "project:acme"), ("servic
 NAMESPACE = "rask"
 PRODUCER_SA = "rask-sa-medallion-producer"
 INGEST_SA = "rask-sa-ingest"
+#: The compute head's one account, which a stage runner's door also maps, for the outcome route alone.
+HEAD_SA = "rask-sa-ray"
 MEDALLION_AUDIENCE = "rask-medallion"
 
 
@@ -77,48 +87,75 @@ class _Verifier:
         return SimpleNamespace(sub=token)
 
 
-class _State:
-    """`WorkflowState`'s fields these routes read; ``name`` is the registered workflow the SDK proxies."""
-
-    def __init__(self, payload: dict[str, Any] | str, *, name: str) -> None:
-        self.serialized_input = payload if isinstance(payload, str) else json.dumps(payload)
-        self.runtime_status = WorkflowStatus.RUNNING
-        self.name = name
-
-
-class _Workflows:
-    """`DaprWorkflowClient`'s two calls these routes make, with the SDK's own signatures."""
-
-    def __init__(self, instances: dict[str, _State]) -> None:
-        self._instances = instances
-        self.terminated: list[str] = []
-
-    def get_workflow_state(self, instance_id: str, *, fetch_payloads: bool = True) -> _State | None:
-        return self._instances.get(instance_id)
-
-    def terminate_workflow(self, instance_id: str, *, output: Any | None = None, recursive: bool = True) -> None:
-        self.terminated.append(instance_id)
-
-
-def _stage(project: str | None) -> _State:
-    """A stage instance as `_dispatch_stage_workflow` persists it: the trigger rides the spec whole."""
+def _stage(action_id: str, project: str | None) -> PlanDocument:
+    """A stage run as the stage runner's dispatch plans it: the order names the tenant, the trigger rides whole."""
+    order = WorkOrder(
+        task="gold",
+        source=WorkSource(uri=f"{_NOWHERE}/in", table_id="silver$features"),
+        destination=WorkDestination(uri=f"{_NOWHERE}/out", table_id="gold$catalog"),
+        stamp=WorkStamp(stage="gold", cardinality="1:1"),
+        identity=WorkIdentity(run_id="run-1", project=project or ""),
+        idempotency_key=action_id,
+    )
     trigger = StageTrigger(token="tok-1", project=project).model_dump()
-    return _State(StageJobSpec(from_uri="s3://wh/in", to_uri="s3://wh/out", stage="gold", trigger=trigger).model_dump(), name="stage_run")
+    return PlanDocument.for_order(
+        order, kind=PlanKind.STAGE, engine="ray", command="python job.py", base_version=None, trigger=trigger, submitted_at=datetime.now(UTC)
+    )
 
 
-def _train(project: str) -> _State:
-    return _State(TrainJobSpec(token="tok-1", model="churn", submission_id="ray-train-tok-1", project=project).model_dump(), name="train_run")
+def _train(action_id: str, project: str) -> PlanDocument:
+    """A training run as the producer's consumer plans it: the tenant on the plan, the trigger's pointers beside it."""
+    return PlanDocument(
+        action_id=action_id,
+        run_id="run-1",
+        kind=PlanKind.TRAIN,
+        engine="ray",
+        task="train",
+        stage="models",
+        from_uri="",
+        to_uri=f"{_NOWHERE}/models/churn",
+        to_id="models$churn",
+        project=project,
+        trigger={"token": "tok-1", "model": "churn"},
+        submitted_at=datetime.now(UTC),
+    )
 
 
-STAGES = {"stage-mine": _stage("mine"), "stage-other": _stage("other"), "stage-single": _stage(None)}
-TRAINS = {
-    "train-acme": _train(CONFIGURED),
-    "train-other": _train("other"),
-    "train-mine": _train("mine"),
-    "train-garbled": _State("not json", name="train_run"),
-    "train-unsafe": _State({"token": "tok-1", "model": "churn", "submission_id": "ray-train-tok-1", "project": "../acme"}, name="train_run"),
-    "train-listed": _State(json.dumps([CONFIGURED]), name="train_run"),
+#: The stage runs the stage runner hosts, by action id: the tenant each plan records (None, single-tenant).
+STAGES: dict[str, str | None] = {"stage-mine": "mine", "stage-other": "other", "stage-single": None}
+#: What the Ray dashboard was asked to stop, recorded by `ray_dashboard` and cleared per test.
+_RAY_STOPS: list[str] = []
+#: Jobs that had already ENDED when the dashboard was asked to stop them, with the state they ended in; every other
+#: job is RUNNING. Cleared per test.
+_RAY_ENDED: dict[str, str] = {}
+#: The stage runner's identity: the owner its plans live under.
+_RUNNER_IDENTITY = "service-silver-to-gold"
+#: The training runs the producer planned, by action id: the tenant each plan records, or a document that does not
+#: parse as a plan (``bytes``).
+TRAINS: dict[str, str | bytes] = {
+    "train-acme": CONFIGURED,
+    "train-other": "other",
+    "train-mine": "mine",
+    "train-garbled": b"not json",
+    "train-unsafe": "../acme",
+    "train-listed": json.dumps([CONFIGURED]).encode(),
 }
+#: The producer's identity: the owner its training plans live under.
+_PRODUCER_IDENTITY = "service-medallion-producer"
+
+
+def _seed_trains(root: Path) -> dict[str, object]:
+    """``TRAINS`` as plans under ``root``; answer the settings that point the producer at them."""
+    update: dict[str, object] = {"control_root": str(root), "fga_service_identity": _PRODUCER_IDENTITY}
+    store = train_plans.plan_store(MedallionSettings().model_copy(update=update))
+    for action_id, project in TRAINS.items():
+        if isinstance(project, bytes):
+            document = root / "_plans" / _PRODUCER_IDENTITY / "runs" / f"{action_id}.json"
+            document.parent.mkdir(parents=True, exist_ok=True)
+            document.write_bytes(project)
+        else:
+            store.create(_train(action_id, project))
+    return update
 
 
 class _Fga:
@@ -225,15 +262,61 @@ def identities(sa_issuer: Any, tmp_path: Any) -> _Identities:
     return _Identities(sa_issuer, tmp_path)
 
 
-def _stage_runner(stages: dict[str, _State], identities: _Identities | None = None) -> FastAPI:
+@pytest.fixture(autouse=True)
+def ray_dashboard(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The dashboard the real Ray adapter reads a run's state from and stops a job through."""
+    _RAY_STOPS.clear()
+    _RAY_ENDED.clear()
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        job = request.url.path.split("/")[3]
+        if request.method == "POST" and request.url.path.endswith("/stop"):
+            _RAY_STOPS.append(job)
+            # Ray answers the stop of a job that already ended with `stopped: false`.
+            return httpx.Response(200, json={"stopped": job not in _RAY_ENDED})
+        return httpx.Response(200, json={"status": _RAY_ENDED.get(job, "RUNNING")})
+
+    client = httpx.AsyncClient(base_url="http://ray-head:8265", transport=httpx.MockTransport(handle))
+
+    async def _client() -> httpx.AsyncClient:
+        return client
+
+    monkeypatch.setattr(ray_submit, "ray_client", _client)
+
+
+def _stage_runner(stages: dict[str, str | bytes | None], root: Path, identities: _Identities | None = None) -> FastAPI:
+    """A stage runner hosting ``stages`` as plans under ``root``; a ``bytes`` value is a plan document that does not parse."""
+    settings = MedallionSettings().model_copy(update={"control_root": str(root), "fga_service_identity": _RUNNER_IDENTITY})
+    store = stage_plans.plan_store(settings)
+    for action_id, project in stages.items():
+        if isinstance(project, bytes):
+            document = root / "_plans" / _RUNNER_IDENTITY / "runs" / f"{action_id}.json"
+            document.parent.mkdir(parents=True, exist_ok=True)
+            document.write_bytes(project)
+        else:
+            store.create(_stage(action_id, project))
     app = FastAPI()
     register_handlers(app)
     install_problem_handlers(app, logging.getLogger(__name__))
     app.include_router(stage_ops.router)
-    app.state.workflow_client = _Workflows(stages)
+    app.dependency_overrides[get_settings] = lambda: settings
+    app.state.dapr = _Bus()
+    app.state.stopped = _RAY_STOPS
     if identities is not None:
         app.state.sa_oidc = identities.verifier(PRODUCER_SA, "service-medallion-producer")
     return app
+
+
+class _Bus:
+    """The stage runner's Dapr client, recording what a resolved run published: a hand-off, or a FAIL."""
+
+    def __init__(self) -> None:
+        self.published: list[tuple[str, dict[str, Any]]] = []
+
+    async def publish_event(
+        self, *, pubsub_name: str, topic_name: str, data: str, data_content_type: str = "application/json", publish_metadata: dict[str, str] | None = None
+    ) -> None:
+        self.published.append((topic_name, json.loads(data)))
 
 
 #: A wired authorization client; the FGA double ignores it, so `None` is the one value that differs.
@@ -265,13 +348,14 @@ def _producer(
         app.state.sa_oidc = identities.verifier(INGEST_SA, "service-ingest")
     app.state.fga = fga_client
     app.state.http = httpx.AsyncClient(transport=httpx.ASGITransport(app=stage_runner))
-    app.state.workflow_client = _Workflows(dict(TRAINS))
+    app.state.dapr = _Bus()
+    app.state.stopped = _RAY_STOPS
     return app
 
 
 @pytest.fixture
-def stage_runner(identities: _Identities) -> FastAPI:
-    return _stage_runner(dict(STAGES), identities)
+def stage_runner(identities: _Identities, tmp_path: Path) -> FastAPI:
+    return _stage_runner(dict(STAGES), tmp_path / "control", identities)
 
 
 @pytest.fixture
@@ -285,20 +369,26 @@ def ticks(monkeypatch: pytest.MonkeyPatch) -> _Ticks:
 
 
 @pytest.fixture
-def producer(stage_runner: FastAPI, identities: _Identities, fga: _Fga, ticks: _Ticks) -> Iterator[TestClient]:
-    with TestClient(_producer(stage_runner, identities), raise_server_exceptions=False) as client:
+def trains(tmp_path: Path) -> dict[str, object]:
+    return _seed_trains(tmp_path / "producer-control")
+
+
+@pytest.fixture
+def producer(stage_runner: FastAPI, identities: _Identities, fga: _Fga, ticks: _Ticks, trains: dict[str, object]) -> Iterator[TestClient]:
+    with TestClient(_producer(stage_runner, identities, settings_update=trains), raise_server_exceptions=False) as client:
         yield client
 
 
 @pytest.fixture
-def unwired(stage_runner: FastAPI, identities: _Identities, fga: _Fga, ticks: _Ticks) -> Iterator[TestClient]:
+def unwired(stage_runner: FastAPI, identities: _Identities, fga: _Fga, ticks: _Ticks, trains: dict[str, object]) -> Iterator[TestClient]:
     """The producer with OIDC on and no authorization client: a person must never be let through."""
-    with TestClient(_producer(stage_runner, identities, fga_client=None), raise_server_exceptions=False) as client:
+    with TestClient(_producer(stage_runner, identities, fga_client=None, settings_update=trains), raise_server_exceptions=False) as client:
         yield client
 
 
 def _terminated(app: FastAPI) -> list[str]:
-    return app.state.workflow_client.terminated
+    """What the app stopped through the Ray dashboard: a stage runner's stage jobs or the producer's training jobs."""
+    return app.state.stopped
 
 
 def _show(stage: str) -> str:
@@ -313,18 +403,18 @@ def _stop(stage: str) -> str:
 
 
 def test_the_stage_runner_reports_the_project_its_instance_RECORDS(stage_runner: FastAPI, identities: _Identities) -> None:
-    """The producer cannot read another app's workflow state, so the tenant has to cross this hop."""
+    """The producer cannot read another app's plans, so the tenant has to cross this hop."""
     with TestClient(stage_runner) as client:
         assert client.get("/stages/stage-other", headers=identities.producer_bearer()).json()["project"] == "other"
         single = client.get("/stages/stage-single", headers=identities.producer_bearer()).json()["project"]
         assert single == "", "a single-tenant run must be told apart from an unreadable one"
 
 
-def test_an_UNREADABLE_instance_names_no_project(identities: _Identities) -> None:
-    with TestClient(_stage_runner({"stage-garbled": _State("not json", name="stage_run")}, identities)) as client:
+def test_an_UNREADABLE_instance_names_no_project(identities: _Identities, tmp_path: Path) -> None:
+    with TestClient(_stage_runner({"stage-garbled": b"not json"}, tmp_path, identities)) as client:
         body = client.get("/stages/stage-garbled", headers=identities.producer_bearer()).json()
 
-    assert body["status"] == "RUNNING", "the status question is still answered"
+    assert body["status"] == "UNREADABLE", "the status question is still answered"
     assert body["project"] is None
 
 
@@ -356,10 +446,19 @@ def test_an_admin_of_one_project_CANNOT_STOP_anothers_stage(producer: TestClient
 
 
 def test_an_admin_CAN_stop_their_own_projects_stage(producer: TestClient, stage_runner: FastAPI) -> None:
+    """The job had already SUCCEEDED when the stop reached it (its report lost, the sweep's tick not yet come), so the
+    run closes as the engine says it ended: succeeded, with its next tier woken, never a FAIL (D-4)."""
+    _RAY_ENDED["stage-mine"] = "SUCCEEDED"
+
     response = producer.post(_stop("stage-mine"), headers=_bearer("alice"))
 
     assert response.status_code == 202, response.text
     assert _terminated(stage_runner) == ["stage-mine"]
+    assert response.json()["status"] == "succeeded", f"a job Ray says SUCCEEDED was closed {response.json()['status']!r} by the stop"
+    published = stage_runner.state.dapr.published
+    assert [payload.get("ray_submission_id") for _topic, payload in published if payload.get("ray_job_done")] == ["stage-mine"], (
+        f"the succeeded run's next tier was not woken: {published}"
+    )
 
 
 def test_a_SINGLE_TENANT_stage_belongs_to_the_configured_project(producer: TestClient) -> None:
@@ -387,7 +486,7 @@ def test_an_UNKNOWN_stage_runner_is_NAMED_to_every_admitted_caller(producer: Tes
 def _runner_without_the_field() -> FastAPI:
     """A stage runner build whose status body carries no `project` key at all — a mixed rollout."""
     app = FastAPI()
-    app.state.workflow_client = _Workflows({})
+    app.state.stopped = []
 
     @app.get("/stages/{instance_id}")
     async def show(instance_id: str) -> dict[str, object]:
@@ -395,7 +494,7 @@ def _runner_without_the_field() -> FastAPI:
 
     @app.post("/stages/{instance_id}/terminate", status_code=202)
     async def stop(instance_id: str) -> dict[str, str]:
-        app.state.workflow_client.terminated.append(instance_id)
+        app.state.stopped.append(instance_id)
         return {"instance_id": instance_id, "detail": "stopped"}
 
     return app
@@ -403,12 +502,12 @@ def _runner_without_the_field() -> FastAPI:
 
 @pytest.mark.parametrize(
     "runner",
-    [lambda ids: _stage_runner({"stage-x": _State("not json", name="stage_run")}, ids), lambda _ids: _runner_without_the_field()],
+    [lambda ids, root: _stage_runner({"stage-x": b"not json"}, root, ids), lambda _ids, _root: _runner_without_the_field()],
     ids=["unreadable-input", "older-build"],
 )
-def test_a_stage_whose_tenant_cannot_be_read_is_REFUSED_to_a_person(fga: _Fga, identities: _Identities, runner: Any) -> None:
+def test_a_stage_whose_tenant_cannot_be_read_is_REFUSED_to_a_person(fga: _Fga, identities: _Identities, runner: Any, tmp_path: Path) -> None:
     """Nothing to authorize on. Reading it as single-tenant would hand a tenant's run to acme's admins."""
-    app = runner(identities)
+    app = runner(identities, tmp_path)
     with TestClient(_producer(app, identities), raise_server_exceptions=False) as client:
         refused = client.post(_stop("stage-x") + "?project=acme", headers=_bearer("bob"))
 
@@ -425,18 +524,10 @@ def test_an_UNWIRED_authorization_service_refuses_a_person_THEIR_OWN_stage(unwir
     assert _terminated(stage_runner) == []
 
 
-def test_a_trigger_that_is_not_a_MAPPING_names_no_project(identities: _Identities) -> None:
-    spec = StageJobSpec(from_uri="s3://wh/in", to_uri="s3://wh/out", stage="gold").model_dump() | {"trigger": "tok-1"}
-    with TestClient(_stage_runner({"stage-odd": _State(spec, name="stage_run")}, identities)) as client:
-        body = client.get("/stages/stage-odd", headers=identities.producer_bearer()).json()
-
-    assert body["project"] is None, "a trigger the stage runner cannot read is not a single-tenant one"
-
-
 def _runner_reporting(project: object) -> FastAPI:
     """A stage runner whose status names ``project`` verbatim."""
     app = FastAPI()
-    app.state.workflow_client = _Workflows({})
+    app.state.stopped = []
 
     @app.get("/stages/{instance_id}")
     async def show(instance_id: str) -> dict[str, object]:
@@ -444,7 +535,7 @@ def _runner_reporting(project: object) -> FastAPI:
 
     @app.post("/stages/{instance_id}/terminate", status_code=202)
     async def stop(instance_id: str) -> dict[str, str]:
-        app.state.workflow_client.terminated.append(instance_id)
+        app.state.stopped.append(instance_id)
         return {"instance_id": instance_id, "detail": "stopped"}
 
     return app
@@ -477,14 +568,14 @@ def _sa_verifier(issuer: Any, subjects: dict[str, str]) -> ServiceAccountVerifie
 
 @pytest.fixture
 def held(sa_issuer: Any, fga: _Fga, ticks: _Ticks, tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[TestClient, TestClient, FastAPI]]:
-    """The producer admitting the ingest service, and a stage runner admitting the producer alone.
+    """The producer admitting the ingest service, and a stage runner whose door maps the producer and the compute head.
 
     Each door maps only the accounts the chart names for it, and the producer forwards with its own
     projected `rask-medallion` token, read from the file the kubelet would project.
     """
     monkeypatch.setenv("APP_API_TOKEN", APP_TOKEN)
-    runner = _stage_runner(dict(STAGES))
-    runner.state.sa_oidc = _sa_verifier(sa_issuer, {_account(PRODUCER_SA): "service-medallion-producer"})
+    runner = _stage_runner(dict(STAGES), tmp_path / "control")
+    runner.state.sa_oidc = _sa_verifier(sa_issuer, {_account(PRODUCER_SA): "service-medallion-producer", _account(HEAD_SA): "service-trainer"})
     token_file = tmp_path / "rask-medallion-token"
     token_file.write_text(sa_issuer.mint(PRODUCER_SA, audience=MEDALLION_AUDIENCE, namespace=NAMESPACE))
     producer = _producer(runner, settings_update={"medallion_identity_token_file": str(token_file)})
@@ -494,26 +585,28 @@ def held(sa_issuer: Any, fga: _Fga, ticks: _Ticks, tmp_path: Any, monkeypatch: p
 
 
 @pytest.mark.parametrize(
-    ("door", "path", "status", "terminated"),
+    ("door", "caller", "path", "status", "terminated"),
     [
-        pytest.param("producer", _stop("stage-mine"), 202, ["stage-mine"], id="producer-stops-a-run-of-a-project-it-administers"),
-        pytest.param("producer", _stop("stage-other"), 403, [], id="producer-refuses-a-run-of-another-project"),
-        pytest.param("stage-runner", "/stages/stage-other/terminate", 401, [], id="stage-runner-refuses-a-caller-that-is-not-the-producer"),
+        pytest.param("producer", INGEST_SA, _stop("stage-mine"), 202, ["stage-mine"], id="producer-stops-a-run-of-a-project-it-administers"),
+        pytest.param("producer", INGEST_SA, _stop("stage-other"), 403, [], id="producer-refuses-a-run-of-another-project"),
+        pytest.param("stage-runner", INGEST_SA, "/stages/stage-other/terminate", 401, [], id="stage-runner-refuses-a-caller-that-is-not-the-producer"),
+        pytest.param("stage-runner", HEAD_SA, "/stages/stage-other/terminate", 403, [], id="stage-runner-refuses-the-compute-head-it-maps-for-outcomes"),
     ],
 )
 def test_a_service_token_stops_only_its_own_tenants_stage(
-    held: tuple[TestClient, TestClient, FastAPI], sa_issuer: Any, door: str, path: str, status: int, terminated: list[str]
+    held: tuple[TestClient, TestClient, FastAPI], sa_issuer: Any, door: str, caller: str, path: str, status: int, terminated: list[str]
 ) -> None:
     """A service is authorized as the subject its account maps to, exactly like a person ([[LH-220]] clause 5).
 
     The request carries what a service invocation carries: the app token daprd stamps, which names
     nobody, beside the service's own projected token. The ingest service's subject administers `mine`
     only. Going round the producer to the stage runner's ClusterIP does not escape the check, because
-    the stage runner admits the producer's account and no other.
+    the stage runner's operator routes admit the producer's account and no other: the compute head, which
+    its door maps for the outcome route, verifies and is refused here.
     """
     producer, runner_client, runner = held
     client = producer if door == "producer" else runner_client
-    headers = {**SERVICE, **_bearer(sa_issuer.mint(INGEST_SA, audience=MEDALLION_AUDIENCE, namespace=NAMESPACE))}
+    headers = {**SERVICE, **_bearer(sa_issuer.mint(caller, audience=MEDALLION_AUDIENCE, namespace=NAMESPACE))}
 
     response = client.post(path, headers=headers)
 
@@ -613,37 +706,37 @@ def test_the_SINGLE_TENANT_row_belongs_to_the_configured_project(producer: TestC
     assert fga.calls == [("batch_check", ["project:acme"]), ("batch_check", ["project:acme"])]
 
 
-# ── the training watch ──────────────────────────────────────────────────────────────────────────────
+# ── the training run ──────────────────────────────────────────────────────────────────────────────
 
 
-def test_a_training_watch_is_gated_on_the_project_it_RECORDS(producer: TestClient) -> None:
-    """The recorded project decides, not the deployment's: a watch naming `other` is refused to acme's
+def test_a_training_run_is_gated_on_the_project_it_RECORDS(producer: TestClient) -> None:
+    """The recorded project decides, not the deployment's: a run naming `other` is refused to acme's
     admin, and one naming `mine` is shown to mine's."""
     assert producer.get("/trains/train-other", headers=_bearer("bob")).status_code == 403
     assert producer.get("/trains/train-mine", headers=_bearer("alice")).status_code == 200
 
 
-def test_a_training_watch_of_another_project_CANNOT_BE_STOPPED(producer: TestClient) -> None:
+def test_a_training_run_of_another_project_CANNOT_BE_STOPPED(producer: TestClient) -> None:
     response = producer.post("/trains/train-other/terminate", headers=_bearer("bob"))
 
     assert response.status_code == 403, response.text
     assert _terminated(cast("FastAPI", producer.app)) == []
 
 
-def test_an_UNWIRED_authorization_service_refuses_a_person_THEIR_OWN_watch(unwired: TestClient) -> None:
+def test_an_UNWIRED_authorization_service_refuses_a_person_THEIR_OWN_training_run(unwired: TestClient) -> None:
     assert unwired.get("/trains/train-acme", headers=_bearer("bob")).status_code == 503
     assert unwired.post("/trains/train-acme/terminate", headers=_bearer("bob")).status_code == 503
     assert _terminated(cast("FastAPI", unwired.app)) == []
 
 
-def test_a_training_watch_whose_input_cannot_be_read_is_REFUSED_to_a_person(producer: TestClient) -> None:
+def test_a_training_run_whose_plan_cannot_be_read_is_REFUSED_to_a_person(producer: TestClient) -> None:
     """Unreadable is not the configured project: reading it so would hand an unknown run to acme's admins."""
     assert producer.get("/trains/train-garbled", headers=_bearer("bob")).status_code == 503
 
 
 @pytest.mark.parametrize("instance_id", ["train-unsafe", "train-listed"])
-def test_a_watch_recording_no_USABLE_project_is_refused_to_a_person(producer: TestClient, fga: _Fga, instance_id: str) -> None:
-    """An unsafe project id, or an input that is not a mapping, names no project to authorize on: never
+def test_a_training_run_recording_no_USABLE_project_is_refused_to_a_person(producer: TestClient, fga: _Fga, instance_id: str) -> None:
+    """An unsafe project id, or a plan that is not a mapping, names no project to authorize on: never
     an FGA object, and never read as the configured project."""
     response = producer.get(f"/trains/{instance_id}", headers=_bearer("bob"))
 
@@ -655,66 +748,45 @@ def test_a_training_stop_is_logged_with_WHO_asked(producer: TestClient, caplog: 
     with caplog.at_level(logging.INFO, logger=train_api.log.name):
         assert producer.post("/trains/train-acme/terminate", headers=_bearer("bob")).status_code == 202
 
-    [line] = [r for r in caplog.records if r.getMessage() == "medallion_train_watch_termination_requested"]
+    [line] = [r for r in caplog.records if r.getMessage() == "medallion_train_run_termination_requested"]
     assert (line.__dict__["instance_id"], line.__dict__["subject"]) == ("train-acme", "bob")
 
 
-def test_the_training_doors_serve_the_watch_the_MINT_schedules(
-    stage_runner: FastAPI, identities: _Identities, fga: _Fga, monkeypatch: pytest.MonkeyPatch
+def test_the_training_doors_serve_the_run_the_consumer_PLANS_on_the_configured_project(
+    stage_runner: FastAPI, identities: _Identities, fga: _Fga, tmp_path: Path
 ) -> None:
-    """The id and state come from `schedule_train_watch`, not from a literal: a mint whose ids the door
-    refuses would leave every real training watch unobservable and unstoppable."""
-    started: list[tuple[Any, dict[str, Any]]] = []
-
-    def start(self: DaprSagaClient, *, saga: Any, payload: dict[str, Any], instance_id: str) -> SagaHandle:
-        started.append((saga, payload))
-        return SagaHandle(instance_id=instance_id, outcome=SagaStart.STARTED)
-
-    monkeypatch.setattr(DaprSagaClient, "start", start)
-    minted = train_service.schedule_train_watch(MedallionSettings(), token="tok-1", model="churn", project=CONFIGURED)
-    assert minted is not None
-    [(saga, payload)] = started
-    app = _producer(stage_runner, identities)
-    app.state.workflow_client = _Workflows({minted: _State(payload, name=saga.__name__)})
+    """The id and the tenant come from the training consumer, not from a literal: it plans every run under the
+    deployment's project whatever the trigger claims, and the doors serve that plan to that project's admin alone.
+    A consumer whose ids the doors refused would leave every real training run unobservable and unstoppable."""
+    root = tmp_path / "planned"
+    update: dict[str, object] = {
+        "control_root": str(root / "control"),
+        "fga_service_identity": _PRODUCER_IDENTITY,
+        "ray_enabled": True,
+        "s3_endpoint": "http://rustfs:9000",
+        "bronze_uri": str(root / "medallion" / "bronze"),
+    }
+    app = _producer(stage_runner, identities, settings_update=update)
+    settings = app.dependency_overrides[get_settings]()
+    trigger = {"token": "tok-1", "model": "churn", "features": [{"dataset": "silver$features", "version": 7}], "config": {}, "project": "other"}
+    assert asyncio.run(train_service.handle_train_trigger(settings, {"data": trigger}, dapr=_Bus())) == {"status": "SUCCESS"}
+    minted = ray_submit.train_submission_id("tok-1")
+    # The job had already published its model, its commit carrying the run's marker, when the stop reached it: Ray
+    # answers the stop with `stopped: false` and SUCCEEDED, and the run must close succeeded, never FAIL (D-4).
+    planned = asyncio.run(train_plans.read(settings, minted))
+    assert planned is not None
+    lance.write_dataset(pa.table({"version": [1]}), planned.to_uri, transaction_properties=CommitMarker(action_id=minted).properties())
+    _RAY_ENDED[minted] = "SUCCEEDED"
 
     with TestClient(app, raise_server_exceptions=False) as client:
+        refused = client.get(f"/trains/{minted}", headers=_bearer("alice"))
         shown = client.get(f"/trains/{minted}", headers=_bearer("bob"))
         stopped = client.post(f"/trains/{minted}/terminate", headers=_bearer("bob"))
+        after = client.get(f"/trains/{minted}", headers=_bearer("bob"))
 
-    assert (shown.status_code, stopped.status_code) == (200, 202), (shown.text, stopped.text)
+    assert (refused.status_code, shown.status_code, stopped.status_code) == (403, 200, 202), (refused.text, shown.text, stopped.text)
     assert _terminated(app) == [minted]
-
-
-def test_a_training_watch_RECORDS_the_configured_project_whatever_the_trigger_claims(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Why the gate above only ever meets the configured project in production: the consumer stamps
-    the deployment's project on the watch, and a trigger's own `project` claim does not reach it."""
-    scheduled: dict[str, Any] = {}
-
-    async def submitted(*_a: object, **_kw: object) -> str:
-        return "submitted"
-
-    def schedule(_settings: MedallionSettings, *, token: str, model: str, originator: str = "", project: str = "") -> str | None:
-        scheduled["project"] = project
-        return None
-
-    monkeypatch.setattr(train_service.ray_submit, "submit_train_job", submitted)
-    monkeypatch.setattr(train_service, "schedule_train_watch", schedule)
-    settings = MedallionSettings.model_validate(
-        {
-            "MEDALLION_RAY_ENABLED": "true",
-            "MEDALLION_COMPUTE_ENABLED": "true",
-            "MEDALLION_S3_ENDPOINT": "http://rustfs:9000",
-            "MEDALLION_S3_SECRET_ACCESS_KEY": "k",
-            "MEDALLION_BRONZE_URI": "s3://lake/medallion/bronze",
-            "MEDALLION_PRODUCE_ADMIN_PROJECT": "globex",
-        }
-    )
-    trigger = {"token": "tok-1", "model": "churn", "features": [{"dataset": "silver$features", "version": 7}], "config": {}, "project": "other"}
-
-    result = asyncio.run(train_service.handle_train_trigger(settings, {"data": trigger}))
-
-    assert result["status"] == "SUCCESS", result
-    assert scheduled["project"] == "globex"
+    assert after.json()["status"] == "SUCCEEDED", f"a training job that published its model was closed {after.json()['status']!r} by the stop"
 
 
 # ── the decision is audited with the RESOURCE's project ─────────────────────────────────────────────
@@ -747,7 +819,7 @@ def _all_decisions(records: list[logging.LogRecord]) -> list[tuple[object, ...]]
     return [(f["audit.action"], f["audit.outcome"], f["audit.subject"], f["audit.resource"], f.get("audit.reason")) for f in fields if "audit.action" in f]
 
 
-def test_a_SERVICE_read_of_a_training_watch_is_audited_on_the_WATCHS_project(
+def test_a_SERVICE_read_of_a_training_run_is_audited_on_the_RUNS_project(
     producer: TestClient, identities: _Identities, audited: list[logging.LogRecord]
 ) -> None:
     """Recorded as a person's is: the decision on the watch's project, under the subject the account maps to."""

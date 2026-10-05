@@ -236,7 +236,7 @@ def _routes(settings: GatewaySettings | None = None) -> list[Route]:
         # The training head (`POST /train`): the producer serves it root-mounted, so the rewrite is a
         # literal rather than `prefix`-interpolated.
         Route("/api/train", "/train", *medallion),
-        # The training watch's status and terminate. A sibling of `/api/train`, not nested under it: the
+        # A planned training run's status and terminate. A sibling of `/api/train`, not nested under it: the
         # producer serves `/trains/{id}`, and `_pick_route` never lets one of the two rows match the other.
         Route("/api/trains", "/trains", *medallion),
         # The APPROVE door for a held promotion. It is on the producer rather than on the stage runner whose

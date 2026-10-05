@@ -38,8 +38,10 @@ from medallion.api.rerun import router as rerun_router
 from medallion.api.stage_runner_ops import router as stage_runner_ops_router
 from medallion.api.train import register_train_trigger_route
 from medallion.api.train import router as train_router
+from medallion.api.train_outcomes import mount_train_outcomes
 from medallion.core.config import get_settings
 from medallion.core.lineage_publish import start_signing, stop_signing
+from medallion.services.ray_submit import close_ray_client
 from medallion.services.task_register import register_tasks
 from service_kit.draining import arm_drain_on_sigterm
 from service_kit.governed.actor_state_store import probe_actor_state_store
@@ -119,15 +121,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Without this the door 404s honestly — which is the correct failure, not a working one.
     app.state.workflow_runtime = None
     app.state.workflow_client = None
-    # `qualityReview OR ray`, because this app hosts TWO workflows and they answer to different
-    # features: `promotion_review` (quality review) and `train_run` (the Ray training watcher, started
-    # by `schedule_train_watch`). Gating on quality review alone meant the DEFAULT chart -- ray on,
-    # review off -- started no runtime here, so every training job was submitted and never watched.
-    # That lane fails silently ON PURPOSE (a lost watcher must not fail a trigger whose job is already
-    # running), so nobody was ever told: no terminal event, no outcome report, no notification to the
-    # originator. Owner ruling 2026-08-25. NOT "always": with neither feature on, this app hosts no
-    # workflow and should run no engine.
-    if settings.quality_review_enabled or settings.ray_enabled:
+    # QUALITY REVIEW ALONE starts it: `promotion_review` is the one workflow this app hosts. A training run is a
+    # plan resolved by its outcome door and the plan sweep (`services/train_plans.py`, CP-029), which need no engine.
+    if settings.quality_review_enabled:
         try:
             import dapr.ext.workflow as wf
 
@@ -139,11 +135,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             app.state.workflow_runtime = runtime
             # ONE client for the app, not one per request — the decision door reads it from here.
             app.state.workflow_client = wf.DaprWorkflowClient()
-            log.info("dapr workflow runtime started", extra={"promotion_review": settings.quality_review_enabled, "train_watch": settings.ray_enabled})
+            log.info("dapr workflow runtime started", extra={"promotion_review": settings.quality_review_enabled})
             # The line above is TRUE and INSUFFICIENT: the runtime starts whether or not this
             # app-id can reach an actor state store, and without one the first call fails (and,
             # on dapr 1.18.1, panics the sidecar). Ask the sidecar what it can actually see.
-            await probe_actor_state_store(capability="held promotions cannot be reviewed and training jobs cannot be watched")
+            await probe_actor_state_store(capability="held promotions cannot be reviewed")
         except Exception:
             # Non-fatal, the stage runner's reasoning: refusing to start because the sidecar is not up yet
             # turns an ordering blip into a CrashLoopBackOff. A hold that cannot be scheduled RETRYs
@@ -172,6 +168,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             await app.state.dapr.close()
         with suppress(Exception):
             await app.state.http.aclose()
+        # The Ray client the executor pools at module level (`ray_submit.ray_client`): the training submit, the plan
+        # sweep and the training operator routes use it on THIS loop, so it is closed here.
+        with suppress(Exception):
+            await close_ray_client()
         fga_client = getattr(app.state, "fga", None)
         if fga_client is not None:
             with suppress(Exception):
@@ -199,6 +199,9 @@ _dapr_app = register_bronze_arrival_route(app)
 # The Ray TRAIN head (#115a): POST /train + the training-trigger subscription (own topic; submit-and-ack).
 app.include_router(train_router)
 register_train_trigger_route(app, _dapr_app)
+# The planned training runs' outcome door (the compute head's training jobs report here) and the plan sweep's cron
+# door, which resolves a training run whose report never arrived (CP-029).
+mount_train_outcomes(app, sweep_binding_name=get_settings().plan_sweep_binding_name)
 # The quality gate's third answer (S3/S4): a stage runner that HOLDS a promotion publishes it here, the
 # review workflow runs in this process, and a `can_promote` holder answers it on /promotions/*.
 app.include_router(promotions_router)

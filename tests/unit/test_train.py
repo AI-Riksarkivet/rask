@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from pathlib import Path
 from typing import Any, cast
 
 import httpx
@@ -31,13 +32,24 @@ from medallion.services import ray_submit, train
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 
+#: This test's local estate, set per test by `_local_estate`: every training run is PLANNED into a control root and
+#: reads its registry's version first (CP-029), so both live on `tmp_path` rather than behind an unreachable endpoint.
+_ROOT = Path()
+
+
+@pytest.fixture(autouse=True)
+def _local_estate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(globals(), "_ROOT", tmp_path)
+
+
 def _settings(**overrides: Any) -> MedallionSettings:
     values: dict[str, Any] = {
         "MEDALLION_RAY_ENABLED": "true",
         "MEDALLION_COMPUTE_ENABLED": "true",
         "MEDALLION_S3_ENDPOINT": "http://rustfs:9000",
         "MEDALLION_S3_SECRET_ACCESS_KEY": "k",
-        "MEDALLION_BRONZE_URI": "s3://lake/medallion/bronze",
+        "MEDALLION_BRONZE_URI": f"{_ROOT}/medallion/bronze",
+        "MEDALLION_CONTROL_ROOT": f"{_ROOT}/control",
     }
     values.update(overrides)
     return MedallionSettings.model_validate(values)
@@ -59,8 +71,9 @@ class _FakeDapr:
 def test_registry_and_artifact_layout_derivation() -> None:
     # D4: registry dataset beside the stages; artifact bytes in a SEPARATE tree at the bucket root
     # (never inside a Lance dataset directory — GC/orphan safety + the #92 allowlist prefix).
-    assert train.registry_uri_for(_settings(), "churn") == "s3://lake/medallion/models/churn"
-    assert train.artifact_base_for(_settings(), "churn") == "s3://lake/models/churn"
+    bucket = _settings(MEDALLION_BRONZE_URI="s3://lake/medallion/bronze")
+    assert train.registry_uri_for(bucket, "churn") == "s3://lake/medallion/models/churn"
+    assert train.artifact_base_for(bucket, "churn") == "s3://lake/models/churn"
     local = _settings(MEDALLION_BRONZE_URI="/data/medallion/bronze")
     assert train.registry_uri_for(local, "churn") == "/data/medallion/models/churn"
     assert train.artifact_base_for(local, "churn") == "/data/medallion/model-artifacts/churn"
@@ -162,14 +175,14 @@ def test_consumer_denied_input_or_models_rung_drops(monkeypatch: pytest.MonkeyPa
         lambda *a, **k: submitted.append("x"),  # never awaited
     )
     _gate(monkeypatch, {"can_read_data:table:silver$features": False})
-    result = asyncio.run(train.handle_train_trigger(_settings(), _EVENT, fga_client=object()))
+    result = asyncio.run(train.handle_train_trigger(_settings(), _EVENT, fga_client=object(), dapr=_FakeDapr()))
     assert result["status"] == "DROP" and submitted == []  # denied BEFORE any compute is spent
 
     _gate(
         monkeypatch,
         {"can_read_data:table:silver$features": True, "can_create_table:namespace:models": False},
     )
-    result = asyncio.run(train.handle_train_trigger(_settings(), _EVENT, fga_client=object()))
+    result = asyncio.run(train.handle_train_trigger(_settings(), _EVENT, fga_client=object(), dapr=_FakeDapr()))
     assert result["status"] == "DROP" and submitted == []
 
 
@@ -179,7 +192,7 @@ def test_consumer_fga_outage_retries(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(train.fga, "check", outage)
     monkeypatch.setattr(train.fga, "batch_check", outage)
-    result = asyncio.run(train.handle_train_trigger(_settings(), _EVENT, fga_client=object()))
+    result = asyncio.run(train.handle_train_trigger(_settings(), _EVENT, fga_client=object(), dapr=_FakeDapr()))
     assert result == {"status": "RETRY"}  # outage ≠ denial
 
 
@@ -226,7 +239,7 @@ def test_the_sdk_harness_trains_on_inputs_openfga_answered(monkeypatch: pytest.M
     submitted = _submits(monkeypatch)
     client = _TrainerOpenFga(unanswered=set())
 
-    assert asyncio.run(train.handle_train_trigger(_settings(), _EVENT, fga_client=client)) == {"status": "SUCCESS"}
+    assert asyncio.run(train.handle_train_trigger(_settings(), _EVENT, fga_client=client, dapr=_FakeDapr())) == {"status": "SUCCESS"}
     assert submitted == ["t1"] and len(client.written) == 1
 
 
@@ -236,7 +249,7 @@ def test_an_input_openfga_could_not_answer_retries_rather_than_drops(monkeypatch
     submitted = _submits(monkeypatch)
     client = _TrainerOpenFga(unanswered={"table:silver$features"})
 
-    assert asyncio.run(train.handle_train_trigger(_settings(), _EVENT, fga_client=client)) == {"status": "RETRY"}
+    assert asyncio.run(train.handle_train_trigger(_settings(), _EVENT, fga_client=client, dapr=_FakeDapr())) == {"status": "RETRY"}
     assert submitted == [] and client.written == []
 
 
@@ -258,7 +271,7 @@ def test_consumer_seeds_the_model_parent_link_before_submit(monkeypatch: pytest.
     )
     monkeypatch.setattr(train.fga, "write_tuples", fake_write)
     monkeypatch.setattr(train.ray_submit, "submit_train_job", fake_submit)
-    result = asyncio.run(train.handle_train_trigger(_settings(), _EVENT, fga_client=object()))
+    result = asyncio.run(train.handle_train_trigger(_settings(), _EVENT, fga_client=object(), dapr=_FakeDapr()))
     assert result == {"status": "SUCCESS"}
     assert (written[0].user, written[0].relation, written[0].object) == (
         "namespace:models",
@@ -270,7 +283,7 @@ def test_consumer_seeds_the_model_parent_link_before_submit(monkeypatch: pytest.
         raise ServiceUnavailableError("fga down")
 
     monkeypatch.setattr(train.fga, "write_tuples", outage)
-    result = asyncio.run(train.handle_train_trigger(_settings(), _EVENT, fga_client=object()))
+    result = asyncio.run(train.handle_train_trigger(_settings(), _EVENT, fga_client=object(), dapr=_FakeDapr()))
     assert result == {"status": "RETRY"}
 
 
@@ -282,25 +295,25 @@ def test_consumer_submits_and_acks_and_maps_outcomes(monkeypatch: pytest.MonkeyP
         calls.append(token)
         # #115b: the consumer enriches each pinned feature with its Lance URI and derives the D4
         # publish pointers — the job reads these verbatim (layout convention lives in train.py only).
-        assert json.loads(features_json) == [{"dataset": "silver$features", "version": 7, "uri": "s3://lake/medallion/silver"}]
-        assert kw["registry_uri"] == "s3://lake/medallion/models/churn"
-        assert kw["artifact_base"] == "s3://lake/models/churn"
+        assert json.loads(features_json) == [{"dataset": "silver$features", "version": 7, "uri": f"{_ROOT}/medallion/silver"}]
+        assert kw["registry_uri"] == f"{_ROOT}/medallion/models/churn"
+        assert kw["artifact_base"] == f"{_ROOT}/medallion/model-artifacts/churn"
         return next(outcomes)
 
     monkeypatch.setattr(train.ray_submit, "submit_train_job", fake_submit)
-    assert asyncio.run(train.handle_train_trigger(_settings(), _EVENT)) == {"status": "SUCCESS"}
-    assert asyncio.run(train.handle_train_trigger(_settings(), _EVENT)) == {"status": "SUCCESS"}  # re-attach
+    assert asyncio.run(train.handle_train_trigger(_settings(), _EVENT, dapr=_FakeDapr())) == {"status": "SUCCESS"}
+    assert asyncio.run(train.handle_train_trigger(_settings(), _EVENT, dapr=_FakeDapr())) == {"status": "SUCCESS"}  # re-attach
     # a terminally FAILED prior job is DROPPED — training is never auto-resubmitted (D2)
-    assert asyncio.run(train.handle_train_trigger(_settings(), _EVENT))["status"] == "DROP"
+    assert asyncio.run(train.handle_train_trigger(_settings(), _EVENT, dapr=_FakeDapr()))["status"] == "DROP"
     assert calls == ["t1", "t1", "t1"]
 
     async def transport_error(*_a: Any, **_kw: Any) -> str:
         raise ray_submit.RayJobError("submit failed")
 
     monkeypatch.setattr(train.ray_submit, "submit_train_job", transport_error)
-    assert asyncio.run(train.handle_train_trigger(_settings(), _EVENT)) == {"status": "RETRY"}
+    assert asyncio.run(train.handle_train_trigger(_settings(), _EVENT, dapr=_FakeDapr())) == {"status": "RETRY"}
 
-    assert asyncio.run(train.handle_train_trigger(_settings(), {"data": {}})) == {"status": "DROP"}
+    assert asyncio.run(train.handle_train_trigger(_settings(), {"data": {}}, dapr=_FakeDapr())) == {"status": "DROP"}
 
 
 def test_consumer_drops_unpinned_or_empty_features(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -311,11 +324,11 @@ def test_consumer_drops_unpinned_or_empty_features(monkeypatch: pytest.MonkeyPat
 
     monkeypatch.setattr(train.ray_submit, "submit_train_job", never)
     unpinned = {"data": {"token": "t", "model": "m", "features": [{"dataset": "silver$features"}]}}
-    assert asyncio.run(train.handle_train_trigger(_settings(), unpinned))["status"] == "DROP"
+    assert asyncio.run(train.handle_train_trigger(_settings(), unpinned, dapr=_FakeDapr()))["status"] == "DROP"
     junk = {"data": {"token": "t", "model": "m", "features": ["junk"]}}
-    assert asyncio.run(train.handle_train_trigger(_settings(), junk))["status"] == "DROP"
+    assert asyncio.run(train.handle_train_trigger(_settings(), junk, dapr=_FakeDapr()))["status"] == "DROP"
     empty = {"data": {"token": "t", "model": "m", "features": []}}
-    assert asyncio.run(train.handle_train_trigger(_settings(), empty))["status"] == "DROP"
+    assert asyncio.run(train.handle_train_trigger(_settings(), empty, dapr=_FakeDapr()))["status"] == "DROP"
 
 
 def test_consumer_drops_path_unsafe_names(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -339,7 +352,7 @@ def test_consumer_drops_path_unsafe_names(monkeypatch: pytest.MonkeyPatch) -> No
         # lineage) a namespace equal to the whole name, corrupting the shared graph node's namespace
         {"token": "t1", "model": "churn", "features": [{"dataset": "events", "version": 1}]},
     ):
-        assert asyncio.run(train.handle_train_trigger(_settings(), {"data": data})) == {"status": "DROP"}
+        assert asyncio.run(train.handle_train_trigger(_settings(), {"data": data}, dapr=_FakeDapr())) == {"status": "DROP"}
 
 
 def test_consumer_drops_oversized_or_nondict_config_and_too_many_features(
@@ -358,7 +371,7 @@ def test_consumer_drops_oversized_or_nondict_config_and_too_many_features(
         {"token": "t1", "model": "churn", "features": [ok], "config": ["not-a-dict"]},
         {"token": "t1", "model": "churn", "features": [ok] * (train.MAX_FEATURES + 1)},
     ):
-        assert asyncio.run(train.handle_train_trigger(_settings(), {"data": data})) == {"status": "DROP"}
+        assert asyncio.run(train.handle_train_trigger(_settings(), {"data": data}, dapr=_FakeDapr())) == {"status": "DROP"}
 
 
 def test_train_route_422s_the_names_its_consumer_would_drop() -> None:
@@ -411,7 +424,6 @@ def test_the_door_202s_exactly_the_tokens_its_consumer_trains_on(monkeypatch: py
         return "submitted"
 
     monkeypatch.setattr(train.ray_submit, "submit_train_job", submitted)
-    monkeypatch.setattr(train, "schedule_train_watch", lambda *_a, **_kw: None)
     bus = _FakeDapr()
     app = FastAPI()
     app.include_router(router)
@@ -425,7 +437,7 @@ def test_the_door_202s_exactly_the_tokens_its_consumer_trains_on(monkeypatch: py
         assert bus.published == [], "a refused request published a training trigger"
         return
     assert door.json()["token"] == key
-    consumer = asyncio.run(train.handle_train_trigger(_settings(), {"data": json.loads(bus.published[0]["data"])}))
+    consumer = asyncio.run(train.handle_train_trigger(_settings(), {"data": json.loads(bus.published[0]["data"])}, dapr=_FakeDapr()))
     assert consumer["status"] == "SUCCESS"
 
 

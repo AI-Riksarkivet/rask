@@ -5,8 +5,8 @@ taking its input from `MEDALLION_FROM_DATASET` instead. That is two sources of t
 with the governed one losing — worse than having only the ungoverned one, because it LOOKS governed:
 an admin edits `from_id` through an audited door and the stage runner keeps reading the old table.
 
-It is also why one stage runner serves exactly one edge. The `stage_run` workflow is already fully
-parameterised (`StageJobSpec` carries `from_uri`/`to_uri`), so the daemon was never the workflow —
+It is also why one stage runner serves exactly one edge. The Ray lane's plan is already fully
+parameterised (its order carries `from_uri`/`to_uri`), so the daemon is not the plan —
 it was the handful of lines that computed those URIs from env before scheduling it.
 
 UNDECLARED KEEPS THE ENV, byte-for-byte. An estate that declared nothing behaves exactly as before,

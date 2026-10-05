@@ -16,9 +16,9 @@ the second; a hand-maintained second copy of that shape is what its docstring fo
 retains — so this verb cannot re-mint one, and a design that required it would be unimplementable.
 
 * **supplied** (an operator has it from the DLQ line, which carries it) — the trigger is verbatim, so
-  the stage runner derives the same deterministic instance id and `submit_or_reattach` REATTACHES to a
-  running or succeeded job instead of starting a second. This is the ideal repair, and it costs no
-  extra call: a duplicate id whose job is RUNNING already answers `"reattached"`;
+  the stage runner derives the same action id and finds the run's plan (`stage_plans.dispatch`): a run
+  that SUCCEEDED submits nothing new, one that FAILED is reopened and resubmitted under the same key,
+  and one in flight re-attaches (`submit_or_reattach` answers `"reattached"`). This is the ideal repair;
 * **absent** — a fresh token, a full recompute, a second lineage run node. Honest, and the common case
   for the never-ran shape where nothing exists to reattach to.
 
@@ -71,11 +71,10 @@ log = logging.getLogger(__name__)
 # `/api/stage-runners` row to this one segment, and the verb is reachable only while both agree.
 router = APIRouter(prefix=STAGE_RUNNERS_PREFIX, tags=["stage-runners"])
 
-#: What the verb predicts it will do, never what it observed. The path is decided inside
-#: `submit_stage` AFTER this returns (R3), and two further horizons make even the prediction
-#: conditional: Ray's GCS is not fault-tolerant here, so a head restart loses the SUCCEEDED job a
-#: reattach would have found; and the Ray submission id folds `code_version` while the workflow id
-#: does not, so a same-token re-run AFTER A DEPLOY is a full recompute regardless.
+#: What the verb predicts it will do, never what it observed. The path is decided inside the stage
+#: runner's plan dispatch AFTER this returns (R3), and one further horizon makes even the prediction
+#: conditional: the action id folds `code_version`, so a same-token re-run AFTER A DEPLOY names a new
+#: run and is a full recompute regardless.
 REATTACH = "reattach-if-live"
 RECOMPUTE = "recompute"
 

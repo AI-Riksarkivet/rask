@@ -5,10 +5,9 @@ never things it depends ON." An import is a dependency, and measured 2026-09-13 
 medallion.producer` pulled in `dapr.ext.workflow` and its whole durabletask stack — the client, the
 deterministic runtime, the generated protobufs.
 
-THE CHAIN WAS NOT WHERE ANYONE LOOKED. `producer.py` starts the workflow RUNTIME only
-`if settings.quality_review_enabled or settings.ray_enabled`, and says so: "with neither feature on,
-this app hosts no workflow and should run no engine". That gate is real, and it is about threads. The
-engine still arrived through `api/promotions.py` — a router the producer mounts unconditionally —
+THE CHAIN WAS NOT WHERE ANYONE LOOKED. `producer.py` starts the workflow RUNTIME only under
+`settings.quality_review_enabled`, the one feature that runs a workflow there. That gate is real, and it
+is about threads. The engine still arrived through `api/promotions.py` — a router the producer mounts unconditionally —
 which imported `WorkflowStatus` at module scope and `PromotionSpec, promotion_review` from
 `medallion.workflow`, whose own body is `import dapr.ext.workflow as wf`. The STAGE RUNNER arrived by a
 second route through the same adapter: `services/transform.py` imports `promotion_hold` at module

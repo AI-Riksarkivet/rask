@@ -16,11 +16,11 @@ claim below was verified against the render or the code (2026-08-28), not inheri
 | --- | --- | --- |
 | Service invocation | ✅ | gateway `_target_base` → `/v1.0/invoke/{app_id}/method` (direct-httpx fallback when Dapr off); `invoke/lineage`, `invoke/compute` |
 | State | ✅ | `state.postgresql` ×1 (the actor state store; scopes are load-bearing — see traps) |
-| Pub/sub | ✅ | `pubsub.jetstream` ×16 in the default render (measured 2026-10-04), each scoped to ONE app-id and naming that app's NATS user from the store (`jwt`/`seedKey` secretKeyRef to `nats-user-<app>`, `auth.secretStore: lance-secrets`; the permission table is `nats.auth.users` in values.yaml, [[XC-078]]); `DaprApp.subscribe` incl. a DLQ route; `queueGroupName` makes replicas competing consumers |
-| Bindings | ✅ | `bindings.cron` ×7 — measured on the deployed estate 2026-09-05: `maintenance-cron` (the sweep), `maintenance-reconcile-cron`, `lineage-reconcile-cron`, `notifications-reconcile-cron`, `catalog-control-relay-cron`, `compute-prune-jobs-cron`, `medallion-cascade-lag-cron`. `ingest-cron` renders from the chart but is not enabled here, so the CHART count is 8 and the RUNNING count is 7 — read the cluster, not the templates. Plus `bindings.smtp`, `bindings.http` — all delivered to `POST /<component-name>` at the pod ROOT |
+| Pub/sub | ✅ | `pubsub.jetstream` ×19 in the default render (counted 2026-10-05: the 16 of XC-078 plus each stage runner's control-lane publisher, CP-029), each scoped to ONE app-id and naming that app's NATS user from the store (`jwt`/`seedKey` secretKeyRef to `nats-user-<app>`, `auth.secretStore: lance-secrets`; the permission table is `nats.auth.users` in values.yaml, [[XC-078]]); `DaprApp.subscribe` incl. a DLQ route; `queueGroupName` makes replicas competing consumers |
+| Bindings | ✅ | `bindings.cron` ×7 — measured on the deployed estate 2026-09-05: `maintenance-cron` (the sweep), `maintenance-reconcile-cron`, `lineage-reconcile-cron`, `notifications-reconcile-cron`, `catalog-control-relay-cron`, `compute-prune-jobs-cron`, `medallion-cascade-lag-cron`. `ingest-cron` renders from the chart but is not enabled here, and `medallion-plan-sweep-cron` (CP-029, one Component scoped to every stage runner and the producer) renders from 2026-10-05, so the CHART count is 9 against the 7 last measured running — read the cluster, not the templates. Plus `bindings.smtp`, `bindings.http` — all delivered to `POST /<component-name>` at the pod ROOT |
 | Actors | ✅ | `DaprActor` ×17, `ActorProxy` ×28 (notifications inbox, project tasks) |
 | Secrets | ✅ | `secretstores.hashicorp.vault` → OpenBao. THE estate rule: sole source, fail-closed, never env fallback |
-| Workflow | ✅ | `DaprWorkflowClient` ×49, `WorkflowRuntime` ×16 (medallion cascade, flows, ingest) |
+| Workflow | ✅ | `DaprWorkflowClient`, `WorkflowRuntime` (the medallion PRODUCER's promotion review, under `qualityReview` only; flows; ingest). No Ray run is a workflow: a stage run and a training run are each a plan resolved by its outcome door and a cron sweep (CP-029) |
 | Configuration | ❌ | Ruled out — see refusals |
 | Middleware | ❌ | Ruled out — see refusals |
 | Distributed lock | ❌ | Not yet — the ONE open candidate (see below) |
@@ -168,12 +168,14 @@ sidecar. The Jobs-API echo of `runtime_env` is exactly why "inject at submit" is
   verbatim: *"No coordination – each replica runs the schedule independently, causing duplicate
   triggers"* and *"when the target app is scaled to multiple replicas, the schedule will fire on every
   instance"*. There is no lease anywhere in the path, so every multi-replica service must buy the
-  guarantee itself, and the estate answers it FOUR different ways: lineage takes a Postgres advisory
+  guarantee itself, and the estate answers it FIVE different ways: lineage takes a Postgres advisory
   lock (`RECONCILE_LOCK_KEY`); notifications and maintenance are pinned to `replicas: 1`; catalog's
-  control relay accepts duplicates because a duplicate publish dedupes on `event_id`; and compute's
+  control relay accepts duplicates because a duplicate publish dedupes on `event_id`; compute's
   prune accepts them because the operation is convergent (`9489d5e1` — until then a job another
   replica had already reclaimed was miscounted as a retention FAILURE, one false alarm per job
-  reclaimed). A new cron on a service that can scale needs its answer chosen and written down, or its
+  reclaimed); and the medallion plan sweep converges through the store: every plan write is ETag CAS,
+  a plan's close is first-terminal-wins, a hand-off is replay-safe and a resubmit re-attaches under the
+  same key (`stage_plans`, `train_plans`). A new cron on a service that can scale needs its answer chosen and written down, or its
   absence reads as an oversight rather than a decision.
 - `ActorProxy` dispatches @actormethod WIRE names, not Python names; mocks cannot catch a mismatch.
 - Missing `dapr.io/app-token-secret` on a bus-subscribing app ⇒ `assert_app_token_configured`

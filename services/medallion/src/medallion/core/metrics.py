@@ -148,12 +148,19 @@ _stage_bytes = _meter.create_counter(
 _stage_outcomes = _meter.create_counter(
     "medallion.stage.outcome",
     unit="{run}",
-    description="Stage-watch runs by terminal VERDICT (succeeded|failed|abandoned|unnotified) — the failure signal Dapr's own family cannot carry.",
+    description="Planned stage runs by terminal VERDICT (succeeded|failed), resolved by the job's report or the sweep.",
+)
+#: An outcome a run's plan refused because it had already closed with the other one: two answers to one run, of which
+#: the first stood. Counted by lane and by the REFUSED status; the run's id rides the log line.
+_outcome_conflicts = _meter.create_counter(
+    "medallion.run.outcome_conflict",
+    unit="{report}",
+    description="Terminal outcomes refused because the run's plan already closed with the other outcome, by lane and refused status.",
 )
 _train_outcomes = _meter.create_counter(
     "medallion.train.outcome",
     unit="{run}",
-    description="Training-watch runs by terminal verdict.",
+    description="Planned training runs by terminal VERDICT (succeeded|failed), resolved by the job's report, the sweep or an operator.",
 )
 _promotion_outcomes = _meter.create_counter(
     "medallion.promotion.outcome",
@@ -163,25 +170,15 @@ _promotion_outcomes = _meter.create_counter(
 
 
 def record_stage_outcome(verdict: str, *, duration_seconds: float | None = None) -> None:
-    """Count one stage-watch run by its terminal verdict, and record what it COST even when it failed.
+    """Count one planned stage run by its terminal verdict, and record what it COST whichever way it ended.
 
-    WHY THIS EXISTS WHEN DAPR ALREADY COUNTS WORKFLOWS. `dapr_runtime_workflow_execution_count_total`
-    carries a `status` label, and for this codebase that label is FALSE: all three workflow services
-    convert failure into a RETURNED value rather than raising, so the orchestrator completes normally
-    and the sidecar records `status="success"`. Measured across the live estate — every app_id holds
-    `success` and nothing else, including runs whose activities the sidecar separately labels `failed`.
-    An alert on `status="failed"` therefore reads green while every run dies. The verdict is a fact only
-    the application knows, so only the application can record it.
+    The verdict is a fact only the application knows: the run's plan closes on it (`stage_plans`), and no engine
+    metric carries it. DURATION ON BOTH VERDICTS, from the plan's submit to its outcome, so stage latency is not
+    survivorship-biased: the runs that take longest are the ones most likely to fail. Reuses `medallion.stage.duration`
+    so the two verdicts stay comparable in one series.
 
-    DURATION ON THE NON-SUCCESS PATHS, which is the point of taking it here. `_watch_seconds` is
-    computed for the abandoned and failed verdicts too, and only the success path
-    (`publish_stage_ready`) ever recorded it — so p95 stage latency was survivorship-biased BY
-    CONSTRUCTION: the runs that take longest are exactly the ones that hit the watch ceiling and get
-    excluded. Reuses `medallion.stage.duration` rather than opening a second histogram, so the success
-    and failure paths remain comparable in one series.
-
-    `verdict` is a CLOSED vocabulary owned by `StageJobOutcome` (succeeded|failed|abandoned|unnotified)
-    — never a value off a payload. Submission ids, tokens and datasets stay on spans and logs.
+    `verdict` is the CLOSED vocabulary `service_kit.lakehouse.run_plans.OutcomeStatus` (succeeded|failed), never a
+    value off a payload. Action ids, tokens and datasets stay on spans and logs.
     """
     attrs = {"lance.medallion.verdict": verdict}
     _stage_outcomes.add(1, attrs)
@@ -189,8 +186,13 @@ def record_stage_outcome(verdict: str, *, duration_seconds: float | None = None)
         _stage_duration.record(duration_seconds, attrs)
 
 
+def record_outcome_conflict(lane: str, refused: str) -> None:
+    """Count one terminal outcome a closed plan refused; ``lane`` and ``refused`` are closed vocabularies."""
+    _outcome_conflicts.add(1, {"lance.medallion.lane": lane, "lance.medallion.verdict": refused})
+
+
 def record_train_outcome(verdict: str) -> None:
-    """Count one training-watch run by verdict. Same argument as `record_stage_outcome`."""
+    """Count one planned training run by its terminal verdict, the closed vocabulary `run_plans.OutcomeStatus`."""
     _train_outcomes.add(1, {"lance.medallion.verdict": verdict})
 
 

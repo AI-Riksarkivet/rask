@@ -92,9 +92,8 @@ def submission_id(stage: str, token: str | None, work: str = "", code: str = "")
     Empty ``code`` reproduces the previous id byte-for-byte, so a deployment that does not set it is
     unchanged rather than silently re-attaching across builds under a new scheme.
 
-    The token is INJECTIVE in the id (:func:`_token_segment`), so two accepted tokens name two stage
-    workflow instances (``transform._dispatch_stage_workflow``; the stage's Ray job itself is named by
-    ``derive_idempotency_key``) and two training Ray jobs. It stays greppable: verbatim, or folded with
+    The token is INJECTIVE in the id (:func:`_token_segment`), so two accepted tokens name two training
+    Ray jobs (a stage's job is named by ``derive_idempotency_key``). It stays greppable: verbatim, or folded with
     its digest appended. ``work`` and ``code`` ride as short digests so arbitrarily long URIs and tags
     cannot push the id past the length cap.
     """
@@ -136,12 +135,12 @@ async def job_status(client: httpx.AsyncClient, sub_id: str) -> str | None:
     A SINGLE read, deliberately: this is not the `while True: sleep()` completion poll that A13 deleted
     from `medallion/services/ray_submit.py`, and it must not grow back into one. That loop was wrong
     because it held a Dapr ack across the whole job runtime, so a job outliving the redelivery window
-    exhausted it. The fix is not "poll faster" — it is to put the WAITING somewhere durable, which is
-    what `medallion.workflow.stage_run` does with `ctx.create_timer`. The workflow decides when to ask
-    again; this function only answers the question once.
+    exhausted it. The fix is not "poll faster" — it is to put the WAITING somewhere durable: a stage's
+    plan sweep and a training run's plan sweep ask on each cron tick, and this function
+    only answers the question once.
 
     ``None`` rather than a raise for an unknown id, because the two callers mean different things by it:
-    a workflow polling immediately after submit may legitimately see the id before the dashboard does,
+    a caller asking immediately after submit may legitimately see the id before the dashboard does,
     and treating that as failure would abort a healthy job on a race. A TRANSPORT failure is still a
     raise — an unreachable dashboard is not evidence about the job.
     """

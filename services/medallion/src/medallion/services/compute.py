@@ -141,9 +141,12 @@ def read_upstream(from_uri: str, storage_options: dict[str, str]) -> UpstreamFac
     return UpstreamFacts(uri=from_uri, version=int(ds.version), chain=chain, schema=ds.schema)
 
 
-def measure(uri: str, storage_options: dict[str, str]) -> WriteResult:
-    """Read the just-written dataset's version + exact output statistics (rows + on-disk bytes) + schema."""
-    ds = lance.dataset(uri, storage_options=storage_options, session=shared_lance_session())
+def measure(uri: str, storage_options: dict[str, str], *, version: int | None = None) -> WriteResult:
+    """Read the just-written dataset's version + exact output statistics (rows + on-disk bytes) + schema.
+
+    ``version`` measures that version rather than the newest, for a caller that knows which commit was its write.
+    """
+    ds = lance.dataset(uri, version=version, storage_options=storage_options, session=shared_lance_session())
     # lance annotates ``DataStatistics.fields`` as a single ``FieldStatistics`` but returns a list at
     # runtime (upstream stub bug), so cast to the real shape before summing the per-field on-disk bytes.
     field_stats = cast("list[Any]", ds.stats.data_stats().fields)
@@ -156,8 +159,11 @@ def measure(uri: str, storage_options: dict[str, str]) -> WriteResult:
     )
 
 
-def measure_stage(from_uri: str, to_uri: str, storage_options: dict[str, str]) -> WriteResult:
+def measure_stage(from_uri: str, to_uri: str, storage_options: dict[str, str], *, version: int | None = None) -> WriteResult:
     """Measure a stage ANOTHER engine wrote (the Ray job) and reconstruct its input→output column edges.
+
+    ``version`` is the commit the run's commit marker named (CP-029), when its outcome found one: the measurement then
+    describes that commit even if another (a compaction) landed after it. ``None`` measures the newest version.
 
     The distributed path writes the downstream dataset out-of-process (``scripts/ray_stage_job.py``), so
     nothing here ever sees the transformed table — a bare :func:`measure` would return an empty
@@ -181,12 +187,12 @@ def measure_stage(from_uri: str, to_uri: str, storage_options: dict[str, str]) -
     # `CreateIndex` version of its own, so measuring afterwards named it instead of the write. Measured
     # 2026-09-11: all 253 stage-authored producer edges in the estate sat on a `CreateIndex` version,
     # and four datasets had no producer edge on ANY retained data version.
-    data_version = int(target.version)
+    data_version = int(target.version) if version is None else version
     if _LINEAGE_COLUMN in target.schema.names:
         _index_lineage(to_uri, storage_options)
     # Everything BUT the version is read after the rebuild, from one open: an index changes no row and
     # no column, so rows/bytes/schema are unaffected and a second open would buy nothing.
-    result = measure(to_uri, storage_options).model_copy(update={"version": data_version})
+    result = measure(to_uri, storage_options, version=version).model_copy(update={"version": data_version})
     # result.fields IS the written schema (facet_fields of the just-measured dataset) — its names are all
     # the edge reconstruction needs on the output side, so the target is opened once, not twice.
     written_columns = [field["name"] for field in result.fields]

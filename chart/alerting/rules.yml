@@ -404,12 +404,8 @@ groups:
             `medallion_refusal_not_retained` log before reading a park as a stuck delivery.
             Runbook: docs/runbooks/RUNBOOK-oncall.md#dlq-parking--a-delivery-gave-up
 
-      # THE RUN-LEVEL VERDICT, and the reason it cannot come from Dapr's own family.
-      # `dapr_runtime_workflow_execution_count_total` carries a `status` label, and for this codebase it
-      # is FALSE: all three workflow services convert failure into a RETURNED value rather than raising,
-      # so the orchestrator completes normally and the sidecar records status="success". Measured across
-      # the live estate — every app_id holds `success` and nothing else, including runs whose ACTIVITIES
-      # the sidecar separately labels `failed`. An alert on that label reads green while every run dies.
+      # THE RUN-LEVEL VERDICT: a planned Ray stage run's terminal, recorded when its plan closes (CP-029). No engine
+      # metric carries it; a RUNNING job is no verdict at all, and a hung hop is `/cascade/stalled`'s to surface.
       - alert: MedallionStageOutcomesFailing
         expr: sum(rate(medallion_stage_outcome_total{lance_medallion_verdict!="succeeded"}[15m])) > 0
         for: 15m
@@ -417,12 +413,12 @@ groups:
           severity: warning
           service: medallion
         annotations:
-          summary: "Medallion stage runs are ending badly — failed, abandoned or unnotified"
+          summary: "Medallion stage runs are failing"
           description: >-
-            A stage watch reached a terminal verdict other than `succeeded`. `abandoned` means the job was
-            still RUNNING at the watch ceiling — not a failure, but the estate stopped looking; `unnotified`
-            means the outcome reached the graph and no person. Split by `lance_medallion_verdict` to tell
-            them apart. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled
+            A planned stage run closed `failed`: its job reported failure, Ray ended it FAILED or STOPPED,
+            or the head lost it and two resubmits never landed a commit marker. Each failure is a FAIL in
+            the graph naming the version the run committed, when it committed one.
+            Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled
 
       # A _preflight refusal acks SUCCESS once its payload is retained on `refused.<appId>`, so the
       # halt leaves no delivery trace at all — `MedallionCascadeDeadLettering` is deliberately blind to
@@ -908,9 +904,9 @@ groups:
             span but swallows the exception inside it, so every activity span is STATUS_CODE_UNSET even
             when this counter says failed. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled
 
-      # THE WEDGED `continue_as_new` DETECTOR. The workflow engine drives each orchestration turn through
-      # its own internal actor type, so reminder fires climbing while executions stay flat IS a watch loop
-      # that will never terminate — a Ray job that never ends, a poll that never sees a terminal status.
+      # THE WEDGED ORCHESTRATION DETECTOR. The workflow engine drives each orchestration turn through its own
+      # internal actor type, so reminder fires climbing while executions stay flat IS an orchestration taking
+      # turns that will never terminate. No Ray run is watched by a workflow (CP-029: they are plans).
       #
       # `unless` rather than `and ... == 0`, deliberately. If the execution family is ABSENT — lazily
       # registered, so absent whenever no workflow has completed since the pod started — an `== 0`
@@ -929,12 +925,11 @@ groups:
           severity: warning
           service: dapr
         annotations:
-          summary: "Workflow orchestration turns are firing but nothing completes — a wedged continue_as_new"
+          summary: "Workflow orchestration turns are firing but nothing completes — a wedged orchestration"
           description: >-
-            The engine's internal reminders keep firing while no workflow execution completes, which is a
-            watch loop taking turns forever. `stage_run` and `train_run` both continue_as_new on every
-            poll, so a job that never reaches a terminal status turns indefinitely and looks healthy from
-            every angle except this one. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled
+            The engine's internal reminders keep firing while no workflow execution completes: an
+            orchestration taking turns forever, which looks healthy from every angle except this one.
+            Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled
 
       # The scrape itself, asserted. If the control-plane job stops producing series the rule above
       # cannot fire, and its silence would be indistinguishable from health — the failure mode this

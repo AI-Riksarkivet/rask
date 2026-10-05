@@ -94,23 +94,11 @@ async def close_ray_client() -> None:
 def train_submission_id(token: str) -> str:
     """The training job's deterministic id, derived in ONE place.
 
-    Same reason as `stage_submission_id`: the SUBMITTER and the WATCHER must name the same job, and a
-    second inline copy of this expression is exactly how a poller ends up watching an id nobody
-    submitted — reporting a healthy training run as missing forever.
+    It is the training plan's action id, the engine's submission id and the job's commit marker at once (CP-029), so
+    a second inline copy of this expression is how the sweep would read the status of an id nobody submitted and
+    fail a healthy training run as never registered.
     """
     return rk.submission_id("train", token)
-
-
-def stage_submission_id(stage: str, token: str | None, from_uri: str, to_uri: str, code: str = "") -> str:
-    """The stage job's deterministic id, derived in ONE place.
-
-    Extracted because S1's workflow has to name the same job twice — once to submit it, once to poll
-    it — and a second inline copy of this expression is how the poller ends up watching an id the
-    submitter never used, reporting a healthy job as missing forever. ``code`` (B3) must therefore
-    reach BOTH calls or the poller watches an id the submitter never used — the exact defect the
-    extraction exists to prevent, reintroduced through the new axis.
-    """
-    return rk.submission_id(stage, token, work=f"{from_uri}\x00{to_uri}", code=code)
 
 
 async def submit_train_job(
@@ -124,6 +112,7 @@ async def submit_train_job(
     artifact_base: str,
     originator: str = "",
     project: str = "",
+    outcome_url: str = "",
 ) -> str:
     """SUBMIT-AND-ACK for a TRAINING job (docs/RAY-TRAIN.md D2) — never block on completion.
 
@@ -161,6 +150,12 @@ async def submit_train_job(
                 "REGISTRY_URI": registry_uri,
                 "ARTIFACT_BASE": artifact_base,
                 "LINEAGE_URL": settings.train_lineage_url,
+                # THE RUN'S ONE NAME AND ITS DOOR (CP-029), in the WorkOrder's own names so both jobs read one
+                # vocabulary: the job stamps the id on its registry commit (the commit marker) and reports its terminal
+                # to the producer's outcome door once its own terminal event landed. A URL, never a credential: the job
+                # authenticates with the head's projected token. An empty door is omitted, and the job reports nothing.
+                "RASK_IDEMPOTENCY_KEY": submission_id,
+                **({"RASK_OUTCOME_URL": outcome_url} if outcome_url else {}),
                 # NO CREDENTIAL AND NO IDENTITY ride this dict, because the Jobs API echoes runtime_env
                 # back. The job reports to the lineage ingest as the Ray head's projected ServiceAccount
                 # token names it (`service-trainer`, [[LH-220]]) and reads S3_SECRET from the pod's env.

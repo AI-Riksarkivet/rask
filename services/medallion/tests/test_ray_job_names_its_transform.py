@@ -28,6 +28,14 @@ from medallion.services.rayjobs_api_executor import RayJobsApiExecutor
 from service_kit.lakehouse.work_order import WorkDestination, WorkIdentity, WorkOrder, WorkSource, WorkStamp
 
 
+async def _submit_stage_job(settings: Any, **kwargs: Any) -> None:
+    """The stage lane's submission: the order it builds, posted through the port."""
+    from medallion.services import stage_submit as _stage_submit
+
+    order, registration = await _stage_submit.build_stage_order(settings, **kwargs)
+    await _stage_submit.submit_stage_order(order, registration)
+
+
 @pytest.fixture
 def captured(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     """Intercept the submit body at the ray-kit seam, so nothing needs a live cluster."""
@@ -85,7 +93,7 @@ async def test_declared_lane_is_stamped_on_the_job(captured: dict[str, Any], mon
     monkeypatch.setattr(stage_submit, "resolve_transform_async", _resolve)
     monkeypatch.setattr(stage_submit, "resolve_task_async", _resolve_task)
 
-    await stage_submit.submit_stage_job(
+    await _submit_stage_job(
         _settings(lane="browserlane"),
         from_uri="s3://acme/bronze",
         to_uri="s3://acme/silver",
@@ -110,7 +118,7 @@ async def test_an_undeclared_run_omits_the_key_rather_than_sending_a_blank(captu
 
     monkeypatch.setattr(stage_submit, "resolve_transform_async", _resolve)
 
-    await stage_submit.submit_stage_job(
+    await _submit_stage_job(
         _settings(),
         from_uri="s3://acme/bronze",
         to_uri="s3://acme/silver",

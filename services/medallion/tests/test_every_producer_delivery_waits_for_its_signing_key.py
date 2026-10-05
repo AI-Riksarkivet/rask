@@ -3,7 +3,7 @@
 TWO GATES, IN THIS ORDER.
 
 THE PRODUCER'S OWN KEY ([[LH-064]]). Dapr delivers a message to a pod whatever its readiness says, so a producer that is
-waiting for its signing key would otherwise start the cascade, hold a promotion and schedule a training watch from events
+waiting for its signing key would otherwise start the cascade, hold a promotion and plan a training run from events
 it could not sign. A DROP would lose the work and a malformed trigger is dropped, so the answer comes before the trigger is
 parsed: RETRY on all four routes, each wired separately, so a route added without the gate is a delivery that is lost.
 

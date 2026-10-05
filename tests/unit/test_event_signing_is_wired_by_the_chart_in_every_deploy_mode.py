@@ -188,6 +188,7 @@ def test_lineage_and_every_bus_door_verify_against_exactly_the_rendered_signers_
         "catalog": _identities_running(docs, "catalog.main:app"),
         "maintenance": _identities_running(docs, "maintenance.service:app"),
         "medallion_producer": _identities_running(docs, "medallion.producer:app"),
+        "medallion_stage_runner": _identities_running(docs, "medallion.stage_runner:app"),
     }
     expected: dict[str, dict[str, object]] = {}
     if doors is not None:

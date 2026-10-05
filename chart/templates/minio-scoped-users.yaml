@@ -328,7 +328,8 @@ spec:
                       "arn:aws:s3:::*/_tasks/*",
                       "arn:aws:s3:::*/_transforms/*",
                       "arn:aws:s3:::*/_gates/*",
-                      "arn:aws:s3:::*/_trash/*"
+                      "arn:aws:s3:::*/_trash/*",
+                      "arn:aws:s3:::*/_plans/*"
                     ]
                   },
                   {

@@ -1303,8 +1303,10 @@ Call: include "lance.saSubjects" (list $root "catalog"|"lineage"|"producer"|"sta
 {{- if and $v.maintenance.enabled (eq $door "catalog") -}}
 {{- $_ := set $m (printf "%smaintenance" $sa) (required "maintenance.catalogServiceIdentity is blank" $v.maintenance.catalogServiceIdentity) -}}
 {{- end -}}
-{{- if eq $door "lineage" -}}
+{{- if or (eq $door "lineage") (and (eq $door "stage" "producer") $v.medallion.enabled $v.medallion.ray) -}}
 {{- if and $v.ray.enabled (or $v.ray.cluster.enabled $v.singleTenant.enabled) }}{{- $_ := set $m (printf "%sray" $sa) (required "medallion.train.trainerIdentity is blank" $v.medallion.train.trainerIdentity) }}{{- end -}}
+{{- end -}}
+{{- if eq $door "lineage" -}}
 {{- if $v.frontend.enabled }}{{- $_ := set $m (printf "%sweb" $sa) (required "frontend.serviceIdentity is blank" $v.frontend.serviceIdentity) }}{{- end -}}
 {{- end -}}
 {{- range $name, $svc := $v.services -}}
@@ -1821,7 +1823,7 @@ measured decision, and a second copy would drift without anything saying so. */}
 {{- if $v.maintenance.enabled }}{{- $s = append $s (dict "id" $v.maintenance.catalogServiceIdentity "app" $v.maintenance.daprAppId "role" "maintenance") }}{{- end -}}
 {{- if $v.medallion.enabled }}
 {{- $s = append $s (dict "id" $v.medallion.producer.serviceIdentity "app" $v.medallion.producer.daprAppId "role" "medallion_producer") }}
-{{- range $v.medallion.stageRunners }}{{- $s = append $s (dict "id" .serviceIdentity "app" .daprAppId) }}{{- end }}
+{{- range $v.medallion.stageRunners }}{{- $s = append $s (dict "id" .serviceIdentity "app" .daprAppId "role" (ternary "medallion_stage_runner" "" (and $v.medallion.ray $v.medallion.compute $v.catalog.controlEmit))) }}{{- end }}
 {{- end -}}
 {{- with (get (($v.services.ingest).env | default dict) "RASK_LINEAGE_SERVICE_IDENTITY") }}
 {{- if or ($v.services.ingest).frontDoor $v.singleTenant.enabled }}{{- $s = append $s (dict "id" . "app" "ingest") }}{{- end }}
@@ -1859,7 +1861,7 @@ measured decision, and a second copy would drift without anything saying so. */}
 
 {{- /* Every control-event role -> its identities (values.yaml `signing.doors`). */ -}}
 {{- define "lance.controlSignerRoles" -}}
-{{- $m := dict "catalog" (list) "maintenance" (list) "medallion_producer" (list) -}}
+{{- $m := dict "catalog" (list) "maintenance" (list) "medallion_producer" (list) "medallion_stage_runner" (list) -}}
 {{- range (include "lance.signers" . | fromJsonArray) }}{{- if and .id .role }}{{- $_ := set $m .role (append (get $m .role) .id | uniq | sortAlpha) }}{{- end }}{{- end -}}
 {{- toJson $m -}}
 {{- end -}}

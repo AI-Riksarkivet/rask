@@ -5141,17 +5141,20 @@ export interface components {
         };
         /**
          * CatalogControlEvent
-         * @description One control-plane mutation notice. Published AFTER the backend/FGA mutation succeeds; the `actor` is
-         *     the VERIFIED principal from the OIDC token in scope (never self-asserted — the pub/sub topic is an
-         *     internal catalog-only channel, so the subscriber trusts the catalog's stamp, exactly like lineage's
-         *     trusted `author`).
+         * @description One control-plane mutation notice, published AFTER the mutation it announces succeeds.
+         *
+         *     `actor` is the person the emitting service authenticated (`user:<sub>`), or a service principal or None when a
+         *     service acts for itself. Several services publish on this topic (`control_signer_role` names the one that signs
+         *     each action), so to a consumer the actor is a claim until the envelope's `rask_signature` proves who stamped it
+         *     (`lineage_kit.signing.verify_control_signature`). The model ignores that member, so a signed and an unsigned
+         *     envelope parse alike.
          */
         CatalogControlEvent: {
             /**
              * Action
              * @enum {string}
              */
-            action: "grant_added" | "grant_revoked" | "project_created" | "project_deleted" | "warehouse_created" | "warehouse_activated" | "warehouse_deactivated" | "warehouse_bound" | "warehouse_unbound" | "warehouse_deleted" | "policy_set" | "policy_deleted" | "transform_set" | "transform_deleted" | "gate_set" | "gate_deleted" | "namespace_created" | "namespace_dropped" | "table_created" | "table_dropped" | "table_renamed" | "table_registered" | "table_deregistered" | "table_declared" | "table_protected" | "table_unprotected" | "namespace_protected" | "namespace_unprotected" | "table_undropped" | "namespace_undropped" | "table_purged" | "namespace_purged" | "table_published" | "table_branch_created" | "table_branch_deleted" | "table_tag_created" | "table_tag_updated" | "table_tag_deleted" | "task_assigned" | "task_unassigned" | "task_changes_requested" | "task_dropped" | "task_lease_expired" | "promotion_review_requested";
+            action: "grant_added" | "grant_revoked" | "project_created" | "project_deleted" | "warehouse_created" | "warehouse_activated" | "warehouse_deactivated" | "warehouse_bound" | "warehouse_unbound" | "warehouse_deleted" | "policy_set" | "policy_deleted" | "transform_set" | "transform_deleted" | "gate_set" | "gate_deleted" | "namespace_created" | "namespace_dropped" | "table_created" | "table_dropped" | "table_renamed" | "table_registered" | "table_deregistered" | "table_declared" | "table_protected" | "table_unprotected" | "namespace_protected" | "namespace_unprotected" | "table_undropped" | "namespace_undropped" | "table_purged" | "namespace_purged" | "table_published" | "table_branch_created" | "table_branch_deleted" | "table_tag_created" | "table_tag_updated" | "table_tag_deleted" | "task_assigned" | "task_unassigned" | "task_changes_requested" | "task_dropped" | "task_lease_expired" | "promotion_review_requested" | "run_planned";
             /** Actor */
             actor?: string | null;
             /** Event Id */
@@ -5166,7 +5169,7 @@ export interface components {
              * Object Type
              * @enum {string}
              */
-            object_type: "project" | "grant" | "warehouse" | "policy" | "namespace" | "table" | "annotation_task" | "transform" | "gate";
+            object_type: "project" | "grant" | "warehouse" | "policy" | "namespace" | "table" | "annotation_task" | "transform" | "gate" | "run";
             /**
              * Occurred At
              * Format: date-time

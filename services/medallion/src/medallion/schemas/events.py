@@ -32,6 +32,7 @@ from typing import Any
 
 from lineage_kit.runs import run_id_for
 from lineage_kit.schemas import Dataset, Job, OutputDataset, Run, RunEvent, RunFacets, RunState
+from service_kit.lakehouse.naming import CATALOG_DELIMITER
 from service_kit.lakehouse.schema import SchemaFields
 from service_kit.lakehouse.subjects import is_person_subject
 from service_kit.openlineage import (
@@ -204,6 +205,10 @@ def build_run_event(
     synthetic: bool = False,
     models: list[str] | None = None,
     commit_sha: str | None = None,
+    #: The version a FAILED run committed before it failed, read off the destination's Lance history (the run's commit
+    #: marker, CP-029 clause e). A FAIL carrying one names it on its output, the WROTE edge with its version; absent
+    #: keeps the FAIL's bare output byte-identical.
+    committed_version: int | None = None,
 ) -> dict[str, Any]:
     """Build the OpenLineage ``RunEvent`` (wire JSON) for one medallion transform — via ``lineage_kit``.
 
@@ -231,6 +236,8 @@ def build_run_event(
     byte-identical to before.
     """
     lance_fields: dict[str, Any] = {"operation": operation}
+    if committed_version is not None:
+        version = committed_version
     if not synthetic:
         # Dropped for SYNTHETIC only — deliberately NOT for FAIL, whose wire is frozen byte-for-byte by
         # `tests/unit/test_events_parity.py` against the legacy builder. Gating on `describes_no_data`
@@ -356,21 +363,26 @@ def build_run_event(
     if column_map and len(inputs) == 1:
         in_ns, in_name = inputs[0]
         column_edges = [(out_field, in_ns, in_name, in_field, "DIRECT", subtype, False) for out_field, in_field, subtype in column_map]
-    output = (
-        _dataset(output_namespace, output_name)
-        if describes_no_data
-        else _dataset(
-            output_namespace,
-            output_name,
-            version=version,
-            row_count=row_count,
-            size_bytes=size_bytes,
-            assertions=assertions,
-            source_uri=source_uri,
-            schema_fields=schema_fields,
-            column_edges=column_edges,
+    if failed and committed_version is not None:
+        # A run that committed and then failed WROTE this version: the edge names it, and nothing else the failed run
+        # never measured (no statistics, no schema, no assertions).
+        output = _dataset(output_namespace, output_name, version=committed_version)
+    else:
+        output = (
+            _dataset(output_namespace, output_name)
+            if describes_no_data
+            else _dataset(
+                output_namespace,
+                output_name,
+                version=version,
+                row_count=row_count,
+                size_bytes=size_bytes,
+                assertions=assertions,
+                source_uri=source_uri,
+                schema_fields=schema_fields,
+                column_edges=column_edges,
+            )
         )
-    )
     event = RunEvent(
         event_type=RunState(event_type.upper()),
         event_time=event_time or datetime.now(UTC).isoformat(),
@@ -379,6 +391,69 @@ def build_run_event(
         inputs=[Dataset.model_validate(_dataset(ns, name)) for ns, name in inputs],
         outputs=[OutputDataset.model_validate(output)],
         producer=_PRODUCER,
+        schema_url=RUN_EVENT_SCHEMA_URL,
+    )
+    return _wire(event)
+
+
+#: The ``producer`` of a training run's terminal that the MEDALLION recorded rather than the job: the train lane's sweep,
+#: for a run whose job never reported, or an operator's stop (CP-029 S2). Apart from the job's own producer, so a
+#: reader can tell who spoke for the run.
+TRAIN_OUTCOME_PRODUCER = "rask://medallion/train-watcher"
+
+
+def build_train_outcome_event(
+    *,
+    succeeded: bool,
+    run_id: str,
+    token: str,
+    model_table: str,
+    models_namespace: str,
+    job_namespace: str,
+    author: str,
+    author_subject: str,
+    registry_uri: str = "",
+    committed_version: int | None = None,
+    error_message: str | None = None,
+    originator: str | None = None,
+    project: str | None = None,
+) -> dict[str, Any]:
+    """A training run's COMPLETE or FAIL, recorded by the medallion for a job that could not record it.
+
+    THE RUN ID IS THE JOB'S OWN (``run_id_for(f"train-{token}")``, byte-identical to `scripts/ray_train_job.py`), so
+    this terminal MERGEs onto the run the job's START opened, and a terminal the job did emit absorbs a repeat of it
+    downstream (the graph MERGEs on the run id, the feed keeps one row per run and terminal state, the inbox keys
+    `runId@STATE`). ``committed_version`` is the registry version the run's commit marker names: the model version a
+    COMPLETE reports, and on a FAIL the version a job that committed and then failed wrote. ``author_subject`` is the
+    medallion's service identity, which lineage authorizes as (`can_write_data` on the model table) and the signature
+    names; the job's own events author as the compute head instead.
+    """
+    lance_fields: dict[str, Any] = {"operation": "training", "token": token}
+    if project:
+        lance_fields["project"] = project
+    if is_person_subject(originator):
+        lance_fields["originator"] = originator
+    run_facets: dict[str, Any] = {
+        "lance": custom_facet(_PRODUCER, **lance_fields),
+        "author": custom_facet(_PRODUCER, name=author, sub=author_subject),
+    }
+    if error_message:
+        run_facets["errorMessage"] = {
+            "_producer": _PRODUCER,
+            "_schemaURL": ERROR_MESSAGE_FACET_SCHEMA_URL,
+            "message": error_message,
+            "programmingLanguage": "PYTHON",
+        }
+    model = model_table.partition(CATALOG_DELIMITER)[2] or model_table
+    output = _dataset(models_namespace, model_table, version=committed_version, source_uri=registry_uri or None)
+    event = RunEvent(
+        event_type=RunState.COMPLETE if succeeded else RunState.FAIL,
+        event_time=datetime.now(UTC).isoformat(),
+        run=Run(run_id=run_id, facets=RunFacets.model_validate(run_facets)),
+        job=Job(namespace=job_namespace, name=f"train_{model}"),
+        inputs=[],
+        outputs=[OutputDataset.model_validate(output)],
+        producer=TRAIN_OUTCOME_PRODUCER,
         schema_url=RUN_EVENT_SCHEMA_URL,
     )
     return _wire(event)

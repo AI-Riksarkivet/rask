@@ -26,9 +26,8 @@ from typing import Any, cast
 
 import pytest
 
-from medallion.core.config import MedallionSettings, get_settings
+from medallion.core.config import MedallionSettings
 from medallion.services import ray_submit, stage_submit, transform
-from medallion.services.trigger_guards import StageTrigger
 
 
 @pytest.fixture
@@ -56,10 +55,16 @@ def _settings(**over: object) -> MedallionSettings:
     return MedallionSettings().model_copy(update=over)
 
 
+async def _submit(settings: MedallionSettings, **kwargs: Any) -> None:
+    """The stage lane's submission: the order it builds, posted through the port."""
+    order, registration = await stage_submit.build_stage_order(settings, **kwargs)
+    await stage_submit.submit_stage_order(order, registration)
+
+
 @pytest.mark.asyncio
 async def test_the_submitted_job_is_told_the_catalog_identifiers_it_moves(captured: dict[str, Any]) -> None:
     """The submission is the only place these can enter the job's environment."""
-    await stage_submit.submit_stage_job(
+    await _submit(
         _settings(),
         from_uri="s3://acme-wh/abc_bronze$events",
         to_uri="s3://acme-wh/def_silver$features",
@@ -92,7 +97,7 @@ async def test_an_unwired_identity_is_OMITTED_rather_than_sent_blank(captured: d
     Sending `""` instead of omitting would pin a value the platform does not know, and the moment a
     runner tests for the key's PRESENCE — the natural way to ask "was I wired?" — a blank answers yes.
     """
-    await stage_submit.submit_stage_job(
+    await _submit(
         _settings(),
         from_uri="s3://acme-wh/bronze",
         to_uri="s3://acme-wh/silver",
@@ -106,51 +111,12 @@ async def test_an_unwired_identity_is_OMITTED_rather_than_sent_blank(captured: d
     )
 
 
-def test_the_dispatch_hands_the_WORKFLOW_the_identity(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Link 2 of the chain. The workflow input is what survives to the submit activity.
-
-    Carried on the SPEC rather than read off the round-tripped trigger, because the trigger does not
-    carry it: `from_id`/`to_id` are resolved by `resolve_stage_identity` (env, or the declared
-    transform record) and the run id is minted by the stage runner, so neither exists on the payload the
-    publisher sent.
-    """
-    scheduled: dict[str, Any] = {}
-
-    class _Client:
-        def schedule_new_workflow(self, **kwargs: Any) -> None:
-            scheduled.update(kwargs)
-
-        def get_workflow_state(self, _instance_id: str) -> object:
-            return None
-
-    import dapr.ext.workflow as wf
-
-    monkeypatch.setattr(wf, "DaprWorkflowClient", lambda *a, **k: _Client())
-
-    transform._dispatch_stage_workflow(
-        get_settings(),
-        from_uri="s3://wh/p-bronze/pages.lance",
-        to_uri="s3://wh/p-silver/pages.lance",
-        token="tok-1",
-        lineage_json="{}",
-        trigger=StageTrigger(token="tok-1"),
-        from_id="acme-bronze$events",
-        to_id="acme-silver$features",
-        run_id="0f9f1f1e-0000-4000-8000-000000000002",
-    )
-
-    spec = scheduled["input"]
-    assert spec.get("from_id") == "acme-bronze$events", f"the identity never reached the workflow input: {sorted(spec)}"
-    assert spec.get("to_id") == "acme-silver$features"
-    assert spec.get("run_id") == "0f9f1f1e-0000-4000-8000-000000000002"
-
-
 @pytest.mark.asyncio
-async def test_the_handler_dispatches_with_the_identity_IT_resolved(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
-    """Link 1, and the one the whole finding turns on: the stage runner holds these names and dropped them.
+async def test_the_handler_dispatches_with_the_identity_IT_resolved(captured: dict[str, Any], tmp_path: Any) -> None:
+    """The whole chain, and the one the finding turns on: the stage runner holds these names and must hand them on.
 
-    Driven through `handle_stage` rather than asserted on `resolve_stage_identity`, because the defect
-    is not that the names are wrong — it is that the dispatch never passed them on.
+    Driven through `handle_stage`, its real plan dispatch and the real submission, because each link looks correct
+    alone: the defect is a name the stage runner resolved and the job's environment never received.
     """
     import lance
     import pyarrow as pa
@@ -166,14 +132,8 @@ async def test_the_handler_dispatches_with_the_identity_IT_resolved(monkeypatch:
         MEDALLION_RAY_ENABLED="true",
         MEDALLION_FROM_URI=str(tmp_path / "bronze.lance"),
         MEDALLION_TO_URI=str(tmp_path / "silver.lance"),
+        MEDALLION_CONTROL_ROOT=str(tmp_path / "control"),
     )
-    dispatched: dict[str, Any] = {}
-
-    def _fake_dispatch(_settings: Any, **kwargs: Any) -> str:
-        dispatched.update(kwargs)
-        return "stage-instance"
-
-    monkeypatch.setattr(transform, "_dispatch_stage_workflow", _fake_dispatch)
 
     class _Dapr:
         async def publish_event(self, **_kwargs: Any) -> None:
@@ -182,35 +142,7 @@ async def test_the_handler_dispatches_with_the_identity_IT_resolved(monkeypatch:
     status = await transform.handle_stage(cast(Any, _Dapr()), settings, {"data": {"token": "tok-1"}})
 
     assert status == {"status": "SUCCESS"}
-    assert dispatched.get("from_id") == "bronze$events", f"the stage runner kept its resolved input id to itself: {sorted(dispatched)}"
-    assert dispatched.get("to_id") == "silver$features"
-    assert dispatched.get("run_id"), "the run the job will emit under was never handed over"
-
-
-def test_the_submit_ACTIVITY_forwards_what_the_spec_carries(captured: dict[str, Any]) -> None:
-    """Link 3, the one a carried field is silently dropped at.
-
-    `submit_stage` reads named fields off the spec — it does not splat it — so a field added to
-    `StageJobSpec` and not read here reaches the state store, survives every checkpoint, and never
-    reaches the job. That is exactly how `originator` and `project` had to be wired one by one.
-    """
-    from medallion import workflow
-
-    spec = workflow.StageJobSpec(
-        from_uri="s3://acme-wh/abc_bronze$events",
-        to_uri="s3://acme-wh/def_silver$features",
-        stage="silver",
-        token="tok-1",
-        from_id="acme-bronze$events",
-        to_id="acme-silver$features",
-        run_id="0f9f1f1e-0000-4000-8000-000000000003",
-    )
-
-    workflow.submit_stage(cast(Any, None), cast(Any, spec.model_dump()))
-
     env = captured["body"]["runtime_env"]["env_vars"]
-    assert (env.get("RASK_SOURCE_TABLE"), env.get("RASK_DEST_TABLE"), env.get("RASK_RUN_ID")) == (
-        "acme-bronze$events",
-        "acme-silver$features",
-        "0f9f1f1e-0000-4000-8000-000000000003",
-    ), f"the durable spec carried the identity and the submission dropped it: {sorted(env)}"
+    assert env.get("RASK_SOURCE_TABLE") == "bronze$events", f"the stage runner kept its resolved input id to itself: {sorted(env)}"
+    assert env.get("RASK_DEST_TABLE") == "silver$features"
+    assert env.get("RASK_RUN_ID"), "the run the job will emit under was never handed over"

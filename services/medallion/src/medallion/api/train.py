@@ -6,37 +6,35 @@ stage hop — see the design doc for why a workload-type field on the medallion 
 
 from __future__ import annotations
 
-import asyncio
-import json
 import logging
-from contextlib import suppress
 from typing import Annotated, Any
 
 from dapr.ext.fastapi import DaprApp
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
-from lance_namespace import ErrorCode
+from lance_namespace import ErrorCode, ServiceUnavailableError
 from openfga_sdk import OpenFgaClient
 from pydantic import BaseModel, Field
 
 from medallion.api.dependencies import DaprClientDep, FgaClientDep, SettingsDep
 from medallion.api.produce_auth import AdmittedCaller, ProducerCaller, authorize_train, require_project_admin
 from medallion.core.config import MedallionSettings, get_settings
+from medallion.services import train_plans
 from medallion.services.train import (
     DATASET_PATTERN,
     MAX_FEATURES,
     MODEL_PATTERN,
     TOKEN_PATTERN,
-    TRAIN_WATCH_PREFIX,
     handle_train_trigger,
     submit_train_request,
     train_head_enabled,
 )
+from medallion.services.train_plans import TrainRunState, TrainStopError
 from service_kit.draining import refuse_when_draining, retry_when_draining
-from service_kit.exceptions import ServiceUnavailableError
 from service_kit.governed.dapr_auth import require_dapr_token
 from service_kit.governed.signing_key import retry_until_signed
 from service_kit.lakehouse.ns_errors import problem_body
+from service_kit.lakehouse.run_plans import PlanDocument
 from service_kit.lakehouse.warehouse_registry import is_safe_project
 
 
@@ -155,23 +153,9 @@ def register_train_trigger_route(app: FastAPI, dapr_app: DaprApp | None = None) 
         if signing is not None:
             return signing
         fga_client = getattr(request.app.state, "fga", None)
-        return await handle_train_trigger(config, event, fga_client=fga_client)
+        return await handle_train_trigger(config, event, dapr=request.app.state.dapr, fga_client=fga_client)
 
     return dapr_app
-
-
-class TrainRunState(BaseModel):
-    """What an operator needs to answer "is my training run still being watched".
-
-    A declared field list, not the SDK's state object: `WorkflowState` carries the serialized input
-    and the serialized output, and this route is reachable by any admin of the watch's project — so it
-    would disclose the whole spec to answer a status question.
-    """
-
-    instance_id: str
-    status: str
-    #: The Ray submission the watcher is polling, echoed so an operator can cross-check the dashboard.
-    submission_id: str | None = None
 
 
 class TrainTerminateAccepted(BaseModel):
@@ -179,104 +163,74 @@ class TrainTerminateAccepted(BaseModel):
     detail: str
 
 
-def _train_client(request: Request) -> Any:
-    """The lifespan's client, never a per-request one.
+def _run_project(settings: MedallionSettings, recorded: str) -> str | None:
+    """The project a training run RECORDS on its plan, or ``None`` when that value names no project.
 
-    `decide()` on the promotion router builds its own and its sibling `show()` reads this one; that
-    asymmetry is its own audit row. New code takes the documented side: constructing a client per
-    request re-opens a gRPC channel to the sidecar on every call.
+    By construction that is the configured project: the trigger consumer stamps `produce_admin_project` on every
+    plan, whatever the trigger claims, so a plan recording none is the configured one, the project `POST /train`
+    authorized. The gate reads the record rather than the setting, so it stays on the resource's own tenant.
     """
-    client = getattr(request.app.state, "workflow_client", None)
-    if client is None:
-        raise ServiceUnavailableError("the workflow engine is not available")
-    return client
-
-
-def _watch_project(settings: MedallionSettings, serialized_input: str | None) -> str | None:
-    """The project a training watch RECORDS (`TrainJobSpec.project`), or ``None`` if it cannot be read.
-
-    By construction that is the configured project: the trigger consumer stamps `produce_admin_project`
-    on every watch, whatever the trigger claims, so a watch recording none is the configured one — the
-    project `POST /train` authorized. The gate reads the record rather than the setting, so it stays
-    on the resource's own tenant.
-    """
-    try:
-        spec = json.loads(serialized_input or "{}")
-    except ValueError:
-        return None
-    project = spec.get("project", "") if isinstance(spec, dict) else None
-    if project == "":
+    if recorded == "":
         return settings.produce_admin_project
-    return project if is_safe_project(project) else None
+    return recorded if is_safe_project(recorded) else None
 
 
-def _no_watch(instance_id: str) -> HTTPException:
-    return HTTPException(status_code=404, detail=f"no training watch {instance_id!r}")
+def _no_run(instance_id: str) -> HTTPException:
+    return HTTPException(status_code=404, detail=f"no training run {instance_id!r}")
 
 
-async def _authorized_watch(
-    request: Request, *, settings: MedallionSettings, fga_client: OpenFgaClient | None, caller: ProducerCaller, instance_id: str
-) -> Any:
-    """Load the TRAINING watch (404 for anything else), then authorize the caller on the project it records.
+async def _authorized_run(settings: MedallionSettings, fga_client: OpenFgaClient | None, caller: ProducerCaller, instance_id: str) -> PlanDocument:
+    """Load the TRAINING plan (404 for anything else), then authorize the caller on the project it records.
 
-    This engine also hosts `promotion_review`, whose door is `/promotions/{id}` on `can_promote`. A
-    training door that acted on one would skip that rung and the promotion's outcome event, so an id
-    `schedule_train_watch` cannot mint is refused before the engine is asked, and a state whose
-    workflow is not `train_run` answers exactly as an absent one.
+    A plan document that does not parse names no project, so the caller is refused it (503) rather than checked
+    against the configured project, which would hand an unknown run to that project's admins.
     """
-    if not instance_id.startswith(TRAIN_WATCH_PREFIX):
-        raise _no_watch(instance_id)
-    client = _train_client(request)
-    # Resolved here, as `promotions.py` does: `medallion.workflow` is the engine adapter, an optional
-    # extra, and a router the producer always mounts must not import it. After the client, because a
-    # live client means the extra is installed; without one the answer is the 503 above.
-    from medallion.workflow import train_run
-
-    # The SDK client is SYNCHRONOUS. Awaiting it inline blocks the event loop for every other request
-    # on this worker — the same reason ingest and flows read their state through a thread.
-    state = await asyncio.to_thread(lambda: client.get_workflow_state(instance_id, fetch_payloads=True))
-    # `name` is the orchestration's registered name, which `workflow.register` leaves as `__name__`.
-    if state is None or state.name != train_run.__name__:
-        raise _no_watch(instance_id)
-    await require_project_admin(fga_client, caller, project=_watch_project(settings, state.serialized_input), resource=f"{train_run.__name__}:{instance_id}")
-    return state
+    resource = f"train_run:{instance_id}"
+    try:
+        plan = await train_plans.read(settings, instance_id)
+    except ValueError:  # a document that does not parse as JSON, or as a plan (pydantic's ValidationError is a ValueError)
+        log.warning("medallion_train_plan_unreadable", extra={"instance_id": instance_id})
+        await require_project_admin(fga_client, caller, project=None, resource=resource)
+        raise ServiceUnavailableError(f"the plan of training run {instance_id!r} cannot be read") from None
+    if plan is None:
+        raise _no_run(instance_id)
+    await require_project_admin(fga_client, caller, project=_run_project(settings, plan.project), resource=resource)
+    return plan
 
 
 @router.get("/trains/{instance_id}")
-async def show_train(instance_id: str, request: Request, settings: SettingsDep, fga_client: FgaClientDep, caller: AdmittedCaller) -> TrainRunState:
-    """DWF-MGT-002: the HTTP view of a training watch. `POST /train` answers 202, and this is how a
-    caller learns whether the watcher is alive or has abandoned the run; an id no watch has is 404.
+async def show_train(instance_id: str, settings: SettingsDep, fga_client: FgaClientDep, caller: AdmittedCaller) -> TrainRunState:
+    """DWF-MGT-002 on plans: the HTTP view of a planned training run. `POST /train` answers 202, and this is how a
+    caller learns whether the run is still training, landed, or failed; an id no training plan has is 404.
 
-    Gated on `can_administer` over the project the watch records: reading the status of compute you
-    may not spend is not public, and the estate argues this exact point on `flows.get_run` and
-    `ingest.get_ingest`.
+    ``instance_id`` is the plan's action id, `ray-train-<token>`. Gated on `can_administer` over the project the plan
+    records: reading the status of compute you may not spend is not public, and the estate argues this exact point
+    on `flows.get_run` and `ingest.get_ingest`.
     """
-    state = await _authorized_watch(request, settings=settings, fga_client=fga_client, caller=caller, instance_id=instance_id)
-    submission_id: str | None = None
-    with suppress(Exception):
-        # Best-effort: a state whose input this build cannot parse must still answer the STATUS
-        # question, which is the one the caller asked.
-        submission_id = str(json.loads(state.serialized_input or "{}").get("submission_id") or "") or None
-    return TrainRunState(instance_id=instance_id, status=str(getattr(state.runtime_status, "name", state.runtime_status)), submission_id=submission_id)
+    plan = await _authorized_run(settings, fga_client, caller, instance_id)
+    return await train_plans.state(plan)
 
 
 @router.post("/trains/{instance_id}/terminate", status_code=202)
 async def terminate_train(
     instance_id: str, request: Request, settings: SettingsDep, fga_client: FgaClientDep, caller: AdmittedCaller
 ) -> TrainTerminateAccepted:
-    """DWF-MGT-003, for the training lane. Refused before the terminate unless the caller administers
-    the project the watch records.
+    """DWF-MGT-003 on plans: stop a training run's job through the executor port, then close its plan on the state the stop left.
 
-    A HARD terminate is honest here and the response says exactly what it does and does not do.
-    `train_run` only POLLS a Ray job it did not submit — `submit_train_job` did, before the watcher
-    was ever scheduled — so stopping the watch does NOT stop the training job or free its GPUs. An
-    operator told "terminated" would reasonably believe otherwise, so the body refuses to imply it.
+    Refused before anything is stopped unless the caller administers the project the plan records. The stop frees the
+    run's GPUs; the engine's state after it decides the terminal (`train_plans.terminate`), so a job that had already
+    published its model closes succeeded, never FAILED. A run that already closed is answered as it stands.
     """
-    await _authorized_watch(request, settings=settings, fga_client=fga_client, caller=caller, instance_id=instance_id)
-    client = _train_client(request)
-    await asyncio.to_thread(lambda: client.terminate_workflow(instance_id))
-    log.info("medallion_train_watch_termination_requested", extra={"instance_id": instance_id, "subject": caller.subject})
-    return TrainTerminateAccepted(
-        instance_id=instance_id,
-        detail="the watch stops; the Ray training job it was polling keeps running and must be stopped through Ray",
-    )
+    plan = await _authorized_run(settings, fga_client, caller, instance_id)
+    try:
+        closed = await train_plans.terminate(settings, request.app.state.dapr, plan)
+    except TrainStopError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    log.info("medallion_train_run_termination_requested", extra={"instance_id": instance_id, "subject": caller.subject})
+    if closed.outcome is None:
+        detail = "the stop was asked and the job has not ended yet; the sweep closes the run on the state it ends in"
+    elif closed.outcome.source == "operator":
+        detail = f"the training job was stopped through the compute engine and the run closed {closed.outcome.status}"
+    else:
+        detail = f"the run had already closed {closed.outcome.status}; nothing was stopped"
+    return TrainTerminateAccepted(instance_id=instance_id, detail=detail)

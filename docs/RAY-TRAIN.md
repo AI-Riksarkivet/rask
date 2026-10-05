@@ -70,6 +70,14 @@ duration is decoupled from bus semantics entirely. Redelivery of a trigger whose
 FAILED does **not** resubmit (unlike the stage path): training compute is expensive and a failed
 run is terminal until a human (or future automation) POSTs `/train` again with a fresh token.
 
+**Every run is a plan (CP-029).** Before the submit the handler writes a plan under the producer's identity, keyed on
+the same `ray-train-<token>` id, and announces it on `catalog.control.v1` (`run_planned`, object `train_run:<id>`).
+The job stamps that id on its registry commit (the commit marker) and, once its own terminal event landed, reports the
+terminal to the producer's outcome door (`POST /runs/{id}/outcome`, URL in `RASK_OUTCOME_URL`). The producer's plan
+sweep resolves a run that never reported: a job Ray says FAILED or STOPPED is one FAIL; one that succeeded or vanished
+is a COMPLETE naming the registry version its marker records, or one FAIL when there is none; a RUNNING job is left
+alone at any age. Nothing is resubmitted. See `docs/DECISIONS.md`, "The train lane is the same plan".
+
 ## D3 — Lineage shape: official facets only, spec-true
 
 - **Job**: namespace `ray-jobs`, name `train.<model>`; the official **`JobTypeJobFacet`** with

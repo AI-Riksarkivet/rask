@@ -11,13 +11,12 @@ blocks ARE the compensating control, so a failure inside one produces exactly th
 exists to prevent — and during a lineage or NATS outage that means every workflow failure in the window
 is destroyed with nothing afterwards indicating a gap exists.
 
-Worse than merely silent, on the reporting path: the `log.error` that follows these blocks still prints,
-and `report_stage_outcome`'s docstring promises "THE FAILURE REACHES THE GRAPH, not just this log line".
-So the log asserts a graph write that never happened. Logging costs nothing on the happy path and turns
+Worse than merely silent, on a reporting path: the `log.error` that follows such a block still prints, so
+the log would assert a graph write that never happened. Logging costs nothing on the happy path and turns
 an invisible failure into a searchable one.
 
-Lives in `core/` because it has more than one consumer: `services/transform.py` (where it was written)
-and `workflow.py`, whose four reporting sites were still bare.
+Lives in `core/` because it has more than one consumer: `services/transform.py`, `services/stage_plans.py`
+and `workflow.py`.
 """
 
 from __future__ import annotations

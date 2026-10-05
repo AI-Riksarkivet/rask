@@ -2,13 +2,14 @@
 
 `service-kit`'s `saga.SagaClient` says what the platform may ask of a workflow engine; this says how
 Dapr answers. It is the workflow-plane twin of `inprocess_executor` / `rayjob_executor` one layer
-down, and it exists so that `transform.py` and `train.py` can start a saga without importing
-`dapr.ext.workflow` inside a function body to do it.
+down, and it exists so that a service can start a saga without importing `dapr.ext.workflow` inside a
+function body to do it. No Ray lane starts one: a stage run and a training run are each a plan (CP-029),
+and the promotion review is the workflow left to move onto this port (LH-226).
 
-THE IMPORT IS LAZY, and for the reason the two call sites already had it lazy: `dapr.ext.workflow`
-pulls the workflow runtime, and the modules that start sagas are also imported by paths that never
-run one (the test suite, a compute-off dev stack). An adapter that imported it at module scope would
-put the engine back into the import graph the port exists to keep it out of.
+THE IMPORT IS LAZY: `dapr.ext.workflow` pulls the workflow runtime, and a module that starts a saga is
+also imported by paths that never run one (the test suite, a compute-off dev stack). An adapter that
+imported it at module scope would put the engine back into the import graph the port exists to keep it
+out of.
 """
 
 from __future__ import annotations

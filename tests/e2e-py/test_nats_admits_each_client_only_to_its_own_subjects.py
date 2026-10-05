@@ -76,10 +76,11 @@ RIG = "rask-test-rig"
 #:
 #: lineage: catalog/core/lineage_emit.py, lineage/services/staged.py (recovered signed bytes), maintenance/core/
 #: lineage_emit.py, medallion/core/lineage_publish.py (producer and stage runners). control: catalog's control_emit
-#: and control_relay.py, and medallion/workflow.py `request_approval`, which runs in the producer's promotion_review
-#: workflow. maintenance work: catalog/endpoints/maintenance.py and maintenance/services/work_queue.py; index: catalog
-#: only. medallion.<tier>: the producer (ingest_trigger, publication_trigger, rerun, media_produce) and each stage
-#: runner's re-wake of its own topic (workflow.py); a stage runner never publishes downstream, promotion goes through
+#: and control_relay.py, medallion/workflow.py `request_approval`, which runs in the producer's promotion_review
+#: workflow, and each stage runner's plan announcement (stage_plans.py) under medallion.ray. maintenance work:
+#: catalog/endpoints/maintenance.py and maintenance/services/work_queue.py; index: catalog only. medallion.<tier>: the
+#: producer (ingest_trigger, publication_trigger, rerun, media_produce) and each stage runner's hand-off to its own
+#: topic (stage_plans.py); a stage runner never publishes downstream, promotion goes through
 #: the catalog (transform.py). medallion.promotion: promotion_hold.py in the stage runners. refused.<app>:
 #: transform.py. dlq.<app>: the `deadLetterTopic` of that app's subscriptions. ingest: queue.py.
 def _values() -> Path:
@@ -88,14 +89,18 @@ def _values() -> Path:
 
 def _control_emitters(values: Path) -> frozenset[str]:
     """Maintenance and the annotator announce on catalog.control.v1 only while the flag that renders their control
-    component is on (maintenance.controlEmit, explorer.controlEmit; both false in the chart's values)."""
+    component is on (maintenance.controlEmit, explorer.controlEmit; both false in the chart's values), and the stage
+    runners only while the Ray lane writes (medallion.ray and medallion.compute; both true in the chart's values)."""
     chart = yaml.safe_load((REPO / "chart" / "values.yaml").read_text()) or {}
     given = yaml.safe_load(values.read_text()) or {}
 
     def on(section: str) -> bool:
         return bool((given.get(section) or {}).get("controlEmit", (chart.get(section) or {}).get("controlEmit")))
 
-    return frozenset(app for app, section in (("maintenance", "maintenance"), ("annotator", "explorer")) if on(section))
+    announcers = frozenset(app for app, section in (("maintenance", "maintenance"), ("annotator", "explorer")) if on(section))
+    medallion = {**(chart.get("medallion") or {}), **(given.get("medallion") or {})}
+    # Each stage runner announces its Ray runs' plans while the Ray lane writes (medallion.ray with medallion.compute).
+    return announcers | (frozenset(RUNNERS) if medallion.get("ray") and medallion.get("compute") else frozenset())
 
 
 PUBLISHERS: dict[str, frozenset[str]] = {

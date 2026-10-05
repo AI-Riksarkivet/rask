@@ -1,136 +1,68 @@
-"""The cascade's operator surface: observe and stop an in-flight `stage_run` (DWF-MGT-002/003).
+"""The cascade's operator surface: observe and stop a planned stage run (DWF-MGT-002/003 on plans, CP-029 D-8).
 
-THESE ROUTES LIVE ON THE STAGE RUNNER, and that is forced rather than chosen. `stage_run` executes in the
-stage runner's own runtime (`stage_runner.py`), and both `get_workflow_state` and `terminate_workflow` resolve an
-instance through the CALLING app's app-id. A copy of these routes on the producer would look for the
-instance under `medallion-producer`, not find it, and — the part that makes it dangerous — **accept
-the call anyway**: a 202 for a terminate that stopped nothing. `promotions.py` records the same trap
-from the other direction, which is why the promotion workflow is hosted beside its door.
+THESE ROUTES LIVE ON THE STAGE RUNNER because the plan does: a run's plan is this stage runner's, under its own
+identity in the control root, and the sweep that resolves it runs here. The stage runner has no gateway row and no
+Ingress, so it is reached through the producer: `stage_runner_ops` authenticates the caller, authorizes it on the
+project the run's plan RECORDS, and forwards here over the stage runner's ClusterIP with its own projected
+`rask-medallion` token. This side admits the producer's account and no other (`service_door.require_producer`), so
+the ClusterIP is not a way round that check.
 
-The stage runner has no gateway row and no Ingress, so it is reached through the producer, which has both:
-`producer.py` authenticates the caller, authorizes it on the run's project, and forwards here over the
-stage runner's ClusterIP with its own projected `rask-medallion` token. Authorization happens THERE, at the
-door a person can reach; this side admits the producer's service account and no other
-(`service_door.require_producer`), so the ClusterIP is not a way round that check.
-
-What terminate does NOT do is stated in the response body. `stage_run` submits a Ray job and then
-polls it; terminating stops the WATCH and the next-tier trigger, never the job. An operator told
-"terminated" would reasonably free the GPUs in their head, and they are not free.
+show answers the plan's identity and state with ONE engine read while the run is open, never the order it carries
+(URIs and a provenance document a status question must not disclose). terminate stops the job through the executor
+port and resolves the plan on the state the engine reports after the stop (`stage_plans.terminate`): a stopped job
+closes the run FAILED and the next tier is never woken, a job that had already succeeded closes it SUCCEEDED and the
+next tier wakes, and a stop the engine has not finished leaves the run for the sweep.
 """
 
 from __future__ import annotations
 
-import asyncio
-import json
-from contextlib import suppress
-from typing import Any
-
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
+from medallion.api.dependencies import SettingsDep
 from medallion.api.service_door import ProducerService
-from service_kit.exceptions import ServiceUnavailableError
+from medallion.services import stage_plans
+from medallion.services.stage_plans import StageHandOffError, StageRunView, StageStopError
 
 
 router = APIRouter(tags=["stages"])
 
 
-class StageRunState(BaseModel):
-    """A DECLARED field list, not the SDK's state object.
-
-    `WorkflowState` carries the serialized input and output — the whole `StageJobSpec`, including the
-    URIs and the lineage blob. A status question must not disclose them to answer.
-    """
-
+class StageTerminated(BaseModel):
     instance_id: str
     status: str
-    #: Echoed so an operator can cross-check the Ray dashboard for the job the watch is polling.
-    submission_id: str | None = None
-    polls_done: int = 0
-    #: The tenant this run is for, read off the trigger it carries — what the producer authorizes the
-    #: caller on, since it cannot read this app's workflow state itself. ``""`` is a single-tenant run
-    #: (its trigger named no project); ``None`` is an input this build cannot read, which the producer
-    #: refuses rather than guess, so the two must never collapse into one value.
-    project: str | None = None
-
-
-class StageTerminateAccepted(BaseModel):
-    instance_id: str
     detail: str
 
 
-def _client(request: Request) -> Any:
-    """The lifespan's client. Constructing one per request re-opens a gRPC channel to the sidecar."""
-    client = getattr(request.app.state, "workflow_client", None)
-    if client is None:
-        raise ServiceUnavailableError("the workflow engine is not available")
-    return client
-
-
-async def _state_or_404(client: Any, instance_id: str, *, payloads: bool) -> Any:
-    # The SDK client is SYNCHRONOUS. Awaiting it inline would block the event loop for every other
-    # request on this worker — the same reason ingest and flows read their state through a thread.
-    state = await asyncio.to_thread(lambda: client.get_workflow_state(instance_id, fetch_payloads=payloads))
-    if state is None:
-        raise HTTPException(status_code=404, detail=f"no stage run {instance_id!r}")
-    return state
-
-
 @router.get("/stages/{instance_id}")
-async def show_stage(instance_id: str, request: Request, _producer: ProducerService) -> StageRunState:
-    """DWF-MGT-002. Before this, an in-flight cascade stage was unobservable over HTTP entirely —
-    `services/compute` proxies Ray read-only and knows nothing about the workflow watching it."""
-    state = await _state_or_404(_client(request), instance_id, payloads=True)
-    submission_id: str | None = None
-    polls = 0
-    project: str | None = None
-    with suppress(Exception):
-        # Best-effort: a spec this build cannot parse must still answer the STATUS question, which is
-        # the one the caller asked.
-        spec = json.loads(state.serialized_input or "{}")
-        project = _trigger_project(spec)
-        submission_id = str(spec.get("submission_id") or "") or None
-        polls = int(spec.get("polls_done") or 0)
-    return StageRunState(
-        instance_id=instance_id,
-        status=str(getattr(state.runtime_status, "name", state.runtime_status)),
-        submission_id=submission_id,
-        polls_done=polls,
-        project=project,
-    )
-
-
-def _trigger_project(spec: dict[str, Any]) -> str | None:
-    """The trigger's project: ``""`` when it names none (single-tenant), ``None`` when it cannot be read.
-
-    Read off the TRIGGER, because that is the one field the stage runner resolved its tenant from before
-    scheduling the run (`transform.py` drops an unsafe one) — the table ids beside it cannot be split
-    back into a project, since a project id may itself contain `-`.
-    """
-    trigger = spec.get("trigger", {})
-    if not isinstance(trigger, dict):
-        return None
-    project = trigger.get("project")
-    if project is None:
-        return ""
-    return project if isinstance(project, str) else None
+async def show_stage(instance_id: str, settings: SettingsDep, _producer: ProducerService) -> StageRunView:
+    """The HTTP view of a planned stage run: its plan, and the engine's state while it is open."""
+    view = await stage_plans.show(settings, instance_id)
+    if view is None:
+        raise HTTPException(status_code=404, detail=f"no stage run {instance_id!r}")
+    return view
 
 
 @router.post("/stages/{instance_id}/terminate", status_code=202)
-async def terminate_stage(instance_id: str, request: Request, _producer: ProducerService) -> StageTerminateAccepted:
-    """DWF-MGT-003 for the cascade.
-
-    A HARD terminate is right here, and it is worth saying why this differs from ingest, where the
-    same finding got a `cancel` EVENT instead: ingest's skipped tail held `emit_terminal`, the only
-    caller of `release_run_units`, so terminating stranded the run's JetStream consumer. `stage_run`
-    holds no queue and no consumer — it submits, polls, and reports — so there is no cleanup a skipped
-    path could leak. The lever an operator actually lacks is the one that stops a wrongly-dispatched
-    stage from publishing the next tier's trigger, and that is exactly what this stops.
-    """
-    client = _client(request)
-    await _state_or_404(client, instance_id, payloads=False)
-    await asyncio.to_thread(lambda: client.terminate_workflow(instance_id))
-    return StageTerminateAccepted(
-        instance_id=instance_id,
-        detail="the watch stops and no downstream trigger is published; the Ray job it was polling keeps running and must be stopped through Ray",
-    )
+async def terminate_stage(instance_id: str, request: Request, settings: SettingsDep, _producer: ProducerService) -> StageTerminated:
+    """Stop a planned stage run's job and close its plan on how the job ended; a run that already closed is answered as it stands."""
+    try:
+        plan = await stage_plans.terminate(settings, request.app.state.dapr, instance_id)
+    except StageStopError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except StageHandOffError as exc:
+        raise HTTPException(
+            status_code=503, detail=f"the job had already succeeded and its next tier could not be woken yet; the sweep repeats it: {exc}"
+        ) from exc
+    if plan is None:
+        raise HTTPException(status_code=404, detail=f"no stage run {instance_id!r}")
+    outcome = plan.outcome
+    if outcome is None:
+        detail = "the stop was sent and the job has not ended yet; the plan sweep closes the run on the state it ends in"
+    elif outcome.source == "operator" and outcome.status == "succeeded":
+        detail = "the job had already succeeded before the stop; the run closed succeeded and its next tier is woken"
+    elif outcome.source == "operator":
+        detail = "the job was stopped through the compute engine and the run closed failed; no downstream trigger is published"
+    else:
+        detail = "the run had already closed; nothing was stopped"
+    return StageTerminated(instance_id=instance_id, status=outcome.status if outcome is not None else "stopping", detail=detail)

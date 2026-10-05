@@ -1,4 +1,4 @@
-"""Three activity-body defects that only show up when an activity RUNS TWICE, or when it fails.
+"""Activity-body defects that only show up when an activity RUNS TWICE, or when it fails.
 
 Dapr guarantees at-least-once activity execution: a worker that crashes after doing the work but
 before recording the result re-executes the whole body on recovery. Everything an activity does must
@@ -10,20 +10,17 @@ therefore be safe to do twice, and everything it swallows must be findable after
 2. `emit_promotion_outcome`'s failure log named NOTHING -- no token, no dataset, no decider -- while
    this activity's own docstring calls lineage "the durable record". A dropped publish emptied the
    record and left a log line nobody could tie to a promotion.
-3. `report_stage_outcome` enriched a failure with Ray's cause without checking the submission id was
-   non-empty, so a permanently-failed SUBMIT sent the reporter at Ray's job LIST endpoint.
 """
 
 from __future__ import annotations
 
 import json
-from contextlib import suppress
 from typing import Any, cast
 
 import pytest
 
 from medallion.schemas.promotion import PromotionSpec
-from medallion.workflow import StageJobOutcome, StageJobSpec, StageReport, request_approval
+from medallion.workflow import request_approval
 
 
 def _spec(**over: Any) -> dict[str, Any]:
@@ -80,43 +77,3 @@ def test_a_RE_EXECUTED_request_approval_carries_the_SAME_dedupe_key(monkeypatch:
 
     assert len(seen) == 2, f"the fixture did not capture both publishes: {seen}"
     assert seen[0]["event_id"] == seen[1]["event_id"], f"a re-executed activity minted a fresh dedupe key: {seen[0]['event_id']} vs {seen[1]['event_id']}"
-
-
-def test_an_EMPTY_submission_id_never_reaches_rays_job_list_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A permanently failed SUBMIT reports with an empty submission id.
-
-    `_read_stage_failure("")` builds the dashboard URL without one, which is Ray's job LIST endpoint
-    -- so the "cause" returned is whatever job happens to be first, attributed to a run that never
-    started. Worse than no cause: a plausible, wrong one, pinned into lineage as this stage's reason.
-    """
-    from medallion import workflow as workflow_mod
-
-    asked: list[str] = []
-
-    def _read(submission_id: str) -> None:
-        asked.append(submission_id)
-        return
-
-    monkeypatch.setattr(workflow_mod, "_read_stage_failure", _read)
-    monkeypatch.setattr(workflow_mod, "record_stage_outcome", lambda *a, **k: None)
-    monkeypatch.setattr(workflow_mod, "_publish_stage_fail_event", lambda *a, **k: None, raising=False)
-
-    payload = StageReport(
-        spec=StageJobSpec.model_validate(
-            {
-                "from_uri": "s3://wh/p-bronze/pages.lance",
-                "to_uri": "s3://wh/p-silver/pages.lance",
-                "stage": "silver",
-                "token": "tok-1",
-                "trigger": {"token": "tok-1"},
-            }
-        ),
-        outcome=StageJobOutcome.model_validate({"submission_id": "", "status": None, "polls": 0, "verdict": "failed"}),
-    )
-    with suppress(Exception):
-        # The SUBJECT is whether Ray is asked at all. What the reporter does afterwards reaches a bus
-        # and is covered by test_stage_workflow; suppressed rather than stubbed so this test cannot
-        # start silently asserting something about a path it does not model.
-        workflow_mod.report_stage_outcome(cast("Any", None), payload)
-
-    assert asked == [], f"an empty submission id was handed to the Ray failure reader: {asked}"

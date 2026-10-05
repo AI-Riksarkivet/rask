@@ -3,9 +3,8 @@
 docs/DECISIONS.md "The compute plane is decoupled" **Two axes, and this module is only the second one.**
 
 * **ORCHESTRATION** — when a stage runs, what happens next, what happens if it dies — is Dapr
-  Workflow's and Dapr pub/sub's, estate-wide and by recorded decision (`.claude/skills/rask-dapr`).
-  Nothing here touches it: the trigger, the durable timer and the re-publish are the same whichever
-  engine below is chosen.
+  pub/sub's and the Ray lane's plan (`stage_plans`, CP-029). Nothing here touches it: the trigger, the
+  plan, its sweep and the re-publish are the same whichever engine below is chosen.
 * **COMPUTE** — what machine moves the bytes — is what a task's registration names, and what this
   module reads.
 
@@ -63,15 +62,14 @@ class _EngineSettings(_TransformSettings, Protocol):
 def hosted_engines(settings: _EngineSettings) -> frozenset[str]:
     """The engines THIS DEPLOYMENT can actually run.
 
-    A DEPLOYMENT FACT, NOT A CONSTANT, and that is the whole of it. Declared as a frozenset containing
-    Ray unconditionally, the refusal below could never fire for Ray: a task registered for `ray` on a
-    deployment with the Ray lane off passed the check, `_dispatch_stage_workflow` enqueued it through a
-    client that only ENQUEUES, and `stage_runner` starts the runtime that would execute it only
-    `if settings.ray_enabled`. Scheduled, never executed, and silent — no failure, no DLQ, no refusal.
+    A DEPLOYMENT FACT, NOT A CONSTANT, and that is the whole of it. A constant containing Ray
+    unconditionally would let a task registered for `ray` pass the check on a deployment with the Ray
+    lane off, where no Ray head is addressed and no plan sweep is wired, so the run would be planned and
+    never resolved — no failure, no DLQ, no refusal.
 
     ``ray_enabled`` is read here for the SECOND of its two jobs. It is also the chart's default engine
     for an estate that has declared nothing (see :func:`engine_for`), and only this one — does this pod
-    start the Ray workflow runtime — may gate a declaration. A declaration still overrides the chart in
+    run the Ray lane — may gate a declaration. A declaration still overrides the chart in
     the direction that carries the decoupling: a task registered for in-process is honoured on a Ray-ON
     deployment, because in-process needs no runtime.
 
@@ -104,8 +102,8 @@ def engine_for(settings: _EngineSettings, *, spec: TransformSpec | None) -> str:
         # declaration for another plane; one the build knows and this deployment has turned OFF is a
         # lever, and saying only "it hosts [inprocess]" leaves the operator to guess which.
         lever = (
-            f" This build can run {registration.engine!r}, but this deployment does not: the Ray lane's workflow runtime "
-            "starts only when MEDALLION_RAY_ENABLED is true, so the stage would be enqueued and never executed."
+            f" This build can run {registration.engine!r}, but this deployment does not: the Ray lane runs only when "
+            "MEDALLION_RAY_ENABLED is true, so the stage would be planned and never resolved."
             if registration.engine in KNOWN_ENGINES
             else " The declaration is valid and belongs to another executor."
         )
