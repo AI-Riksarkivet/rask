@@ -164,6 +164,25 @@ def test_the_job_runs_end_to_end_from_env(tmp_path: Path) -> None:
     assert silver.column("checksum")[0].as_py()
 
 
+def test_an_upstream_correction_and_deletion_reach_silver_through_the_consumer_rule(tmp_path: Path) -> None:
+    """The published window resolved by the change-feed consumer rule: merge by key, then retract.
+
+    An in-place `update` keeps the row's `_row_created_at_version` and moves only its
+    `_row_last_updated_at_version` (lance_docs/file_format.md:4270-4298), so a consumer keyed on the
+    INSERTED predicate never sees it; a delete leaves no row for any predicate to name.
+    """
+    uri, silver = _bronze(tmp_path, [1, 2, 3]), str(tmp_path / "silver.lance")
+    run({"RASK_SOURCE_URI": uri, "RASK_DEST_URI": silver})
+    floor = lance.dataset(uri).version
+    lance.dataset(uri).update({"payload": "CAST('a much longer corrected body of page two' AS BINARY)"}, where="id = 2")
+    lance.dataset(uri).delete("id = 3")
+
+    run({"RASK_SOURCE_URI": uri, "RASK_DEST_URI": silver, "RASK_VERSION_FLOOR": str(floor)})
+
+    words = dict(zip(*lance.dataset(silver).to_table(columns=["id", "word_count"]).to_pydict().values(), strict=True))
+    assert words == {1: 4, 2: 8}, f"silver did not follow the corrected and the deleted bronze rows: {words}"
+
+
 def test_missing_env_refuses_loudly() -> None:
     with pytest.raises(ValueError, match="RASK_SOURCE_URI and RASK_DEST_URI"):
         run({})

@@ -22,6 +22,36 @@ after an append and an update, and the `inserted` window (1, 3] answers []. A co
 catalog cannot rule the case out at creation alone: a table registered at an empty location, or one
 whose bytes were rewritten outside the catalog, reaches this door without passing a create.
 
+THE CONSUMER RULE, stated once for every published range (`table_published`'s and a stage trigger's
+`{from_version, to_version}`, a work order's `version_floor`). A consumer resolves the window
+`(from, to]` in one of two ways, and in no other:
+
+    1. through `/changes` — `inserted`, `updated` and `deleted` for that window, applied together; or
+    2. by merging on its key every row with `_row_last_updated_at_version > from` (and `<= to` when
+       bounded), then retracting the rows `DatasetDelta.get_deleted_row_ids()` names for the window.
+
+`_row_created_at_version` alone is the INSERTED predicate and nothing more: a consumer keyed on it never
+sees an in-place correction or a deletion.
+
+THE WINDOW IS ONE SNAPSHOT. Lance's feed is three queries against the table AT `end_version`
+(`file_format.md:4270-4298`): a row updated inside the window and again after it carries the later
+version, so a scan of the latest snapshot drops it from a closed window. The door opens the dataset at
+`end_version` (at the head it read, for an open window) and answers all three kinds from that handle.
+
+AND ONLY A WINDOW THE VERSION COLUMNS DESCRIBE. Three transactions change rows without moving those
+columns the way the predicates assume, so the door reads the window's transactions and refuses a
+window spanning one (`unfollowable`): a Restore and an Overwrite replace the table wholesale, and an
+Update whose `fields_modified` is non-empty rewrote a column in place (`fragment.update_columns` plus
+`LanceOperation.Update`, `lance_docs/guide.md:1715-1770`; measured on pylance 12.0.0 it leaves
+`_row_last_updated_at_version` where it was, so the `updated` stream never shows the change).
+`dataset.update` and `merge_insert` commit an Update with `fields_modified == []` and new fragments,
+which the columns describe, and a compaction (a ReserveFragments BaseOperation then a Rewrite) moves
+no row. A window from version 0 is the whole snapshot at `end_version`, which no transaction can make
+wrong: `inserted` answers every row, `updated` none, and `deleted` none, since any row it could name
+is one the consumer never held. So it is answered without the walk, and without `delta()`, which would
+need version 1's manifest that maintenance cleanup removes. A later begin whose manifest is gone is
+refused for every kind alike.
+
 THE CASCADE ASKS THE SAME QUESTION WITH ONE COLUMN, and the difference is deliberate.
 `scripts/ray_stage_job._delta_filter` filters on `_row_last_updated_at_version` alone, which selects
 the inserted and the updated rows together — a never-updated row carries its creation version there
@@ -34,6 +64,8 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Final, Literal
 
+import lance
+from lance import LanceOperation
 from lance_namespace import InvalidInputError, InvalidTableStateError
 
 
@@ -74,13 +106,8 @@ def require_row_versions(stable_row_ids: bool, *, table: str) -> None:
         )
 
 
-def change_filter(*, begin_version: int, end_version: int | None, kind: ChangeKind) -> str:
-    """The SQL predicate selecting rows that changed in ``(begin_version, end_version]``.
-
-    ``end_version`` of ``None`` is the open window — "everything since" — which is the ordinary
-    subscription shape. It must stay unbounded rather than defaulting to the begin version or to the
-    dataset's current version read separately: a bound read at a different moment than the scan is a
-    window that silently drops whatever landed in between.
+def validate_window(*, begin_version: int, end_version: int | None) -> None:
+    """Refuse a window no table can answer truthfully.
 
     Raises:
         InvalidInputError: for a negative begin, or a window that ends before it starts. Both would
@@ -96,6 +123,38 @@ def change_filter(*, begin_version: int, end_version: int | None, kind: ChangeKi
             f"begin_version {begin_version} is after end_version {end_version} — an inverted window answers no rows, "
             "which is indistinguishable from 'nothing changed'"
         )
+
+
+def unfollowable(transaction: lance.Transaction | None) -> str | None:
+    """Why a window containing ``transaction`` cannot be answered from the version columns, or ``None``.
+
+    See the module docstring's THE WINDOW rules. A version with no readable transaction is refused too:
+    the door cannot vouch for a window whose history it cannot see.
+    """
+    if transaction is None:
+        return "records no transaction"
+    operation = transaction.operation
+    if isinstance(operation, LanceOperation.Restore):
+        return "is a Restore, which replaces the table with an earlier version"
+    if isinstance(operation, LanceOperation.Overwrite):
+        return "is an Overwrite, which replaces every row"
+    if isinstance(operation, LanceOperation.Update) and operation.fields_modified:
+        return f"rewrote field ids {list(operation.fields_modified)} in place, which moves no row's version"
+    return None
+
+
+def change_filter(*, begin_version: int, end_version: int | None, kind: ChangeKind) -> str:
+    """The SQL predicate selecting rows that changed in ``(begin_version, end_version]``.
+
+    ``end_version`` of ``None`` is the open window — "everything since" — which is the ordinary
+    subscription shape. It must stay unbounded rather than defaulting to the begin version or to the
+    dataset's current version read separately: a bound read at a different moment than the scan is a
+    window that silently drops whatever landed in between.
+
+    Raises:
+        InvalidInputError: an invalid window (:func:`validate_window`), or ``kind="deleted"``.
+    """
+    validate_window(begin_version=begin_version, end_version=end_version)
     if kind == "deleted":
         # NOT A PREDICATE, AND SAYING SO IS THE POINT. The version columns describe rows the table still
         # has; a deleted row is absent from the scan, so any filter composed here would answer the wrong

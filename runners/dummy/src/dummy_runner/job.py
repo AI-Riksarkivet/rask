@@ -28,12 +28,14 @@ log = logging.getLogger(__name__)
 
 
 def read_delta(from_uri: str, base_version: int | None) -> pa.Table:
-    """Read only the rows added since `base_version` — D1's O(delta), not a tier rescan.
+    """Read only the rows inserted or updated since `base_version` — D1's O(delta), not a tier rescan.
 
-    `_row_created_at_version` is the change-data-feed predicate, verified working in open_ingest.md
-    §7.11 row 2. It requires `enable_stable_row_ids` at CREATION — a silent no-op if set later
-    (lance_docs/file_format.md:4011-4013), which is why the catalog's creation contract (A14) enforces
-    it and why bronze is created empty with the flag rather than on first write.
+    The change-feed consumer rule (`catalog.services.changes` in the platform): merge by key every row
+    with `_row_last_updated_at_version > base`, then retract what the deleted stream names
+    (:func:`read_deleted`). A never-updated row carries its creation version in that column, so one
+    predicate selects the inserts and the in-place corrections together; `_row_created_at_version`
+    alone selects only the inserts. Both columns need `enable_stable_row_ids` at CREATION
+    (lance_docs/file_format.md:4011-4015).
 
     base_version None means "everything": a first run has no delta boundary, and an anti-join against
     an empty silver would be the same answer at more cost.
@@ -41,7 +43,35 @@ def read_delta(from_uri: str, base_version: int | None) -> pa.Table:
     ds = lance.dataset(from_uri)
     if base_version is None:
         return ds.to_table(with_row_id=True)
-    return ds.to_table(with_row_id=True, filter=f"_row_created_at_version > {base_version}")
+    return ds.to_table(with_row_id=True, filter=f"_row_last_updated_at_version > {base_version}")
+
+
+def read_deleted(from_uri: str, base_version: int | None) -> list[int]:
+    """The bronze `_rowid`s deleted since `base_version`, from Lance's own deletion record.
+
+    `DatasetDelta.get_deleted_row_ids()` reads the window's transactions, so the cost is the deletion's,
+    not the tier's. A first run (`None`) has nothing to retract.
+    """
+    if base_version is None:
+        return []
+    ds = lance.dataset(from_uri)
+    if ds.version <= base_version:
+        return []
+    deleted = ds.delta(begin_version=base_version, end_version=ds.version).get_deleted_row_ids()
+    return [rowid for batch in deleted for rowid in batch.column("_rowid").to_pylist()]
+
+
+def retract_silver(to_uri: str, deleted: list[int]) -> int:
+    """Delete the silver rows whose `source_rowid` names a deleted bronze row; answer how many keys."""
+    if not deleted:
+        return 0
+    try:
+        ds = lance.dataset(to_uri)
+    except Exception:
+        return 0
+    for start in range(0, len(deleted), 1000):
+        ds.delete(f"source_rowid IN ({', '.join(str(rowid) for rowid in deleted[start : start + 1000])})")
+    return len(deleted)
 
 
 def write_silver(to_uri: str, rows: pa.Table, run_id: str) -> dict[str, Any]:
@@ -91,6 +121,9 @@ def run(env: dict[str, str] | None = None) -> dict[str, Any]:
         emit(build_run_event(event_type=event_type, run_id=run_id, to_id=to_id, from_id=from_id, originator=originator, project=project, **over))
 
     try:
+        # RETRACTION FIRST: a deletion-only window is an empty delta, and the early return below would
+        # otherwise report it as "nothing changed".
+        retracted = retract_silver(to_uri, read_deleted(from_uri, base_version))
         delta = read_delta(from_uri, base_version)
         if delta.num_rows == 0:
             # An empty delta is a legitimate no-op, NOT a failure: a redelivered event whose rows were
@@ -99,7 +132,7 @@ def run(env: dict[str, str] | None = None) -> dict[str, Any]:
             # event missing from the graph is what makes "did my trigger do anything?" unanswerable.
             log.info("dummy transform: empty delta, nothing to do")
             _emit("COMPLETE", rows=0)
-            return {"rows_in": 0, "rows_written": 0, "version": None, "skipped": True}
+            return {"rows_in": 0, "rows_written": 0, "retracted": retracted, "version": None, "skipped": True}
 
         silver = transform_batch(delta, stage=e.get("RASK_STAGE", "silver"), lineage=e.get("RASK_LINEAGE_DOCUMENT", ""))
         result = write_silver(to_uri, silver, run_id)
@@ -114,6 +147,7 @@ def run(env: dict[str, str] | None = None) -> dict[str, Any]:
     return {
         "rows_in": delta.num_rows,
         "rows_written": silver.num_rows,
+        "retracted": retracted,
         "version": result["version"],
         "run_id": run_id,
         "schema": [f.name for f in SILVER_SCHEMA],

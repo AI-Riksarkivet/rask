@@ -10,8 +10,8 @@ THE PREDICATE has two halves and both exist only as of `498b5531`: the source's 
 `lance` run facet records each run's range). Before that commit the second half had no store at all,
 which is why this module could not have been written first.
 
-CONTIGUITY IS WHAT MAKES THIS A LOSS DETECTOR. A consumer resolves its delta as
-`_row_created_at_version > from AND <= to`, and `from` is the source's PREVIOUS PUBLISHED version
+CONTIGUITY IS WHAT MAKES THIS A LOSS DETECTOR. A consumer resolves its window `(from, to]` by the
+change-feed consumer rule (`catalog.services.changes`), and `from` is the source's PREVIOUS PUBLISHED version
 (`publication.py`) rather than the previous CONSUMED one — so the rows a lost trigger skipped fall
 outside every later hop's filter and are never read again. Measured against the highest `to_version`,
 such an edge reads level the moment any later hop succeeds, while the skipped rows are gone; measured

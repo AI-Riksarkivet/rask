@@ -41,7 +41,8 @@ class WorkSource(BaseModel):
     uri: str
     #: The catalog identifier, e.g. `acme-bronze$events` — how the platform names it, not a path.
     table_id: str
-    #: ``None`` = read everything; an int = ``_row_created_at_version > floor``. None is NOT 0: a floor
+    #: ``None`` = read everything; an int = the window ``(floor, …]``, resolved by the change-feed
+    #: consumer rule (`catalog.services.changes`). None is NOT 0: a floor
     #: of 0 asserts a prior version that may not exist, the same distinction `build_stage_trigger`
     #: enforces on the wire.
     version_floor: int | None = None

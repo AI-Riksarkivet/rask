@@ -4,8 +4,9 @@ The point of this runner is that everything around the transform is production-s
 transform itself needs no GPU, no model download, and no network. What it computes (a checksum, a
 word count, an eight-float fake embedding) is deliberately meaningless. What it EXERCISES is not:
 
-* a **CDF delta read** — `_row_created_at_version` bounded by the published version, so the stage runner
-  processes exactly the new rows rather than rescanning the tier (D1);
+* a **CDF delta read** — the change-feed consumer rule over the published window: rows with
+  `_row_last_updated_at_version` above it merged by key, rows the deleted stream names retracted, so the
+  stage runner processes exactly what changed rather than rescanning the tier (D1);
 * a **merge_insert on a stable id**, so a redelivered trigger converges instead of duplicating (E2);
 * **source_rowid carried, bytes NOT copied** — silver stores a reference into bronze and consumers
   resolve payloads from there (D2). Copying blobs forward is the measured defect this avoids;

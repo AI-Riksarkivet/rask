@@ -61,7 +61,7 @@ from catalog.schemas import (
     TableChangesRequest,
     publish_the_plan_body_as_required,
 )
-from catalog.services import blob_serving, changes, dataplane, native, table_create
+from catalog.services import blob_serving, dataplane, native, table_create
 from service_kit.governed import fga
 from service_kit.governed.audit import audit_read
 from service_kit.lakehouse import protection
@@ -783,10 +783,9 @@ def query_table(id: str, body: QueryTableRequest, ns: NamespaceDep, settings: Se
 def table_changes(id: str, body: TableChangesRequest, ns: NamespaceDep, settings: SettingsDep, so: StorageOptionsDep, token: CurrentToken = None) -> Response:
     """Rows that changed in ``(begin_version, end_version]`` — Arrow-IPC, like ``query``.
 
-    Composes the predicate `lance_docs/file_format.md:4270-4300` documents; the scan is
-    `dataplane.read_changes`, which is its OWN scan and not the query door's — `QueryTableRequest`
-    requires `k` and `vector`, so reusing that door would mean inventing a vector to ask a question
-    with nothing to do with similarity. What the two doors DO share is the framing they answer in.
+    Answers the change data feed `lance_docs/file_format.md:4270-4298` documents, from one snapshot at
+    the window's end, and refuses a window the version columns cannot describe; the rules and the
+    consumer contract live in `catalog.services.changes`, the read in `dataplane.read_changes`.
 
     A CHANGE FEED IS A READ, which settles both policy questions: it is gated like one and audited like
     one (§ J1), because following every row a table ever received is the most disclosing read
@@ -811,15 +810,12 @@ def table_changes(id: str, body: TableChangesRequest, ns: NamespaceDep, settings
     `tests/unit/test_fga_model_contract.py::test_every_DATA_READ_door_is_gated_as_a_READ`.
     """
     segments = parse_identifier(id, settings.delimiter)
-    if body.kind == "deleted":
-        # A DIFFERENT QUESTION, NOT A DIFFERENT FILTER. The version columns describe rows the table
-        # still has, so a deleted row is absent from every scan and `change_filter` refuses to compose
-        # a predicate for it; Lance answers from the transaction range instead. Audited identically —
-        # learning which rows a table LOST is as disclosing as learning which it gained.
-        data = dataplane.read_deleted_row_ids(ns, so, segments, begin_version=body.begin_version, end_version=body.end_version, branch=body.branch)
-    else:
-        predicate = changes.change_filter(begin_version=body.begin_version, end_version=body.end_version, kind=body.kind)
-        data = dataplane.read_changes(ns, so, segments, predicate=predicate, columns=body.columns, branch=body.branch)
+    # ONE CALL FOR ALL THREE KINDS: the window is one snapshot, opened at its end, and `deleted` is
+    # answered from the transaction range on that same handle rather than from a scan — learning which
+    # rows a table LOST is as disclosing as learning which it gained, so it is audited identically.
+    data = dataplane.read_changes(
+        ns, so, segments, begin_version=body.begin_version, end_version=body.end_version, kind=body.kind, columns=body.columns, branch=body.branch
+    )
     audit_read(subject=_reader(token), resource=id, version=body.end_version, columns=body.columns, change_kind=body.kind)
     # STREAMED, like the blob door above and for the same reason: a feed's size is a property of the
     # DATA and this door has no bound to offer — the version window is the only cursor, and one

@@ -96,8 +96,8 @@ ControlAction = Literal[
     # § D2 D-R2: the tag is the truth, this event is only the NOTIFICATION. A publication moves the
     # `published` ref, so it belongs to the same family as the other ref-plane mutations here — and a
     # consumer that misses it loses nothing, because the tag still answers "what is ready?".
-    # `extra` carries {from_version, to_version}: the RANGE (D-R3) a consumer turns straight into a
-    # row delta via `_row_created_at_version`, holding no bookmark of its own.
+    # `extra` carries {from_version, to_version}: the RANGE (D-R3) a consumer resolves by the change-feed
+    # consumer rule (`catalog.services.changes`), holding no bookmark of its own.
     "table_published",
     # ANNOTATION WORK, and the first control actions a service other than the catalog/maintenance pair
     # publishes. They belong in this vocabulary rather than a stream of their own for the reason the

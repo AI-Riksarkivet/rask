@@ -139,8 +139,8 @@ def build_stage_trigger(*, object_id: str, event_id: str, extra: dict[str, Any])
         "token": event_id,
         "dataset": f"{source}{DELIMITER}{table}",
         "namespace": source,
-        # THE RANGE (D-R3). A consumer resolves it with `_row_created_at_version > from AND <= to` and
-        # keeps no bookmark. `from_version` is None on a dataset's first publication, meaning
+        # THE RANGE (D-R3). A consumer resolves it by the change-feed consumer rule
+        # (`catalog.services.changes`) and keeps no bookmark. `from_version` is None on a dataset's first publication, meaning
         # "everything up to `to`" — carried as-is rather than coerced to 0, because "no prior
         # publication" and "published from version 0" are different claims.
         "from_version": extra.get("from_version"),

@@ -243,8 +243,8 @@ class PublicationResult(BaseModel):
     """What a publish attempt did, and to what.
 
     `from_version`/`to_version` are the RANGE (D-R3) the notification carries, so a consumer resolves
-    an exact row delta with `_row_created_at_version > from AND <= to` and keeps no bookmark of its
-    own. `from_version` is None the first time a dataset is published — there is no prior published
+    an exact row delta by the change-feed consumer rule (`catalog.services.changes`) and keeps no
+    bookmark of its own. `from_version` is None the first time a dataset is published — there is no prior published
     version, so the delta is "everything up to `to_version`".
     """
 

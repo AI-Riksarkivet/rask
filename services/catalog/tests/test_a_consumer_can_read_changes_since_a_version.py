@@ -168,7 +168,7 @@ def test_a_deleted_row_COMES_BACK_from_the_transaction_range(tmp_path, monkeypat
 
     from lance_namespace import LanceNamespace
 
-    payload = b"".join(dataplane.read_deleted_row_ids(cast("LanceNamespace", None), {}, ["t"], begin_version=begin, end_version=None))
+    payload = b"".join(dataplane.read_changes(cast("LanceNamespace", None), {}, ["t"], begin_version=begin, end_version=None, kind="deleted"))
     deleted = pyarrow.ipc.open_file(pa.py_buffer(payload)).read_all().column("_rowid").to_pylist()
 
     assert deleted == [rowid_of["b"]], f"the feed did not name the deleted row: {deleted} (b was {rowid_of['b']})"
@@ -206,7 +206,7 @@ def test_the_feed_HANDS_OUT_its_answer_in_pieces_rather_than_holding_all_of_it(t
     lance.write_dataset(pa.table({"id": pa.array(range(rows), pa.int64())}), uri, mode="create", data_storage_version="2.2", enable_stable_row_ids=True)
     monkeypatch.setattr(dataplane, "open_dataset", lambda *_a, **_kw: lance.dataset(uri))
 
-    feed = dataplane.read_changes(cast("LanceNamespace", None), {}, ["t"], predicate="_row_created_at_version >= 1")
+    feed = dataplane.read_changes(cast("LanceNamespace", None), {}, ["t"], begin_version=0, end_version=None, kind="inserted")
 
     assert not isinstance(feed, bytes | bytearray), "the door returned its whole answer as one object — nothing bounds what it holds"
     chunks = list(feed)

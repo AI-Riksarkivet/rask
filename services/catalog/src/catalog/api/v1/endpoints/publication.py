@@ -327,8 +327,8 @@ async def publish_table(
     # nothing: there is no new readiness to wake anyone for, and an event on a rejection would train
     # consumers to check whether a "published" notice actually published.
     #
-    # `extra` carries the RANGE, which is the whole point of the signal (D-R3) — a consumer turns
-    # {from, to} straight into `_row_created_at_version > from AND <= to` and keeps no bookmark.
+    # `extra` carries the RANGE, which is the whole point of the signal (D-R3) — a consumer resolves
+    # {from, to} by the change-feed consumer rule (`catalog.services.changes`) and keeps no bookmark.
     #
     # THIS COMMENT USED TO SAY a consumer that misses the event "loses nothing", because the tag still
     # answers "what is ready?". That is true of a POLLING consumer and false of the one that matters:

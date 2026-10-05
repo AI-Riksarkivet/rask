@@ -2133,44 +2133,66 @@ def read_changes(
     so: StorageOptions,
     table_id: list[str],
     *,
-    predicate: str,
+    begin_version: int,
+    end_version: int | None,
+    kind: changes.ChangeKind,
     columns: list[str] | None = None,
     branch: str | None = None,
 ) -> Iterator[bytes]:
-    """Rows matching a change-feed predicate, Arrow FILE-framed (§ J4), handed out in pieces.
+    """The rows that changed in ``(begin_version, end_version]``, Arrow FILE-framed (§ J4), handed out in pieces.
 
-    Its own scan rather than the query door's, because `QueryTableRequest` is a VECTOR model — `k` and
-    `vector` are required — so reusing it would mean inventing a vector to ask a question that has
-    nothing to do with similarity.
+    ONE SNAPSHOT, the window's end. The dataset is opened AT ``end_version`` — at the head it read, for
+    an open window — and every kind is answered from that handle, so a closed window answers the same set
+    however far the table has moved on (`changes` module docstring, THE WINDOW IS ONE SNAPSHOT). Before
+    any row is read the table must track row versions (`changes.require_row_versions`) and the window
+    must hold no transaction the version columns cannot describe (:func:`_require_followable_window`).
+
+    `inserted` and `updated` are scans with the predicate `services/changes.py` composes, which owns the
+    two documented windows; this function does not know what a change is and must not learn — a second
+    place that composes either is a second place it can drift from `file_format.md`. Its own scan rather
+    than the query door's, because `QueryTableRequest` is a VECTOR model (`k` and `vector` required).
+
+    `deleted` is not a predicate: the rows are gone from the scan, so Lance answers from the transaction
+    range instead (`DatasetDelta.get_deleted_row_ids()`, a single `_rowid` column). The publication delta
+    is insert-only while the cascade's writer hard-deletes with `when_not_matched_by_source_delete`, so
+    without this a retracted row left the tier without a trace any consumer could follow. Served on
+    demand rather than stamped into the publish event (owner decision, 2026-09-11): a deleted-row set is
+    unbounded, and stamping it turns a large delete into a large message on the bus.
 
     FILE FRAMING, not stream: this answers `application/vnd.apache.arrow.file`, matching the query
     door, and a consumer reading one framing as the other fails at the first batch rather than
-    degrading. `encode_arrow_stream` is the sibling for the stream doors and is deliberately not reused.
-
-    The predicate AND the projection come from `services/changes.py`, which owns the two documented
-    windows; this function does not know what a change is and must not learn — a second place that
-    composes either is a second place it can drift from `file_format.md`.
-
-    THE PROJECTION IS PART OF THE ANSWER, not a default: Lance returns only data columns unless the
-    version pseudo-columns are named, so a feed that passed the caller's `columns` through verbatim
-    handed back changed rows with no version on them and no way to ask for the next window.
+    degrading. THE PROJECTION IS PART OF THE ANSWER: Lance returns only data columns unless the version
+    pseudo-columns are named, so a feed that passed the caller's `columns` through verbatim handed back
+    changed rows with no version on them and no way to ask for the next window.
 
     IT YIELDS rather than returns, because the answer is sized by the DATA and this door has no bound
     to put on it — no `limit`, no page token, and none available: the version window is the only
-    cursor a consumer has, and one version can carry the whole table.
+    cursor a consumer has, and one version can carry the whole table. MEASURED 2026-09-22 (200k rows x
+    256B, 58.4 MB of Arrow over the feed's five projected columns): the materialising form peaked at
+    **147.6 MB of RSS for one call, 2.53x the payload**; yielding peaks at **60.1 MB, 1.03x**, and the
+    wire output is byte-identical (58,410,370 both). RSS is the measurement because `tracemalloc`
+    reports 0 MB for the scan and the encode, watching the Python heap while Arrow allocates elsewhere.
 
-    MEASURED 2026-09-22 (200k rows x 256B, 58.4 MB of Arrow over the feed's five projected columns),
-    same projection on both sides: the materialising form peaked at **147.6 MB of RSS for one call,
-    2.53x the payload**, because it held three copies at once — the scan's table, the IPC encoding
-    beside it, and `to_pybytes()` copying that onto the Python heap. Yielding peaks at **60.1 MB,
-    1.03x**, and the wire output is byte-identical (58,410,370 both), same schema, same rows.
-
-    RSS is the measurement because nothing cheaper can see this: `tracemalloc` reports 0 MB for the
-    scan and the encode, watching the Python heap while Arrow allocates elsewhere — the blind spot
-    [[LH-183]] paid for twice.
+    Raises:
+        InvalidInputError: an invalid window, or a predicate or projection Lance rejects.
+        TableVersionNotFoundError: ``end_version`` is not a version of the ref.
+        InvalidTableStateError: the table has no stable row ids, or the window spans a transaction the
+            version columns cannot describe or whose record cannot be read.
     """
-    dataset = open_dataset(ns, so, table_id, branch=branch)
-    changes.require_row_versions(dataset.has_stable_row_ids, table=".".join(table_id))
+    changes.validate_window(begin_version=begin_version, end_version=end_version)
+    table = ".".join(table_id)
+    dataset = open_dataset(ns, so, table_id, version=end_version, branch=branch)
+    changes.require_row_versions(dataset.has_stable_row_ids, table=table)
+    end = int(dataset.version)
+    spans = _window_spans(dataset, begin_version, end, branch)
+    if begin_version > 0:
+        _require_followable_window(spans, table=table)
+    if kind == "deleted":
+        # A window from version 0 names only rows the consumer never held, and `delta()` would need the
+        # manifest of version 1, which maintenance cleanup removes from every table older than its
+        # retention: that resynchronisation is answered empty rather than read.
+        return _deleted_row_ids(spans) if begin_version > 0 else _arrow_file_chunks(_DELETED_SCHEMA, None, iter(()))
+    predicate = changes.change_filter(begin_version=begin_version, end_version=end, kind=kind)
     projection = changes.feed_projection(columns, data_columns=dataset.schema.names)
     with caller_sql("invalid change-feed predicate"):
         scanner = dataset.scanner(filter=predicate, columns=projection)
@@ -2183,55 +2205,108 @@ def read_changes(
     return _arrow_file_chunks(scanner.projected_schema, first, batches)
 
 
-def read_deleted_row_ids(
-    ns: LanceNamespace,
-    so: StorageOptions,
-    table_id: list[str],
-    *,
-    begin_version: int,
-    end_version: int | None = None,
-    branch: str | None = None,
-) -> Iterator[bytes]:
-    """The `_rowid`s deleted in ``(begin_version, end_version]``, Arrow FILE-framed (§ J4, LH-008).
+class _WindowSpan(BaseModel):
+    """The part of a window one ref committed: versions ``(low, high]`` of ``handle``."""
 
-    ITS OWN DOOR BECAUSE IT IS ITS OWN QUESTION. `read_changes` scans the table with a predicate over
-    the version columns, and those columns describe rows the table STILL HAS — a deleted row is absent
-    from every scan, so no filter can name it. Lance answers from the TRANSACTION range instead:
-    `DatasetDelta.get_deleted_row_ids()` streams a single `_rowid` column (verified against the
-    installed pylance; it requires stable row ids, which `changes.require_row_versions` checks first).
+    model_config = {"arbitrary_types_allowed": True}
 
-    WHY THE FEED NEEDS IT AT ALL: the publication delta is insert-only while the cascade's writer
-    hard-deletes with `when_not_matched_by_source_delete`, so a retracted row left the tier without a
-    trace any consumer could follow and silver and gold served it indefinitely.
+    handle: lance.LanceDataset
+    #: The ref ``handle`` is on, `None` for main — what `checkout_version((ref, v))` names.
+    ref: str | None
+    low: int
+    high: int
 
-    SERVED ON DEMAND rather than stamped into the publish event (owner decision, 2026-09-11): a
-    deleted-row set is unbounded, so stamping it turns a large delete into a large message on the bus.
-    Publishing a version range and letting the consumer pull is what every change-data system of this
-    shape does.
 
-    ONLY `_rowid`, and that is Lance's answer rather than a projection choice — the rows are gone, so
-    there is nothing else left to return. A consumer resolves them against whatever it stored when it
-    read the row.
+def _window_spans(dataset: lance.LanceDataset, begin: int, end: int, branch: str | None) -> list[_WindowSpan]:
+    """``(begin, end]`` split by the ref that committed each version, newest first.
 
-    THE WINDOW IS ALWAYS CLOSED, because `delta()` refuses an open one — measured against the installed
-    pylance: `end_version=None` raises "Must specify both with_begin_version and with_end_version"
-    (`lance/src/dataset/delta.rs`). The scan doors accept "everything since", so an omitted
-    `end_version` is closed HERE at the version of the dataset this call opened.
-    That is exact rather than a separately-read bound: it is the same handle the delta is read from, so
-    there is no moment between the two in which a write could land — which is the hazard
-    `changes.change_filter` refuses to take by defaulting a bound it would have to read separately.
+    A branch's own versions start above its `parent_version`; everything at or below it is its parent's
+    history, read on the parent's handle at that version (`checkout_version((parent_branch, v))`, where
+    `None` is main; measured on pylance 12.0.0, nested branches included). The branch's first manifest
+    carries the parent's version number and no transaction a write made, and `read_transaction` on it
+    PANICS on 12.0.0 (`not yet implemented`), while the versions below it do not exist on the branch at
+    all — so no span ever asks a branch for a version at or below its branch point.
     """
-    dataset = open_dataset(ns, so, table_id, branch=branch)
-    changes.require_row_versions(dataset.has_stable_row_ids, table=".".join(table_id))
+    spans: list[_WindowSpan] = []
+    handle, high, name = dataset, end, recorded_branch(branch)
+    while True:
+        if name is None:
+            spans.append(_WindowSpan(handle=handle, ref=None, low=begin, high=high))
+            break
+        listed = handle.branches.list().get(name) or {}
+        parent = listed.get("parent_version")
+        floor = int(parent) if isinstance(parent, int) else 0
+        spans.append(_WindowSpan(handle=handle, ref=name, low=max(begin, floor), high=high))
+        if begin >= floor:
+            break
+        parent_branch = listed.get("parent_branch")
+        name = parent_branch if isinstance(parent_branch, str) else None
+        handle, high = handle.checkout_version((name, floor)), floor
+    return [span for span in spans if span.high > span.low]
+
+
+def _require_followable_window(spans: list[_WindowSpan], *, table: str) -> None:
+    """Refuse a window spanning a transaction the version columns cannot describe (`changes.unfollowable`).
+
+    One `read_transaction` per version in the window, and the window's BEGIN manifest must still exist:
+    `delta()` reads it for the `deleted` kind, so a window whose begin maintenance cleaned up is refused
+    here for every kind alike rather than answered by the scans and failed by the delta. A failed read
+    refuses the window rather than answering it: a cleaned-up version's manifest is gone (OSError,
+    measured on 12.0.0), and a read that PANICS raises a pyo3 `PanicException`, which derives from
+    BaseException and cannot be caught by name.
+
+    Raises:
+        InvalidTableStateError: a version in the window is unfollowable or unreadable.
+    """
+    for span in spans:
+        for version in range(span.high, span.low, -1):
+            try:
+                transaction = span.handle.read_transaction(version)
+            except BaseException as exc:  # noqa: BLE001 — a Rust PANIC is not an Exception
+                if isinstance(exc, KeyboardInterrupt | SystemExit):
+                    raise
+                raise InvalidTableStateError(
+                    f"the change window on table {table} cannot be followed: version {version}'s transaction is unreadable "
+                    f"({type(exc).__name__}). Resynchronise from begin_version=0."
+                ) from exc
+            if (reason := changes.unfollowable(transaction)) is not None:
+                raise InvalidTableStateError(
+                    f"the change window on table {table} cannot be followed: version {version} {reason}, so the version columns "
+                    "do not describe what changed. Resynchronise from begin_version=0."
+                )
+    if not spans:
+        return
+    lowest = spans[-1]
+    try:
+        lowest.handle.checkout_version((lowest.ref, lowest.low))
+    except BaseException as exc:  # noqa: BLE001 — a Rust PANIC is not an Exception
+        if isinstance(exc, KeyboardInterrupt | SystemExit):
+            raise
+        raise InvalidTableStateError(
+            f"the change window on table {table} cannot be followed: its begin version {lowest.low} is no longer retained "
+            f"({type(exc).__name__}). Resynchronise from begin_version=0."
+        ) from exc
+
+
+#: The deleted-row feed's schema: Lance's own answer is a single `_rowid` column.
+_DELETED_SCHEMA: Final = pa.schema([pa.field("_rowid", pa.uint64())])
+
+
+def _deleted_row_ids(spans: list[_WindowSpan]) -> Iterator[bytes]:
+    """The `_rowid`s each span's ref deleted, Arrow FILE-framed.
+
+    One `delta()` per span, because `delta()` on a branch refuses a begin below its branch point (the
+    manifest is not there; measured on 12.0.0). Each is closed (`delta()` refuses an open window,
+    "Must specify both with_begin_version and with_end_version"). The caller asks only for a window with
+    a begin above 0, whose begin manifest `_require_followable_window` has already found.
+    """
+    readers = []
     with caller_sql("invalid deleted-row window"):
-        reader = dataset.delta(begin_version=begin_version, end_version=end_version if end_version is not None else dataset.version).get_deleted_row_ids()
-        # Streamed for the same reason `read_changes` is, and the count is no smaller for being one
-        # column: a bulk delete names every row it removed, so `read_all()` sized this answer by the
-        # DELETION and then copied it twice more on the way out.
-        schema = reader.schema
-        batches = iter(reader)
+        for span in spans:
+            readers.append(span.handle.delta(begin_version=span.low, end_version=span.high).get_deleted_row_ids())
+        batches = (batch for reader in readers for batch in reader)
         first = next(batches, None)
-    return _arrow_file_chunks(schema, first, batches)
+    return _arrow_file_chunks(readers[0].schema if readers else _DELETED_SCHEMA, first, batches)
 
 
 def filter_internal_metadata(metadata: dict[str, str]) -> dict[str, str]:
