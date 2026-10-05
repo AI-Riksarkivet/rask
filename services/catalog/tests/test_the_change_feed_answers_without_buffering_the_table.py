@@ -1,13 +1,10 @@
-"""The change-feed ROUTE hands its answer out progressively, not the service function alone.
+"""The change-feed ROUTE refuses a bad request before it starts streaming, not as a truncated 200.
 
-`dataplane.read_changes` yielding is necessary and not sufficient: a route that wraps a generator in
-`Response(content=...)` re-buffers the whole thing and puts every byte back in the pod, with the
-service-level test still green. So this drives the door through the app and asserts the property that
-only the wire can show — the response carries no `Content-Length`, because FastAPI cannot know one
-without consuming the generator first.
-
-The second assertion is that streaming did not cost the contract: the body is still a complete Arrow
-FILE (`open_file` validates the footer, which arrives as the last chunk) carrying every row.
+The feed streams its answer, so anything that fails after the first byte reaches the caller as a 200
+carrying a broken Arrow file. What the scan rejects must therefore be rejected while the endpoint can
+still answer with a status. That the stream holds the pod's memory down through the middleware the
+service ships is measured from outside a real catalog process by
+`tests/integration/test_a_wide_read_stays_under_the_catalog_memory_limit.py`.
 """
 
 from __future__ import annotations
@@ -18,7 +15,6 @@ from typing import Any
 
 import lance
 import pyarrow as pa
-import pyarrow.ipc
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -29,8 +25,7 @@ from catalog.core.config import Settings
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 
-#: Enough rows that the scan spans several batches — one batch would make "it streamed" unfalsifiable.
-_ROWS = 50_000
+_ROWS = 10
 
 
 @pytest.fixture
@@ -81,43 +76,3 @@ def test_a_COLUMN_THE_TABLE_DOES_NOT_HAVE_is_a_4xx_and_not_a_truncated_200(clien
     )
 
     assert 400 <= response.status_code < 500, f"an unknown column answered {response.status_code}, not a client error"
-
-
-def test_the_stream_survives_the_MIDDLEWARE_THE_SERVICE_ACTUALLY_SHIPS(table_uri: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The fixture above builds a bare app; production does not.
-
-    Middleware is where a streaming response quietly stops streaming, and the endpoint test above
-    would stay green through it while the pod paid exactly what it paid before. `main.py` adds two:
-    `BodySizeLimitMiddleware` and `WriteConcurrencyLimitMiddleware`.
-
-    WHAT THE ASSERTION CATCHES, measured rather than reasoned: a middleware that drains
-    `response.body_iterator` and returns a plain `Response` sets `Content-Length` (32 on a two-chunk
-    probe), so its absence is real evidence the bytes were never collected. Deriving from
-    `BaseHTTPMiddleware` is NOT by itself the hazard — a pass-through one was driven here and streams
-    with no `Content-Length`; it is COLLECTING the body that does it, whatever the base class.
-
-    Driving the real pair rather than reading their definitions, because which middleware the service
-    mounts is the kind of fact that changes without this route noticing.
-    """
-    from catalog.api.load_shed import WriteConcurrencyLimitMiddleware
-    from service_kit.body_limit import BodySizeLimitMiddleware
-
-    settings = Settings(LANCE_S3_ACCESS_KEY_ID="k", LANCE_S3_SECRET_ACCESS_KEY="s")
-    application = FastAPI()
-    install_problem_handlers(application, logging.getLogger(__name__))
-    application.include_router(door.management_router)
-    application.state.dapr_client = None
-    application.add_middleware(BodySizeLimitMiddleware, max_bytes=settings.max_body_bytes)
-    application.add_middleware(WriteConcurrencyLimitMiddleware, max_concurrent=settings.max_concurrent_writes)
-
-    monkeypatch.setattr(door.dataplane, "open_dataset", lambda *_a, **_kw: lance.dataset(table_uri))
-    application.dependency_overrides[get_settings] = lambda: settings
-    application.dependency_overrides[get_namespace] = lambda: object()
-    application.dependency_overrides[get_storage_options] = lambda: {}
-
-    with TestClient(application) as client:
-        response = client.post("/management/v1/table/t/changes", json={"begin_version": 0, "kind": "inserted"})
-
-    assert response.status_code == 200, response.text
-    assert "content-length" not in response.headers, "a middleware buffered the stream to measure it"
-    assert pyarrow.ipc.open_file(pa.py_buffer(response.content)).read_all().num_rows == _ROWS

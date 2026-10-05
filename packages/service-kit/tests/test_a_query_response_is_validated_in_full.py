@@ -63,7 +63,7 @@ def test_a_response_whose_buffers_lie_is_refused(offsets: bytes) -> None:
     reader = CatalogTableReader(_Answers(body.replace(_OFFSETS, offsets)), ["ns", "t"])
 
     with pytest.raises(ArrowBodyError):
-        reader.to_table()
+        reader.to_table(version=1)
 
 
 def test_a_projection_of_a_field_that_stores_nothing_is_read() -> None:
@@ -71,4 +71,4 @@ def test_a_projection_of_a_field_that_stores_nothing_is_read() -> None:
     nulls = pa.table({"n": pa.nulls(100_000)})
     reader = CatalogTableReader(_Answers(_file(nulls)), ["ns", "t"])
 
-    assert reader.to_table().equals(nulls)
+    assert reader.to_table(version=1, limit=nulls.num_rows).equals(nulls)

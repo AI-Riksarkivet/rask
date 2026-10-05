@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any, cast
 from lance_namespace import ErrorCode, LanceNamespaceError, ServiceUnavailableError, UnsupportedOperationError
 
 from service_kit.lakehouse.spec_routes import is_spec_route
+from service_kit.lancekit.outage import reads_as_store_outage
 from service_kit.problem import PROBLEM_JSON, problem_body
 
 
@@ -195,6 +196,10 @@ def install_problem_handlers(app: FastAPI, log: logging.Logger) -> None:
 
     @app.exception_handler(LanceNamespaceError)
     async def handle_domain_error(request: Request, exc: LanceNamespaceError) -> JSONResponse:
+        # The native backend reports an object store that did not answer as a typed InternalError (500);
+        # it is the same outage `handle_unexpected_error` answers 503 for, in the backend's own dialect.
+        if int(exc.code) == ErrorCode.INTERNAL and reads_as_store_outage(exc):
+            return _store_unavailable(request, exc)
         status, body = problem_detail(exc)
         # Same split as the redaction: Unsupported is the backend answering "I don't do that", so it gets
         # a plain info line. A traceback at ERROR is for faults — spending one on a capability answer is
@@ -207,6 +212,14 @@ def install_problem_handlers(app: FastAPI, log: logging.Logger) -> None:
         elif status >= 500:
             log.exception("domain_error", extra={"method": request.method, "path": request.url.path, "status": status})
         return JSONResponse(status_code=status, content=body, media_type=PROBLEM_JSON)
+
+    def _store_unavailable(request: Request, exc: Exception) -> JSONResponse:
+        log.warning("object_store_unavailable", extra={"method": request.method, "path": request.url.path, "error": str(exc)[:300]})
+        return JSONResponse(
+            status_code=503,
+            content=problem_body(ErrorCode.SERVICE_UNAVAILABLE, status=503, title="ServiceUnavailable", detail="Service Unavailable"),
+            media_type=PROBLEM_JSON,
+        )
 
     @app.exception_handler(RequestValidationError)
     async def handle_validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
@@ -259,6 +272,12 @@ def install_problem_handlers(app: FastAPI, log: logging.Logger) -> None:
 
     @app.exception_handler(Exception)
     async def handle_unexpected_error(request: Request, exc: Exception) -> JSONResponse:
+        # AN OBJECT STORE THAT DID NOT ANSWER IS AN OUTAGE, and every Lance call reaches this handler
+        # through the same bare `ValueError`/`OSError`. Classified here, at the one seam every untyped
+        # failure passes, rather than at each of the call sites that open, scan or commit: a 503 tells
+        # the caller to retry and the operator to look at the store, where a 500 says this service broke.
+        if reads_as_store_outage(exc):
+            return _store_unavailable(request, exc)
         # Internals (native/Arrow/S3 error text, paths) leak via logs only — never the body.
         log.exception("unhandled_error", extra={"method": request.method, "path": request.url.path})
         return JSONResponse(

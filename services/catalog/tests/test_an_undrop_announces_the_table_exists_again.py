@@ -63,7 +63,7 @@ def client(tmp_path: Path, emitted: list[dict[str, Any]], monkeypatch: pytest.Mo
     control = tmp_path / "control"
     control.mkdir()
     settings = SimpleNamespace(
-        delimiter="$", registry_root=str(control), storage_options=lambda: {}, trash_grace_days=7, fga_enabled=False, warehouses_enabled=False
+        delimiter="$", registry_root=str(control), storage_options=lambda **_: {}, trash_grace_days=7, fga_enabled=False, warehouses_enabled=False
     )
     for dependency, value in (
         (SettingsDep, settings),

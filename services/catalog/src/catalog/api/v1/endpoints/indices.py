@@ -45,7 +45,7 @@ from lance_namespace import (
 )
 
 from catalog.api import lineage_deps
-from catalog.api.dependencies import LineageEmitterDep, NamespaceDep, SettingsDep, StorageOptionsDep
+from catalog.api.dependencies import DataNamespaceDep, LineageEmitterDep, NamespaceDep, SettingsDep, StorageOptionsDep
 from catalog.api.security import CurrentToken
 from catalog.core.config import Settings
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
@@ -75,6 +75,7 @@ async def create_index(
     body: CreateTableIndexRequest,
     request: Request,
     ns: NamespaceDep,
+    data_ns: DataNamespaceDep,
     settings: SettingsDep,
     so: StorageOptionsDep,
     token: CurrentToken,
@@ -91,7 +92,7 @@ async def create_index(
     await run_in_threadpool(partial(open_dataset_for_commit, ns, so, segments))
     if (queued := await _queue_build(request, ns, settings, segments, body, kind=VECTOR_INDEX)) is not None:
         return CreateTableIndexResponse(transaction_id=queued)
-    response: CreateTableIndexResponse = await run_in_threadpool(native.call, ns, "create_table_index", body)
+    response: CreateTableIndexResponse = await run_in_threadpool(native.call, data_ns, "create_table_index", body)
     await lineage_deps.emit_measured_write(
         emitter,
         segments,

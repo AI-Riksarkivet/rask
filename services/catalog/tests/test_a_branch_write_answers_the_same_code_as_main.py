@@ -72,7 +72,7 @@ def _code(ns, *, branch: str | None, on: str, payload: pa.Table) -> int | None: 
     """Drive merge_insert and return the spec code it answered, or None if it did not fail."""
     request = MergeInsertIntoTableRequest(id=TABLE_ID, on=on, when_matched_update_all=True, branch=branch)
     try:
-        merge_insert_into_table(ns, {}, request, _ipc(payload), max_bytes=_BODY_LIMIT)
+        merge_insert_into_table(ns, {}, request, _ipc(payload), max_bytes=_BODY_LIMIT, data_ns=ns)
     except Exception as exc:  # noqa: BLE001 — the CODE is the subject; the class is only how it carries one
         return getattr(exc, "code", None)
     return None

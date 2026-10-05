@@ -35,7 +35,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Final, Protocol, runtime_checkable
 
 import lance
 import pyarrow as pa
@@ -154,37 +154,41 @@ class CatalogTransport(Protocol):
     def list_versions(self, table_id: list[str], *, limit: int | None = None) -> list[CatalogVersion]: ...
 
 
+#: The bytes one page of a catalog read asks for: a quarter of the catalog's default 16 MiB answer
+#: ceiling (`LANCE_QUERY_MAX_RESPONSE_MB`), so a page sized from a measured row width stays under it with
+#: room for the catalog estimating that width differently ([[LH-247]]).
+_PAGE_BYTES: Final = 4 << 20
+#: The first page's row count, before any row width is known.
+_FIRST_PAGE_ROWS: Final = 64
+
+
 class CatalogTableReader:
     """Reads a table through the lance-ns catalog ``/query`` contract.
 
-    ``table_id`` is the catalog identifier as a list (``[namespace, table]``);
-    ``scan_k`` is the large ``k`` used to express a filter/columns-only scan (the
-    endpoint has no plain-scan verb). Decodes the ``application/vnd.apache.arrow.file``
-    response with :func:`~service_kit.lancekit.arrow_ipc.decode_arrow_response`, which validates
-    it in full and raises :class:`~service_kit.lancekit.arrow_ipc.ArrowBodyError` for bytes that are not
-    a valid Arrow IPC body.
+    ``table_id`` is the catalog identifier as a list (``[namespace, table]``). A scan is expressed as an
+    empty vector (the endpoint has no plain-scan verb) and read in PAGES of a bounded ``k`` plus an
+    ``offset``, every page pinned to one table version: the catalog refuses a ``k`` whose answer could
+    exceed its ceiling, because it builds each answer whole in memory, so an unbounded logical read is
+    many bounded answers, never one. The first page is :data:`_FIRST_PAGE_ROWS` rows; each later page is
+    :data:`_PAGE_BYTES` worth of rows at the width the previous page measured. A page shorter than the
+    ``k`` it asked for is the last. Decodes each ``application/vnd.apache.arrow.file`` response with
+    :func:`~service_kit.lancekit.arrow_ipc.decode_arrow_response`, which validates it in full and raises
+    :class:`~service_kit.lancekit.arrow_ipc.ArrowBodyError` for bytes that are not a valid Arrow IPC body.
     """
 
-    def __init__(
-        self,
-        transport: CatalogTransport,
-        table_id: list[str],
-        *,
-        scan_k: int = 1_000_000_000,
-    ) -> None:
+    def __init__(self, transport: CatalogTransport, table_id: list[str]) -> None:
         self._transport = transport
         self._id = table_id
-        self._scan_k = scan_k
 
     def _build_request(
         self,
         *,
         columns: list[str] | None,
         filter: str | None,
-        limit: int | None,
-        offset: int | None,
+        k: int,
+        offset: int,
         with_row_id: bool,
-        version: int | None,
+        version: int,
     ) -> QueryTableRequest:
         from lance_namespace_urllib3_client import (  # optional dep: catalog backend only
             QueryTableRequest,
@@ -194,12 +198,12 @@ class CatalogTableReader:
 
         return QueryTableRequest(
             id=self._id,
-            # empty vector + large k ⇒ scan intent (no plain-scan verb exists)
+            # empty vector ⇒ scan intent (no plain-scan verb exists)
             vector=QueryTableRequestVector(single_vector=[]),
-            k=limit if limit is not None else self._scan_k,
+            k=k,
             columns=QueryTableRequestColumns(column_names=columns) if columns else None,
             filter=filter,
-            offset=offset,
+            offset=offset or None,
             with_row_id=with_row_id or None,
             version=version,
         )
@@ -214,21 +218,29 @@ class CatalogTableReader:
         with_row_id: bool = False,
         version: int | None = None,
     ) -> pa.Table:
-        """Scan the table — ``version`` pins a HISTORICAL snapshot (catalog time-travel;
-        a bad/reclaimed version is the catalog's 404, translated to ``NotFoundError``).
+        """Scan the table, page by page — ``version`` pins a HISTORICAL snapshot (catalog time-travel;
+        a bad/reclaimed version is the catalog's 404, translated to ``NotFoundError``), and an unpinned
+        read pins the version current when it starts, so its pages cannot straddle a commit.
         The extra defaulted kwarg keeps this a :class:`TableReader`."""
-        request = self._build_request(
-            columns=columns,
-            filter=filter,
-            limit=limit,
-            offset=offset,
-            with_row_id=with_row_id,
-            version=version,
-        )
-        # The response is bytes from another service, validated in full like a caller's body, because
-        # framing that parses says nothing about the buffers it frames. It is not held to its size as a
-        # body is: the query bounds a response, and an honest projection can be as dense as a hostile body.
-        return decode_arrow_response(self._transport.query(request))
+        pinned = version if version is not None else self.table_version()
+        start = offset or 0
+        pages: list[pa.Table] = []
+        read = 0
+        page_rows = _FIRST_PAGE_ROWS
+        while True:
+            k = max(1, page_rows if limit is None else min(page_rows, limit - read))
+            request = self._build_request(columns=columns, filter=filter, k=k, offset=start + read, with_row_id=with_row_id, version=pinned)
+            # The response is bytes from another service, validated in full like a caller's body, because
+            # framing that parses says nothing about the buffers it frames. It is not held to its size as a
+            # body is: the query bounds a response, and an honest projection can be as dense as a hostile body.
+            page = decode_arrow_response(self._transport.query(request))
+            pages.append(page)
+            read += page.num_rows
+            if page.num_rows < k or (limit is not None and read >= limit):
+                break
+            page_rows = max(1, _PAGE_BYTES // -(-page.nbytes // page.num_rows))
+        table = pa.concat_tables(pages)
+        return table if limit is None else table.slice(0, limit)
 
     def count_rows(self, filter: str | None = None, *, version: int | None = None) -> int:
         return self._transport.count(self._id, filter, version=version)
@@ -281,7 +293,7 @@ class LocalCatalogTransport:
         table = self._at_version(request.version).to_table(
             columns=columns,
             filter=request.filter,
-            limit=request.k if request.k is not None and request.k < 1_000_000_000 else None,
+            limit=request.k,
             offset=request.offset,
             with_row_id=bool(request.with_row_id),
         )

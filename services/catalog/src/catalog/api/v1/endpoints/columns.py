@@ -37,7 +37,7 @@ from lance_namespace import (
 from openfga_sdk import OpenFgaClient
 
 from catalog.api import fga_deps, lineage_deps
-from catalog.api.dependencies import FgaClientDep, LineageEmitterDep, NamespaceDep, SettingsDep, StorageOptionsDep
+from catalog.api.dependencies import DataNamespaceDep, FgaClientDep, LineageEmitterDep, NamespaceDep, SettingsDep, StorageOptionsDep
 from catalog.api.security import CurrentToken, Principal
 from catalog.core import provenance_guard
 from catalog.core.config import Settings
@@ -218,7 +218,7 @@ async def drop_columns(
 # missing `status_code` would go unnoticed until a backend arrived and silently answered 200.
 @router.post("/{id}/backfill_column", response_model_exclude_none=True, status_code=202)
 def backfill_column(
-    id: str, body: AlterTableBackfillColumnsRequest, ns: NamespaceDep, settings: SettingsDep, so: StorageOptionsDep
+    id: str, body: AlterTableBackfillColumnsRequest, ns: NamespaceDep, data_ns: DataNamespaceDep, settings: SettingsDep, so: StorageOptionsDep
 ) -> AlterTableBackfillColumnsResponse:
     """Backfill values into columns via the native driver — wraps ``alter_table_backfill_columns``.
 
@@ -228,7 +228,7 @@ def backfill_column(
     """
     body.id = reconcile_body_id(parse_identifier(id, settings.delimiter), body.id)
     judged_native_version(ns, so, list(body.id or []), version=None)
-    return native.call(ns, "alter_table_backfill_columns", body)
+    return native.call(data_ns, "alter_table_backfill_columns", body)
 
 
 @router.post("/{id}/update_field_metadata", response_model_exclude_none=True)

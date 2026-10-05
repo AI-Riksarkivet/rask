@@ -15,7 +15,7 @@ from lance_namespace import (
 )
 from openfga_sdk import OpenFgaClient
 
-from catalog.core.config import Settings, get_settings
+from catalog.core.config import Settings, StorePlane, get_settings
 from catalog.core.identifiers import parse_identifier
 from catalog.core.lineage_emit import LineageEmitter, NoopEmitter, OriginatorBoundEmitter, is_person_subject
 from catalog.core.namespace import build_namespace_for_root
@@ -160,7 +160,7 @@ def _fresh_cached_binding(cache: dict[str, dict[str, str]], top_ns: str, ttl_sec
     return entry
 
 
-def namespace_for_root(request: Request, settings: Settings, root_uri: str, *, endpoint: str | None = None) -> LanceNamespace:
+def namespace_for_root(request: Request, settings: Settings, root_uri: str, *, endpoint: str | None = None, plane: StorePlane = "metadata") -> LanceNamespace:
     """The (cached) namespace connection rooted at ``root_uri`` — one per warehouse bucket.
 
     PUBLIC on purpose — the warehouse/namespace lifecycle endpoints resolve bucket-rooted connections
@@ -171,10 +171,12 @@ def namespace_for_root(request: Request, settings: Settings, root_uri: str, *, e
     endpoint is caller-owned and may be corrected, and a root-only key would serve the connection built
     against the OLD store for the life of the process — an open against the wrong endpoint, which reads
     as a missing table rather than as stale configuration."""
-    conns: dict[tuple[str, str | None], LanceNamespace] = request.app.state.warehouse_namespaces
+    conns: dict[tuple[str, str | None], LanceNamespace] = (
+        request.app.state.warehouse_namespaces if plane == "metadata" else request.app.state.warehouse_data_namespaces
+    )
     conn = conns.get((root_uri, endpoint))
     if conn is None:
-        conn = build_namespace_for_root(settings, root_uri, endpoint=endpoint)
+        conn = build_namespace_for_root(settings, root_uri, endpoint=endpoint, plane=plane)
         conns[(root_uri, endpoint)] = conn
     return conn
 
@@ -257,6 +259,27 @@ async def namespace_for_top_ns(request: Request, settings: Settings, top_ns: str
 NamespaceDep = Annotated[LanceNamespace, Depends(get_namespace)]
 
 
+async def get_data_namespace(request: Request, settings: SettingsDep, ns: NamespaceDep) -> LanceNamespace:
+    """The request's namespace connection under the DATA plane's object-store bounds ([[LH-247]]).
+
+    For the native operations that move rows (`/query`, `count_rows`, inserts, merges, index builds,
+    `analyze_plan`): the metadata connection's whole-request bound would cut off a legitimate transfer
+    (`CatalogReadBounds`). It is the data twin OF the connection :func:`get_namespace` resolved, found by
+    identity, so it follows the same warehouse routing without a second binding read, and a connection
+    that is neither the default nor a cached warehouse one (a test's override) is handed back unchanged.
+    """
+    state = request.app.state
+    if ns is getattr(state, "namespace", None):
+        return state.data_namespace
+    for (root_uri, endpoint), conn in getattr(state, "warehouse_namespaces", {}).items():
+        if conn is ns:
+            return namespace_for_root(request, settings, root_uri, endpoint=endpoint, plane="data")
+    return ns
+
+
+DataNamespaceDep = Annotated[LanceNamespace, Depends(get_data_namespace)]
+
+
 def get_fga_client(request: Request) -> OpenFgaClient | None:
     """The wired OpenFGA client from catalog.state, or ``None`` when FGA isn't provisioned.
 
@@ -271,8 +294,13 @@ FgaClientDep = Annotated[OpenFgaClient | None, Depends(get_fga_client)]
 
 
 def get_storage_options(settings: SettingsDep) -> dict[str, str]:
-    """Object-store options (S3/MinIO credentials, region) for direct pylance access."""
-    return settings.storage_options()
+    """Object-store options (S3/MinIO credentials, region) for direct pylance access, under the DATA plane's bounds.
+
+    Every door opens its pylance handle with these and reads or writes rows through it, and a handle's
+    object-store bounds are fixed when it opens, so they are the data plane's (`CatalogReadBounds`). A
+    door's first store call is the metadata connection's describe, which finds a silent store first.
+    """
+    return settings.storage_options(plane="data")
 
 
 StorageOptionsDep = Annotated[dict[str, str], Depends(get_storage_options)]

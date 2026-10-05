@@ -36,6 +36,7 @@ from catalog.api import fga_deps, lineage_deps
 from catalog.api import idempotency as idem
 from catalog.api.dependencies import (
     ControlEmitterDep,
+    DataNamespaceDep,
     FgaClientDep,
     LineageEmitterDep,
     NamespaceDep,
@@ -50,7 +51,7 @@ from catalog.core.formats import reject_unsupported_properties
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.core.lineage_emit import COMPACT_TABLE, DELETE, INSERT, MERGE_INSERT, OVERWRITE_TABLE, UPDATE, merge_source_pin, parse_run_facets
 from catalog.core.modes import CreateMode, InsertMode
-from catalog.core.namespace import judged_native_version
+from catalog.core.namespace import judged_native_dataset, judged_native_version
 from catalog.core.serialization import dump
 from catalog.core.vending import table_has_branch
 from catalog.schemas import (
@@ -454,6 +455,7 @@ async def insert_into_table(
 async def merge_insert_into_table(
     id: str,
     ns: NamespaceDep,
+    data_ns: DataNamespaceDep,
     settings: SettingsDep,
     so: StorageOptionsDep,
     token: CurrentToken,
@@ -521,7 +523,9 @@ async def merge_insert_into_table(
         use_index=use_index,
         branch=branch,
     )
-    response: MergeInsertIntoTableResponse = await run_in_threadpool(dataplane.merge_insert_into_table, ns, so, req, data, max_bytes=settings.max_body_bytes)
+    response: MergeInsertIntoTableResponse = await run_in_threadpool(
+        partial(dataplane.merge_insert_into_table, ns, so, req, data, max_bytes=settings.max_body_bytes, data_ns=data_ns)
+    )
     # merge can add/change columns (schema drift at this version) → record the post-write schema, read
     # PINNED at the version this merge produced so a concurrent writer can't smuggle in a later schema.
     await lineage_deps.emit_measured_write(
@@ -760,15 +764,19 @@ def _reader(token: object) -> str:
 
 
 @router.post("/{id}/query", responses=_serves(ARROW_FILE), response_class=ArrowFileResponse)
-def query_table(id: str, body: QueryTableRequest, ns: NamespaceDep, settings: SettingsDep, so: StorageOptionsDep, token: CurrentToken = None) -> Response:
+def query_table(
+    id: str, body: QueryTableRequest, ns: NamespaceDep, data_ns: DataNamespaceDep, settings: SettingsDep, so: StorageOptionsDep, token: CurrentToken = None
+) -> Response:
     """Run a query and return matching rows as an Arrow-IPC file — wraps ``query_table``."""
     body.id = reconcile_body_id(parse_identifier(id, settings.delimiter), body.id)
     dataplane.refuse_a_branch_this_door_cannot_honour(body.branch, door="query_table")
     dataplane.refuse_an_unbounded_boolean_chain(body.filter, field="filter")
     # PINNED TO THE VERSION WHOSE BASES WERE JUDGED ([[LH-279]]): the native query opens the table inside
     # Rust, where a planted base answered with another table's rows (lh279 m2).
-    body.version = judged_native_version(ns, so, list(body.id or []), version=body.version)
-    response = native.call(ns, "query_table", body)
+    judged = judged_native_dataset(ns, so, list(body.id or []), version=body.version)
+    dataplane.refuse_an_unbounded_result(judged, k=body.k, offset=body.offset, columns=body.columns, max_bytes=settings.query_max_response_mb << 20)
+    body.version = int(judged.version)
+    response = native.call(data_ns, "query_table", body)
     if not isinstance(response, QueryTableResponse) or not isinstance(response.data, bytes):
         raise TypeError(f"query_table must answer a QueryTableResponse carrying Arrow bytes, got {type(response).__name__}: {response!r:.200}")
     # AFTER the read, not before: an audit line for rows nobody received is a false record, and this
@@ -850,7 +858,13 @@ def table_changes(id: str, body: TableChangesRequest, ns: NamespaceDep, settings
 @router.post("/{id}/count_rows", operation_id="count_table_rows")
 @router.get("/{id}/count_rows", operation_id="count_table_rows_compat_get")
 def count_table_rows(
-    id: str, ns: NamespaceDep, settings: SettingsDep, so: StorageOptionsDep, body: CountTableRowsRequest | None = None, token: CurrentToken = None
+    id: str,
+    ns: NamespaceDep,
+    data_ns: DataNamespaceDep,
+    settings: SettingsDep,
+    so: StorageOptionsDep,
+    body: CountTableRowsRequest | None = None,
+    token: CurrentToken = None,
 ) -> Response:
     """Count the table's rows on the ref the request names — ``count_table_rows``; returns plain text.
 
@@ -864,7 +878,7 @@ def count_table_rows(
     # transparently as a bare number for the REST namespace." It answered `text/plain` and survived
     # only by accident — a bare number happens to parse as JSON — while its two siblings below, whose
     # payload is a STRING, did not.
-    counted = dataplane.count_rows(ns, so, req)
+    counted = dataplane.count_rows(ns, so, req, data_ns=data_ns)
     # A COUNT IS A READ. It answers a question about the rows without returning them, and a subject that
     # can count is a subject that can probe — so it belongs in the same log as a query (§ J1).
     audit_read(subject=_reader(token), resource=id, version=getattr(req, "version", None))
@@ -900,13 +914,18 @@ def explain_table_query_plan(
 
 
 @router.post("/{id}/analyze_plan")
-def analyze_table_query_plan(id: str, body: AnalyzeTableQueryPlanRequest, ns: NamespaceDep, settings: SettingsDep, so: StorageOptionsDep) -> Response:
+def analyze_table_query_plan(
+    id: str, body: AnalyzeTableQueryPlanRequest, ns: NamespaceDep, data_ns: DataNamespaceDep, settings: SettingsDep, so: StorageOptionsDep
+) -> Response:
     """Return the analyzed query plan with runtime metrics — ``analyze_table_query_plan``; plain text."""
     body.id = reconcile_body_id(parse_identifier(id, settings.delimiter), body.id)
     dataplane.refuse_a_branch_this_door_cannot_honour(body.branch, door="analyze_table_query_plan")
     dataplane.refuse_an_unbounded_boolean_chain(body.filter, field="filter")
-    body.version = judged_native_version(ns, so, list(body.id or []), version=body.version)
-    result = native.call(ns, "analyze_table_query_plan", body)
+    # ANALYZE RUNS THE QUERY to report its metrics, so it spends what `/query` would and takes its bound.
+    judged = judged_native_dataset(ns, so, list(body.id or []), version=body.version)
+    dataplane.refuse_an_unbounded_result(judged, k=body.k, offset=body.offset, columns=body.columns, max_bytes=settings.query_max_response_mb << 20)
+    body.version = int(judged.version)
+    result = native.call(data_ns, "analyze_table_query_plan", body)
     # A JSON-ENCODED STRING, per `components.responses`. It answered `text/plain`, which the 0.12.0
     # reqwest client rejects outright (the Python urllib3 client tolerates it, which is why rask's own
     # e2e never noticed). `JSONResponse` on a `str` encodes it AS a string, so a plan that happens to

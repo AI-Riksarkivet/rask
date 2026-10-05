@@ -12,7 +12,7 @@ from lance_namespace import (
 )
 
 from catalog.api import fga_deps
-from catalog.api.dependencies import FgaClientDep, NamespaceDep, SettingsDep
+from catalog.api.dependencies import DataNamespaceDep, FgaClientDep, NamespaceDep, SettingsDep
 from catalog.api.security import CurrentToken
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.services import native
@@ -63,9 +63,9 @@ async def create_materialized_view(
 # missing `status_code` would go unnoticed until a backend arrived and silently answered 200.
 @router.post("/{id}/refresh", response_model_exclude_none=True, status_code=202)
 def refresh_materialized_view(
-    id: str, ns: NamespaceDep, settings: SettingsDep, body: RefreshMaterializedViewRequest | None = None
+    id: str, data_ns: DataNamespaceDep, settings: SettingsDep, body: RefreshMaterializedViewRequest | None = None
 ) -> RefreshMaterializedViewResponse:
     """Rematerialize a materialized view via the native backend's ``refresh_materialized_view``."""
     req = body or RefreshMaterializedViewRequest()
     req.id = reconcile_body_id(parse_identifier(id, settings.delimiter), req.id)
-    return native.call(ns, "refresh_materialized_view", req)
+    return native.call(data_ns, "refresh_materialized_view", req)

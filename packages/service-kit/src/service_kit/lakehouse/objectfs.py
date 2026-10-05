@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Final
 from urllib.parse import urlsplit
 
 import pyarrow.fs as pafs
+from pydantic import BaseModel, Field
 
 from service_kit.lakehouse.endpoint_scheme import allow_http_for, endpoint_scheme
 
@@ -99,6 +100,47 @@ def lance_storage_options(
         options["aws_session_token"] = session_token
     options.update(_encryption_options(server_side_encryption, sse_kms_key_id, sse_bucket_key_enabled))
     return options
+
+
+class StoreTimeouts(BaseModel):
+    """How long one object-store call may take before Lance gives up, as ``storage_options`` keys.
+
+    A PLANE CHOOSES THESE, which is why they are a value here and not baked into
+    :func:`lance_storage_options`: a request-serving plane must fail fast and let its caller retry,
+    while a batch plane would rather wait out a slow store than fail a long job. Without them Lance runs
+    on object_store's defaults (`lance_docs/guide.md:2333-2348`: connect 5 s, request 30 s, 3 retries
+    within 180 s), and MEASURED on pylance 12.0.0 one dataset open against a store that drops packets
+    took **124.9 s**, and against one that accepts the connection and never answers it outlasted a
+    300 s harness.
+
+    THE REQUEST KEY IS ``timeout``, NOT THE DOCUMENTED ``request_timeout``. Measured on pylance 12.0.0
+    against a store that accepts and never answers: with ``request_timeout=5s`` each request still ran
+    its full 30.0 s (object_store ignores an option it does not recognise), with ``timeout=3s`` it ran
+    3.0 s. ``connect_timeout``, ``client_max_retries`` and ``client_retry_timeout`` were honoured as
+    documented.
+
+    LANCE RETRIES ABOVE THE CLIENT, so the bound on one call is a multiple of these. Measured on 12.0.0:
+    a dataset open against a silent store issued its version listing **six times**, with
+    ``client_max_retries=0`` and with the AIMD throttle's ``lance_aimd_max_retries=0`` alike, so one
+    open costs about six times ``(client_max_retries + 1) * request`` plus a few hundred milliseconds of
+    backoff.
+    """
+
+    model_config = {"frozen": True}
+
+    connect_s: float = Field(gt=0)
+    request_s: float = Field(gt=0)
+    max_retries: int = Field(ge=0)
+    retry_window_s: int = Field(ge=0)
+
+    def storage_options(self) -> StorageOptions:
+        """The four keys, in the spelling object_store honours (milliseconds, so a fraction survives)."""
+        return {
+            "connect_timeout": f"{round(self.connect_s * 1000)}ms",
+            "timeout": f"{round(self.request_s * 1000)}ms",
+            "client_max_retries": str(self.max_retries),
+            "client_retry_timeout": str(self.retry_window_s),
+        }
 
 
 #: The three algorithms object_store accepts, verbatim from `lance_docs/guide.md:2417`. A fourth value

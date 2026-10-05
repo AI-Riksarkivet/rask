@@ -111,6 +111,7 @@ from service_kit.lakehouse.schema import SchemaFields, facet_fields
 from service_kit.lancekit.absence import reads_as_absent
 from service_kit.lancekit.arrow_ipc import ArrowBodyError, ArrowBodyTooLargeError, decode_arrow_stream, encode_arrow_stream
 from service_kit.lancekit.commit_verdict import CommitVerdict, classify_commit_failure
+from service_kit.lancekit.outage import reads_as_store_outage
 from service_kit.lancekit.versions import committed_at
 from storage import s3_client, split_s3_uri
 
@@ -1739,6 +1740,97 @@ def refuse_an_unbounded_boolean_chain(sql: str | None, *, field: str) -> None:
         )
 
 
+#: The native query path carries `k` and `offset` as u32: MEASURED on pylance 12.0.0, `k=2**32` and
+#: `offset=10**12` raise `OverflowError` inside the native call, which answered 500.
+_U32_MAX: Final = 2**32 - 1
+#: Rows read to estimate a variable-width column's width, when the projection carries one.
+_WIDTH_SAMPLE_ROWS: Final = 16
+#: What the native answer adds beyond the projection: `_distance` or `_score` (float32) and `_rowid` (u64).
+_ANSWER_EXTRA_BYTES: Final = 16
+
+
+def refuse_an_unbounded_result(dataset: lance.LanceDataset, *, k: int, offset: int | None, columns: object, max_bytes: int) -> None:
+    """Refuse a native query whose answer could exceed ``max_bytes``, before the native backend reads a row ([[LH-247]]).
+
+    The native backend materialises the whole answer in one buffer before the first byte is sent, so
+    the only bound this door has is the row count it asks for. `k` has a minimum of 0 and no maximum in
+    the spec (`spec.yaml` QueryTableRequest), and `k=0` answers EVERY row. MEASURED on pylance 12.0.0
+    from outside a one-CPU catalog process, 164 MB table of 1024-dim float32 vectors on a moto store:
+    `k=0` returned 169,290,994 bytes and peaked at 822,192 kB against the pod's 524,288 kB limit, and a
+    68 MB answer (`k=16000`, 492 MB table) at 885,188 kB. A whole-table read belongs to `/changes` or a
+    credential vend, which stream.
+
+    `k` is capped by the projected row width: exact for fixed-width columns, and estimated from
+    :data:`_WIDTH_SAMPLE_ROWS` rows of the projection when it carries a variable-width one. `offset` is
+    not, so a reader pages a large read with a bounded `k` (`service_kit.lancekit.reader`): the rows an
+    offset skips are streamed past, not held. MEASURED on the same table and process: `k=1000,
+    offset=39000` (skipping 156 MB) peaked at 395,256 kB, beside 381,412 kB for `k=4000` with no offset.
+
+    Raises:
+        InvalidInputError: ``k`` is 0, ``k`` or ``offset`` exceeds u32, or ``k`` rows exceed ``max_bytes``.
+    """
+    skip = offset or 0
+    if k == 0:
+        raise InvalidInputError("k must be at least 1: k=0 asks for every row in one answer; read a whole table through /changes or a credential vend")
+    for name, value in (("k", k), ("offset", skip)):
+        if value > _U32_MAX:
+            raise InvalidInputError(f"{name}={value} exceeds {_U32_MAX}, the largest row count a query can carry")
+    row_bytes = _projected_row_bytes(dataset, columns)
+    ceiling = max(1, max_bytes // row_bytes)
+    if k > ceiling:
+        raise InvalidInputError(
+            f"k = {k} rows of about {row_bytes} bytes exceed this door's {max_bytes}-byte answer (at most {ceiling} rows); "
+            "page with a smaller k and an offset, or read a whole table through /changes or a credential vend"
+        )
+
+
+def _projected_row_bytes(dataset: lance.LanceDataset, columns: object) -> int:
+    """The in-memory bytes one native answer row of the request's ``columns`` holds, its own extra columns included.
+
+    Exact for fixed-width columns; a variable-width column's width is sampled from the table.
+    """
+    names = getattr(columns, "column_names", None)
+    aliases = getattr(columns, "column_aliases", None)
+    projection: list[str] | dict[str, str] | None = names or aliases or None
+    with caller_sql("invalid query columns"):
+        schema = dataset.scanner(columns=projection, limit=1).projected_schema
+        widths = [_fixed_width(field.type) for field in schema]
+        variable = [i for i, width in enumerate(widths) if width is None]
+        sampled = 0
+        if variable:
+            sample = dataset.scanner(columns=_narrowed(projection, schema, variable), limit=_WIDTH_SAMPLE_ROWS).to_table()
+            sampled = -(-sample.nbytes // sample.num_rows) if sample.num_rows else 0
+    return sum(width for width in widths if width is not None) + sampled + _ANSWER_EXTRA_BYTES
+
+
+def _narrowed(projection: list[str] | dict[str, str] | None, schema: pa.Schema, positions: list[int]) -> list[str] | dict[str, str]:
+    """``projection`` cut down to the output columns at ``positions``, in the form it was given.
+
+    A projected schema lists its fields in the projection's order, so a position names the same column
+    in both; the projection's own spelling (a nested field path, an alias) is what the scanner takes back.
+    """
+    if isinstance(projection, dict):
+        items = list(projection.items())
+        return dict(items[i] for i in positions)
+    if projection:
+        return [projection[i] for i in positions]
+    return [schema.field(i).name for i in positions]
+
+
+def _fixed_width(data_type: pa.DataType) -> int | None:
+    """The in-memory bytes one value of ``data_type`` takes, or ``None`` when that depends on the value."""
+    if pa.types.is_fixed_size_list(data_type):
+        inner = _fixed_width(data_type.value_type)
+        return None if inner is None else inner * data_type.list_size
+    if pa.types.is_struct(data_type):
+        widths = [_fixed_width(data_type.field(i).type) for i in range(data_type.num_fields)]
+        return None if None in widths else sum(w for w in widths if w is not None)
+    try:
+        return max(1, data_type.bit_width // 8)
+    except ValueError:
+        return None
+
+
 @contextmanager
 def caller_sql(action: str) -> Iterator[None]:
     """Translate Lance's expression-parse failures into a 4xx instead of letting them escape as a 500.
@@ -1961,9 +2053,9 @@ def insert_into_table(ns: LanceNamespace, so: StorageOptions, req: InsertIntoTab
 
 
 def merge_insert_into_table(
-    ns: LanceNamespace, so: StorageOptions, req: MergeInsertIntoTableRequest, data: bytes, *, max_bytes: int
+    ns: LanceNamespace, so: StorageOptions, req: MergeInsertIntoTableRequest, data: bytes, *, max_bytes: int, data_ns: LanceNamespace
 ) -> MergeInsertIntoTableResponse:
-    """Run the spec's merge-insert against the ref the request NAMES.
+    """Run the spec's merge-insert against the ref the request NAMES; main's native merge runs on ``data_ns``.
 
     Same defect and same severity as `insert_into_table`: verified live, a merge naming `work` applied
     its update to MAIN and left the branch untouched, reporting `num_updated_rows: 1` for a row it had
@@ -1985,7 +2077,7 @@ def merge_insert_into_table(
     # A source repeating a key either inserts every copy (unmatched) or is ambiguous (matched); both arms ([[LH-243]]).
     primary_keys.refuse_repeats_within(rows, primary_keys.key_columns(dataset.lance_schema), door="merge_insert")
     if req.branch is None:
-        return cast(MergeInsertIntoTableResponse, native.call(ns, "merge_insert_into_table", req, data))
+        return cast(MergeInsertIntoTableResponse, native.call(data_ns, "merge_insert_into_table", req, data))
     # THE BUILDER IS CONSTRUCTED INSIDE THE GUARD, and that placement is the fix rather than a tidy-up:
     # `merge_insert(on)` is where Lance rejects a key column that does not exist, and it sat outside
     # `caller_sql`, so the one door whose whole job is matching on that column reported `Internal 18`
@@ -2085,8 +2177,8 @@ def refuse_a_branch_this_door_cannot_honour(branch: str | None, *, door: str, re
         )
 
 
-def count_rows(ns: LanceNamespace, so: StorageOptions, req: CountTableRowsRequest) -> int:
-    """Count rows on the ref the request NAMES — the read-side twin of `update_table`'s omission.
+def count_rows(ns: LanceNamespace, so: StorageOptions, req: CountTableRowsRequest, *, data_ns: LanceNamespace) -> int:
+    """Count rows on the ref the request NAMES — the read-side twin of `update_table`'s omission; main's native count runs on ``data_ns``.
 
     The upstream `count_table_rows` takes the whole request and answers from main whatever `branch`
     says, so a branch-scoped count returned a number that was correct for a dataset the caller did not
@@ -2110,7 +2202,7 @@ def count_rows(ns: LanceNamespace, so: StorageOptions, req: CountTableRowsReques
         # PINNED TO THE VERSION JUDGED ([[LH-279]]): the native count opens the table inside Rust, so the
         # request carries the exact version whose bases were just checked.
         req.version = judged_native_version(ns, so, _table_id(req), version=req.version)
-        response = native.call(ns, "count_table_rows", req)
+        response = native.call(data_ns, "count_table_rows", req)
         if not isinstance(response, CountTableRowsResponse) or response.count is None:
             raise TypeError(f"count_table_rows must answer a CountTableRowsResponse with a count, got {type(response).__name__}: {response!r}")
         return response.count
@@ -2299,6 +2391,14 @@ def read_changes(
     wire output is byte-identical (58,410,370 both). RSS is the measurement because `tracemalloc`
     reports 0 MB for the scan and the encode, watching the Python heap while Arrow allocates elsewhere.
 
+    YIELDING BOUNDS WHAT THIS FUNCTION HOLDS, NOT WHAT LANCE HOLDS. The scan itself runs under the
+    process scan defaults the catalog sets at boot (`catalog.main.bound_lance_scans`, [[LH-247]]):
+    Lance's own size a batch in ROWS (8,192, whatever their width) and buffer up to 2 GB of IO ahead of
+    the consumer (`lance_docs/guide.md:3048-3072`), and on a 164 MB table of 1024-dim float32 vectors
+    this feed peaked the catalog at 597,224 kB against its 524,288 kB limit (pylance 12.0.0, measured
+    from outside a one-CPU catalog over a moto store). No scanner option is passed here, so the feed
+    and the native backend's scans share one bound an operator can move in one place.
+
     Raises:
         InvalidInputError: an invalid window, or a predicate or projection Lance rejects.
         TableVersionNotFoundError: ``end_version`` is not a version of the ref.
@@ -2391,6 +2491,7 @@ def _require_followable_window(spans: list[_WindowSpan], *, table: str) -> None:
             except BaseException as exc:  # noqa: BLE001 — a Rust PANIC is not an Exception
                 if isinstance(exc, KeyboardInterrupt | SystemExit):
                     raise
+                _raise_if_store_outage(exc, table=table)
                 raise InvalidTableStateError(
                     f"the change window on table {table} cannot be followed: version {version}'s transaction is unreadable "
                     f"({type(exc).__name__}). Resynchronise from begin_version=0."
@@ -2408,10 +2509,24 @@ def _require_followable_window(spans: list[_WindowSpan], *, table: str) -> None:
     except BaseException as exc:  # noqa: BLE001 — a Rust PANIC is not an Exception
         if isinstance(exc, KeyboardInterrupt | SystemExit):
             raise
+        _raise_if_store_outage(exc, table=table)
         raise InvalidTableStateError(
             f"the change window on table {table} cannot be followed: its begin version {lowest.low} is no longer retained "
             f"({type(exc).__name__}). Resynchronise from begin_version=0."
         ) from exc
+
+
+def _raise_if_store_outage(exc: BaseException, *, table: str) -> None:
+    """Raise 503 for a read the store did not answer, which says nothing about whether the window can be followed.
+
+    Refusing it as unfollowable (409, "resynchronise from 0") would send a consumer to re-read the whole
+    table because the store blinked.
+
+    Raises:
+        ServiceUnavailableError: ``exc`` is an object-store outage (`service_kit.lancekit.outage`).
+    """
+    if reads_as_store_outage(exc):
+        raise ServiceUnavailableError(f"the object store did not answer reading the change window on table {table}") from exc
 
 
 #: The deleted-row feed's schema: Lance's own answer is a single `_rowid` column.

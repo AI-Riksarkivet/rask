@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 
@@ -83,6 +84,32 @@ def consume_dapr_secrets(settings: Settings) -> None:
         raise RuntimeError("LANCE_S3_SECRET_ACCESS_KEY is required when secrets_from_dapr is off")
 
 
+def bound_lance_scans(settings: Settings) -> None:
+    """Give every scan this process builds the catalog's bounds, unless the operator set Lance's own variable ([[LH-247]]).
+
+    `/query` and `analyze_plan` are served by the native backend, which builds its scanner in Rust from
+    the spec request, so no scanner option reaches it from Python; Lance's process defaults are the one
+    lever that bounds those scans and the change feed's alike, and they are read when a scan is built,
+    so setting them here, before the app serves, bounds every one. ``LANCE_DEFAULT_IO_BUFFER_SIZE`` is
+    documented (pylance 12.0.0 `ScannerBuilder.io_buffer_size`). ``LANCE_DEFAULT_BATCH_SIZE`` and
+    ``LANCE_DEFAULT_FRAGMENT_READAHEAD`` are NOT in `lance_docs/` or pylance's docstrings: they are
+    named in the 12.0.0 binary and their effect was measured, so a pylance upgrade re-measures them.
+
+    MEASURED on pylance 12.0.0 from outside a one-CPU catalog process over a moto store, tables of
+    1024-dim float32 vectors, pod limit 524,288 kB, Lance's defaults against these three:
+
+        change feed, 164 MB table                       597,224 kB  ->  361,572 kB
+        unindexed vector /query k<=2048, 164 MB table   627,404 kB  ->  440,648 kB
+        unindexed k=10 vector /query, 492 MB table      824,824 kB  ->  466,296 kB (IO buffer alone)
+
+    The last row is why the bound cannot be a cap on `k` alone: a flat vector search reads the whole
+    vector column whatever `k` is.
+    """
+    os.environ.setdefault("LANCE_DEFAULT_IO_BUFFER_SIZE", str(settings.scan_io_buffer_mb << 20))
+    os.environ.setdefault("LANCE_DEFAULT_BATCH_SIZE", str(settings.scan_batch_rows))
+    os.environ.setdefault("LANCE_DEFAULT_FRAGMENT_READAHEAD", "1")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
@@ -104,6 +131,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         insecure_allow_unauthenticated=settings.insecure_allow_unauthenticated,
     )
     instrument_lance_if_available()  # Lance-native IO metrics onto the global MeterProvider
+    bound_lance_scans(settings)
     # Consume the sensitive S3 secret from the Dapr secret store (OpenBao) — the store is the SOLE source
     # of truth, NOT a fallback. With secrets_from_dapr on, the chart does not put the secret in pod env,
     # so reading the env would yield nothing: fetch from the store (retrying while it seeds) and FAIL
@@ -123,10 +151,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # call in async context is never normalized.
     await run_in_threadpool(consume_dapr_secrets, settings)
     app.state.namespace = build_namespace(settings)  # fail fast if storage misconfigured
+    # The same root under the data plane's bounds, for the native operations that move rows (`DataNamespaceDep`).
+    app.state.data_namespace = build_namespace(settings, plane="data")
     # #3-A warehouse routing caches (only used when warehouses_enabled): top-level-namespace → its physical
     # root_uri (bindings are immutable, so cache-forever is safe) and root_uri → its namespace connection.
     app.state.warehouse_binding_cache = {}
     app.state.warehouse_namespaces = {}
+    app.state.warehouse_data_namespaces = {}
     # `fatal=True` KEEPS THIS SERVICE'S POSTURE: neither construction was wrapped in a `try`, so a
     # failed build has always crashed the pod. The catalog is the estate's authorization SOURCE — it
     # writes the grants every other service reads — so a boot that cannot reach OpenFGA must be

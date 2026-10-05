@@ -24,21 +24,23 @@ from lance_namespace import (
 from pydantic import BaseModel, Field
 
 from catalog.core.base_judge import installed_judge, require_sanctioned_bases
-from catalog.core.config import Settings, shared_lance_session
+from catalog.core.config import Settings, StorePlane, shared_lance_session
 from catalog.core.store_endpoint import require_estate_store
 from service_kit.lakehouse import auto_cleanup
 from service_kit.lakehouse.features import BasePathRef, flags_from_open_error, manifest_base_path_refs, manifest_feature_flags, mixes_data_file_versions
 from service_kit.lancekit.absence import reads_as_absent
+from service_kit.lancekit.outage import reads_as_store_outage
 
 
 log = logging.getLogger(__name__)
 
 
-def build_namespace(settings: Settings) -> LanceNamespace:
-    return connect(settings.impl, settings.namespace_properties())
+def build_namespace(settings: Settings, *, plane: StorePlane = "metadata") -> LanceNamespace:
+    """The estate-rooted namespace connection, its object-store calls bounded for ``plane`` (`CatalogReadBounds`)."""
+    return connect(settings.impl, settings.namespace_properties(plane=plane))
 
 
-def build_namespace_for_root(settings: Settings, root_uri: str, *, endpoint: str | None = None) -> LanceNamespace:
+def build_namespace_for_root(settings: Settings, root_uri: str, *, endpoint: str | None = None, plane: StorePlane = "metadata") -> LanceNamespace:
     """A namespace backend rooted at ``root_uri`` instead of the default ``settings.root`` (#3-A).
 
     Same impl, endpoint and CREDENTIALS as the default connection. ``endpoint`` is the warehouse
@@ -57,7 +59,7 @@ def build_namespace_for_root(settings: Settings, root_uri: str, *, endpoint: str
     require_estate_store(endpoint, estate=settings.s3_endpoint, subject=f"the warehouse rooted at {root_uri!r}")
     target = settings.s3_endpoint
     try:
-        return connect(settings.impl, settings.namespace_properties(root=root_uri))
+        return connect(settings.impl, settings.namespace_properties(root=root_uri, plane=plane))
     except ValueError as exc:
         # A STORE THAT WILL NOT ANSWER IS AN OUTAGE, NOT A BROKEN CATALOG. pylance raises a bare
         # `ValueError` for every construction failure, so an unreachable warehouse store surfaced as
@@ -233,13 +235,23 @@ def judged_native_version(ns: LanceNamespace, storage_options: dict[str, str], t
         InvalidTableStateError: That version declares a base the catalog did not sanction.
         UnsupportedOperationError: That version keeps data on a base under its own credential.
     """
+    return int(judged_native_dataset(ns, storage_options, table_id, version=version).version)
+
+
+def judged_native_dataset(ns: LanceNamespace, storage_options: dict[str, str], table_id: list[str], *, version: int | None) -> lance.LanceDataset:
+    """:func:`judged_native_version`, handing back the judged handle for a door that also reads its schema.
+
+    Raises:
+        InvalidTableStateError: That version declares a base the catalog did not sanction.
+        UnsupportedOperationError: That version keeps data on a base under its own credential.
+    """
     dataset = open_dataset(ns, storage_options, table_id, version=version)
     if base_store_params_for(dataset, storage_options) is not None:
         raise UnsupportedOperationError(
             f"table {'.'.join(table_id)} keeps data on a base opened under its own credential, which this door's native reader cannot "
             "carry; read it through the catalog's /changes door"
         )
-    return int(dataset.version)
+    return dataset
 
 
 def base_store_params_for(dataset: lance.LanceDataset, storage_options: dict[str, str]) -> dict[str, dict[str, str]] | None:
@@ -318,6 +330,10 @@ def _open_ref(location: str, storage_options: dict[str, str], table_id: list[str
             # is `TableNotFoundError` — the same error this function raises when the registration names
             # no location at all, found one step later. The location rides the message, because knowing
             # the table is missing does not tell anyone which bucket to go and look at.
+            # A STORE THAT DID NOT ANSWER IS NEITHER. It arrives as the same bare ValueError, and read as
+            # absence it tells the caller a live table is missing whenever the store is down ([[LH-247]]).
+            if reads_as_store_outage(exc):
+                raise ServiceUnavailableError(f"the object store did not answer opening table {'.'.join(table_id)}") from exc
             message = str(exc).lower()
             if version is not None and "_versions/" in message and ".manifest" in message:
                 raise TableVersionNotFoundError(f"table version {version} was not found") from exc

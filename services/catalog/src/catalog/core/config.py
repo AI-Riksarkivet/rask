@@ -19,6 +19,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from service_kit.governed.settings import GovernedAuthSettings
 from service_kit.lakehouse.endpoint_scheme import allow_http_for
 from service_kit.lakehouse.naming import CATALOG_DELIMITER
+from service_kit.lakehouse.objectfs import StoreTimeouts
 
 
 if TYPE_CHECKING:
@@ -27,6 +28,9 @@ if TYPE_CHECKING:
 
 
 _STORAGE_PREFIX = "storage."
+
+#: Which object-store budget a connection runs under (`CatalogReadBounds`).
+StorePlane = Literal["metadata", "data"]
 
 
 class LanceSessionCaps(BaseSettings):
@@ -101,6 +105,74 @@ class CatalogStorageSettings(BaseSettings):
     s3_sse_kms_key_id: str | None = Field(default=None, alias="LANCE_S3_SSE_KMS_KEY_ID")
     s3_sse_bucket_key_enabled: bool | None = Field(default=None, alias="LANCE_S3_SSE_BUCKET_KEY_ENABLED")
     s3_sts_endpoint: str | None = Field(default=None, alias="LANCE_S3_STS_ENDPOINT")
+
+
+class CatalogReadBounds(BaseSettings):
+    """How long one object-store call, and how much memory one read, may cost this process ([[LH-247]]).
+
+    The catalog serves requests, so a store that stops answering must cost the caller a prompt 503 and
+    not a worker held for minutes, and a read whose answer is sized by the DATA must cost a bounded
+    amount of the pod. Named settings rather than literals for the reason `LanceSessionCaps` gives: they
+    must follow `resources.limits.memory` and the store's latency, which a literal cannot.
+    """
+
+    model_config = SettingsConfigDict(populate_by_name=True, env_prefix="LANCE_", extra="ignore")
+
+    #: Object-store call bounds, in TWO PLANES (`service_kit.lakehouse.objectfs.StoreTimeouts` holds the
+    #: measurements). object_store's request timeout covers the WHOLE request, body included, so one
+    #: budget cannot serve both a manifest read and a 5 MiB upload part.
+    #:
+    #: THE METADATA PLANE (`store_*`) is the native namespace connection: every describe, list, declare
+    #: and version lookup, which is also the first store call every data door makes, so a store that has
+    #: stopped answering is found here and answered 503. NO CLIENT RETRY: Lance re-issues a failed
+    #: listing itself (six attempts per open, measured on pylance 12.0.0), so a client retry multiplies
+    #: every outage by six more, and a 503 is retryable by the caller. Measured with these defaults on
+    #: pylance 12.0.0: a dataset open against a store that drops packets failed in 14.5 s, against one
+    #: that never answers in 32.8 s.
+    store_connect_timeout_s: float = Field(default=2.0, gt=0, alias="LANCE_STORE_CONNECT_TIMEOUT_S")
+    store_request_timeout_s: float = Field(default=5.0, gt=0, alias="LANCE_STORE_REQUEST_TIMEOUT_S")
+    store_max_retries: int = Field(default=0, ge=0, alias="LANCE_STORE_MAX_RETRIES")
+    store_retry_window_s: int = Field(default=5, ge=0, alias="LANCE_STORE_RETRY_WINDOW_S")
+    #: THE DATA PLANE (`data_store_*`, with the same connect bound) is every handle that moves rows: the
+    #: pylance opens the doors read and write through (`StorageOptionsDep`) and the native connection the
+    #: native data operations run on (`DataNamespaceDep`). Its request bound is sized to the transfer, not
+    #: to a metadata call: measured on pylance 12.0.0 through a proxy capping a moto store at 8 MB/s, a
+    #: 100 MB write took 14.1 s and a 100 MB full read 13.3 s under these defaults, and BOTH FAILED under
+    #: the metadata plane's (a 5 MiB part ran its 5 s and was cut off). The connect bound still finds a
+    #: store that has dropped off the network in seconds.
+    data_store_request_timeout_s: float = Field(default=120.0, gt=0, alias="LANCE_DATA_STORE_REQUEST_TIMEOUT_S")
+    data_store_max_retries: int = Field(default=3, ge=0, alias="LANCE_DATA_STORE_MAX_RETRIES")
+    data_store_retry_window_s: int = Field(default=300, ge=0, alias="LANCE_DATA_STORE_RETRY_WINDOW_S")
+
+    #: Lance's process scan defaults, applied at boot by `catalog.main.bound_lance_scans` to every scan
+    #: this process builds: the native backend's (`/query`, `analyze_plan`), which take no scanner
+    #: option from Python, and the change feed's. Lance's own are a 2 GB IO buffer
+    #: (`lance_docs/guide.md:3053-3055`) and 8,192-row batches whatever their width, which is 32 MiB of
+    #: 1024-dim float32 vectors per batch (`guide.md:3060-3068`, which suggests 1,024 rows for those).
+    scan_io_buffer_mb: int = Field(default=32, ge=1, alias="LANCE_SCAN_IO_BUFFER_MB")
+    scan_batch_rows: int = Field(default=1024, ge=1, alias="LANCE_SCAN_BATCH_ROWS")
+    #: The most bytes one `/query` answer may carry. The native backend materialises the whole answer
+    #: in one buffer before the first byte is sent, so `k` (plus `offset`) is capped by the projected
+    #: row width to stay inside this.
+    query_max_response_mb: int = Field(default=16, ge=1, alias="LANCE_QUERY_MAX_RESPONSE_MB")
+
+    @property
+    def store_timeouts(self) -> StoreTimeouts:
+        return StoreTimeouts(
+            connect_s=self.store_connect_timeout_s,
+            request_s=self.store_request_timeout_s,
+            max_retries=self.store_max_retries,
+            retry_window_s=self.store_retry_window_s,
+        )
+
+    @property
+    def data_store_timeouts(self) -> StoreTimeouts:
+        return StoreTimeouts(
+            connect_s=self.store_connect_timeout_s,
+            request_s=self.data_store_request_timeout_s,
+            max_retries=self.data_store_max_retries,
+            retry_window_s=self.data_store_retry_window_s,
+        )
 
 
 class CatalogControlBusSettings(BaseSettings):
@@ -347,6 +419,7 @@ class Settings(
     GovernedAuthSettings,
     LanceSessionCaps,
     CatalogStorageSettings,
+    CatalogReadBounds,
     CatalogControlBusSettings,
     CatalogDaprSettings,
     CatalogLineageSettings,
@@ -601,8 +674,8 @@ class Settings(
             )
         return self
 
-    def namespace_properties(self, *, root: str | None = None) -> dict[str, str]:
-        """Return properties for ``lance_namespace.connect(impl, properties)``.
+    def namespace_properties(self, *, root: str | None = None, plane: StorePlane = "metadata") -> dict[str, str]:
+        """Return properties for ``lance_namespace.connect(impl, properties)``, bounded for ``plane``.
 
         ``root`` lets a WAREHOUSE-rooted connection differ from the estate default; the ``storage.``
         property vocabulary is spelled here once, because a caller composing these names itself is how
@@ -625,7 +698,12 @@ class Settings(
             f"{_STORAGE_PREFIX}region": self.s3_region,
             f"{_STORAGE_PREFIX}allow_http": allow_http_for(self.s3_endpoint),
             f"{_STORAGE_PREFIX}virtual_hosted_style_request": str(self.s3_virtual_hosted).lower(),
+            **{f"{_STORAGE_PREFIX}{key}": value for key, value in self.timeouts_for(plane).storage_options().items()},
         }
+
+    def timeouts_for(self, plane: StorePlane) -> StoreTimeouts:
+        """The object-store call bounds of ``plane`` (see `CatalogReadBounds`)."""
+        return self.store_timeouts if plane == "metadata" else self.data_store_timeouts
 
     @model_validator(mode="after")
     def _validate_outbox_prefixes(self) -> Self:
@@ -646,9 +724,10 @@ class Settings(
             )
         return self
 
-    def storage_options(self) -> dict[str, str]:
-        """Return the ``storage.*`` properties with the prefix stripped, for pylance."""
-        return {key[len(_STORAGE_PREFIX) :]: value for key, value in self.namespace_properties().items() if key.startswith(_STORAGE_PREFIX)}
+    def storage_options(self, *, plane: StorePlane = "metadata") -> dict[str, str]:
+        """Return the ``storage.*`` properties with the prefix stripped, for pylance, bounded for ``plane``."""
+        properties = self.namespace_properties(plane=plane)
+        return {key[len(_STORAGE_PREFIX) :]: value for key, value in properties.items() if key.startswith(_STORAGE_PREFIX)}
 
 
 @lru_cache
