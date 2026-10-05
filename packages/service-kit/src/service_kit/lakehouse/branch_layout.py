@@ -29,7 +29,8 @@ from urllib.parse import unquote
 #: The directories a branch writes its own files into under ``tree/<branch>/``. `file_format.md` § "Branch
 #: Dataset Layout" lists the first four; ``data`` holds the files a branch writes itself (measured on
 #: pylance 12.0.0: an append to a branch lands its fragment under ``tree/<branch>/data/``). A
-#: branch-scoped write credential grants exactly these and nothing else under the branch.
+#: branch-scoped maintain credential grants exactly these and nothing else under the branch; a
+#: branch-scoped write credential grants only ``data`` ([[LH-202]]).
 BRANCH_FILE_DIRS: Final = ("_versions", "_transactions", "_deletions", "_indices", "data")
 
 #: Segment names a branch may not carry: the directories above, plus the dataset-root names a branch

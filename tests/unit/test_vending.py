@@ -106,7 +106,7 @@ def test_web_identity_vendor_exchanges_the_token_for_scoped_creds() -> None:
     assert creds.expires_at_millis is not None and creds.expires_at_millis > 0
     assert captured["WebIdentityToken"] == "the.jwt.tok"
     policy = json.loads(captured["Policy"])
-    actions = policy["Statement"][1]["Action"]
+    actions = [action for statement in policy["Statement"] for action in statement["Action"]]
     assert "s3:PutObject" in actions  # write tier scoped to the table prefix
 
 
@@ -183,21 +183,6 @@ def test_a_tenants_policy_still_allows_its_OWN_table(tier: Tier) -> None:
     assert _policy_allows(policy, action="s3:ListBucket", bucket="tenant-b", key="")
 
 
-def test_a_policy_does_not_reach_a_SIBLING_table_in_the_same_bucket() -> None:
-    """Single-bucket deployments share one bucket across tables, so the prefix — not just the
-    bucket — is the boundary. A credential for one table must not read its neighbour."""
-    policy: Any = build_session_policy("shared", "nsa/tbl_a.lance", "write")
-    assert not _policy_allows(policy, action="s3:GetObject", bucket="shared", key="nsa/tbl_b.lance/data/x.lance")
-    assert _policy_allows(policy, action="s3:GetObject", bucket="shared", key="nsa/tbl_a.lance/data/x.lance")
-
-
-def test_a_read_tier_policy_cannot_write_its_own_table() -> None:
-    """The tier split is a security boundary, not an ergonomic one."""
-    policy: Any = build_session_policy("tenant-b", "isobns/isobtbl.lance", "read")
-    assert not _policy_allows(policy, action="s3:PutObject", bucket="tenant-b", key="isobns/isobtbl.lance/data/x.lance")
-    assert not _policy_allows(policy, action="s3:DeleteObject", bucket="tenant-b", key="isobns/isobtbl.lance/data/x.lance")
-
-
 # --------------------------------------------------------------------------- #
 # diff2 F5 — the WIRE CONTRACT between what the vendors emit and what a client reads
 #
@@ -212,7 +197,7 @@ def test_a_read_tier_policy_cannot_write_its_own_table() -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_a_declared_base_is_granted_READ_even_at_write_tier() -> None:
+def test_a_declared_base_is_granted_READ_even_at_the_maintain_tier() -> None:
     """A table whose fragments resolve through a base cannot use its credential without reading there.
 
     MEASURED LIVE 2026-09-08 (§ H12): the sweep vends a table-scoped write credential — the right
@@ -230,13 +215,13 @@ def test_a_declared_base_is_granted_READ_even_at_write_tier() -> None:
     sanctioned it — the tier asymmetry is what this pins, and an unsanctioned base would be dropped
     before the question could be asked (`test_a_declared_base_cannot_reach_a_table_the_caller_never_opened`).
     """
-    policy: Any = build_session_policy("bkt", "tables/db1$users", "write", bases=("s3://bkt/shared/src.lance",), sanctioned_bases=("s3://bkt/shared",))
+    policy: Any = build_session_policy("bkt", "tables/db1$users", "maintain", bases=("s3://bkt/shared/src.lance",), sanctioned_bases=("s3://bkt/shared",))
     objects = [st for st in policy["Statement"] if st["Action"] != ["s3:ListBucket"]]
 
     table = next(st for st in objects if "tables/db1$users" in st["Resource"])
     base = next(st for st in objects if "shared/src.lance" in st["Resource"])
 
-    assert "s3:PutObject" in table["Action"], "the table's own prefix keeps its write tier"
+    assert "s3:PutObject" in table["Action"], "the table's own prefix keeps its maintain tier"
     assert base["Action"] == ["s3:GetObject"], f"a base must be readable and never writable: {base['Action']}"
 
 

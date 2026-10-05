@@ -84,7 +84,7 @@ _FGA_TYPE: dict[str, str] = {
 # Read-only trailing actions (reader rung). ``query``/``count_rows`` read DATA; the rest
 # read metadata — split so list_objects(can_read_data) is meaningful (both are reader).
 # ``credentials`` (vending) is a DATA read at minimum — the router guard requires can_read_data; the
-# endpoint additionally requires can_write_data for a write-tier vend.
+# endpoint additionally requires can_write_data for a write-tier vend and can_maintain for a maintain-tier one.
 # ``blobs`` (GET /v1/table/{id}/blobs — the credential-less blob serving path) returns raw payload
 # bytes, so it is a DATA read exactly like ``query``.
 # ``changes`` (§ J4) is the MOST disclosing read a table has — every row it ever received, in order —
@@ -117,12 +117,12 @@ _READ_RELATIONS: Final = frozenset({"can_get_metadata", "can_read_data", "can_re
 #: right and jointly denied: MEASURED 2026-09-08, 207 of 285 rewrites a tick fell back to the
 #: deployment's ROOT key because this router refused before the endpoint's tier check ever ran.
 #:
-#: PER ACTION, never per tier. The router could read `?tier=`, and it would buy nothing: a write-tier
+#: PER ACTION, never per tier. The router could read `?tier=`, and it would buy nothing: a maintain-tier
 #: session policy grants `s3:GetObject` alongside `PutObject`, so a maintainer that can rewrite can
 #: already read those bytes. Gating the second door on the tier would add a moving part and no
 #: privilege boundary. What it must NOT become is a rung on the reader tier at large — `query` and
 #: `blobs` stay `can_read_data`, pinned by
-#: `tests/integration/test_the_maintainer_rung_opens_the_write_tier_vend.py`.
+#: `tests/integration/test_the_maintainer_rung_opens_the_maintain_tier_vend.py`.
 _ALTERNATIVE_RUNGS: dict[tuple[str, str], str] = {("table", "credentials"): "can_maintain"}
 
 #: The two doors distributed compaction calls, and the ONLY callers are the maintenance plane.

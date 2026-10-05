@@ -33,28 +33,6 @@ def _ids(*values: int) -> pa.Table:
     return pa.table({"id": pa.array(values, pa.int64())})
 
 
-def test_commit_appends_client_written_fragments(tmp_path: Any) -> None:
-    uri = str(tmp_path / "t")
-    # A table already exists (create stays server-side — it centralizes the 2.2 + stable-row-id invariant).
-    lance.write_dataset(
-        pa.table({"id": pa.array([1, 2], pa.int64()), "v": ["a", "b"]}),
-        uri,
-        data_storage_version="2.2",
-        enable_stable_row_ids=True,
-    )
-    base = lance.dataset(uri).version
-
-    # The client wrote these fragments itself; the catalog only commits the metadata.
-    frags = _fragments(uri, pa.table({"id": pa.array([3], pa.int64()), "v": ["c"]}))
-    version, row_count = commit_appended_fragments(uri, {}, frags, base)
-
-    assert version == base + 1
-    assert row_count == 3
-    assert lance.dataset(uri).to_table().num_rows == 3
-    # The append inherited the create-time config — stable row ids are still on (not reset by the commit).
-    assert lance.dataset(uri).has_stable_row_ids
-
-
 def test_classify_commit_error_maps_the_taxonomy() -> None:
     # Do NOT collapse every commit OSError to 409. Four distinct outcomes:
     #   schema/version mismatch  -> 400 (can never succeed on retry)

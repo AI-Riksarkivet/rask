@@ -798,6 +798,11 @@ export interface paths {
          *     stay server-side; transaction.md/namespace.md). Writer tier: the router ``authorize`` gate maps
          *     ``/commit`` to ``can_write_data``. Conflict → 409 (re-read the version + re-commit); schema/version
          *     mismatch → 400; store outage → 503 (see ``dataplane._classify_commit_error``).
+         *
+         *     THE WRITER'S ONLY COMMIT PATH, on main and on every branch ([[LH-202]]). A writer-tier credential puts
+         *     files under ``data/`` (``tree/<branch>/data/`` for a branch credential) and nothing that commits, so
+         *     a writer of a branch (D3) appends here with ``branch``. A branch that does not exist is 404
+         *     ``TableBranchNotFound``, the code the vend door answers for the same name.
          */
         post: operations["commit_fragments_management_v1_table__id__commit_post"];
         delete?: never;
@@ -1990,7 +1995,7 @@ export interface paths {
         put?: never;
         /**
          * Vend Outbox Credentials
-         * @description Vend a write-tier credential scoped to the estate's lineage outbox prefix.
+         * @description Vend a maintain-tier (whole-prefix) credential scoped to the estate's lineage outbox prefix.
          *
          *     Answers `server_mediated` when no outbox is configured or the vendor declines — the same shape the
          *     table door uses, so a caller has one response contract rather than two. A caller that receives it
@@ -10848,6 +10853,8 @@ export interface operations {
     commit_fragments_management_v1_table__id__commit_post: {
         parameters: {
             query?: {
+                /** @description The branch to append to. Omit for main. The fragments must sit under the branch's own `tree/<branch>/data/` and `read_version` is branch-local. */
+                branch?: string | null;
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
@@ -10976,8 +10983,9 @@ export interface operations {
     vend_credentials_management_v1_table__id__credentials_post: {
         parameters: {
             query?: {
-                tier?: "read" | "write";
-                /** @description The branch this credential is for. Naming one NARROWS the grant: write lands on that branch's own directories under `<table>/tree/<branch>/` (`_versions`, `_transactions`, `_deletions`, `_indices`, `data`) and main drops to read-only. Omit for main. */
+                /** @description `read` (can_read_data), `write` (can_write_data: read the table, put files under `data/` for `/commit` to fold in) or `maintain` (can_maintain: get, put and delete the whole prefix). */
+                tier?: "read" | "write" | "maintain";
+                /** @description The branch this credential is for. Naming one NARROWS the grant: writes land under that branch's own `<table>/tree/<branch>/` (`data/` at the write tier; `_versions`, `_transactions`, `_deletions`, `_indices` and `data` at the maintain tier) and main drops to read-only. Omit for main. */
                 branch?: string;
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;

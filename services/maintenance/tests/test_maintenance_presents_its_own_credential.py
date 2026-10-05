@@ -34,7 +34,7 @@ def _settings() -> MaintenanceSettings:
 
 def _vend_door() -> respx.Route:
     payload = {"mode": "direct", "credentials": {"storage_options": _SCOPED}, "location": _URI}
-    return respx.post(_VEND, params={"tier": "write"}).mock(return_value=httpx.Response(200, json=payload))
+    return respx.post(_VEND, params={"tier": "maintain"}).mock(return_value=httpx.Response(200, json=payload))
 
 
 @respx.mock

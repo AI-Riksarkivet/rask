@@ -1115,7 +1115,7 @@ def _run_scope_probe(root_uri: str, vendor: CredentialVendor, storage_options: d
 
     checks: list[ProbeCheck] = []
     try:
-        vended = vendor.vend(table_location=f"s3://{bucket}/{probe_prefix}", tier="write")
+        vended = vendor.vend(table_location=f"s3://{bucket}/{probe_prefix}", tier="maintain")
     except Exception as exc:  # noqa: BLE001 — any vend failure is one reportable outcome, not a 500
         checks.append(ProbeCheck(name="issue", outcome="fail", detail=f"{type(exc).__name__}: {exc}"))
         vended = None

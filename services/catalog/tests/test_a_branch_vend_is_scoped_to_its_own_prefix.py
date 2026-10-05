@@ -76,8 +76,10 @@ def _may_put(policy: dict[str, object], key: str) -> bool:
         pytest.param("tree/a/b/_versions/1.manifest", False, id="nested-branch"),
     ],
 )
-def test_a_branch_WRITE_may_write_only_that_branchs_own_files(key: str, allowed: bool) -> None:
-    policy = build_session_policy(BUCKET, EVALUATED_PREFIX, "write", branch="a")
+def test_a_branch_MAINTAIN_may_write_only_that_branchs_own_files(key: str, allowed: bool) -> None:
+    """The maintain tier names the branch's file directories; the write tier's `data/`-only grant is
+    pinned in `tests/integration/test_a_write_vend_reaches_only_what_its_rung_may_change.py` ([[LH-202]])."""
+    policy = build_session_policy(BUCKET, EVALUATED_PREFIX, "maintain", branch="a")
 
     assert _may_put(policy, key) is allowed
 

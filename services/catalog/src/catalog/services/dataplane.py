@@ -1060,6 +1060,7 @@ def commit_appended_fragments(
     *,
     run: commit_runs.CommitRun | None = None,
     external_blob_bases: Sequence[base_registry.RecordedBase] = (),
+    branch: str | None = None,
 ) -> tuple[int, int]:
     """Commit client-written fragments as an APPEND — the catalog as the governed commit coordinator (#2).
 
@@ -1079,8 +1080,15 @@ def commit_appended_fragments(
     holds them (:func:`_find_run_commit`), and an EMPTY commit is answered with what the catalog recorded
     this caller's run committing, or refused when it recorded nothing.
 
+    ``branch`` commits onto that branch rather than main ([[LH-202]]): a writer-tier credential reaches only
+    ``data/`` (``tree/<branch>/data/`` for a branch), so this door is how a writer of any branch (D3) lands an
+    append. ``read_version`` and the returned version are branch-local, every file is looked for under the
+    branch's own ``data/``, and the commit goes through the branch handle, which Lance commits to
+    ``tree/<branch>/_versions/`` (measured on 12.0.0). A run is recorded against main only, so a branch
+    commit carrying one is refused.
+
     Returns:
-        ``(version, row_count)``: the committed version and the table's row count at it.
+        ``(version, row_count)``: the committed version and the ref's row count at it.
 
     The fragments are a claim and the data files are the authority (:mod:`catalog.services.client_fragments`):
     nothing an append cannot carry, each file at its declared size, and each footer agreeing with the
@@ -1097,6 +1105,8 @@ def commit_appended_fragments(
     """
     if read_version < 0:
         raise InvalidInputError(f"read_version must be non-negative, got {read_version}")
+    if run is not None and branch is not None:
+        raise InvalidInputError("a run is recorded against main only; commit a branch without a run_id")
     # Client-controlled input: a malformed fragment dict raises KeyError/TypeError/ValueError from
     # ``from_json`` (outside the OSError taxonomy) — translate to a 400, never a 500 (audit 2026-07-14).
     try:
@@ -1114,21 +1124,25 @@ def commit_appended_fragments(
         raise InvalidInputError("no fragments to commit")
     _refuse_based_data_files(fragments)
     client_fragments.refuse_forged_metadata(frags)
-    judged_version, judged_against = _refuse_foreign_file_versions(location, so, frags, read_version)
+    judged_version, judged_against = _refuse_foreign_file_versions(location, so, frags, read_version, branch=branch)
     client_fragments.refuse_files_the_table_holds(frags, judged_against)
+    ref_location = _ref_location(location, branch)
     # HIGH (audit 2026-07-14): Lance's commit validates NEITHER data-file existence NOR the declared row
     # count, so a client whose direct write landed under a DIFFERENT prefix than the catalog-resolved
     # location (no malice required) could otherwise commit a 200-OK-but-UNREADABLE current version that
     # breaks reads for EVERY reader until an operator restores. Pre-verify the files exist under the table
     # location; a failed check leaves the table untouched (400) instead of poisoning its current version.
-    _verify_fragment_data_files(location, so, fragments)
+    _verify_fragment_data_files(ref_location, so, fragments)
     # The files exist at their declared sizes; their footers now say whether they hold what is declared ([[LH-211]]).
-    client_fragments.verify_against_footers(location, so, frags, judged_against)
+    client_fragments.verify_against_footers(ref_location, so, frags, judged_against)
     op = lance.LanceOperation.Append(frags)
+    # A branch commits through its own handle: `LanceDataset.commit` of a branch-checked-out dataset lands
+    # on `tree/<branch>/_versions/` and leaves main where it was (measured on 12.0.0).
+    target: str | lance.LanceDataset = location if branch is None else _open_on_ref(location, so, version=None, branch=branch)
     if columns := client_fragments.blob_columns(judged_against):
-        _verify_blob_sidecars(location, so, op, frags, read_version=judged_version, columns=columns, external_bases=external_blob_bases)
+        _verify_blob_sidecars(target, ref_location, so, op, frags, read_version=judged_version, columns=columns, external_bases=external_blob_bases)
     try:
-        dataset = lance.LanceDataset.commit(location, op, read_version=judged_version, storage_options=so)
+        dataset = lance.LanceDataset.commit(target, op, read_version=judged_version, storage_options=so)
     except OSError as exc:
         raise _classify_commit_error(exc) from exc
     version = int(dataset.version)
@@ -1167,8 +1181,21 @@ def _refuse_based_data_files(fragments: list[dict[str, Any]]) -> None:
         )
 
 
+def _ref_location(location: str, branch: str | None) -> str:
+    """The directory a ref's own files live under: the dataset root for main, ``tree/<branch>`` for a branch (`file_format.md`)."""
+    return location if branch is None else f"{location.rstrip('/')}/{branch_layout.BRANCH_CONTAINER}/{branch}"
+
+
+def _open_on_ref(location: str, so: StorageOptions, *, version: int | None, branch: str | None) -> lance.LanceDataset:
+    """``location`` at ``version`` of main, or of ``branch`` when one is named (branch-local numbering)."""
+    options = dict(so) if so else None
+    if branch is None:
+        return lance.dataset(location, version=version, storage_options=options, session=shared_lance_session())
+    return lance.dataset(location, storage_options=options, session=shared_lance_session()).checkout_version((branch, version))
+
+
 def _refuse_foreign_file_versions(
-    location: str, so: StorageOptions, frags: Sequence[lance.FragmentMetadata], read_version: int
+    location: str, so: StorageOptions, frags: Sequence[lance.FragmentMetadata], read_version: int, *, branch: str | None = None
 ) -> tuple[int, lance.LanceDataset]:
     """Refuse fragments whose data files would mix the table's file versions.
 
@@ -1184,7 +1211,7 @@ def _refuse_foreign_file_versions(
     version (measured on 12.0.0). A base that cannot be read fails closed.
     """
     try:
-        base = lance.dataset(location, version=read_version or None, storage_options=dict(so) if so else None, session=shared_lance_session())
+        base = _open_on_ref(location, so, version=read_version or None, branch=branch)
     except Exception as exc:
         if reads_as_absent(exc):
             raise InvalidInputError(f"{_NO_BASE_DETAIL}: {exc}") from exc
@@ -1196,7 +1223,7 @@ def _refuse_foreign_file_versions(
     reason = describe_foreign_data_file_versions(base.data_storage_version, files)
     if reason is None:
         return int(base.version), base
-    if read_version and (latest := _latest_if_it_matches(location, so, files)) is not None:
+    if read_version and (latest := _latest_if_it_matches(location, so, files, branch=branch)) is not None:
         # Written after an Overwrite moved the table to their version: Lance's own non-retryable
         # conflict is the true answer, and it refuses the commit without setting the flag.
         return int(base.version), latest
@@ -1215,14 +1242,17 @@ def _refuse_foreign_file_versions(
     )
 
 
-def _latest_if_it_matches(location: str, so: StorageOptions, files: Sequence[VersionedDataFile]) -> lance.LanceDataset | None:
-    """The table's LATEST version when ``files`` are all at its file version, else ``None``. Read only on the refusal path."""
-    latest = lance.dataset(location, storage_options=dict(so) if so else None, session=shared_lance_session())
+def _latest_if_it_matches(location: str, so: StorageOptions, files: Sequence[VersionedDataFile], *, branch: str | None = None) -> lance.LanceDataset | None:
+    """The ref's LATEST version when ``files`` are all at its file version, else ``None``. Read only on the refusal path."""
+    latest = _open_on_ref(location, so, version=None, branch=branch)
     return latest if describe_foreign_data_file_versions(latest.data_storage_version, files) is None else None
 
 
 def _verify_fragment_data_files(location: str, so: StorageOptions, fragments: list[dict[str, Any]]) -> None:
     """Reject a commit that references data files ABSENT under ``<location>/data/`` (audit HIGH fix).
+
+    ``location`` is the ref's own directory (:func:`_ref_location`): a branch's appended files live under
+    ``tree/<branch>/data/``.
 
     Each fragment's ``files[].path`` is a bare filename under the dataset's ``data/`` dir: a file naming a
     base was already refused by :func:`_refuse_based_data_files`. A missing file means the client's direct
@@ -1256,7 +1286,8 @@ def _verify_fragment_data_files(location: str, so: StorageOptions, fragments: li
 
 
 def _verify_blob_sidecars(
-    location: str,
+    target: str | lance.LanceDataset,
+    ref_location: str,
     so: StorageOptions,
     op: lance.LanceOperation.Append,
     frags: Sequence[lance.FragmentMetadata],
@@ -1271,15 +1302,18 @@ def _verify_blob_sidecars(
     table's readers never see it. Lance's own cleanup does not remove a detached manifest: after
     ``cleanup_old_versions(older_than=0)`` the ``_versions/d<version>.manifest`` was still there while
     the commit's ``.txn`` was gone (measured on 12.0.0), so the door deletes the manifest itself.
+
+    ``target`` is what the real commit goes through (the location for main, the branch handle for a
+    branch) and ``ref_location`` the directory whose ``_versions/`` the detached manifest lands in.
     """
     try:
-        detached = lance.LanceDataset.commit(location, op, read_version=read_version, storage_options=so, detached=True)
+        detached = lance.LanceDataset.commit(target, op, read_version=read_version, storage_options=so, detached=True)
     except OSError as exc:
         raise _classify_commit_error(exc) from exc
     try:
         client_fragments.verify_blob_sidecars(detached, frags, columns, external_bases=external_bases, object_sizes=partial(_object_sizes, so=so))
     finally:
-        _discard_detached_manifest(location, so, int(detached.version))
+        _discard_detached_manifest(ref_location, so, int(detached.version))
 
 
 def _object_sizes(uris: Sequence[str], *, so: StorageOptions) -> list[int | None]:

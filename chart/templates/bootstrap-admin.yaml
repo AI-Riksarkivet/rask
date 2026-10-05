@@ -161,9 +161,8 @@ spec:
               # rungs in both directions (`model.fga`): a maintainer may rewrite HOW a dataset is stored
               # and may not change WHAT it says. Granting the sweep `writer` is the widest write grant in
               # the estate and would make one compromised maintenance pod equivalent to compromising
-              # every table it can reach. The vend door has accepted either rung since the maintainer
-              # rung landed (`credentials.py`: "EITHER RUNG OPENS THIS DOOR, and they mean different
-              # things"), so this costs the sweep nothing it uses.
+              # every table it can reach. The sweep vends `tier=maintain`, which the door opens to
+              # `can_maintain` alone (`credentials.py`), so this is the rung its vend needs.
               #
               # MEASURED on the live store 2026-09-09, before this line changed: `service-maintenance`
               # held `can_write_data` on 106 tables and `can_maintain` on 323. The writer grant existed

@@ -1,4 +1,4 @@
-"""A maintainer may obtain the credential its own rewrite needs, and nobody else gains anything.
+"""A maintainer may obtain the credential its own rewrite needs, and each writing tier opens to its own rung only.
 
 the lakehouse register, row H13 (drained 2026-09-10; in git history). MEASURED LIVE 2026-09-08: of 285 rewrite attempts in one sweep
 tick, 207 were refused a vended credential and fell back to the deployment's ROOT key —
@@ -12,8 +12,12 @@ THE TWO RUNGS MEAN DIFFERENT THINGS and the model keeps them apart — a maintai
 write, drop and promote (`model.fga.yaml`'s own test block asserts all four). What they share is the
 STORAGE verb: compaction, index optimization and reclamation rewrite files, and an object store cannot
 express "rewrite but do not change content" — both are `PutObject`. So a maintainer receives a
-write-TIER credential scoped to its own table for 900 s, which is the narrower of the two available
+whole-prefix credential scoped to its own table for 900 s, which is the narrower of the two available
 postures by an enormous margin; the other is the root key.
+
+ONE RUNG PER TIER ([[LH-202]]). The maintain tier reaches `_versions/` and deletes, the write tier only
+`data/`, so a door that accepted either rung for either tier would hand a writer the policy that commits
+any transaction around `/commit`.
 
 Owner ruling 2026-09-08. Driven through the REAL route rather than a helper, because what is being
 pinned is a credential-vending authorization decision.
@@ -110,37 +114,37 @@ def _grant(
     monkeypatch.setattr(door.fga, "check", _check)
 
 
-def test_a_maintainer_gets_the_write_tier_credential(governed: tuple[TestClient, list[str]], monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_maintainer_gets_the_maintain_tier_credential(governed: tuple[TestClient, list[str]], monkeypatch: pytest.MonkeyPatch) -> None:
+    client, checked = governed
+    _grant(monkeypatch, checked, allow={"can_maintain"})
+
+    resp = client.post("/management/v1/table/db$t/credentials?tier=maintain")
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["mode"] == "direct"
+    assert checked == ["can_maintain"], f"the maintain tier asks its own rung only: {checked}"
+
+
+def test_a_writer_cannot_obtain_the_maintain_tier(governed: tuple[TestClient, list[str]], monkeypatch: pytest.MonkeyPatch) -> None:
+    """The escalation the split exists to close: `can_write_data` does not open the whole-prefix policy."""
+    client, checked = governed
+    _grant(monkeypatch, checked, allow={"can_write_data"})
+
+    resp = client.post("/management/v1/table/db$t/credentials?tier=maintain")
+
+    assert resp.status_code == 403, resp.text
+    assert checked == ["can_maintain"]
+
+
+def test_a_maintainer_cannot_obtain_the_write_tier(governed: tuple[TestClient, list[str]], monkeypatch: pytest.MonkeyPatch) -> None:
+    """The model's separation holds at the door: a maintainer is not a logical writer."""
     client, checked = governed
     _grant(monkeypatch, checked, allow={"can_maintain"})
 
     resp = client.post("/management/v1/table/db$t/credentials?tier=write")
 
-    assert resp.status_code == 200, resp.text
-    assert resp.json()["mode"] == "direct"
-    assert "can_write_data" in checked and "can_maintain" in checked, f"both rungs must be consulted: {checked}"
-
-
-def test_a_writer_still_gets_it_WITHOUT_the_second_probe(governed: tuple[TestClient, list[str]], monkeypatch: pytest.MonkeyPatch) -> None:
-    """The common path must not pay for the new rung, and a writer must not be recorded as a maintainer."""
-    client, checked = governed
-    _grant(monkeypatch, checked, allow={"can_write_data"})
-
-    resp = client.post("/management/v1/table/db$t/credentials?tier=write")
-
-    assert resp.status_code == 200, resp.text
-    assert checked == ["can_write_data"], f"a granted first rung must short-circuit: {checked}"
-
-
-def test_holding_NEITHER_rung_is_still_refused(governed: tuple[TestClient, list[str]], monkeypatch: pytest.MonkeyPatch) -> None:
-    """The half that makes the other two mean something: this door still refuses."""
-    client, checked = governed
-    _grant(monkeypatch, checked, allow=set())
-
-    resp = client.post("/management/v1/table/db$t/credentials?tier=write")
-
     assert resp.status_code == 403, resp.text
-    assert checked == ["can_write_data", "can_maintain"]
+    assert checked == ["can_write_data"]
 
 
 def test_the_READ_tier_never_consults_either_rung(governed: tuple[TestClient, list[str]], monkeypatch: pytest.MonkeyPatch) -> None:
@@ -175,7 +179,7 @@ def test_a_maintainer_REACHES_the_vend_route_at_all(governed: tuple[TestClient, 
     client, checked = governed
     _grant(monkeypatch, checked, allow={"can_maintain"}, router_grants=set())
 
-    resp = client.post("/management/v1/table/db$t/credentials?tier=write")
+    resp = client.post("/management/v1/table/db$t/credentials?tier=maintain")
 
     assert resp.status_code == 200, resp.text
     assert resp.json()["mode"] == "direct"
@@ -186,7 +190,7 @@ def test_holding_NEITHER_router_rung_is_still_refused_at_the_route(governed: tup
     client, checked = governed
     _grant(monkeypatch, checked, allow=set(), router_grants=set())
 
-    resp = client.post("/management/v1/table/db$t/credentials?tier=write")
+    resp = client.post("/management/v1/table/db$t/credentials?tier=maintain")
 
     assert resp.status_code == 403, resp.text
 

@@ -339,6 +339,13 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   `LANCE_MULTIBASE_DATA_BASES` alone. Pinned by
   `tests/integration/test_an_external_blob_base_is_authorized_per_table.py` and the planted-base case of
   `test_a_forged_fragment_is_refused_and_the_table_is_unchanged.py`.
+- **A vend's tier is one FGA rung's allow-list over the Lance layout** ([[LH-202]],
+  `vending.build_session_policy`). Every tier lists and gets `<prefix>/*`; `write` (`can_write_data`)
+  adds put on `data/*` and ingest's `_ingest_staging/*` ledger and nothing that commits, deletes or
+  moves a ref, so a writer appends through `/commit` (`?branch=` for a branch); `maintain`
+  (`can_maintain`) gets put/delete on the whole prefix for compaction and cleanup, and is also the shape
+  for the outbox and the warehouse scope probe. The door checks the one rung its tier names, never
+  either. A put over an existing data file is the residue no session policy can refuse.
 - **Four doors commit client-produced data, and all four judge its file versions.** `/commit`
   (`dataplane.commit_appended_fragments`), `/compaction_commit` (`commit_compaction`), `register`, and
   ingest's own `Lander.commit_fragments` refuse data files at another version than the table's
@@ -610,7 +617,8 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   whatever lies under a branch's directory as that branch's (measured on pylance 12.0.0: a reclaim of
   `a` deleted `a/_versions`'s manifests; deleting `a/_versions` deleted `a`'s history). So the create
   door refuses a layout segment (400) and a name that nests with an existing branch (409, code 19); a
-  branch-write vend grants only `tree/<b>/{_versions,_transactions,_deletions,_indices,data}/*`;
+  branch-maintain vend grants only `tree/<b>/{_versions,_transactions,_deletions,_indices,data}/*`
+  and a branch-write vend only `tree/<b>/data/*`;
   delete goes through nested branches deepest first, refused whole (409) when a branch outside them is
   forked from one; every reclaim (the sweep's `nested_branch` gate,
   `maintenance/run`, `version/delete`) refuses a branch with another inside it; and the sweep lists

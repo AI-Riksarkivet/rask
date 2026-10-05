@@ -30,8 +30,8 @@ STS call, which AWS web identity deliberately does not.
   catalog; the client uses the server-mediated (Arrow-IPC) data endpoints. The
   simplest, backend-agnostic default — nothing is delegated.
 
-OpenFGA decides the tier: ``can_read_data`` -> ``"read"``, ``can_write_data`` ->
-``"write"``.
+OpenFGA decides the tier: ``can_read_data`` -> ``"read"``, ``can_write_data`` -> ``"write"``,
+``can_maintain`` -> ``"maintain"`` (:func:`build_session_policy` says what each grants).
 """
 
 from __future__ import annotations
@@ -50,14 +50,23 @@ from catalog.core.base_judge import BaseJudge, require_sanctioned_bases
 from catalog.core.config import shared_lance_session
 from service_kit.lakehouse.base_refs import location_within
 from service_kit.lakehouse.base_registry import BaseJudgement, BaseRole, BaseStanding
-from service_kit.lakehouse.branch_layout import BRANCH_FILE_DIRS
+from service_kit.lakehouse.branch_layout import BRANCH_CONTAINER, BRANCH_FILE_DIRS
 from service_kit.lakehouse.features import BasePathRef
 from service_kit.lakehouse.objectfs import lance_storage_options
+from service_kit.lakehouse.table_layout import DATA_DIR, INGEST_STAGING_DIR
 
 
 log = logging.getLogger(__name__)
 
-Tier = Literal["read", "write"]
+#: What a credential may do inside the prefix it is scoped to ([[LH-202]]):
+#:
+#: * ``read`` — list and get the table.
+#: * ``write`` — a ``can_write_data`` append: read the table, put data files under ``data/`` (and ingest's
+#:   staging ledger), nothing that commits, deletes or moves a ref. Commits go through ``/commit``.
+#: * ``maintain`` — a ``can_maintain`` rewrite and reclaim: get, put and delete anywhere in the prefix,
+#:   because compaction commits versions and cleanup deletes them. Also the shape for a prefix with no
+#:   Lance layout to narrow by (the lineage outbox, the warehouse scope probe).
+Tier = Literal["read", "write", "maintain"]
 VendingMode = Literal["mode_b", "sts", "web_identity"]
 
 
@@ -128,7 +137,11 @@ def split_s3_location(location: str) -> tuple[str, str]:
 
 
 _READ_ACTIONS = ("s3:GetObject",)
-_WRITE_ACTIONS = (
+#: A writer lands new objects and may abandon its own multipart upload; it deletes nothing.
+_APPEND_ACTIONS = ("s3:PutObject", "s3:AbortMultipartUpload")
+#: Ingest's ledger is written, read back and purged by the run that owns it.
+_LEDGER_ACTIONS = ("s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload")
+_MAINTAIN_ACTIONS = (
     "s3:GetObject",
     "s3:PutObject",
     "s3:DeleteObject",
@@ -167,9 +180,10 @@ def _reject_a_base_that_is_not_a_location(base: str, base_prefix: str) -> None:
     base would turn a credential scoped to a single table prefix into a bucket-wide reader.
 
     THE INPUT IS CHOSEN BY A WRITER, which is why depth has to be checked rather than assumed. Bases are
-    read from the table's own manifest, and a write-tier vend grants ``PutObject`` on ``<prefix>/*``,
-    which covers ``_versions/`` — enough to commit a manifest client-side. So the value here is one a
-    writer on ONE table can pick, used to widen that same writer's next credential.
+    read from the table's own manifest, and a maintain-tier vend grants ``PutObject`` on ``<prefix>/*``,
+    which covers ``_versions/`` — enough to commit a manifest client-side; the static keys the cascade's
+    writers hold reach it too. So the value here is one a principal on ONE table can pick, used to widen
+    the next credential vended for it.
     :func:`_reject_iam_metacharacters` already treats this field as untrusted for wildcards; this is the
     other half of the same distrust.
 
@@ -450,11 +464,25 @@ def build_session_policy(
 ) -> dict[str, object]:
     """Build an STS inline session policy scoping access to one table prefix + tier.
 
-    Two statements: ``s3:ListBucket`` on the bucket gated by an ``s3:prefix``
-    condition, plus object actions on ``bucket/<prefix>/*``. Read tier =
-    GET + List; write tier additionally allows PUT / DELETE /
-    AbortMultipartUpload. As an STS *session* policy this can only RESTRICT the
-    catalog's role (intersection-only), never widen it.
+    Every tier lists and reads ``<prefix>/*`` (``s3:ListBucket`` gated by an ``s3:prefix`` condition,
+    ``s3:GetObject`` on the objects). What else it grants is an allow-list from the layout
+    `lance_docs/file_format.md` fixes, one rung per FGA relation ([[LH-202]]):
+
+    * ``read``: nothing else.
+    * ``write`` (``can_write_data``): put and abort-upload on ``<prefix>/data/*``, where ``write_fragments``
+      lands data files and blob sidecars (``service_kit.lakehouse.table_layout``), and put/delete on ingest's
+      staging ledger. Never ``_versions/``, ``_transactions/``, ``_deletions/``, ``_indices/``, ``_refs/``,
+      ``tree/`` or ``_mem_wal/``, and no delete of anything Lance reads: the append is committed by the
+      catalog's ``/commit`` under its own credential, so a writer that could put a manifest could commit
+      Overwrite, Restore, UpdateBases or a DataReplacement around the door, and one that could put under
+      ``_refs/`` could move a tag or forge a branch.
+    * ``maintain`` (``can_maintain``): get, put, delete and abort-upload on ``<prefix>/*``: compaction
+      commits versions and cleanup deletes them, and an object store cannot tell a rewrite from a write.
+
+    WHAT A SESSION POLICY CANNOT REFUSE: a ``PutObject`` over an existing key. A writer's ``data/*`` grant
+    can therefore overwrite a committed data file's bytes in place; Lance's own commit is put-if-not-exists
+    (``file_format.md``), but no policy condition makes a data-file put one. As an STS *session* policy
+    this can only RESTRICT the catalog's role (intersection-only), never widen it.
 
     ``bases`` are the base paths the table's manifest declares, granted READ and never write, at either
     tier, and only when :func:`_base_is_sanctioned` allows it — inside the table's own vended scope, or
@@ -515,10 +543,10 @@ def build_session_policy(
     #
     # A READ tier needs no split: it is already read-everywhere-in-scope, and a second statement
     # granting nothing new is one more thing to get wrong.
-    branch_write = bool(branch) and tier == "write"
-    obj_actions = list(_READ_ACTIONS if branch_write else (_WRITE_ACTIONS if tier == "write" else _READ_ACTIONS))
+    root = f"{bucket}/{prefix}" if prefix else bucket
+    obj_actions = list(_MAINTAIN_ACTIONS if tier == "maintain" and not branch else _READ_ACTIONS)
     list_prefixes = [f"{prefix}/*"] if prefix else ["*"]
-    obj_resource = f"arn:aws:s3:::{bucket}/{prefix}/*" if prefix else f"arn:aws:s3:::{bucket}/*"
+    obj_resource = f"arn:aws:s3:::{root}/*"
     statements: list[dict[str, object]] = [
         {
             "Sid": "ListTablePrefix",
@@ -534,18 +562,25 @@ def build_session_policy(
             "Resource": obj_resource,
         },
     ]
-    if branch_write:
-        # THE BRANCH'S OWN DIRECTORIES, never `tree/<branch>/*` ([[LH-203]]). The format lays a nested
-        # branch inside its parent's directory (`a/b` at `tree/a/b/`), so a string-prefix grant on
-        # `tree/a/*` was a write credential for every branch named under `a`. Naming the five
-        # directories a branch writes into (`branch_layout.BRANCH_FILE_DIRS`) stops at `a`'s own files.
-        branch_root = f"{bucket}/{prefix}/tree/{branch}" if prefix else f"{bucket}/tree/{branch}"
+    # THE BRANCH'S OWN DIRECTORIES, never `tree/<branch>/*` ([[LH-203]]). The format lays a nested
+    # branch inside its parent's directory (`a/b` at `tree/a/b/`), so a string-prefix grant on
+    # `tree/a/*` was a write credential for every branch named under `a`. Naming directories
+    # (`branch_layout.BRANCH_FILE_DIRS`) stops at `a`'s own files.
+    ref_root = f"{root}/{BRANCH_CONTAINER}/{branch}" if branch else root
+    if tier == "write":
+        # The same rung on a branch as on main: a branch writer appends through `/commit?branch=`.
+        statements.append({"Sid": "TableData", "Effect": "Allow", "Action": list(_APPEND_ACTIONS), "Resource": f"arn:aws:s3:::{ref_root}/{DATA_DIR}/*"})
+        if not branch:
+            statements.append(
+                {"Sid": "IngestLedger", "Effect": "Allow", "Action": list(_LEDGER_ACTIONS), "Resource": f"arn:aws:s3:::{root}/{INGEST_STAGING_DIR}/*"}
+            )
+    elif tier == "maintain" and branch:
         statements.append(
             {
                 "Sid": "BranchObjects",
                 "Effect": "Allow",
-                "Action": list(_WRITE_ACTIONS),
-                "Resource": [f"arn:aws:s3:::{branch_root}/{directory}/*" for directory in BRANCH_FILE_DIRS],
+                "Action": list(_MAINTAIN_ACTIONS),
+                "Resource": [f"arn:aws:s3:::{ref_root}/{directory}/*" for directory in BRANCH_FILE_DIRS],
             }
         )
     n = 0

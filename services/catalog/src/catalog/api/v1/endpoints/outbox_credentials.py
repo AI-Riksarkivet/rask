@@ -10,8 +10,10 @@ backstop could not write, so the run lost its lineage event outright and still r
 THE MECHANISM WAS NOT DECIDED HERE. The estate's standing rule is "STS for STORAGE — a scoped static
 key is not a fix", which rules out minting ingest a RustFS user the way the medallion has one. And the
 primitive already expresses it: `vending.build_session_policy(bucket, prefix, tier, bases)` is
-prefix-GENERIC rather than table-keyed, so `(lance-catalog, _lineage_outbox, write)` needs nothing new
-from it, and as an STS *session* policy it can only RESTRICT the catalog's role, never widen it. What
+prefix-GENERIC rather than table-keyed, so `(lance-catalog, _lineage_outbox, maintain)` needs nothing new
+from it, and as an STS *session* policy it can only RESTRICT the catalog's role, never widen it. The
+`maintain` tier, because it is the whole-prefix shape: the writer tier is an allow-list from a Lance
+table's layout ([[LH-202]]), and the outbox holds event objects, not a table. What
 was missing was a door: the sole vending route was `POST /v1/table/{id}/credentials`, and a control
 prefix is not a table.
 
@@ -59,7 +61,7 @@ async def vend_outbox_credentials(
     vendor: VendorDep,
     web_identity_token: RawBearerToken,
 ) -> CredentialResponse:
-    """Vend a write-tier credential scoped to the estate's lineage outbox prefix.
+    """Vend a maintain-tier (whole-prefix) credential scoped to the estate's lineage outbox prefix.
 
     Answers `server_mediated` when no outbox is configured or the vendor declines — the same shape the
     table door uses, so a caller has one response contract rather than two. A caller that receives it
@@ -85,7 +87,7 @@ async def vend_outbox_credentials(
     await fga_deps.require_relation(client, settings, token, relation="can_stage_events", obj=settings.fga_root_object)
 
     try:
-        creds = await run_in_threadpool(vendor.vend, table_location=outbox, tier="write", web_identity_token=web_identity_token, bases=())
+        creds = await run_in_threadpool(vendor.vend, table_location=outbox, tier="maintain", web_identity_token=web_identity_token, bases=())
     except ClientError as exc:
         # Same split the table door makes: only web_identity re-presents the caller's token, so only
         # there is a rejection an AUTH problem; anywhere else it is a backend fault.
@@ -97,5 +99,5 @@ async def vend_outbox_credentials(
 
     mode = "server_mediated" if creds is None else "direct"
     if mode == "direct":
-        audit("vend_outbox_credentials", SUCCESS, subject=token.sub if token is not None else None, resource=outbox, tier="write")
+        audit("vend_outbox_credentials", SUCCESS, subject=token.sub if token is not None else None, resource=outbox, tier="maintain")
     return CredentialResponse(mode=mode, credentials=creds, location=outbox)

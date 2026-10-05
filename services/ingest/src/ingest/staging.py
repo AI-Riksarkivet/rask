@@ -55,16 +55,11 @@ from typing import TYPE_CHECKING, Any
 from pydantic import BaseModel
 
 from ingest.config import settings
+from service_kit.lakehouse.table_layout import INGEST_STAGING_DIR
 
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Sequence
-
-#: Lives INSIDE the dataset directory on purpose: staging travels with the data it belongs to, so a
-#: warehouse move or a bucket rename cannot separate a run's uncommitted fragments from their
-#: dataset. Underscore-prefixed to sit beside Lance's own `_versions`/`_transactions` without
-#: colliding with a data file.
-STAGING_DIR = "_ingest_staging"
 
 
 def _is_object_store(uri: str) -> bool:
@@ -72,8 +67,13 @@ def _is_object_store(uri: str) -> bool:
 
 
 def staging_root(dataset_uri: str, run_id: str) -> str:
-    """The run's staging location. Per-run, so purging one run cannot touch another's."""
-    return f"{dataset_uri.rstrip('/')}/{STAGING_DIR}/{run_id}"
+    """The run's staging location. Per-run, so purging one run cannot touch another's.
+
+    INSIDE the dataset directory on purpose: staging travels with the data it belongs to, so a warehouse
+    move or a bucket rename cannot separate a run's uncommitted fragments from their dataset, and the
+    table's writer-tier credential reaches it (`service_kit.lakehouse.table_layout`, [[LH-202]]).
+    """
+    return f"{dataset_uri.rstrip('/')}/{INGEST_STAGING_DIR}/{run_id}"
 
 
 def manifest_name(unit_keys: Sequence[str] | str) -> str:
@@ -133,7 +133,7 @@ def unit_manifest_uri(dataset_uri: str, run_id: str) -> str:
     (It would in fact survive today: `discover_staged` skips any record with no `fragments`. Being
     outside the prefix means the recovery path's correctness does not DEPEND on that defensive branch.)
     """
-    return f"{dataset_uri.rstrip('/')}/{STAGING_DIR}/_units/{run_id}.json"
+    return f"{dataset_uri.rstrip('/')}/{INGEST_STAGING_DIR}/_units/{run_id}.json"
 
 
 def write_unit_manifest(dataset_uri: str, run_id: str, pairs: Sequence[tuple[str, str | None]], storage_options: dict[str, str] | None = None) -> str:

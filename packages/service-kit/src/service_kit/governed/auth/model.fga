@@ -188,8 +188,8 @@ type estate
         # service must never be an estate owner. So this names its own role instead of widening `owner`,
         # the same shape `can_maintain` and `can_update_tag`'s `publisher` were minted for.
         #
-        # The STS session policy the door builds scopes the credential to that one prefix and write tier
-        # (`vending.build_session_policy(bucket, "_lineage_outbox", "write")`), so this rung buys exactly
+        # The STS session policy the door builds scopes the credential to that one prefix
+        # (`vending.build_session_policy(bucket, "_lineage_outbox", "maintain")`), so this rung buys exactly
         # "may append to the recovery log" and nothing else — not the control root around it, and not any
         # tenant's data.
         define can_stage_events: event_stager or owner

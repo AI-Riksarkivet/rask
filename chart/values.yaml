@@ -1693,11 +1693,10 @@ maintenance:
   # deployment must remember to turn off is one nobody turns off" — and a hardening every deployment
   # must remember to turn ON is the same defect facing the other way.
   #
-  # Both preconditions hold and are narrower than the old comment claimed. The door accepts EITHER rung
-  # (`endpoints/credentials.py`: "can_write_data or can_maintain required ... for a write-tier
-  # credential"), so the E2 swap that bootstrapped the sweep as a `maintainer` rather than a `writer`
-  # does not block it; and the URL is rendered by this chart, so "catalog reachable" is a property of
-  # the deployment rather than of the operator's memory.
+  # Both preconditions hold. The sweep vends `tier=maintain`, which `endpoints/credentials.py` opens to
+  # `can_maintain`, the rung the bootstrap grants the sweep (a `maintainer`, never a `writer`); and the
+  # URL is rendered by this chart, so "catalog reachable" is a property of the deployment rather than
+  # of the operator's memory.
   #
   # COVERAGE IS PER WAREHOUSE, not estate-wide: the bootstrap hook grants the maintainer rung on the
   # default warehouse, so a tenant warehouse (and any warehouse minted after install) still compacts on

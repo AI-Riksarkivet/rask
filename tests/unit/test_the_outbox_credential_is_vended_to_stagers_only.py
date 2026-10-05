@@ -45,7 +45,7 @@ async def test_it_vends_for_the_CONFIGURED_outbox_and_takes_no_path(monkeypatch:
         web_identity_token=None,
     )
     assert seen["location"] == "s3://lance-catalog/_lineage_outbox"
-    assert seen["tier"] == "write"
+    assert seen["tier"] == "maintain"
 
 
 def _settings() -> Any:

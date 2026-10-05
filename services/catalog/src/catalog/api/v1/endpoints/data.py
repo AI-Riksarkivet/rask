@@ -27,6 +27,7 @@ from lance_namespace import (
     MergeInsertIntoTableResponse,
     QueryTableRequest,
     QueryTableResponse,
+    TableBranchNotFoundError,
     UpdateTableRequest,
     UpdateTableResponse,
 )
@@ -51,6 +52,7 @@ from catalog.core.lineage_emit import COMPACT_TABLE, DELETE, INSERT, MERGE_INSER
 from catalog.core.modes import CreateMode, InsertMode
 from catalog.core.namespace import judged_native_version
 from catalog.core.serialization import dump
+from catalog.core.vending import table_has_branch
 from catalog.schemas import (
     CommitFragmentsRequest,
     CommitFragmentsResponse,
@@ -221,6 +223,12 @@ async def commit_fragments(
     emitter: LineageEmitterDep,
     body: CommitFragmentsRequest,
     authorization: Annotated[str | None, Header()] = None,
+    branch: Annotated[
+        str | None,
+        Query(
+            description="The branch to append to. Omit for main. The fragments must sit under the branch's own `tree/<branch>/data/` and `read_version` is branch-local."
+        ),
+    ] = None,
 ) -> CommitFragmentsResponse:
     """Client-DIRECT append commit (#2) — the catalog as the governed commit coordinator.
 
@@ -231,11 +239,18 @@ async def commit_fragments(
     path (the read-modify-write ops — insert/merge_insert/update/delete — and the 2.2-centralizing create
     stay server-side; transaction.md/namespace.md). Writer tier: the router ``authorize`` gate maps
     ``/commit`` to ``can_write_data``. Conflict → 409 (re-read the version + re-commit); schema/version
-    mismatch → 400; store outage → 503 (see ``dataplane._classify_commit_error``)."""
+    mismatch → 400; store outage → 503 (see ``dataplane._classify_commit_error``).
+
+    THE WRITER'S ONLY COMMIT PATH, on main and on every branch ([[LH-202]]). A writer-tier credential puts
+    files under ``data/`` (``tree/<branch>/data/`` for a branch credential) and nothing that commits, so
+    a writer of a branch (D3) appends here with ``branch``. A branch that does not exist is 404
+    ``TableBranchNotFound``, the code the vend door answers for the same name."""
     segments = parse_identifier(id, settings.delimiter)
     described: DescribeTableResponse = await run_in_threadpool(native.call, ns, "describe_table", DescribeTableRequest(id=segments))
     if not described.location:
         raise InvalidInputError("table has no object-store location for a client-direct commit")
+    if branch is not None and not await run_in_threadpool(table_has_branch, described.location, settings.storage_options(), branch):
+        raise TableBranchNotFoundError(f"branch {branch!r} not found on this table")
     # A run belongs to the verified caller that names it ([[LH-280]]).
     run = (
         CommitRun(control_root=settings.registry_root, storage_options=settings.storage_options(), subject=subject, run_id=body.run_id) if body.run_id else None
@@ -244,7 +259,7 @@ async def commit_fragments(
     # manifest's list is the writer's, and the configured allowlist is wider than any one table.
     record = await run_in_threadpool(BaseJudge.from_settings(settings).read_record, described.location)
     version, row_count = await run_in_threadpool(
-        partial(dataplane.commit_appended_fragments, run=run, external_blob_bases=record.entries if record is not None else ()),
+        partial(dataplane.commit_appended_fragments, run=run, external_blob_bases=record.entries if record is not None else (), branch=branch),
         described.location,
         so,
         body.fragments,
@@ -252,7 +267,7 @@ async def commit_fragments(
     )
     # The shared measured-write trailer, pinned to the version THIS commit made, same as /insert — so the
     # WROTE edge + columnLineage-ready schema land identically whether the append was byte-proxy or direct.
-    # The door commits on main only: it takes no ref, and the location it commits to is main's.
+    # On the ref the commit went to: a branch's version number read back off main is another snapshot.
     await lineage_deps.emit_measured_write(
         emitter,
         segments,
@@ -263,7 +278,7 @@ async def commit_fragments(
         operation=INSERT,
         authorization=authorization,
         pin_version=version,
-        branch=None,
+        branch=branch,
     )
     return CommitFragmentsResponse(version=version, row_count=row_count)
 

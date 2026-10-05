@@ -15425,7 +15425,7 @@
     },
     "/management/v1/table/{id}/commit": {
       "post": {
-        "description": "Client-DIRECT append commit (#2) \u2014 the catalog as the governed commit coordinator.\n\nThe client wrote data fragments straight to object storage with vended, table-scoped creds (never\nthrough here); this endpoint receives only the tiny serialized ``FragmentMetadata`` + the ``read_version``\nand folds them into a metadata-only Lance ``commit`` under ROOT creds, then emits the INSERT lineage. So\nNO data byte transits the catalog \u2014 the byte-proxy's scaling + OOM liability is gone for the bulk-append\npath (the read-modify-write ops \u2014 insert/merge_insert/update/delete \u2014 and the 2.2-centralizing create\nstay server-side; transaction.md/namespace.md). Writer tier: the router ``authorize`` gate maps\n``/commit`` to ``can_write_data``. Conflict \u2192 409 (re-read the version + re-commit); schema/version\nmismatch \u2192 400; store outage \u2192 503 (see ``dataplane._classify_commit_error``).",
+        "description": "Client-DIRECT append commit (#2) \u2014 the catalog as the governed commit coordinator.\n\nThe client wrote data fragments straight to object storage with vended, table-scoped creds (never\nthrough here); this endpoint receives only the tiny serialized ``FragmentMetadata`` + the ``read_version``\nand folds them into a metadata-only Lance ``commit`` under ROOT creds, then emits the INSERT lineage. So\nNO data byte transits the catalog \u2014 the byte-proxy's scaling + OOM liability is gone for the bulk-append\npath (the read-modify-write ops \u2014 insert/merge_insert/update/delete \u2014 and the 2.2-centralizing create\nstay server-side; transaction.md/namespace.md). Writer tier: the router ``authorize`` gate maps\n``/commit`` to ``can_write_data``. Conflict \u2192 409 (re-read the version + re-commit); schema/version\nmismatch \u2192 400; store outage \u2192 503 (see ``dataplane._classify_commit_error``).\n\nTHE WRITER'S ONLY COMMIT PATH, on main and on every branch ([[LH-202]]). A writer-tier credential puts\nfiles under ``data/`` (``tree/<branch>/data/`` for a branch credential) and nothing that commits, so\na writer of a branch (D3) appends here with ``branch``. A branch that does not exist is 404\n``TableBranchNotFound``, the code the vend door answers for the same name.",
         "operationId": "commit_fragments_management_v1_table__id__commit_post",
         "parameters": [
           {
@@ -15435,6 +15435,24 @@
             "schema": {
               "title": "Id",
               "type": "string"
+            }
+          },
+          {
+            "description": "The branch to append to. Omit for main. The fragments must sit under the branch's own `tree/<branch>/data/` and `read_version` is branch-local.",
+            "in": "query",
+            "name": "branch",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The branch to append to. Omit for main. The fragments must sit under the branch's own `tree/<branch>/data/` and `read_version` is branch-local.",
+              "title": "Branch"
             }
           },
           {
@@ -15814,27 +15832,30 @@
             }
           },
           {
+            "description": "`read` (can_read_data), `write` (can_write_data: read the table, put files under `data/` for `/commit` to fold in) or `maintain` (can_maintain: get, put and delete the whole prefix).",
             "in": "query",
             "name": "tier",
             "required": false,
             "schema": {
               "default": "read",
+              "description": "`read` (can_read_data), `write` (can_write_data: read the table, put files under `data/` for `/commit` to fold in) or `maintain` (can_maintain: get, put and delete the whole prefix).",
               "enum": [
                 "read",
-                "write"
+                "write",
+                "maintain"
               ],
               "title": "Tier",
               "type": "string"
             }
           },
           {
-            "description": "The branch this credential is for. Naming one NARROWS the grant: write lands on that branch's own directories under `<table>/tree/<branch>/` (`_versions`, `_transactions`, `_deletions`, `_indices`, `data`) and main drops to read-only. Omit for main.",
+            "description": "The branch this credential is for. Naming one NARROWS the grant: writes land under that branch's own `<table>/tree/<branch>/` (`data/` at the write tier; `_versions`, `_transactions`, `_deletions`, `_indices` and `data` at the maintain tier) and main drops to read-only. Omit for main.",
             "in": "query",
             "name": "branch",
             "required": false,
             "schema": {
               "default": "",
-              "description": "The branch this credential is for. Naming one NARROWS the grant: write lands on that branch's own directories under `<table>/tree/<branch>/` (`_versions`, `_transactions`, `_deletions`, `_indices`, `data`) and main drops to read-only. Omit for main.",
+              "description": "The branch this credential is for. Naming one NARROWS the grant: writes land under that branch's own `<table>/tree/<branch>/` (`data/` at the write tier; `_versions`, `_transactions`, `_deletions`, `_indices` and `data` at the maintain tier) and main drops to read-only. Omit for main.",
               "title": "Branch",
               "type": "string"
             }
@@ -19815,7 +19836,7 @@
     },
     "/v1/outbox/credentials": {
       "post": {
-        "description": "Vend a write-tier credential scoped to the estate's lineage outbox prefix.\n\nAnswers `server_mediated` when no outbox is configured or the vendor declines \u2014 the same shape the\ntable door uses, so a caller has one response contract rather than two. A caller that receives it\nstages nothing and its events stay on the primary publish path, which is the honest degradation:\nthe backstop is absent, not silently broken.",
+        "description": "Vend a maintain-tier (whole-prefix) credential scoped to the estate's lineage outbox prefix.\n\nAnswers `server_mediated` when no outbox is configured or the vendor declines \u2014 the same shape the\ntable door uses, so a caller has one response contract rather than two. A caller that receives it\nstages nothing and its events stay on the primary publish path, which is the honest degradation:\nthe backstop is absent, not silently broken.",
         "operationId": "vend_outbox_credentials_v1_outbox_credentials_post",
         "parameters": [
           {
