@@ -46,7 +46,7 @@ from catalog.api.rask_params import RaskDataBase, RaskExternalBlobBase, RaskFlag
 from catalog.api.security import CurrentSubject, CurrentToken
 from catalog.core import provenance_guard
 from catalog.core.base_judge import BaseJudge
-from catalog.core.formats import reject_unsupported_format
+from catalog.core.formats import reject_unsupported_properties
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.core.lineage_emit import COMPACT_TABLE, DELETE, INSERT, MERGE_INSERT, OVERWRITE_TABLE, UPDATE, merge_source_pin, parse_run_facets
 from catalog.core.modes import CreateMode, InsertMode
@@ -564,7 +564,7 @@ async def update_table(
     # LANCE-ONLY (2026-08-15 ruling). An update door is the create door's back way in: a table
     # made as Lance could otherwise be asked to change format afterwards, and the guard's contract is
     # that a format-selecting property is never silently ignored — on any door that accepts one.
-    reject_unsupported_format(body.properties)
+    reject_unsupported_properties(body.properties)
     segments = parse_identifier(id, settings.delimiter)
     body.id = reconcile_body_id(segments, body.id)
     response: UpdateTableResponse = await run_in_threadpool(dataplane.update_table, ns, so, body)

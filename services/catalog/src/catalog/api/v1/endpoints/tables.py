@@ -56,7 +56,7 @@ from catalog.api.pagination import paginate
 from catalog.api.rask_params import RaskFlag
 from catalog.api.security import CurrentToken
 from catalog.core.base_judge import BaseJudge, GovernedStorage
-from catalog.core.formats import reject_unsupported_format
+from catalog.core.formats import reject_unsupported_properties
 from catalog.core.identifiers import MAX_NAMESPACE_DEPTH, parse_identifier, reconcile_body_id, require_safe_segments
 from catalog.core.lineage_emit import (
     DECLARE_TABLE,
@@ -254,7 +254,7 @@ async def declare_table(
     # LANCE-ONLY (2026-08-15 ruling). This door takes `properties` through its spec request
     # model and never checked it, so a non-Lance format could be selected here while the create
     # door rejected it. Before anything is reserved.
-    reject_unsupported_format(body.properties if body else None)
+    reject_unsupported_properties(body.properties if body else None)
     segments = parse_identifier(id, settings.delimiter)
     # A wildcard (`*`/`?`) in a segment would widen the vended STS policy to siblings — refused at SHAPE,
     # before the location is reserved (declare mints the table's object-store prefix from these segments).
@@ -802,7 +802,7 @@ async def register_table(
         return RegisterTableResponse.model_validate(converge.replay.body)
 
     # LANCE-ONLY (2026-08-15 ruling) — same bypass as `declare_table`; `body` is required here.
-    reject_unsupported_format(body.properties)
+    reject_unsupported_properties(body.properties)
     segments = parse_identifier(id, settings.delimiter)
     await fga_deps.require_parent_exists(ns, "table", segments, delimiter=settings.delimiter)
     # The id must not still belong to a trashed table (diff2 F10 item 4): a recoverable drop KEEPS
@@ -1357,6 +1357,7 @@ async def restore_table(
     # 11, the codes `_open_ref` mints for every other door. Unchecked, because a restore reads no row.
     if body.branch is not None:
         await run_in_threadpool(partial(open_dataset_unchecked, ns, so, segments, version=body.version, branch=body.branch))
+    await run_in_threadpool(partial(dataplane.refuse_a_restore_that_arms_cleanup, ns, so, segments, version=body.version, branch=body.branch))
     response: RestoreTableResponse = await run_in_threadpool(native.call, ns, "restore_table", body)
     # The response carries only a transaction_id, so the event names the version THAT transaction
     # committed on the ref it restored, and the shared trailer reads its schema off one pinned open

@@ -44,11 +44,11 @@ from maintenance.core.metrics import (
     record_unrecorded_bases,
 )
 from maintenance.services import catalog_compaction, compaction_executor, credentials, purge
-from maintenance.services.optimize import AUTO_CLEANUP_PREFIX, DatasetResult, Rewriter, compact_one, discover_datasets, summarize_refusals
+from maintenance.services.optimize import DatasetResult, Rewriter, compact_one, discover_datasets, summarize_refusals
 from maintenance.services.tiers import target_rows_for
 from service_kit.governed import fga
 from service_kit.governed.audit import SUCCESS, audit
-from service_kit.lakehouse import base_refs, base_registry, maintenance_policies, trash, warehouse_records
+from service_kit.lakehouse import auto_cleanup, base_refs, base_registry, maintenance_policies, trash, warehouse_records
 from service_kit.lakehouse.features import flags_from_open_error, manifest_feature_flags, mixes_data_file_versions
 from service_kit.lakehouse.lance_session import affordable_cache_bytes
 from service_kit.lakehouse.objectfs import s3_filesystem
@@ -712,7 +712,7 @@ def _probe_before_vending(uri: str, options: dict[str, str], *, cleanup_enabled:
             data_storage_version=ds.data_storage_version,
             mixed_data_file_versions=mixes_data_file_versions(manifest_feature_flags(ds)[0]),
         )
-        if any(key.startswith(AUTO_CLEANUP_PREFIX) for key in ds.config()):
+        if auto_cleanup.armed_keys(ds.config()):
             return replace(found, may_write=True)  # the commit path is armed, and disarming it commits
         if len(ds.get_fragments()) > 1:
             return replace(found, may_write=True)  # compaction can merge them

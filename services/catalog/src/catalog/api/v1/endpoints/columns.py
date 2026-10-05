@@ -49,7 +49,7 @@ from catalog.core.lineage_emit import (
     UPDATE_FIELD_METADATA,
     UPDATE_SCHEMA_METADATA,
 )
-from catalog.core.namespace import judged_native_version
+from catalog.core.namespace import judged_native_version, open_dataset_for_commit
 from catalog.services import dataplane, native
 from service_kit.governed import fga
 
@@ -336,6 +336,7 @@ async def update_table_schema_metadata(
         response = UpdateTableSchemaMetadataResponse(metadata=updated)
     else:
         req = UpdateTableSchemaMetadataRequest(id=segments, metadata={k: v for k, v in values.items() if v is not None}, branch=branch)
+        await run_in_threadpool(partial(open_dataset_for_commit, ns, so, segments, checked=False))
         response = await run_in_threadpool(native.call, ns, "update_table_schema_metadata", req)
         # ONE DOOR, ONE ANSWER. The dataplane route above already hides the reserved `lineage.*` /
         # `rask.*` keys; the native op returns them verbatim, so without this the same door described a table

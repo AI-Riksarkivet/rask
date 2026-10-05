@@ -50,7 +50,7 @@ from catalog.api.security import CurrentToken
 from catalog.core.config import Settings
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.core.lineage_emit import CREATE_INDEX, DROP_INDEX
-from catalog.core.namespace import judged_native_version
+from catalog.core.namespace import open_dataset_for_commit
 from catalog.services import dataplane, native
 from service_kit import dapr_publish
 from service_kit.lakehouse.work_items import SCALAR_INDEX, VECTOR_INDEX, IndexWorkItem
@@ -87,7 +87,8 @@ async def create_index(
     body.id = reconcile_body_id(segments, body.id)
     dataplane.refuse_a_branch_this_door_cannot_honour(body.branch, door="create_table_index")
     # An index build reads every row of the column, queued or not ([[LH-279]]).
-    await run_in_threadpool(partial(judged_native_version, ns, so, segments, version=None))
+    # Judged ([[LH-279]]: a build reads every row of the column) and disarmed ([[LH-245]]) before it is queued or run.
+    await run_in_threadpool(partial(open_dataset_for_commit, ns, so, segments))
     if (queued := await _queue_build(request, ns, settings, segments, body, kind=VECTOR_INDEX)) is not None:
         return CreateTableIndexResponse(transaction_id=queued)
     response: CreateTableIndexResponse = await run_in_threadpool(native.call, ns, "create_table_index", body)
@@ -124,7 +125,8 @@ async def create_scalar_index(
     segments = parse_identifier(id, settings.delimiter)
     body.id = reconcile_body_id(segments, body.id)
     dataplane.refuse_a_branch_this_door_cannot_honour(body.branch, door="create_table_scalar_index")
-    await run_in_threadpool(partial(judged_native_version, ns, so, segments, version=None))
+    # Judged ([[LH-279]]: a build reads every row of the column) and disarmed ([[LH-245]]) before it is queued or run.
+    await run_in_threadpool(partial(open_dataset_for_commit, ns, so, segments))
     if (queued := await _queue_build(request, ns, settings, segments, body, kind=SCALAR_INDEX)) is not None:
         return CreateTableScalarIndexResponse(transaction_id=queued)
     response: CreateTableScalarIndexResponse = await run_in_threadpool(native.call, ns, "create_table_scalar_index", body)
@@ -242,6 +244,7 @@ async def drop_table_index(
         branch = body.branch
     dataplane.refuse_a_branch_this_door_cannot_honour(branch, door="drop_table_index")
     req = DropTableIndexRequest(id=segments, index_name=index_name)
+    await run_in_threadpool(partial(open_dataset_for_commit, ns, so, segments, checked=False))
     response: DropTableIndexResponse = await run_in_threadpool(native.call, ns, "drop_table_index", req)
     await lineage_deps.emit_measured_write(
         emitter,

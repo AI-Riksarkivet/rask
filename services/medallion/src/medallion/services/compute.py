@@ -31,7 +31,7 @@ from pydantic import BaseModel, Field
 from lineage_kit.consume import LineageDoc, LineageEdge, as_json_rows
 from medallion.core.config import shared_lance_session
 from medallion.services.derivers import ARTIFACT_COLUMNS, derive_artifacts, is_derivable
-from service_kit.lakehouse import blobs, schema
+from service_kit.lakehouse import auto_cleanup, blobs, schema
 
 # ONE implementation, shared with the Ray driver — the same reason the stage stamp itself lives
 # there. A second copy is how the two drivers came to disagree about `stage`'s column position,
@@ -249,12 +249,12 @@ def seed_bronze(uri: str, storage_options: dict[str, str], *, rows: int = 8, dat
     #
     # Idempotence is unchanged: a re-seed of the same rows updates rows that are already there and
     # inserts none, so it stays the no-op it was. What it stops doing is re-minting identity to do it.
-    if _dataset_exists(uri, storage_options):
+    if dataset_exists(uri, storage_options):
         # `when_not_matched_by_source_delete` is what makes this a FULL SYNC rather than an upsert, so
         # the tier still means "this run's output IS the whole dataset" — a row the seed no longer
         # produces is removed, exactly as overwrite removed it. Measured on pylance 10.0.0: source
         # dropping id=3 deletes it while id=1 keeps `_rowid` 0. Same semantics, surviving identity.
-        lance.dataset(uri, storage_options=storage_options, session=shared_lance_session()).merge_insert(
+        open_to_commit(uri, storage_options).merge_insert(
             "id"
         ).when_matched_update_all().when_not_matched_insert_all().when_not_matched_by_source_delete().execute(declare_dataset_id(table, dataset_id))
         # A merge carries ROWS, not schema metadata (see `ensure_declared_dataset_id`), so the stamp on
@@ -290,7 +290,7 @@ def _index_lineage(uri: str, storage_options: dict[str, str]) -> None:
     the DISTRIBUTED stage write, which overwrites and so drops the dataset's indices. The in-process stages
     merge and keep theirs, so this is a no-op re-create there rather than a repair.
     """
-    ds = lance.dataset(uri, storage_options=storage_options, session=shared_lance_session())
+    ds = open_to_commit(uri, storage_options)
     ds.create_scalar_index(
         _LINEAGE_COLUMN,
         IndexConfig(index_type="json", parameters={"target_index_type": "btree", "path": _LINEAGE_INDEX_PATH}),
@@ -374,11 +374,11 @@ def transform_stage(
     # estate 2026-09-06: silver's 8 `source_rowid` values named bronze rows that no longer existed,
     # 8 of 8, because bronze had been overwritten 20 times.
     carried_base = blobs.external_base_of(ds)
-    if _dataset_exists(to_uri, storage_options):
+    if dataset_exists(to_uri, storage_options):
         # `merge_insert` refuses a source with a column the target lacks ("Append with different
         # schema", pylance 12.0.0), so a run that produces a new column widens the tier first.
         _add_new_columns_by_id(out, to_uri, storage_options)
-        lance.dataset(to_uri, storage_options=storage_options, session=shared_lance_session()).merge_insert(
+        open_to_commit(to_uri, storage_options).merge_insert(
             "id"
         ).when_matched_update_all().when_not_matched_insert_all().when_not_matched_by_source_delete().execute(declare_dataset_id(out, dataset_id))
         ensure_declared_dataset_id(to_uri, dataset_id or "", storage_options, session=shared_lance_session())
@@ -432,7 +432,7 @@ def _carry_governance_labels(upstream: pa.Schema, to_uri: str, storage_options: 
 
     Top-level fields only, which is where the classify door's labels on the cascade's tiers live.
     """
-    target = lance.dataset(to_uri, storage_options=storage_options, session=shared_lance_session())
+    target = open_to_commit(to_uri, storage_options)
     updates: dict[str, dict[str, str | None]] = {}
     for field in upstream:
         if field.name not in target.schema.names:
@@ -464,7 +464,7 @@ def _add_new_columns_by_id(out: pa.Table, to_uri: str, storage_options: dict[str
     that merge's source and target agree on the schema.
     """
     for attempt in range(1, _WIDEN_ATTEMPTS + 1):
-        target = lance.dataset(to_uri, storage_options=storage_options, session=shared_lance_session())
+        target = open_to_commit(to_uri, storage_options)
         new = [name for name in out.column_names if name not in target.schema.names]
         if not new:
             return
@@ -587,7 +587,21 @@ _DERIVE_PROBE_ROWS = 64
 _EXTERNAL_BASE_NAME = "source"
 
 
-def _dataset_exists(uri: str, storage_options: dict[str, str]) -> bool:
+def open_to_commit(uri: str, storage_options: dict[str, str]) -> lance.LanceDataset:
+    """Open ``uri`` for a commit with Lance's commit-path auto-cleanup disarmed first ([[LH-245]]).
+
+    Lance deletes versions inside any commit whose resulting manifest carries ``lance.auto_cleanup.*``
+    config, past every hold and under this lane's static key (:mod:`service_kit.lakehouse.auto_cleanup`).
+    The disarm is a config-only commit made only when a key is present, and every commit this lane then
+    makes on the handle, or on a reopen, builds on the disarmed manifest.
+    """
+    dataset = lance.dataset(uri, storage_options=storage_options, session=shared_lance_session())
+    if removed := auto_cleanup.disarm(dataset):
+        log.warning("medallion_auto_cleanup_disarmed_before_commit", extra={"uri": uri, "keys": removed})
+    return dataset
+
+
+def dataset_exists(uri: str, storage_options: dict[str, str]) -> bool:
     """Whether `uri` already holds a dataset — the create-vs-overwrite question `initial_bases` asks.
 
     A read, not a stat: an object store has no directories, and `Path("s3://b/k")` collapses to a

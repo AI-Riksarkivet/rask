@@ -215,8 +215,11 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   (`cleanup_enabled`/`optimize_indices_enabled`), never reorder them — which is why they are modules
   in one service rather than four services each rescanning every bucket. Version reclamation has ONE
   owner, this pass: Lance's commit-path auto-cleanup (`lance.auto_cleanup.*`) deletes inside whichever
-  writer commits, past a hold and a protected base, so `compact_one` deletes every such key before its
-  refusal gates and no policy field turns the lane on (LH-245).
+  writer commits, past a hold and a protected base. No door arms it (the property guard refuses the keys),
+  every committing catalog door disarms the ref first (`core/namespace.disarm_commit_path_cleanup`; erasure
+  every ref), the static-key writers (medallion's in-process lane, `scripts/ray_stage_job.py`) disarm before
+  their first commit, the restore door refuses an armed version, and `compact_one` deletes every such key before its refusal gates
+  as the backstop for a table nobody commits on (LH-245).
 - **A dataset URI encodes its TIER in SIX different places, and they do not agree on which end it
   sits.** `maintenance/services/tiers.py` sizes fragments per tier (bronze 512 / silver 262 144 / gold
   524 288 rows — bronze rows are ~1.8 MB page images, silver/gold ~2 KB records, so one row count

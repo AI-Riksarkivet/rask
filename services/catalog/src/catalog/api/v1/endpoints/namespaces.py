@@ -47,7 +47,7 @@ from catalog.api.pagination import paginate
 from catalog.api.rask_params import RaskFlag
 from catalog.api.security import CurrentToken, Principal
 from catalog.core.config import Settings
-from catalog.core.formats import reject_unsupported_format
+from catalog.core.formats import reject_unsupported_properties
 from catalog.core.identifiers import MAX_NAMESPACE_DEPTH, parse_identifier, reconcile_body_id, require_safe_segments
 from catalog.core.lineage_emit import DROP_TABLE, REGISTER_TABLE, emit_write_event
 
@@ -139,7 +139,7 @@ async def create_namespace(
     # LANCE-ONLY (2026-08-15 ruling). A namespace carries no bytes, but its `properties` map is
     # where a client sets a DEFAULT format for the tables created under it — so accepting one here
     # would let the ruling be bypassed one level up from the door that enforces it.
-    reject_unsupported_format(body.properties if body else None)
+    reject_unsupported_properties(body.properties if body else None)
     # WHAT `mode` MEANS HERE, from spec.yaml's CreateNamespaceRequest: "Create: the operation fails
     # with 409. ExistOk: the operation succeeds and the existing namespace is kept. Overwrite: the
     # existing namespace is dropped and a new empty namespace with this name is created." The backend

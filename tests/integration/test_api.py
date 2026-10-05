@@ -526,7 +526,9 @@ def test_restore_emits_lineage_at_new_version(client: TestClient, fake_ns: Magic
     fake_ns.describe_transaction.return_value = DescribeTransactionResponse(status="SUCCEEDED", properties={"uuid": "tx", "version": "12"})
     dataset = MagicMock()
     dataset.version = 13
+    dataset.config.return_value = {}
     monkeypatch.setattr("catalog.services.dataplane.open_dataset", lambda *a, **k: dataset)
+    monkeypatch.setattr("catalog.services.dataplane.open_dataset_unchecked", lambda *a, **k: dataset)
     captured = _capture_measured_emit(monkeypatch)
 
     resp = client.post("/v1/table/db$t/restore", json={"version": 3})

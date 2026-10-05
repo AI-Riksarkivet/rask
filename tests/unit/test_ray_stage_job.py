@@ -557,7 +557,8 @@ def _versions_of(uri: str) -> int:
     return lance.dataset(uri).version
 
 
-def test_a_delta_run_reprocesses_only_the_rows_added_since_BASE_VERSION(tmp_path: Path) -> None:
+@pytest.mark.parametrize("armed", [pytest.param(False, id="plain"), pytest.param(True, id="armed-tier")])
+def test_a_delta_run_reprocesses_only_the_rows_added_since_BASE_VERSION(tmp_path: Path, armed: bool) -> None:
     """The backfill property: two rows added to an existing tier must move two rows, not the tier.
 
     Observed through the STAGE STAMP rather than a row count, because a count cannot tell the two
@@ -567,6 +568,10 @@ def test_a_delta_run_reprocesses_only_the_rows_added_since_BASE_VERSION(tmp_path
     Note the destination must already exist: a delta against a destination that cannot merge degrades
     to a full run on purpose (see `_mergeable`), because writing a delta into a table `_reset_if_legacy`
     just wiped is silent data loss. That degradation is what the first version of this test hit.
+
+    The armed case: silver carries Lance's commit-path auto-cleanup keys, set out of band, and the job commits with
+    a static key outside the catalog, so it disarms the destination before its first commit and keeps every
+    version silver had ([[LH-245]]).
     """
     import lance
 
@@ -581,7 +586,13 @@ def test_a_delta_run_reprocesses_only_the_rows_added_since_BASE_VERSION(tmp_path
         mode="append",
         data_storage_version="2.2",
     )
+    if armed:
+        lance.dataset(silver).update_config(
+            {"lance.auto_cleanup.interval": "1", "lance.auto_cleanup.older_than": "0s", "lance.auto_cleanup.retain_versions": "1"}
+        )
+    kept = {v["version"] for v in lance.dataset(silver).versions()}
     job._run_stage(bronze, silver, "backfill-pass", {}, lineage='{"run_id": "r-delta"}', base_version=base)
+    assert kept <= {v["version"] for v in lance.dataset(silver).versions()}, "the stage run deleted silver's versions"
 
     out = lance.dataset(silver).to_table(columns=["id", "stage"]).to_pylist()
     by_id = {row["id"]: row["stage"] for row in out}

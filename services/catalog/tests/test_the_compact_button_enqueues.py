@@ -85,6 +85,9 @@ def _app(settings: Settings, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) ->
     class _Ds:
         uri = "s3://warehouse/aa3bed10_ns$events"
 
+        def config(self) -> dict[str, str]:
+            return {}
+
     monkeypatch.setattr(door, "open_dataset", lambda ns, so, segments, **kwargs: _Ds())
     monkeypatch.setattr(sk_base_refs, "sibling_base_refs", lambda uri, so, *, configured, record_of: sk_base_refs.BaseRefs())
     application.dependency_overrides[get_settings] = lambda: settings
@@ -144,6 +147,9 @@ def test_the_identity_survives_a_uri_no_parser_can_read(monkeypatch: pytest.Monk
         # The MEDALLION layout on purpose: this is the URI shape `table_id_from_uri` cannot read, so a
         # test using the flat layout would pass with the identity still coming from the path.
         uri = "s3://lance-catalog/medallion/bronze"
+
+        def config(self) -> dict[str, str]:
+            return {}
 
     monkeypatch.setattr(door, "open_dataset", lambda ns, so, segments, **kwargs: _MedallionDs())
 

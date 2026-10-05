@@ -26,6 +26,7 @@ from pydantic import BaseModel, Field
 from catalog.core.base_judge import installed_judge, require_sanctioned_bases
 from catalog.core.config import Settings, shared_lance_session
 from catalog.core.store_endpoint import require_estate_store
+from service_kit.lakehouse import auto_cleanup
 from service_kit.lakehouse.features import BasePathRef, flags_from_open_error, manifest_base_path_refs, manifest_feature_flags, mixes_data_file_versions
 from service_kit.lancekit.absence import reads_as_absent
 
@@ -155,6 +156,59 @@ def open_dataset_unchecked(
     base, and a door that does read rows must not call this.
     """
     return _open_ref(_table_location(ns, table_id), storage_options, table_id, version=version, branch=branch)
+
+
+def disarm_commit_path_cleanup(dataset: lance.LanceDataset, table_id: list[str]) -> lance.LanceDataset:
+    """Remove any ``lance.auto_cleanup.*`` key from the ref ``dataset`` is on, BEFORE a door commits on it ([[LH-245]]).
+
+    Lance deletes versions inside the commit whose resulting manifest carries those keys, under whoever
+    commits and past every hold (:mod:`service_kit.lakehouse.auto_cleanup`). Measured on pylance 12.0.0: the
+    hook reads the manifest the commit PRODUCES, so a config-only commit that drops the keys deletes nothing
+    and the door's own commit, rebased onto it, deletes nothing either. So an armed table — armed out of band
+    by a maintain-tier credential, since no catalog door writes manifest config — is disarmed by its next
+    door commit, whether or not the sweep has reached it.
+
+    Returns the same handle, advanced in place to the disarm commit when there was one, so the door commits
+    through it and reports the version its own operation made.
+    """
+    removed = auto_cleanup.disarm(dataset)
+    if removed:
+        log.warning("auto_cleanup_disarmed_before_commit", extra={"table_id": list(table_id), "keys": removed, "version": dataset.version})
+    return dataset
+
+
+def disarm_every_ref(dataset: lance.LanceDataset, table_id: list[str]) -> lance.LanceDataset:
+    """:func:`disarm_commit_path_cleanup` on main and on every branch head, for a door that commits on all of them.
+
+    The erasure door deletes and compacts on every ref, and each of those commits would reclaim behind its
+    retention window on an armed ref. A branch list that cannot be read disarms main only; the door reports
+    the branches it could not reach on its own.
+    """
+    try:
+        branches = list(dataset.branches.list() or {})
+    except Exception:  # noqa: BLE001 — the erasure reports an unreadable branch list as its own surface
+        branches = []
+    for name in branches:
+        disarm_commit_path_cleanup(dataset.checkout_version((name, None)), [*table_id, f"@{name}"])
+    return disarm_commit_path_cleanup(dataset, table_id)
+
+
+def open_dataset_for_commit(
+    ns: LanceNamespace,
+    storage_options: dict[str, str],
+    table_id: list[str],
+    *,
+    branch: str | None = None,
+    checked: bool = True,
+) -> lance.LanceDataset:
+    """:func:`open_dataset` (or, with ``checked=False``, :func:`open_dataset_unchecked`) on the ref a door is
+    about to commit on, with commit-path auto-cleanup disarmed (:func:`disarm_commit_path_cleanup`).
+
+    Every catalog door that commits opens here, including the doors whose commit runs inside the native
+    backend: they open the ref only to disarm it, and the native call's own open then reads the disarmed manifest.
+    """
+    opened = open_dataset(ns, storage_options, table_id, branch=branch) if checked else open_dataset_unchecked(ns, storage_options, table_id, branch=branch)
+    return disarm_commit_path_cleanup(opened, table_id)
 
 
 def judged_native_version(ns: LanceNamespace, storage_options: dict[str, str], table_id: list[str], *, version: int | None) -> int:

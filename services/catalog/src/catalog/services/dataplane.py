@@ -99,11 +99,11 @@ from catalog.core import provenance_guard
 from catalog.core.base_judge import require_sanctioned_bases
 from catalog.core.config import shared_lance_session
 from catalog.core.modes import CreateMode, InsertMode
-from catalog.core.namespace import judged_native_version, open_dataset, open_dataset_unchecked
+from catalog.core.namespace import disarm_commit_path_cleanup, judged_native_version, open_dataset, open_dataset_unchecked
 from catalog.services import changes, client_fragments, native, table_bases, table_claims
 from catalog.services.base_credentials import BaseCredentials
 from catalog.services.cast_size import bytes_after_cast
-from service_kit.lakehouse import base_registry, branch_layout, commit_runs, location_claims
+from service_kit.lakehouse import auto_cleanup, base_registry, branch_layout, commit_runs, location_claims
 from service_kit.lakehouse.base_refs import decoded_path
 from service_kit.lakehouse.features import VersionedDataFile, describe_foreign_data_file_versions, manifest_base_path_refs
 from service_kit.lakehouse.objectfs import StorageOptions, credential_of, s3_filesystem
@@ -539,7 +539,8 @@ def create_table(
     if existing is not None and not only_declared:  # a written, readable table already lives here
         if normalized is CreateMode.OVERWRITE:
             # A new version of the same table, so the table's provenance rides onto it ([[LH-242]]).
-            current = lance.dataset(existing, storage_options=so, session=shared_lance_session())
+            # Disarmed first ([[LH-245]]): an overwrite carries the table's config forward, keys included.
+            current = disarm_commit_path_cleanup(lance.dataset(existing, storage_options=so, session=shared_lance_session()), segments)
             dataset = _write_blob(
                 provenance_guard.keep_provenance(current.schema, table),
                 existing,
@@ -1166,7 +1167,9 @@ def commit_appended_fragments(
     op = lance.LanceOperation.Append(frags)
     # A branch commits through its own handle: `LanceDataset.commit` of a branch-checked-out dataset lands
     # on `tree/<branch>/_versions/` and leaves main where it was (measured on 12.0.0).
-    target: str | lance.LanceDataset = location if branch is None else _open_on_ref(location, so, version=None, branch=branch)
+    # Disarmed before the commit ([[LH-245]]): the Append rebases onto the config-only commit, so neither deletes a version.
+    ref = disarm_commit_path_cleanup(_open_on_ref(location, so, version=None, branch=branch), [location])
+    target: str | lance.LanceDataset = location if branch is None else ref
     if columns := client_fragments.blob_columns(judged_against):
         _verify_blob_sidecars(target, ref_location, so, op, frags, read_version=judged_version, columns=columns, external_bases=external_blob_bases)
     try:
@@ -1584,6 +1587,7 @@ def commit_compaction(location: str, so: StorageOptions, results: Sequence[str],
 
     require_sanctioned_bases(location, manifest_base_path_refs(dataset), judge=None)
     require_compactable(dataset, so)
+    dataset = disarm_commit_path_cleanup(dataset, [location])
     # The rewrites are client-supplied, so their files are judged like an append's: a forged or buggy
     # result at another file version would commit and stamp flag 256 (measured on pylance 12.0.0).
     foreign = describe_foreign_data_file_versions(
@@ -1865,7 +1869,7 @@ def update_table(ns: LanceNamespace, so: StorageOptions, req: UpdateTableRequest
     refuse_an_unbounded_boolean_chain(req.predicate, field="predicate")
     for expression in updates.values():
         refuse_an_unbounded_boolean_chain(expression, field="updates")
-    dataset = open_dataset(ns, so, table_id, branch=req.branch)
+    dataset = disarm_commit_path_cleanup(open_dataset(ns, so, table_id, branch=req.branch), table_id)
     with caller_sql("invalid update expression or predicate"):
         result = dataset.update(updates, where=req.predicate)
     # pylance's update() returns an UpdateResult TypedDict (a plain dict at runtime); the row count is
@@ -1882,7 +1886,7 @@ def delete_from_table(ns: LanceNamespace, so: StorageOptions, req: DeleteFromTab
     # Same omission as `update_table` above, and worse here: a wrong-target DELETE loses rows that were
     # never meant to be touched, and returns 200.
     refuse_an_unbounded_boolean_chain(req.predicate, field="predicate")
-    dataset = open_dataset(ns, so, table_id, branch=req.branch)
+    dataset = disarm_commit_path_cleanup(open_dataset(ns, so, table_id, branch=req.branch), table_id)
     with caller_sql("invalid delete predicate"):
         dataset.delete(req.predicate)
     return DeleteFromTableResponse(version=dataset.version)
@@ -1907,7 +1911,7 @@ def insert_into_table(ns: LanceNamespace, so: StorageOptions, req: InsertIntoTab
     # Validated here as well as at the door's coercion: this hands pyarrow's buffers to Lance in-process,
     # and Lance writes whatever an unvalidated offset points at.
     rows = read_arrow_body(data, max_bytes=max_bytes)
-    dataset = open_dataset(ns, so, _table_id(req), branch=req.branch)
+    dataset = disarm_commit_path_cleanup(open_dataset(ns, so, _table_id(req), branch=req.branch), _table_id(req))
     # THROUGH `InsertMode`, the one vocabulary every caller shares. pylance's own parser is not the
     # spec's: it takes `create`, which the spec does not give this door, and refuses an unknown value with
     # a bare ValueError that would answer 500. The parse is idempotent, so a mode the door already parsed
@@ -1941,9 +1945,9 @@ def merge_insert_into_table(
     refuse_an_unbounded_boolean_chain(req.when_not_matched_by_source_delete_filt, field="when_not_matched_by_source_delete_filt")
     rows = read_arrow_body(data, max_bytes=max_bytes)
     if req.branch is None:
-        judged_native_version(ns, so, _table_id(req), version=None)
+        disarm_commit_path_cleanup(open_dataset(ns, so, _table_id(req)), _table_id(req))
         return cast(MergeInsertIntoTableResponse, native.call(ns, "merge_insert_into_table", req, data))
-    dataset = open_dataset(ns, so, _table_id(req), branch=req.branch)
+    dataset = disarm_commit_path_cleanup(open_dataset(ns, so, _table_id(req), branch=req.branch), _table_id(req))
     # THE BUILDER IS CONSTRUCTED INSIDE THE GUARD, and that placement is the fix rather than a tidy-up:
     # `merge_insert(on)` is where Lance rejects a key column that does not exist, and it sat outside
     # `caller_sql`, so the one door whose whole job is matching on that column reported `Internal 18`
@@ -1966,6 +1970,28 @@ def merge_insert_into_table(
         num_inserted_rows=int(counts.get("num_inserted_rows", 0)),
         num_deleted_rows=int(counts.get("num_deleted_rows", 0)),
     )
+
+
+def refuse_a_restore_that_arms_cleanup(ns: LanceNamespace, so: StorageOptions, table_id: list[str], *, version: int | None, branch: str | None) -> None:
+    """Refuse restoring a version whose config carries ``lance.auto_cleanup.*`` keys ([[LH-245]]).
+
+    A restore commits the restored version's config, and Lance's commit-path cleanup reads the manifest a
+    commit produces (measured on pylance 12.0.0: disarming the latest version and then restoring an armed one
+    re-armed the table and deleted versions in the restore's own commit). No disarm can precede that commit,
+    because the keys arrive with it, so the door refuses rather than letting a restore delete history past
+    every hold. Unchecked, because a restore reads no row.
+
+    Raises:
+        InvalidInputError: The version to restore carries ``lance.auto_cleanup.*`` keys.
+    """
+    if version is None:
+        return
+    target = open_dataset_unchecked(ns, so, table_id, version=version, branch=branch)
+    if armed := auto_cleanup.armed_keys(target.config()):
+        raise InvalidInputError(
+            f"restore refused: version {version} carries commit-path auto-cleanup config {armed}, and restoring it would delete "
+            "table versions inside the restore's own commit. Version reclamation belongs to the maintenance sweep; restore a version without these keys"
+        )
 
 
 def refuse_a_branch_this_door_cannot_honour(branch: str | None, *, door: str, remedy: str | None = None) -> None:
@@ -2084,7 +2110,7 @@ def add_columns(ns: LanceNamespace, so: StorageOptions, req: AlterTableAddColumn
     transforms = {c.name: c.expression for c in columns if c.expression}
     if not transforms:
         raise InvalidInputError("add_columns requires a name and SQL expression per column")
-    dataset = open_dataset(ns, so, table_id, branch=req.branch)
+    dataset = disarm_commit_path_cleanup(open_dataset(ns, so, table_id, branch=req.branch), table_id)
     with _column_op("add_columns", dataset.schema.names):
         dataset.add_columns(transforms)
     return AlterTableAddColumnsResponse(version=dataset.version)
@@ -2105,7 +2131,7 @@ def alter_columns(ns: LanceNamespace, so: StorageOptions, req: AlterTableAlterCo
             # data_type is a JsonArrowDataType dict; pylance needs a real pa.DataType, not the JSON dict.
             alteration["data_type"] = _json_arrow_to_pa_type(dt if isinstance(dt, dict) else dt.model_dump())
         alterations.append(alteration)
-    dataset = open_dataset(ns, so, table_id, branch=req.branch)
+    dataset = disarm_commit_path_cleanup(open_dataset(ns, so, table_id, branch=req.branch), table_id)
     provenance_guard.refuse_provenance_alter(dataset.schema, alterations)
     with _column_op("alter_columns", dataset.schema.names):
         # pylance accepts plain dict alterations at runtime; its stub types them as
@@ -2118,7 +2144,7 @@ def drop_columns(ns: LanceNamespace, so: StorageOptions, req: AlterTableDropColu
     """Drop the named columns from the table."""
     table_id = _table_id(req)
     columns = list(req.columns or [])
-    dataset = open_dataset(ns, so, table_id, branch=req.branch)
+    dataset = disarm_commit_path_cleanup(open_dataset(ns, so, table_id, branch=req.branch), table_id)
     provenance_guard.refuse_provenance_drop(dataset.schema, columns)
     with _column_op("drop_columns", dataset.schema.names):
         dataset.drop_columns(columns)
@@ -2420,7 +2446,7 @@ def update_schema_metadata(
     reports, and the version the update committed: the handle advances to it in place (measured on pylance
     12.0.0), so the lineage event names this commit rather than whatever a reopen finds.
     """
-    dataset = open_dataset(ns, so, table_id, branch=branch)
+    dataset = disarm_commit_path_cleanup(open_dataset(ns, so, table_id, branch=branch), table_id)
     result = dataset.update_schema_metadata(values)
     return filter_internal_metadata(result), int(dataset.version)
 
@@ -2517,7 +2543,7 @@ def update_field_metadata(
     """Merge/replace per-field metadata for the given field paths."""
     field_updates = {u["path"]: dict(u.get("metadata") or {}) for u in updates if u.get("path")}
     replace = any(bool(u.get("replace")) for u in updates)
-    dataset = open_dataset(ns, so, table_id, branch=branch)
+    dataset = disarm_commit_path_cleanup(open_dataset(ns, so, table_id, branch=branch), table_id)
     with _column_op("update_field_metadata", dataset.schema.names):
         dataset.update_field_metadata(field_updates, replace=replace)
     # A None value is the key-deletion signal for the backend; drop those from the
@@ -3014,7 +3040,7 @@ def ensure_merge_key_index(ns: LanceNamespace, segments: list[str], on: str | No
         return
     try:
         if branch is not None and so is not None:
-            dataset = open_dataset(ns, so, segments, branch=branch)
+            dataset = disarm_commit_path_cleanup(open_dataset(ns, so, segments, branch=branch), segments)
             if any(on in (index.get("fields") or []) for index in dataset.list_indices()):
                 return
             dataset.create_scalar_index(on, index_type="BTREE")
@@ -3028,6 +3054,8 @@ def ensure_merge_key_index(ns: LanceNamespace, segments: list[str], on: str | No
                 # (BITMAP/INVERTED) therefore also suppresses the BTREE — revisit only if merge dedup
                 # proves unable to use those.
                 return
+        if so is not None:
+            disarm_commit_path_cleanup(open_dataset(ns, so, segments), segments)
         native.call(
             ns,
             "create_table_scalar_index",

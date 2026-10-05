@@ -20,6 +20,7 @@ import pyarrow as pa
 from lance import blob_array, blob_field
 from pydantic import BaseModel
 
+from medallion.services.compute import dataset_exists, open_to_commit
 from service_kit.lakehouse import schema
 from service_kit.lakehouse.sources import SourceAdapter, SourceObject
 
@@ -195,6 +196,9 @@ def ingest_to_bronze(
         if chunk:
             yield _chunk_batch(chunk, next_id, extra_columns)
 
+    if dataset_exists(bronze_uri, storage_options):
+        # An overwrite carries the table's config forward, so an armed bronze would reclaim inside it ([[LH-245]]).
+        open_to_commit(bronze_uri, storage_options)
     try:
         dataset = lance.write_dataset(  # noqa: TID251
             batches(),

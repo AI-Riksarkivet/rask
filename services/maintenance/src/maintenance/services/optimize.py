@@ -32,6 +32,7 @@ from maintenance.services.compaction_executor import (
 )
 from maintenance.services.index_health import inspect_indices
 from maintenance.services.rewrite_slot import record_committed_rewrite, resident_bytes, rewrite_slot
+from service_kit.lakehouse import auto_cleanup
 from service_kit.lakehouse.base_refs import BaseRefs, containment_of, location_in_store
 from service_kit.lakehouse.branch_layout import BRANCH_CONTAINER, BRANCH_REFS_DIR, branch_name_from_ref_file, branch_named_by, branches_inside
 from service_kit.lakehouse.features import (
@@ -612,13 +613,6 @@ def _reclaim_versions(
     result.bytes_removed = int(getattr(stats, "bytes_removed", 0))
 
 
-#: Every manifest config key Lance's commit-path auto-cleanup reads. A PREFIX, not the two keys
-#: `disable_auto_cleanup` deletes: measured on pylance 12.0.0, that call removes only `.interval` and
-#: `.older_than` and leaves `.retain_versions` standing, so a table it "disabled" still carries a
-#: retention instruction the next `enable` or `update_config` re-arms.
-AUTO_CLEANUP_PREFIX = "lance.auto_cleanup."
-
-
 class DisarmOutcome(BaseModel):
     """What :func:`_disarm_commit_path_cleanup` did, carried onto whichever result the pass returns."""
 
@@ -634,36 +628,25 @@ class DisarmOutcome(BaseModel):
 
 
 def _disarm_commit_path_cleanup(ds: lance.LanceDataset, *, uri: str) -> DisarmOutcome:
-    """Remove every ``lance.auto_cleanup.*`` key, so no commit but the sweep's reclaims a version ([[LH-245]]).
+    """Remove every ``lance.auto_cleanup.*`` key, the backstop for a table no door commits on ([[LH-245]]).
 
-    Lance runs cleanup INSIDE the commit of whoever writes, every N commits, from these manifest keys
-    (`lance_docs/guide.md:3857-3923`). Measured on pylance 12.0.0: with `interval=1, older_than=0s`, one
-    ordinary `write_dataset(mode="append")` took a table from versions 1..7 to 7..8, and
-    `LanceDataset.commit` of an `Append` — the catalog's own `/commit` shape — did the same. That
-    deletion answers to none of the sweep's gates: a legal hold (`cleanup_enabled=False`) and a
-    protected base both return before reclamation, the writer may hold no delete right (Lance then
-    only logs the hook's failure), nothing records it, and pylance 12's Python `write_dataset` has no
-    `skip_auto_cleanup` a writer could opt out with. So the sweep is the one reclaimer and this lane is
-    closed rather than governed.
+    Every catalog door that commits disarms the ref first (:mod:`service_kit.lakehouse.auto_cleanup` records
+    the measurements); a table nobody commits on is disarmed here instead, so it does not stay armed until
+    some later commit reclaims behind the sweep's gates.
 
     Called right after the open, BEFORE every refusal gate: the hold and the protected base are exactly
     the tables whose history the lane would delete, and a refusal that returned first would leave the
-    keys standing. The write is a config-only commit — no data file is touched — so it is safe on a
-    table the pass then declines to rewrite.
-
-    WRITES ONLY WHEN A KEY IS PRESENT. `delete_config_keys` commits a version even when there is
-    nothing to delete (measured on 12.0.0: `disable_auto_cleanup` on a key-free table moved it 12 -> 13),
-    and this runs on every dataset every tick. A failure is reported on the result, never raised: the
+    keys standing. The write is a config-only commit, and only when a key is present, so it is safe on a
+    table the pass then declines to rewrite. A failure is reported on the result, never raised: the
     dataset stays armed, which an operator must see, and the next tick retries.
     """
     try:
-        armed = sorted(key for key in ds.config() if key.startswith(AUTO_CLEANUP_PREFIX))
-        if not armed:
-            return DisarmOutcome()
-        ds.delete_config_keys(armed)
+        armed = auto_cleanup.disarm(ds)
     except Exception as exc:  # noqa: BLE001 — reported on the result; the pass continues
         log.warning("auto_cleanup_disarm_failed", extra={"uri": uri, "error": str(exc)})
         return DisarmOutcome(error=f"auto_cleanup: {exc}", error_type=type(exc).__name__)
+    if not armed:
+        return DisarmOutcome()
     log.warning("auto_cleanup_disarmed", extra={"uri": uri, "keys": armed})
     return DisarmOutcome(disarmed=True)
 

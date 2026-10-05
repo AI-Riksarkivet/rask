@@ -66,7 +66,7 @@ from catalog.api.security import Principal
 from catalog.core import provenance_guard
 from catalog.core.base_judge import GovernedStorage
 from catalog.core.config import Settings
-from catalog.core.formats import reject_unsupported_format
+from catalog.core.formats import reject_unsupported_properties
 from catalog.core.identifiers import parse_identifier, require_safe_segments
 from catalog.core.lineage_emit import OVERWRITE_TABLE, InputPin, InputRef, LineageEmitter, merge_source_pin, parse_run_facets
 from catalog.core.lineage_metadata import build_lineage_metadata, stamp_lineage_metadata
@@ -166,7 +166,7 @@ def parse_create_shape(
             raise InvalidInputError(f"data_base(s) not in the LANCE_MULTIBASE_DATA_BASES allowlist: {rogue}")
     parsed_properties = _parse_properties(properties)
     # #78 format honesty: reject a client that tries to select another file format (see the helper).
-    reject_unsupported_format(parsed_properties)
+    reject_unsupported_properties(parsed_properties)
     # Create properties are stamped onto the Lance file's schema metadata, so they meet the same
     # reserved-namespace rule as every other metadata write door ([[LH-208]]).
     provenance_guard.refuse_reserved_keys(parsed_properties or {}, door="create properties")

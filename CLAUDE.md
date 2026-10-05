@@ -283,7 +283,7 @@ single file:
 
 - **LANCE ONLY, ALWAYS — a permanent ruling (owner, 2026-08-15), not a current-scope note.** The catalog
   stores Lance tables and **no other format, ever**. A create naming a non-Lance format is refused 400
-  at the door (`data.py::_reject_unsupported_format`; pinned by `tests/unit/test_format_guard.py`) —
+  at the door (`core/formats.py::reject_unsupported_properties`; pinned by `tests/unit/test_format_guard.py`) —
   that 400 is the final answer, not a gap awaiting Parquet/Iceberg/Delta support. This is load-bearing,
   not a preference: the catalog is deliberately format-AWARE (imports pylance, serves the data plane
   in-process, coordinates commits), and all three are only sound because the format is closed. It is

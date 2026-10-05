@@ -46,18 +46,29 @@ def _by_id(uri: str, column: str, version: int | None = None) -> dict[int, Any]:
     return dict(zip(table.column("id").to_pylist(), table.column(column).to_pylist(), strict=True))
 
 
-def test_a_payload_corrected_in_place_reaches_silver_under_the_run_that_carried_it(tmp_path: Path) -> None:
+#: What a tier armed out of band carries ([[LH-245]]): one commit on it would delete every older version.
+_ARMED: dict[str, str | None] = {"lance.auto_cleanup.interval": "1", "lance.auto_cleanup.older_than": "0s", "lance.auto_cleanup.retain_versions": "1"}
+
+
+@pytest.mark.parametrize("armed", [pytest.param(False, id="plain"), pytest.param(True, id="armed-tier")])
+def test_a_payload_corrected_in_place_reaches_silver_under_the_run_that_carried_it(tmp_path: Path, armed: bool) -> None:
+    """The armed case: the in-process lane commits with a static key outside the catalog, so it disarms the tier
+    itself before its first commit, and the re-run keeps every version silver had ([[LH-245]])."""
     bronze, silver = str(tmp_path / "bronze.lance"), str(tmp_path / "silver.lance")
     seed_bronze(bronze, {}, rows=3)
     transform_stage(bronze, silver, {}, stage="silver", lineage=_doc(_FIRST_RUN))
     # In place, on the last row: it keeps its stable `_rowid` and its position, so silver's
     # `source_rowid` list is unchanged element for element.
     lance.dataset(bronze).update({"payload": "'event-2-corrected'"}, where="id = 2")
+    if armed:
+        lance.dataset(silver).update_config(_ARMED)
+    kept = {v["version"] for v in lance.dataset(silver).versions()}
 
     transform_stage(bronze, silver, {}, stage="silver", lineage=_doc(_SECOND_RUN))
 
     assert _by_id(silver, "payload") == {0: "event-0", 1: "event-1", 2: "event-2-corrected"}
     assert {json.loads(cell)["run_id"] for cell in _by_id(silver, "lineage").values()} == {_SECOND_RUN}
+    assert kept <= {v["version"] for v in lance.dataset(silver).versions()}, "the stage run deleted silver's versions"
 
 
 def test_a_new_column_lands_on_its_own_rows_when_the_tier_moves_under_the_write(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

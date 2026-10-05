@@ -55,6 +55,9 @@ def opened(monkeypatch: pytest.MonkeyPatch) -> _Opened:
     class _Ds:
         uri = _URI
 
+        def config(self) -> dict[str, str]:
+            return {}
+
     def _open(ns: object, so: object, segments: object, **kwargs: Any) -> _Ds:
         seen.refs.append(kwargs.get("branch"))
         return _Ds()

@@ -66,7 +66,7 @@ from lance.commit import CommitConflictError
 # Both drivers can import `service_kit` — this script already did, for `stamp_stage` — so the
 # implementations moved there and both now call ONE function. `media` rides the optional
 # `service-kit[media]` extra, which the ray-cluster image installs.
-from service_kit.lakehouse import media
+from service_kit.lakehouse import auto_cleanup, media
 from service_kit.lakehouse.blobs import blob_field_names
 from service_kit.lakehouse.commit_marker import CommitMarker, stamped
 from service_kit.lakehouse.objectfs import StorageOptions, fs_and_base, lance_storage_options, s3_filesystem
@@ -853,6 +853,20 @@ def _land_staged(to_uri: str, staged_uri: str, so: StorageOptions, marker: Commi
     return lance.dataset(to_uri, storage_options=so).count_rows()
 
 
+def _disarm_destination(to_uri: str, so: StorageOptions) -> None:
+    """Remove Lance's commit-path auto-cleanup keys from the destination before this run commits on it ([[LH-245]]).
+
+    Lance deletes versions inside any commit whose resulting manifest carries ``lance.auto_cleanup.*`` config, past
+    every hold and under this job's static key (`service_kit.lakehouse.auto_cleanup`). Every commit this run makes on
+    the destination builds on the disarmed manifest, so one disarm before the first covers the run. A config-only
+    commit, made only when a key is present, and it carries no marker: the run's last commit still does.
+    """
+    if not _dataset_exists(to_uri, so):
+        return
+    if removed := auto_cleanup.disarm(lance.dataset(to_uri, storage_options=so)):
+        print(f"RAY-STAGE disarmed commit-path auto-cleanup on {to_uri}: {removed}")
+
+
 def _run_stage(
     from_uri: str,
     to_uri: str,
@@ -870,6 +884,7 @@ def _run_stage(
     Every lane's LAST destination commit carries ``marker``, with every commit it cannot mark ordered before it.
     """
     upstream = lance.dataset(from_uri, storage_options=so)
+    _disarm_destination(to_uri, so)
     # THE DELTA BOUNDARY (D1): the order's version floor, so a two-row backfill does not rescan and
     # rewrite the whole tier.
     delta = _delta_filter(base_version)

@@ -33,7 +33,7 @@ from catalog.api.dependencies import NamespaceDep, SettingsDep, StorageOptionsDe
 from catalog.core.base_judge import BaseJudge
 from catalog.core.config import fresh_lance_session
 from catalog.core.identifiers import parse_identifier
-from catalog.core.namespace import open_dataset
+from catalog.core.namespace import disarm_every_ref, open_dataset
 from catalog.schemas import ErasureRequest
 from catalog.services.erasure import ErasureReport, erase
 
@@ -91,6 +91,9 @@ async def erase_subject(
     """
     segments = parse_identifier(id, settings.delimiter)
     dataset = await run_in_threadpool(open_dataset, ns, so, segments)
+    # Every ref disarmed before the first delete ([[LH-245]]): each delete and compaction below is a commit, and
+    # on an armed ref Lance would reclaim inside it, ignoring `retain_days`, with nothing in the report.
+    dataset = await run_in_threadpool(disarm_every_ref, dataset, segments)
     # The #114 pre-pass the compact and GC doors run, for the same reason: the evidence that another
     # dataset resolves its files through this one lives only on that dataset. Same bound too, one listing
     # of the table's parent (`sibling_base_refs`), and a partial map is logged and used, as they do.

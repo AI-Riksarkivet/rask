@@ -51,7 +51,7 @@ from catalog.core.base_judge import BaseJudge
 from catalog.core.config import Settings
 from catalog.core.identifiers import parse_identifier
 from catalog.core.lineage_emit import COMPACT_TABLE, CREATE_INDEX
-from catalog.core.namespace import open_dataset
+from catalog.core.namespace import disarm_commit_path_cleanup, open_dataset
 from catalog.schemas import CompactAccepted, CompactRequest, CompactResult, GcPreview, GcRequest, GcRunResult, ReindexAccepted, ReindexRequest, ReindexResult
 from catalog.services import index_specs, maintenance
 from service_kit import dapr_publish
@@ -218,6 +218,8 @@ async def compact_maintenance(
     # notice that.
     segments = parse_identifier(id, settings.delimiter)
     ds = await run_in_threadpool(open_dataset, ns, so, segments, branch=branch)
+    # Disarmed before the compaction is run or queued ([[LH-245]]): its commit would otherwise reclaim behind every hold.
+    ds = await run_in_threadpool(disarm_commit_path_cleanup, ds, segments)
     protected = await _base_refs(ds, so, settings)
 
     publisher = getattr(request.app.state, "dapr_client", None)
@@ -326,6 +328,8 @@ async def reindex_maintenance(
     """
     segments = parse_identifier(id, settings.delimiter)
     ds = await run_in_threadpool(open_dataset, ns, so, segments, branch=branch)
+    # Disarmed before the rebuild is run or queued ([[LH-245]]).
+    ds = await run_in_threadpool(disarm_commit_path_cleanup, ds, segments)
     spec = await run_in_threadpool(index_specs.describe_index_for_rebuild, ds, body.index_name)
     params = {**spec.params, **body.params}
 

@@ -1,4 +1,4 @@
-"""The LANCE-ONLY product invariant, at one choke point.
+"""The properties no catalog door honours, refused at one choke point: a non-Lance format, and Lance's commit-path auto-cleanup.
 
 STANDING RULING (owner, 2026-08-15): rask stores Lance tables and no other format, ever. That makes
 this a PRODUCT invariant rather than an implementation detail of any one door, which is why it lives
@@ -9,11 +9,19 @@ create door. `declare_table`, `register_table`, `create_namespace` and `update_t
 same `properties` map through their spec request models and none of them checked it — so a client
 could select a non-Lance format through four of the five doors that accept one. Moving it here is
 what lets every door call the same rule instead of re-deriving it or forgetting to.
+
+The same doors refuse ``lance.auto_cleanup.*`` ([[LH-245]]). Those keys arm Lance to delete versions inside
+whichever commit next lands, past every legal hold and protected base (:mod:`service_kit.lakehouse.auto_cleanup`).
+No property a door accepts reaches the manifest config those keys live in (create stamps properties into the
+schema metadata, which arms nothing: measured on pylance 12.0.0), so honouring one is impossible and echoing
+it back would let a client believe it had armed the table.
 """
 
 from __future__ import annotations
 
 from lance_namespace import InvalidInputError
+
+from service_kit.lakehouse import auto_cleanup
 
 
 #: Format-selecting properties an Iceberg / Unity-Catalog client might send, expecting to choose a file
@@ -22,8 +30,8 @@ from lance_namespace import InvalidInputError
 FORMAT_KEYS = ("write.format.default", "data_source_format")
 
 
-def reject_unsupported_format(properties: object) -> None:
-    """Raise 400 if ``properties`` request a non-Lance file format — never a silent no-op.
+def reject_unsupported_properties(properties: object) -> None:
+    """Raise 400 if ``properties`` request a non-Lance file format or commit-path auto-cleanup — never a silent no-op.
 
     Tolerant of a non-mapping (``None``, an unparsed string) on purpose: the doors differ in whether
     they hand over a parsed dict or a raw body field, and a guard that raised on shape would turn a
@@ -37,3 +45,8 @@ def reject_unsupported_format(properties: object) -> None:
             raise InvalidInputError(
                 f"file format {requested!r} ({key}) is not supported — this catalog stores Lance only; format-selecting properties are not silently ignored"
             )
+    if armed := auto_cleanup.armed_keys(properties):
+        raise InvalidInputError(
+            f"properties {armed} are not accepted: Lance's commit-path auto-cleanup deletes versions past every legal hold, "
+            "so version reclamation belongs to the maintenance sweep and its retention policy alone"
+        )

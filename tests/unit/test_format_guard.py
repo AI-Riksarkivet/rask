@@ -30,18 +30,20 @@ from __future__ import annotations
 import pytest
 from lance_namespace import InvalidInputError
 
-from catalog.core.formats import reject_unsupported_format
+from catalog.core.formats import reject_unsupported_properties
 
 
 @pytest.mark.parametrize(
     "props",
     [
-        {"write.format.default": "parquet"},
+        pytest.param({"write.format.default": "parquet"}, id="non-lance-format"),
+        # [[LH-245]]: the key that arms Lance to delete versions inside any later commit, past every hold.
+        pytest.param({"lance.auto_cleanup.interval": "1"}, id="commit-path-auto-cleanup"),
     ],
 )
-def test_rejects_non_lance_format(props: dict[str, str]) -> None:
+def test_rejects_a_property_no_door_honours(props: dict[str, str]) -> None:
     with pytest.raises(InvalidInputError):
-        reject_unsupported_format(props)
+        reject_unsupported_properties(props)
 
 
 @pytest.mark.parametrize(
@@ -51,7 +53,7 @@ def test_rejects_non_lance_format(props: dict[str, str]) -> None:
     ],
 )
 def test_allows_lance_or_absent(props: object) -> None:
-    reject_unsupported_format(props)  # no raise
+    reject_unsupported_properties(props)  # no raise
 
 
 # --------------------------------------------------------------------------------------------------

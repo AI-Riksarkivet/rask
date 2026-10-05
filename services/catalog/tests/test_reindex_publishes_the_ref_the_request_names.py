@@ -57,6 +57,9 @@ def client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     class _Ds:
         uri = _URI
 
+        def config(self) -> dict[str, str]:
+            return {}
+
     class _Spec:
         column, kind, index_type, name, params = "vec", "vector", "IVF_PQ", "vec_idx", {}
 
