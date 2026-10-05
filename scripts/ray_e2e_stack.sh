@@ -205,7 +205,11 @@ for i in $(seq 1 40); do
 done
 
 step "5/6 seed the medallion FGA grants (service identities the cascade + train run authenticate as)"
-OPENFGA_API_URL=http://localhost:8081 scripts/seed_medallion_fga.sh || { echo "!! FGA seed failed"; exit 1; }
+# OpenFGA admits only a projected `rask-openfga` token ([[XC-077]]): the seed and the suites speak as the
+# bootstrap Job's ServiceAccount, through one TokenRequest written to a file.
+FGA_TOKEN_FILE="$(mktemp)"
+kubectl create token "$RELEASE-sa-jobs" --audience rask-openfga --duration 2h > "$FGA_TOKEN_FILE" || { echo "!! could not mint a rask-openfga token"; exit 1; }
+OPENFGA_API_URL=http://localhost:8081 OPENFGA_TOKEN_FILE="$FGA_TOKEN_FILE" scripts/seed_medallion_fga.sh || { echo "!! FGA seed failed"; exit 1; }
 DAPR_TOKEN="$(kubectl get secret "$RELEASE-dapr-app-token" -o jsonpath='{.data.token}' | base64 -d)"
 [ -n "$DAPR_TOKEN" ] || { echo "!! no dapr app token"; exit 1; }
 
@@ -216,7 +220,7 @@ step "6/6 run the Ray train suite and the governance suite against the live ray-
 LANCE_E2E_LANCERAY_URL=http://localhost:8002 LANCE_E2E_CATALOG_URL=http://localhost:2333 \
 LANCE_E2E_AUTH_SERVER=http://localhost:2333 \
 LANCE_E2E_LINEAGE_URL=http://localhost:8000 LANCE_E2E_DEX=http://localhost:5556/dex \
-LANCE_E2E_FGA=http://localhost:8081 LANCE_E2E_DAPR_TOKEN="$DAPR_TOKEN" LANCE_E2E_GREPTIME_URL="" \
+LANCE_E2E_FGA=http://localhost:8081 LANCE_E2E_FGA_TOKEN_FILE="$FGA_TOKEN_FILE" LANCE_E2E_DAPR_TOKEN="$DAPR_TOKEN" LANCE_E2E_GREPTIME_URL="" \
 PYTHONPATH=services uv run pytest \
   tests/e2e-py/test_ray_train_e2e.py \
   tests/e2e-py/test_governance_e2e.py \

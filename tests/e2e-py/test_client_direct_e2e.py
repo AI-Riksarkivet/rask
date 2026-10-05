@@ -23,7 +23,7 @@ import pytest
 import requests
 from topology import assert_parent_exists, create_top_level
 
-from service_kit.governed.auth.write_model import carried_model
+from service_kit.governed.auth.write_model import carried_model, fga_headers
 
 
 CATALOG = os.environ.get("LANCE_E2E_CATALOG_URL", "").rstrip("/")
@@ -31,6 +31,8 @@ DEX = os.environ.get("LANCE_E2E_DEX", "http://localhost:5556/dex").rstrip("/")
 FGA = os.environ.get("LANCE_E2E_FGA", "http://localhost:8080").rstrip("/")
 #: The store `scripts/e2e_live.sh` found the catalog using (its pin, else the newest `lance-catalog`).
 STORE = os.environ.get("LANCE_E2E_FGA_STORE_ID", "")
+#: The `rask-openfga` token file the runner minted (`scripts/e2e_live.sh`); OpenFGA refuses a call without it ([[XC-077]]).
+FGA_TOKEN_FILE = os.environ.get("LANCE_E2E_FGA_TOKEN_FILE") or None
 S3 = os.environ.get("LANCE_E2E_S3", "http://localhost:9900").rstrip("/")
 
 pytestmark = pytest.mark.e2e
@@ -82,7 +84,7 @@ def _store_model() -> tuple[str, str]:
     refuses reads further down as the door under test denying. No such model fails the suite.
     """
     try:
-        return carried_model(FGA, pinned=STORE)
+        return carried_model(FGA, token_file=FGA_TOKEN_FILE, pinned=STORE)
     except LookupError as exc:
         pytest.fail(str(exc))
 
@@ -90,6 +92,7 @@ def _store_model() -> tuple[str, str]:
 def _grant(st: str, m: str, sub: str, rel: str, obj: str) -> None:
     r = requests.post(
         f"{FGA}/stores/{st}/write",
+        headers=fga_headers(FGA_TOKEN_FILE),
         json={
             "writes": {"tuple_keys": [{"user": f"user:{sub}", "relation": rel, "object": obj}]},
             "authorization_model_id": m,

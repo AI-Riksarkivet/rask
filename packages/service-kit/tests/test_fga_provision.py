@@ -60,7 +60,7 @@ async def test_provision_writes_the_conditions_block(monkeypatch: pytest.MonkeyP
     _FakeClient.requests = []
     monkeypatch.setattr(fga, "OpenFgaClient", _FakeClient)
 
-    store_id, model_id = await fga.provision("http://fga:8080")
+    store_id, model_id = await fga.provision("http://fga:8080", token_file=None)
 
     assert (store_id, model_id) == ("store-1", "model-1")
     assert len(_FakeClient.requests) == 1
@@ -203,7 +203,7 @@ async def test_a_WILDCARD_only_write_names_the_relation_it_changed(monkeypatch: 
     _install(monkeypatch, desired=_with_wildcard_assignee(MODEL), stored=MODEL)
 
     with caplog.at_level(logging.INFO, logger=fga.__name__):
-        await fga.provision("http://fga:8080")
+        await fga.provision("http://fga:8080", token_file=None)
 
     [written] = [record for record in caplog.records if record.getMessage() == "openfga_model_written"]
     assert written.__dict__["changed"] == ["role#assignee"], "the write was logged without the relation whose restriction it changed"
@@ -236,7 +236,7 @@ async def test_an_unchanged_model_is_not_rewritten(monkeypatch: pytest.MonkeyPat
     """THE GATE. 1,316 versions on the live store came from this write firing on every boot."""
     _install(monkeypatch, desired=MODEL, stored=MODEL)
 
-    store_id, model_id = await fga.provision("http://fga:8080")
+    store_id, model_id = await fga.provision("http://fga:8080", token_file=None)
 
     assert _ModelStoreClient.requests == [], "an unchanged model must not mint a new version on every pod start"
     assert (store_id, model_id) == ("store-1", "model-EXISTING"), "the estate keeps answering with the model it already has"
@@ -248,7 +248,7 @@ async def test_a_brand_new_store_is_modelled_without_a_read(monkeypatch: pytest.
     same reason the narrowing guard skips it."""
     _install(monkeypatch, desired=MODEL, stored=None, empty_store=True)
 
-    store_id, model_id = await fga.provision("http://fga:8080")
+    store_id, model_id = await fga.provision("http://fga:8080", token_file=None)
 
     assert _ModelStoreClient.reads == 0, "a first boot must not depend on a model that cannot exist yet"
     assert len(_ModelStoreClient.requests) == 1

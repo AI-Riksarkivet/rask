@@ -63,6 +63,8 @@
  *   kubectl port-forward -n kube-system svc/traefik 8080:80 &
  *   cd tests/e2e && node verify_notifications_two_users.mjs
  */
+import { readFileSync } from 'node:fs';
+
 import { chromium } from '@playwright/test';
 
 // 8080, not 8090, and NOT a separate Dex host — both are facts about this deployment, read from it
@@ -117,6 +119,13 @@ const LINEAGE_URL = process.env.LINEAGE_URL ?? 'http://localhost:8001';
 const GATEWAY_URL = process.env.GATEWAY_URL ?? ORIGIN;
 const FGA_API_URL = process.env.FGA_API_URL ?? 'http://localhost:18099';
 const FGA_STORE_NAME = process.env.FGA_STORE_NAME ?? 'lance-catalog';
+/** OpenFGA admits only a projected `rask-openfga` token (XC-077): `make notifications-lanes` mints one into
+ *  FGA_TOKEN_FILE, read again on every call. */
+const FGA_TOKEN_FILE = process.env.FGA_TOKEN_FILE;
+function fgaAuth() {
+	if (!FGA_TOKEN_FILE) throw new Error('set FGA_TOKEN_FILE to a rask-openfga token (kubectl create token <release>-sa-jobs --audience rask-openfga)');
+	return { authorization: `Bearer ${readFileSync(FGA_TOKEN_FILE, 'utf8').trim()}` };
+}
 /** The notifications service's OWN principal — the reconciler reads lineage's governed feed as this,
  *  so it needs its own grant. Matches `RASK_LINEAGE_SERVICE_IDENTITY` / the chart's default. */
 const SERVICE_SUBJECT = process.env.NOTIFICATIONS_SUBJECT ?? 'notifications';
@@ -251,7 +260,7 @@ async function fgaStoreId() {
 	let token;
 	do {
 		const url = `${FGA_API_URL}/stores?page_size=50${token ? `&continuation_token=${token}` : ''}`;
-		const res = await fetch(url);
+		const res = await fetch(url, { headers: fgaAuth() });
 		if (!res.ok) throw new Error(`openfga /stores: HTTP ${res.status}`);
 		const body = await res.json();
 		const hit = (body.stores ?? []).filter((s) => s.name === FGA_STORE_NAME);
@@ -267,7 +276,7 @@ async function seedGrants(storeId, tuples) {
 	for (const key of tuples) {
 		const res = await fetch(`${FGA_API_URL}/stores/${storeId}/write`, {
 			method: 'POST',
-			headers: { 'content-type': 'application/json' },
+			headers: { 'content-type': 'application/json', ...fgaAuth() },
 			body: JSON.stringify({ writes: { tuple_keys: [key] } }),
 		});
 		if (res.ok) continue;

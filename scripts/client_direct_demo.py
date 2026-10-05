@@ -20,12 +20,14 @@ import lance
 import pyarrow as pa
 import requests
 
-from service_kit.governed.auth.write_model import carried_model
+from service_kit.governed.auth.write_model import carried_model, fga_headers
 
 
 CATALOG = os.environ["CD_CATALOG"].rstrip("/")
 DEX = os.environ["CD_DEX"].rstrip("/")
 FGA = os.environ["CD_FGA"].rstrip("/")
+#: A `rask-openfga` token file (XC-077), e.g. `kubectl create token rask-sa-jobs --audience rask-openfga` written out.
+FGA_TOKEN_FILE = os.environ.get("CD_FGA_TOKEN_FILE") or None
 S3 = os.environ["CD_S3"].rstrip("/")
 NS, TBL = "cddemo", "t"
 TABLE = f"{NS}${TBL}"
@@ -57,6 +59,7 @@ def _sub(tok: str) -> str:
 def _grant(st: str, m: str, sub: str, rel: str, obj: str) -> None:
     r = requests.post(
         f"{FGA}/stores/{st}/write",
+        headers=fga_headers(FGA_TOKEN_FILE),
         json={
             "writes": {"tuple_keys": [{"user": f"user:{sub}", "relation": rel, "object": obj}]},
             "authorization_model_id": m,
@@ -70,7 +73,7 @@ def _grant(st: str, m: str, sub: str, rel: str, obj: str) -> None:
 def main() -> None:
     tok = _token()
     sub = _sub(tok)
-    st, m = carried_model(FGA, pinned=os.environ.get("RASK_FGA_STORE_ID", ""))
+    st, m = carried_model(FGA, token_file=FGA_TOKEN_FILE, pinned=os.environ.get("RASK_FGA_STORE_ID", ""))
     h = {"Authorization": f"Bearer {tok}"}
     # alice needs writer on the warehouse to create the namespace + table underneath it.
     _grant(st, m, sub, "writer", "warehouse:lance_catalog")

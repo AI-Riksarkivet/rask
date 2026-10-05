@@ -24,7 +24,7 @@ from collections.abc import Iterator
 import pytest
 import requests
 
-from service_kit.governed.auth.write_model import carried_model
+from service_kit.governed.auth.write_model import carried_model, fga_headers
 
 
 LANCERAY = os.environ.get("LANCE_E2E_LANCERAY_URL", "")
@@ -36,6 +36,8 @@ DEX_SECRET = os.environ.get("LANCE_E2E_DEX_SECRET", "lance-catalog-secret")
 FGA = os.environ.get("LANCE_E2E_FGA", "")
 #: The store `scripts/e2e_live.sh` found the catalog using (its pin, else the newest `lance-catalog`).
 STORE = os.environ.get("LANCE_E2E_FGA_STORE_ID", "")
+#: The `rask-openfga` token file the runner minted (`scripts/e2e_live.sh`); OpenFGA refuses a call without it ([[XC-077]]).
+FGA_TOKEN_FILE = os.environ.get("LANCE_E2E_FGA_TOKEN_FILE") or None
 DAPR_TOKEN = os.environ.get("LANCE_E2E_DAPR_TOKEN", "")
 WAREHOUSE = "warehouse:lance_catalog"
 
@@ -70,7 +72,7 @@ def _tuples(store_model: tuple[str, str], *, writes: list[dict] | None = None, d
         body["writes"] = {"tuple_keys": writes}
     if deletes:
         body["deletes"] = {"tuple_keys": deletes}
-    resp = requests.post(f"{FGA}/stores/{store}/write", json=body, timeout=10)
+    resp = requests.post(f"{FGA}/stores/{store}/write", headers=fga_headers(FGA_TOKEN_FILE), json=body, timeout=10)
     if resp.status_code == 200:
         return
     message = resp.json().get("message", "") if resp.status_code == 400 else ""
@@ -101,7 +103,7 @@ def fga_store(stack: tuple[str, str, str]) -> tuple[str, str]:
     """
     _ = stack  # gate on the stack fixture's env + reachability (+ auth-on) skips BEFORE touching OpenFGA
     try:
-        return carried_model(FGA, pinned=STORE)
+        return carried_model(FGA, token_file=FGA_TOKEN_FILE, pinned=STORE)
     except OSError as exc:
         # Unreachable/unset FGA must SKIP, not ERROR: an unguarded request raises out of a module-scoped
         # fixture, which pytest reports as an error for every test that uses it — indistinguishable in CI

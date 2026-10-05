@@ -181,6 +181,7 @@ spec:
             */}}
             - { name: RASK_FGA_ENABLED, value: "true" }
             - { name: RASK_FGA_API_URL, value: {{ .Values.medallion.fgaApiUrl | quote }} }
+            {{- include "lance.fgaToken" (list "env") | nindent 12 }}
             {{- with .Values.auth.fgaStoreId }}
             {{- /*
                Operator-pinned FGA store id — the same auth.fgaStoreId every consumer + the bootstrap-admin
@@ -411,10 +412,12 @@ spec:
             {{- include "lance.tmpMount" . | nindent 12 }}
             {{- include "lance.identityTokens" (list "mounts" "rask-catalog" "rask-lineage" "rask-medallion") | nindent 12 }}
             {{- include "lance.saVerifier" (list . "mounts" "producer") | nindent 12 }}
+            {{- if or .Values.medallion.fgaEnabled .Values.auth.enabled }}{{ include "lance.fgaToken" (list "mounts") | nindent 12 }}{{ end }}
       volumes:
         {{- include "lance.tmpVolume" . | nindent 8 }}
         {{- include "lance.identityTokens" (list "volumes" "rask-catalog" "rask-lineage" "rask-medallion") | nindent 8 }}
         {{- include "lance.saVerifier" (list . "volumes" "producer") | nindent 8 }}
+        {{- if or .Values.medallion.fgaEnabled .Values.auth.enabled }}{{ include "lance.fgaToken" (list "volumes") | nindent 8 }}{{ end }}
 ---
 apiVersion: v1
 kind: Service
@@ -688,6 +691,7 @@ spec:
             {{- if $root.Values.medallion.fgaEnabled }}
             - { name: RASK_FGA_ENABLED, value: "true" }
             - { name: RASK_FGA_API_URL, value: {{ $root.Values.medallion.fgaApiUrl | quote }} }
+            {{- include "lance.fgaToken" (list "env") | nindent 12 }}
             {{- with $root.Values.auth.fgaStoreId }}
             {{- /*
                Operator-pinned FGA store id — one auth.fgaStoreId across every consumer (see services.yaml).
@@ -714,10 +718,12 @@ spec:
             {{- include "lance.tmpMount" $root | nindent 12 }}
             {{- include "lance.identityTokens" (list "mounts" "rask-catalog" "rask-lineage") | nindent 12 }}
             {{- include "lance.saVerifier" (list $root "mounts" "stage") | nindent 12 }}
+            {{- if $root.Values.medallion.fgaEnabled }}{{ include "lance.fgaToken" (list "mounts") | nindent 12 }}{{ end }}
       volumes:
         {{- include "lance.tmpVolume" $root | nindent 8 }}
         {{- include "lance.identityTokens" (list "volumes" "rask-catalog" "rask-lineage") | nindent 8 }}
         {{- include "lance.saVerifier" (list $root "volumes" "stage") | nindent 8 }}
+        {{- if $root.Values.medallion.fgaEnabled }}{{ include "lance.fgaToken" (list "volumes") | nindent 8 }}{{ end }}
 ---
 {{- /* A stage runner is BUS-ONLY: no gateway row, no Ingress. This ClusterIP has two callers, each admitted by its
        projected token on its own routes: the producer, proxying the operator routes onto the runs this runner planned,

@@ -162,13 +162,23 @@ def _stub_client(monkeypatch) -> None:
     monkeypatch.setattr(fga, "resolve", _resolve)
 
 
-async def _provision(_url: str) -> tuple[str, str]:
-    return ("store", "model")
+async def _provision(
+    _url: str, *, token_file: str | None, store_name: str = "lance-catalog", store_id: str | None = None, retry_attempts: int = 3
+) -> tuple[str, str]:
+    """`fga.provision`'s whole signature, as `_resolve` carries `fga.resolve`'s."""
+    del token_file, store_name, retry_attempts
+    return (store_id or "store", "model")
 
 
 async def _resolve(
-    _url: str, *, store_name: str = "lance-catalog", store_id: str | None = None, deadline_seconds: float = 0.0, poll_seconds: float = 0.0
+    _url: str,
+    *,
+    token_file: str | None,
+    store_name: str = "lance-catalog",
+    store_id: str | None = None,
+    deadline_seconds: float = 0.0,
+    poll_seconds: float = 0.0,
 ) -> tuple[str, str]:
     """`fga.resolve`'s whole signature, so a new keyword the caller passes reaches the double."""
-    del store_name, deadline_seconds, poll_seconds
+    del token_file, store_name, deadline_seconds, poll_seconds
     return (store_id or "store", "model")

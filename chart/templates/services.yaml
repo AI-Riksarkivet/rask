@@ -347,9 +347,11 @@ spec:
           volumeMounts:
             {{- include "lance.tmpMount" . | nindent 12 }}
             {{- include "lance.saVerifier" (list $root "mounts" "catalog") | nindent 12 }}
+            {{- if .Values.auth.enabled }}{{ include "lance.fgaToken" (list "mounts") | nindent 12 }}{{ end }}
       volumes:
         {{- include "lance.tmpVolume" . | nindent 8 }}
         {{- include "lance.saVerifier" (list $root "volumes" "catalog") | nindent 8 }}
+        {{- if .Values.auth.enabled }}{{ include "lance.fgaToken" (list "volumes") | nindent 8 }}{{ end }}
 ---
 apiVersion: v1
 kind: Service
@@ -614,6 +616,7 @@ spec:
             - { name: RASK_OIDC_ALLOW_INSECURE, value: {{ ternary "false" "true" (hasPrefix "https://" .Values.dex.issuer) | quote }} }
             - { name: RASK_FGA_ENABLED, value: "true" }
             - { name: RASK_FGA_API_URL, value: "http://{{ include "lance.openfgaHost" . }}:8080" }
+            {{- include "lance.fgaToken" (list "env") | nindent 12 }}
             {{- with .Values.auth.fgaStoreId }}
             {{- /*
                Operator-pinned FGA store id — the same auth.fgaStoreId every consumer + the bootstrap-admin
@@ -652,9 +655,11 @@ spec:
           volumeMounts:
             {{- include "lance.tmpMount" . | nindent 12 }}
             {{- include "lance.saVerifier" (list $root "mounts" "lineage") | nindent 12 }}
+            {{- if .Values.auth.enabled }}{{ include "lance.fgaToken" (list "mounts") | nindent 12 }}{{ end }}
       volumes:
         {{- include "lance.tmpVolume" . | nindent 8 }}
         {{- include "lance.saVerifier" (list $root "volumes" "lineage") | nindent 8 }}
+        {{- if .Values.auth.enabled }}{{ include "lance.fgaToken" (list "volumes") | nindent 8 }}{{ end }}
 ---
 apiVersion: v1
 kind: Service

@@ -364,6 +364,7 @@ spec:
             {{- if .Values.auth.enabled }}
             - { name: RASK_FGA_ENABLED, value: "true" }
             - { name: RASK_FGA_API_URL, value: "http://{{ include "lance.openfgaHost" . }}:8080" }
+            {{- include "lance.fgaToken" (list "env") | nindent 12 }}
             {{- /* Store/model ids are PINNED, never provisioned here — the SAME auth.fgaStoreId the catalog
                    reads and the bootstrap-admin Job grants into, so the store this reports on can never
                    diverge from the store the catalog checks against. A maintenance job that provisioned its
@@ -381,9 +382,11 @@ spec:
           volumeMounts:
             {{- include "lance.tmpMount" . | nindent 12 }}
             {{- include "lance.identityTokens" (list "mounts" "rask-catalog") | nindent 12 }}
+            {{- if .Values.auth.enabled }}{{ include "lance.fgaToken" (list "mounts") | nindent 12 }}{{ end }}
       volumes:
         {{- include "lance.tmpVolume" . | nindent 8 }}
         {{- include "lance.identityTokens" (list "volumes" "rask-catalog") | nindent 8 }}
+        {{- if .Values.auth.enabled }}{{ include "lance.fgaToken" (list "volumes") | nindent 8 }}{{ end }}
 ---
 apiVersion: v1
 kind: Service

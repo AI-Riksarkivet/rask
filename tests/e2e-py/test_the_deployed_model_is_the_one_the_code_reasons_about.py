@@ -40,7 +40,7 @@ from typing import Any
 
 import pytest
 
-from service_kit.governed.auth.write_model import STORE_NAME, history, model_document, shape
+from service_kit.governed.auth.write_model import STORE_NAME, fga_headers, history, model_document, shape
 from service_kit.governed.fga import ModelHistory, newest_store
 
 
@@ -49,12 +49,15 @@ from service_kit.governed.fga import ModelHistory, newest_store
 #: store is down", i.e. a SKIP. A gate that skips for a reason it misreports is worse than no gate.
 FGA = os.environ.get("LANCE_E2E_FGA", "").rstrip("/")
 STORE = os.environ.get("LANCE_E2E_FGA_STORE_ID", "")
+#: The `rask-openfga` token file the runner minted (`scripts/e2e_live.sh`); OpenFGA refuses a call without it ([[XC-077]]).
+FGA_TOKEN_FILE = os.environ.get("LANCE_E2E_FGA_TOKEN_FILE") or None
 
 pytestmark = pytest.mark.e2e
 
 
 def _get(path: str) -> dict[str, Any]:
-    with urllib.request.urlopen(f"{FGA}{path}", timeout=30) as response:  # noqa: S310 — in-cluster address from the runner
+    request = urllib.request.Request(f"{FGA}{path}", headers=fga_headers(FGA_TOKEN_FILE))  # noqa: S310 — in-cluster address from the runner
+    with urllib.request.urlopen(request, timeout=30) as response:  # noqa: S310
         return json.loads(response.read() or b"{}")
 
 
@@ -71,7 +74,7 @@ def held() -> tuple[str, ModelHistory]:
     store = STORE or (str(named["id"]) if named else "")
     if not store:
         pytest.fail(f"the deployed OpenFGA holds no store named {STORE_NAME!r} and none is pinned: the catalog never provisioned the estate's store")
-    return store, history(FGA, store, model_document())
+    return store, history(FGA, store, model_document(), token_file=FGA_TOKEN_FILE)
 
 
 def _absent(store: str, read: ModelHistory) -> str:

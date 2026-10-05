@@ -42,6 +42,7 @@ from service_kit.control_emit import ControlSign, make_control_emitter
 from service_kit.draining import arm_drain_on_sigterm
 from service_kit.governed.auth_lifespan import build_fga_client
 from service_kit.governed.dapr_auth import assert_app_token_configured
+from service_kit.governed.fga import OpenFgaCredentialRefusedError
 from service_kit.governed.fga import dispose as fga_dispose
 from service_kit.governed.secrets import apply_dapr_secrets
 from service_kit.governed.signing_key import SigningKeyHolder, attach_signing, make_signing_holder, signing_ready_check
@@ -80,9 +81,15 @@ async def _make_fga_client(settings: MaintenanceSettings) -> Any | None:  # noqa
     NEVER RAISES, which is why ``fatal`` stays at its default. A misconfigured or unreachable authz
     endpoint degrades the authz categories; it must not stop the sweep, which is this service's
     primary job and needs no FGA at all. It also returns the client rather than assigning it: the
-    sweep runs from a cron route and holds it as ``app.state.fga_client``.
+    sweep runs from a cron route and holds it as ``app.state.fga_client``. That holds for a refused
+    credential too, which `build_fga_client` raises for every other service ([[XC-077]]): here it is logged
+    as an error and the authz categories report unavailable while the sweep runs on.
     """
-    return await build_fga_client(settings, service="maintenance", provision=False)
+    try:
+        return await build_fga_client(settings, service="maintenance", provision=False)
+    except OpenFgaCredentialRefusedError:
+        log.exception("openfga_credential_refused", extra={"service": "maintenance"})
+        return None
 
 
 def _make_s3_client(settings: MaintenanceSettings) -> Any | None:  # noqa: ANN401 — boto3 client has no stub

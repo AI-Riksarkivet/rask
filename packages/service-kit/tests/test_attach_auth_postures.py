@@ -48,6 +48,7 @@ class _Settings(BaseModel):
     fga_store_id: str | None = None
     fga_model_id: str | None = None
     fga_timeout_seconds: float = 5.0
+    fga_token_file: str | None = None
 
 
 class _Recorder:

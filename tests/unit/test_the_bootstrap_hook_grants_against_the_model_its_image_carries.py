@@ -7,7 +7,9 @@ write fails with `type 'estate' not found`, and this post-upgrade hook fails the
 
 RUN, not read: the Job's own command is taken from the rendered chart and executed against a stub OpenFGA
 that validates each tuple against the model the request names, the way OpenFGA does, so the assertions are
-on the requests the hook really sends and on whether it really finishes.
+on the requests the hook really sends and on whether it really finishes. The stub admits only the bearer the
+Job's projected token file holds ([[XC-077]]); the file sits where the rendered `RASK_FGA_TOKEN_FILE` says,
+moved under ``tmp_path``.
 """
 
 from __future__ import annotations
@@ -15,6 +17,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -33,13 +36,17 @@ def _run(job: dict[str, Any], env: dict[str, str]) -> subprocess.CompletedProces
 
 
 @pytest.mark.parametrize(("stores", "pin"), [(BY_NAME, {}), (PINNED, {"RASK_FGA_STORE_ID": STORE})], ids=["by-name", "pinned"])
-def test_every_tuple_request_names_the_model_the_image_carries(stores: list[dict[str, str]], pin: dict[str, str]) -> None:
+def test_every_tuple_request_names_the_model_the_image_carries(stores: list[dict[str, str]], pin: dict[str, str], tmp_path: Path) -> None:
     job = next(c for workload, _, c in containers(render(*DEFAULT_ARGS)) if workload.endswith("-bootstrap-admin"))
+    token = tmp_path / env_of(job)["RASK_FGA_TOKEN_FILE"].lstrip("/")
+    token.parent.mkdir(parents=True)
+    token.write_text("projected-sa-jobs-token\n")
     recorded = Recorded()
-    with openfga(stores, recorded) as url:
-        done = _run(job, {"PATH": os.environ["PATH"], **env_of(job), **pin, "FGA_API_URL": url})
+    with openfga(stores, recorded, token_file=token) as url:
+        done = _run(job, {"PATH": os.environ["PATH"], **env_of(job), **pin, "FGA_API_URL": url, "RASK_FGA_TOKEN_FILE": str(token)})
 
     unpinned = [r for r in recorded.requests if r.get("authorization_model_id") != CARRYING]
+    assert recorded.refused == 0, f"OpenFGA refused {recorded.refused} of the hook's requests for want of its token:\n{done.stdout}{done.stderr}"
     assert recorded.requests, f"the hook sent no tuple request at all:\n{done.stdout}{done.stderr}"
     assert not unpinned, (
         f"{len(unpinned)} of {len(recorded.requests)} tuple requests do not name the model this image carries "

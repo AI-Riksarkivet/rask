@@ -63,6 +63,7 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      volumes: {{- include "lance.fgaToken" (list "volumes") | nindent 8 }}
       containers:
         - name: bootstrap
           image: "{{ include "lance.catalogImage" . }}"
@@ -71,8 +72,10 @@ spec:
           resources:
             requests: { cpu: "10m", memory: "64Mi" }
             limits: { cpu: "200m", memory: "256Mi" }
+          volumeMounts: {{- include "lance.fgaToken" (list "mounts") | nindent 12 }}
           env:
             - { name: FGA_API_URL, value: "http://{{ include "lance.openfgaHost" . }}:8080" }
+            {{- include "lance.fgaToken" (list "env") | nindent 12 }}
             {{- /*
                The DEFAULT WAREHOUSE, matching `fga_default_warehouse_object` in
                packages/service-kit/src/service_kit/governed/settings.py — the structural root a
@@ -95,10 +98,11 @@ spec:
             - |
               import os, sys, time
               import httpx
-              from service_kit.governed.auth.write_model import STORE_NAME, history, model_document
+              from service_kit.governed.auth.write_model import STORE_NAME, fga_headers, history, model_document
               from service_kit.governed.fga import newest_store
 
               api = os.environ["FGA_API_URL"].rstrip("/")
+              token_file = os.environ["RASK_FGA_TOKEN_FILE"]
               obj = os.environ["FGA_ROOT_OBJECT"]
               # THE ESTATE ROOT ([[LH-055]], ruling docs/DECISIONS.md:2240), SEEDED BEFORE ANYTHING
               # CHECKS IT. This hook is post-install/post-upgrade, so the fleet's pods are already
@@ -118,12 +122,16 @@ spec:
               while model_id is None:
                   try:
                       if not store_id:
-                          r = httpx.get(f"{api}/stores", timeout=5)
+                          r = httpx.get(f"{api}/stores", headers=fga_headers(token_file), timeout=5)
                           r.raise_for_status()
                           store_id = (newest_store(r.json().get("stores", []), STORE_NAME) or {}).get("id")
-                      carrying = history(api, store_id, model_document()).carrying if store_id else None
+                      carrying = history(api, store_id, model_document(), token_file=token_file).carrying if store_id else None
                       model_id = carrying and carrying["id"]
                   except (httpx.HTTPError, OSError) as exc:
+                      # A refused credential is not "not ready yet": no wait mends it ([[XC-077]]).
+                      status = getattr(getattr(exc, "response", None), "status_code", None) or getattr(exc, "code", None)
+                      if status in (401, 403):
+                          sys.exit(f"OpenFGA at {api} refused this Job's token from {token_file} ({status})")
                       print(f"openfga not ready: {exc}", flush=True)
                   if model_id is None:
                       if time.monotonic() > deadline:
@@ -266,13 +274,14 @@ spec:
               for target, pairs in ((obj, grants), (estate_obj, estate_grants)):
                 for subject_id, relation in pairs:
                   tuple_key = {"user": subject_id, "relation": relation, "object": target}
-                  r = httpx.post(f"{api}/stores/{store_id}/check", json={"tuple_key": tuple_key, "authorization_model_id": model_id}, timeout=10)
+                  r = httpx.post(f"{api}/stores/{store_id}/check", headers=fga_headers(token_file), json={"tuple_key": tuple_key, "authorization_model_id": model_id}, timeout=10)
                   if r.status_code == 200 and r.json().get("allowed"):
                       print(f"bootstrap-admin: {subject_id} already {relation} of {target} — nothing to do")
                       continue
 
                   r = httpx.post(
                       f"{api}/stores/{store_id}/write",
+                      headers=fga_headers(token_file),
                       json={"writes": {"tuple_keys": [tuple_key]}, "authorization_model_id": model_id},
                       timeout=10,
                   )

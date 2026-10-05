@@ -51,6 +51,7 @@ spec:
       securityContext:
         runAsNonRoot: true
         seccompProfile: { type: RuntimeDefault }
+      volumes: {{- include "lance.fgaToken" (list "volumes") | nindent 8 }}
       containers:
         - name: write-model
           image: "{{ include "lance.catalogImage" . }}"
@@ -62,8 +63,10 @@ spec:
           resources:
             requests: { cpu: "50m", memory: "128Mi" }
             limits: { cpu: "500m", memory: "512Mi" }
+          volumeMounts: {{- include "lance.fgaToken" (list "mounts") | nindent 12 }}
           env:
             - { name: FGA_API_URL, value: "http://{{ include "lance.openfgaHost" . }}:8080" }
+            {{- include "lance.fgaToken" (list "env") | nindent 12 }}
             {{- with .Values.auth.fgaStoreId }}
             - { name: RASK_FGA_STORE_ID, value: {{ . | quote }} }
             {{- end }}

@@ -134,7 +134,7 @@ def _over_the_wire(objects: list[str]) -> dict[str, bool]:
         app = web.Application()
         app.router.add_post("/stores/{store_id}/batch-check", _wire_batch_check)
         async with TestServer(app) as server:
-            client = fga.make_client(str(server.make_url("")).rstrip("/"), _STORE_ID, _MODEL_ID)
+            client = fga.make_client(str(server.make_url("")).rstrip("/"), _STORE_ID, _MODEL_ID, token_file=None)
             try:
                 return await fga.batch_check(client, user="alice", relation="can_read_data", objects=objects, retry_attempts=1, **_NO_WAIT)
             finally:

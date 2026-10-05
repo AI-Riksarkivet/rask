@@ -156,12 +156,21 @@ export LANCE_E2E_ADMIN_TOKEN="$ALICE"
 # So the token is offered only when the estate agrees it is non-admin, and the suite SKIPS otherwise —
 # an honest skip beats a red test that alleges something untrue.
 if [ -n "$FGA" ]; then
+  # OPENFGA ADMITS ONLY A PROJECTED `rask-openfga` TOKEN ([[XC-077]]), so this runner and the suites speak
+  # to it as the bootstrap Job's ServiceAccount, the identity that writes the estate's standing tuples. A
+  # TokenRequest, written to a file the suites re-read (`LANCE_E2E_FGA_TOKEN_FILE`); no secret is stored.
+  FGA_TOKEN_FILE="$(mktemp)"
+  trap 'rm -f "$FGA_TOKEN_FILE"' EXIT
+  kubectl create token "$RELEASE-sa-jobs" --audience rask-openfga --duration 2h > "$FGA_TOKEN_FILE" \
+    || fail "could not mint a rask-openfga token for $RELEASE-sa-jobs"
+  export LANCE_E2E_FGA_TOKEN_FILE="$FGA_TOKEN_FILE"
+  FGA_AUTH="Authorization: Bearer $(cat "$FGA_TOKEN_FILE")"
   # THE STORE THE ESTATE USES: the catalog's `RASK_FGA_STORE_ID` pin, else the newest store named
   # `lance-catalog` (`fga.newest_store`), the rule the hook and every service share ([[LH-201]]).
   # EXPORTED so a suite reads the SAME store this runner picked: a second pick by another rule agrees
   # only while the estate holds one store.
   STORE_ID="$(kubectl get deploy "$RELEASE-catalog" -o jsonpath='{.spec.template.spec.containers[?(@.name=="catalog")].env[?(@.name=="RASK_FGA_STORE_ID")].value}' 2>/dev/null || true)"
-  [ -n "$STORE_ID" ] || STORE_ID="$(curl -s -m 10 "http://$FGA/stores" | uv run python -c "
+  [ -n "$STORE_ID" ] || STORE_ID="$(curl -s -m 10 -H "$FGA_AUTH" "http://$FGA/stores" | uv run python -c "
 import json, sys
 from service_kit.governed.auth.write_model import STORE_NAME
 from service_kit.governed.fga import newest_store
@@ -176,15 +185,15 @@ print(named['id'] if named else '')" 2>/dev/null || true)"
 import sys
 from service_kit.governed.auth.write_model import carried_model
 try:
-    print(carried_model(sys.argv[1], pinned=sys.argv[2])[1])
+    print(carried_model(sys.argv[1], token_file=sys.argv[3], pinned=sys.argv[2])[1])
 except LookupError as exc:
-    sys.exit(f'   note: {exc}')" "http://$FGA" "$STORE_ID" || true)"
+    sys.exit(f'   note: {exc}')" "http://$FGA" "$STORE_ID" "$FGA_TOKEN_FILE" || true)"
   sub_of() { TOK="$1" uv run python -c "
 import base64, json, os
 b = os.environ['TOK'].split('.')[1]; b += '=' * (-len(b) % 4)
 print(json.loads(base64.urlsafe_b64decode(b))['sub'])" 2>/dev/null || true; }
   can_administer() {
-    curl -s -m 10 -X POST "http://$FGA/stores/$STORE_ID/check" -H 'content-type: application/json' \
+    curl -s -m 10 -X POST "http://$FGA/stores/$STORE_ID/check" -H "$FGA_AUTH" -H 'content-type: application/json' \
       -d "{\"authorization_model_id\":\"$MODEL_ID\",\"tuple_key\":{\"user\":\"user:$1\",\"relation\":\"can_administer\",\"object\":\"project:${LANCE_E2E_PROJECT:-acme}\"}}" \
       | uv run python -c "import sys,json;print(json.load(sys.stdin).get('allowed'))" 2>/dev/null || true
   }

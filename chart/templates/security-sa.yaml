@@ -6,7 +6,7 @@
      fleet service cannot name an SA this file did not render, and a pod names its SA with this file's
      prefix (lance.fullname), which follows the release name where rask.fullname does not. Pinned by
      tests/unit/test_a_first_party_pod_cannot_read_a_secret_through_the_kube_api.py. */}}
-{{- $components := list "catalog" "lineage" "web" "maintenance" "medallion-producer" "minio" "age" "openbao" "dex" "jobs" "viewer" "search" "annotator" "assist" "vmalert" "alertmanager" "ray" }}
+{{- $components := list "catalog" "lineage" "web" "maintenance" "medallion-producer" "minio" "age" "openbao" "dex" "jobs" "viewer" "search" "annotator" "assist" "vmalert" "alertmanager" "ray" "issuer-mirror" }}
 {{- range $name, $_ := .Values.services }}
 {{- if not (has $name $components) }}
 {{- $components = append $components $name }}
@@ -44,7 +44,7 @@ automountServiceAccountToken: false
 {{- /* The SA issuer's discovery document and JWKS, which the API server serves only to a grant. The D1
      verifiers (LH-220) read them to validate a caller's projected token offline; an in-cluster reader
      authenticates this request with its own projected token. A third-party verifier that fetches
-     anonymously (OpenFGA OIDC, MinIO STS) is not covered by a per-SA grant. */}}
+     anonymously reads them through the issuer mirror (OpenFGA, XC-077); MinIO STS does not yet. */}}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
@@ -55,7 +55,7 @@ roleRef:
   kind: ClusterRole
   name: system:service-account-issuer-discovery
 subjects:
-  {{- $verifiers := list "catalog" "lineage" "medallion-producer" }}
+  {{- $verifiers := list "catalog" "lineage" "medallion-producer" "issuer-mirror" }}
   {{- range .Values.medallion.stageRunners }}{{- $verifiers = append $verifiers .name }}{{- end }}
   {{- range $verifiers }}
   - kind: ServiceAccount

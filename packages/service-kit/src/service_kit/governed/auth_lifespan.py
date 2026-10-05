@@ -80,6 +80,8 @@ class _FgaSettings(Protocol):
     def fga_model_id(self) -> str | None: ...
     @property
     def fga_timeout_seconds(self) -> float: ...
+    @property
+    def fga_token_file(self) -> str | None: ...
 
 
 class _GovernedSettings(_FgaSettings, Protocol):
@@ -136,14 +138,14 @@ async def build_fga_client(
     """
     if not settings.fga_enabled:
         return None
-    try:
-        from service_kit.governed import fga
+    from service_kit.governed import fga
 
+    try:
         store_id, model_id = settings.fga_store_id, settings.fga_model_id
         pinned = bool(store_id and model_id)
         if not pinned:
             if provision:
-                store_id, model_id = await fga.provision(settings.fga_api_url, store_id=store_id)  # noqa: TID251
+                store_id, model_id = await fga.provision(settings.fga_api_url, token_file=settings.fga_token_file, store_id=store_id)  # noqa: TID251
                 # STRUCTURED, not a printf: `openfga_provisioned` is a documented INFO audit-tier
                 # event (`service_kit.obs`, severity 9), and it had two hand-written emitters
                 # (catalog + lineage) before this became the single bootstrap. One structured
@@ -151,7 +153,7 @@ async def build_fga_client(
                 # dropped the tier obs.py raises to OTLP.
                 log.info("openfga_provisioned", extra={"service": service, "store_id": store_id, "model_id": model_id})
             else:
-                resolved = await fga.resolve(settings.fga_api_url, store_id=store_id)
+                resolved = await fga.resolve(settings.fga_api_url, token_file=settings.fga_token_file, store_id=store_id)
                 if resolved is None:
                     # Fails CLOSED, and never by provisioning: the service that noticed must not be the
                     # one that decides what everyone is allowed to do. A FATAL caller raises: the
@@ -169,7 +171,7 @@ async def build_fga_client(
                     return None
                 store_id, model_id = resolved
                 log.info("openfga_resolved_by_name", extra={"service": service, "store_id": store_id, "model_id": model_id})
-        client = fga.make_client(settings.fga_api_url, store_id, model_id, timeout_seconds=settings.fga_timeout_seconds)
+        client = fga.make_client(settings.fga_api_url, store_id, model_id, token_file=settings.fga_token_file, timeout_seconds=settings.fga_timeout_seconds)
         if pinned and provision:
             # A PIN SKIPS `provision`, WHICH IS THE POINT AND ALSO THE BLIND SPOT. Nothing above reads
             # `load_model()`, so a `model.fga` edit shipped in this image takes effect nowhere and says
@@ -181,8 +183,12 @@ async def build_fga_client(
             # model, and the same gate that decides who may publish decides who speaks about it.
             await fga.audit_pinned_model(client, store_id=store_id, model_id=model_id)
         log.info("%s: FGA client ready (%s)", service, settings.fga_api_url)
-    except Exception:
-        if fatal:
+    except Exception as exc:
+        # A refused credential is raised whatever `fatal` says: the pod must not report Ready with every
+        # governed door failing closed ([[XC-077]], `fga.OpenFgaCredentialRefusedError`).
+        if fga.credential_refused(exc) and not isinstance(exc, fga.OpenFgaCredentialRefusedError):
+            raise fga.OpenFgaCredentialRefusedError(f"{service}: OpenFGA refused this pod's credential") from exc
+        if fatal or fga.credential_refused(exc):
             raise
         # Structured, carrying the service — maintenance's `reconcile_fga_client_failed`, now shared.
         log.exception("openfga_client_failed", extra={"service": service})

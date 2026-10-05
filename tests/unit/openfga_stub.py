@@ -8,6 +8,10 @@ narrower model is the newest and every `estate:rask` request naming no model, or
 
 `STORE` is the one a caller must use; every other listed store answers 404. By name it is the newest
 `lance-catalog`; pinned, it is named otherwise and a NEWER `lance-catalog` exists beside it.
+
+Every request must carry ``Authorization: Bearer <the token file's content at that moment>``, or it answers 401
+as an OpenFGA with OIDC authn does ([[XC-077]]): a client that sends no credential, or keeps the token it read
+before the file was rotated, is refused.
 """
 
 from __future__ import annotations
@@ -17,6 +21,7 @@ import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Any, Final
 from urllib.parse import parse_qs, urlsplit
 
@@ -25,17 +30,19 @@ from pydantic import BaseModel, Field
 from service_kit.governed.auth.write_model import STORE_NAME, model_document
 
 
-STORE: Final = "01STORE"
-CARRYING: Final = "01CARRYING"
-LEGACY: Final = "01LEGACY"
+STORE: Final = "01J00000000000000000000ST1"
+STORE_OLDER: Final = "01J00000000000000000000ST0"
+STORE_NEWER: Final = "01J00000000000000000000ST2"
+CARRYING: Final = "01J00000000000000000000CAR"
+LEGACY: Final = "01J00000000000000000000GCY"
 
 BY_NAME: Final = [
-    {"id": "01OLDER", "name": STORE_NAME, "created_at": "2026-07-15T00:00:00Z"},
-    {"id": STORE, "name": STORE_NAME, "created_at": "2026-07-15T00:00:01Z"},
+    {"id": STORE_OLDER, "name": STORE_NAME, "created_at": "2026-07-15T00:00:00Z", "updated_at": "2026-07-15T00:00:00Z"},
+    {"id": STORE, "name": STORE_NAME, "created_at": "2026-07-15T00:00:01Z", "updated_at": "2026-07-15T00:00:01Z"},
 ]
 PINNED: Final = [
-    {"id": STORE, "name": "pinned", "created_at": "2026-07-15T00:00:00Z"},
-    {"id": "01NEWER", "name": STORE_NAME, "created_at": "2026-07-15T00:00:01Z"},
+    {"id": STORE, "name": "pinned", "created_at": "2026-07-15T00:00:00Z", "updated_at": "2026-07-15T00:00:00Z"},
+    {"id": STORE_NEWER, "name": STORE_NAME, "created_at": "2026-07-15T00:00:01Z", "updated_at": "2026-07-15T00:00:01Z"},
 ]
 
 
@@ -47,13 +54,14 @@ def legacy_body() -> dict[str, Any]:
 
 
 class Recorded(BaseModel):
-    """What the stub saw: every check and write request body, and the tuples the store holds."""
+    """What the stub saw: every check and write request body, the tuples the store holds, and how many requests it refused 401."""
 
     requests: list[dict[str, Any]] = Field(default_factory=list)
     written: set[tuple[str, str, str]] = Field(default_factory=set)
+    refused: int = 0
 
 
-def _handler(stores: list[dict[str, str]], recorded: Recorded) -> type[BaseHTTPRequestHandler]:
+def _handler(stores: list[dict[str, str]], recorded: Recorded, token_file: Path) -> type[BaseHTTPRequestHandler]:
     history: list[dict[str, Any]] = [{"id": LEGACY, **legacy_body()}, {"id": CARRYING, **model_document()}]
 
     class OpenFga(BaseHTTPRequestHandler):
@@ -65,7 +73,16 @@ def _handler(stores: list[dict[str, str]], recorded: Recorded) -> type[BaseHTTPR
             self.end_headers()
             self.wfile.write(data)
 
+        def _refused(self) -> bool:
+            if self.headers.get("authorization") == f"Bearer {token_file.read_text().strip()}":
+                return False
+            recorded.refused += 1
+            self._send(401, {"code": "unauthenticated", "message": "unauthenticated"})
+            return True
+
         def do_GET(self) -> None:
+            if self._refused():
+                return None
             url = urlsplit(self.path)
             if url.path == "/stores":
                 return self._send(200, {"stores": stores, "continuation_token": ""})
@@ -76,6 +93,8 @@ def _handler(stores: list[dict[str, str]], recorded: Recorded) -> type[BaseHTTPR
             return self._send(200, {"authorization_models": history[page : page + 1], "continuation_token": str(page + 1) if more else ""})
 
         def do_POST(self) -> None:
+            if self._refused():
+                return None
             verb = urlsplit(self.path).path.removeprefix(f"/stores/{STORE}/")
             if verb not in ("check", "read", "write"):
                 return self._send(404, {"code": "store_id_not_found"})
@@ -116,9 +135,9 @@ def _handler(stores: list[dict[str, str]], recorded: Recorded) -> type[BaseHTTPR
 
 
 @contextmanager
-def openfga(stores: list[dict[str, str]], recorded: Recorded) -> Iterator[str]:
-    """Serve the stub on a free local port for the block; yields its base URL."""
-    server = ThreadingHTTPServer(("127.0.0.1", 0), _handler(stores, recorded))
+def openfga(stores: list[dict[str, str]], recorded: Recorded, *, token_file: Path) -> Iterator[str]:
+    """Serve the stub on a free local port for the block, admitting the bearer ``token_file`` holds; yields its base URL."""
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _handler(stores, recorded, token_file))
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
         yield f"http://127.0.0.1:{server.server_address[1]}"

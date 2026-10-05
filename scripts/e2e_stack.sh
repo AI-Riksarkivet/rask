@@ -283,10 +283,15 @@ print(json.loads(base64.urlsafe_b64decode(p))['sub'])")"
 # double-create (two catalog pods provisioning against a freshly-rolled OpenFGA) can never make the seeder
 # and the serving catalog disagree about which store the grants live in (CI flake 2026-07-15: the CLI
 # verified can_create_warehouse=allowed on stores[0] while the catalog checked its own newer store → 403).
-SID="$(fga store list --api-url http://localhost:8081 \
+# OpenFGA admits only a projected `rask-openfga` token ([[XC-077]]): the seeder speaks as the bootstrap Job's
+# ServiceAccount, through a TokenRequest the suites re-read from LANCE_E2E_FGA_TOKEN_FILE.
+FGA_TOKEN_FILE="$(mktemp)"
+kubectl create token "$RELEASE-sa-jobs" --audience rask-openfga --duration 2h > "$FGA_TOKEN_FILE" || { echo "!! could not mint a rask-openfga token"; exit 1; }
+FGA_TOKEN="$(cat "$FGA_TOKEN_FILE")"
+SID="$(fga store list --api-url http://localhost:8081 --api-token "$FGA_TOKEN" \
   | uv run python -c "import sys,json;s=[x for x in json.load(sys.stdin)['stores'] if x['name']=='lance-catalog'];print(max(s,key=lambda x:x['created_at'])['id'])")"
 # project-admin => can_create_warehouse (the #3-A gate). bob gets NOTHING — he is the 403 leg.
-fga tuple write --api-url http://localhost:8081 --store-id "$SID" "user:$SUB" admin project:acme >/dev/null
+fga tuple write --api-url http://localhost:8081 --api-token "$FGA_TOKEN" --store-id "$SID" "user:$SUB" admin project:acme >/dev/null
 echo "   seeded user:${SUB:0:12}… admin project:acme (store ${SID:0:8}…)"
 
 # WAIT until the grant is READABLE before running the suites. OpenFGA on Postgres is eventually consistent:
@@ -295,7 +300,7 @@ echo "   seeded user:${SUB:0:12}… admin project:acme (store ${SID:0:8}…)"
 # exact trap this whole job exists to close. Poll the ACTUAL permission the test needs (can_create_warehouse
 # on project:acme) until it reads allowed.
 for i in $(seq 1 30); do
-  allowed="$(fga query check --api-url http://localhost:8081 --store-id "$SID" \
+  allowed="$(fga query check --api-url http://localhost:8081 --api-token "$FGA_TOKEN" --store-id "$SID" \
     "user:$SUB" can_create_warehouse project:acme 2>/dev/null \
     | uv run python -c "import sys,json;print(json.load(sys.stdin).get('allowed', False))" 2>/dev/null || echo False)"
   [ "$allowed" = "True" ] && { echo "   grant is readable (can_create_warehouse=allowed)"; break; }
@@ -327,6 +332,7 @@ export LANCE_E2E_LINEAGE_URL=http://localhost:18000
 # client-direct suite's reachability probe 404'd and it SKIPPED — silently, on every run.
 export LANCE_E2E_DEX=http://localhost:5556/dex
 export LANCE_E2E_FGA=http://localhost:8081
+export LANCE_E2E_FGA_TOKEN_FILE="$FGA_TOKEN_FILE"
 export LANCE_E2E_TOKEN="$ALICE"
 export LANCE_E2E_NONADMIN_TOKEN="$BOB"
 export LANCE_E2E_DAPR_TOKEN="$DAPR_TOKEN"

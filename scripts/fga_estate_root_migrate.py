@@ -41,7 +41,7 @@ from typing import Any, Final
 
 import httpx
 
-from service_kit.governed.auth.write_model import carried_model
+from service_kit.governed.auth.write_model import carried_model, fga_headers
 
 
 #: Old rung -> new rung. Each maps to ITSELF rather than a promotion, and the list is SHORT on purpose.
@@ -73,11 +73,13 @@ NOT_CARRIED: Final[dict[str, str]] = {
 
 OLD_ROOT: Final = os.environ.get("RASK_FGA_DEFAULT_WAREHOUSE_OBJECT", "warehouse:lance_catalog")
 NEW_ROOT: Final = os.environ.get("RASK_FGA_ESTATE_OBJECT", "estate:rask")
+#: The pod's projected `rask-openfga` token, presented on every request ([[XC-077]]); the catalog pod this runs in sets it.
+TOKEN_FILE: Final = os.environ.get("RASK_FGA_TOKEN_FILE")
 
 
 def _post(api: str, path: str, body: dict[str, Any]) -> dict[str, Any]:
     """POST and RAISE on anything but 2xx — a migration that swallows a refusal reports success."""
-    response = httpx.post(f"{api}{path}", json=body, timeout=30)
+    response = httpx.post(f"{api}{path}", headers=fga_headers(TOKEN_FILE), json=body, timeout=30)
     response.raise_for_status()
     decoded: dict[str, Any] = response.json()
     return decoded
@@ -136,7 +138,7 @@ def main() -> int:
     dry_run = bool(os.environ.get("DRY_RUN"))
 
     try:
-        store_id, model_id = carried_model(api, pinned=os.environ.get("RASK_FGA_STORE_ID", ""))
+        store_id, model_id = carried_model(api, token_file=TOKEN_FILE, pinned=os.environ.get("RASK_FGA_STORE_ID", ""))
     except LookupError as exc:
         print(f"!! {exc}", file=sys.stderr)
         return 1

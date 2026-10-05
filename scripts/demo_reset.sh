@@ -33,6 +33,8 @@ S3_ACCESS_KEY="${S3_ACCESS_KEY:-minioadmin}"
 S3_SECRET_KEY="${S3_SECRET_KEY:-minioadmin}"
 ROOT_BUCKET="${ROOT_BUCKET:-lance-catalog}" # the catalog root/registry bucket (minio.bucket)
 OPENFGA_API_URL="${OPENFGA_API_URL:-http://localhost:8081}"
+# OpenFGA admits only a projected `rask-openfga` token (XC-077): `kubectl create token rask-sa-jobs --audience rask-openfga > "$OPENFGA_TOKEN_FILE"`.
+OPENFGA_TOKEN_FILE="${OPENFGA_TOKEN_FILE:-}"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 FGA_BIN="$ROOT/.localbin/fga"
@@ -174,7 +176,8 @@ echo
 echo "== 2) OpenFGA tuples for removed warehouses/projects ($OPENFGA_API_URL) =="
 # Store selection = the seed scripts' pattern: NEWEST store named lance-catalog (max created_at — the
 # same selector service_kit.governed.fga.provision uses, so we clean the store the catalog actually serves from).
-SID="$("$FGA_BIN" store list --api-url "$OPENFGA_API_URL" \
+FGA_TOKEN="$(cat "${OPENFGA_TOKEN_FILE:?set OPENFGA_TOKEN_FILE to a rask-openfga token file}")"
+SID="$("$FGA_BIN" store list --api-url "$OPENFGA_API_URL" --api-token "$FGA_TOKEN" \
   | uv run --no-sync python -c "import sys,json;s=[x for x in json.load(sys.stdin)['stores'] if x['name']=='lance-catalog'];print(max(s,key=lambda x:x['created_at'])['id'] if s else '')")"
 if [ -z "$SID" ]; then
   echo "   !! no lance-catalog store found — skipping FGA cleanup (nothing to clean on a fresh store)"
@@ -188,7 +191,7 @@ else
   # `warehouse:<id>` appears as a USER only on `namespace:` objects (the tenant-seed parent links),
   # and `project:<p>` as a USER only on `warehouse:` objects (the project parent edges).
   read_tuples() { # $1 = --user|--object, $2 = the subject/object id, [$3 = object-type filter for --user]
-    "$FGA_BIN" tuple read --api-url "$OPENFGA_API_URL" --store-id "$SID" --max-pages 0 \
+    "$FGA_BIN" tuple read --api-url "$OPENFGA_API_URL" --api-token "$FGA_TOKEN" --store-id "$SID" --max-pages 0 \
       "$1" "$2" ${3:+--object "$3"} \
       | uv run --no-sync python -c "
 import sys, json
@@ -215,7 +218,7 @@ for t in json.load(sys.stdin).get('tuples', []):
     while IFS=' ' read -r user relation object; do
       echo "   ✗ remove tuple: $user $relation $object"
       if [ "$MODE" = "apply" ]; then
-        "$FGA_BIN" tuple delete --api-url "$OPENFGA_API_URL" --store-id "$SID" \
+        "$FGA_BIN" tuple delete --api-url "$OPENFGA_API_URL" --api-token "$FGA_TOKEN" --store-id "$SID" \
           "$user" "$relation" "$object" >/dev/null
       fi
     done < "$TUPLES"

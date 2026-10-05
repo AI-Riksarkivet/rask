@@ -18,11 +18,20 @@
  * Run:  ORIGIN=http://localhost:8080 node tests/e2e/verify_originator_lane.mjs
  */
 
+import { readFileSync } from 'node:fs';
+
 const ORIGIN = process.env.ORIGIN ?? 'http://localhost:8080';
 const LINEAGE_URL = process.env.LINEAGE_URL ?? `${ORIGIN}/api/lineage`;
 const GATEWAY_URL = process.env.GATEWAY_URL ?? ORIGIN;
 const FGA_API_URL = process.env.FGA_API_URL ?? 'http://localhost:18099';
 const FGA_STORE_NAME = process.env.FGA_STORE_NAME ?? 'lance-catalog';
+/** OpenFGA admits only a projected `rask-openfga` token (XC-077): `make notifications-lanes` mints one into
+ *  FGA_TOKEN_FILE, read again on every call. */
+const FGA_TOKEN_FILE = process.env.FGA_TOKEN_FILE;
+function fgaAuth() {
+	if (!FGA_TOKEN_FILE) throw new Error('set FGA_TOKEN_FILE to a rask-openfga token (kubectl create token <release>-sa-jobs --audience rask-openfga)');
+	return { authorization: `Bearer ${readFileSync(FGA_TOKEN_FILE, 'utf8').trim()}` };
+}
 const TOKEN_URL = process.env.TOKEN_URL ?? `${ORIGIN}/dex/token`;
 const CLIENT_ID = process.env.OIDC_CLIENT_ID ?? 'lance-catalog';
 const CLIENT_SECRET = process.env.OIDC_CLIENT_SECRET ?? 'lance-catalog-secret';
@@ -64,7 +73,7 @@ function subjectOf(token) {
 async function fgaStoreId() {
 	let page;
 	do {
-		const res = await fetch(`${FGA_API_URL}/stores?page_size=50${page ? `&continuation_token=${page}` : ''}`);
+		const res = await fetch(`${FGA_API_URL}/stores?page_size=50${page ? `&continuation_token=${page}` : ''}`, { headers: fgaAuth() });
 		if (!res.ok) throw new Error(`openfga /stores: HTTP ${res.status}`);
 		const body = await res.json();
 		const hit = (body.stores ?? []).filter((s) => s.name === FGA_STORE_NAME);
@@ -79,7 +88,7 @@ async function seedGrants(storeId, tuples) {
 	for (const key of tuples) {
 		const res = await fetch(`${FGA_API_URL}/stores/${storeId}/write`, {
 			method: 'POST',
-			headers: { 'content-type': 'application/json' },
+			headers: { 'content-type': 'application/json', ...fgaAuth() },
 			body: JSON.stringify({ writes: { tuple_keys: [key] } }),
 		});
 		if (res.ok) continue;

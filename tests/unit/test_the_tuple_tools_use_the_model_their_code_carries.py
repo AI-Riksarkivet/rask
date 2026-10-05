@@ -40,11 +40,19 @@ def _not_carrying(recorded: Recorded) -> str:
     return f"{len(wrong)} of {len(recorded.requests)} tuple requests do not name the carried model {CARRYING}: {wrong[:1]}" if wrong else ""
 
 
+@pytest.fixture
+def token(tmp_path: Path) -> Path:
+    """The catalog pod's projected `rask-openfga` token, the bearer the stub admits ([[XC-077]])."""
+    path = tmp_path / "token"
+    path.write_text("projected-sa-catalog-token\n")
+    return path
+
+
 @_STORES
-def test_the_estate_migration_grants_against_the_model_it_carries(stores: list[dict[str, str]], pin: str) -> None:
+def test_the_estate_migration_grants_against_the_model_it_carries(stores: list[dict[str, str]], pin: str, token: Path) -> None:
     recorded = Recorded(written=set(_OLD_ROOT))
-    with openfga(stores, recorded) as url:
-        env = {"PATH": os.environ["PATH"], "RASK_FGA_API_URL": url, **({"RASK_FGA_STORE_ID": pin} if pin else {})}
+    with openfga(stores, recorded, token_file=token) as url:
+        env = {"PATH": os.environ["PATH"], "RASK_FGA_API_URL": url, "RASK_FGA_TOKEN_FILE": str(token), **({"RASK_FGA_STORE_ID": pin} if pin else {})}
         done = subprocess.run([sys.executable, "-"], input=_MIGRATE.read_text(), env=env, capture_output=True, text=True, timeout=60, check=False)
 
     assert recorded.requests, f"the migration sent no tuple request at all:\n{done.stdout}{done.stderr}"
@@ -54,9 +62,9 @@ def test_the_estate_migration_grants_against_the_model_it_carries(stores: list[d
 
 
 @_STORES
-def test_the_carried_model_is_the_checkouts_body_in_the_estates_store(stores: list[dict[str, str]], pin: str) -> None:
+def test_the_carried_model_is_the_checkouts_body_in_the_estates_store(stores: list[dict[str, str]], pin: str, token: Path) -> None:
     # The stub's history puts a legacy body newest, on page one, and this checkout's model on page two: a reader
     # that stops at the first page, or takes the newest, answers LEGACY. Pinned, a NEWER `lance-catalog` sits
     # beside the pinned store, so ignoring the pin answers the wrong store.
-    with openfga(stores, Recorded()) as url:
-        assert carried_model(url, pinned=pin) == (STORE, CARRYING)
+    with openfga(stores, Recorded(), token_file=token) as url:
+        assert carried_model(url, token_file=str(token), pinned=pin) == (STORE, CARRYING)

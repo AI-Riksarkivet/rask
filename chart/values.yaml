@@ -904,7 +904,19 @@ auth:
   # `kube-root-ca.crt` at /var/run/secrets/rask/sa-fetch. Never the automount token: it is a one-year
   # extended credential (P5.3 d3) and XC-076 keeps it off. The value is k3s's default issuer, read live
   # from /.well-known/openid-configuration on 2026-10-02.
-  serviceAccountIssuer: https://kubernetes.default.svc.cluster.local
+  # The anchor is read again as OpenFGA's issuer alias (`openfga.extraEnvVars`), and
+  # templates/openfga-authn.yaml refuses a render where the two differ.
+  serviceAccountIssuer: &serviceAccountIssuer https://kubernetes.default.svc.cluster.local
+  # THE ISSUER MIRROR ([[XC-077]]): templates/openfga-authn.yaml republishes this issuer's discovery document
+  # and key set, unauthenticated, at http://<release>-issuer-mirror:8080 for a verifier that fetches them with
+  # no credential. OpenFGA is that verifier: v1.18.3 fetches `<issuer>/.well-known/openid-configuration` and
+  # its `jwks_uri` with a bare HTTP client and will not start when either fails (internal/authn/oidc/oidc.go),
+  # and k3s answers both 401 without a bearer (measured 2026-10-05). The mirror fetches them with its own
+  # API-audience token and the cluster CA, as the rask doors do (`lance.saFetch`), serves only that public
+  # material, and caches nothing. Turn it off only on a platform whose issuer serves discovery to anyone (a
+  # managed cluster's public OIDC issuer), and point `openfga.authn.oidc.issuer` at that issuer instead.
+  issuerMirror:
+    enabled: true
   # ON BY DEFAULT (2026-08-06). It was `false`, and values-prod.yaml flipped it — which meant every
   # install that forgot to pass a values file came up UNGOVERNED, silently and green. That is exactly
   # how it kept happening: a `helm upgrade` without `-f values-prod.yaml` reverts a governed estate to
@@ -3344,9 +3356,58 @@ openfga:
   # container, which is inert here: datastore.applyMigrations is false and templates/openfga-migrate.yaml
   # owns migration instead. Move this back to `experimentals:` when the subchart reaches a version whose
   # enum lists the flag; that bump is blocked on Chart.lock (see chart/Chart.yaml under openfga).
+  #
+  # THE ISSUER ALIAS rides here because the subchart has no value for it. A token's `iss` is the cluster
+  # issuer while OpenFGA fetches keys from the mirror (`authn.oidc.issuer` below), and OpenFGA accepts an
+  # `iss` equal to the issuer or to any alias (oidc.go `Authenticate`).
+  #
+  # THE SUBJECT ALLOW-LIST, read from the ConfigMap templates/openfga-authn.yaml renders from
+  # `lance.openfgaSubjects`: every ServiceAccount whose pod renders `lance.fgaToken`, as
+  # `system:serviceaccount:<release namespace>:<sa>`. Without it any pod in ANY namespace of the cluster that
+  # projects the audience is admitted (oidc.go checks `sub` only when the list is non-empty), and a
+  # ServiceAccount name is namespace-scoped, so the list shuts every other namespace out and, inside this
+  # one, every account that is not an FGA client. A list-valued OPENFGA_* env is COMMA-joined: measured
+  # 2026-10-05 on openfga v1.18.3 run through Dagger, a comma-joined subjects env admitted both listed
+  # accounts and refused the unlisted ones, while a space-joined one refused all of them.
+  # A change to the client set reaches OpenFGA when its pods restart (env from a ConfigMap is read at
+  # start); until then a new client is refused, never an old one admitted.
   extraEnvVars:
     - name: OPENFGA_EXPERIMENTALS
       value: weighted_graph_check
+    - name: OPENFGA_AUTHN_OIDC_ISSUER_ALIASES
+      value: *serviceAccountIssuer
+    - name: OPENFGA_AUTHN_OIDC_SUBJECTS
+      valueFrom: { configMapKeyRef: { name: rask-openfga-authn, key: subjects } }
+  # AUTHENTICATED ([[XC-077]]). With no authn the API answered any pod with no credential, so Ray workload
+  # code could write `estate#admin` for itself or replace the model with no rask audit record. Lakekeeper
+  # authenticates to its OpenFGA as a client of an OIDC provider (crates/authz-openfga/src/config.rs, client
+  # credentials or an API key, refusing a half-configured pair); rask's provider is the cluster
+  # ServiceAccount issuer (D1), so a client presents its pod's projected token and holds no secret at all.
+  # A preshared key would be a secret in a value or an env, which the secrets rule forbids.
+  #
+  # Each FGA client projects a 600 s token for the audience `rask-openfga` (`lance.fgaToken`, the
+  # `lance.openfgaAudience` this must equal; templates/openfga-authn.yaml refuses a render where they
+  # differ) and re-reads it on every request (`service_kit.governed.fga.client_configuration`). OpenFGA
+  # admits a token only with that audience AND a subject on the allow-list above, so a Ray worker, a pod in
+  # another namespace, or an in-namespace pod running as a non-client account is refused. The exclusive
+  # NetworkPolicy ingress for OpenFGA, the row's other half, waits on XC-009 and is not rendered here.
+  #
+  # `issuer` is rendered by the subchart's tpl, so the release name follows the install.
+  authn:
+    method: oidc
+    oidc:
+      issuer: "http://{{ .Release.Name }}-issuer-mirror:8080"
+      audience: rask-openfga
+  # OFF: the playground is a browser UI that only runs with authn `none` (cmd/run/run.go
+  # `runPlaygroundServer` refuses any other method), and OpenFGA has deprecated it.
+  playground:
+    enabled: false
+  # NO BROWSER CALLS OpenFGA: the zones reach it only through the services. CORS stays closed by naming
+  # one origin under the reserved `.invalid` TLD (RFC 2606), which no page can have; an empty list is not
+  # closed, because rs/cors reads an empty AllowedOrigins as `*`, and the subchart default is `*`.
+  http:
+    corsAllowedOrigins: ["https://openfga.invalid"]
+    corsAllowedHeaders: ["Authorization"]
   datastore:
     engine: postgres
     # DSN comes from the infra-credentials Secret (key openfga-datastore-uri) — the SAME secret the AGE

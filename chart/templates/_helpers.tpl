@@ -1333,7 +1333,16 @@ Call: include "lance.saVerifier" (list $root "env"|"volumes"|"mounts" <door>). *
 - { name: RASK_SA_SUBJECTS, value: {{ toJson $subjects | quote }} }
 - { name: RASK_SA_FETCH_TOKEN_FILE, value: /var/run/secrets/rask/sa-fetch/token }
 - { name: RASK_SA_CA_FILE, value: /var/run/secrets/rask/sa-fetch/ca.crt }
-{{- else if eq $part "volumes" }}
+{{- else }}
+{{- include "lance.saFetch" $part }}
+{{- end }}
+{{- end -}}
+{{- end -}}
+
+{{/* The API-audience token and cluster CA a reader of the SA issuer's discovery and keys fetches with, at
+/var/run/secrets/rask/sa-fetch. Call: include "lance.saFetch" "volumes"|"mounts". */}}
+{{- define "lance.saFetch" -}}
+{{- if eq . "volumes" }}
 - name: sa-fetch
   projected:
     sources:
@@ -1342,7 +1351,6 @@ Call: include "lance.saVerifier" (list $root "env"|"volumes"|"mounts" <door>). *
 {{- else }}
 - { name: sa-fetch, mountPath: /var/run/secrets/rask/sa-fetch, readOnly: true }
 {{- end }}
-{{- end -}}
 {{- end -}}
 
 
@@ -1363,6 +1371,36 @@ Call: include "lance.saVerifier" (list $root "env"|"volumes"|"mounts" <door>). *
 {{- $root := . }}
 - { name: RASK_FGA_ENABLED, value: "true" }
 - { name: RASK_FGA_API_URL, value: "http://{{ include "lance.openfgaHost" $root }}:8080" }
+{{- include "lance.fgaToken" (list "env") }}
+{{- end -}}
+
+{{/* What an OpenFGA client presents ([[XC-077]]): its projected token for the audience OpenFGA accepts (values.yaml
+`openfga:`). Every pod that names OpenFGA renders all three parts under the condition its URL has. Call:
+include "lance.fgaToken" (list "env"|"volumes"|"mounts"). */}}
+{{- define "lance.openfgaAudience" -}}rask-openfga{{- end -}}
+{{/* The ServiceAccounts OpenFGA admits (`authn.oidc.subjects`), comma-joined: exactly the pods that render
+`lance.fgaToken`, under the same conditions, qualified by the release namespace. */}}
+{{- define "lance.openfgaSubjects" -}}
+{{- $v := .Values -}}{{- $p := printf "system:serviceaccount:%s:" .Release.Namespace -}}{{- $sa := printf "%s%s-sa-" $p (include "lance.fullname" .) -}}
+{{- $out := list -}}
+{{- if $v.auth.enabled -}}
+{{- range list "catalog" "lineage" "jobs" "hooks" }}{{ $out = append $out (printf "%s%s" $sa .) }}{{ end -}}
+{{- if $v.maintenance.enabled }}{{ $out = append $out (printf "%smaintenance" $sa) }}{{ end -}}
+{{- if $v.controlplane.enabled }}{{ $out = append $out (printf "%s%s-controlplane" $p (include "rask.fullname" .)) }}{{ end -}}
+{{- if $v.explorer.enabled }}{{ range $n, $_ := $v.explorer.services }}{{ $out = append $out (printf "%s%s" $sa $n) }}{{ end }}{{ end -}}
+{{- range $n, $s := $v.services }}{{ if and (not (has $n (list "catalog" "lineage"))) (or $s.frontDoor $v.singleTenant.enabled) $s.governedAuth }}{{ $out = append $out (printf "%s%s" $sa $n) }}{{ end }}{{ end -}}
+{{- end -}}
+{{- if and $v.medallion.enabled (or $v.medallion.fgaEnabled $v.auth.enabled) }}{{ $out = append $out (printf "%smedallion-producer" $sa) }}{{ end -}}
+{{- if and $v.medallion.enabled $v.medallion.fgaEnabled }}{{ range $v.medallion.stageRunners }}{{ $out = append $out (printf "%s%s" $sa .name) }}{{ end }}{{ end -}}
+{{- $out | uniq | sortAlpha | join "," -}}
+{{- end -}}
+{{- define "lance.fgaToken" -}}
+{{- $aud := include "lance.openfgaAudience" . -}}
+{{- if eq (first .) "env" }}
+- { name: RASK_FGA_TOKEN_FILE, value: /var/run/secrets/rask/identity/{{ $aud }}/token }
+{{- else }}
+{{- include "lance.identityTokens" (list (first .) $aud) }}
+{{- end }}
 {{- end -}}
 
 {{/* The operator-pinned FGA store/model ids — optional, and emitted at DIFFERENT positions by

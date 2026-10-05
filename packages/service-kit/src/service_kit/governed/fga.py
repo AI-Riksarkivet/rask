@@ -37,7 +37,7 @@ from collections.abc import Awaitable, Callable, Iterable
 from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Final, Literal, NamedTuple, Self, cast
+from typing import Any, Final, Literal, NamedTuple, Self, cast, override
 
 import aiohttp
 from lance_namespace import InvalidInputError, ServiceUnavailableError
@@ -56,7 +56,8 @@ from openfga_sdk.client.models import (
 from openfga_sdk.client.models.list_users_request import ClientListUsersRequest
 from openfga_sdk.client.models.read_changes_request import ClientReadChangesRequest
 from openfga_sdk.configuration import RetryParams
-from openfga_sdk.exceptions import ApiException
+from openfga_sdk.credentials import CredentialConfiguration, Credentials
+from openfga_sdk.exceptions import ApiException, ForbiddenException, UnauthorizedException
 from openfga_sdk.models.check_error import CheckError
 from openfga_sdk.models.create_store_request import CreateStoreRequest
 from openfga_sdk.models.error_code import ErrorCode
@@ -82,6 +83,7 @@ from tenacity import (
 )
 
 from service_kit.governed.audit import SUCCESS, audit
+from service_kit.governed.machine_identity import read_identity_token
 
 
 log = logging.getLogger(__name__)
@@ -568,6 +570,70 @@ class ModelHistoryTooLongError(Exception):
 RESOLVE_DEADLINE_SECONDS: Final = 120.0
 
 
+class OpenFgaCredentialRefusedError(ServiceUnavailableError):
+    """OpenFGA answered 401 or 403 to this pod's credential ([[XC-077]]).
+
+    Not an outage: no retry or wait mends a missing, wrong or unlisted token, so a booting service raises it
+    whatever its `fatal` posture (`auth_lifespan.build_fga_client`). A pod that kept serving with no client
+    would stay Ready while every governed door failed closed, and a rollout would report green.
+    """
+
+
+def credential_refused(exc: BaseException) -> bool:
+    """Whether ``exc``, or anything in its cause chain, is OpenFGA refusing the credential (401 or 403)."""
+    seen: BaseException | None = exc
+    while seen is not None:
+        if isinstance(seen, (UnauthorizedException, ForbiddenException, OpenFgaCredentialRefusedError)):
+            return True
+        seen = seen.__cause__
+    return False
+
+
+class _ProjectedToken(CredentialConfiguration):
+    """The pod's projected ServiceAccount token, read again on every request the SDK sends ([[XC-077]]).
+
+    The SDK reads ``api_token`` each time it builds a request's ``Authorization`` header
+    (``ApiClient.update_params_for_auth``), so a property that reads the file presents the token the kubelet
+    holds now: a copy taken at construction stops authenticating at the first rotation (~515 s of a 600 s
+    token). An unreadable file raises `IdentityTokenUnavailableError` and the request is not sent.
+    """
+
+    def __init__(self, token_file: str) -> None:
+        super().__init__()
+        self._token_file = token_file
+
+    @property
+    @override
+    def api_token(self) -> str:
+        return read_identity_token(self._token_file)
+
+
+def client_configuration(
+    api_url: str,
+    *,
+    token_file: str | None,
+    store_id: str | None = None,
+    authorization_model_id: str | None = None,
+    timeout_millisec: int | None = None,
+    retry_params: RetryParams | None = None,
+) -> ClientConfiguration:
+    """The configuration every OpenFGA client in the estate is built from, presenting ``token_file`` when given.
+
+    ``token_file`` has no default, so no call site leaves the credential out by omission. ``None`` sends no
+    ``Authorization`` header, which an OpenFGA with authn answers 401. The SDK reads the token once while
+    building (``validate_credentials_config``), so an unreadable file fails the build, not the first check.
+    """
+    credentials = Credentials(method="api_token", configuration=_ProjectedToken(token_file)) if token_file else None
+    return ClientConfiguration(
+        api_url=api_url,
+        credentials=credentials,
+        store_id=store_id,
+        authorization_model_id=authorization_model_id,
+        timeout_millisec=timeout_millisec,
+        retry_params=retry_params,
+    )
+
+
 def newest_store(stores: Iterable[Any], name: str) -> Any | None:
     """The newest store named ``name``: the rule every reader and writer of the estate's model shares."""
     named = [store for store in stores if _field(store, "name") == name]
@@ -648,6 +714,7 @@ async def _model_history(
 async def provision(
     api_url: str,
     *,
+    token_file: str | None,
     store_name: str = "lance-catalog",
     store_id: str | None = None,
     retry_attempts: int = DEFAULT_RETRY_ATTEMPTS,
@@ -665,7 +732,7 @@ async def provision(
     model = load_model()
     store_is_new = False
     if store_id is None:
-        async with OpenFgaClient(ClientConfiguration(api_url=api_url)) as client:
+        async with OpenFgaClient(client_configuration(api_url, token_file=token_file)) as client:
             stores = await client.list_stores()
             existing = newest_store(stores.stores or [], store_name)
             if existing is not None:
@@ -674,7 +741,7 @@ async def provision(
                 created = await client.create_store(CreateStoreRequest(name=store_name))
                 store_id = str(created.id)
                 store_is_new = True
-    async with OpenFgaClient(ClientConfiguration(api_url=api_url, store_id=store_id)) as client:
+    async with OpenFgaClient(client_configuration(api_url, token_file=token_file, store_id=store_id)) as client:
         # A store minted moments ago holds no model, so it never pays the read, which is also what keeps
         # a first boot from depending on a model that cannot exist yet.
         history = ModelHistory() if store_is_new else await _model_history(client, model, retry_attempts=retry_attempts)
@@ -718,6 +785,7 @@ async def provision(
 async def resolve(
     api_url: str,
     *,
+    token_file: str | None,
     store_name: str = "lance-catalog",
     store_id: str | None = None,
     deadline_seconds: float = RESOLVE_DEADLINE_SECONDS,
@@ -760,11 +828,11 @@ async def resolve(
     reason = ""
     while True:
         try:
-            found = store_id or await _named_store_id(api_url, store_name)
+            found = store_id or await _named_store_id(api_url, store_name, token_file=token_file)
             if found is None:
                 reason = f"no store named {store_name!r}"
             else:
-                async with OpenFgaClient(ClientConfiguration(api_url=api_url, store_id=found)) as client:
+                async with OpenFgaClient(client_configuration(api_url, token_file=token_file, store_id=found)) as client:
                     history = await _model_history(client, model, known_newest=known_newest, retry_attempts=1)
                 if history.carrying is not None:
                     return found, str(history.carrying.id)
@@ -773,7 +841,10 @@ async def resolve(
                 reason = f"store {found} holds no model carrying this image's model.json"
         except (*_FAIL_CLOSED, ServiceUnavailableError) as exc:
             # The store lookup raises the transport's own errors; the history read raises them as
-            # ServiceUnavailableError through `_guarded`. Both are "not answering yet".
+            # ServiceUnavailableError through `_guarded`. Both are "not answering yet", except a refused
+            # credential, which no wait mends.
+            if credential_refused(exc):
+                raise OpenFgaCredentialRefusedError(f"OpenFGA at {api_url} refused this pod's credential (token file {token_file!r})") from exc
             reason = f"OpenFGA unavailable: {exc}"
         waited = loop.time() - started
         if waited + poll_seconds > deadline_seconds:
@@ -782,9 +853,9 @@ async def resolve(
         await asyncio.sleep(poll_seconds)
 
 
-async def _named_store_id(api_url: str, store_name: str) -> str | None:
+async def _named_store_id(api_url: str, store_name: str, *, token_file: str | None) -> str | None:
     """The id of the newest store named ``store_name``, or ``None`` when there is none."""
-    async with OpenFgaClient(ClientConfiguration(api_url=api_url)) as client:
+    async with OpenFgaClient(client_configuration(api_url, token_file=token_file)) as client:
         stores = await client.list_stores()
     found = newest_store(stores.stores or [], store_name)
     return None if found is None else str(found.id)
@@ -885,9 +956,10 @@ def make_client(
     store_id: str,
     model_id: str,
     *,
+    token_file: str | None,
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
 ) -> OpenFgaClient:
-    """Build an OpenFGA client pinned to a store + authorization model.
+    """Build an OpenFGA client pinned to a store + authorization model, presenting ``token_file`` (`client_configuration`).
 
     ``timeout_seconds`` becomes the client-wide request timeout
     (``ClientConfiguration.timeout_millisec``) so an unresponsive OpenFGA fails
@@ -899,8 +971,9 @@ def make_client(
     with two uncoordinated backoffs). tenacity is the single authoritative retry layer.
     """
     return OpenFgaClient(
-        ClientConfiguration(
-            api_url=api_url,
+        client_configuration(
+            api_url,
+            token_file=token_file,
             store_id=store_id,
             authorization_model_id=model_id,
             timeout_millisec=int(timeout_seconds * 1000),

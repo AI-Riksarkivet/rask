@@ -1,0 +1,85 @@
+{{- if .Values.openfga.enabled }}
+{{- /* [[XC-077]]: OpenFGA's subject allow-list, and the issuer mirror; rationale in values.yaml `openfga.authn`
+       and `auth.issuerMirror`. */}}
+{{- $fga := .Values.openfga -}}
+{{- if ne (($fga.authn).oidc).audience (include "lance.openfgaAudience" .) }}
+{{- fail (printf "openfga.authn.oidc.audience is %q, but the FGA clients project %q (lance.openfgaAudience): every client would be refused" (($fga.authn).oidc).audience (include "lance.openfgaAudience" .)) }}
+{{- end }}
+{{- $ref := dict }}{{- range $fga.extraEnvVars }}{{- if eq .name "OPENFGA_AUTHN_OIDC_SUBJECTS" }}{{- $ref = ((.valueFrom).configMapKeyRef) | default dict }}{{- end }}{{- end }}
+{{- if or (not $ref.name) (ne ($ref.key | default "") "subjects") }}
+{{- fail "OpenFGA must read OPENFGA_AUTHN_OIDC_SUBJECTS from a configMapKeyRef with key `subjects` (openfga.extraEnvVars), or it admits every ServiceAccount in the cluster" }}
+{{- end }}
+{{- $cm := $ref.name }}
+{{- $subjects := include "lance.openfgaSubjects" . }}
+{{- /* No FGA client renders (auth off): an empty list would admit every subject, so name one no ServiceAccount
+       can have (a namespace cannot be `-`). */}}
+{{- if not $subjects }}{{- $subjects = "system:serviceaccount:-:no-fga-client" }}{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $cm }}
+  labels: {{- include "rask.componentLabels" (list . "openfga") | nindent 4 }}
+data:
+  subjects: {{ $subjects | quote }}
+---
+{{- if .Values.auth.issuerMirror.enabled }}
+{{- $alias := "" }}{{- range $fga.extraEnvVars }}{{- if eq .name "OPENFGA_AUTHN_OIDC_ISSUER_ALIASES" }}{{- $alias = .value }}{{- end }}{{- end }}
+{{- if ne $alias .Values.auth.serviceAccountIssuer }}
+{{- fail (printf "OpenFGA's issuer alias is %q, but the tokens carry iss %q (auth.serviceAccountIssuer): every client would be refused" $alias .Values.auth.serviceAccountIssuer) }}
+{{- end }}
+{{- $name := printf "%s-issuer-mirror" .Release.Name }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels: {{- include "rask.componentLabels" (list . "issuer-mirror") | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app.kubernetes.io/component: issuer-mirror, app.kubernetes.io/instance: {{ .Release.Name }} }
+  template:
+    metadata:
+      labels: {{- include "rask.componentLabels" (list . "issuer-mirror") | nindent 8 }}
+    spec:
+      terminationGracePeriodSeconds: {{ .Values.lifecycle.terminationGracePeriodSeconds }}
+      serviceAccountName: {{ include "lance.fullname" . }}-sa-issuer-mirror
+      securityContext: { runAsNonRoot: true, seccompProfile: { type: RuntimeDefault } }
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: mirror
+          image: "{{ include "lance.catalogImage" . }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- include "lance.securityContext" . | nindent 10 }}
+          {{- include "lance.preStop" . | nindent 10 }}
+          command: ["uvicorn", "--factory", "service_kit.governed.issuer_mirror:create_app", "--host=0.0.0.0", "--port=8080"]
+          args: {{- include "rask.shutdownArg" . | nindent 12 }}
+          env:
+            - { name: RASK_ISSUER_MIRROR_ISSUER, value: {{ .Values.auth.serviceAccountIssuer | quote }} }
+            - { name: RASK_ISSUER_MIRROR_PUBLIC_URL, value: "http://{{ $name }}:8080" }
+            - { name: RASK_ISSUER_MIRROR_TOKEN_FILE, value: /var/run/secrets/rask/sa-fetch/token }
+            - { name: RASK_ISSUER_MIRROR_CA_FILE, value: /var/run/secrets/rask/sa-fetch/ca.crt }
+          ports: [{ name: http, containerPort: 8080 }]
+          readinessProbe: { httpGet: { path: /.well-known/openid-configuration, port: http }, periodSeconds: 10, timeoutSeconds: 5 }
+          livenessProbe: { tcpSocket: { port: http }, periodSeconds: 20 }
+          resources:
+            requests: { cpu: 10m, memory: 96Mi }
+            limits: { memory: 256Mi }
+          volumeMounts:
+            {{- include "lance.tmpMount" . | nindent 12 }}
+            {{- include "lance.saFetch" "mounts" | nindent 12 }}
+      volumes:
+        {{- include "lance.tmpVolume" . | nindent 8 }}
+        {{- include "lance.saFetch" "volumes" | nindent 8 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels: {{- include "rask.componentLabels" (list . "issuer-mirror") | nindent 4 }}
+spec:
+  selector: { app.kubernetes.io/component: issuer-mirror, app.kubernetes.io/instance: {{ .Release.Name }} }
+  ports: [{ name: http, port: 8080, targetPort: http }]
+{{- end }}
+{{- end }}

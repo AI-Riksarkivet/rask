@@ -11,13 +11,16 @@
 # Prereq: the store holds this checkout's model (the openfga-model hook or the catalog wrote it), and
 # OpenFGA is reachable. Port-forward first:
 #   kubectl port-forward svc/lance-ns-openfga 8081:8080 &
-#   OPENFGA_API_URL=http://localhost:8081 scripts/seed_medallion_fga.sh
+#   OPENFGA_API_URL=http://localhost:8081 OPENFGA_TOKEN_FILE=<token file> scripts/seed_medallion_fga.sh
 # RASK_FGA_STORE_ID pins the store, as it does for the catalog.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BIN="$ROOT/.localbin"
 API="${OPENFGA_API_URL:-http://localhost:8081}"
+# OpenFGA admits only a projected `rask-openfga` token ([[XC-077]]). OPENFGA_TOKEN_FILE names one, e.g. a
+# TokenRequest: `kubectl create token rask-sa-jobs --audience rask-openfga > "$OPENFGA_TOKEN_FILE"`.
+TOKEN_FILE="${OPENFGA_TOKEN_FILE:?set OPENFGA_TOKEN_FILE to a rask-openfga token file}"
 # The ESTATE-level warehouse the unqualified `bronze|silver|gold` namespaces hang from.
 # Overridable because an estate has more than one: measured on the k3s estate 2026-09-24,
 # `namespace:silver` parents under BOTH `warehouse:lance_catalog` and `warehouse:bind86-wh`,
@@ -35,9 +38,9 @@ STORE_MODEL="$(uv run --project "$ROOT" python -c '
 import os, sys
 from service_kit.governed.auth.write_model import carried_model
 try:
-    print(*carried_model(sys.argv[1], pinned=os.environ.get("RASK_FGA_STORE_ID", "")))
+    print(*carried_model(sys.argv[1], token_file=sys.argv[2], pinned=os.environ.get("RASK_FGA_STORE_ID", "")))
 except LookupError as exc:
-    sys.exit(f"!! {exc}")' "$API")"
+    sys.exit(f"!! {exc}")' "$API" "$TOKEN_FILE")"
 SID="${STORE_MODEL% *}"
 MODEL="${STORE_MODEL#* }"
 echo "store: $SID model: $MODEL"
@@ -48,7 +51,7 @@ echo "store: $SID model: $MODEL"
 # relation failed every write while the script still printed "✓ seeded" and exited 0).
 w() {
   local out
-  if out=$("$BIN/fga" tuple write --api-url "$API" --store-id "$SID" --model-id "$MODEL" "$@" 2>&1); then return 0; fi
+  if out=$("$BIN/fga" tuple write --api-url "$API" --api-token "$(cat "$TOKEN_FILE")" --store-id "$SID" --model-id "$MODEL" "$@" 2>&1); then return 0; fi
   case "$out" in
     *already\ exists*|*duplicate*) return 0 ;;
     *) echo "!! seed write failed: $* — $out" >&2; return 1 ;;

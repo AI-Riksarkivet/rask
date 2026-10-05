@@ -276,8 +276,10 @@ spec:
           volumeMounts:
             {{- include "lance.tmpMount" $root | nindent 12 }}
             - { name: corpus, mountPath: {{ $root.Values.explorer.corpusMountPath | quote }}, readOnly: true }
+            {{- if $root.Values.auth.enabled }}{{ include "lance.fgaToken" (list "mounts") | nindent 12 }}{{ end }}
       volumes:
         {{- include "lance.tmpVolume" $root | nindent 8 }}
+        {{- if $root.Values.auth.enabled }}{{ include "lance.fgaToken" (list "volumes") | nindent 8 }}{{ end }}
         {{- /* The corpus volume, by explorer.corpus.mode. NO hostPath ships by DEFAULT (live-proof
              2026-07-28, defect 5): `hostPath` with `type: Directory` requires /var/media-corpus to
              already exist on the node, and when it doesn't all three pods wedge ContainerCreating with

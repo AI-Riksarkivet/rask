@@ -112,6 +112,7 @@ spec:
           volumeMounts:
             {{- include "lance.tmpMount" $root | nindent 12 }}
             {{- include "lance.identityTokens" (prepend (include "lance.fleetAudiences" (list $name $svc) | splitList " " | compact) "mounts") | nindent 12 }}
+            {{- if and $root.Values.auth.enabled $svc.governedAuth }}{{ include "lance.fgaToken" (list "mounts") | nindent 12 }}{{ end }}
           ports:
             - name: http
               containerPort: {{ $svc.port }}
@@ -350,6 +351,7 @@ spec:
       volumes:
         {{- include "lance.tmpVolume" $root | nindent 8 }}
         {{- include "lance.identityTokens" (prepend (include "lance.fleetAudiences" (list $name $svc) | splitList " " | compact) "volumes") | nindent 8 }}
+        {{- if and $root.Values.auth.enabled $svc.governedAuth }}{{ include "lance.fgaToken" (list "volumes") | nindent 8 }}{{ end }}
 ---
 apiVersion: v1
 kind: Service

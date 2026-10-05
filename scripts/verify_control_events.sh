@@ -52,6 +52,8 @@ ok() { echo "OK: $*"; }
 kubectl port-forward "svc/$RELEASE-catalog" "$CAT_PORT:2333" >/tmp/pf-cat.log 2>&1 & PIDS+=($!)
 kubectl port-forward "svc/$RELEASE-dex" 5556:5556 >/tmp/pf-dex.log 2>&1 & PIDS+=($!)
 kubectl port-forward "svc/$RELEASE-openfga" 8081:8080 >/tmp/pf-fga.log 2>&1 & PIDS+=($!)
+# OpenFGA admits only a projected `rask-openfga` token (XC-077); speak as the bootstrap Job's ServiceAccount.
+FGA_TOKEN="$(kubectl create token "$RELEASE-sa-jobs" --audience rask-openfga --duration 1h)"
 for i in $(seq 1 30); do
   c=$(curl -s -o /dev/null -w '%{http_code}' -m2 "http://localhost:$CAT_PORT/livez" 2>/dev/null || true)
   d=$(curl -s -o /dev/null -w '%{http_code}' -m2 http://localhost:5556/dex/.well-known/openid-configuration 2>/dev/null || true)
@@ -76,19 +78,19 @@ ALICE_SUB="$(sub_of "$ALICE")"; BOB_SUB="$(sub_of "$BOB")"
 # `owner warehouse:lance_catalog` now (cond 4); --seed writes it manually for legacy stacks. Bob's
 # project-admin tuple stays script-seeded in BOTH modes: it is a negative-test fixture (a mere project
 # admin must 403 on the estate feed), not part of the estate bootstrap. ROOT = fga_root_object default.
-SID="$(fga store list --api-url http://localhost:8081 2>/dev/null | python3 -c "import sys,json;s=json.load(sys.stdin).get('stores',[]);print(s[0]['id'] if s else '')")"
+SID="$(fga store list --api-url http://localhost:8081 --api-token "$FGA_TOKEN" 2>/dev/null | python3 -c "import sys,json;s=json.load(sys.stdin).get('stores',[]);print(s[0]['id'] if s else '')")"
 [ -n "$SID" ] || fail "no OpenFGA store (is fga provisioned?)"
 if [ "$SEED" = "1" ]; then
-  fga tuple write --api-url http://localhost:8081 --store-id "$SID" "user:$ALICE_SUB" owner warehouse:lance_catalog >/dev/null 2>&1 || true
+  fga tuple write --api-url http://localhost:8081 --api-token "$FGA_TOKEN" --store-id "$SID" "user:$ALICE_SUB" owner warehouse:lance_catalog >/dev/null 2>&1 || true
 fi
 # Bob's project is a THROWAWAY fixture project, deliberately NOT a real tenant: granting him admin on
 # acme polluted the tenants panel's admin list AND broke verify_produce_door.sh's negative case (bob
 # must NOT be an acme admin there — found when both scripts ran against one persisted store 2026-07-24).
-fga tuple write --api-url http://localhost:8081 --store-id "$SID" "user:$BOB_SUB" admin project:ctlfixture >/dev/null 2>&1 || true
+fga tuple write --api-url http://localhost:8081 --api-token "$FGA_TOKEN" --store-id "$SID" "user:$BOB_SUB" admin project:ctlfixture >/dev/null 2>&1 || true
 # --seed polls longer (a fresh write can lag through OpenFGA); assert mode expects a pre-existing grant.
 TRIES=$([ "$SEED" = "1" ] && echo 20 || echo 5)
 for i in $(seq 1 "$TRIES"); do
-  a="$(fga query check --api-url http://localhost:8081 --store-id "$SID" "user:$ALICE_SUB" can_observe_events warehouse:lance_catalog 2>/dev/null | python3 -c "import sys,json;print(json.load(sys.stdin).get('allowed',False))" 2>/dev/null || true)"
+  a="$(fga query check --api-url http://localhost:8081 --api-token "$FGA_TOKEN" --store-id "$SID" "user:$ALICE_SUB" can_observe_events warehouse:lance_catalog 2>/dev/null | python3 -c "import sys,json;print(json.load(sys.stdin).get('allowed',False))" 2>/dev/null || true)"
   [ "$a" = "True" ] && break
   if [ "$i" = "$TRIES" ]; then
     if [ "$SEED" = "1" ]; then

@@ -67,6 +67,8 @@ step "4/7 port-forward dex + medallion-producer + openfga + lineage"
 kubectl port-forward "svc/$RELEASE-dex" 5556:5556 >/tmp/pf-dex.log 2>&1 & PF_PIDS+=($!)
 kubectl port-forward "svc/$RELEASE-medallion-producer" 8000:8000 >/tmp/pf-ray.log 2>&1 & PF_PIDS+=($!)
 kubectl port-forward "svc/$RELEASE-openfga" 8081:8080 >/tmp/pf-fga.log 2>&1 & PF_PIDS+=($!)
+# OpenFGA admits only a projected `rask-openfga` token (XC-077); speak as the bootstrap Job's ServiceAccount.
+FGA_TOKEN="$(kubectl create token "$RELEASE-sa-jobs" --audience rask-openfga --duration 1h)"
 kubectl port-forward "svc/$RELEASE-lineage" 8010:8000 >/tmp/pf-lin.log 2>&1 & PF_PIDS+=($!)
 for i in $(seq 1 30); do
   d=$(curl -s -o /dev/null -w '%{http_code}' -m2 http://localhost:5556/dex/.well-known/openid-configuration 2>/dev/null || true)
@@ -89,11 +91,11 @@ SUB="$(ALICE="$ALICE" uv run python -c "
 import os,base64,json
 p=os.environ['ALICE'].split('.')[1]; p+='='*(-len(p)%4)
 print(json.loads(base64.urlsafe_b64decode(p))['sub'])")"
-SID="$(fga store list --api-url http://localhost:8081 \
+SID="$(fga store list --api-url http://localhost:8081 --api-token "$FGA_TOKEN" \
   | uv run python -c "import sys,json;s=[x for x in json.load(sys.stdin)['stores'] if x['name']=='lance-catalog'];print(max(s,key=lambda x:x['created_at'])['id'])")"
-fga tuple write --api-url http://localhost:8081 --store-id "$SID" "user:$SUB" admin project:acme >/dev/null 2>&1 || true
+fga tuple write --api-url http://localhost:8081 --api-token "$FGA_TOKEN" --store-id "$SID" "user:$SUB" admin project:acme >/dev/null 2>&1 || true
 for i in $(seq 1 30); do
-  a="$(fga query check --api-url http://localhost:8081 --store-id "$SID" "user:$SUB" can_administer project:acme 2>/dev/null \
+  a="$(fga query check --api-url http://localhost:8081 --api-token "$FGA_TOKEN" --store-id "$SID" "user:$SUB" can_administer project:acme 2>/dev/null \
       | uv run python -c "import sys,json;print(json.load(sys.stdin).get('allowed',False))" 2>/dev/null || echo False)"
   [ "$a" = "True" ] && break
   [ "$i" = "30" ] && fail "admin grant never became readable"

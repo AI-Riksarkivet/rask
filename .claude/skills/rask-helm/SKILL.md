@@ -222,6 +222,16 @@ catalog, lineage, maintenance, the medallion, OpenBao and Dex ran as `default` w
   has applied it. Read a pod's Configuration from its `dapr.io/config`, never by a name built from the app-id.
   The gates: `tests/unit/test_only_the_owner_may_read_its_signing_key.py` (who may read which secret) and
   `tests/unit/test_event_signing_is_wired_by_the_chart_in_every_deploy_mode.py` (the name follows the spec).
+- **OpenFGA admits only a projected `rask-openfga` token from a listed ServiceAccount** ([[XC-077]]): OIDC
+  against the cluster SA issuer, keys fetched through the issuer mirror in `templates/openfga-authn.yaml`
+  (OpenFGA fetches discovery with no bearer and k3s answers that 401), the subject allow-list from
+  `lance.openfgaSubjects` (a ConfigMap OpenFGA reads at start, so a new client needs an OpenFGA restart),
+  playground off, CORS closed. A pod that names OpenFGA renders all three parts of `lance.fgaToken` (env,
+  volume, mount) under the condition its URL has, and `lance.openfgaSubjects` must list its account under
+  the same condition. A list-valued `OPENFGA_*` env is comma-joined (measured on v1.18.3). An operator tool
+  mints a token with `kubectl create token <release>-sa-jobs --audience rask-openfga`. The gate is
+  `tests/unit/test_openfga_admits_only_a_projected_service_account_token.py`; `openfga-authn.yaml` fails
+  the render when OpenFGA's audience, issuer alias or subject source drifts from the clients'.
 - **The gate is the render, judged by what each role grants**, so a new subchart that binds a
   secret-reading or token-reviewing role to `default` fails without anyone listing it:
   `tests/unit/test_a_first_party_pod_cannot_read_a_secret_through_the_kube_api.py`. A `User` subject

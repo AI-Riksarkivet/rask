@@ -190,7 +190,11 @@ prod-render-check: ## Render values-prod.yaml and assert its HA + security switc
 # have an invocation site — so a sixth drive cannot land unreferenced.
 notifications-lanes: ## The five notification-lane drives vs a deployed estate (ORIGIN=http://…)
 	@test -n "$(ORIGIN)" || { echo "set ORIGIN, e.g. make notifications-lanes ORIGIN=http://localhost:8080"; exit 1; }
-	@for drive in tests/e2e/verify_originator_lane.mjs \
+	@# OpenFGA admits only a projected rask-openfga token (XC-077): one TokenRequest for the bootstrap Job account.
+	@FGA_TOKEN_FILE="$$(mktemp)"; trap 'rm -f "$$FGA_TOKEN_FILE"' EXIT; \
+	kubectl create token "$${RELEASE:-rask}-sa-jobs" --audience rask-openfga --duration 1h > "$$FGA_TOKEN_FILE" || exit 1; \
+	export FGA_TOKEN_FILE; \
+	for drive in tests/e2e/verify_originator_lane.mjs \
 	              tests/e2e/verify_task_assignment_lane.mjs \
 	              tests/e2e/verify_task_departure_lanes.mjs \
 	              tests/e2e/verify_lease_lapse_lane.mjs \

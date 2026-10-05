@@ -75,6 +75,10 @@ class FgaSettings:
     fga_store_id: str | None = Field(default=None, alias="RASK_FGA_STORE_ID")
     fga_model_id: str | None = Field(default=None, alias="RASK_FGA_MODEL_ID")
     fga_timeout_seconds: float = Field(default=5.0, ge=0.1, alias="RASK_FGA_TIMEOUT_SECONDS")
+    #: This pod's projected ServiceAccount token for the `rask-openfga` audience, presented as the bearer of
+    #: every OpenFGA request and read on each one, because the kubelet rotates it ([[XC-077]]). Unset sends
+    #: no credential, which only an OpenFGA without authn admits; the chart sets it wherever auth is on.
+    fga_token_file: str | None = Field(default=None, alias="RASK_FGA_TOKEN_FILE")
     #: The estate's root FGA object — the one a platform-wide PRIVILEGE is checked against, as
     #: opposed to a per-tenant one. Shared here rather than redeclared per service because it is a
     #: coordinate every governed service must agree on: the catalog gates `GET /v1/events` on it,

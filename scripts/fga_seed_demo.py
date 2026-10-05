@@ -46,7 +46,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from service_kit.governed.auth.write_model import carried_model
+from service_kit.governed.auth.write_model import carried_model, fga_headers
 
 
 _FIXTURES = Path(__file__).resolve().parents[1] / "packages/service-kit/src/service_kit/governed/auth/model.fga.yaml"
@@ -62,11 +62,11 @@ _DEX_SUBS = {
 _TUPLE_RE = re.compile(r"-\s*\{\s*user:\s*\"?(?P<user>[^,\"]+)\"?\s*,\s*relation:\s*\"?(?P<relation>[^,\"]+)\"?\s*,\s*object:\s*\"?(?P<object>[^}\"]+)\"?\s*\}")
 
 
-def _post(base: str, path: str, payload: dict) -> dict:
+def _post(base: str, path: str, payload: dict, *, token_file: str | None) -> dict:
     req = urllib.request.Request(  # noqa: S310 — a fixed localhost base, not user-controlled
         f"{base}{path}",
         data=json.dumps(payload).encode(),
-        headers={"content-type": "application/json"},
+        headers={"content-type": "application/json", **fga_headers(token_file)},
         method="POST",
     )
     with urllib.request.urlopen(req, timeout=20) as res:  # noqa: S310 — a fixed localhost base
@@ -106,6 +106,11 @@ def remap(tuples: list[dict[str, str]], subs: dict[str, str]) -> list[dict[str, 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--api", default="http://127.0.0.1:18080", help="OpenFGA HTTP API base")
+    ap.add_argument(
+        "--token-file",
+        default=os.environ.get("OPENFGA_TOKEN_FILE"),
+        help="a rask-openfga token, e.g. `kubectl create token rask-sa-jobs --audience rask-openfga` written to a file (XC-077)",
+    )
     ap.add_argument("--dry-run", action="store_true", help="print what would be written, write nothing")
     ap.add_argument(
         "--map",
@@ -134,7 +139,7 @@ def main() -> int:
         return 0
 
     try:
-        store, model = carried_model(args.api, pinned=os.environ.get("RASK_FGA_STORE_ID", ""))
+        store, model = carried_model(args.api, token_file=args.token_file, pinned=os.environ.get("RASK_FGA_STORE_ID", ""))
     except LookupError as exc:
         print(f"!! {exc} — is auth.enabled and the catalog up?", file=sys.stderr)
         return 1
@@ -143,7 +148,7 @@ def main() -> int:
     written = skipped = failed = 0
     for t in tuples:
         try:
-            _post(args.api, f"/stores/{store}/write", {"writes": {"tuple_keys": [t]}, "authorization_model_id": model})
+            _post(args.api, f"/stores/{store}/write", {"writes": {"tuple_keys": [t]}, "authorization_model_id": model}, token_file=args.token_file)
             written += 1
             print(f"  + {t['object']}#{t['relation']}@{t['user'][:40]}")
         except urllib.error.HTTPError as exc:

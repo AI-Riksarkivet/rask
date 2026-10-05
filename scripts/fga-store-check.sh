@@ -39,8 +39,11 @@ API="$(kubectl -n "$NS" exec "$POD" -c catalog -- printenv RASK_FGA_API_URL)"
 FETCH='
 import json, os, sys, urllib.parse, urllib.request
 api = os.environ["RASK_FGA_API_URL"].rstrip("/")
+token_file = os.environ.get("RASK_FGA_TOKEN_FILE")
 def get(path):
-    with urllib.request.urlopen(api + path, timeout=30) as r:
+    # The projected rask-openfga token of the catalog pod, read per request: OpenFGA refuses a call without it, XC-077.
+    headers = {"Authorization": "Bearer " + open(token_file).read().strip()} if token_file else {}
+    with urllib.request.urlopen(urllib.request.Request(api + path, headers=headers), timeout=30) as r:
         return json.load(r)
 if sys.argv[1] == "stores":
     print(json.dumps({"pinned": os.environ.get("RASK_FGA_STORE_ID", ""), "stores": get("/stores").get("stores") or []}))

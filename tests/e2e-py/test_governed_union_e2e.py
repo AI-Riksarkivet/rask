@@ -47,7 +47,7 @@ import requests
 from promotion_review import approve_if_held
 from topology import OUTSIDER
 
-from service_kit.governed.auth.write_model import carried_model
+from service_kit.governed.auth.write_model import carried_model, fga_headers
 
 
 LANCERAY = os.environ.get("LANCE_E2E_LANCERAY_URL", "")
@@ -57,6 +57,8 @@ DEX_SECRET = os.environ.get("LANCE_E2E_DEX_SECRET", "lance-catalog-secret")
 FGA = os.environ.get("LANCE_E2E_FGA", "")
 #: The store `scripts/e2e_live.sh` found the catalog using (its pin, else the newest `lance-catalog`).
 STORE = os.environ.get("LANCE_E2E_FGA_STORE_ID", "")
+#: The `rask-openfga` token file the runner minted (`scripts/e2e_live.sh`); OpenFGA refuses a call without it ([[XC-077]]).
+FGA_TOKEN_FILE = os.environ.get("LANCE_E2E_FGA_TOKEN_FILE") or None
 DAPR_TOKEN = os.environ.get("LANCE_E2E_DAPR_TOKEN", "")
 #: Whether the estate MEASURES quality, exported by `scripts/e2e_live.sh` from the running stage runner.
 #: The two legs below assert `quality_passed` on a WROTE edge, and only `assert_quality` ever produces the
@@ -277,7 +279,7 @@ def fga_store(stack: tuple[str, str]) -> tuple[str, str]:
     """
     _ = stack  # gate on the stack fixture's env + reachability (+ auth-on) skips BEFORE touching OpenFGA
     try:
-        return carried_model(FGA, pinned=STORE)
+        return carried_model(FGA, token_file=FGA_TOKEN_FILE, pinned=STORE)
     except OSError as exc:
         # Unreachable/unset FGA must SKIP, not ERROR: an unguarded request raises out of a module-scoped
         # fixture, which pytest reports as an error for every test that uses it — indistinguishable in CI
@@ -299,7 +301,12 @@ def _tuples(fga_store: tuple[str, str], *, writes: list[dict] | None = None, del
     store, model = fga_store
 
     def _one(key: str, tuple_key: dict) -> None:
-        resp = requests.post(f"{FGA}/stores/{store}/write", json={"authorization_model_id": model, key: {"tuple_keys": [tuple_key]}}, timeout=10)
+        resp = requests.post(
+            f"{FGA}/stores/{store}/write",
+            headers=fga_headers(FGA_TOKEN_FILE),
+            json={"authorization_model_id": model, key: {"tuple_keys": [tuple_key]}},
+            timeout=10,
+        )
         if resp.status_code == 200:
             return
         message = resp.json().get("message", "") if resp.status_code == 400 else ""
@@ -328,6 +335,7 @@ def _check(fga_store: tuple[str, str], user: str, relation: str, obj: str) -> bo
     store, model = fga_store
     resp = requests.post(
         f"{FGA}/stores/{store}/check",
+        headers=fga_headers(FGA_TOKEN_FILE),
         json={"authorization_model_id": model, "tuple_key": {"user": user, "relation": relation, "object": obj}},
         timeout=10,
     )

@@ -38,6 +38,8 @@ fail() { echo "!! FAIL: $*"; exit 1; }
 kubectl -n ingress-nginx port-forward svc/ingress-nginx-controller "$ORIGIN_PORT:80" >/tmp/pf-ingress.log 2>&1 & PIDS+=($!)
 kubectl port-forward "svc/$RELEASE-dex" 5556:5556 >/tmp/pf-dex.log 2>&1 & PIDS+=($!)
 kubectl port-forward "svc/$RELEASE-openfga" 8081:8080 >/tmp/pf-fga.log 2>&1 & PIDS+=($!)
+# OpenFGA admits only a projected `rask-openfga` token (XC-077); speak as the bootstrap Job's ServiceAccount.
+FGA_TOKEN="$(kubectl create token "$RELEASE-sa-jobs" --audience rask-openfga --duration 1h)"
 for i in $(seq 1 30); do
   # Probe the ORIGIN ROOT, not a zone path. This polled "/data" — a path the 7 -> 4 zone merge deleted
   # (data is an area of the lakehouse zone now), so it answered 404, never matched, and the loop below
@@ -63,11 +65,11 @@ mint() { curl -s http://localhost:5556/dex/token -d grant_type=password -d clien
 sub_of() { python3 -c "import sys,base64,json;t=sys.argv[1].split('.')[1];t+='='*(-len(t)%4);print(json.loads(base64.urlsafe_b64decode(t)).get('sub',''))" "$1"; }
 ID="$(mint alice@example.com)"; [ -n "$ID" ] || fail "could not mint alice's Dex token (is dex ready?)"
 SUB="$(sub_of "$ID")"; [ -n "$SUB" ] || fail "could not decode alice's sub"
-SID="$(fga store list --api-url http://localhost:8081 2>/dev/null | python3 -c "import sys,json;s=json.load(sys.stdin).get('stores',[]);print(s[0]['id'] if s else '')")"
+SID="$(fga store list --api-url http://localhost:8081 --api-token "$FGA_TOKEN" 2>/dev/null | python3 -c "import sys,json;s=json.load(sys.stdin).get('stores',[]);print(s[0]['id'] if s else '')")"
 [ -n "$SID" ] || fail "no OpenFGA store (is auth.enabled + the model provisioned?)"
-fga tuple write --api-url http://localhost:8081 --store-id "$SID" "user:$SUB" admin project:acme >/dev/null 2>&1 || true
+fga tuple write --api-url http://localhost:8081 --api-token "$FGA_TOKEN" --store-id "$SID" "user:$SUB" admin project:acme >/dev/null 2>&1 || true
 for i in $(seq 1 30); do
-  a="$(fga query check --api-url http://localhost:8081 --store-id "$SID" "user:$SUB" can_administer project:acme 2>/dev/null | python3 -c "import sys,json;print(json.load(sys.stdin).get('allowed',False))" 2>/dev/null || true)"
+  a="$(fga query check --api-url http://localhost:8081 --api-token "$FGA_TOKEN" --store-id "$SID" "user:$SUB" can_administer project:acme 2>/dev/null | python3 -c "import sys,json;print(json.load(sys.stdin).get('allowed',False))" 2>/dev/null || true)"
   [ "$a" = "True" ] && { echo "✓ alice (user:${SUB:0:12}…) is admin on project:acme"; break; }
   [ "$i" = "30" ] && fail "alice admin grant never became readable"
   sleep 1

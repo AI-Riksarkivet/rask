@@ -105,7 +105,7 @@ async def test_no_store_means_None_not_a_new_one(fake_fga) -> None:
 
     fake_fga.stores = []
 
-    assert await fga.resolve("http://fga:8080", deadline_seconds=0.0) is None
+    assert await fga.resolve("http://fga:8080", token_file=None, deadline_seconds=0.0) is None
     assert "create_store" not in fake_fga.calls
 
 
@@ -119,7 +119,7 @@ async def test_a_store_with_no_model_is_also_None(fake_fga) -> None:
     fake_fga.stores = [_Store("01STORE", "lance-catalog", 1)]
     fake_fga.models = []
 
-    assert await fga.resolve("http://fga:8080", deadline_seconds=0.0) is None
+    assert await fga.resolve("http://fga:8080", token_file=None, deadline_seconds=0.0) is None
     assert "write_authorization_model" not in fake_fga.calls
 
 
@@ -133,7 +133,7 @@ async def test_it_takes_the_NEWEST_store_when_names_collide(fake_fga) -> None:
     fake_fga.stores = [_Store("01OLD", "lance-catalog", 1), _Store("01NEW", "lance-catalog", 9)]
     fake_fga.models = [_Model("01MODEL", _bundled())]
 
-    resolved = await fga.resolve("http://fga:8080")
+    resolved = await fga.resolve("http://fga:8080", token_file=None)
     assert resolved is not None and resolved[0] == "01NEW"
 
 
@@ -144,4 +144,4 @@ async def test_it_ignores_stores_with_a_DIFFERENT_name(fake_fga) -> None:
 
     fake_fga.stores = [_Store("01OTHER", "something-else", 5)]
 
-    assert await fga.resolve("http://fga:8080", deadline_seconds=0.0) is None
+    assert await fga.resolve("http://fga:8080", token_file=None, deadline_seconds=0.0) is None
