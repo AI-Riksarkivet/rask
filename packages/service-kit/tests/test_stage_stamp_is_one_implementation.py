@@ -48,20 +48,20 @@ class TestColumnOrderIsStable:
     def test_an_existing_stage_column_keeps_its_position(self) -> None:
         table = pa.table({"id": [1], "stage": ["bronze"], "data": ["a"]})
 
-        out = stamp_stage(table, stage="silver")
+        out = stamp_stage(table, stage="silver", stable_row_ids=True)
 
         assert out.column_names == ["id", "stage", "data"], "re-stamping moved the column, so a dataset's schema depends on which compute path wrote it"
         assert out.column("stage").to_pylist() == ["silver"]
 
     def test_a_missing_stage_column_is_appended(self) -> None:
-        out = stamp_stage(_rows(), stage="silver")
+        out = stamp_stage(_rows(), stage="silver", stable_row_ids=True)
         assert out.column_names == ["id", "data", "stage"]
 
 
 class TestRootProvenance:
     def test_no_rowid_and_no_source_rowid_is_not_an_error(self) -> None:
         """A tabular upstream read without with_row_id has neither. It must still stamp."""
-        out = stamp_stage(_rows(), stage="silver")
+        out = stamp_stage(_rows(), stage="silver", stable_row_ids=True)
         assert SOURCE_ROWID_COLUMN not in out.column_names
 
 
@@ -70,7 +70,7 @@ class TestTheLineageColumn:
         """The re-stamp exists so a gold row does not claim its parent's provenance."""
         table = _rows(**{LINEAGE_COLUMN: ['{"run":"parent"}', '{"run":"parent"}']})
 
-        out = stamp_stage(table, stage="gold", lineage='{"run":"child"}')
+        out = stamp_stage(table, stage="gold", stable_row_ids=True, lineage='{"run":"child"}')
 
         assert out.column(LINEAGE_COLUMN).to_pylist() == ['{"run":"child"}', '{"run":"child"}']
         assert out.column_names.count(LINEAGE_COLUMN) == 1
@@ -79,7 +79,7 @@ class TestTheLineageColumn:
         """Carrying the parent's document forward unchanged would be a false claim about this row."""
         table = _rows(**{LINEAGE_COLUMN: ['{"run":"parent"}', '{"run":"parent"}']})
 
-        out = stamp_stage(table, stage="gold", lineage="")
+        out = stamp_stage(table, stage="gold", stable_row_ids=True, lineage="")
 
         assert LINEAGE_COLUMN not in out.column_names
 
@@ -102,14 +102,14 @@ class TestTheDeclaredIdNamesTHISTier:
         """The half that was missing: an unwired driver must not publish its parent's name."""
         bronze = _rows().replace_schema_metadata({LINEAGE_DATASET_ID_KEY: "acme$bronze"})
 
-        out = stamp_stage(bronze, stage="silver")
+        out = stamp_stage(bronze, stage="silver", stable_row_ids=True)
 
         assert LINEAGE_DATASET_ID_KEY.encode() not in (out.schema.metadata or {})
 
     def test_a_declared_id_REPLACES_an_inherited_one(self) -> None:
         bronze = _rows().replace_schema_metadata({LINEAGE_DATASET_ID_KEY: "acme$bronze"})
 
-        out = stamp_stage(bronze, stage="silver", dataset_id="acme$silver")
+        out = stamp_stage(bronze, stage="silver", stable_row_ids=True, dataset_id="acme$silver")
 
         assert (out.schema.metadata or {})[LINEAGE_DATASET_ID_KEY.encode()] == b"acme$silver"
 
@@ -118,7 +118,7 @@ class TestTheDeclaredIdNamesTHISTier:
         (`ray_stage_job._target_schema`), so the metadata rule has to hold with no rows to stamp."""
         bronze = _rows().replace_schema_metadata({LINEAGE_DATASET_ID_KEY: "acme$bronze"})
 
-        target = stamp_stage(bronze.schema.empty_table(), stage="silver", dataset_id="acme$silver").schema
+        target = stamp_stage(bronze.schema.empty_table(), stage="silver", stable_row_ids=True, dataset_id="acme$silver").schema
 
         assert (target.metadata or {})[LINEAGE_DATASET_ID_KEY.encode()] == b"acme$silver"
 

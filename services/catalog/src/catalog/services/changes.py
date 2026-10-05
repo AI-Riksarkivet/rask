@@ -14,11 +14,13 @@ THE `updated` FILTER'S FIRST CLAUSE IS THE SUBTLE ONE, and the guide states its 
 begin_version`". Drop it and every insert is reported twice — once as inserted, once as updated — so a
 consumer applying both streams double-counts.
 
-PRECONDITION, `file_format.md:4015`: these columns exist only where row-level version tracking is on.
-This estate requires it everywhere (`enable_stable_row_ids`; the catalog refuses a governed dataset
-created without it), so the feed is available wherever the catalog governs — but a dataset registered
-from outside that rule would answer an unresolved-column error rather than an empty feed, which is the
-honest failure and is left to surface.
+PRECONDITION, `file_format.md:4011-4015`: the version columns mean something only where stable row ids
+are on, and otherwise the feed is SILENTLY EMPTY rather than an error. Measured on pylance 12.0.0: a
+table created without `enable_stable_row_ids` still answers both columns, both read 1 for every row
+after an append and an update, and the `inserted` window (1, 3] answers []. A consumer reads that as
+"nothing changed", so `require_row_versions` refuses such a table before any predicate runs. The
+catalog cannot rule the case out at creation alone: a table registered at an empty location, or one
+whose bytes were rewritten outside the catalog, reaches this door without passing a create.
 
 THE CASCADE ASKS THE SAME QUESTION WITH ONE COLUMN, and the difference is deliberate.
 `scripts/ray_stage_job._delta_filter` filters on `_row_last_updated_at_version` alone, which selects
@@ -32,7 +34,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Final, Literal
 
-from lance_namespace import InvalidInputError
+from lance_namespace import InvalidInputError, InvalidTableStateError
 
 
 #: The three questions a consumer can ask of a version window.
@@ -55,6 +57,21 @@ _UPDATED = "_row_last_updated_at_version"
 #: door names them. `_rowid` rides along because it is what identifies the row an update applies TO: the
 #: primary key is the transform's business, and the cascade's tiers do not all carry one.
 FEED_COLUMNS: Final = (_CREATED, _UPDATED, "_rowid")
+
+
+def require_row_versions(stable_row_ids: bool, *, table: str) -> None:
+    """Refuse a change feed over a table whose row versions are not tracked.
+
+    Raises:
+        InvalidTableStateError: the table has no stable row ids (spec code 19, 409). The request is
+            well formed and the table cannot answer it truthfully; stable row ids are create-time-only,
+            so the remedy is a new table, not a retry.
+    """
+    if not stable_row_ids:
+        raise InvalidTableStateError(
+            f"table {table} was created without stable row ids, so Lance tracks no row versions and keeps no deleted-row record "
+            "for it: a change feed would answer an empty window whatever changed. Recreate it with enable_stable_row_ids=True."
+        )
 
 
 def change_filter(*, begin_version: int, end_version: int | None, kind: ChangeKind) -> str:

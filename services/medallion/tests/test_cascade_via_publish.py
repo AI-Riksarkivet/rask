@@ -62,7 +62,7 @@ def _settings(tmp_path: Path, **over: Any) -> MedallionSettings:
 @pytest.fixture
 def upstream(tmp_path: Path) -> Path:
     """A real bronze dataset, so the compute path this feature depends on actually runs."""
-    lance.write_dataset(pa.table({"id": [1, 2, 3]}), str(tmp_path / "bronze.lance"))
+    lance.write_dataset(pa.table({"id": [1, 2, 3]}), str(tmp_path / "bronze.lance"), enable_stable_row_ids=True)
     return tmp_path
 
 

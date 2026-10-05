@@ -527,7 +527,7 @@ def _carry_forward(ds: lance.LanceDataset, stage: str) -> tuple[pa.Table, dict[s
     """
     blob_cols = blobs.blob_field_names(ds.schema)
     if not blob_cols:
-        return _stamp_stage(_carry_source_rowid(_drop_inherited_lineage(ds.to_table(with_row_id=True))), stage), {}
+        return _stamp_stage(_drop_inherited_lineage(ds.to_table(with_row_id=True)), stage, stable_row_ids=ds.has_stable_row_ids), {}
 
     # EXTERNAL UPSTREAM: FORWARD THE POINTER, DO NOT RE-PERSIST THE BYTES (§4.1/§4.2, change 3).
     #
@@ -573,14 +573,7 @@ def _carry_forward(ds: lance.LanceDataset, stage: str) -> tuple[pa.Table, dict[s
         else:
             fields.append(aligned.schema.field(f.name))
             columns[f.name] = aligned.column(f.name)
-    # Root provenance: a carried source_rowid came through the loop above (a plain upstream column); at the
-    # first derive off bronze it is minted here from the just-read _rowid (same aligned scan). _rowid is not persisted.
-    if _SOURCE_ROWID_COLUMN not in columns:
-        fields.append(pa.field(_SOURCE_ROWID_COLUMN, pa.uint64()))
-        columns[_SOURCE_ROWID_COLUMN] = aligned.column("_rowid").cast(pa.uint64())
-    fields.append(pa.field(_STAGE_COLUMN, pa.string()))
-    columns[_STAGE_COLUMN] = pa.array([stage] * rows, pa.string())
-    return pa.table(columns, schema=pa.schema(fields)), blob_payloads
+    return _with_root_provenance(columns, fields, aligned.column("_rowid"), ds, stage=stage, rows=rows), blob_payloads
 
 
 #: How many rows the derivability probe reads. Bounded because the question is "what KIND of payload
@@ -640,12 +633,7 @@ def _carry_forward_external(ds: lance.LanceDataset, stage: str, blob_cols: list[
         else:
             fields.append(table.schema.field(f.name))
             columns[f.name] = table.column(f.name)
-    if _SOURCE_ROWID_COLUMN not in columns:
-        fields.append(pa.field(_SOURCE_ROWID_COLUMN, pa.uint64()))
-        columns[_SOURCE_ROWID_COLUMN] = table.column("_rowid").cast(pa.uint64())
-    fields.append(pa.field(_STAGE_COLUMN, pa.string()))
-    columns[_STAGE_COLUMN] = pa.array([stage] * rows, pa.string())
-    out = pa.table(columns, schema=pa.schema(fields))
+    out = _with_root_provenance(columns, fields, table.column("_rowid"), ds, stage=stage, rows=rows)
     return out, _payloads_if_derivable(ds, blob_cols, rows)
 
 
@@ -698,18 +686,23 @@ def _drop_inherited_lineage(table: pa.Table) -> pa.Table:
     return table.drop_columns([_LINEAGE_COLUMN]) if _LINEAGE_COLUMN in table.column_names else table
 
 
-def _carry_source_rowid(table: pa.Table) -> pa.Table:
-    """Root provenance — delegated to the shared stamp so the Ray driver cannot disagree with this one.
+def _with_root_provenance(
+    columns: dict[str, Any], fields: list[pa.Field], row_ids: pa.ChunkedArray, ds: lance.LanceDataset, *, stage: str, rows: int
+) -> pa.Table:
+    """The carried columns plus `source_rowid` and `stage`, root provenance minted by the shared stamp.
 
-    `source_rowid` names the BRONZE row an output descends from (R23). An upstream that already carries
-    it keeps it; re-minting from the immediate parent would reroot the chain one tier down.
+    A carried `source_rowid` came through the caller's loop as a plain upstream column and is kept; at
+    the first derive off bronze it is minted from the just-read `_rowid` of the same scan, which
+    `carry_source_rowid` refuses when the upstream has no stable row ids. `_rowid` is not persisted.
     """
     from service_kit.lakehouse.stage_stamp import carry_source_rowid
 
-    return carry_source_rowid(table)
+    carried = pa.table({**columns, "_rowid": row_ids}, schema=pa.schema([*fields, pa.field("_rowid", row_ids.type)]))
+    out = carry_source_rowid(carried, stable_row_ids=ds.has_stable_row_ids)
+    return out.append_column(pa.field(_STAGE_COLUMN, pa.string()), pa.array([stage] * rows, pa.string()))
 
 
-def _stamp_stage(table: pa.Table, stage: str) -> pa.Table:
+def _stamp_stage(table: pa.Table, stage: str, *, stable_row_ids: bool) -> pa.Table:
     """Set (or append) the ``stage`` provenance column — delegated to the shared stamp.
 
     IN PLACE when the column exists, and that is the half which had drifted from the Ray driver:
@@ -718,4 +711,4 @@ def _stamp_stage(table: pa.Table, stage: str) -> pa.Table:
     """
     from service_kit.lakehouse.stage_stamp import stamp_stage
 
-    return stamp_stage(table, stage=stage)
+    return stamp_stage(table, stage=stage, stable_row_ids=stable_row_ids)

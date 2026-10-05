@@ -46,7 +46,7 @@ class _Dapr:
 
 @pytest.fixture
 def upstream(tmp_path: Path) -> Path:
-    lance.write_dataset(pa.table({"id": [1, 2, 3]}), str(tmp_path / "silver.lance"))
+    lance.write_dataset(pa.table({"id": [1, 2, 3]}), str(tmp_path / "silver.lance"), enable_stable_row_ids=True)
     return tmp_path
 
 

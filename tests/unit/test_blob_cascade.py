@@ -17,7 +17,7 @@ from medallion.services.compute import transform_stage
 
 
 def _write(uri: str, table: pa.Table) -> None:
-    lance.write_dataset(table, uri, mode="overwrite", data_storage_version="2.2")
+    lance.write_dataset(table, uri, mode="overwrite", data_storage_version="2.2", enable_stable_row_ids=True)
 
 
 def test_blob_column_survives_a_cascade_hop(tmp_path: Path) -> None:

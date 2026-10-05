@@ -30,8 +30,11 @@ from __future__ import annotations
 from pathlib import Path
 
 import lance
+import pyarrow as pa
+import pytest
 
-from medallion.services.compute import seed_bronze
+from medallion.services.compute import seed_bronze, transform_stage
+from service_kit.lakehouse.stage_stamp import UnstableRowIdsError
 
 
 def _row_ids(uri: str) -> list[int]:
@@ -67,3 +70,24 @@ def test_a_re_seed_with_more_rows_keeps_the_originals_identity(tmp_path: Path) -
 
     kept = {k: v for k, v in before.items() if after.get(k) == v}
     assert len(kept) == len(before), f"growing the seed re-minted ids for rows that already existed: {before} -> {after}"
+
+
+@pytest.mark.parametrize("payload", ["tabular", "managed-blob"])
+def test_the_head_hop_refuses_an_upstream_without_stable_row_ids(tmp_path: Path, payload: str) -> None:
+    """`source_rowid` minted from a non-stable `_rowid` names a physical address the next compaction rewrites.
+
+    Stable row ids are create-time-only (`lance_docs/file_format.md:4011-4015`), so the head hop refuses
+    rather than writing a silver tier whose every parent reference goes stale on the first maintenance
+    pass. Both in-process mint sites: the tabular read and the aligned blob scan.
+    """
+    bronze, silver = str(tmp_path / "bronze.lance"), str(tmp_path / "silver.lance")
+    tabular = payload == "tabular"
+    field = pa.field("payload", pa.string()) if tabular else lance.blob_field("payload")
+    column = pa.array(["a", "b"]) if tabular else lance.blob_array([b"a", b"b"])
+    rows = pa.table({"id": pa.array([0, 1], pa.int64()), "payload": column}, schema=pa.schema([pa.field("id", pa.int64()), field]))
+    lance.write_dataset(rows, bronze, data_storage_version="2.2")
+
+    with pytest.raises(UnstableRowIdsError, match="stable row ids"):
+        transform_stage(bronze, silver, {}, stage="silver")
+
+    assert not Path(silver).exists(), "a refused head hop must write no tier"

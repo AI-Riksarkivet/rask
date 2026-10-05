@@ -74,7 +74,17 @@ ONE_TO_MANY: Final = "1:N"
 CARDINALITIES: Final = frozenset({ONE_TO_ONE, ONE_TO_MANY})
 
 
-def carry_source_rowid(table: pa.Table) -> pa.Table:
+class UnstableRowIdsError(ValueError):
+    """An upstream without stable row ids was asked to mint root provenance.
+
+    Without stable row ids `_rowid` is a physical address, not an identifier: compaction rewrites it and
+    row versions are not tracked (`lance_docs/file_format.md:4011-4015`). A `source_rowid` minted from
+    one names a row only until the next maintenance pass, and every join on it afterwards answers
+    rows, just the wrong ones. Stable row ids are create-time-only, so no retry repairs this.
+    """
+
+
+def carry_source_rowid(table: pa.Table, *, stable_row_ids: bool) -> pa.Table:
     """Ensure `source_rowid` holds the stable `_rowid` of the BRONZE row this output descends from.
 
     An upstream that already carries it (a later stage) KEEPS it — re-minting from the immediate parent
@@ -82,16 +92,28 @@ def carry_source_rowid(table: pa.Table) -> pa.Table:
     rather than the bronze one it actually descends from. The first derive off bronze mints it from the
     reserved metacolumn of the row just read, which requires the caller to have read `with_row_id=True`.
 
+    ``stable_row_ids`` is the upstream dataset's `has_stable_row_ids`. Minting refuses an upstream
+    without them; carrying an existing `source_rowid` does not depend on it, because that value was
+    minted against bronze and travels as a plain column.
+
     HEAD DETECTION IS HEURISTIC — the absence of `source_rowid`, not a position. In the steady state only
     bronze lacks it, so this is exact. During a mixed-version rollout a mid-cascade dataset written by
     older code also lacks it, and a stage reading such an upstream mints from the IMMEDIATE parent for
-    one cycle; it self-heals on the next full run from bronze. Acceptable only because the cascade is
-    overwrite-only and re-runs.
+    one cycle; it self-heals on the next full run from bronze.
+
+    Raises:
+        UnstableRowIdsError: the table must mint `source_rowid` and its upstream has no stable row ids.
     """
     if SOURCE_ROWID_COLUMN in table.column_names:
         return table.drop_columns([_ROWID]) if _ROWID in table.column_names else table
     if _ROWID not in table.column_names:
         return table
+    if not stable_row_ids:
+        raise UnstableRowIdsError(
+            "the upstream was created without stable row ids, so its `_rowid` is a physical address that the next "
+            "compaction rewrites; minting `source_rowid` from it would point every downstream row at the wrong parent. "
+            "Recreate the upstream with enable_stable_row_ids=True (it is create-time-only)."
+        )
     minted = table.column(_ROWID).cast(pa.uint64())
     return table.drop_columns([_ROWID]).append_column(pa.field(SOURCE_ROWID_COLUMN, pa.uint64()), minted)
 
@@ -127,7 +149,7 @@ def declare_dataset_id(table: pa.Table, dataset_id: str | None) -> pa.Table:
     return table.replace_schema_metadata(metadata)
 
 
-def stamp_stage(table: pa.Table, *, stage: str, lineage: str = "", dataset_id: str = "") -> pa.Table:
+def stamp_stage(table: pa.Table, *, stage: str, stable_row_ids: bool, lineage: str = "", dataset_id: str = "") -> pa.Table:
     """Stamp this stage's provenance onto `table` and return the result.
 
     Threads root provenance (`source_rowid`), (re)stamps `stage`, re-stamps the consume-layer
@@ -138,8 +160,10 @@ def stamp_stage(table: pa.Table, *, stage: str, lineage: str = "", dataset_id: s
     describes the parent's run and the parent's id names the parent's dataset, so leaving either on a
     child is a claim about the wrong object — and the child's readers cannot tell an inherited value
     from a declared one.
+
+    ``stable_row_ids`` is the upstream dataset's `has_stable_row_ids` (:func:`carry_source_rowid`).
     """
-    out = carry_source_rowid(table)
+    out = carry_source_rowid(table, stable_row_ids=stable_row_ids)
     out = _set_or_append(out, pa.field(STAGE_COLUMN, pa.string()), pa.array([stage] * out.num_rows, pa.string()))
     if lineage:
         document = pa.array([lineage] * out.num_rows, pa.string())
@@ -185,6 +209,7 @@ __all__ = [
     "ONE_TO_ONE",
     "SOURCE_ROWID_COLUMN",
     "STAGE_COLUMN",
+    "UnstableRowIdsError",
     "carry_source_rowid",
     "declare_dataset_id",
     "ensure_declared_dataset_id",

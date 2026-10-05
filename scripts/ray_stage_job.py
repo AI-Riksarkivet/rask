@@ -71,7 +71,15 @@ from service_kit.lakehouse.blobs import blob_field_names
 from service_kit.lakehouse.commit_marker import CommitMarker, stamped
 from service_kit.lakehouse.objectfs import StorageOptions, fs_and_base, lance_storage_options, s3_filesystem
 from service_kit.lakehouse.run_outcomes import OutcomeReport, report_outcome
-from service_kit.lakehouse.stage_stamp import CARDINALITIES, LINEAGE_COLUMN, ONE_TO_ONE, SOURCE_ROWID_COLUMN, STAGE_COLUMN, ensure_declared_dataset_id
+from service_kit.lakehouse.stage_stamp import (
+    CARDINALITIES,
+    LINEAGE_COLUMN,
+    ONE_TO_ONE,
+    SOURCE_ROWID_COLUMN,
+    STAGE_COLUMN,
+    UnstableRowIdsError,
+    ensure_declared_dataset_id,
+)
 
 
 # --- the commit marker (CP-029 D-5) ----------------------------------------------------------------
@@ -185,7 +193,7 @@ def _reset_if_legacy(to_uri: str, so: StorageOptions) -> None:
 _ROWID = "_rowid"
 
 
-def _stamp_stage(table: pa.Table, stage: str, lineage: str = "", dataset_id: str = "") -> pa.Table:
+def _stamp_stage(table: pa.Table, stage: str, lineage: str = "", dataset_id: str = "", *, stable_row_ids: bool) -> pa.Table:
     """The per-stage provenance stamp — delegated to the ONE implementation both drivers share.
 
     This was a hand-maintained mirror of the medallion's copy and it had already drifted: on a
@@ -196,10 +204,13 @@ def _stamp_stage(table: pa.Table, stage: str, lineage: str = "", dataset_id: str
     It is now the ONLY thing in this job that decides where a provenance column sits: the media lane
     stamps through it, the distributed lane's blocks come out of it, and the schema the distributed
     lane creates its destination with is derived from it (:func:`_target_schema`).
+
+    ``stable_row_ids`` is the upstream's `has_stable_row_ids`: the stamp refuses to mint `source_rowid`
+    from an upstream without them (`stage_stamp.carry_source_rowid`).
     """
     from service_kit.lakehouse.stage_stamp import stamp_stage
 
-    return stamp_stage(table, stage=stage, lineage=lineage, dataset_id=dataset_id)
+    return stamp_stage(table, stage=stage, stable_row_ids=stable_row_ids, lineage=lineage, dataset_id=dataset_id)
 
 
 def _target_schema(upstream: lance.LanceDataset, stage: str, lineage: str, dataset_id: str) -> pa.Schema:
@@ -218,7 +229,7 @@ def _target_schema(upstream: lance.LanceDataset, stage: str, lineage: str, datas
     Two constructions of one schema can only ever agree by luck, which is the class `stage_stamp`'s
     own module docstring records for the two drivers. One function answers for both sides here.
     """
-    return _stamp_stage(upstream.schema.empty_table(), stage, lineage, dataset_id).schema
+    return _stamp_stage(upstream.schema.empty_table(), stage, lineage, dataset_id, stable_row_ids=upstream.has_stable_row_ids).schema
 
 
 #: How many rows the media lane holds in the driver at once.
@@ -371,7 +382,9 @@ def _media_transform(
             _converge(to_uri, out, so, mark, retract=retract if last else None)
 
     for batch in scanner.to_batches():
-        out = _media_batch(pa.Table.from_batches([batch]), blob_cols, derive_from, stage=stage, lineage=lineage, dataset_id=dataset_id)
+        out = _media_batch(
+            pa.Table.from_batches([batch]), blob_cols, derive_from, stage=stage, lineage=lineage, dataset_id=dataset_id, stable_row_ids=ds.has_stable_row_ids
+        )
         if held is not None:
             land(held, last=False)
         held = out
@@ -389,6 +402,7 @@ def _media_transform(
             stage=stage,
             lineage=lineage,
             dataset_id=dataset_id,
+            stable_row_ids=ds.has_stable_row_ids,
         )
         lance.write_dataset(
             empty,
@@ -401,7 +415,9 @@ def _media_transform(
         )
 
 
-def _media_batch(aligned: pa.Table, blob_cols: list[str], derive_from: str | None, *, stage: str, lineage: str, dataset_id: str = "") -> pa.Table:
+def _media_batch(
+    aligned: pa.Table, blob_cols: list[str], derive_from: str | None, *, stage: str, lineage: str, stable_row_ids: bool, dataset_id: str = ""
+) -> pa.Table:
     """One slice: re-wrap its blobs, stamp its provenance, derive its artifacts.
 
     Every batch takes the same branches and therefore produces the same schema, which is what lets
@@ -424,7 +440,7 @@ def _media_batch(aligned: pa.Table, blob_cols: list[str], derive_from: str | Non
             # head and drops it (it is Lance's reserved metacolumn and is never persisted).
             fields.append(aligned.schema.field(name))
             columns[name] = aligned.column(name)
-    out = _stamp_stage(pa.table(columns, schema=pa.schema(fields)), stage, lineage, dataset_id)
+    out = _stamp_stage(pa.table(columns, schema=pa.schema(fields)), stage, lineage, dataset_id, stable_row_ids=stable_row_ids)
 
     # Row-wise, image payloads only — a payload past the header probe that fails full decode raises,
     # FAILing the run; a NULL payload (absent bytes, not bad bytes) keeps its row with null artifacts.
@@ -709,67 +725,82 @@ def _drop_staged(staged_uri: str, so: StorageOptions) -> None:
         print(f"RAY-STAGE WARN staging set left behind at {staged_uri}: {type(exc).__name__}: {exc}")
 
 
-class UpstreamVanishedError(RuntimeError):
-    """The upstream's key column read back EMPTY, which a retraction would read as "delete the tier"."""
-
-
-#: How many dead keys go into one `IN (...)` delete predicate.
+#: How many keys go into one `IN (...)` predicate.
 #:
-#: The retraction deletes the SMALL side — the keys that disappeared — rather than filtering on
-#: `NOT IN (every live key)`, because the live set is the size of the tier and the dead set is the size
-#: of the change. It is still unbounded in principle (a caller may delete a million rows in one
-#: version), so the predicate is chunked rather than built from whatever the difference happens to be.
+#: The retraction reads and deletes the SMALL side — the rows Lance recorded as deleted — but a caller
+#: may delete a million rows in one version, so every predicate built from that set is chunked rather
+#: than sized by whatever the deletion happened to be.
 _RETRACT_CHUNK = 1000
 
 
-def _retract_deleted(upstream: lance.LanceDataset, to_uri: str, so: StorageOptions) -> int:
-    """Drop tier rows whose upstream row is gone, and answer how many. The delta lane's other half.
+def _in_chunks(column: str, keys: list[int]) -> Iterator[str]:
+    """`column IN (...)` predicates over ``keys``, `_RETRACT_CHUNK` keys each."""
+    for start in range(0, len(keys), _RETRACT_CHUNK):
+        yield f"{column} IN ({', '.join(str(key) for key in keys[start : start + _RETRACT_CHUNK])})"
+
+
+def _retract_deleted(upstream: lance.LanceDataset, base_version: int, to_uri: str, so: StorageOptions) -> int:
+    """Drop tier rows whose upstream row was deleted since ``base_version``, and answer how many.
 
     WHY THE DELTA LANE NEEDS THIS AT ALL: a full run converges with
     `when_not_matched_by_source_delete`, so the run's output IS the whole tier and a row it no longer
     produces is retracted. A delta's source is by construction only what changed, so the same clause
-    would delete everything the delta did not carry. The two lanes therefore answered a deletion
-    differently — measured 2026-09-11, deleting bronze `id=1` left silver holding `[0, 1, 2]` on a
-    delta run and `[0, 2]` on a full one — and which one ran was the scheduler's choice.
+    would delete everything the delta did not carry.
 
-    THE JOIN IS ROOT PROVENANCE, which is what lets one rule reach every hop.
-    `stage_stamp.carry_source_rowid` KEEPS `source_rowid` rather than re-minting it per hop, so
-    measured over a real three-tier chain `gold.source_rowid == silver.source_rowid == bronze._rowid`.
-    The tier below is therefore always joined on `source_rowid`, and the upstream side is
-    `source_rowid` where it exists and the reserved `_rowid` at the cascade head — the same
-    head-detection the stamp itself uses, for the same reason.
+    THE DELETED SET IS LANCE'S OWN RECORD: `upstream.delta(begin_version=base).get_deleted_row_ids()`
+    reads the window's transactions and names the stable `_rowid`s deleted in it (measured on pylance
+    12.0.0: one `delete("id = 2")` answers `[1]`). A compaction deletes no row — it rewrites fragments
+    and keeps every stable id — so a window spanning one answers `[]` and retracts nothing (measured on
+    12.0.0, a Rewrite window). The cost is sized by the deletion, never by either tier: no key column is
+    read whole on either side.
 
-    EXACT for a `1:1` lane at every hop and for `1:N` at the head. Its one imprecision is `1:N` deeper
-    in: siblings share a root key, so deleting one of several children upstream leaves the key present
-    and the tier below keeps its rows. That is an UNDER-deletion — a stale row rather than a lost one.
+    THE JOIN IS ROOT PROVENANCE. `stage_stamp.carry_source_rowid` KEEPS `source_rowid` rather than
+    re-minting it per hop, so `gold.source_rowid == silver.source_rowid == bronze._rowid`. At the
+    cascade head the deleted `_rowid`s ARE the keys; deeper in, each is mapped to its `source_rowid`
+    through the upstream at ``base_version``, where the deleted rows still exist (a `_rowid IN (...)`
+    filter, which Lance answers from its row-id index).
 
-    A NULL `source_rowid` is left alone rather than treated as dead: it names no upstream row, so the
-    join cannot speak about it, and "unjoinable" must not read as "orphaned".
-
-    IT COSTS ONE KEY-COLUMN SCAN PER SIDE, every delta run, and that is the honest price of the
-    guarantee — a deletion is invisible to the version columns, so nothing cheaper than reading the
-    keys can find one. It is an int64 column with no payload behind it, against a lane whose whole
-    purpose is to avoid re-deriving those payloads.
+    A `1:N` lane deeper in shares one root key between siblings, so a key is retracted only when no
+    upstream row still carries it: deleting one of several children must not drop the survivors'
+    descendants. That check filters on the candidate keys, not on the whole column.
 
     Raises:
-        UpstreamVanishedError: if the upstream's key column reads back empty. Every downstream row
-            would then be an orphan and the tier would be emptied by a single unreadable scan — the
-            refusal `StagedOutputEmptyError` makes for the same shape on the landing path.
+        UnstableRowIdsError: the upstream has no stable row ids. Its `_rowid` is a physical address
+            that a compaction rewrites and its deleted-row record does not exist
+            (`lance_docs/file_format.md:4011-4015`), so neither side of this join means anything.
     """
+    if not upstream.has_stable_row_ids:
+        raise UnstableRowIdsError(f"{upstream.uri} was created without stable row ids, so a delta run cannot follow its deletions; rebuild it with a full run")
     destination = lance.dataset(to_uri, storage_options=so)
     if SOURCE_ROWID_COLUMN not in destination.schema.names:
         return 0
-
-    upstream_key = SOURCE_ROWID_COLUMN if SOURCE_ROWID_COLUMN in upstream.schema.names else _ROWID
-    live = set(upstream.to_table(columns=[upstream_key]).column(upstream_key).to_pylist())
-    if not live:
-        raise UpstreamVanishedError(f"{upstream.uri} reports no rows under `{upstream_key}` — retracting against it would empty {to_uri}")
-
-    held = destination.to_table(columns=[SOURCE_ROWID_COLUMN]).column(SOURCE_ROWID_COLUMN).to_pylist()
-    dead = sorted({key for key in held if key is not None and key not in live})
-    for start in range(0, len(dead), _RETRACT_CHUNK):
-        keys = ", ".join(str(key) for key in dead[start : start + _RETRACT_CHUNK])
-        destination.delete(f"{SOURCE_ROWID_COLUMN} IN ({keys})")
+    deleted = sorted(
+        key
+        for batch in upstream.delta(begin_version=base_version, end_version=upstream.version).get_deleted_row_ids()
+        for key in batch.column(_ROWID).to_pylist()
+    )
+    if not deleted:
+        return 0
+    if SOURCE_ROWID_COLUMN in upstream.schema.names:
+        before = upstream.checkout_version(base_version)
+        candidates = sorted(
+            {
+                key
+                for where in _in_chunks(_ROWID, deleted)
+                for key in before.to_table(columns=[SOURCE_ROWID_COLUMN], filter=where).column(SOURCE_ROWID_COLUMN).to_pylist()
+                if key is not None
+            }
+        )
+        surviving = {
+            key
+            for where in _in_chunks(SOURCE_ROWID_COLUMN, candidates)
+            for key in upstream.to_table(columns=[SOURCE_ROWID_COLUMN], filter=where).column(SOURCE_ROWID_COLUMN).to_pylist()
+        }
+        dead = [key for key in candidates if key not in surviving]
+    else:
+        dead = deleted
+    for where in _in_chunks(SOURCE_ROWID_COLUMN, dead):
+        destination.delete(where)
     return len(dead)
 
 
@@ -860,7 +891,7 @@ def _run_stage(
     if blob_field_names(upstream.schema):
         # MEDIA path: the derivers need the payload bytes, so round-trip + derive via pylance (below).
         _media_transform(from_uri, to_uri, so, stage=stage, lineage=lineage, dataset_id=dataset_id, marker=marker)
-    elif delta is not None:
+    elif delta is not None and base_version is not None:
         # BACKFILL LANE. The delta is by construction small, so it is stamped and merged on the driver
         # — the same argument the cascade head below already makes for handling the bronze root
         # natively rather than distributing it.
@@ -869,7 +900,7 @@ def _run_stage(
         # describe rows the table still has, so nothing the predicate selects can name a row that is
         # gone. Run after the early return below and a delete would leave through the `delta_empty`
         # door reporting that nothing changed.
-        retracted = _retract_deleted(upstream, to_uri, so)
+        retracted = _retract_deleted(upstream, base_version, to_uri, so)
         source = upstream.to_table(with_row_id=True, filter=delta)
         rows_in = source.num_rows
         if rows_in == 0:
@@ -879,7 +910,7 @@ def _run_stage(
             # that finds none resubmits the run, which converges, rather than mistaking it for a write.
             print(f"RAY-STAGE OK stage={stage} lane=delta rows=0 delta_empty=1 retracted={retracted} base_version={base_version}")
             return None
-        produced = _stamp_stage(source, stage, lineage, dataset_id)
+        produced = _stamp_stage(source, stage, lineage, dataset_id, stable_row_ids=upstream.has_stable_row_ids)
         rows_out = produced.num_rows
         # A merge carries ROWS, not schema metadata, so the stamp reaches the dataset only through
         # `ensure_declared_dataset_id` (`service_kit.lakehouse.stage_stamp`). That commit cannot carry the marker, so it
@@ -901,7 +932,7 @@ def _run_stage(
         # production cascade head and this audit could not run Ray (worker startup fails in the dev
         # sandbox), so it is recorded as a follow-up to prove on kind, not flipped on a signature read.
         _reset_if_legacy(to_uri, so)
-        head_rows = _stamp_stage(upstream.to_table(with_row_id=True), stage, lineage, dataset_id)
+        head_rows = _stamp_stage(upstream.to_table(with_row_id=True), stage, lineage, dataset_id, stable_row_ids=upstream.has_stable_row_ids)
         # A FULL-SYNC MERGE, NOT AN OVERWRITE — the same change the in-process head took 2026-09-06.
         # Overwrite re-mints every `_rowid`, and the tier above resolves its `source_rowid` against
         # exactly those, so a re-derivation silently detached the whole chain (measured live: 8 of 8
@@ -931,8 +962,10 @@ def _run_stage(
         # inherit it). concurrency>1 → fragments written in parallel + one commit. source_rowid is already a
         # plain column in `base`, so it flows through map_batches + write as ordinary data (no distributed
         # _rowid needed) — only the head, handled natively above, has to mint it.
+        # Read on the driver, so the closure Ray ships carries a bool rather than a dataset handle.
+        stable = bool(upstream.has_stable_row_ids)
         transformed = lr.read_lance(from_uri, storage_options=so).map_batches(
-            lambda table: _stamp_stage(table, stage, lineage, dataset_id), batch_format="pyarrow"
+            lambda table: _stamp_stage(table, stage, lineage, dataset_id, stable_row_ids=stable), batch_format="pyarrow"
         )
         # THE DISTRIBUTED OUTPUT LANDS IN A STAGING DATASET, then ONE merge converges it — see
         # `_land_staged` for why an append cannot preserve `_rowid` and why the merge's retraction

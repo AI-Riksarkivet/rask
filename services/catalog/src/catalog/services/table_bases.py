@@ -301,7 +301,7 @@ def judge_registered_table(ns: LanceNamespace, so: dict[str, str], segments: lis
     In order: the location the backend RESOLVED, which is right for a warehouse-bound table too; no other
     registered table may overlap it (:func:`require_exclusive_location`, asked after the
     registration so a concurrent overlap is caught by whichever lands second); the dataset must not carry
-    reader flag 256; and every base it declares must be its own, configured, approved or already recorded
+    reader flag 256 and must have stable row ids; and every base it declares must be its own, configured, approved or already recorded
     (:func:`entries_for_registration`). Only then is the record claimed, so a refused dataset
     leaves no entry behind.
 
@@ -314,8 +314,8 @@ def judge_registered_table(ns: LanceNamespace, so: dict[str, str], segments: lis
     absent and registers unjudged.
 
     Raises:
-        InvalidInputError: Another table overlaps the location, the dataset mixes data file versions, or
-            it declares a base nothing sanctions.
+        InvalidInputError: Another table overlaps the location, the dataset mixes data file versions, it
+            has no stable row ids, or it declares a base nothing sanctions.
         ServiceUnavailableError: The location, the object index or the record could not be read, so
             nothing was judged.
     """
@@ -343,6 +343,13 @@ def judge_registered_table(ns: LanceNamespace, so: dict[str, str], segments: lis
             "data files sit at more than one Lance file version, and no operation removes the flag. Maintenance refuses such a table, "
             "and pylance 11 and lancedb 0.34 cannot open it. Recreate it into a new dataset written at one data_storage_version, then "
             "register that."
+        )
+    if not facts.stable_row_ids:
+        log.warning("register_refused_unstable_row_ids", extra={"table": table, "location": location})
+        raise InvalidInputError(
+            f"the dataset at {location!r} was created without stable row ids: its `_rowid` is a physical address that compaction "
+            "rewrites, Lance tracks no row versions for it, and its change feed would answer empty windows. Stable row ids are "
+            "create-time-only (lance_docs/file_format.md:4011-4015); recreate it with enable_stable_row_ids=True, then register that."
         )
     entries = entries_for_registration(
         location, facts.bases, registry=context.registry, configured=context.configured, data_allowlist=context.data_allowlist, governed=context.governed

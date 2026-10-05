@@ -2170,6 +2170,7 @@ def read_changes(
     [[LH-183]] paid for twice.
     """
     dataset = open_dataset(ns, so, table_id, branch=branch)
+    changes.require_row_versions(dataset.has_stable_row_ids, table=".".join(table_id))
     projection = changes.feed_projection(columns, data_columns=dataset.schema.names)
     with caller_sql("invalid change-feed predicate"):
         scanner = dataset.scanner(filter=predicate, columns=projection)
@@ -2197,8 +2198,7 @@ def read_deleted_row_ids(
     the version columns, and those columns describe rows the table STILL HAS — a deleted row is absent
     from every scan, so no filter can name it. Lance answers from the TRANSACTION range instead:
     `DatasetDelta.get_deleted_row_ids()` streams a single `_rowid` column (verified against the
-    installed pylance; the method documents "Requires stable row ids", which the catalog's creation
-    contract already enforces on every governed dataset).
+    installed pylance; it requires stable row ids, which `changes.require_row_versions` checks first).
 
     WHY THE FEED NEEDS IT AT ALL: the publication delta is insert-only while the cascade's writer
     hard-deletes with `when_not_matched_by_source_delete`, so a retracted row left the tier without a
@@ -2222,6 +2222,7 @@ def read_deleted_row_ids(
     `changes.change_filter` refuses to take by defaulting a bound it would have to read separately.
     """
     dataset = open_dataset(ns, so, table_id, branch=branch)
+    changes.require_row_versions(dataset.has_stable_row_ids, table=".".join(table_id))
     with caller_sql("invalid deleted-row window"):
         reader = dataset.delta(begin_version=begin_version, end_version=end_version if end_version is not None else dataset.version).get_deleted_row_ids()
         # Streamed for the same reason `read_changes` is, and the count is no smaller for being one

@@ -43,7 +43,7 @@ def _upstream() -> pa.Table:
             "source_rowid": pa.array([10, 11, 12], pa.uint64()),
         }
     )
-    return stamp_stage(table, stage="bronze", lineage='{"run":"r1"}')
+    return stamp_stage(table, stage="bronze", stable_row_ids=True, lineage='{"run":"r1"}')
 
 
 def _write(tmp_path: Path, table: pa.Table, *, name: str = "out.lance", dataset_id: str = "acme-silver$features") -> object:
@@ -58,7 +58,7 @@ def test_a_CONFORMING_output_fails_nothing(tmp_path: Path) -> None:
     """The baseline. A tier written the way the in-process writer writes one satisfies every
     obligation that can be evaluated."""
     upstream = _upstream()
-    written = _write(tmp_path, stamp_stage(upstream, stage="silver", lineage='{"run":"r2"}'))
+    written = _write(tmp_path, stamp_stage(upstream, stage="silver", stable_row_ids=True, lineage='{"run":"r2"}'))
 
     assertions = verify_stage_output(written, upstream_schema=upstream.schema, rows_in=3, expect_lineage=True)
 
@@ -87,7 +87,7 @@ def test_an_INT64_source_rowid_fails_O2_while_passing_everything_around_it(tmp_p
     """The measured `runners/dummy` defect. The column is present and non-null, so O1 and O4 pass —
     only the TYPE is wrong, and a check that looked at presence alone would report a clean tier."""
     upstream = _upstream()
-    wrong = stamp_stage(upstream, stage="silver", lineage='{"run":"r2"}')
+    wrong = stamp_stage(upstream, stage="silver", stable_row_ids=True, lineage='{"run":"r2"}')
     wrong = wrong.set_column(wrong.schema.get_field_index("source_rowid"), pa.field("source_rowid", pa.int64()), wrong.column("source_rowid").cast(pa.int64()))
     written = _write(tmp_path, wrong)
 
@@ -101,7 +101,7 @@ def test_a_MISSING_dataset_id_fails_O12(tmp_path: Path) -> None:
     """Without it the maintenance sweep names this dataset by its URI stem, so its per-dataset FAIL
     events land on a node no grant matches — delivered to nobody, while every status reads success."""
     upstream = _upstream()
-    written = _write(tmp_path, stamp_stage(upstream, stage="silver", lineage='{"r":1}'), dataset_id="")
+    written = _write(tmp_path, stamp_stage(upstream, stage="silver", stable_row_ids=True, lineage='{"r":1}'), dataset_id="")
 
     assert _verdicts(verify_stage_output(written, upstream_schema=upstream.schema))["O12"] is Verdict.FAILED
 
@@ -110,7 +110,7 @@ def test_a_ROW_COUNT_that_broke_1_to_1_fails_O6(tmp_path: Path) -> None:
     """A transform that lost rows. The job enforces this on itself; nothing enforced it on anyone
     else, which is precisely the gap."""
     upstream = _upstream()
-    written = _write(tmp_path, stamp_stage(upstream.slice(0, 2), stage="silver", lineage='{"r":1}'))
+    written = _write(tmp_path, stamp_stage(upstream.slice(0, 2), stage="silver", stable_row_ids=True, lineage='{"r":1}'))
 
     assert _verdicts(verify_stage_output(written, upstream_schema=upstream.schema, rows_in=3))["O6"] is Verdict.FAILED
 
@@ -119,7 +119,7 @@ def test_a_declared_FAN_OUT_constrains_no_row_count(tmp_path: Path) -> None:
     """1:N is a shape the lakehouse supports — a video into frames, a recording into speaker turns.
     Refusing it would forbid a legitimate transform; guessing 1:1 would refuse it silently."""
     upstream = _upstream()
-    written = _write(tmp_path, stamp_stage(pa.concat_tables([upstream, upstream]), stage="silver", lineage='{"r":1}'))
+    written = _write(tmp_path, stamp_stage(pa.concat_tables([upstream, upstream]), stage="silver", stable_row_ids=True, lineage='{"r":1}'))
 
     verdicts = _verdicts(verify_stage_output(written, upstream_schema=upstream.schema, cardinality=ONE_TO_MANY, rows_in=3))
     assert verdicts["O6"] is Verdict.SKIPPED
@@ -133,7 +133,7 @@ def test_an_UNEVALUATED_obligation_is_SKIPPED_and_never_a_PASS(tmp_path: Path) -
     ends up looking complete while checking almost nothing — and `failed()` must not refuse on them
     either, or an unaffordable check becomes a hard outage.
     """
-    written = _write(tmp_path, stamp_stage(_upstream(), stage="silver", lineage='{"r":1}'))
+    written = _write(tmp_path, stamp_stage(_upstream(), stage="silver", stable_row_ids=True, lineage='{"r":1}'))
 
     verdicts = _verdicts(verify_stage_output(written, scan=False))
 
@@ -152,7 +152,7 @@ def test_the_SCHEMA_check_is_an_equality_against_the_reference_function(tmp_path
     The transform's OWN columns are allowed on top: that is what a transform is for.
     """
     upstream = _upstream()
-    extended = stamp_stage(upstream, stage="silver", lineage='{"r":1}').append_column("embedding", pa.array([[1.0], [2.0], [3.0]]))
+    extended = stamp_stage(upstream, stage="silver", stable_row_ids=True, lineage='{"r":1}').append_column("embedding", pa.array([[1.0], [2.0], [3.0]]))
     written = _write(tmp_path, extended)
 
     assert _verdicts(verify_stage_output(written, upstream_schema=upstream.schema, rows_in=3))["O3"] is Verdict.PASSED

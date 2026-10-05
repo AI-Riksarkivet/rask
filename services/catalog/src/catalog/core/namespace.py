@@ -259,6 +259,9 @@ class RegisteredDataset(BaseModel):
 
     #: Reader flag 256 (mixed data file versions) is set.
     mixed: bool
+    #: The dataset tracks stable row ids (`has_stable_row_ids`). Unread, and False, when the open itself
+    #: was refused over flag 256, which the door refuses first.
+    stable_row_ids: bool
     #: Every base the manifest declares. Empty when the open itself was refused over flag 256, which
     #: the door refuses before it looks at a base.
     bases: list[BasePathRef] = Field(default_factory=list)
@@ -276,12 +279,12 @@ def registered_dataset_facts(location: str, storage_options: dict[str, str]) -> 
     except (ValueError, OSError) as exc:
         refused = flags_from_open_error(exc)
         if refused is not None and mixes_data_file_versions(refused):
-            return RegisteredDataset(mixed=True)
+            return RegisteredDataset(mixed=True, stable_row_ids=False)
         if refused is None and reads_as_absent(exc):
             return None
         raise
     reader, _writer = manifest_feature_flags(dataset)
-    return RegisteredDataset(mixed=mixes_data_file_versions(reader), bases=manifest_base_path_refs(dataset))
+    return RegisteredDataset(mixed=mixes_data_file_versions(reader), stable_row_ids=dataset.has_stable_row_ids, bases=manifest_base_path_refs(dataset))
 
 
 def warn_if_mixed_file_versions(location: str, storage_options: dict[str, str], *, table: str) -> None:

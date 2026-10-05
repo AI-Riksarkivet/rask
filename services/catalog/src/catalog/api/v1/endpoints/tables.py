@@ -846,6 +846,9 @@ async def register_table(
             if facts is not None and facts.mixed:
                 log.warning("register_converge_refused_mixed_file_versions", extra={"table": id, "location": registered})
                 raise
+            if facts is not None and not facts.stable_row_ids:
+                log.warning("register_converge_refused_unstable_row_ids", extra={"table": id, "location": registered})
+                raise
             # THE RECORD CONVERGES WITH THE EDGE ([[LH-279]]). The medallion re-enters this door on
             # every run, so a table registered before its record existed gets one here — judged exactly
             # as a fresh registration's bases are, and never for a base nothing sanctions.

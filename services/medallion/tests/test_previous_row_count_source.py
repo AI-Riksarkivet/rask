@@ -33,7 +33,7 @@ def test_an_existing_destination_reports_what_it_held_BEFORE_the_write(tmp_path)
     """The regression. With `version - 1` this returned the new count and the delta was always zero."""
     src = str(tmp_path / "from.lance")
     dst = str(tmp_path / "to.lance")
-    lance.write_dataset(pa.table({"id": list(range(8))}), src)
+    lance.write_dataset(pa.table({"id": list(range(8))}), src, enable_stable_row_ids=True)
     transform_stage(src, dst, {}, stage="silver")
 
     lance.write_dataset(pa.table({"id": list(range(1000))}), src, mode="overwrite")

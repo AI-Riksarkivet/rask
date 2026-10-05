@@ -10,7 +10,10 @@ The dir backend registers a location without opening it (measured on 12.0.0: a m
 location and a nested path are all accepted), so the door judges the dataset itself, off the location
 the backend resolved, and deregisters what it attached when it refuses.
 
-Only bit 256 is judged. An ingest-style dataset with an external base carries flag 16 and flags
+A dataset created without stable row ids is refused the same way: its `_rowid` is an address compaction
+rewrites, Lance tracks no row versions for it, and its change feed would answer empty windows.
+
+Only bit 256 is judged among the feature flags. An ingest-style dataset with an external base carries flag 16 and flags
 (18, 18); a generic unsupported-features gate would refuse every externally based bronze registration.
 
 The catalog's own re-registers (table undrop, namespace undrop) restore a table rask already governed.
@@ -141,11 +144,15 @@ class TestThePublicDoor:
         assert resp.status_code == 400, resp.text
         assert not _is_registered(catalog, "db$t")
 
-    @pytest.mark.parametrize(("case", "status"), [("mixed", 400), ("unreadable", 503), ("clean", 200)])
+    @pytest.mark.parametrize(("case", "status"), [("mixed", 400), ("unstable", 400), ("unreadable", 503), ("clean", 200)])
     def test_a_refused_dataset_never_gains_an_owner_a_lineage_node_or_an_event(
         self, catalog: TestClient, root: Path, monkeypatch: pytest.MonkeyPatch, case: str, status: int
     ) -> None:
-        """The judgement runs before the seed and both emits; the clean case proves the spies are wired."""
+        """The judgement runs before the seed and both emits; the clean case proves the spies are wired.
+
+        ``unstable`` is a dataset created without stable row ids: its `_rowid` is an address compaction
+        rewrites and its change feed answers empty windows (`lance_docs/file_format.md:4011-4015`).
+        """
         from catalog.api import fga_deps
         from catalog.api.v1.endpoints import tables
 
@@ -158,7 +165,10 @@ class TestThePublicDoor:
             return _record
 
         _create_namespace(catalog, "db")
-        _write(root / "t", [1, 2], version="2.1")
+        if case == "unstable":
+            lance.write_dataset(pa.table({"id": pa.array([1, 2], pa.int64())}), str(root / "t"), data_storage_version="2.2")
+        else:
+            _write(root / "t", [1, 2], version="2.1")
         if case == "mixed":
             _mix(root / "t")
         elif case == "unreadable":
@@ -172,6 +182,7 @@ class TestThePublicDoor:
 
         assert resp.status_code == status, resp.text
         assert sorted(called) == (["control", "lineage", "seed"] if case == "clean" else []), called
+        assert _is_registered(catalog, "db$t") is (case == "clean"), "a refused registration must leave nothing attached"
 
     @pytest.mark.parametrize(("mix", "converged"), [(True, False), (False, True)])
     def test_a_re_register_never_converges_governance_onto_a_mixed_dataset(

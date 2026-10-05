@@ -258,7 +258,7 @@ def test_a_failed_assertion_is_RECORDED_by_the_stage_runner_and_RULED_ON_by_the_
     records what the data looked like at the hop even though the hop did not rule on it.
     """
     silver = str(tmp_path / "silver")
-    lance.write_dataset(pa.table({"id": pa.array([1, None], pa.int64()), "p": ["a", "b"]}), silver, mode="overwrite")
+    lance.write_dataset(pa.table({"id": pa.array([1, None], pa.int64()), "p": ["a", "b"]}), silver, mode="overwrite", enable_stable_row_ids=True)
     gold = str(tmp_path / "gold")
     settings = _quality_stage_runner_settings(silver, gold)
     dapr = _FakeDapr()

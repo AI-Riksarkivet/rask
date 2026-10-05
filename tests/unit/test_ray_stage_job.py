@@ -23,7 +23,7 @@ import json
 from collections.abc import Iterator
 from pathlib import Path
 from types import ModuleType
-from typing import cast
+from typing import Any, cast
 
 import pyarrow as pa
 import pytest
@@ -112,7 +112,7 @@ def test_stamp_stage_mints_source_rowid_at_the_head_and_carries_it_forward() -> 
     compute._carry_source_rowid + _stamp_stage.
     """
     head = pa.table({"id": [1, 2], "_rowid": pa.array([40, 41], pa.uint64())})
-    stamped = job._stamp_stage(head, "bronze")
+    stamped = job._stamp_stage(head, "bronze", stable_row_ids=True)
     assert "_rowid" not in stamped.column_names  # reserved metacolumn never persisted
     assert stamped.column("source_rowid").to_pylist() == [40, 41]  # minted from _rowid
     assert stamped.column("stage").to_pylist() == ["bronze", "bronze"]
@@ -124,7 +124,7 @@ def test_stamp_stage_mints_source_rowid_at_the_head_and_carries_it_forward() -> 
             "_rowid": pa.array([7, 8], pa.uint64()),
         }
     )
-    stamped2 = job._stamp_stage(carried, "silver")
+    stamped2 = job._stamp_stage(carried, "silver", stable_row_ids=True)
     assert "_rowid" not in stamped2.column_names
     assert stamped2.column("source_rowid").to_pylist() == [40, 41]  # ROOT id kept, NOT the parent's _rowid
 
@@ -146,12 +146,12 @@ def test_stamp_stage_re_stamps_the_lineage_column_instead_of_inheriting_it() -> 
         }
     )
 
-    stamped = job._stamp_stage(upstream, "gold", doc)
+    stamped = job._stamp_stage(upstream, "gold", doc, stable_row_ids=True)
     assert stamped.column_names.count("lineage") == 1
     assert stamped.schema.field("lineage").type.extension_name == "arrow.json"  # Lance JSONB, not a string
     assert stamped.column("lineage").to_pylist() == [doc, doc]  # THIS run's document, on every row
 
-    bare = job._stamp_stage(upstream, "gold")
+    bare = job._stamp_stage(upstream, "gold", stable_row_ids=True)
     assert "lineage" not in bare.column_names  # no document handed over → the parent's is still dropped
 
 
@@ -617,7 +617,7 @@ def test_a_redelivered_delta_CONVERGES_instead_of_duplicating(tmp_path: Path, mo
     def a_concurrent_run_commits_first(transaction: lance.Transaction, marker: CommitMarker) -> lance.Transaction:
         if not raced:
             raced.append(marker.action_id)
-            rows = job._stamp_stage(lance.dataset(bronze).to_table(with_row_id=True), "silver", '{"run_id": "r-1"}', "")
+            rows = job._stamp_stage(lance.dataset(bronze).to_table(with_row_id=True), "silver", '{"run_id": "r-1"}', "", stable_row_ids=True)
             job._converge(silver, rows, {}, CommitMarker(action_id="concurrent-run"), full_sync=True)
         return real_stamped(transaction, marker)
 
@@ -1003,17 +1003,47 @@ def test_the_two_lanes_AGREE_about_a_deleted_row(tmp_path: Path) -> None:
     assert by_delta == by_full, "which lane ran still decides whether a delete propagates"
 
 
-def test_an_upstream_that_reads_back_EMPTY_refuses_rather_than_emptying_the_tier(tmp_path: Path) -> None:
-    """One unreadable scan must not delete a governed tier — the `StagedOutputEmptyError` guard shape."""
+@pytest.mark.parametrize("hop", ["head", "deeper"])
+def test_a_retraction_reads_only_what_lance_recorded_as_deleted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, hop: str) -> None:
+    """A delete and a compaction in one window: the tier loses exactly the deleted row, and no key column is read whole.
+
+    The deleted set comes from Lance's own record (`delta(...).get_deleted_row_ids()`), so a compaction,
+    which deletes no row and keeps every stable id, retracts nothing (measured on pylance 12.0.0: a
+    Rewrite window answers `[]`). At the head the deleted `_rowid`s are the keys; deeper in they are
+    mapped to `source_rowid` through the upstream at the boundary. Every scan the run issues is recorded
+    off the real scanner: a retraction sized by the tier shows up as an unfiltered read of `_rowid` or
+    `source_rowid`.
+    """
     import lance
 
-    bronze = _bronze_tabular(tmp_path, rows=3)
-    silver = str(tmp_path / "silver_guard")
-    job._run_stage(bronze, silver, "silver", {}, lineage='{"run_id": "r-full"}')
+    upstream = _bronze_tabular(tmp_path, rows=4)
+    if hop == "deeper":
+        silver = str(tmp_path / "silver_upstream")
+        job._run_stage(upstream, silver, "silver", {}, lineage='{"run_id": "r-silver"}')
+        upstream = silver
+    tier = str(tmp_path / "tier_compacted")
+    if hop == "head":
+        job._run_stage(upstream, tier, "tier", {}, lineage='{"run_id": "r-full"}')
+    else:
+        # A full run off a tier that already carries `source_rowid` distributes on Ray; the tier is the
+        # same rows written directly, which is all the delta run below needs of it.
+        lance.write_dataset(lance.dataset(upstream).to_table(), tier, data_storage_version="2.2", enable_stable_row_ids=True)
+    boundary = lance.dataset(upstream).version
+    lance.dataset(upstream).delete("id = 1")
+    lance.dataset(upstream).optimize.compact_files(target_rows_per_fragment=1024)
 
-    lance.dataset(bronze).delete("id >= 0")
+    scans: list[tuple[tuple[str, ...], str | None]] = []
+    real_scanner = lance.LanceDataset.scanner
 
-    with pytest.raises(job.UpstreamVanishedError):
-        job._retract_deleted(lance.dataset(bronze), silver, {})
+    def recording_scanner(self: lance.LanceDataset, *args: Any, **kwargs: Any) -> lance.LanceScanner:
+        columns = kwargs.get("columns")
+        scans.append((tuple(columns) if isinstance(columns, list) else (), cast("str | None", kwargs.get("filter"))))
+        return real_scanner(self, *args, **kwargs)
 
-    assert lance.dataset(silver).count_rows() == 3, "the tier was emptied by a refusal that did not hold"
+    monkeypatch.setattr(lance.LanceDataset, "scanner", recording_scanner)
+    job._run_stage(upstream, tier, "tier", {}, lineage='{"run_id": "r-delta"}', base_version=boundary)
+
+    held = sorted(lance.dataset(tier).to_table(columns=["id"]).to_pydict()["id"])
+    assert held == [0, 2, 3], f"the tier did not lose exactly the deleted row: {held}"
+    whole_key_reads = [scan for scan in scans if scan[1] is None and {"_rowid", "source_rowid"} & set(scan[0])]
+    assert whole_key_reads == [], f"the retraction read a whole key column: {whole_key_reads}"

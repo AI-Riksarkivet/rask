@@ -37,7 +37,7 @@ def _bronze_media(tmp_path: Path, payloads: list[bytes]) -> str:
         },
         schema=pa.schema([pa.field("id", pa.int64()), blob_field("payload"), pa.field("source_uri", pa.string())]),
     )
-    lance.write_dataset(table, uri, mode="overwrite", data_storage_version="2.2")
+    lance.write_dataset(table, uri, mode="overwrite", data_storage_version="2.2", enable_stable_row_ids=True)
     return uri
 
 
@@ -76,6 +76,7 @@ def test_tabular_dataset_flows_untouched(tmp_path: Path) -> None:
         pa.table({"id": pa.array([1, 2], pa.int64()), "v": pa.array([10, 20], pa.int64())}),
         src,
         data_storage_version="2.2",
+        enable_stable_row_ids=True,
     )
     dst = str(tmp_path / "tabular_out")
 

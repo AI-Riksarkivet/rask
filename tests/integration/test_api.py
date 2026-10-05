@@ -278,14 +278,16 @@ def _capture_emit(monkeypatch, module: str) -> dict[str, object]:
 def _judge_as_single_version(monkeypatch) -> None:
     """The register door opens the dataset it attached; a MagicMock backend attaches none.
 
-    Only the dataset read is replaced — a single-version dataset declaring no base — so the describe that
+    Only the dataset read is replaced — a single-version dataset with stable row ids declaring no base — so the describe that
     resolves the location still runs. What the door does with a real mixed dataset is pinned in
     `tests/unit/test_a_register_refuses_a_table_that_mixes_file_versions.py`, and its location-exclusivity in
     `tests/integration/test_a_planted_base_is_refused_and_freezes_nothing.py`.
     """
     from catalog.core.namespace import RegisteredDataset
 
-    monkeypatch.setattr("catalog.services.table_bases.registered_dataset_facts", lambda _location, _storage_options: RegisteredDataset(mixed=False))
+    monkeypatch.setattr(
+        "catalog.services.table_bases.registered_dataset_facts", lambda _location, _storage_options: RegisteredDataset(mixed=False, stable_row_ids=True)
+    )
 
 
 def _capture_measured_emit(monkeypatch) -> dict[str, object]:

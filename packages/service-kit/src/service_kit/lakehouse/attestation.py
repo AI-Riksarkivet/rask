@@ -187,7 +187,8 @@ def _o3_schema_matches_the_reference(schema: pa.Schema, upstream: pa.Schema | No
     """
     if upstream is None:
         return _skip("O3", "no upstream schema supplied; a statement about a relationship needs both sides")
-    reference = stamp_stage(upstream.empty_table(), stage="reference", lineage="{}").schema
+    # A schema carries no `_rowid`, so the stamp mints nothing here and `stable_row_ids` decides nothing.
+    reference = stamp_stage(upstream.empty_table(), stage="reference", stable_row_ids=True, lineage="{}").schema
     mismatched = [
         f"{field.name}: {schema.field(field.name).type} != {field.type}"
         for field in reference
