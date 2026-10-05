@@ -18,10 +18,10 @@ row (XC-049, for one, only if a short-list chart fix needs release space). Item 
 
 Beside the order (owner, 2026-10-02): prune pass 2 runs in parallel.
 
-1. The other 24 short-list rows, in four batches that can run in parallel worktrees (owner, 2026-09-29: batch and parallelize):
+1. The other 23 short-list rows, in four batches that can run in parallel worktrees (owner, 2026-09-29: batch and parallelize):
    a. Commit and change-feed integrity: **LH-202**, **LH-214**, **LH-216**, **LH-213**, **LH-217**, **LH-241**.
    b. Erasure and governance: **LH-263**, **LH-245**, **LH-242**, **LH-037**, **LH-194**.
-   c. Storage isolation and table identity: **LH-209**, **LH-252**, **LH-273**, **LH-203**, **LH-204**.
+   c. Storage isolation and table identity: **LH-252**, **LH-273**, **LH-203**, **LH-204**.
    d. Infrastructure authentication and resilience: **XC-003**, **XC-077**, **XC-004**, **XC-075**, **LH-247**, **CP-041**, **CP-051**, **LH-243**.
    Why: each makes a criterion false on a production deployment (the production triage, second-reviewed).
 2. **XC-090** with **XC-096** and its proof legs **XC-091** to **XC-095**, its harness built now as a failing test, closing last.
@@ -39,7 +39,7 @@ Approved by the owner on 2026-10-02: the Phase 1 rows that, left unfixed, make a
 - Criterion 5, resilience (9): LH-203, LH-204, LH-211, LH-247, CP-041, CP-051, LH-243, LH-273, XC-075.
 - The gate (1): XC-090.
 
-Closed since the approval: LH-281 and LH-210 (helm rev 260), XC-076, LH-220's enabler (helm rev 261), LH-220 (helm rev 262), LH-064 (helm revs 263 to 265), XC-078 (helm revs 266 to 270), CTL-021 (helm rev 271), CP-029 (helm rev 272), LH-205, LH-211 and LH-226 (helm revs 273 and 274), and LH-208 and LH-272 (helm rev 275).
+Closed since the approval: LH-281 and LH-210 (helm rev 260), XC-076, LH-220's enabler (helm rev 261), LH-220 (helm rev 262), LH-064 (helm revs 263 to 265), XC-078 (helm revs 266 to 270), CTL-021 (helm rev 271), CP-029 (helm rev 272), LH-205, LH-211 and LH-226 (helm revs 273 and 274), LH-208 and LH-272 (helm rev 275), and LH-209 (helm rev 276).
 
 ## Owner rulings in force
 
@@ -102,7 +102,7 @@ Closed since the approval: LH-281 and LH-210 (helm rev 260), XC-076, LH-220's en
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 20 | 20 | 9 |
+| **PHASE 1 · LAKEHOUSE** | 19 | 19 | 8 |
 | **PHASE 1 · CROSS-CUTTING** | 11 | 11 | 9 |
 | **PHASE 1 · CONTROLPLANE AND NOTIFICATIONS** | 0 | 0 | 0 |
 | **PHASE 1 · AFTER LAUNCH** | 117 | 111 | 19 |
@@ -110,7 +110,7 @@ Closed since the approval: LH-281 and LH-210 (helm rev 260), XC-076, LH-220's en
 | **FRONTEND** | 7 | 7 | 0 |
 | **LOW PRIORITY** | 37 | 36 | 0 |
 
-**211 open items**, of which **6 are blocked on a decision**, **2 wait on another row or ruling** and **203 can be picked up today**; 41 are HIGH. 51 ids left the register on 2026-09-25 and 42 on 2026-09-29, listed at the foot so nothing vanishes silently. The three Phase 1 sections hold the production short list (25 open rows) with their enablers (31 rows); the other 117 Phase 1 rows wait in PHASE 1 · AFTER LAUNCH (owner, 2026-10-02).
+**210 open items**, of which **6 are blocked on a decision**, **2 wait on another row or ruling** and **202 can be picked up today**; 40 are HIGH. 51 ids left the register on 2026-09-25 and 42 on 2026-09-29, listed at the foot so nothing vanishes silently. The three Phase 1 sections hold the production short list (24 open rows) with their enablers (30 rows); the other 117 Phase 1 rows wait in PHASE 1 · AFTER LAUNCH (owner, 2026-10-02).
 
 ## PHASE 1 · LAKEHOUSE
 
@@ -137,14 +137,6 @@ Closed since the approval: LH-281 and LH-210 (helm rev 260), XC-076, LH-220's en
 - *How:* The dir catalog arbitrates only ADDs (lance_docs/ns_catalog/catalog/dir/index.md:131-134) and RegisterTable declares 400/409 (spec.yaml:371-392), so take exclusivity as an ADD: a put-if-not-exists location claim keyed by sha256(normalised location) (the claim_bucket precedent), taken by register, undrop and rename, released by drop/purge, plus a retire claim on the source whose loser answers code 14. Refuse control prefixes and the model registry with InvalidInputError, never 409. Make purge liveness location-aware from `__manifest`. Lakekeeper refuses overlapping locations inside the create transaction (crates/lakekeeper-storage-postgres/src/tabular/mod.rs:552).
 - *Closes when:* Live, barrier-threaded renames leave one live id per location, and purge never deletes bytes a live id resolves to.
 - *Evidence:* services/catalog/src/catalog/api/v1/endpoints/tables.py:717-800,1107,1134-1148 · services/catalog/src/catalog/services/dataplane.py:644-660 · services/catalog/src/catalog/services/table_bases.py:139-161,274 · services/maintenance/src/maintenance/services/purge.py:307-376 · docs/audits/2026-09-25/03-lance-docs-full-audit.md LD20
-
-**LH-209 · External blob bases are authorized by base, never by object: every create registers models/ so every vend reads all model artifacts, and a blob pointer reads another tenant's object**
-`catalog, medallion` · **HIGH** · **blocks-prod**
-- *What is left:* `_write_blob` registers every LANCE_EXTERNAL_BLOB_BASES entry (default `s3://<bucket>/models/`) on EVERY create, and `vend_sanctioned_bases` unions that list, so any vend lists and reads `models/*`. The allowlist is enforced only in `_write_blob` on create: `/commit` accepts fragments written outside bases, and `blob_serving.read_blob` dereferences a pointer with the catalog's root options.
-- *Why:* Criterion 2, zero trust: a confused deputy across tenants and a vend wider than the table.
-- *How:* An external blob URI must map to a registered base (lance_docs/guide.md:315-321), so authorize base AND object: register an external base only for a blob-v2 column whose pointers fall under it; take the external list out of vend_sanctioned_bases and serve external bytes server-mediated or through a model-scoped vend; at create and commit, commit detached and refuse any kind-3 descriptor outside a registered base or whose target the caller cannot read; the blob door and medallion dereference only with the caller's scoped credential; the viewer's dereference is parked as LOW-038.
-- *Closes when:* A plain create followed by a read vend grants nothing outside the table prefix, and a pointer to another tenant's object is refused at create and at commit, RED per path.
-- *Evidence:* services/catalog/src/catalog/services/table_create.py:251 · services/catalog/src/catalog/core/vending.py:486-526 · services/catalog/src/catalog/services/dataplane.py:221-256,841-865 · services/catalog/src/catalog/services/blob_serving.py:92-154 · services/catalog/src/catalog/core/base_judge.py:51 (68a07c1 sanctions external blob bases per base, not per object) · services/catalog/src/catalog/core/config.py:421-438 · docs/audits/2026-09-25/03-lance-docs-full-audit.md LD04, LD05
 
 **LH-263 · erase() reports complete while the subject survives in un-rewritten fragments, live index segments, external blobs, shallow clones and MemWAL shards**
 `catalog` · **HIGH** · **blocks-prod**
@@ -2120,6 +2112,8 @@ Found by the 2026-10-02 review of LH-064, its fix round and its live readback (h
 - LH-406 · LOW · Branch answers still inconsistent after LH-272: restore on main to a missing version answers 500 (an upstream RuntimeError); version/list and version/describe answer a missing branch with code 4 and a storage path instead of 22; tags/create and tags/update answer a missing branch with 11 and 8 (found building LH-272) · `catalog`
 - LH-407 · LOW · register and undrop re-registers still attach a dataset's own lineage.* / rask.* schema metadata (undrop cannot refuse lineage.*: a re-registered table carries the catalog's own stamp); field-level rask.* (classification) in a create payload is not gated by can_classify (found building LH-208) · `catalog`
 - LH-408 · LOW · LH-208's reserved-key guard matches exact keys: case, whitespace and unicode variants (`Lineage.dataset_id`, ` lineage.x`, a zero-width joiner) pass with no reader keyed on them today; a failed pylance create_branch('victim$payroll') leaves tree/victim$payroll/_versions, which the sweep would name by path (found reviewing LH-208) · `catalog, maintenance`
+- LH-409 · LOW · Ingest's catalog_service._create_empty sends external_blob_base only when it creates the table: on a 409 for an existing dataset nothing is registered, so a second ingest from a different approved bucket into the same dataset is refused by Lance at write (found reviewing LH-209) · `ingest, catalog`
+- LH-410 · LOW · After LH-209 the blob door, the viewer and the medallion still dereference external pointers with their service's own credential; an approved LANCE_EXTERNAL_BLOB_BASES entry is open to every creator (any prefix inside it); LANCE_ALLOW_EXTERNAL_BLOBS stays a blanket operator bypass; a vended compaction over a table with an external base is unverified against RustFS (found building and reviewing LH-209) · `catalog, viewer, medallion`
 - LH-386 · LOW · Stale prose: ingest/lineage.py complete() says ingest's COMPLETE fires the bronze head (its _emitter says ingest never publishes to the topic); maintenance/services/arrival.py lists ingest and the annotator among topic writers; scripts/ray_e2e_stack.sh says the store is off; tests/unit/workflow_action_order.json is orphaned · `ingest, maintenance, scripts, tests`
 - XC-117 · LOW · Nothing ties a non-off signature-door mode to a reachable secret store: an enforcing door with no store answers RETRY to every delivery it would act on · `chart, service-kit`
 - XC-118 · LOW · Downstream of the OTel Collector, not to be fixed (owner 2026-10-04: GreptimeDB is being replaced by OpenObserve or the Grafana stack): vmalert v1.106.1 POSTs every query with no Content-Type and GreptimeDB answers 415, so all 59 rules are health=err and no alert fires; a rules change restarts vmalert, resetting `for:` clocks; Alertmanager's config has no checksum · `chart (observability)`
