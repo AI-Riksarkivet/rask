@@ -18,9 +18,9 @@ row (XC-049, for one, only if a short-list chart fix needs release space). Item 
 
 Beside the order (owner, 2026-10-02): prune pass 2 runs in parallel.
 
-1. The other 18 short-list rows, in four batches that can run in parallel worktrees (owner, 2026-09-29: batch and parallelize):
+1. The other 17 short-list rows, in four batches that can run in parallel worktrees (owner, 2026-09-29: batch and parallelize):
    a. Commit and change-feed integrity: **LH-202**, **LH-216**, **LH-213**, **LH-217**, **LH-241**.
-   b. Erasure and governance: **LH-245**, **LH-037**, **LH-194**.
+   b. Erasure and governance: **LH-245**, **LH-194**.
    c. Storage isolation and table identity: **LH-252**, **LH-273**.
    d. Infrastructure authentication and resilience: **XC-003**, **XC-077**, **XC-004**, **XC-075**, **LH-247**, **CP-041**, **CP-051**, **LH-243**.
    Why: each makes a criterion false on a production deployment (the production triage, second-reviewed).
@@ -39,7 +39,7 @@ Approved by the owner on 2026-10-02: the Phase 1 rows that, left unfixed, make a
 - Criterion 5, resilience (9): LH-203, LH-204, LH-211, LH-247, CP-041, CP-051, LH-243, LH-273, XC-075.
 - The gate (1): XC-090.
 
-Closed since the approval: LH-281 and LH-210 (helm rev 260), XC-076, LH-220's enabler (helm rev 261), LH-220 (helm rev 262), LH-064 (helm revs 263 to 265), XC-078 (helm revs 266 to 270), CTL-021 (helm rev 271), CP-029 (helm rev 272), LH-205, LH-211 and LH-226 (helm revs 273 and 274), LH-208 and LH-272 (helm rev 275), LH-209 (helm rev 276), LH-203, LH-204 and LH-214 (helm rev 277), and LH-242 and LH-263 (helm rev 278).
+Closed since the approval: LH-281 and LH-210 (helm rev 260), XC-076, LH-220's enabler (helm rev 261), LH-220 (helm rev 262), LH-064 (helm revs 263 to 265), XC-078 (helm revs 266 to 270), CTL-021 (helm rev 271), CP-029 (helm rev 272), LH-205, LH-211 and LH-226 (helm revs 273 and 274), LH-208 and LH-272 (helm rev 275), LH-209 (helm rev 276), LH-203, LH-204 and LH-214 (helm rev 277), LH-242 and LH-263 (helm rev 278), and LH-037 (helm revs 278 and 279).
 
 ## Owner rulings in force
 
@@ -102,7 +102,7 @@ Closed since the approval: LH-281 and LH-210 (helm rev 260), XC-076, LH-220's en
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 14 | 14 | 4 |
+| **PHASE 1 · LAKEHOUSE** | 13 | 13 | 4 |
 | **PHASE 1 · CROSS-CUTTING** | 11 | 11 | 9 |
 | **PHASE 1 · CONTROLPLANE AND NOTIFICATIONS** | 0 | 0 | 0 |
 | **PHASE 1 · AFTER LAUNCH** | 117 | 111 | 19 |
@@ -110,7 +110,7 @@ Closed since the approval: LH-281 and LH-210 (helm rev 260), XC-076, LH-220's en
 | **FRONTEND** | 7 | 7 | 0 |
 | **LOW PRIORITY** | 37 | 36 | 0 |
 
-**205 open items**, of which **6 are blocked on a decision**, **2 wait on another row or ruling** and **197 can be picked up today**; 36 are HIGH. 51 ids left the register on 2026-09-25 and 42 on 2026-09-29, listed at the foot so nothing vanishes silently. The three Phase 1 sections hold the production short list (19 open rows) with their enablers (25 rows); the other 117 Phase 1 rows wait in PHASE 1 · AFTER LAUNCH (owner, 2026-10-02).
+**204 open items**, of which **6 are blocked on a decision**, **2 wait on another row or ruling** and **196 can be picked up today**; 36 are HIGH. 51 ids left the register on 2026-09-25 and 42 on 2026-09-29, listed at the foot so nothing vanishes silently. The three Phase 1 sections hold the production short list (18 open rows) with their enablers (24 rows); the other 117 Phase 1 rows wait in PHASE 1 · AFTER LAUNCH (owner, 2026-10-02).
 
 ## PHASE 1 · LAKEHOUSE
 
@@ -145,14 +145,6 @@ Closed since the approval: LH-281 and LH-210 (helm rev 260), XC-076, LH-220's en
 - *How:* Blob thresholds and classification ride per-column field metadata (lance_docs/guide.md:321-329): build every downstream blob field from the upstream field's metadata in both lanes, and carry bytes for non-kind-3 rows or take the managed path when any exists.
 - *Closes when:* A mixed bronze reaches silver with every managed payload intact, and silver's blob field carries bronze's classification and thresholds, on the in-process lane, RED.
 - *Evidence:* services/medallion/src/medallion/services/compute.py:509-511,535,596-599 · packages/service-kit/src/service_kit/lakehouse/blobs.py:139-161 · scripts/ray_stage_job.py:332 · docs/audits/2026-09-25/03-lance-docs-full-audit.md LD25
-
-**LH-037 · drop_namespace Skip skips the cleanup trailer, and create_namespace refuses the spec's Overwrite**
-`catalog` · **MEDIUM** · **blocks-prod**
-- *What is left:* (1) On NamespaceNotFound after the gate passes, run the idempotent trailer (revoke tuples, clear protection, unbind, delete policy) and answer success for Skip; a caller with no rung on an unknown id keeps the 2026-09-11 rule's 403, recorded in DECISIONS.md. (2) Implement namespace Overwrite with Restrict semantics as drop-then-create: an empty namespace needs `can_delete` plus create-on-parent, has its tuples revoked and seeds the caller; a non-empty one answers 409 code 3 naming its contents.
-- *Why:* Criterion 2 (lance-ns conformance). A stock client's Overwrite is refused, and a Skip retry over a half-dropped namespace leaves stale tuples a reused id inherits.
-- *How:* spec.yaml:2504-2512 (CreateNamespace modes) and :2410-2433 (codes). The Skip status is ambiguous in the spec: the mode text says 204 (:2617) while DropNamespace declares only 200 (:223-238); pin what pylance's RestNamespace accepts. Lakekeeper resolves existence before the batch authz check (docs/audits/2026-09-25/lakekeeper-deep-read/authz.md §6); adopting that belongs to LH-236.
-- *Closes when:* Route tests: Skip on an absent namespace that still has tuples succeeds and leaves no tuple, protection or binding; Overwrite on an empty namespace recreates it with fresh ownership; Overwrite on a non-empty one answers 409 code 3; both recorded in DECISIONS.md.
-- *Evidence:* services/catalog/src/catalog/api/v1/endpoints/namespaces.py:151-157,582-629 · services/catalog/src/catalog/core/modes.py:21,54 · lance_docs/ns_catalog/spec.yaml:223-238,2504-2512,2611-2617
 
 **LH-194 · A failed cascade-head seed leaves a catalog record governing no bytes, and can deregister a head that already existed**
 `medallion, catalog` · **MEDIUM** · **blocks-prod**
@@ -2079,6 +2071,7 @@ Found by the 2026-10-02 review of LH-064, its fix round and its live readback (h
 - LH-413 · LOW · LH-203/LH-204/LH-214 residuals: the branch delete control event names only the requested branch, not the nested ones it removed; two concurrent branch creates can both pass the nesting check; version/delete's nested refusal is untested; location-claim release is not ETag-conditioned and the 15-minute lease depends on pod clocks; the WROTE edge does not store branchIdentifier; the medallion re-opens latest for its committed version (compute.py) (found reviewing LH-203, LH-204, LH-214) · `catalog, lineage, medallion`
 - LH-414 · LOW · LH-263 residuals: an index segment whose creating commit was reclaimed, or that a merge or delta built, counts as unproven, so its retained version stays a residual even if it never held the subject (over-reports, never under-reports); FTS segments are rebuilt but no test can see their tokens; the referring clone is refused rather than named; erasure's commits emit no write event; whether #114 treats a table's own in-location base as another dataset is unconfirmed (found building and reviewing LH-263) · `catalog`
 - LH-415 · LOW · LH-242 residuals: a create Overwrite's control event is still table_created (distinguishable only by extra.mode); insert?mode=overwrite stays at writer tier (found building LH-242) · `catalog`
+- LH-416 · LOW · LH-037 residuals: create_namespace ExistOk on an existing warehouse-bound top-level id still hits the warehouse guard; a Skip over an absent namespace cannot list its descendants, so their stale grants are not reached; the Overwrite can_delete denial has no offline test (found building LH-037) · `catalog`
 - LH-386 · LOW · Stale prose: ingest/lineage.py complete() says ingest's COMPLETE fires the bronze head (its _emitter says ingest never publishes to the topic); maintenance/services/arrival.py lists ingest and the annotator among topic writers; scripts/ray_e2e_stack.sh says the store is off; tests/unit/workflow_action_order.json is orphaned · `ingest, maintenance, scripts, tests`
 - XC-117 · LOW · Nothing ties a non-off signature-door mode to a reachable secret store: an enforcing door with no store answers RETRY to every delivery it would act on · `chart, service-kit`
 - XC-118 · LOW · Downstream of the OTel Collector, not to be fixed (owner 2026-10-04: GreptimeDB is being replaced by OpenObserve or the Grafana stack): vmalert v1.106.1 POSTs every query with no Content-Type and GreptimeDB answers 415, so all 59 rules are health=err and no alert fires; a rules change restarts vmalert, resetting `for:` clocks; Alertmanager's config has no checksum · `chart (observability)`
