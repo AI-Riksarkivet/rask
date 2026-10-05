@@ -1,8 +1,11 @@
 """The held-promotion door: the bus ingress that starts a review, and the route a person answers it on.
 
+The review is driven through the `SagaClient` port (`service_kit.lakehouse.saga`), which the producer's
+lifespan builds once as `app.state.saga_client`; this module names no workflow engine.
+
 **Why this lives on `medallion-producer` and not on the stage runner that held the promotion.**
-`raise_workflow_event` resolves the workflow actor through the app-id of the process that calls it, so
-the route and the workflow instance must be in the SAME app. The quality gate runs in the
+A signal to the review (Dapr's `raise_workflow_event`) resolves the workflow actor through the app-id of
+the process that sends it, so the route and the workflow instance must be in the SAME app. The quality gate runs in the
 `silver-to-gold` stage runner — a bus-only worker with no gateway row and no Ingress path — and giving it one
 would make a cascade stage publicly addressable to expose a single button. Hosting only the ROUTE here
 is worse than either: the sidecar looks for the instance under this app-id, does not find it, and
@@ -33,9 +36,10 @@ from service_kit.governed import fga
 from service_kit.governed.audit import ALLOW, DENY, FAILURE, audit
 from service_kit.governed.dapr_auth import require_dapr_token
 from service_kit.governed.signing_key import retry_until_signed
+from service_kit.lakehouse.saga import SagaClient, SagaStart
 
 
-#: Ceiling on any single synchronous workflow-client call from these routes.
+#: Ceiling on any single synchronous saga-client call from these routes.
 #:
 #: `run_in_threadpool` around a blocking SDK call is the estate's sanctioned pattern, but unbounded it
 #: parks a worker thread forever against a sidecar that ACCEPTS and never answers — and the threadpool
@@ -49,7 +53,7 @@ WORKFLOW_CALL_TIMEOUT_SECONDS = 5.0
 
 
 async def _bounded(call: Any, *args: Any) -> Any:
-    """Run a blocking workflow-client call off the loop, with a ceiling.
+    """Run a blocking saga-client call off the loop, with a ceiling.
 
     A `TimeoutError` is left to propagate to the route, which maps it to 503 — the caller's request is
     fine, the engine is simply not answering.
@@ -63,30 +67,6 @@ router = APIRouter(tags=["promotions"])
 _SUCCESS = {"status": "SUCCESS"}
 _RETRY = {"status": "RETRY"}
 _DROP = {"status": "DROP"}
-
-
-def _is_live(status: Any) -> bool:  # noqa: ANN401 — the SDK's runtime-status enum, resolved lazily
-    """Is this instance still answerable? A workflow is never terminal-and-answerable: the engine
-    accepts an event for a completed instance and discards it, which is the silent-success this door
-    exists to refuse.
-
-    The enum is imported HERE rather than at module scope, and that is the whole point: this router is
-    mounted unconditionally by the producer, so a module-level `dapr.ext.workflow` import made the
-    cascade head depend on the workflow engine. By the time this is reached a workflow client exists,
-    so the engine is present. Identity against the enum rather than a name comparison — the member
-    names are the library's to change, the members are what it compares.
-    """
-    from dapr.ext.workflow.workflow_state import WorkflowStatus
-
-    return status in (WorkflowStatus.RUNNING, WorkflowStatus.PENDING, WorkflowStatus.SUSPENDED)
-
-
-class _Client(Protocol):
-    """The slice of `DaprWorkflowClient` this module uses, so a test needs no sidecar."""
-
-    def raise_workflow_event(self, instance_id: str, event_name: str, *, data: Any = None) -> None: ...
-    def schedule_new_workflow(self, *, workflow: Any, input: Any, instance_id: str) -> str: ...  # noqa: A002
-    def get_workflow_state(self, instance_id: str, *, fetch_payloads: bool = True) -> Any: ...
 
 
 class Authorize(Protocol):
@@ -134,30 +114,22 @@ def instance_for(token: str) -> str:
     return f"promotion-{token}"
 
 
-def _client(client: _Client | None) -> _Client:
-    if client is not None:
-        return client
-    import dapr.ext.workflow as wf
-
-    return wf.DaprWorkflowClient()
-
-
-def _live_spec(client: _Client, instance_id: str) -> PromotionSpec:
+def _live_spec(client: SagaClient, instance_id: str) -> PromotionSpec:
     """Load the promotion behind `instance_id`, refusing anything this app cannot actually resume.
 
     A live instance whose stored input no longer validates is `InvalidTableState`: the review exists
     and its state cannot serve the request, and a retry reads the same bytes. The response carries no
     internals, so the log names the instance and the failing fields for the operator who must clear it.
     """
-    state = client.get_workflow_state(instance_id, fetch_payloads=True)
+    state = client.state(instance_id)
     if state is None:
         raise TableNotFoundError(f"no promotion under review with id {instance_id!r}")
-    status = getattr(state, "runtime_status", None)
-    if not _is_live(status):
-        name = getattr(status, "name", str(status))
-        raise TableNotFoundError(f"promotion {instance_id!r} is no longer under review ({name})")
+    if not state.status.live:
+        # A finished review is never answerable: the engine accepts a signal for a completed instance
+        # and discards it, which is the silent success this door exists to refuse.
+        raise TableNotFoundError(f"promotion {instance_id!r} is no longer under review ({state.status.name})")
     try:
-        return PromotionSpec.model_validate_json(state.serialized_input or "{}")
+        return PromotionSpec.model_validate_json(state.input or "{}")
     except ValidationError as exc:
         log.warning(
             "medallion_promotion_review_unreadable",
@@ -177,8 +149,15 @@ def promotion_object(spec: PromotionSpec) -> str:
     return f"namespace:{spec.to_namespace}"
 
 
-async def handle_promotion_held(event: dict[str, Any], *, client: _Client | None = None) -> dict[str, str]:
-    """Turn a stage runner's held promotion into a durable review instance. Testable half of the subscription."""
+async def handle_promotion_held(event: dict[str, Any], *, client: SagaClient | None) -> dict[str, str]:
+    """Turn a stage runner's held promotion into a durable review instance. Testable half of the subscription.
+
+    ``client`` is ``None`` when this producer hosts no review runtime (quality review off): the hold is DROPPED to the
+    dead-letter topic, where it is counted and visible, rather than scheduled onto an engine nothing runs.
+    """
+    if client is None:
+        log.error("medallion_promotion_held_without_review", extra={"event": str(event)[:512]})
+        return _DROP
     try:
         spec = PromotionSpec.model_validate((event or {}).get("data") or {})
     except ValidationError:
@@ -192,34 +171,20 @@ async def handle_promotion_held(event: dict[str, Any], *, client: _Client | None
     # producer always mounts is what made the cascade head depend on the engine.
     from medallion.workflow import promotion_review
 
-    wf_client = _client(client)
     instance_id = instance_for(spec.token)
     try:
-        await _bounded(lambda: wf_client.schedule_new_workflow(workflow=promotion_review, input=spec.model_dump(), instance_id=instance_id))
+        handle = await _bounded(lambda: client.start(saga=promotion_review, payload=spec.model_dump(), instance_id=instance_id))
     except Exception:
-        # Two events wear one exception, and they need opposite answers. An instance that already
-        # exists means the review is open and this delivery is fully handled. Anything else — no
-        # sidecar, an unscoped actor state store, the engine down — means NOTHING is holding the
-        # promotion, and acking would lose the review.
-        if not _exists(wf_client, instance_id):
-            log.warning("medallion_promotion_review_not_scheduled", extra={"token": spec.token, "instance_id": instance_id}, exc_info=True)
-            return _RETRY
+        # `start` already told "the review is open" (ALREADY_RUNNING) from "nothing is holding the
+        # promotion" (it raised): no sidecar, an unscoped actor state store, the engine down. Acking the
+        # second would lose the review.
+        log.warning("medallion_promotion_review_not_scheduled", extra={"token": spec.token, "instance_id": instance_id}, exc_info=True)
+        return _RETRY
+    if handle.outcome is SagaStart.ALREADY_RUNNING:
         log.info("medallion_promotion_review_reattach", extra={"instance_id": instance_id})
         return _SUCCESS
     log.info("medallion_promotion_review_scheduled", extra={"token": spec.token, "instance_id": instance_id, "dataset": spec.to_dataset})
     return _SUCCESS
-
-
-def _exists(client: _Client, instance_id: str) -> bool:
-    """Whether the engine knows this instance — with an unanswerable lookup read as 'no'.
-
-    A state read that raises means the engine is unreachable, which is the case that must RETRY;
-    returning False sends the caller down exactly that path.
-    """
-    try:
-        return client.get_workflow_state(instance_id) is not None
-    except Exception:
-        return False
 
 
 async def decide_promotion(
@@ -227,24 +192,25 @@ async def decide_promotion(
     *,
     approved: bool,
     subject: str,
-    client: _Client | None = None,
+    client: SagaClient | None,
     authorize: Authorize | None = None,
 ) -> dict[str, Any]:
     """Deliver one person's answer to a held promotion.
 
-    Checks the instance is hosted and still live BEFORE touching the client, because the client
-    accepts an event for an instance it does not host and discards it — a 202 for an approval that
+    Checks the instance is hosted and still live BEFORE signalling it, because the engine accepts a
+    signal for an instance it does not host and discards it — a 202 for an approval that
     will never arrive is the one outcome worse than a 404.
     """
+    if client is None:
+        raise TableNotFoundError(f"no promotion is under review with id {instance_id!r}: quality review is not enabled on this estate")
     if not subject:
         # The shared-token path of the auth door resolves no principal. The workflow refuses an
         # unattributable decision anyway; refusing it here says so to the caller instead of three
         # hops later in a lineage FAIL nobody is watching.
         raise PermissionDeniedError("a promotion decision must name the person who made it; sign in and retry")
 
-    wf_client = _client(client)
     try:
-        spec = await _bounded(_live_spec, wf_client, instance_id)
+        spec = await _bounded(_live_spec, client, instance_id)
     except (TableNotFoundError, PermissionDeniedError, InvalidTableStateError):
         raise
     except Exception as exc:
@@ -253,7 +219,7 @@ async def decide_promotion(
     if authorize is not None:
         await authorize(subject=subject, obj=promotion_object(spec))
 
-    await _bounded(lambda: wf_client.raise_workflow_event(instance_id, "promotion_decision", data={"approved": approved, "subject": subject}))
+    await _bounded(lambda: client.signal(instance_id, "promotion_decision", {"approved": approved, "subject": subject}))
     log.info(
         "medallion_promotion_decided",
         extra={"instance_id": instance_id, "approved": approved, "subject": subject, "dataset": spec.to_dataset},
@@ -302,10 +268,7 @@ async def decide(
         instance_id,
         approved=body.approved,
         subject=subject or "",
-        # THE LIFESPAN'S CLIENT, like `show` 13 lines below — whose comment states the rule this route
-        # was breaking beside it. Omitting it made `_client(None)` construct a fresh
-        # `DaprWorkflowClient`, and so a fresh gRPC channel to the sidecar, on every approval.
-        client=getattr(request.app.state, "workflow_client", None),
+        client=request.app.state.saga_client,
         authorize=_fga_gate(request),
     )
     return DecisionAccepted(**outcome)
@@ -320,8 +283,10 @@ async def show(
     """What is being asked, so the approver can answer it: the datasets, the failed assertions, the deadline."""
     # From `app.state`, built once in the lifespan. Constructing a client per request re-opens its
     # connection to the sidecar on every call — the "build it in lifespan, inject it" rule.
-    wf_client = _client(getattr(request.app.state, "workflow_client", None))
-    spec = await _bounded(_live_spec, wf_client, instance_id)
+    client = request.app.state.saga_client
+    if client is None:
+        raise TableNotFoundError(f"no promotion is under review with id {instance_id!r}: quality review is not enabled on this estate")
+    spec = await _bounded(_live_spec, client, instance_id)
     gate = _fga_gate(request)
     if gate is not None:
         # `and subject` used to sit here, which read as a guard and acted as a bypass: a caller with
@@ -355,6 +320,7 @@ def register_promotion_route(app: FastAPI, dapr_app: DaprApp | None = None) -> D
     )
     async def on_promotion_held(
         event: dict[str, Any],
+        request: Request,
         config: SettingsDep,
         _: Annotated[None, Depends(require_dapr_token)],
         drain: Annotated[dict[str, str] | None, Depends(retry_when_draining)] = None,
@@ -366,6 +332,6 @@ def register_promotion_route(app: FastAPI, dapr_app: DaprApp | None = None) -> D
             return drain
         if signing is not None:
             return signing
-        return await handle_promotion_held(event)
+        return await handle_promotion_held(event, client=request.app.state.saga_client)
 
     return dapr_app

@@ -20,7 +20,9 @@ source of truth. Design targets come only from owner rulings (the register heade
    (engine_choice.py:95-98). The Ray address falls back to `http://<release>-ray-head-svc:8265`
    (medallion.yaml:617). No Ray cluster renders by default, though: `ray.cluster.enabled: false` (values.yaml:2529-2530)
    gates raycluster.yaml:1, and `singleTenant.enabled: false` (values.yaml:66-67) gates rayservice.yaml:1. The submit
-   activity therefore fails, and `stage_run` reports a failed outcome (workflow.py:264-282). values-local.yaml:44-49
+   therefore fails: the stage runner logs it and acks with the run's plan open (stage_plans.py:253-257), the plan
+   sweep resubmits under the same key at most twice, and then closes the plan failed with a FAIL through the lineage
+   outbox (stage_plans.py:272-306). values-local.yaml:44-49
    records this exact failure ("Temporary failure in name resolution"). This is CP-041.
 2. **The profile that does run the cascade is `make k3s-up`** (Makefile:768, 792, 795), which layers
    `chart/values-local.yaml` on top. That file turns on `ray.cluster.enabled` (values-local.yaml:126-127), pins
@@ -106,8 +108,8 @@ Wired in `chart/values.yaml`:
 
 **Not wired in the default chart:**
 - **No Ray cluster.** See headline 1: the Ray lane dies at submit (CP-041).
-- **The in-process lane works only after an explicit `medallion.ray=false`.** It then needs no Ray and no Workflow
-  runtime (stage_runner.py:83-114; engine_choice.py:81).
+- **The in-process lane works only after an explicit `medallion.ray=false`.** It then needs no Ray. No stage runner
+  hosts a Workflow runtime on either lane (stage_runner.py:84-89; engine_choice.py:81).
 - **The media lane starts its own cascade.** `/ingest-media` publishes `medallion.media` directly instead of
   going through `/bronze-arrival` (media_produce.py:242-258; LH-329).
 - **A project-qualified run needs `scripts/seed_estate.py` first.** That script creates project `acme`, its warehouse
@@ -136,9 +138,8 @@ what `/produce` actually writes: 8 synthetic rows `{id: 0..7, payload: "event-i"
    also grants writer, publisher and validator to the cascade identities on every warehouse it creates
    (`LANCE_FGA_CASCADE_WRITERS`, services.yaml:307-339).
 3. A human who holds `can_administer` on `project:acme`.
-4. For the in-process variant, `medallion.ray=false` as well. values.yaml:1330-1338 requires a stage-runner restart
-   when ENABLING the Ray lane (actor state-store scope); setting `ray=false` changes the pod env, so the stage runners
-   roll anyway.
+4. For the in-process variant, `medallion.ray=false` as well. It changes the stage runners' pod env, so they roll; no
+   stage runner is scoped to the actor state store on either lane, since none hosts a workflow.
 
 ### 2c. The trace (project `acme`, Ray lane, the k3s-up profile)
 
@@ -159,10 +160,10 @@ Token `T` = the caller's `Idempotency-Key`. Tables: `acme-bronze$events` → `ac
 | 9 | Stage runner resolves roots | The chart's FROM/TO URI, or the project warehouse root, overridden by the catalog's describe of upstream and then by the trigger's `from_uri` if it is inside `read_root` | static key for control reads | nothing | — | — | transform.py:659-795 (`_resolve_roots`, `_confine_from_uri`; roots and read_root at :684-690) |
 | 10 | Stage runner → catalog `describe`, else `create?mode=exist_ok` for `acme-silver$features` (`ensure_stage_output`), then `POST …/credentials?tier=write` (`authorize_stage_write`) | HTTP | Service door. FGA: `can_create_table` at create; `can_write_data` or `can_maintain` at the vend. **The vended STS credential is discarded.** | catalog creates an empty table only if describe refuses (catalog_register.py:331-356); seed_estate declares `acme-silver$features` and `acme-gold$catalog` (seed_estate.py:208-209), so whether the first run creates is UNVERIFIED | on a create, the catalog emits a `create_table` DDL lineage marker (catalog core/lineage_emit.py:677) | — | transform.py:1085-1126; catalog_register.py:221-263,284-357; credentials.py:78-90 |
 | 11 | Stage runner → bus | `_emit_start_run` (sign, outbox, PUB) | stage runner key | — | **OL START**, same deterministic runId as the later COMPLETE | — | transform.py:1158-1168,298-358 |
-| 12 | **Engine hand-off, Ray lane** (chosen because `ray_enabled` and nothing is declared) | Measures `pre_rows`, then `DaprSagaClient.start(stage_run)` with deterministic instance id `stage-<hash(stage, T, from, to)>`, and **acks** | n/a | nothing | — | the Workflow owns the run | engine_choice.py:95-98; transform.py:917-970,183-225 |
-| 13 | Dapr Workflow `stage_run` → Ray Jobs API | Activity `submit_stage` (re-attach on replay) → `submit_stage_job` (httpx POST `/api/jobs/`), then a durable-timer poll loop with `continue_as_new` | **no token to Ray** (CP-010) | — | a failed submit → `report_stage_outcome` → FAIL lineage | job terminal | workflow.py:252-356,478-520,575-594 |
+| 12 | **Engine hand-off, Ray lane** (chosen because `ray_enabled` and nothing is declared) | Measures `pre_rows`, then `stage_plans.dispatch`: writes the run's `PlanDocument` under `<control root>/_plans/` (created if absent, ETag CAS), keyed by the action id `derive_idempotency_key(stage, token, from, to, code_version)`, announces it as `run_planned` on `catalog.control.v1`, and **acks** | n/a | the plan record | control event `run_planned` (object `stage_run:<id>`, the plan's URI, claim-check) | the plan owns the run | engine_choice.py:95-98; transform.py:853-885; stage_plans.py:194-257 |
+| 13 | Stage runner → Ray Jobs API | `submit_stage_order` through the executor port under the action id (httpx POST `/api/jobs/`); a failed submit is logged and acked, and the sweep owns the retry | **no token to Ray** (CP-010) | — | — | the job reports, or the sweep reads it | stage_plans.py:253-257 |
 | 14 | Ray job `ray_stage_job.py` → S3 | Direct LANCE writes. Seeded bronze has no `source_rowid`, so this hop takes the cascade-head branch: a driver-side pylance read with `_rowid`, stamp, then a full-sync `merge_insert` (:799-802) or a `create` (:804-811), with no lance_ray and no staging set (:778-811). The distributed lance_ray → staging → `_land_staged` path (:812-872) is for tiers that already carry `source_rowid`. Media: driver-side round trip. | `S3_KEY`/`S3_SECRET` = static `rask-ray-compute` from pod env | `acme-silver$features`, silver. Create, or MergeInsert; the `lineage` column is written in the same commit. | **none**: the job never reads `LINEAGE_URL` | job SUCCEEDED | ray_stage_job.py:1-31,73-89,679-715,721-868; _ray-cluster-config.tpl:173-182,220-226 |
-| 15 | Workflow `publish_stage_ready` → the stage runner's own `sub_topic` | PUB, the trigger re-published with `ray_job_done: true`, `ray_submission_id`, `ray_duration_seconds` | sidecar | — | — | pass 2 of `handle_stage` | workflow.py:599-651 |
+| 15 | Job → the stage runner's outcome door, or the plan sweep → `run_outcomes.resolve` | HTTP `POST /runs/{action_id}/outcome`, or the `medallion-plan-sweep-cron` binding (`@every 30s`) reading the job through the executor port (a RUNNING job is left alone at any age). On success, a PUB re-publishing the trigger to the stage runner's own `sub_topic` with `ray_job_done: true`, `ray_submission_id`, `ray_duration_seconds` and the marker's committed version | the Ray head's projected `rask-medallion` token, admitted as `trainerIdentity` alone; the sidecar for the PUB | the plan's outcome (CAS, first terminal wins) | FAIL through the lineage outbox on a failed run | pass 2 of `handle_stage` on success | run_outcomes.py:91-158; stage_plans.py:130-191,272-319; stage_outcomes.py:32-36 |
 | 16 | `handle_stage` pass 2 | `measure_stage` reads the written dataset; the local profile also runs `assert_quality` (row_count > 0, key non-null, required columns) | static key | reads only; pass 2 also re-runs read_upstream, `ensure_stage_output` and `authorize_stage_write` (a second write vend); only the START emit is suppressed (transform.py:331-332,1087-1126). Measuring rebuilds the lineage index, a `CreateIndex` commit of its own that no event names; the event carries the data version captured before it (compute.py:180-186) | — | — | transform.py:971-983,1187-1200; compute.py:180-186 |
 | 17 | Stage runner → bus | `_emit_complete` (sign, outbox, PUB) | stage runner key | — | **OL COMPLETE**: author `{name: data_eng, sub: service-bronze-to-silver}`; `lance {token: T, cascade_id: T, project: acme, originator}`; inputs `[acme-bronze$events]`; outputs `[acme-silver$features @ data version]` with `outputStatistics`, `columnLineage` and `dataQualityAssertions` | AGE: `READ` (no input version: inputs are built bare, events.py:379, and READ gets a version only when one is sent, lineage repository.py:355-365), `WROTE{version}` and a dataset-level, unversioned `DERIVED_FROM` silver → bronze (cypher.py:414), plus column edges. Notifies ORIGINATOR and watchers as in 6b. | transform.py:1809-1839,1279-1281; events.py:90-128; cypher.py:12-20 |
 | 18 | **Gate.** `_review_reasons` (band; review is off, so no reasons) → `_probe_gate` (skipped with no band reasons) → `gate_decision` = **PUBLISH** (a target and a catalog) | code | — | — | — | — | transform.py:1428-1458; gate_decision.py:83-95 |
@@ -175,8 +176,8 @@ Token `T` = the caller's `Idempotency-Key`. Tables: `acme-bronze$events` → `ac
 `executor_for(IN_PROCESS_ENGINE)` running `compute.transform_stage` inside the stage runner, under the static
 `rask-medallion` key. If the rows line up it uses `add_columns`; otherwise it runs a full-sync `merge_insert(id)`
 (update, insert, and delete by source) or a `create` on the first write, then rebuilds the lineage index
-(transform.py:849-902,1005-1009; compute.py:311-414). There is no Workflow, no Ray, and no second pass. On the Ray
-lane, by contrast, the stage runners start a Dapr Workflow runtime only when `ray_enabled` (stage_runner.py:83-114).
+(transform.py:849-902,1005-1009; compute.py:311-414). There is no plan, no Ray, and no second pass. Neither lane runs a Dapr Workflow: the Ray lane's run is a plan
+closed by its job's report or the sweep (stage_runner.py:84-89).
 
 **HOLD branch** (off by default). It needs review enabled, either by `qualityReview: true` or by a project-declared gate record (gate.py:88-115; transform.py:1303-1312,1656-1657), and a band breach (±25%, or a first promotion;
 values.yaml:1436,1457). Then `_probe_gate` asks the catalog with `gate_only` (tag untouched), `gate_decision` returns
@@ -249,7 +250,7 @@ reported as REFUSED (transform.py:1499-1504; gate_decision.py:111-115).
 | Item | Score | Evidence | Rows |
 |---|---|---|---|
 | Import contracts | PARTIAL | `the-lakehouse-is-not-built-on-ray` covers catalog, lineage, medallion, maintenance and notifications, and `the-lakehouse-is-not-built-on-a-workflow-engine` covers catalog, lineage, medallion, maintenance and service_kit, with six medallion ignore lines (.importlinter:51-84). Ingest and controlplane are outside both. | XC-109, XC-093 |
-| Workflow-engine seam | PARTIAL | The `SagaClient` port covers start and exists (saga.py:61-79). The Ray lane's outcome is known only through `stage_run` (workflow.py:252). Promotions, stage_ops and train use a raw `DaprWorkflowClient`. Ingest uses `dapr.ext.workflow` directly (ingest `__init__.py`:161,260). | CP-029, LH-226, XC-109, CP-025 |
+| Workflow-engine seam | PARTIAL | A Ray stage run and a training run are each a plan closed by an outcome door or the plan sweep, with no workflow (stage_plans.py, train_plans.py). The one medallion workflow, `promotion_review`, is started, read and signalled through the `SagaClient` port (`start`, `state`, `signal`; saga.py), whose Dapr adapter is the only medallion module besides `medallion.workflow` that the import contract lets name the engine. Ingest uses `dapr.ext.workflow` directly (ingest `__init__.py`:161,260). | XC-109, CP-025 |
 | Compute-engine seam | PARTIAL | The `Executor` port (executor.py:137) and `engine_choice` pick in-process or Ray by record, and refuse an unhosted engine (engine_choice.py:84-118). But no lane is declared (the chart boolean decides), and the train submit and resubmit bypass the port. There are two Jobs clients. | CP-031, CP-044, CP-022 |
 | Lakehouse ↔ annotator, search, viewer | PARTIAL | The viewer and search open Lance with the deployment key. Annotator saves go through lancekit directly. Maintenance knows annotator objects. | LOW-027, LOW-003, LH-325 (parked) |
 | Event-driven vs call-driven | PARTIAL | Tier-to-tier movement is event-driven (steps 5→7, 19→20). Control calls to the catalog are synchronous HTTP (steps 3, 7, 10, 19). The ingest, Ray-train and external lineage lanes are HTTP-only and bypass the bus. The media head triggers directly. | CTL-021, LH-329, CP-037 |
@@ -279,7 +280,6 @@ Labels: **RULED** = an owner ruling or CLAUDE.md; **ROW** = the row's How; **OPE
 | Catalog as sole committer | Choose (a) the server-side data doors, (b) a client-direct non-Append door, or (c) the maintainer tier for stage identities, after LH-330's measurements | OPEN DECISION "commit-door decision" (`open_backlog_left_new2.md:85`); ROW LH-330 |
 | | Where the default lane lives, and whether the head asks for its location | OPEN DECISION D6 (:68); ROW LH-164 (under D6(a)) |
 | Media head arrival-driven | Drop the direct publish; `/bronze-arrival` matches the media write and routes it by `transform_routes` | ROW LH-329 (admitted, :58); CLAUDE.md Architecture ("driven by the ARRIVAL event") |
-| Workflow-engine seam | An outcome door keyed on `derive_idempotency_key`, then SagaClient gains state, terminate and signal | ROW CP-029, then LH-226 (FOCUS item 4, :24-25) |
 | | Ingest and controlplane added to both contracts; `ingest_run` behind the saga port | RULED "Ingest is a Phase 1 component" (:60) + ROW XC-109 |
 | | A runtime proof with no engine and no Ray | ROW XC-093 |
 | Compute-engine seam | Lanes declared through the transform door from a chart hook | ROW CP-031 |
@@ -497,8 +497,8 @@ JetStream, OpenFGA, Dex). Every target in §4 stays inside this stack except XC-
 
 - **Current use**
   - pub/sub on NATS JetStream, eight `pubsub.jetstream` Component definitions (dapr-component.yaml:16,42,91,146,243,311,404,477); the one at :243 renders once per subscriber (`range`, :235).
-  - Workflow: medallion `stage_run`, `train_run` and `promotion_review` (workflow.py:252,947), plus ingest
-    `ingest_run`.
+  - Workflow: medallion `promotion_review` (workflow.py), hosted by the producer under `qualityReview`, plus ingest
+    `ingest_run`. A Ray stage run and a training run are plans, not workflows.
   - Actors: notifications `InboxActor` (inbox_actor.py:210).
   - A Postgres actor state store (dapr-statestore.yaml:47,72).
   - Cron bindings, eight Components (catalog-control-relay-cron.yaml:28 … services.yaml:492).
@@ -510,11 +510,9 @@ JetStream, OpenFGA, Dex). Every target in §4 stays inside this stack except XC-
   - No `accessControl` on any callee (XC-009).
   - The app token is the only proof at subscription routes (bronze_arrival.py:48; events.py:57).
   - Workflows are unversioned (CP-025).
-  - The port covers only start and exists (LH-226).
   - Ingest uses raw nats-py beside Dapr (queue.py:33; XC-109).
 - **Better use**
   - Per-app Configuration `accessControl` defaultAction deny (ROW XC-009).
-  - SagaClient gains state, terminate and signal (ROW LH-226).
   - Versioned workflows (ROW CP-025).
   - `dapr-api-token` stays only as proof of sidecar arrival (ROW LH-220 How).
 

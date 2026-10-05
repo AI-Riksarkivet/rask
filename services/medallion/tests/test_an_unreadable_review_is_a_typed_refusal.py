@@ -27,6 +27,7 @@ from lance_namespace import ErrorCode
 
 from medallion.api import promotions
 from medallion.api.promotions import instance_for
+from medallion.services.dapr_saga import DaprSagaClient
 from service_kit.exceptions import register_handlers
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 
@@ -93,7 +94,7 @@ def _serving(engine: _Engine) -> Iterator[TestClient]:
     register_handlers(app)
     install_problem_handlers(app, logging.getLogger(__name__))
     app.include_router(promotions.router)
-    app.state.workflow_client = engine
+    app.state.saga_client = DaprSagaClient(engine)
     app.dependency_overrides[promotions.authenticate_subject] = lambda: "CiQwOGE4Njg0Yi1kYjg4"
     with TestClient(app, raise_server_exceptions=False) as client:
         yield client

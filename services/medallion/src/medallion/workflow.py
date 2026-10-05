@@ -140,6 +140,19 @@ def register(runtime: wf.WorkflowRuntime) -> None:
         runtime.register_activity(a)
 
 
+def start_runtime() -> wf.WorkflowRuntime:
+    """Build, register and start the runtime that hosts this module's workflows, and return it to be shut down.
+
+    Here rather than in the producer's lifespan so the engine's runtime is named only by its adapter: the producer
+    asks for a running worker and holds the handle. `start()` runs the worker on its own threads and does not block
+    the event loop.
+    """
+    runtime = wf.WorkflowRuntime()
+    register(runtime)
+    runtime.start()
+    return runtime
+
+
 # --------------------------------------------------------------------------- #
 # S3/S4 — the quality gate's third answer: a held promotion a person can release
 # --------------------------------------------------------------------------- #

@@ -22,6 +22,7 @@ from dapr.ext.workflow.workflow_state import WorkflowStatus
 from lance_namespace import PermissionDeniedError, TableNotFoundError
 
 from medallion.api.promotions import decide_promotion, handle_promotion_held, instance_for
+from medallion.services.dapr_saga import DaprSagaClient
 
 
 class _State:
@@ -84,8 +85,8 @@ class TestTheHoldReachesTheProducerOverTheBus:
         promotion, each asking the approver separately."""
         client = _WorkflowClient()
 
-        first = await handle_promotion_held({"data": _held()}, client=client)
-        second = await handle_promotion_held({"data": _held()}, client=client)
+        first = await handle_promotion_held({"data": _held()}, client=DaprSagaClient(client))
+        second = await handle_promotion_held({"data": _held()}, client=DaprSagaClient(client))
 
         assert first == second == {"status": "SUCCESS"}
         assert len(client.scheduled) == 1
@@ -102,7 +103,7 @@ class TestTheHoldReachesTheProducerOverTheBus:
             def get_workflow_state(self, instance_id: str, *, fetch_payloads: bool = True) -> None:
                 raise RuntimeError("connection refused")
 
-        result = await handle_promotion_held({"data": _held()}, client=_Down())
+        result = await handle_promotion_held({"data": _held()}, client=DaprSagaClient(_Down()))
 
         assert result == {"status": "RETRY"}
 
@@ -112,7 +113,7 @@ class TestTheDecisionDoor:
     async def test_an_approval_raises_the_event_INTO_the_hosting_app(self) -> None:
         client = _WorkflowClient(instances={instance_for("tok-1"): _State(_held(), WorkflowStatus.RUNNING)})
 
-        result = await decide_promotion(instance_for("tok-1"), approved=True, subject="CiQwOGE4Njg0Yi1kYjg4", client=client)
+        result = await decide_promotion(instance_for("tok-1"), approved=True, subject="CiQwOGE4Njg0Yi1kYjg4", client=DaprSagaClient(client))
 
         assert result["status"] == "accepted"
         assert result["approved"] is True
@@ -126,7 +127,7 @@ class TestTheDecisionDoor:
         client = _WorkflowClient()
 
         with pytest.raises(TableNotFoundError):
-            await decide_promotion(instance_for("nope"), approved=True, subject="CiQwOGE4Njg0Yi1kYjg4", client=client)
+            await decide_promotion(instance_for("nope"), approved=True, subject="CiQwOGE4Njg0Yi1kYjg4", client=DaprSagaClient(client))
 
         assert client.raised == [], "the door must not reach the client for an instance it does not host"
 
@@ -137,7 +138,7 @@ class TestTheDecisionDoor:
         client = _WorkflowClient(instances={instance_for("tok-1"): _State(_held(), WorkflowStatus.COMPLETED)})
 
         with pytest.raises(TableNotFoundError, match="COMPLETED"):
-            await decide_promotion(instance_for("tok-1"), approved=True, subject="CiQwOGE4Njg0Yi1kYjg4", client=client)
+            await decide_promotion(instance_for("tok-1"), approved=True, subject="CiQwOGE4Njg0Yi1kYjg4", client=DaprSagaClient(client))
 
         assert client.raised == []
 
@@ -149,7 +150,7 @@ class TestTheDecisionDoor:
         client = _WorkflowClient(instances={instance_for("tok-1"): _State(_held(), WorkflowStatus.RUNNING)})
 
         with pytest.raises(PermissionDeniedError):
-            await decide_promotion(instance_for("tok-1"), approved=True, subject="", client=client)
+            await decide_promotion(instance_for("tok-1"), approved=True, subject="", client=DaprSagaClient(client))
 
         assert client.raised == []
 
@@ -166,7 +167,7 @@ class TestTheDoorAuthorizesAgainstTHISPromotion:
         async def _authorize(*, subject: str, obj: str) -> None:
             gated.append((subject, obj))
 
-        await decide_promotion(instance_for("tok-1"), approved=True, subject="alice", client=client, authorize=_authorize)
+        await decide_promotion(instance_for("tok-1"), approved=True, subject="alice", client=DaprSagaClient(client), authorize=_authorize)
 
         assert gated == [("alice", "namespace:acme-gold")], "can_promote is a rung on the DESTINATION stage"
 
@@ -178,7 +179,7 @@ class TestTheDoorAuthorizesAgainstTHISPromotion:
             raise PermissionDeniedError(f"{subject} lacks can_promote on {obj}")
 
         with pytest.raises(PermissionDeniedError):
-            await decide_promotion(instance_for("tok-1"), approved=True, subject="mallory", client=client, authorize=_deny)
+            await decide_promotion(instance_for("tok-1"), approved=True, subject="mallory", client=DaprSagaClient(client), authorize=_deny)
 
         assert client.raised == []
 
@@ -195,6 +196,6 @@ class TestTheDoorAuthorizesAgainstTHISPromotion:
         async def _authorize(*, subject: str, obj: str) -> None:
             gated.append((subject, obj))
 
-        await decide_promotion(instance_for("tok-1"), approved=True, subject="alice", client=client, authorize=_authorize)
+        await decide_promotion(instance_for("tok-1"), approved=True, subject="alice", client=DaprSagaClient(client), authorize=_authorize)
 
         assert gated == [("alice", "namespace:curated")]

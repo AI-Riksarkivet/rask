@@ -26,6 +26,7 @@ from dapr.ext.workflow.workflow_state import WorkflowStatus
 from lance_namespace import PermissionDeniedError
 
 from medallion.api.promotions import instance_for, show
+from medallion.services.dapr_saga import DaprSagaClient
 
 
 class _State:
@@ -84,7 +85,7 @@ class _FGA:
 
 def _request(*, fga_client: Any) -> _Request:
     instances = {instance_for("tok-1"): _State(_held(), WorkflowStatus.RUNNING)}
-    return _Request(_App(_State_(workflow_client=_WorkflowClient(instances), fga=fga_client)))
+    return _Request(_App(_State_(saga_client=DaprSagaClient(_WorkflowClient(instances)), fga=fga_client)))
 
 
 @pytest.mark.asyncio

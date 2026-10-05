@@ -57,6 +57,7 @@ from medallion.api.promotions import handle_promotion_held
 from medallion.core import lineage_publish
 from medallion.core.config import MedallionSettings, get_settings
 from medallion.schemas.promotion import PromotionSpec
+from medallion.services.dapr_saga import DaprSagaClient
 from medallion.services.promotion_hold import hold_spec, publish_hold
 from medallion.services.transform import StageIdentity, resolve_stage_identity
 from medallion.workflow import PromotionOutcome, PromotionReport, emit_promotion_outcome
@@ -306,7 +307,7 @@ def test_a_hold_that_does_not_name_its_stage_is_refused(field: str, value: str |
         payload[field] = value
     engine = _Engine()
 
-    assert asyncio.run(handle_promotion_held({"data": payload}, client=engine)) == {"status": "DROP"}
+    assert asyncio.run(handle_promotion_held({"data": payload}, client=DaprSagaClient(engine))) == {"status": "DROP"}
     assert engine.scheduled == []
 
 
@@ -331,7 +332,7 @@ def test_a_published_hold_reaches_the_emit_intact(captured: list[dict[str, Any]]
 
     assert asyncio.run(publish_hold(bus, stage, report.spec)) is True
     # A JSON-typed publish reaches the subscriber with its payload parsed into the CloudEvent's `data`.
-    held = asyncio.run(handle_promotion_held({"data": json.loads(bus.published[0]["data"])}, client=engine))
+    held = asyncio.run(handle_promotion_held({"data": json.loads(bus.published[0]["data"])}, client=DaprSagaClient(engine)))
     assert held == {"status": "SUCCESS"}, f"the hold topic refused the hold the stage runner published: {held}"
     workflow_input = PromotionSpec.model_validate(from_json(to_json(engine.scheduled[0])))
     activity_input = from_json(to_json(PromotionReport(spec=workflow_input, outcome=report.outcome)))

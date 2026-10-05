@@ -41,6 +41,7 @@ from medallion.api.train import router as train_router
 from medallion.api.train_outcomes import mount_train_outcomes
 from medallion.core.config import get_settings
 from medallion.core.lineage_publish import start_signing, stop_signing
+from medallion.services.dapr_saga import DaprSagaClient
 from medallion.services.ray_submit import close_ray_client
 from medallion.services.task_register import register_tasks
 from service_kit.draining import arm_drain_on_sigterm
@@ -112,7 +113,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # delivery (`retry_until_signed` on its routes), reports itself not ready, and heals in place when the key is published.
     signing = await start_signing(app, settings)
     # THE WORKFLOW WORKER for `promotion_review` — and the reason this app hosts it at all.
-    # `raise_workflow_event` resolves the instance through the CALLING app's app-id, so the approve
+    # A signal to the review resolves the instance through the CALLING app's app-id, so the approve
     # route and the instance must share a process. The gate that holds a promotion runs in a stage runner,
     # but a stage runner is bus-only: no gateway row, no Ingress, nothing a person can POST to. Hosting the
     # workflow here (beside the door, behind the same dual-auth as /produce) is what makes the ask
@@ -120,21 +121,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     #
     # Without this the door 404s honestly — which is the correct failure, not a working one.
     app.state.workflow_runtime = None
-    app.state.workflow_client = None
+    # The promotion door's one saga client (`medallion.api.promotions`), built ONLY where this app hosts the review
+    # runtime. With quality review off the producer is outside the actor state store's scope, and on dapr 1.18.1 a
+    # single workflow call from an app-id with no actor state store panics its sidecar (measured live 2026-10-05:
+    # one GET /promotions/<id> crash-looped daprd), so the door answers without an engine rather than reaching one.
+    app.state.saga_client = DaprSagaClient() if settings.quality_review_enabled else None
     # QUALITY REVIEW ALONE starts it: `promotion_review` is the one workflow this app hosts. A training run is a
     # plan resolved by its outcome door and the plan sweep (`services/train_plans.py`, CP-029), which need no engine.
     if settings.quality_review_enabled:
         try:
-            import dapr.ext.workflow as wf
+            from medallion.workflow import start_runtime
 
-            from medallion.workflow import register
-
-            runtime = wf.WorkflowRuntime()
-            register(runtime)
-            runtime.start()  # its own threads; does not block the event loop
-            app.state.workflow_runtime = runtime
-            # ONE client for the app, not one per request — the decision door reads it from here.
-            app.state.workflow_client = wf.DaprWorkflowClient()
+            app.state.workflow_runtime = start_runtime()
             log.info("dapr workflow runtime started", extra={"promotion_review": settings.quality_review_enabled})
             # The line above is TRUE and INSUFFICIENT: the runtime starts whether or not this
             # app-id can reach an actor state store, and without one the first call fails (and,

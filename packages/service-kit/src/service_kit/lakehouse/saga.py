@@ -11,18 +11,19 @@ orchestration constructs (`yield ctx.*`, `DaprWorkflowContext`) live in FOUR fil
 `dapr.ext.workflow` carry ZERO: they are registration and client calls. So an engine swap rewrites the
 orchestration, which is engine-shaped by nature (Dapr replays a generator, Argo walks a YAML DAG,
 Flyte composes decorated tasks — those do not reduce to one interface without becoming the lowest
-common denominator of all three). What DOES reduce is the ACTIVITY layer's reach upward:
-`transform.py` and `train.py` each imported `dapr.ext.workflow` inside a function body purely to start
-an instance. A service that has just built a `WorkOrder` should not have to know which engine will
-carry it.
+common denominator of all three). What DOES reduce is a door's reach into the engine to
+start, read or answer an instance: the route a person approves a held promotion on should not have to
+know which engine is holding it.
 
-TWO OPERATIONS AND NO MORE, because two is what the estate uses. `start` is idempotent by contract,
-and `exists` is why: a schedule failure is two different events wearing one exception, and they need
-opposite answers. "This instance already exists" means a watcher is already on this exact job and the
-trigger is fully handled; anything else (no sidecar, an unscoped state store, the engine down) means
-NOTHING is watching, and swallowing it would ack a trigger whose work never starts. `start` returning
-`ALREADY_RUNNING` makes that distinction the port's, not each caller's — the medallion had to check
-the instance by hand to tell them apart.
+THREE OPERATIONS AND NO MORE, because three is what the estate uses: the promotion review is started,
+read and answered. `start` is idempotent by contract: a schedule failure is two different events wearing
+one exception, and they need opposite answers. "This instance already exists" means a watcher is already
+on this exact job and the trigger is fully handled; anything else (no sidecar, an unscoped state store,
+the engine down) means NOTHING is watching, and swallowing it would ack a trigger whose work never
+starts. `start` returning `ALREADY_RUNNING` makes that distinction the adapter's, not each caller's.
+`state` answers what the engine holds under an id, in a status vocabulary this module owns rather than
+the engine's enum. `signal` delivers an external event to a waiting saga. There is no `terminate`: no
+caller stops a saga, since a stage run and a training run are plans the executor stops (CP-029).
 
 **`service-kit` must not gain a workflow-engine dependency**, and this module adds none: it imports
 pydantic and the standard library.
@@ -49,7 +50,7 @@ class SagaStart(StrEnum):
 
 
 class SagaHandle(BaseModel):
-    """The identity of a running saga — what a caller keeps to poll or terminate it later."""
+    """The identity of a running saga — what a caller keeps to read or signal it later."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -57,12 +58,55 @@ class SagaHandle(BaseModel):
     outcome: SagaStart
 
 
+class SagaStatus(StrEnum):
+    """Where a saga stands, in the port's words rather than an engine's.
+
+    `PENDING`, `RUNNING` and `SUSPENDED` are LIVE: the saga can still take a signal and act on it.
+    `COMPLETED`, `FAILED` and `TERMINATED` are terminal. `STALLED` is an instance the engine holds and
+    cannot advance, and `UNKNOWN` is a status the adapter has no word for; neither is live, because an
+    engine that accepts a signal for an instance that will never act on it is reporting a success that
+    did not happen.
+    """
+
+    PENDING = "pending"
+    RUNNING = "running"
+    SUSPENDED = "suspended"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    TERMINATED = "terminated"
+    STALLED = "stalled"
+    UNKNOWN = "unknown"
+
+    @property
+    def live(self) -> bool:
+        """Whether a saga in this status can still take a signal and act on it."""
+        return self in _LIVE
+
+
+_LIVE = frozenset({SagaStatus.PENDING, SagaStatus.RUNNING, SagaStatus.SUSPENDED})
+
+
+class SagaState(BaseModel):
+    """What the engine holds under one instance id: its status and the input it was started with.
+
+    `input` is the payload as the engine stored it, serialized: a caller that reads a saga back
+    validates it into its own model, and a stored input that no longer validates is that caller's
+    refusal to make, not the port's.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    instance_id: str
+    status: SagaStatus
+    input: str | None = None
+
+
 @runtime_checkable
 class SagaClient(Protocol):
-    """Start a durable saga, and answer whether one is already running under an id.
+    """Start a durable saga, read where it stands, and deliver it an external event.
 
     A CALLER-CHOSEN `instance_id` is the whole idempotency story and is required, not optional: the
-    estate derives it deterministically from the work (`stage_submission_id`), so a redelivered
+    estate derives it deterministically from the work (the promotion's run token), so a redelivered
     trigger names the saga that is already handling it. An engine that mints its own id cannot
     provide that, and an adapter for one must derive a deterministic mapping rather than accept a
     generated id — otherwise at-least-once delivery becomes at-least-once EXECUTION.
@@ -76,11 +120,19 @@ class SagaClient(Protocol):
         """
         ...
 
-    def exists(self, instance_id: str) -> bool:
-        """Whether a saga is registered under `instance_id`.
+    def state(self, instance_id: str) -> SagaState | None:
+        """What the engine holds under `instance_id`, or `None` when it holds nothing.
 
-        Separate from `start` because a caller sometimes needs the answer without attempting a start —
-        and because an adapter whose engine cannot answer it must say so by raising rather than
-        returning `False`, which would read as "safe to start" on the one path where it is not.
+        Raises when the engine cannot answer. Reading an unreachable engine as `None` would tell a
+        caller that no saga exists on exactly the path where one may.
+        """
+        ...
+
+    def signal(self, instance_id: str, event: str, data: Any) -> None:  # noqa: ANN401 — the event body is the saga's own contract with its caller
+        """Deliver `event` with `data` to the saga under `instance_id`.
+
+        An engine may accept a signal for an instance it does not host, or one that has finished, and
+        discard it. A caller whose answer must arrive reads `state` first and refuses an instance that is
+        absent or not `live`.
         """
         ...

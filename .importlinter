@@ -77,10 +77,8 @@ forbidden_modules =
     durabletask
 ignore_imports =
     medallion.workflow -> dapr.ext.workflow
-    medallion.api.promotions -> dapr.ext.workflow
-    medallion.api.promotions -> dapr.ext.workflow.workflow_state
-    medallion.producer -> dapr.ext.workflow
     medallion.services.dapr_saga -> dapr.ext.workflow
+    medallion.services.dapr_saga -> dapr.ext.workflow.workflow_state
 allow_indirect_imports = True
 
 [importlinter:contract:settings-import-no-web-stack]

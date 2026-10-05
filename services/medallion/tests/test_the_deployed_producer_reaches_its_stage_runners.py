@@ -57,3 +57,13 @@ def test_a_stage_read_reaches_the_runner_with_the_producers_own_token(producer: 
     assert answered.status_code == 200, answered.text
     assert hosted.call_count == 1
     assert hosted.calls.last.request.headers["authorization"] == "Bearer the-producers-projected-token"
+
+
+def test_a_promotion_read_with_quality_review_off_is_404_and_reaches_no_workflow_engine(producer: TestClient) -> None:
+    """With quality review off the producer hosts no review runtime and sits outside the actor state store's scope,
+    where a single workflow call panics its sidecar on dapr 1.18.1 (measured live 2026-10-05). The door answers
+    from what this app runs, not from an engine it never started."""
+    answered = producer.get("/promotions/promotion-any-token")
+
+    assert answered.status_code == 404, answered.text
+    assert "quality review is not enabled" in answered.json()["detail"], answered.text
