@@ -11,12 +11,12 @@ image:
     flows: "fix-71d7b04f"
     gateway: "lakehouse-661140a4"
     ingest: "lakehouse-0317aa73"
-    lance-rest-catalog: "lakehouse-1feab46a"
+    lance-rest-catalog: "lakehouse-ac30f3b1"
     minio: "RELEASE.2025-04-22T22-12-26Z"
     nats: "2.14.2-alpine"
     nats-box: "0.19.7"
     nats-server-config-reloader: "0.23.0"
-    notifications: "lakehouse-1feab46a"
+    notifications: "lakehouse-4f3a02a7"
     openbao: "2.2.0"
     openfga: "v1.18.3"
     opentelemetry-collector-contrib: "0.157.0"
@@ -31,4 +31,4 @@ image:
   digests: {}
 ray:
   image:
-    tag: "main-d6130edf"
+    tag: "lakehouse-4f3a02a7"

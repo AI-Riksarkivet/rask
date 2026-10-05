@@ -18,8 +18,8 @@ row (XC-049, for one, only if a short-list chart fix needs release space). Items
 
 Beside the order (owner, 2026-10-02): prune pass 2 runs in parallel.
 
-1. **CP-029** with **LH-226**.
-   Why: criterion 3, kept first by the owner; the default cascade learns a stage's outcome only through Dapr workflows on Ray, and CP-029's outcome door precedes LH-226's workflow half.
+1. **LH-226**.
+   Why: criterion 3; CP-029 closed (helm rev 272), so the remaining engine coupling is promotion_review behind the raw DaprWorkflowClient, which LH-226's port removes.
 2. The other 28 short-list rows, in four batches that can run in parallel worktrees (owner, 2026-09-29: batch and parallelize):
    a. Commit and change-feed integrity: **LH-211**, **LH-202**, **LH-214**, **LH-216**, **LH-213**, **LH-217**, **LH-241**.
    b. Erasure and governance: **LH-263**, **LH-245**, **LH-242**, **LH-037**, **LH-194**, **LH-208**, **LH-272**.
@@ -41,7 +41,7 @@ Approved by the owner on 2026-10-02: the Phase 1 rows that, left unfixed, make a
 - Criterion 5, resilience (9): LH-203, LH-204, LH-211, LH-247, CP-041, CP-051, LH-243, LH-273, XC-075.
 - The gate (1): XC-090.
 
-Closed since the approval: LH-281 and LH-210 (helm rev 260), XC-076, LH-220's enabler (helm rev 261), LH-220 (helm rev 262), LH-064 (helm revs 263 to 265), XC-078 (helm revs 266 to 270), and CTL-021 (helm rev 271).
+Closed since the approval: LH-281 and LH-210 (helm rev 260), XC-076, LH-220's enabler (helm rev 261), LH-220 (helm rev 262), LH-064 (helm revs 263 to 265), XC-078 (helm revs 266 to 270), CTL-021 (helm rev 271), and CP-029 (helm rev 272).
 
 ## Owner rulings in force
 
@@ -104,7 +104,7 @@ Closed since the approval: LH-281 and LH-210 (helm rev 260), XC-076, LH-220's en
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 26 | 26 | 13 |
+| **PHASE 1 · LAKEHOUSE** | 25 | 25 | 12 |
 | **PHASE 1 · CROSS-CUTTING** | 11 | 11 | 9 |
 | **PHASE 1 · CONTROLPLANE AND NOTIFICATIONS** | 0 | 0 | 0 |
 | **PHASE 1 · AFTER LAUNCH** | 117 | 111 | 19 |
@@ -112,7 +112,7 @@ Closed since the approval: LH-281 and LH-210 (helm rev 260), XC-076, LH-220's en
 | **FRONTEND** | 7 | 7 | 0 |
 | **LOW PRIORITY** | 37 | 36 | 0 |
 
-**217 open items**, of which **6 are blocked on a decision**, **2 wait on another row or ruling** and **209 can be picked up today**; 45 are HIGH. 51 ids left the register on 2026-09-25 and 42 on 2026-09-29, listed at the foot so nothing vanishes silently. The three Phase 1 sections hold the production short list (29 open rows) with CP-029, LH-226 and their enablers (37 rows); the other 117 Phase 1 rows wait in PHASE 1 · AFTER LAUNCH (owner, 2026-10-02).
+**216 open items**, of which **6 are blocked on a decision**, **2 wait on another row or ruling** and **208 can be picked up today**; 44 are HIGH. 51 ids left the register on 2026-09-25 and 42 on 2026-09-29, listed at the foot so nothing vanishes silently. The three Phase 1 sections hold the production short list (29 open rows) with LH-226 and its enablers (36 rows); the other 117 Phase 1 rows wait in PHASE 1 · AFTER LAUNCH (owner, 2026-10-02).
 
 ## PHASE 1 · LAKEHOUSE
 
@@ -227,14 +227,6 @@ Closed since the approval: LH-281 and LH-210 (helm rev 260), XC-076, LH-220's en
 - *How:* Make creation and compensation one request, Lakekeeper's TableCreationGuard shape (crates/lakekeeper/src/server/tables/create_table.rs:44-53,146): spec CreateTable with the seed rows as the Arrow IPC body, unwound in-request as `_undo_register` does (spec.yaml:1424-1441); or DeclareTable then seed, with maintenance reaping byte-less declarations by age (spec.yaml:1977-1983). Both require the head to ask for its location (D6).
 - *Closes when:* A failed seed leaves no record governing absent bytes, and a second /produce whose seed fails never removes or reports as byte-less a record it did not create, each pinned by a test on the producer's real service identity.
 - *Evidence:* services/medallion/src/medallion/services/produce.py:43-76,187-239 · services/medallion/src/medallion/services/catalog_register.py:444,484-492,498 · services/catalog/src/catalog/api/fga_deps.py:1219 · services/catalog/src/catalog/api/v1/endpoints/tables.py:245,853-857 · docs/audits/2026-09-25/03-lance-docs-full-audit.md LD21
-
-**CP-029 · The workflow watchers are the lakehouse's remaining engine coupling: no plan document and no outcome door**
-`medallion, lineage, compute` · **HIGH** · **first: criterion 3**
-- *What is left:* Build lakehouse-analysis §11 D: a plan document published on a control lane, and an idempotent outcome door keyed on the WorkOrder idempotency key through which a job reports its own terminal state; then retire stage_run and train_run. The credential-vending submit door is dropped: jobs vend their own credentials (D1, LH-129). Acceptance clauses merged in: (a) from CP-033, the instance and outcome key is `derive_idempotency_key` with code_version, so a redelivery after a deploy submits the new build's job (transform.py:193 keys the instance on stage_submission_id, which omits it; stage_submit.py:213 keys the job with it); (b) from CP-034, an `unnotified` verdict (job SUCCEEDED, data committed) is recorded as a truthful COMPLETE with inputs and output, never FAIL (workflow.py:403-406,726-727); (c) from CP-038, a train job that vanishes or never registers reaches exactly one terminal and a RUNNING job at the poll ceiling emits nothing (report_train_outcome returns silently on `abandoned`, workflow.py:976-977,1065-1070); (d) from CP-045, the destination's Lance history is the durable record: whoever commits stamps a commit marker in transaction_properties (one convention with LH-225): the job on a direct commit, the catalog on a door commit, taking it from the request's context (spec.yaml:2472-2490), because no spec operation carries transaction_properties and lance_ray 0.5.0 exposes none, and an abandoned or unnotified run reads read_transaction above the version recorded at submit, marker found → stage-ready (next tier woken), absent → FAIL. (e) A job that FAILS after committing reports a FAIL with a bare output and no version (_build_stage_fail_event, workflow.py:777-783; schemas/events.py:348-353), and the stage job itself emits nothing (_ray-cluster-config.tpl:220-226), so the version it committed is recorded only by the reconcile back-fill; clause (d)'s marker read applies to the `failed` verdict too, and a found marker puts the committed version and the WROTE edge on the terminal event.
-- *Why:* Criterion 3: stage_run and train_run are Dapr workflows the medallion depends on to learn a job's outcome.
-- *How:* Key the door on `derive_idempotency_key` (work_order.py:150,201); jobs report through it under their projected SA token. Lakekeeper runs work as leased records plus doors, not replayed histories (docs/audits/2026-09-25/lakekeeper-deep-read/resilience.md:65-68). This precedes the Dapr-workflow half of LH-226, not the other way round.
-- *Closes when:* The outcome door and plan document exist and are pinned by tests, and stage_run/train_run are deleted. RED first, each clause: two triggers under two code versions submit two jobs; an `unnotified` run publishes no FAIL and keeps its input→output edge; a vanished train job emits one FAIL without the marker and COMPLETE with the version when the marker is found, and a RUNNING job at the poll ceiling emits nothing; an abandoned stage whose destination carries the marker wakes the next tier. A job that commits and then fails emits a terminal event naming the version its marker records (RED first).
-- *Evidence:* docs/audits/lakehouse-2026-09/lakehouse-analysis.md:222 · services/medallion/src/medallion/workflow.py:252,947 · packages/service-kit/src/service_kit/lakehouse/work_order.py:150,201 · services/compute/src/compute/routes.py:26-71 · the commit-door decision for these lanes: LH-330
 
 **CP-041 · Two values keys name the Ray plane, so a default render prunes one cluster and submits to a Service that does not exist**
 `chart, compute, medallion` · **MEDIUM** · **blocks-prod**
@@ -2152,6 +2144,13 @@ Found by the 2026-10-02 review of LH-064, its fix round and its live readback (h
 - LH-389 · LOW · On a release that first narrows a machine identity to a new rung, the model is written pre-upgrade and the grant post-upgrade, so the new lineage refuses the reconciler (403, cursor held, nothing lost) until bootstrap-admin has run; the hook's own header warns against seeding a grant in the release that starts reading it (found reviewing CTL-021) · `chart, notifications`
 - LH-390 · LOW · tests/e2e/verify_notifications_two_users.mjs still seeds `user:notifications reader table:<OUTPUT>` with the governed-feed rationale CTL-021 retired, so each run re-adds a data rung the reconciler no longer uses (the live `reader table:bronze$events` deleted at CTL-021's close is its residue) · `tests/e2e`
 - LH-391 · LOW · model.fga.yaml asserts no `event_stager` holder is refused can_read_event_feed and no `role#assignee` tuple on event_reader is refused, so folding the stager into the feed rung flips no check (found reviewing CTL-021) · `service-kit (FGA model)`
+- LH-392 · LOW · A supplied-token rerun against a CLOSED stage plan: succeeded re-drives nothing even when pass 2 died into the DLQ; failed reopens with attempt 1's stored order, ignoring the rerun's from/to versions and originator (found reviewing CP-029; medallion stage_plans.py, api/rerun.py) · `medallion`
+- LH-393 · LOW · Plan close is not attempt-guarded: a sweep resolve that read attempt 1 can close a just-reopened attempt 2; close/reopen can drop the open-index entry; sweep update lambdas do not check is_open (narrow windows; found reviewing CP-029; service-kit run_plans.py) · `service-kit`
+- LH-394 · LOW · A succeeded Ray stage records medallion.stage.duration twice (hand_off and pass 2), against trigger_guards' one-recording-site comment (found reviewing CP-029) · `medallion`
+- LH-395 · LOW · MEDALLION_CONTROL_ROOT now renders under medallion.ray even with projectsEnabled=false, turning on #84 tenant routing in an overlay that opted out (found reviewing CP-029; chart medallion.yaml) · `chart, medallion`
+- LH-396 · LOW · The train sweep's never-registered FAIL can race a Dapr-redelivered submit retry: the retry then trains and COMPLETEs a run already closed failed (found reviewing CP-029; train_plans.py dispatch) · `medallion`
+- LH-397 · LOW · services/maintenance test_two_readings_move_with_the_heap fails intermittently under -n 16 (passes alone; seen twice 2026-10-05 on trees that touch no maintenance code) · `maintenance tests`
+- LH-398 · LOW · The lance.medallion.verdict span attribute and medallion_stage_outcome_total{verdict} lost their only tests with stage_run's suite (found reviewing CP-029) · `medallion tests`
 - LH-386 · LOW · Stale prose: ingest/lineage.py complete() says ingest's COMPLETE fires the bronze head (its _emitter says ingest never publishes to the topic); maintenance/services/arrival.py lists ingest and the annotator among topic writers; scripts/ray_e2e_stack.sh says the store is off; tests/unit/workflow_action_order.json is orphaned · `ingest, maintenance, scripts, tests`
 - XC-117 · LOW · Nothing ties a non-off signature-door mode to a reachable secret store: an enforcing door with no store answers RETRY to every delivery it would act on · `chart, service-kit`
 - XC-118 · LOW · Downstream of the OTel Collector, not to be fixed (owner 2026-10-04: GreptimeDB is being replaced by OpenObserve or the Grafana stack): vmalert v1.106.1 POSTs every query with no Content-Type and GreptimeDB answers 415, so all 59 rules are health=err and no alert fires; a rules change restarts vmalert, resetting `for:` clocks; Alertmanager's config has no checksum · `chart (observability)`
