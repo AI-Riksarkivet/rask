@@ -1,11 +1,4 @@
 {{- if .Values.backups.controlRoot.enabled }}
-{{- if not .Values.externalSecrets.enabled }}
-{{- /* REFUSED AT RENDER rather than shipped broken. The credential is a MOUNTED ESO Secret and env
-   delivery is not an alternative the estate permits, so with the operator off this job would render a
-   pod referencing a Secret nothing creates — `optional: false`, so it never starts, and a backup that
-   never starts is indistinguishable from one that has nothing to do. */}}
-{{- fail "backups.controlRoot.enabled requires externalSecrets.enabled: the job takes its S3 credential from an ESO-written Secret it MOUNTS, and this estate does not deliver secrets through the environment" }}
-{{- end }}
 {{- /*
 The CONTROL ROOT's scheduled backup ([[LH-110]]) — the registry holding every project, warehouse,
 namespace binding and bucket claim. Lose it and the Lance data survives while nothing can route to

@@ -16,6 +16,8 @@ import pytest
 import yaml
 from chart_yaml import FAST_LOADER
 
+from tests.unit.chart_render import ESO_ARGS
+
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -26,7 +28,7 @@ def _render(**sets: str) -> list[dict]:
     cmd = ["helm", "template", "rask", str(REPO / "chart")]
     # Since auth defaults ON (2026-08-06) every render needs identity values; the chart refuses OIDC
     # without a session secret ON PURPOSE, and that refusal has its own test in test_invariants.py.
-    cmd += ["--set-string", "frontend.oidc.sessionSecret=test-session-secret-32-chars-minimum"]
+    cmd += [*ESO_ARGS]
     cmd += ["--set-string", "frontend.oidc.publicIssuer=http://localhost:8080/dex"]
     cmd += ["--set-string", "frontend.oidc.publicOrigin=http://localhost:8080"]
     # The chart REQUIRES an image registry unless the images are side-loaded into the node

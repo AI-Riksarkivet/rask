@@ -1,4 +1,4 @@
-{{- if .Values.externalSecrets.enabled }}
+{{- if .Values.openbao.enabled }}
 {{/* OpenBao's Kubernetes auth backend validates a caller's ServiceAccount token by asking the
      Kubernetes API to review it (a TokenReview). It performs that review AS ITS OWN ServiceAccount,
      so that account needs `system:auth-delegator` — the cluster role whose entire purpose is
@@ -9,8 +9,8 @@
      enough to evaluate the role, because it could not verify who was calling. Measured on the live
      cluster 2026-08-31, after the FQDN fix moved the failure from DNS to authorization.
 
-     Gated on externalSecrets.enabled because ESO is the only consumer of the kubernetes auth backend
-     — every other secret consumer reaches OpenBao through a Dapr sidecar with a token. */}}
+     ESO is the only consumer of the kubernetes auth backend — every other secret consumer reaches
+     OpenBao through a Dapr sidecar with a token — and ESO is a prerequisite, so it renders with OpenBao. */}}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:

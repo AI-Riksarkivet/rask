@@ -39,8 +39,9 @@ from tests.unit.test_invariants import _helm_template
 #: 30 -> 23 when the seven zones' `LINEAGE_SERVICE_TOKEN` became a MOUNTED FILE ([[XC-001]]): the
 #: value left the environment, and `readSecretFile` re-reads it per request so an ESO rotation reaches
 #: a running pod without the watcher that row's other option would have needed.
+#: 23 -> 22 when the minio-scoped-users Job took the store root as a mounted file ([[XC-004]]).
 #: Lowering it is the point; raising it means a workload took the banned path and the rule lost ground.
-SECRET_ENV_BASELINE = 23
+SECRET_ENV_BASELINE = 22
 
 
 def _secret_env_entries() -> list[tuple[str, str, bool]]:
@@ -97,18 +98,11 @@ _MINTED_MATERIAL = re.compile(r"^(?:[0-9a-f]{40}|[A-Za-z0-9]{40})$")
 #: `"secretKeyRef" in env["valueFrom"]`, so it sat green at 23 == 23 while these six rendered beside
 #: the one `secretKeyRef` it counted.
 #:
-#: SIX AND NOT ZERO because the Job that carries them is the estate's only consumer of MinIO's ADMIN
-#: API (`policy create`, `user add`), which has no S3 equivalent and which RustFS does not implement —
-#: so its fate turns on the object-store ruling ([[XC-075]]) rather than on a rewrite here. A ratchet
-#: keeps the number from growing while that is decided; zero is the destination.
-#:
-#: LOWERING THIS BREAKS A SIBLING GATE ON PURPOSE. `test_one_secret_string_reaches_every_site` asserts
-#: the provisioning Job carries each plane's secret as a literal `value: "<secret>"` — it is checking
-#: that the Job MINTS what the pods PRESENT, and a literal is merely how it reads that today. Whoever
-#: removes these six must replace that hop with a comparison against whatever the Job then reads the
-#: secret from, in the same commit. Deleting it instead would leave the pair unchecked at the one hop
-#: that creates it.
-PLAINTEXT_SECRET_BASELINE = 6
+#: ZERO since [[XC-004]]: no credential is a chart value, and the scoped-users Job derives each secret into a
+#: memory file in-cluster. The pairing that literal used to carry (the Job mints what the pods present) is
+#: checked where it now happens, by running the seed and the Job's derive step:
+#: `test_the_dev_openbao_is_seeded_by_its_own_pod.py`.
+PLAINTEXT_SECRET_BASELINE = 0
 
 
 def _plaintext_secret_entries(rendered: str | None = None) -> list[tuple[str, str]]:

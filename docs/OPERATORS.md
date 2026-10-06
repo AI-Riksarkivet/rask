@@ -29,9 +29,9 @@ that weren't. Fixed:
 - **rustfs-operator (#3)** — externalizing RustFS left `greptimedb-standalone.objectStorage.s3.endpoint` at
   the deleted in-cluster service (a static subchart value that can't follow the helper). The `values-prod`
   EXTERNALIZE block now pairs them atomically and `prod-render-check` leg 10 fails if only one is set.
-- **External Secrets Operator (#5)** — `externalSecrets.enabled=true` is now exercised by `prod-render-check`
-  leg 11 (SecretStore + ExternalSecret CRs render, static Secrets skipped, fail-closed guard satisfied with
-  no plaintext `age.password`/`rustfs.secretKey`).
+- **External Secrets Operator (#5)** — a prerequisite since [[XC-004]]: the render fails without
+  `external-secrets.io/v1`, every pod without a sidecar takes its credentials from an ESO-written Secret, and
+  `prod-render-check` leg 11 proves the prod render takes them all from the store (§ 8).
 - **CloudNativePG (#2)** — the AGE-extension blocker is **solved + proven** (`docs/CNPG-AGE.md`): AGE now
   ships for PG18 (v1.7.0), so it mounts as a CNPG **ImageVolume extension** on a stock Postgres image (no
   fork). Proven locally end-to-end (`.docker/cnpg-age-ext.dockerfile` builds it; a stock PG18 loads it via
@@ -305,3 +305,45 @@ inbox prefix). The catalog's ack on CATALOG_CONTROL is stream-wide because its b
 server's, so a compromised catalog could ack or terminate the producer's and notifications' control deliveries, a lesser
 power than the one it holds as the signer of every control event. Port 8222 is unauthenticated by design. Anything
 holding OpenBao's dev root token reads the store (XC-079).
+
+## 8 · Credentials: generated for the dev store, provisioned for a real one (XC-004)
+
+No credential is a chart value (`templates/prod-credentials.yaml` refuses one by name), so none is in
+`helm get values`, the manifest, a hook or a Job spec. The two exemptions (owner, 2026-10-06) are the bundled
+dev Dex's configuration (XC-025) and the dev OpenBao's root token (XC-079); a real-deployment render refuses
+both (the bundled Dex and the dev OpenBao).
+
+- **Dev (the chart's `server -dev` OpenBao).** `<release>-dev-credentials` holds `minio-secret-key`,
+  `postgres-password`, `dapr-app-token`, `ray-auth-token` and `frontend-session-secret`. On a fresh install ESO's
+  Password generator creates it once (`refreshPolicy: CreatedOnce`, `helm.sh/resource-policy: keep`). The OpenBao
+  pod mounts it, and its seed writes every field of `secret/lance` from it as `@file`, deriving the scoped storage
+  secrets from the root (`lance.scopedSecretFn`, which `minio-scoped-users` runs too). The Secret outlives an
+  OpenBao replacement, so the AGE database and the object store, which keep what they were initialised with, see
+  the same values after a re-seed. The seed re-reads the mounted Secret every 5 s and re-seeds when it changes,
+  so a rotation never needs the OpenBao pod replaced. Third-party credentials (the Hugging Face token) are
+  operator-supplied: `make k3s-up` writes the bootstrap Secret `rask-supplied-credentials` from `HF_TOKEN` and sets
+  `secrets.hfTokenInStore`, and the same loop carries a changed token into the store.
+- **An estate whose stores already exist keeps its credentials.** If the AGE or object-store StatefulSet exists
+  and `<release>-dev-credentials` does not, the render refuses (`lookup`, so only against a cluster): generating
+  beside live data would lock every consumer out of it. Create the Secret from the credentials the estate holds
+  first; a Secret that exists without an owner is operator-held and the chart generates nothing beside it.
+- **Real deployment.** The platform's store holds every field `templates/openbao.yaml`'s header lists, provisioned
+  by its operator; the chart generates nothing.
+- **Never delete the OpenBao pod to make it re-seed.** A replacement with no outgoing pod re-mints every signing
+  pair (§ 6) and the NATS root (§ 7, an empty JetStream). The seed's loop is the re-seed path; a rollout restart
+  (`kubectl rollout restart deploy/rask-openbao`, a surge) is the only safe replacement.
+- **Rotating,** one class at a time, so a server learns a value only after the store and every ExternalSecret
+  hold it and its consumers restart right after:
+  1. Change the key of `<release>-dev-credentials` (a real deployment: the field in the store) with a value
+     generated in the cluster; wait for the seed's "the mounted credentials changed; seeding again".
+  2. Force-sync every ExternalSecret that reads the store (`infra-credentials`, `observability-s3`,
+     `control-root-backup-s3`, `dapr-app-token`, `frontend-session`, `hf-token`) with the `force-sync`
+     annotation, and wait for Ready. Their refresh is otherwise `externalSecrets.refreshInterval`, and a pod
+     restarted before it takes the old value.
+  3. Tell the server, when one holds the credential: `ALTER ROLE` inside AGE from stdin for `postgres-password`;
+     restart `rask-minio`, then run `make k3s-up` again so `minio-scoped-users` re-derives every scoped user, for
+     `minio-secret-key`.
+  4. Restart the consumers at once: a `secretKeyRef` env and the injector's app token are read at pod creation,
+     so nothing rolls on its own. AGE: the sidecar Deployments, OpenFGA, the OTel Collector. The root: the
+     sidecar Deployments, GreptimeDB and the Ray head (delete its pod; the RayCluster recreates it). The app
+     token and session key: the sidecar Deployments and the zones. The HF token: the Ray head.

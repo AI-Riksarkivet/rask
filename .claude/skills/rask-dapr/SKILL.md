@@ -151,7 +151,7 @@ injector webhook is fail-closed via the paired label — a pod with the annotati
 silent no-sidecar failure). **No sidecar:** the 7 web zones, Ray head/workers, and every runner.
 Anything running there gets its secrets by other means — today the Ray lane's are injected by the
 submitting service (which DOES fetch them from the Dapr store first); the ESO path
-(`externalSecrets`) is the sanctioned k8s-native alternative when a pod must hold a secret and has no
+(ESO, a prerequisite since XC-004) is the sanctioned k8s-native alternative when a pod must hold a secret and has no
 sidecar. The Jobs-API echo of `runtime_env` is exactly why "inject at submit" is under review.
 
 ## Traps already paid for (don't rediscover)

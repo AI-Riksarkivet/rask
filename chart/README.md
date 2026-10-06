@@ -60,6 +60,9 @@ lacks OTAP support).
 
 ## Local k3s quickstart
 
+The External Secrets Operator is a prerequisite rask never installs
+([docs/architecture/deployment.md](../docs/architecture/deployment.md#prerequisites-the-external-secrets-operator-and-a-secret-store)).
+
 ```bash
 make k3s-install      # one-time: k3s + helm + NVIDIA device-plugin + KubeRay (sudo)
 make k3s-build        # build fleet + frontend + ray images as :dev
@@ -84,9 +87,12 @@ helm upgrade --install rask chart/ \
 
 ## Config and secrets
 
-Sensitive config (database URL, S3 credentials, HF token) comes from an
-operator-created Secret. The default expected name is `rask-app`; override with
-`existingSecret=<name>`.
+No credential is a chart value, and the render refuses one. Credentials live in the
+secret store (`<kvMount>/<secretPath>`, fields listed in `templates/openbao.yaml`'s
+header) and reach pods through the Dapr secret store or ESO-written Secrets. The dev
+OpenBao's are generated in-cluster by ESO's Password generator; a production store's
+are provisioned by its operator. `existingSecret` replaces `rask-app`, which carries
+only the object store's access key ID and endpoint.
 
 Non-sensitive config (service URLs, feature flags, orchestrator settings) flows
 from `values.yaml` into a ConfigMap mounted by each Deployment.

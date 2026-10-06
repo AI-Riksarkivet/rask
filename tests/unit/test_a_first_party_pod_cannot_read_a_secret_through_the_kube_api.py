@@ -45,9 +45,6 @@ _PROD_ARGS: tuple[str, ...] = (
     "-f", str(REPO / "chart/values-prod.yaml"),
     "--set", "image.catalog.tag=v0",
     "--set", "frontend.image.tag=v0",
-    "--set", "dapr.appToken=ci-dummy-token-0000000000",
-    "--set", "age.password=ci-dummy-pw",
-    "--set", "minio.secretKey=ci-dummy-key",
     "--set", "signing.provisioned=true",
     "--set", "nats.auth.provisioned=true",
     "--set", "backups.volumeSnapshot.snapshotClassName=csi-snapclass",
@@ -272,17 +269,13 @@ def _offending(args: tuple[str, ...]) -> list[str]:
     return found
 
 
-@pytest.mark.parametrize(
-    ("overlay", "eso"),
-    [pytest.param("default", False, id="default"), pytest.param("deployed", True, id="deployed"), pytest.param("prod", False, id="prod")],
-)
-def test_no_first_party_service_account_can_read_a_secret_or_review_a_token(overlay: str, eso: bool) -> None:
+@pytest.mark.parametrize("overlay", sorted(_OVERLAYS))
+def test_no_first_party_service_account_can_read_a_secret_or_review_a_token(overlay: str) -> None:
     """No grant of `secrets` or `tokenreviews` reaches `default`, an every-SA group, or an SA a first-party pod runs as.
 
-    The one sanctioned grant is `system:auth-delegator` on the SA OpenBao alone runs as, and only under
-    ESO, the one path that logs in through OpenBao's Kubernetes auth backend. OpenBao reviews ESO's
-    login with its OWN mounted token, so the grant and the mount must name one SA; without ESO the token
-    would be idle and the pod holds none.
+    The one sanctioned grant is `system:auth-delegator` on the SA OpenBao alone runs as: ESO, a prerequisite
+    ([[XC-004]]), logs in through OpenBao's Kubernetes auth backend, and OpenBao reviews that login with its
+    OWN mounted token, so the grant and the mount must name one SA.
     """
     args = _OVERLAYS[overlay]
     pods, bindings = _pods(*args), _bindings(*args)
@@ -297,10 +290,8 @@ def test_no_first_party_service_account_can_read_a_secret_or_review_a_token(over
     assert any("tokenreviews" in b.grants for b in bindings), f"{overlay}: no binding classified as reviewing tokens; Sentry's does"
 
     assert _offending(args) == [], f"{overlay}: {_offending(args)}"
-    assert delegated == ([(openbao.service_account,)] if eso else []), (
-        f"{overlay}: auth-delegator bound to {delegated}, OpenBao runs as {openbao.service_account}"
-    )
-    assert openbao.token_mounted is eso, f"{overlay}: OpenBao mounts a token: {openbao.token_mounted}, ESO on: {eso}"
+    assert delegated == [(openbao.service_account,)], f"{overlay}: auth-delegator bound to {delegated}, OpenBao runs as {openbao.service_account}"
+    assert openbao.token_mounted, f"{overlay}: OpenBao mounts no token, so it cannot review ESO's login"
 
 
 @pytest.mark.parametrize("overlay", sorted(_OVERLAYS))

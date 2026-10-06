@@ -123,8 +123,7 @@ func (m *Rask) Charts(
 		//
 		// ── THIS STEP WAS UNSATISFIABLE FOR 923 COMMITS, AND IT TOOK FIVE GATES DOWN WITH IT ─────────
 		// A bare `helm template chart` has been REFUSED since 3c909e0a (2026-08-04, "registry required")
-		// made `image.repository` a `required`, and again by b6accf32's `frontend.oidc.sessionSecret`
-		// guard. So this line exited 1 on every run, and everything after it — the NetworkPolicy
+		// made `image.repository` a `required`, and again by an OIDC guard. So this line exited 1 on every run, and everything after it — the NetworkPolicy
 		// isolation invariants, the service-account hardening invariants, the Dapr resiliency/DLQ
 		// invariants, `make prod-render-check` and `make alert-rules-check` — never executed once.
 		//
@@ -163,30 +162,21 @@ func (m *Rask) Charts(
 // placeholder: the guard is about SHAPE (a registry-qualified name, not a bare one that would resolve
 // to Docker Hub and ImagePullBackOff), not about which registry.
 //
-// THE CREDENTIALS BELOW ARE WHAT MAKE THE REGISTRY PATH RENDERABLE AT ALL ([[XC-070]]).
-// `chart/templates/prod-credentials.yaml` refuses a real-registry render that still carries the
-// well-known dev values — correctly, since "holding the repository is holding the credential" — and
-// this gate renders exactly that shape on purpose. Without them `dagger call charts` fails on every
-// invocation, which is not a gate: it cannot separate a good chart from a bad one, so its result
-// stops being read and the production path goes back to uncovered.
-//
-// Supplying them is what a real deployment does, and it changes nothing the gate is testing: the
-// guard is about the SHAPE of the reference, and these values are never resolved by a render. If this
-// list stops covering a value the guard compares against a published literal, the guard fails this
-// render and names the value. `signing.provisioned` is the same kind of input: the operator's attestation
+// NO CREDENTIAL IS AN ARGUMENT ([[XC-004]]): the chart takes none as a value and refuses one, so a
+// real-registry render points at the platform's store (`openbao.devMode=false`) and the External Secrets
+// Operator, a prerequisite the render checks through `.Capabilities`, is named with `--api-versions`.
+// The bundled dev Dex is refused on a real deployment (its credentials are published, XC-025), so this
+// real-registry shape turns it off as values-prod.yaml does. `signing.provisioned` is the operator's attestation
 // that the event-signing keys exist, without which `templates/signing-provisioned.yaml` refuses a sealed store;
 // `nats.auth.provisioned` attests every bus client's NATS user the same way (`templates/nats-provisioned.yaml`).
 const renderArgs = "--set image.repository=ghcr.io/example/rask " +
-	"--set-string frontend.oidc.sessionSecret=test-session-secret-32-chars-minimum " +
+	"--api-versions external-secrets.io/v1/ExternalSecret " +
 	"--set-string frontend.oidc.publicIssuer=http://localhost:8080/dex " +
 	"--set-string frontend.oidc.publicOrigin=http://localhost:8080 " +
 	"--set openbao.devMode=false " +
 	"--set signing.provisioned=true " +
 	"--set nats.auth.provisioned=true " +
-	"--set-string dapr.appToken=render-gate-app-token-not-a-real-credential " +
-	"--set-string age.password=render-gate-age-password-not-a-real-credential " +
-	"--set-string minio.secretKey=render-gate-store-key-not-a-real-credential " +
-	"--set-string dex.clientSecret=render-gate-client-secret-not-a-real-credential"
+	"--set dex.enabled=false"
 
 // networkPolicyGate: the NetworkPolicy layer is off by default and, when flipped on, renders the full
 // isolation set (default-deny, DNS allow, the exclusive openbao lock). Copied verbatim from ci.yml.

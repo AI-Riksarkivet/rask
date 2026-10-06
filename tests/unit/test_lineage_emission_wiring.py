@@ -39,6 +39,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.unit.chart_render import ESO_ARGS
+
 
 REPO = Path(__file__).resolve().parents[2]
 CHART = REPO / "chart"
@@ -70,7 +72,7 @@ def _render(*set_values: str) -> str:
     argv = [helm, "template", "rask", str(CHART)]
     # Since auth defaults ON (2026-08-06) every render needs identity values; the chart refuses OIDC
     # without a session secret ON PURPOSE, and that refusal has its own test in test_invariants.py.
-    argv += ["--set-string", "frontend.oidc.sessionSecret=test-session-secret-32-chars-minimum"]
+    argv += [*ESO_ARGS]
     argv += ["--set-string", "frontend.oidc.publicIssuer=http://localhost:8080/dex"]
     argv += ["--set-string", "frontend.oidc.publicOrigin=http://localhost:8080"]
     # Side-loaded images: see `rask.image` in _helpers.tpl — the chart refuses a bare

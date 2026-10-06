@@ -122,9 +122,9 @@ even when the backends are governed: each reads lineage as `frontend.serviceIden
 `LINEAGE_SERVICE_SUBJECTS`), and catalog control-plane surfaces show "sign in" with no way to sign in —
 because per-user OIDC login needs a **browser-reachable IdP**, which the in-cluster `dex.issuer` is not. Turn
 it on with `frontend.oidc.enabled=true` + `frontend.oidc.publicIssuer` (the external Dex/Keycloak/Auth0
-issuer) + `frontend.oidc.publicOrigin` (the browser origin that forms the `…/auth/callback` redirect) +
-`frontend.oidc.sessionSecret` (≥32 chars; seals the session cookie AES-256-GCM via a Secret — required,
-render fails without it).
+issuer) + `frontend.oidc.publicOrigin` (the browser origin that forms the `…/auth/callback` redirect). The session
+sealing key is the store's `frontend-session-secret`, which ESO writes into `<release>-frontend-session`
+(generated in-cluster for the dev OpenBao); it is never a value.
 
 **Cross-zone login is one origin, one cookie.** The `home` zone owns `/auth/{login,callback,logout}`; the
 sealed session cookie is set at path `/`, so because the Ingress path-routes every zone under one origin, a
@@ -154,8 +154,7 @@ Ingress controller. These steps mutate the cluster — run them yourself (or `!`
    --set ingress.enabled=true \
    --set frontend.oidc.enabled=true \
    --set frontend.oidc.publicIssuer=http://lance-ns-dex:5556/dex \
-   --set frontend.oidc.publicOrigin=http://localhost:8090 \
-   --set frontend.oidc.sessionSecret=$(head -c48 /dev/urandom | base64 | tr -d '/+=' | head -c48)
+   --set frontend.oidc.publicOrigin=http://localhost:8090
 !kubectl rollout restart deploy/lance-ns-dex deploy/lance-ns-medallion-producer
 
 # 4. drive the cross-zone login + authz (the script does its own ingress/dex/openfga port-forwards +

@@ -157,7 +157,7 @@ for zero trust."*
 | `env: valueFrom: secretKeyRef` marked ✅ "secrets from secretKeyRef" | **Not approved.** Whether an ESO-written Secret delivered this way satisfies the rule is backlog XC-002, awaiting a ruling. Default: a working secret never enters process env. |
 | `helm-secrets` / SOPS: encrypted secrets in a values file | **No.** A chart value never carries a secret, encrypted or not. A record NAMES a secret. |
 | `templates/secret.yaml` rendering a Secret from `.Values` | **No.** Credentials come from OpenBao via the Dapr secret store or ESO. |
-| a literal `value:` in a Job's env for a derived credential | **No** — `minio-scoped-users.yaml` does this today and it is readable by anyone with `get jobs`. |
+| a literal `value:` in a Job's env for a derived credential | **No** — readable by anyone with `get jobs`; `minio-scoped-users.yaml` derives each one into a memory file in-cluster ([[XC-004]]). |
 | Docker-based chart tooling | **Dagger.** `dagger call charts` runs the chart gate. |
 
 ## 8. `default` is a shared identity, and a subchart can hand it every Secret

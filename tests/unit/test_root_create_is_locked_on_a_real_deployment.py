@@ -35,13 +35,10 @@ from test_invariants import _rendered_docs  # noqa: E402
 
 LOCK = "LANCE_FGA_LOCK_ROOT_CREATE"
 
-#: A real deployment needs real credentials, or `prod-credentials.yaml` refuses the render first —
-#: which is the OTHER half of the same signal working, and would make this gate unable to render.
+#: A real deployment: the platform's sealed store, whose operator attests the keys it provisioned.
 _REAL = (
     "openbao.devMode=false",
-    "dapr.appToken=a-real-app-token",
-    "age.password=a-real-age-password",
-    "minio.secretKey=a-real-rustfs-secret",
+    "dex.enabled=false",
     "signing.provisioned=true",
     "nats.auth.provisioned=true",
 )

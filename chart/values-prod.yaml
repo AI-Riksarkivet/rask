@@ -80,9 +80,9 @@ frontend:
   # templates/auth-consistency.yaml REFUSES that combination without a sign-in flow — the prod
   # overlay could not render at all until this landed, which nothing noticed because the render
   # check itself was unreachable (its `make prod-render-check` target did not exist).
-  # The three secrets stay OUT of the repo, exactly like dapr.appToken / age.password /
-  # minio.secretKey: supply them at deploy (`--set frontend.oidc.sessionSecret=…` or a values
-  # file). frontends.yaml fails closed on each one, so a missing value cannot ship quietly.
+  # Its two secrets (the session sealing key and the client secret) come from the store, field
+  # `frontend-session-secret` and `publisher-oidc-client-secret` of `<kvMount>/<secretPath>`; publicIssuer
+  # and publicOrigin are configuration, supplied at deploy, and frontends.yaml fails closed on each.
   oidc:
     enabled: true
 podDisruptionBudget:
@@ -143,27 +143,29 @@ backups:
     snapshotClassName: "" # set your cluster's CSI VolumeSnapshotClass
 
 # --- Secrets: the SEALED, file-backed OpenBao (no fixed root token; an operator must init + unseal).
-# NOTE devMode=false is the prod signal: the render now FAILS unless age.password + minio.secretKey are
-# overridden (or externalSecrets.enabled hands the Secrets to the external-secrets operator) — the
-# well-known dev credentials must not reach a prod cluster (infra-credentials.yaml guard). -----------
+# devMode=false is the prod signal. No credential is a chart value: the operator provisions every field
+# `<kvMount>/<secretPath>` must hold (templates/openbao.yaml's header lists them) and the External Secrets
+# Operator, a prerequisite installed on its own, delivers them (templates/external-secrets.yaml). -----
 openbao:
   devMode: false
 
 # --- Ray token auth ON (gate 7 / R3): a prod render that deploys Ray (singleTenant.enabled) FAILS
 # CLOSED without this (ray-auth-token.yaml guard) — an unauthenticated Ray dashboard is remote code
 # execution. kuberay 1.6.2 (Chart.yaml) consumes the chart's <release>-ray-auth-token Secret via
-# spec.authOptions and its RayService controller authenticates its own reconcile calls. Supply the
-# token out-of-band (--set ray.auth.token=... / externalSecrets) or leave empty for the
-# lookup-pinned chart-generated one — never commit it. ------------------------------------------
+# spec.authOptions and its RayService controller authenticates its own reconcile calls. The token is
+# the store's `ray-auth-token`, which ESO writes into that Secret. ---------------------------------
 ray:
   auth:
     enabled: true
 
-# --- Dapr: the app-API token is the auth secret for the sidecar-delivered routes — MUST be overridden.
-# The placeholder below FAILS the render on purpose (dapr-app-token.yaml guard): pass a real value with
-# --set dapr.appToken=... (or your values pipeline) — never commit it to this file.
+# --- The bundled Dex is the dev IdP (its users and client secret are published in this chart, XC-025); a real
+# deployment refuses it (templates/prod-credentials.yaml) and signs in through the platform's IdP.
+dex:
+  enabled: false
+
+# --- Dapr: the app-API token, the auth secret for the sidecar-delivered routes, is the store's
+# `dapr-app-token`; ESO writes it into `<release>-dapr-app-token` for the injector.
 dapr:
-  appToken: "REPLACE-ME-with-a-real-secret" # source from OpenBao / an external secret, not this file
   # Dapr control-plane HA: multi-replica operator / placement / scheduler + Sentry (the mTLS CA that sits in
   # the sidecar cert-renewal path). kind ran single-node; in prod a Sentry node-drain/OOM eventually breaks
   # sidecar identity renewal → all service-invocation + pub/sub across the mesh stops. (prod-readiness P1)
@@ -251,8 +253,8 @@ observability:
 # age (CloudNativePG):                               # managed Postgres for the AGE graph + OpenFGA datastore
 #   enabled: false
 #   externalHost: lance-pg-rw                        # the CNPG Cluster's -rw service
-#   user: lance                                      # match the CNPG Cluster's role/password/dbs
-#   password: REPLACE-ME
+#   user: lance                                      # match the CNPG Cluster's role and dbs; the password
+#                                                    # is the store's `postgres-password`
 #   # ⚠ AGE-EXTENSION DECISION (docs/OPERATORS.md, RASK-INTEGRATION.md): a STOCK CNPG image cannot run the
 #   # lineage graph — `LOAD 'age'` / create_graph / ag_catalog need the Apache AGE extension compiled in. Run
 #   # CNPG with a CUSTOM imageName that bundles AGE (ghcr image built from the CNPG PG16 base + AGE), matching
@@ -260,12 +262,11 @@ observability:
 # openfga:                                           # the openfga subchart's datastore points at the same DB
 #   datastore:
 #     uri: postgres://lance:REPLACE-ME@lance-pg-rw:5432/openfga?sslmode=require
-# openbao (External Secrets Operator):               # externalSecrets.enabled syncs the infra Secrets FROM Vault
-#   enabled: false                                   # — see externalSecrets below; the static Secrets are skipped
-#   externalAddr: https://vault.internal:8200
-# externalSecrets:                                   # ESO owns infra-credentials + observability-s3 from Vault
-#   enabled: true                                    # (no plaintext secret ships; age.password/minio.secretKey
-#   role: lance                                      # then need NOT be set — ESO satisfies the fail-closed guard)
+# openbao (the platform's store):                   # ESO (a prerequisite) syncs every Secret a pod without a
+#   enabled: false                                   # sidecar mounts FROM it; the platform provisions the ESO
+#   externalAddr: https://vault.internal:8200        # role and every field the chart's header lists
+# externalSecrets:
+#   role: lance
 # nats (managed / NACK-provisioned JetStream):       # the in-cluster single node is a SPOF: bus down = no
 #   enabled: false                                   # lineage ingest, no cascade. NACK Stream CRs are optional
 #   externalUrl: nats://nats.internal:4222           # (the in-chart provision Job stays idempotent either way).

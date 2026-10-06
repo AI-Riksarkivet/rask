@@ -9,12 +9,8 @@
      THE INDENTATION IS 4 SPACES AND STAYS THAT WAY. It is what `rayClusterConfig:` already required,
      and YAML only demands that a mapping's keys be consistent and deeper than their parent — so the
      same block sits under a RayCluster's `spec:` unchanged. Re-indenting to 2 would have made the
-     extraction a rewrite of 250 lines whose render nobody could diff.
-
-     `$secretName` is re-derived here rather than passed, so the define is self-contained: it comes
-     from `.Values` and the release name, both of which the root context already carries. */}}
-{{- define "rask.rayClusterConfig" -}}
-{{- $secretName := .Values.existingSecret | default (printf "%s-app" (include "rask.fullname" .)) }}
+     extraction a rewrite of 250 lines whose render nobody could diff. */}}
+{{- define "rask.rayClusterConfig" }}
     rayVersion: {{ .Values.ray.rayVersion | quote }}
     {{- if .Values.ray.auth.enabled }}
     {{- /* Token auth (gate 7 / R3), the NATIVE kuberay >= 1.6.0 wiring: authOptions.secretName
@@ -119,11 +115,13 @@
                   value: "0"
                 - name: HF_HOME
                   value: /cache/hf
+                {{- if .Values.secrets.hfTokenInStore }}
                 - name: HF_TOKEN
                   valueFrom:
                     secretKeyRef:
-                      name: {{ $secretName }}
-                      key: HF_TOKEN
+                      name: {{ include "rask.fullname" . }}-hf-token
+                      key: token
+                {{- end }}
                 {{- /* THE JOB SECRETS LIVE ON THE POD, NOT IN THE SUBMISSION (docs/DECISIONS.md "The Python estate audit"
                      P0, fixed 2026-08-28). They rode `runtime_env.env_vars`, and the Ray Jobs API
                      echoes runtime_env back on `GET /api/jobs/<id>` — an unauthenticated dashboard,

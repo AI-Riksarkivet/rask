@@ -6,10 +6,9 @@ MEASURED, not guessed. `external-secrets` 0.20.x serves `external-secrets.io/v1`
     no matches for kind "ExternalSecret" in version "external-secrets.io/v1beta1"
 
 That is the estate's SANCTIONED secret-distribution path — the one thing that gets a credential to a
-pod with no Dapr sidecar (the Ray head/workers, the web zones, every runner). It is also a path
-nothing exercised: `externalSecrets.enabled` defaults false, so every render and every test skipped
-these documents, and the break was invisible until an operator turned it on in production — the worst
-possible moment to discover that secrets have no transport.
+pod with no Dapr sidecar (the Ray head/workers, the web zones, every runner). While ESO was an
+opt-in nothing exercised, the break stayed invisible until an operator turned it on in production — the
+worst possible moment to discover that secrets have no transport. It is a prerequisite now ([[XC-004]]).
 
 The gate is a STRING check on the rendered manifests rather than a live API probe, deliberately: it
 has to fail in CI, where no cluster exists. `v1beta1` is asserted absent by name because that is the
@@ -23,6 +22,8 @@ import pathlib
 import pytest
 import yaml
 from chart_yaml import FAST_LOADER
+
+from tests.unit.chart_render import ESO_ARGS
 
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
@@ -45,10 +46,7 @@ def _rendered_eso() -> list[dict]:
             str(REPO / "chart"),
             "--set",
             "image.localImages=true",
-            "--set",
-            "externalSecrets.enabled=true",
-            "--set",
-            "frontend.oidc.sessionSecret=probe-secret-that-is-long-enough-x",
+            *ESO_ARGS,
             "--set-string",
             "frontend.oidc.publicIssuer=http://localhost:8080/dex",
             "--set-string",
@@ -65,6 +63,6 @@ def _rendered_eso() -> list[dict]:
 
 def test_every_eso_document_names_the_served_api() -> None:
     docs = _rendered_eso()
-    assert docs, "externalSecrets.enabled=true rendered no ESO documents — this gate sees nothing to check"
+    assert docs, "the render has no ESO documents — this gate sees nothing to check"
     wrong = sorted({f"{d['kind']}/{d['metadata']['name']}={d['apiVersion']}" for d in docs if d["apiVersion"] != SERVED})
     assert not wrong, f"these name an apiVersion the operator does not serve, so the cluster refuses them: {wrong}"

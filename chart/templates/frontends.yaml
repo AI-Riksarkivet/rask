@@ -96,20 +96,6 @@ spec:
       app.kubernetes.io/component: {{ $comp }}
   template:
     metadata:
-      annotations:
-        {{- /* [[XC-001]]. The SESSION secret's checksum: a value taken through `secretKeyRef` is injected at
-             pod creation and never refreshed, so a rotation reaches the zones only by changing the pod
-             template. All seven consume `<release>-frontend-session` for the session-cookie sealing
-             key and the confidential Dex client secret.
-             ROTATING THE SEALING KEY LOGS EVERYONE OUT, which is exactly why the rotation must reach
-             the pods: half the fleet holding the old key and half the new is a cookie that verifies
-             on one zone and 401s on the next, and the estate has no way to tell that apart from a
-             user who is simply signed out.
-             THE VALUES, NOT THE TEMPLATE. `include`-ing this file from inside it recurses until helm
-             gives up — the Secret and the Deployments that consume it live in one file — so the hash
-             is taken over exactly the two fields the Secret carries. That is also the tighter hash:
-             an unrelated edit to this template does not roll seven zones. */}}
-        checksum/frontend-session: {{ printf "%s|%s" ($root.Values.frontend.oidc.sessionSecret | default "") ($root.Values.dex.clientSecret | default "") | sha256sum }}
       labels:
         {{- include "rask.selectorLabels" $root | nindent 8 }}
         app.kubernetes.io/component: {{ $comp }}
@@ -294,9 +280,9 @@ spec:
                Per-user OIDC login (opt-in; needs a browser-reachable IdP). Every zone reads
                the sealed session cookie (ISSUER+CLIENT_ID+REDIRECT_URI make authEnabled
                true; SESSION_SECRET decodes it); the home zone also presents the confidential
-               client secret at the token exchange. Secrets ride a Secret via secretKeyRef.
+               client secret at the token exchange. Both ride `<release>-frontend-session`, which
+               the external-secrets operator writes from the store (templates/external-secrets.yaml).
             */}}
-            {{- if not $fe.oidc.sessionSecret }}{{ fail "frontend.oidc.enabled requires frontend.oidc.sessionSecret (>=32 chars) to seal the session cookie" }}{{- end }}
             {{- if not $fe.oidc.publicIssuer }}{{ fail "frontend.oidc.enabled requires frontend.oidc.publicIssuer (a browser-reachable IdP)" }}{{- end }}
             {{- if not $fe.oidc.publicOrigin }}{{ fail "frontend.oidc.enabled requires frontend.oidc.publicOrigin (the browser-reachable origin)" }}{{- end }}
             - name: OIDC_ISSUER
@@ -406,25 +392,5 @@ spec:
   selector:
     {{- include "rask.selectorLabels" $root | nindent 4 }}
     app.kubernetes.io/component: {{ $comp }}
-{{- end }}
-{{- if and .Values.auth.enabled .Values.frontend.oidc.enabled }}
----
-{{- /*
-   The session-cookie sealing key (AES-256-GCM) + the confidential Dex client secret, shared
-   by every zone (they all read the origin-wide cookie; home also exchanges the code). A
-   Secret, not plaintext env, so the prod-render zero-plaintext check holds. Operator-provided
-   + stable (rotating it logs everyone out). Gated on auth.enabled too — the consuming OIDC env
-   only renders under auth.enabled, so there is no orphan Secret.
-*/}}
-apiVersion: v1
-kind: Secret
-metadata:
-  name: {{ .Release.Name }}-frontend-session
-  labels:
-    {{- include "rask.labels" . | nindent 4 }}
-type: Opaque
-data:
-  secret: {{ .Values.frontend.oidc.sessionSecret | b64enc | quote }}
-  clientSecret: {{ .Values.dex.clientSecret | b64enc | quote }}
 {{- end }}
 {{- end }}

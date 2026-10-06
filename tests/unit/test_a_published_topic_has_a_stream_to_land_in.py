@@ -31,6 +31,8 @@ import subprocess
 
 import pytest
 
+from tests.unit.chart_render import ESO_ARGS
+
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 CHART = REPO / "chart"
@@ -61,8 +63,7 @@ def _render() -> str:
         str(CHART),
         "--set",
         "image.localImages=true",
-        "--set-string",
-        "frontend.oidc.sessionSecret=test-session-secret-32-chars-minimum",
+        *ESO_ARGS,
         "--set-string",
         "frontend.oidc.publicIssuer=http://localhost:8080/dex",
         "--set-string",

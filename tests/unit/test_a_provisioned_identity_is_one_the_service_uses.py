@@ -31,6 +31,8 @@ import pytest
 import yaml
 from chart_yaml import FAST_LOADER
 
+from tests.unit.chart_render import ESO_ARGS
+
 
 REPO = Path(__file__).resolve().parents[2]
 CHART = REPO / "chart"
@@ -55,8 +57,7 @@ def _render(*extra: str) -> str:
         str(CHART),
         "--set",
         "image.localImages=true",
-        "--set-string",
-        "frontend.oidc.sessionSecret=test-session-secret-32-chars-minimum",
+        *ESO_ARGS,
         "--set-string",
         "frontend.oidc.publicIssuer=http://localhost:8080/dex",
         "--set-string",

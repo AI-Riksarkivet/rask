@@ -8,6 +8,24 @@ both the operator subchart and the custom resource it manages. Set all three to
 `true` for local k3s; leave them `false` for production (external deps supplied
 via `existingSecret`).
 
+## Prerequisites: the External Secrets Operator and a secret store
+
+The chart takes **no credential as a value** ([[XC-004]]). Every secret lives in a store (the chart's dev
+OpenBao, or the platform's OpenBao/Vault via `openbao.externalAddr`) and reaches a pod from it: through the
+Dapr secret store for a pod with a sidecar, and through an ExternalSecret for one without. So the
+**External Secrets Operator is a prerequisite**, platform-run like the store, and rask never installs it.
+Install it on its own release first:
+
+```bash
+helm upgrade --install external-secrets external-secrets --repo https://charts.external-secrets.io \
+  --version 2.10.0 --namespace external-secrets --create-namespace --wait
+```
+
+Without it, `helm upgrade` and `make k3s-up` fail at render time with a message naming the operator. A
+cluster-less `helm template` states the API it targets: `--api-versions external-secrets.io/v1/ExternalSecret`
+(plus `--api-versions generators.external-secrets.io/v1alpha1/Password` for the dev OpenBao, whose
+credentials ESO's Password generator creates in-cluster). A credential passed as a value is refused.
+
 ## Local deploy (k3s)
 
 ```bash

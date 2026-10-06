@@ -6,13 +6,15 @@
      devMode=false → `server -config`: sealed, file-backed on a PVC; an operator must init + unseal it and
                      set up real auth (no fixed root token, no auto-seed). This is the prod path.
 
-   THE FIELDS `secret/lance` MUST HOLD (prod / externalAddr — nothing auto-seeds them, and the chart
-   omits every plaintext env row behind the secretsViaDapr guard, so an unseeded field is a fail-closed
-   outage at first use, not a fallback): minio-secret-key, postgres-password, publisher-oidc-password,
-   publisher-oidc-client-secret (the Dex client secret), dapr-state-connection-string,
-   dapr-app-token (the app-API token, for any pod whose doors read it from here rather than from env —
-   it must equal the value the `dapr-app-token` Secret holds, since daprd stamps the header from that
-   Secret and the app compares against this field). Beside the bundle, for every identity in
+   THE FIELDS `secret/lance` MUST HOLD (prod / externalAddr — nothing auto-seeds them and no credential is
+   a chart value, so an unseeded field is a fail-closed outage at first use, not a fallback):
+   minio-access-key, minio-secret-key, postgres-password, publisher-oidc-password,
+   publisher-oidc-client-secret (the Dex client secret), dapr-state-connection-string, dapr-app-token (the
+   app-API token: ESO writes it into the `dapr-app-token` Secret daprd stamps the header from, and the doors
+   compare against this field), frontend-session-secret (the zones' cookie sealing key), ray-auth-token,
+   ray-compute-access-key, ray-compute-secret-key, and `<plane>-s3-secret-key` for each scoped identity
+   named in values.yaml `minio` (sha256("<identity>-s3-<minio-secret-key>")[:40], `lance.scopedSecretFn`, which
+   `minio-scoped-users` derives too). With `secrets.hfTokenInStore`, `hf-token` (field `token`). Beside the bundle, for every identity in
    lance.signingIdentities, two secrets: signing-public-<identity> (field `keys`) and then signing-key-<identity>
    (field `seed`), described in values.yaml `signing:`; the render refuses a non-dev store until an operator
    created them and signing.provisioned says so. Likewise nats-user-<user> per values.yaml `nats.auth` user, and
@@ -98,9 +100,8 @@ spec:
     spec:
       serviceAccountName: {{ include "lance.openbaoServiceAccount" . }}
       {{- /* The Kubernetes auth backend reviews ESO's login with THIS pod's token and reads the API
-           server's CA beside it (openbao-auth-delegator.yaml). Nothing else logs in that way, so
-           without ESO the pod holds no token. */}}
-      automountServiceAccountToken: {{ .Values.externalSecrets.enabled | default false }}
+           server's CA beside it (openbao-auth-delegator.yaml). ESO is a prerequisite, so it always holds one. */}}
+      automountServiceAccountToken: true
       {{- if .Values.security.infraContexts.enabled }}
       # Per-image uid/fsGroup from values (the audit: data/secret holders need runAsUser+fsGroup for
       # their PVCs — no blind helper reuse). Flag default OFF: flip after the kind boot check (§7a).
@@ -207,6 +208,10 @@ spec:
                  seed keeps there outlive a restart of either container. */}}
           volumeMounts:
             {{- include "lance.tmpMount" . | nindent 12 }}
+            - { name: dev-credentials, mountPath: /dev-credentials, readOnly: true }
+            {{- if .Values.secrets.hfTokenInStore }}
+            - { name: supplied-credentials, mountPath: /supplied, readOnly: true }
+            {{- end }}
             {{- if or $mint $nats }}
             - { name: signing, mountPath: /signing }
             {{- end }}
@@ -220,6 +225,10 @@ spec:
             - { name: BAO_ADDR, value: "http://127.0.0.1:8200" }
             - { name: BAO_TOKEN, value: {{ .Values.openbao.devToken | quote }} }
             - { name: HOME, value: /tmp }
+            - { name: DEV_CREDENTIALS, value: /dev-credentials }
+            {{- if .Values.secrets.hfTokenInStore }}
+            - { name: SUPPLIED_CREDENTIALS, value: /supplied }
+            {{- end }}
             {{- if or $mint $nats }}
             - { name: SIGNING_DIR, value: /signing }
             {{- end }}
@@ -335,48 +344,52 @@ spec:
               }
               {{- end }}
               {{- $baseFixture := include "lance.baseFixture" . | fromJson }}
-              {{- if $baseFixture }}
-              root={{ .Values.minio.secretKey | squote }}
-              {{- include "lance.baseFixtureSecretFn" . | nindent 14 }}
-              {{- end }}
+              {{- /* EVERY GENERATED VALUE REACHES THE STORE AS `@file`, never argv, output or the render ([[XC-004]]):
+                     the dev credentials from the ESO-generated Secret, and what is derived from them from files
+                     written here. The two Dex values are the bundled IdP's own (dex.yaml carries them, XC-025). */}}
+              G=$DEV_CREDENTIALS
+              {{- include "lance.scopedSecretFn" . | nindent 14 }}
+              {{- /* THE MOUNTED CREDENTIALS ARE READ ON EVERY SEED, and a change to them is a reason to seed: kubelet
+                     refreshes a mounted Secret in place, so rotating a key of `<release>-dev-credentials` (or the
+                     operator's hf-token) reaches the store through the loop below without replacing this pod, whose
+                     replacement without a surge would re-mint the signing pairs and the NATS root (OPERATORS.md 6-8). */}}
+              fingerprint() {
+                cat "$G/minio-secret-key" "$G/postgres-password" "$G/dapr-app-token" "$G/ray-auth-token" "$G/frontend-session-secret" \
+                  {{- if .Values.secrets.hfTokenInStore }} "$SUPPLIED_CREDENTIALS/hf-token"{{ end }} 2>/dev/null | sha256sum | cut -d' ' -f1
+              }
+              derive() {
+                for k in minio-secret-key postgres-password dapr-app-token ray-auth-token frontend-session-secret; do
+                  [ -s "$G/$k" ] || { echo "the generated dev credential $k is missing, so this store stays not Ready" >&2; exit 1; }
+                done
+                root=$(cat "$G/minio-secret-key")
+                (umask 077; printf 'postgres://%s:%s@%s:%s/%s?sslmode=disable' {{ .Values.age.user | squote }} "$(cat "$G/postgres-password")" {{ include "lance.ageConnectHost" . | squote }} {{ .Values.age.port | squote }} {{ .Values.age.stateDb | squote }} > "$HOME/seed/dapr-state-dsn")
+                {{- range $id := list .Values.minio.rayComputeAccessKey .Values.minio.maintenanceAccessKey .Values.minio.medallionAccessKey .Values.minio.catalogAccessKey .Values.minio.lineageAccessKey .Values.minio.viewerAccessKey | compact | uniq }}
+                scoped_secret {{ $id }} "$HOME/seed/scoped-{{ $id }}"
+                {{- end }}
+                {{- range $ref, $_ := $baseFixture }}
+                scoped_secret {{ $ref }} "$HOME/seed/base-{{ $ref }}"
+                {{- end }}
+              }
               seed() {
-              bao kv put secret/lance minio-secret-key={{ .Values.minio.secretKey }} \
-                minio-access-key={{ .Values.minio.accessKey }} postgres-password={{ .Values.age.password }} \
+              seen=$(fingerprint)
+              derive
+              bao kv put secret/lance minio-secret-key=@"$G/minio-secret-key" \
+                minio-access-key={{ .Values.minio.accessKey }} postgres-password=@"$G/postgres-password" \
                 publisher-oidc-password={{ .Values.dex.publisher.password }} \
                 publisher-oidc-client-secret={{ .Values.dex.clientSecret }} \
-                dapr-state-connection-string="postgres://{{ .Values.age.user }}:{{ .Values.age.password }}@{{ include "lance.ageConnectHost" . }}:{{ .Values.age.port }}/{{ .Values.age.stateDb }}?sslmode=disable" \
-                {{- /* THE APP-API-TOKEN, so a pod can authenticate its Dapr doors without the value
-                       passing through its environment. `dapr.io/app-token-secret` gives the SIDECAR the
-                       token; the APP has been getting it as a `secretKeyRef` env row, which is a
-                       Kubernetes Secret injected as an environment variable — the path the estate's
-                       secrets rule names and refuses. A pod with a sidecar can read this bundle, so
-                       `RASK_APP_TOKEN_FROM_STORE` points its doors here instead.
-                       SAME VALUE as the Secret `dapr-app-token.yaml` renders, and it has to be: daprd
-                       stamps the header from that Secret, and the app compares against this field. Two
-                       sources for one comparison is why they are both `.Values.dapr.appToken` rather
-                       than independently generated. */}}
-                dapr-app-token={{ .Values.dapr.appToken }} \
-                {{- /* THE COMPUTE PLANE'S SCOPED PAIR. `external-secrets.yaml` READS these two
-                       properties out of this secret, and until 2026-09-09 nothing WROTE them — they
-                       existed only in `infra-credentials.yaml`, which renders on the ESO-OFF path.
-                       So with `externalSecrets.enabled` the ExternalSecret asked OpenBao for two
-                       properties that were never seeded, ESO failed the WHOLE object ("could not get
-                       secret data from provider"), and `rask-infra-credentials` was never created —
-                       taking every pod that mounts it with it: the AGE consumers, the OpenFGA migrate
-                       Job, the bucket-init Job, the OTel Collector and all seven web zones, each
-                       stuck in CreateContainerConfigError. A reader without a writer is not a partial
-                       control, it is an outage, because ESO syncs a Secret whole or not at all.
-                       Same expressions as the ESO-OFF path so the two agree by construction. */}}
+                dapr-state-connection-string=@"$HOME/seed/dapr-state-dsn" \
+                {{- /* THE APP-API-TOKEN, so a pod can authenticate its Dapr doors without the value passing
+                       through its environment (`RASK_APP_TOKEN_FROM_STORE`). ESO writes the same field into the
+                       `dapr-app-token` Secret daprd stamps the header from, so the two agree by construction. */}}
+                dapr-app-token=@"$G/dapr-app-token" ray-auth-token=@"$G/ray-auth-token" \
+                frontend-session-secret=@"$G/frontend-session-secret" \
+                {{- /* THE COMPUTE PLANE'S SCOPED PAIR, which `external-secrets.yaml` READS into
+                       `infra-credentials`. ESO syncs a Secret whole or not at all, so a property it reads and
+                       nothing writes takes every pod mounting that Secret down (measured 2026-09-09: the
+                       AGE consumers, the OpenFGA migrate Job, the bucket-init Job, the OTel Collector and
+                       all seven web zones in CreateContainerConfigError). */}}
                 ray-compute-access-key={{ .Values.minio.rayComputeAccessKey | default .Values.minio.accessKey }} \
-                {{- /* DERIVED like its four siblings below, never `| default minio.secretKey`. That
-                     fallback published the store's ROOT credential under a scoped identity's name:
-                     `rayComputeSecretKey` ships empty, so the default always won. Measured live
-                     2026-09-11 by hash — `ray-compute-secret-key`, `ray-compute-access-key` and
-                     `minio-secret-key` were byte-identical in `rask-infra-credentials`.
-                     `minio-scoped-users.yaml` CREATES `rask-ray-compute` with the derived secret, so
-                     the published pair could never match: a consumer either signed as root, defeating
-                     the scoping entirely, or failed SignatureDoesNotMatch. */}}
-                ray-compute-secret-key={{ include "lance.scopedStorageSecret" (list $ $.Values.minio.rayComputeAccessKey $.Values.minio.rayComputeSecretKey) }} \
+                ray-compute-secret-key=@"{{ ternary (printf "$HOME/seed/scoped-%s" .Values.minio.rayComputeAccessKey) "$G/minio-secret-key" (not (not .Values.minio.rayComputeAccessKey)) }}" \
                 {{- /* THE MAINTENANCE PLANE'S SCOPED S3 SECRET, when one is provisioned. Its own field
                        rather than a second value on `minio-secret-key`: that field IS the tenant root's
                        secret and other services read it, so overwriting it would repoint the whole
@@ -385,7 +398,7 @@ spec:
                        field the service is told to read and nothing writes is a fail-closed boot, since
                        `fetch_required_secrets` raises rather than degrading. */}}
                 {{- if $.Values.minio.maintenanceAccessKey }}
-                maintenance-s3-secret-key={{ include "lance.scopedStorageSecret" (list $ $.Values.minio.maintenanceAccessKey $.Values.minio.maintenanceSecretKey) }} \
+                maintenance-s3-secret-key=@"$HOME/seed/scoped-{{ $.Values.minio.maintenanceAccessKey }}" \
                 {{- end }}
                 {{- /* THE MEDALLION PLANE'S SCOPED S3 SECRET, on the same terms as maintenance's: its own
                        field rather than a second value on `minio-secret-key`, which IS the tenant root's
@@ -394,7 +407,7 @@ spec:
                        read and nothing writes is a fail-closed boot, since `fetch_required_secrets`
                        raises rather than degrading. */}}
                 {{- if $.Values.minio.medallionAccessKey }}
-                medallion-s3-secret-key={{ include "lance.scopedStorageSecret" (list $ $.Values.minio.medallionAccessKey $.Values.minio.medallionSecretKey) }} \
+                medallion-s3-secret-key=@"$HOME/seed/scoped-{{ $.Values.minio.medallionAccessKey }}" \
                 {{- end }}
                 {{- /* THE CATALOG'S OWN GATE, matching the Deployment's own `$catalogScoped` test
                        (`services.yaml:129`) exactly as the medallion block above matches `$medScoped`
@@ -408,7 +421,7 @@ spec:
                        only lineage's and maintenance's fields. One service's identity could take
                        another service down at boot. */}}
                 {{- if $.Values.minio.catalogAccessKey }}
-                catalog-s3-secret-key={{ include "lance.scopedStorageSecret" (list $ $.Values.minio.catalogAccessKey $.Values.minio.catalogSecretKey) }} \
+                catalog-s3-secret-key=@"$HOME/seed/scoped-{{ $.Values.minio.catalogAccessKey }}" \
                 {{- end }}
                 {{- /* THE LINEAGE PLANE'S SCOPED S3 SECRET, on the same terms as the two above: its own
                        field rather than a second value on `minio-secret-key`, which IS the tenant root's
@@ -417,7 +430,7 @@ spec:
                        nothing writes is a fail-closed boot, since `fetch_required_secrets` raises rather
                        than degrading. */}}
                 {{- if $.Values.minio.lineageAccessKey }}
-                lineage-s3-secret-key={{ include "lance.scopedStorageSecret" (list $ $.Values.minio.lineageAccessKey $.Values.minio.lineageSecretKey) }} \
+                lineage-s3-secret-key=@"$HOME/seed/scoped-{{ $.Values.minio.lineageAccessKey }}" \
                 {{- end }}
 
               echo "seeded secret/lance into OpenBao"
@@ -441,25 +454,29 @@ spec:
                      in its environment on a pod that HAS a Dapr sidecar. */}}
               bao kv put secret/viewer-s3 \
                 access_key={{ $.Values.minio.viewerAccessKey }} \
-                secret_key={{ include "lance.scopedStorageSecret" (list $ $.Values.minio.viewerAccessKey $.Values.minio.viewerSecretKey) }}
+                secret_key=@"$HOME/seed/scoped-{{ $.Values.minio.viewerAccessKey }}" >/dev/null
               echo "seeded secret/viewer-s3 into OpenBao"
               {{- end }}
               {{- /* values.yaml `catalog.multibase.devSeed`: each data base's credential, under the name its reference gives. */}}
               {{- range $ref, $_ := $baseFixture }}
-              base_secret {{ $ref }} "$HOME/seed/base-{{ $ref }}"
               bao kv put secret/{{ $ref }} aws_access_key_id={{ $ref }} {{ include "lance.catalogSecretField" $ }}=@"$HOME/seed/base-{{ $ref }}" >/dev/null
               echo "seeded secret/{{ $ref }} into OpenBao"
               {{- end }}
-
-              {{- if $.Values.externalSecrets.enabled }}
+              {{- if $.Values.secrets.hfTokenInStore }}
+              if [ -s "$SUPPLIED_CREDENTIALS/hf-token" ]; then
+                bao kv put secret/hf-token token=@"$SUPPLIED_CREDENTIALS/hf-token" >/dev/null
+                echo "seeded secret/hf-token into OpenBao"
+              else
+                echo "secrets.hfTokenInStore is set and no supplied hf-token is mounted: secret/hf-token stays absent" >&2
+              fi
+              {{- end }}
               {{- /* THE AUTH HALF ESO NEEDS, and without it the KV half above is unreachable.
 
                      `external-secrets.yaml` renders a SecretStore that authenticates to OpenBao with
                      `auth.kubernetes` at mountPath `{{ $.Values.externalSecrets.kubernetesAuthPath }}`
                      assuming role `{{ $.Values.externalSecrets.role }}`. Measured 2026-09-08: the
-                     operator ran 3/3 with ZERO SecretStores in the cluster, and nothing in this repo
-                     enabled that auth backend or created that role — so flipping
-                     `externalSecrets.enabled` alone leaves every ExternalSecret in SecretSyncedError,
+                     operator ran 3/3 with ZERO SecretStores in the cluster while nothing enabled that
+                     auth backend or created that role, so every ExternalSecret sat in SecretSyncedError,
                      which reads as a broken deploy rather than a missing prerequisite.
 
                      IT BELONGS IN THE SEED because this is the one place that already holds the root
@@ -483,20 +500,26 @@ spec:
               {{- range $files := include "lance.natsFiles" $ | fromJson }}{{- range $files }}
               path "{{ $.Values.externalSecrets.kvMount }}/data/{{ . }}" { capabilities = ["read"] }
               {{- end }}{{- end }}
+              {{- if $.Values.secrets.hfTokenInStore }}
+              path "{{ $.Values.externalSecrets.kvMount }}/data/hf-token" { capabilities = ["read"] }
+              {{- end }}
               POLICY
               bao write auth/{{ $.Values.externalSecrets.kubernetesAuthPath }}/role/{{ $.Values.externalSecrets.role }} \
                 bound_service_account_names={{ $.Values.externalSecrets.serviceAccount | default "external-secrets" }} \
                 bound_service_account_namespaces={{ $.Values.externalSecrets.namespace | default "external-secrets" }} \
                 policies={{ $.Values.externalSecrets.role }} ttl=1h
               echo "provisioned kubernetes auth + role {{ $.Values.externalSecrets.role }} for ESO"
-              {{- end }}
               bao kv put secret/openbao-seeded pod="$HOSTNAME" >/dev/null
+              (umask 077; printf '%s' "$seen" > "$HOME/seed/fingerprint")
               echo "seeded this pod's store"
               }
               until bao status >/dev/null 2>&1; do echo wait-openbao; sleep 1; done
               seed
               while sleep 5; do
-                out=$(bao kv get -field=pod secret/openbao-seeded 2>&1) && continue
+                if out=$(bao kv get -field=pod secret/openbao-seeded 2>&1); then
+                  [ "$(fingerprint)" = "$(cat "$HOME/seed/fingerprint")" ] && continue
+                  echo "the mounted credentials changed; seeding again"; seed; continue
+                fi
                 case "$out" in
                   "No value found at"*) echo "this pod's store lost its seed; seeding it again"; seed ;;
                 esac
@@ -505,6 +528,12 @@ spec:
       volumes:
         {{- if .Values.openbao.devMode }}
         {{- include "lance.tmpVolume" . | nindent 8 }}
+        {{- /* GENERATED IN THE CLUSTER by ESO (external-secrets.yaml); the pod starts once it exists. */}}
+        - { name: dev-credentials, secret: { secretName: {{ include "lance.fullname" . }}-dev-credentials, defaultMode: 0400 } }
+        {{- if .Values.secrets.hfTokenInStore }}
+        {{- /* THE OPERATOR'S BOOTSTRAP for third-party credentials (`make k3s-up` writes it from HF_TOKEN). */}}
+        - { name: supplied-credentials, secret: { secretName: {{ include "lance.fullname" . }}-supplied-credentials, optional: true, defaultMode: 0400 } }
+        {{- end }}
         {{- if or $mint $nats }}
         - { name: signing, emptyDir: { medium: Memory, sizeLimit: 1Mi } }
         {{- end }}

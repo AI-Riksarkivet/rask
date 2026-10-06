@@ -70,17 +70,6 @@ spec:
       app.kubernetes.io/instance: {{ .Release.Name }}
   template:
     metadata:
-      annotations:
-        {{- /*
-           A ROTATION MUST REACH THE POD THAT HOLDS THE SECRET. The root credential arrives by
-           `secretKeyRef`, which k8s resolves once at pod start — so changing it in the Secret leaves the
-           running server on the old value while every client is reprovisioned with the new one, and the
-           store answers SignatureDoesNotMatch with nothing naming the cause. The checksum makes the
-           pod template change when the Secret does, so helm rolls it. Pinned by
-           tests/unit/test_a_rotated_secret_reaches_the_pods_that_hold_it.py, which caught this template
-           without it.
-        */}}
-        checksum/infra-credentials: {{ include (print $.Template.BasePath "/infra-credentials.yaml") $ | sha256sum }}
       labels:
         {{- include "lance.labels" . | nindent 8 }}
         app.kubernetes.io/component: minio
@@ -129,12 +118,11 @@ spec:
             {{- /*
                secretKeyRef, never `value:` — a literal here is readable in `kubectl get statefulset
                -o yaml`, `kubectl describe` and `helm get manifest`, which is the "same secret still
-               recoverable from another surface" finding infra-credentials.yaml exists for.
+               recoverable from another surface" finding.
 
-               It goes to the INFRA tier rather than through the Dapr secret store like the fleet's
-               credentials, and that is not a shortcut: the consumer is the object store itself, a
-               third-party server with no daprd sidecar — the exact case infra-credentials.yaml's own
-               header enumerates.
+               It comes from `<release>-infra-credentials`, which the external-secrets operator writes
+               from the store, rather than through the Dapr secret store like the fleet's credentials: the
+               consumer is the object store itself, a third-party server with no daprd sidecar.
             */}}
             - name: MINIO_ROOT_USER
               valueFrom:

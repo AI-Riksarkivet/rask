@@ -33,11 +33,13 @@ import pytest
 import yaml
 from chart_yaml import FAST_LOADER
 
+from tests.unit.chart_render import ESO_ARGS
+
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 
 _OIDC_ARGS = [
-    "--set-string", "frontend.oidc.sessionSecret=ci-dummy-session-secret-at-least-32-chars",
+    *ESO_ARGS,
     "--set-string", "frontend.oidc.publicIssuer=https://auth.example.com/dex",
     "--set-string", "frontend.oidc.publicOrigin=https://lance.example.com",
 ]  # fmt: skip
@@ -46,9 +48,6 @@ _OIDC_ARGS = [
 _PROD_ARGS = [
     "--set", "image.catalog.tag=v0",
     "--set", "frontend.image.tag=v0",
-    "--set", "dapr.appToken=ci-dummy-token-0000000000",
-    "--set", "age.password=ci-dummy-pw",
-    "--set", "minio.secretKey=ci-dummy-key",
     "--set", "signing.provisioned=true",
     "--set", "nats.auth.provisioned=true",
     "--set", "backups.volumeSnapshot.snapshotClassName=csi-snapclass",

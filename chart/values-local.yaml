@@ -148,9 +148,9 @@ docs:
 # nothing going red. The same class as the corpus PVC this file's header describes, and worse: the
 # symptom is a credential quietly widening rather than a 500.
 #
-# Only the NAME is needed. Each secret is derived from it plus `minio.secretKey`
-# (`lance.scopedStorageSecret`), so declaring the identities costs no secret in git, and the one
-# string reaches the pod env, the OpenBao seed and the `mc` user creation together — a scoped access
+# Only the NAME is needed. Each secret is derived in-cluster from it plus the store's root secret
+# (`lance.scopedSecretFn`), so declaring the identities costs no secret anywhere, and the one
+# string reaches the OpenBao seed and the `mc` user creation together — a scoped access
 # key beside any other secret is `SignatureDoesNotMatch` on every call.
 #
 # `minio-scoped-users` provisions each policy and user as a post-upgrade hook, and naming an
@@ -167,23 +167,6 @@ docs:
 minio:
   maintenanceAccessKey: rask-maintenance
   medallionAccessKey: rask-medallion
-
-# EXTERNAL SECRETS OPERATOR — the sanctioned path for a pod with NO Dapr sidecar (the Ray lane, the
-# seven web zones, the runners), which cannot call `/v1.0/secrets/*` and therefore cannot use the
-# store the rest of the fleet uses. Owner ruling 2026-09-08: "Never secret through envs. Either from
-# ESO, secret store dapr and STS for zero trust."
-#
-# It lives HERE rather than as a `--set` for the reason this whole file exists: a flag omitted from
-# one later upgrade reverts the setting silently, and a credential path that reverts silently is
-# worse than one that was never enabled.
-#
-# Turning it on also makes the OpenBao seed provision ESO's AUTH half — the kubernetes auth
-# backend, a policy granting READ on exactly `<kvMount>/data/<secretPath>`, and the role bound to the
-# operator's ServiceAccount. Measured 2026-09-08: with only the KV half seeded the operator ran 3/3
-# with ZERO SecretStores and every ExternalSecret would have sat in SecretSyncedError, so the toggle
-# alone was never sufficient.
-externalSecrets:
-  enabled: true
 
 # THE CONTROL ROOT'S SCHEDULED BACKUP ([[LH-110]]), on here so the lane is exercised rather than only
 # rendered. `dest` is left empty deliberately for a dev estate: that writes `_backups/control/` inside

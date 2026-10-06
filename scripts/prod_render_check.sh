@@ -2,9 +2,9 @@
 # Render the PRODUCTION overlay (values-prod.yaml) and assert its HA + security switches are actually ON.
 # Nothing else in CI renders the prod overlay — the e2e jobs deploy the DEFAULT (kind) values — so without
 # this a regression that silently ships the dev posture in prod (NetworkPolicy off, OpenFGA/Dapr single-
-# replica) sails through green. Dummy values satisfy the render-FAILS-CLOSED prod-secret guards (appToken /
-# age pw / rustfs key); supplying them ALSO proves the guards don't block a legitimate
-# prod render. Run: `make prod-render-check` (or in CI). Requires helm + the vendored chart/charts/*.tgz.
+# replica) sails through green. No credential is passed: the chart takes none as a value ([[XC-004]]), and
+# a prod render that needed one would fail here. Run: `make prod-render-check` (or in CI). Requires helm +
+# the vendored chart/charts/*.tgz.
 set -euo pipefail
 
 CHART="${CHART:-chart}"
@@ -16,18 +16,18 @@ CHART="${CHART:-chart}"
 # One array, used by all four helm calls below: adding a fifth without them would fail the whole script
 # at that line with no message (set -e + command substitution), which is how this reached CI red.
 # Dummies on purpose: they satisfy the fail-closed guards and thereby also prove the guards do not block
-# a legitimate prod render — the same reason the appToken/age/minio dummies exist.
+# a legitimate prod render. The External Secrets Operator is a prerequisite the render checks through
+# `.Capabilities`, so a cluster-less render names its API.
 #
 # image.repository joined this array on 2026-08-22. It became `required` in 3c909e0a (2026-08-04,
 # "registry required") and NOTHING here supplied it, so all four renders died on the guard and the whole
 # script exited 1 — every run, for 923 commits. It was invisible because `make prod-render-check` is
 # step 6 of .dagger/charts.go's chain and step 2 had been failing on the SAME guard since the same
 # commit: the gate never reached the script that would have reported it. values-prod.yaml deliberately
-# does NOT pin a registry (the deployer supplies theirs), so the check must, exactly as it does for the
-# appToken and the age/minio credentials. signing.provisioned is the operator's attestation that the event-signing
+# does NOT pin a registry (the deployer supplies theirs), so the check must. signing.provisioned is the operator's attestation that the event-signing
 # keys exist in the sealed store (templates/signing-provisioned.yaml refuses a non-dev store without it), and
 # nats.auth.provisioned the same for the NATS users and route credential (templates/nats-provisioned.yaml).
-COMMON=(--set frontend.oidc.sessionSecret=ci-dummy-session-secret-at-least-32-chars
+COMMON=(--api-versions external-secrets.io/v1/ExternalSecret
         --set frontend.oidc.publicIssuer=https://auth.example.com/dex
         --set frontend.oidc.publicOrigin=https://lance.example.com
         --set image.repository=ghcr.io/example/rask
@@ -38,8 +38,6 @@ trap 'rm -f "$OUT"' EXIT
 
 helm template rask "$CHART" -f "$CHART/values-prod.yaml" \
   --set image.catalog.tag=v0 --set frontend.image.tag=v0 \
-  --set dapr.appToken=ci-dummy-token-0000000000 \
-  --set age.password=ci-dummy-pw --set minio.secretKey=ci-dummy-key \
   --set backups.volumeSnapshot.snapshotClassName=csi-snapclass \
   --set ingress.host=lance.example.com "${COMMON[@]}" > "$OUT"
 
@@ -174,8 +172,7 @@ peak=$((cap * body + headroom))
 # DNS survives anywhere (app env OR the greptime config), and that setting ONLY the minio half leaks.
 EXT_S3=https://s3.ext.example.com
 atomic=$(helm template rask "$CHART" -f "$CHART/values-prod.yaml" \
-  --set image.catalog.tag=v0 --set frontend.image.tag=v0 --set dapr.appToken=ci-dummy-token-0000000000 \
-  --set age.password=ci-dummy-pw --set minio.secretKey=ci-dummy-key \
+  --set image.catalog.tag=v0 --set frontend.image.tag=v0 \
   --set backups.volumeSnapshot.snapshotClassName=csi-snapclass --set ingress.host=lance.example.com \
   --set minio.enabled=false --set minio.externalEndpoint="$EXT_S3" \
   --set greptimedb-standalone.objectStorage.s3.endpoint="$EXT_S3" "${COMMON[@]}" 2>/dev/null)
@@ -184,25 +181,18 @@ grep -q "rask-minio:9000" <<<"$atomic" \
 # Negative: minio externalized but the greptime companion OMITTED must still show the leak (proves the pairing
 # is load-bearing, i.e. the guard above isn't vacuous).
 leak=$(helm template rask "$CHART" -f "$CHART/values-prod.yaml" \
-  --set image.catalog.tag=v0 --set frontend.image.tag=v0 --set dapr.appToken=ci-dummy-token-0000000000 \
-  --set age.password=ci-dummy-pw --set minio.secretKey=ci-dummy-key \
+  --set image.catalog.tag=v0 --set frontend.image.tag=v0 \
   --set backups.volumeSnapshot.snapshotClassName=csi-snapclass --set ingress.host=lance.example.com \
   --set minio.enabled=false --set minio.externalEndpoint="$EXT_S3" "${COMMON[@]}" 2>/dev/null)
 grep -q "rask-minio:9000" <<<"$leak" \
   || fail "the store-externalize coherence guard is vacuous (expected the greptime leak without the companion override)"
 
-# 11. External Secrets Operator path renders (operator-handoff audit): externalSecrets.enabled=true must
-# render the SecretStore + ExternalSecret CRs, SKIP the static infra-credentials + observability-s3 Secrets,
-# and SATISFY the fail-closed prod-secret guard WITHOUT age.password/minio.secretKey (ESO supplies them).
-eso=$(helm template rask "$CHART" -f "$CHART/values-prod.yaml" \
-  --set image.catalog.tag=v0 --set frontend.image.tag=v0 --set dapr.appToken=ci-dummy-token-0000000000 \
-  --set backups.volumeSnapshot.snapshotClassName=csi-snapclass --set ingress.host=lance.example.com \
-  --set externalSecrets.enabled=true "${COMMON[@]}" 2>/dev/null) \
-  || fail "prod render with externalSecrets.enabled=true FAILED (age.password/minio.secretKey should not be required)"
-grep -q "kind: SecretStore" <<<"$eso" || fail "ESO path must render a SecretStore"
-grep -q "kind: ExternalSecret" <<<"$eso" || fail "ESO path must render the ExternalSecret CRs"
-grep -A2 "name: rask-infra-credentials" <<<"$eso" | grep -q "stringData:" \
-  && fail "ESO path must SKIP the static infra-credentials Secret (external-secrets owns it)"
+# 11. The prod render takes every credential from the store through ESO: the SecretStore and the
+# ExternalSecrets render, no Secret the chart renders carries a credential key, and nothing is generated
+# (the Password generator is the dev OpenBao's alone).
+grep -q "kind: SecretStore" "$OUT" || fail "prod must render the SecretStore ESO syncs from"
+grep -q "name: rask-infra-credentials" "$OUT" || fail "prod must render the infra-credentials ExternalSecret"
+grep -q "kind: Password" "$OUT" && fail "prod must not generate credentials (the Password generator is the dev OpenBao's)"
 
 # 12. Every Job/CronJob POD TEMPLATE carries a component label (the P4 landmine, audit 2026-07-24: the
 # unlabeled minio-mkbucket hook matched no minio-ingress client and every prod install wedged before a

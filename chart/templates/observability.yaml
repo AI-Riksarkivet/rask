@@ -3,24 +3,6 @@
 {{- range (.Values.storage).stores }}{{ if eq (get . "role") "observability" }}{{ $_ := set $got (printf "storage.stores[%s].bucket" .name) .bucket }}{{ end }}{{ end }}
 {{- range $k, $v := $got }}{{ if ne (toString $v) $.Values.observability.bucket }}{{ fail (printf "%s (%v) must equal observability.bucket (%s)" $k $v $.Values.observability.bucket) }}{{ end }}{{ end }}
 {{- end }}
-{{- if and .Values.observability.enabled (not .Values.externalSecrets.enabled) }}
-{{- /*
-   GreptimeDB object-storage credentials — the greptimedb-standalone subchart reads these env-var keys
-   from `credentials.existingSecretName`. Points GreptimeDB at the in-cluster MinIO S3 (same keys).
-   Skipped when externalSecrets.enabled: the external-secrets operator then OWNS this same-named Secret,
-   syncing the store's root secret FROM Vault (templates/external-secrets.yaml) — same two-tier rule as
-   infra-credentials, so the "0 plaintext secrets on the prod-secure path" guarantee holds here too.
-*/}}
-apiVersion: v1
-kind: Secret
-metadata:
-  name: {{ .Release.Name }}-observability-s3
-  labels: {{- include "lance.labels" . | nindent 4 }}
-type: Opaque
-stringData:
-  GREPTIMEDB_STANDALONE__STORAGE__ACCESS_KEY_ID: {{ .Values.minio.accessKey | quote }}
-  GREPTIMEDB_STANDALONE__STORAGE__SECRET_ACCESS_KEY: {{ .Values.minio.secretKey | quote }}
-{{- end }}
 ---
 {{- if .Values.dapr.enabled }}
 {{- /*

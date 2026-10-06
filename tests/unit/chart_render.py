@@ -29,12 +29,19 @@ from tests.unit.chart_yaml import FAST_LOADER
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 
-#: The fail-closed OIDC guards' dummy inputs. Without them `frontends.yaml` refuses to render at all,
-#: so every caller needs them and none of them is testing OIDC.
+#: The APIs of the External Secrets Operator, a prerequisite the chart checks through `.Capabilities`
+#: ([[XC-004]]): a cluster-less render names the cluster it targets. Without them every render refuses.
+ESO_ARGS: tuple[str, ...] = (
+    "--api-versions", "external-secrets.io/v1/ExternalSecret",
+    "--api-versions", "generators.external-secrets.io/v1alpha1/Password",
+)  # fmt: skip
+
+#: The fail-closed OIDC guards' dummy inputs, plus the ESO APIs. Without them `frontends.yaml` refuses
+#: to render at all, so every caller needs them and none of them is testing OIDC.
 OIDC_ARGS: tuple[str, ...] = (
-    "--set-string", "frontend.oidc.sessionSecret=ci-dummy-session-secret-at-least-32-chars",
     "--set-string", "frontend.oidc.publicIssuer=https://auth.example.com/dex",
     "--set-string", "frontend.oidc.publicOrigin=https://lance.example.com",
+    *ESO_ARGS,
 )  # fmt: skip
 
 #: The local-development overlay: side-loaded images, MinIO on.

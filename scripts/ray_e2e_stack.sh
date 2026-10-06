@@ -87,6 +87,12 @@ kind get clusters 2>/dev/null | grep -qx "$CLUSTER" || kind create cluster --nam
 # anything later repoints it.
 kind export kubeconfig --name "$CLUSTER"
 export RASK_EXPECT_CONTEXT="kind-$CLUSTER"
+# THE EXTERNAL SECRETS OPERATOR, a platform prerequisite the chart refuses to render without ([[XC-004]]).
+# This throwaway cluster stands in for the platform, so the lane installs it on its own release, pinned
+# to the version docs/architecture/deployment.md names, before rask; rask itself never installs it.
+"$(dirname "$0")/helm.sh" upgrade --install external-secrets external-secrets \
+  --repo https://charts.external-secrets.io --version 2.10.0 \
+  --namespace external-secrets --create-namespace --wait --timeout 300s
 # EVERY https REPOSITORY `chart/Chart.yaml` DECLARES, derived rather than listed. `helm dependency
 # build` needs each one even when the component is disabled, and a hand-written list is a second copy
 # of the chart's own dependency set: measured 2026-09-24, it named five of the nine, so the lane died
@@ -134,6 +140,7 @@ HELM_SET=(
 # this loop needs to know neither rule. `--tag` comes from $CATALOG_IMG so one variable decides the
 # tag this script builds and the tag it looks for.
 SIDE_LOADED="$("$(dirname "$0")/helm.sh" template "$RELEASE" ./chart "${HELM_SET[@]}" \
+  --api-versions external-secrets.io/v1/ExternalSecret --api-versions generators.external-secrets.io/v1alpha1/Password \
   | uv run python "$(dirname "$0")/side_loaded_images.py" --tag "$TAG")"
 # AN EXPLICIT CHECK, because an empty set is not an empty amount of work — it means this script is
 # about to deploy images it never built, and every pod that needs one sits in ImagePullBackOff.

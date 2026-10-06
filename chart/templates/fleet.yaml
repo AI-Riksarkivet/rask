@@ -255,8 +255,8 @@ spec:
             {{- if and $root.Values.dapr.sidecars $needsAppToken }}
             {{- /* One secret for both arms, so the whole plane presents ONE service identity — the same
                  `{{ .Release.Name }}-dapr-app-token` the medallion producer, the stage runners and the
-                 maintenance cron read. It cannot dangle: `dapr.sidecars` is what renders that Secret
-                 (dapr-app-token.yaml's gating invariant) and it also gates this reference.
+                 maintenance cron read. It cannot dangle: `dapr.sidecars` is what renders that Secret's
+                 ExternalSecret (external-secrets.yaml) and it also gates this reference.
 
                  Worth keeping from the ingest incident, because it recurred here in mirror image: the
                  comment on the USER door below PREDICTED the 403 outcome in as many words, and the two

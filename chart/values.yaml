@@ -61,18 +61,22 @@ storage:
 singleTenant:
   enabled: false
 
-# Optional override: if set, this Secret is used verbatim instead of the
-# chart-generated one (prod with external deps). Empty = chart generates creds.
+# Optional override: if set, this Secret is used verbatim instead of the chart's `<release>-app`
+# (prod with external deps). It carries configuration (the object store's access key ID and endpoint),
+# never a credential.
 existingSecret: ""
 
-# Random creds are generated once on first install and pinned across upgrades
-# via `lookup`. Override here to force a value.
-# The OBJECT-STORE credential pair is NOT here (lance-ns-merge P4 store unification): it is
-# minio.accessKey/secretKey — one pair for the Tenant credsSecret, the fleet AWS_*, and the lakehouse
-# apps; `make k3s-up` injects it from .env AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY.
-# (postgresPassword died at P7a with the rask app-DB Cluster; the AGE Postgres creds live under `age`.)
+# NO CREDENTIAL IS A CHART VALUE ([[XC-004]]). Every secret the estate uses lives in the secret store and
+# reaches a pod from it: the Dapr secret store for a sidecar, an ExternalSecret for a pod without one.
+# The dev OpenBao's are generated in-cluster (templates/external-secrets.yaml, `<release>-dev-credentials`);
+# a real deployment's are provisioned in the platform's store by its operator, and the render refuses a
+# credential passed as a value (templates/prod-credentials.yaml).
 secrets:
-  hfToken: ""            # HuggingFace token for the gated TrOCR model; from .env HF_TOKEN
+  # THE HUGGING FACE TOKEN is a third party's credential, so nothing here can generate it. The operator
+  # writes it to the store at `<kvMount>/hf-token`, field `token` (dev: `make k3s-up` with HF_TOKEN set
+  # writes the bootstrap Secret `<release>-supplied-credentials` the dev OpenBao seeds it from), then sets
+  # this so the `<release>-hf-token` ExternalSecret renders. Off, the Ray pods start without HF_TOKEN.
+  hfTokenInStore: false
 
 # INTERACTIVE API DOCS — /docs, /redoc and /openapi.json — across every app in the release.
 #
@@ -754,8 +758,8 @@ networkPolicy:
   # varz/jsz for the admin ops view) from the web-admin zone pods ONLY. 6222/7422 stay closed — see
   # network-policy.yaml (3e)/(3f).
   enabled: false
-  # Extra `from` peers for the openbao policy — e.g. the external-secrets operator's namespace when
-  # externalSecrets.enabled: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: external-secrets}}}]
+  # Extra `from` peers for the openbao policy — e.g. the external-secrets operator's namespace:
+  # [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: external-secrets}}}]
   openbaoExtraFrom: []
   # Extra `from` peers for the minio policy — the ray-lance demo pods live outside the release's
   # component labels (deploy/ray-lance-demo.yaml), so grant them here when running `make ray-demo`:
@@ -871,16 +875,16 @@ frontend:
     - {name: explorer, path: /explorer}
     - {name: annotator, path: /annotator}
   # Per-user OIDC login (opt-in), shared across ALL zones — one origin, one sealed cookie, so a login on
-  # any zone is a login on every zone. REQUIRED when enabled: sessionSecret (seals the cookie),
-  # publicIssuer, publicOrigin (forms the home zone's /auth/callback redirect URI). The confidential Dex
-  # client secret rides dex.clientSecret.
+  # any zone is a login on every zone. REQUIRED when enabled: publicIssuer, publicOrigin (forms the home
+  # zone's /auth/callback redirect URI). The sealing key and the client secret come from the store.
   oidc:
     # ON BY DEFAULT, in lockstep with auth.enabled — the chart REFUSES the half-governed pair
     # (templates/auth-consistency.yaml), so these two must move together or the render fails.
     enabled: true
     publicIssuer: "" # browser-reachable IdP issuer, e.g. https://auth.example.com/dex
     publicOrigin: "" # browser-reachable origin, e.g. https://app.example.com (forms the redirect URI)
-    sessionSecret: "" # >=32 random chars; seals the session cookie (AES-256-GCM). REQUIRED when enabled.
+    # The session-cookie sealing key is not a value: it is the store's `frontend-session-secret`, written
+    # by ESO into `<release>-frontend-session` beside the client secret.
 
 # --- lance-ns nginx gateway: RETIRED (lance-ns-merge.md decision 4 + P4) ----------------------------
 # The rask fleet gateway at services.gateway (uvicorn `gateway:app` on :8888) is the ONE front door; it
@@ -924,7 +928,7 @@ auth:
   # (observed on rask-web-models, 2026-08-06). A security default must fail CLOSED, not open.
   #
   # This makes a bare `helm install` REFUSE rather than install: frontend.oidc.enabled is on too, and
-  # the chart already fails the render without a sessionSecret. That refusal is the point — an
+  # the chart already fails the render without a publicIssuer. That refusal is the point — an
   # ungoverned estate should require someone to ask for it (`--set auth.enabled=false`), never to
   # forget something.
   enabled: true
@@ -1091,8 +1095,8 @@ catalog:
     #   * the dev OpenBao's seed writes `secret/<ref>` with `aws_access_key_id=<ref>` and the secret under
     #     the field the catalog reads (`lance.catalogSecretField`), the bundle shape
     #     `catalog/services/warehouse_credentials.py::resolve` requires.
-    # THE SECRET IS DERIVED IN THE CLUSTER, never rendered: sha256("<ref>-s3-<minio.secretKey>")[:40], the
-    # function `lance.scopedStorageSecret` uses, computed by both pods from the root secret they already
+    # THE SECRET IS DERIVED IN THE CLUSTER, never rendered: sha256("<ref>-s3-<the store root secret>")[:40],
+    # the function `lance.scopedSecretFn` writes, computed by both pods from the root secret they already
     # hold (the Job reads it as a mounted file). So the two halves agree without one handing the other a
     # key, a re-run is idempotent, and the seed's own re-seed loop restores the entry after an in-place
     # OpenBao restart or a replaced pod. It is a fixture identity, not a tenant's: it proves the per-base
@@ -2326,9 +2330,9 @@ minio:
   # supports VolumeSnapshot + encryption, see values-prod.yaml).
   storageClass: ""                    # data PVCs; "" => the cluster's default StorageClass
   # THE STORE'S ROOT ACCOUNT. Every scoped identity below exists so that nothing in the fleet presents
-  # THIS pair; it remains only because the store itself must boot with one.
+  # THIS pair; it remains only because the store itself must boot with one. Only the access key ID is a
+  # value: the secret half is the store's `minio-secret-key` (generated in-cluster for the dev OpenBao).
   accessKey: minioadmin
-  secretKey: minioadmin
   # THE COMPUTE PLANE'S OWN CREDENTIAL, scoped away from the tenant root above.
   #
   # The Ray pods ran on `accessKey`/`secretKey` — the store's ROOT account — so anything able to run
@@ -2337,27 +2341,25 @@ minio:
   # (measured 2026-08-30: `medallion*` and `*-wh` allowed; `_projects/`, `_protection/`, `_policies/`
   # and `rask-observability` all AccessDenied from the pod's own credential).
   #
-  # NAMING THE IDENTITY IS ENOUGH: set the access key alone and the secret is DERIVED
-  # (`lance.scopedStorageSecret` — sha256 of the identity plus `minio.secretKey`), so declaring a
-  # scoped identity in a values file needs no secret in git. DERIVED rather than generated because the
-  # other half of this pair is created separately by `mc admin user add`: the two agree only by
-  # computing the same function of the same inputs. Set the secret key too and yours wins, for an operator supplying one from a manager.
-  # One value therefore reaches all of: the pod env, the OpenBao seed and the `mc` user creation —
-  # which is the property that matters, because a scoped access key beside any other secret is
-  # `SignatureDoesNotMatch` on every call (measured, twice) and looks correct in a diff.
+  # NAMING THE IDENTITY IS ENOUGH: the secret is DERIVED in-cluster (`lance.scopedSecretFn` — sha256 of
+  # the identity plus the store's root secret), so declaring a scoped identity needs no secret anywhere.
+  # DERIVED rather than generated because the other half of this pair is created separately by
+  # `mc admin user add`: the dev OpenBao's seed and the `minio-scoped-users` Job agree only by computing
+  # the same function of the same inputs, and both read the root from a file, never from the render.
+  # A scoped access key beside any other secret is `SignatureDoesNotMatch` on every call (measured,
+  # twice) and looks correct in a diff.
   #
   # EMPTY = the root credential, i.e. today's behaviour, so this stays inert until an identity is
   # named. `minio-scoped-users` then creates the policy and the user with the same `mc` image the
   # bucket-init Job uses.
   # NAMED 2026-09-10, the third identity `medallionAccessKey`/`maintenanceAccessKey` already are.
-  # While it was empty, `infra-credentials.yaml`'s `| default .Values.minio.accessKey` made the
+  # While it was empty, the infra-credentials Secret's `| default .Values.minio.accessKey` made the
   # ESO-delivered `ray-compute-secret-key` the tenant ROOT — measured on the live estate, both
   # `ray-compute-access-key` and `ray-compute-secret-key` decoded to `rustfsadmin`. So the SANCTIONED
   # delivery path was handing out root while a hand-applied Secret carried the scoped credential the
   # head actually used: pointing the head at ESO to "fix the path" would have silently downgraded the
   # Ray lane from scoped to root, which is the opposite of what that change looks like.
   rayComputeAccessKey: rask-ray-compute
-  rayComputeSecretKey: ""
   # THE MAINTENANCE PLANE'S OWN CREDENTIAL, scoped away from the tenant root above.
   #
   # `MAINTENANCE_S3_ACCESS_KEY_ID` renders from `accessKey` — the store's ROOT account — and maintenance
@@ -2373,8 +2375,8 @@ minio:
   # outside the default warehouse degrades, and what it degrades TO is this key. The fallback itself
   # has to stop being root.
   #
-  # THE ACCESS KEY ALONE IS THE WHOLE SETTING: the secret is derived from it unless one is supplied
-  # (`lance.scopedStorageSecret`), so this identity can be declared in a values file — which is the
+  # THE ACCESS KEY ALONE IS THE WHOLE SETTING: the secret is derived from it in-cluster
+  # (`lance.scopedSecretFn`), so this identity can be declared in a values file — which is the
   # point, since a hand-set env is drift Helm never corrects and one values edit reverts to root.
   #
   # DERIVED, NOT EMPTY. This shipped as `""` — the tenant ROOT credential — with the reasoning that a
@@ -2383,9 +2385,8 @@ minio:
   # `pre-upgrade` too, so the user exists before the pods that present it roll, and root-by-default has
   # nothing left defending it. `rask.isRealDeployment`'s own rule applies: a guard reachable only by
   # remembering an opt-in protects the installs that did not need protecting. Set a value here to name
-  # a different user; the secret is still derived unless supplied (`lance.scopedStorageSecret`).
+  # a different user; the secret is still derived (`lance.scopedSecretFn`).
   maintenanceAccessKey: rask-maintenance
-  maintenanceSecretKey: ""
   # THE CATALOG'S OWN IDENTITY — the last service that presented the store's ROOT account (LH-051).
   #
   # It could not be scoped before the store swap, and that was measured rather than assumed: RustFS
@@ -2400,18 +2401,15 @@ minio:
   # stale by construction; what the scoping removes is the ability to mint identities and rewrite the
   # policies that govern every other plane.
   #
-  # The access key is the whole setting; the secret derives (`lance.scopedStorageSecret`) unless one
-  # is supplied.
+  # The access key is the whole setting; the secret derives in-cluster (`lance.scopedSecretFn`).
   catalogAccessKey: rask-catalog
-  catalogSecretKey: ""
   # THE MEDALLION PLANE'S SCOPED IDENTITY — the producer and all three stage runners share one, because
   # `medallion.yaml` renders their S3 env from one pair and they do one class of work. The access key
-  # is the whole setting; the secret is derived unless supplied (`lance.scopedStorageSecret`).
+  # is the whole setting; the secret is derived in-cluster (`lance.scopedSecretFn`).
   # Provisioned by `minio-scoped-users.yaml` as `rask-medallion`: data in any warehouse, `_tasks/`
   # writable because this plane REGISTERS them, every other control prefix read-only. Named here rather
   # than left empty for the reason above — an install must not come up on the tenant root.
   medallionAccessKey: rask-medallion
-  medallionSecretKey: ""
   # THE LINEAGE SERVICE'S SCOPED IDENTITY, and its policy is the TIGHTEST of the three because its S3
   # surface is the smallest — measured 2026-09-07 rather than assumed. Lineage opens datasets READ-ONLY
   # to probe versions, schema and dangling blobs (`core/reconcile.py`, `demo.py`), and the only bytes it
@@ -2423,7 +2421,6 @@ minio:
   # was built, provisioned and never selected, so it presented `rustfsadmin` while holding the tightest
   # policy in the estate.
   lineageAccessKey: rask-lineage
-  lineageSecretKey: ""
   # THE OBJECT BROWSER, and the LOOSEST-privileged plane holding the TIGHTEST policy: the viewer only
   # LISTS and GETS. It has no write path at all — `objects.py` calls `list_objects_v2`, `head_object`
   # and `get_object` and nothing else — so its identity needs no PutObject and no DeleteObject, which
@@ -2433,7 +2430,6 @@ minio:
   # credential, on a pod that HAS a Dapr sidecar and could have asked the secret store for a scoped
   # one. The widest credential in the estate, reached by the one path the goal forbids.
   viewerAccessKey: rask-viewer
-  viewerSecretKey: ""
   # The Lance lakehouse ROOT bucket (catalog LANCE_REST_ROOT + the warehouse registry). Referenced by
   # name in scripts/demo_reset.sh + the vending/lineage tests — do not rename casually.
   bucket: lance-catalog
@@ -2520,10 +2516,8 @@ ray:
   # fleet-consumer half (compute). Requires ray.rayVersion >= 2.52.0 (operator validation).
   auth:
     enabled: false
-    # Optional explicit token. Empty => chart-generated (randAlphaNum 32), pinned across upgrades
-    # via lookup. NEVER commit a real value; prod
-    # supplies it out-of-band (--set / values pipeline) or via externalSecrets (OpenBao/ESO).
-    token: ""
+    # The token is the store's `ray-auth-token`, written by ESO into `<release>-ray-auth-token`; the dev
+    # OpenBao's is generated in-cluster. Never a value.
   # MUST MATCH WHAT THE IMAGE SHIPS, and the lock is the source of truth for that:
   # .docker/ray-cluster.dockerfile builds with `uv sync --package ray-cluster-env` from the root uv.lock,
   # and packages/ray-cluster-env requires ray[data,default,serve]>=2.58. This read 2.56.1 while the container ran 2.57.0 —
@@ -2867,7 +2861,7 @@ nats:
   # what it was before this block. On, nats.conf includes ../nats-auth/server.conf (operator, system_account, resolver MEMORY,
   # resolver_preload) and the cluster block ../nats-auth/route.conf (routes carrying the route user, and the authorization they
   # are checked against), both written by an ExternalSecret from `nats-server` and `nats-route`, so no JWT and no password lives
-  # in the release; nats-box takes `monitor` as a creds file. It needs externalSecrets.enabled and the store. A reload cannot
+  # in the release; nats-box takes `monitor` as a creds file. It needs the store. A reload cannot
   # switch modes (nats-server refuses a change to the resolver or the system account), a pod restarted alone into operator mode
   # cannot join the other two, and a new system account starts an empty JetStream, so the streams are recreated by the stream
   # Job with `admin` and every subscriber restarts after them.
@@ -3155,11 +3149,9 @@ dapr:
   # deadline is unset) so a wedged sidecar can't hang a publisher indefinitely — a timeout surfaces as a
   # publish failure the caller handles (the producer → 503, the stage runners → RETRY) instead of a stuck request.
   apiTimeoutSeconds: 30
-  # Dapr app-API-token — Dapr injects it (APP_API_TOKEN) into subscriber apps AND stamps a
-  # `dapr-api-token` header on every event it DELIVERS, so the sidecar-delivered routes (/lineage-events,
-  # /medallion-event, the cron route) reject any forged request that didn't come through the sidecar.
-  # OVERRIDE in prod (it's the auth secret for those routes). Closes the provenance-forgery prod-blocker.
-  appToken: "lance-dev-dapr-app-token-override-me"
+  # The Dapr app-API token is not a value: it is the store's `dapr-app-token`, written by ESO into
+  # `<release>-dapr-app-token` for the injector (templates/external-secrets.yaml). Dapr stamps it as
+  # `dapr-api-token` on every delivery, so the sidecar-delivered routes reject a forged request.
   # Dapr-native retry + dead-letter layer — DEFAULT ON (Dapr-first rule). Wires THREE things TOGETHER
   # (they are only correct as a set — a deadLetterTopic without a retry policy dead-letters on the FIRST
   # failure per Dapr's documented default):
@@ -3404,8 +3396,8 @@ openfga:
   datastore:
     engine: postgres
     # DSN comes from the infra-credentials Secret (key openfga-datastore-uri) — the SAME secret the AGE
-    # servers + our migrate Job consume, rendered from age.* in dev and OWNED by the external-secrets
-    # operator when externalSecrets.enabled. No plaintext password in values/env: the subchart's
+    # servers + our migrate Job consume, written by the external-secrets operator from the
+    # store's `postgres-password`. No plaintext password in values/env: the subchart's
     # existingSecret+secretKeys branch turns this into a secretKeyRef. (Subchart values can't template,
     # so the release-prefixed secret name is hardcoded — it is `<release>-infra-credentials`, and the
     # release is `rask`.)
@@ -3458,7 +3450,7 @@ age:
   # on the older pin nothing governed comes up on an arm64 host at all.
   image: apache/age:release_PG16_1.6.0
   user: lance
-  password: lance
+  # No password value: the AGE password is the store's `postgres-password` ([[XC-004]]).
   lineageDb: lineage
   openfgaDb: openfga
   # The Dapr state store's database (see stateStore above). Dapr owns this schema outright — it creates
@@ -3635,17 +3627,18 @@ signing:
   # read-only root.
   mintImage: natsio/nats-box:0.19.7
 
-# --- external-secrets.io — sync the infra-tier Secret FROM Vault so NO plaintext secret ships in the chart.
-# Requires the external-secrets operator in-cluster. When on, templates/external-secrets.yaml creates a
-# SecretStore (→ vaultAddr) + an ExternalSecret that OWNS <release>-infra-credentials, and the static
-# Secret in infra-credentials.yaml is skipped. Complements openbao.externalAddr (the app tier's Dapr path).
+# --- external-secrets.io — the PREREQUISITE every pod without a sidecar takes its credentials through.
+# The External Secrets Operator is platform-run and rask never installs it (owner, 2026-10-05): install it
+# on its own before the chart (docs/architecture/deployment.md § Prerequisites). A render for a cluster
+# that does not serve external-secrets.io/v1 fails naming it; a cluster-less render declares the APIs
+# with `--api-versions external-secrets.io/v1/ExternalSecret` (and
+# `generators.external-secrets.io/v1alpha1/Password` for the dev OpenBao's generated credentials).
+# templates/external-secrets.yaml creates a SecretStore (→ the store) and one ExternalSecret per Secret a
+# pod without a sidecar mounts. With the chart's dev OpenBao its seed also provisions the auth half: the
+# kubernetes auth backend, a policy granting READ on exactly the paths those ExternalSecrets name, and the
+# role below bound to the operator's ServiceAccount (measured 2026-09-08: without it every ExternalSecret
+# sat in SecretSyncedError). A platform store is provisioned by its operator.
 externalSecrets:
-  # WHEN THIS IS TURNED ON, THE OPENBAO SEED ALSO PROVISIONS THE AUTH HALF — the kubernetes auth
-  # backend, a policy granting READ on exactly `<kvMount>/data/<secretPath>`, and the role below bound
-  # to the operator's ServiceAccount. Measured 2026-09-08: without those, the operator ran 3/3 with ZERO
-  # SecretStores and every ExternalSecret would have sat in SecretSyncedError — the KV half of what ESO
-  # needs was seeded and the AUTH half was not, so the toggle alone was never sufficient.
-  enabled: false
   refreshInterval: "1h"
   kvMount: secret # the Vault KV mount path
   kvVersion: "v2"

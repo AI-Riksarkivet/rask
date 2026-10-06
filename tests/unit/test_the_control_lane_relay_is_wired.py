@@ -32,6 +32,8 @@ import pytest
 import yaml
 from chart_yaml import FAST_LOADER
 
+from tests.unit.chart_render import ESO_ARGS
+
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 CHART = REPO / "chart"
@@ -42,7 +44,7 @@ def _render(*set_values: str) -> list[dict]:
     if not pathlib.Path(helm).exists():
         pytest.skip("helm not available")
     argv = [helm, "template", "rask", str(CHART), "--set", "image.localImages=true"]
-    argv += ["--set-string", "frontend.oidc.sessionSecret=test-session-secret-32-chars-minimum"]
+    argv += [*ESO_ARGS]
     argv += ["--set-string", "frontend.oidc.publicIssuer=http://localhost:8080/dex"]
     argv += ["--set-string", "frontend.oidc.publicOrigin=http://localhost:8080"]
     for value in set_values:

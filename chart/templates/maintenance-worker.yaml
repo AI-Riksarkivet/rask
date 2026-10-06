@@ -255,14 +255,11 @@ spec:
               upgrade. Requiring BOTH halves is the Ray pair's measured lesson: setting one gives
               `SignatureDoesNotMatch` on every operation.
             */ -}}
-            {{- /* The ACCESS KEY alone scopes the plane; the secret is derived unless supplied
-                 (`lance.scopedStorageSecret`), so declaring the identity needs no secret in a values file. */ -}}
+            {{- /* The ACCESS KEY alone scopes the plane; the secret is derived in-cluster
+                 (`lance.scopedSecretFn`), so declaring the identity needs no secret anywhere. */ -}}
             {{- $scoped := .Values.minio.maintenanceAccessKey }}
             - { name: MAINTENANCE_S3_ACCESS_KEY_ID, value: {{ ternary .Values.minio.maintenanceAccessKey .Values.minio.accessKey (not (not $scoped)) | quote }} }
-            {{- if not (include "lance.secretsViaDapr" .) }}
-            - { name: MAINTENANCE_S3_SECRET_ACCESS_KEY, value: {{ ternary (include "lance.scopedStorageSecret" (list . .Values.minio.maintenanceAccessKey .Values.minio.maintenanceSecretKey)) .Values.minio.secretKey (not (not $scoped)) | quote }} }
-            {{- else }}
-            # A secret store is configured → the S3 secret comes ONLY from it at boot; not in pod env (the
+            # The S3 secret comes ONLY from the secret store at boot; never in pod env (the
             # audit's fix — maintenance is a real S3 consumer that compacts/GCs the lakehouse). Fails closed.
             - { name: MAINTENANCE_SECRETS_FROM_DAPR, value: "true" }
             {{- if $scoped }}
@@ -271,7 +268,6 @@ spec:
             # mismatched pair and every operation fails `SignatureDoesNotMatch`. That is the Ray pair's
             # measured lesson, and the field was already configurable; only the chart had to use it.
             - { name: MAINTENANCE_DAPR_SECRET_S3_FIELD, value: "maintenance-s3-secret-key" }
-            {{- end }}
             {{- end }}
             - { name: MAINTENANCE_S3_BUCKET, value: {{ .Values.minio.bucket | quote }} }
             {{- /* The #50 policy registry root defaults to this bucket, matching the catalog's

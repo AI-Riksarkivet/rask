@@ -752,17 +752,24 @@ CORPUS ?= pvc
 CORPUS_ACCESS_MODE ?= ReadWriteOnce
 
 # The LOCAL dev identity values. auth.enabled + frontend.oidc.enabled are ON in the chart's own
-# defaults now (a security default must fail closed — an ungoverned estate should require asking for
-# it, never forgetting a values file), and the chart REFUSES to render OIDC without a session secret.
-# So the local loop supplies its own here, in the open, where it is obviously a dev value:
-#   - it is not a secret in any meaningful sense — dex's static users are chart config, the estate is
-#     on localhost, and the string says what it is;
-#   - it is NOT a default inside values.yaml, because a plausible-looking key shipped in the chart is
-#     the one that silently reaches production. Prod supplies its own via values-prod.yaml.
-# Override any of them from the environment for a differently-addressed dev cluster.
+# defaults (a security default must fail closed), and the chart REFUSES to render OIDC without a
+# browser-reachable issuer and origin, so the local loop supplies them here. Neither is a secret: the
+# session sealing key is generated in-cluster with every other dev credential ([[XC-004]]).
+# Override them from the environment for a differently-addressed dev cluster.
 DEV_ISSUER          ?= http://localhost:8080/dex
 DEV_ORIGIN          ?= http://localhost:8080
-DEV_SESSION_SECRET  ?= dev-session-secret-32-chars-min-ok
+
+# THE CREDENTIAL KEYS A RELEASE MAY STILL CARRY from before [[XC-004]], dropped from every upgrade that
+# re-feeds the live values (`-f $$LIVE`). templates/prod-credentials.yaml refuses each of them as a value,
+# and `null` is how Helm removes a key a values file supplies. The two lists name the same keys.
+DROP_CREDENTIAL_VALUES := --set dapr.appToken=null --set frontend.oidc.sessionSecret=null \
+  --set secrets.hfToken=null --set ray.auth.token=null --set age.password=null --set minio.secretKey=null \
+  --set minio.rayComputeSecretKey=null --set minio.maintenanceSecretKey=null --set minio.medallionSecretKey=null \
+  --set minio.catalogSecretKey=null --set minio.lineageSecretKey=null --set minio.viewerSecretKey=null
+
+# THE ONE BOOTSTRAP SECRET a dev estate is given by hand: the operator-supplied third-party credentials
+# (today the Hugging Face token), which nothing in the cluster can generate. The dev OpenBao seeds the
+# store from it (values.yaml `secrets.hfTokenInStore`); the token reaches kubectl on stdin, never argv.
 
 k3s-crds: ## Apply the vendored CRDs the chart deliberately does not package (see chart/.helmignore)
 	@# Server-side apply: the CNPG CRD set exceeds kubectl's client-side annotation limit.
@@ -786,6 +793,11 @@ k3s-up: k3s-deps k3s-crds k3s-stem-check ## Vendor deps, apply CRDs, then instal
 	  echo ">> HF_TOKEN from $${HF_HOME:-$$HOME/.cache/huggingface}/token (hf auth login)"; \
 	fi; \
 	if [ -z "$$HF_TOKEN" ]; then echo "WARN: no HF token (env, .env, or 'hf auth login') — htrflow Serve will 401 on the gated TrOCR model"; fi; \
+	HFARGS=; \
+	if [ -n "$$HF_TOKEN" ]; then \
+	  printf '%s' "$$HF_TOKEN" | $(KUBECTL) create secret generic rask-supplied-credentials --from-file=hf-token=/dev/stdin --dry-run=client -o yaml | $(KUBECTL) apply -f - >/dev/null || exit 1; \
+	  HFARGS="--set secrets.hfTokenInStore=true"; \
+	fi; \
 	: # THE PINS FILE CARRIES TAGS AND NOTHING ELSE, so it LAYERS over the registry rather than replacing
 	: # it. `k3s-pins.sh` strips the registry on purpose ("the chart supplies it from image.repository"),
 	: # so selecting the pins file INSTEAD of the live values left `image.repository` unset and the chart
@@ -810,13 +822,12 @@ k3s-up: k3s-deps k3s-crds k3s-stem-check ## Vendor deps, apply CRDs, then instal
 	  --set explorer.enabled=$(EXPLORER) \
 	  --set-string frontend.oidc.publicIssuer=$(DEV_ISSUER) \
 	  --set-string frontend.oidc.publicOrigin=$(DEV_ORIGIN) \
-	  --set-string frontend.oidc.sessionSecret=$(DEV_SESSION_SECRET) \
 	  --set-string dex.issuer=$(DEV_ISSUER) \
 	  --set explorer.corpus.mode=$(CORPUS) \
 	  --set explorer.corpus.accessMode=$(CORPUS_ACCESS_MODE) \
-	  $${HF_TOKEN:+--set-string secrets.hfToken=$$HF_TOKEN} \
-	  $${AWS_ACCESS_KEY_ID:+--set-string minio.accessKey=$$AWS_ACCESS_KEY_ID} \
-	  $${AWS_SECRET_ACCESS_KEY:+--set-string minio.secretKey=$$AWS_SECRET_ACCESS_KEY}
+	  $(DROP_CREDENTIAL_VALUES) \
+	  $$HFARGS \
+	  $${AWS_ACCESS_KEY_ID:+--set-string minio.accessKey=$$AWS_ACCESS_KEY_ID}
 	$(KUBECTL) rollout status deploy/rask-gateway --timeout=300s
 	@echo "UI → http://<node-ip>/   (catch-all ingress; over VS Code/ssh -L forward port 80 → http://localhost:<port>/)"
 	@echo "API → http://<node-ip>/api/ray/health"
@@ -876,7 +887,7 @@ k3s-converge: ## Roll a WHOLE image stem to one tag and upgrade (the resolution 
 	@# clean, which is the worst direction for this failure to go. So the recipe keeps the upgrade's
 	@# status in rc and exits with it after the cleanup.
 	@test -n "$(TAG)" || { echo "!! TAG is required, e.g. make k3s-converge TAG=main-$$(git rev-parse --short=8 HEAD)"; exit 2; }
-	@set -a; [ -f .env ] && . ./.env; set +a; 	STEM="$${STEM:-lance-rest-catalog}"; 	LIVE=$$(mktemp); 	$(HELM) get values rask -o yaml >"$$LIVE" 2>/dev/null || { echo "!! no live release to read image settings from"; exit 1; }; 	grep -q 'repository:' "$$LIVE" || { echo "!! the live release carries no image.repository; run make k3s-up first"; exit 1; }; 	echo ">> converging stem $$STEM -> $(TAG)"; 	$(HELM) upgrade --install rask ./chart --wait --wait-for-jobs --timeout 20m --take-ownership 	  -f "$$LIVE" 	  -f chart/values-local.yaml 	  --set image.tags.$$STEM=$(TAG) 	  --set explorer.enabled=$(EXPLORER) 	  --set-string frontend.oidc.publicIssuer=$(DEV_ISSUER) 	  --set-string frontend.oidc.publicOrigin=$(DEV_ORIGIN) 	  --set-string frontend.oidc.sessionSecret=$(DEV_SESSION_SECRET) 	  --set-string dex.issuer=$(DEV_ISSUER) 	  --set explorer.corpus.mode=$(CORPUS) 	  --set explorer.corpus.accessMode=$(CORPUS_ACCESS_MODE) 	  $${HF_TOKEN:+--set-string secrets.hfToken=$$HF_TOKEN}; 	rc=$$?; 	rm -f "$$LIVE"; 	[ $$rc -eq 0 ] || { echo "!! helm upgrade FAILED (exit $$rc) — the release was NOT converged, and the cluster may now disagree with it"; exit $$rc; }
+	@set -a; [ -f .env ] && . ./.env; set +a; 	STEM="$${STEM:-lance-rest-catalog}"; 	LIVE=$$(mktemp); 	$(HELM) get values rask -o yaml >"$$LIVE" 2>/dev/null || { echo "!! no live release to read image settings from"; exit 1; }; 	grep -q 'repository:' "$$LIVE" || { echo "!! the live release carries no image.repository; run make k3s-up first"; exit 1; }; 	echo ">> converging stem $$STEM -> $(TAG)"; 	$(HELM) upgrade --install rask ./chart --wait --wait-for-jobs --timeout 20m --take-ownership 	  -f "$$LIVE" 	  -f chart/values-local.yaml 	  --set image.tags.$$STEM=$(TAG) 	  --set explorer.enabled=$(EXPLORER) 	  --set-string frontend.oidc.publicIssuer=$(DEV_ISSUER) 	  --set-string frontend.oidc.publicOrigin=$(DEV_ORIGIN) 	  --set-string dex.issuer=$(DEV_ISSUER) 	  --set explorer.corpus.mode=$(CORPUS) 	  --set explorer.corpus.accessMode=$(CORPUS_ACCESS_MODE) 	  $(DROP_CREDENTIAL_VALUES); 	rc=$$?; 	rm -f "$$LIVE"; 	[ $$rc -eq 0 ] || { echo "!! helm upgrade FAILED (exit $$rc) — the release was NOT converged, and the cluster may now disagree with it"; exit $$rc; }
 	@# SINGLE QUOTES around the suggested command, never backticks: a backtick inside an echo is
 	@# COMMAND SUBSTITUTION, so `>> ... `make k3s-up` ...` RAN a full k3s-up as a side effect of
 	@# printing advice. Observed 2026-09-22 in this target's own output — "every stem converged —

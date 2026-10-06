@@ -70,10 +70,9 @@ external endpoint:
 > password come from Vault, only the non-sensitive S3 access-key id stays templated). The
 > `values-prod.yaml` EXTERNALIZE block shows the full set.
 >
-> The prod path also **fails the render** instead of shipping known-bad values: `openbao.devMode=false`
-> with the dev-default `age.password`/`rustfs.secretKey` (and no externalSecrets) aborts, and the
-> `values-prod.yaml` `dapr.appToken` placeholder aborts until a real secret is passed — the app token
-> authenticates every sidecar-delivered route, so a public constant there would make them forgeable.
+> No credential is a chart value ([[XC-004]]): the render refuses one by name, and a real deployment
+> with the dev OpenBao is refused. Every credential, the app token that authenticates every
+> sidecar-delivered route included, comes from the store through ESO, a prerequisite.
 
 ## Data lifecycle — what's permanent vs transient
 The S3 store is permanent **infrastructure**; the *data within it* has a lifecycle:

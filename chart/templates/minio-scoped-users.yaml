@@ -67,9 +67,8 @@ metadata:
 
          A PRE-UPGRADE HOOK MAY ONLY CONSUME A SECRET KEY THE PREVIOUS RELEASE ALREADY PUBLISHED —
          a permanent property of the phase, and a CONSTRAINT ON RENAMES rather than a reason to drop
-         the phase. This Job takes the store's root credential by `secretKeyRef` from
-         `infra-credentials`, which under `externalSecrets.enabled` is owned by ESO and filled from
-         OpenBao; the mapping that names a key arrives with the release's OWN templates, which helm
+         the phase. This Job mounts the store's root credential from `infra-credentials`, which ESO
+         writes from the store; the mapping that names a key arrives with the release's OWN templates, which helm
          applies only AFTER its pre-upgrade hooks. So an upgrade that RENAMES that key deadlocks: the
          hook cannot start (`CreateContainerConfigError: couldn't find key`), helm waits for it, and
          the ExternalSecret that would create the key sits in the manifest helm has not applied.
@@ -114,19 +113,23 @@ spec:
       {{- end }}
       volumes:
         {{- include "lance.tmpVolume" . | nindent 8 }}
-        {{- if $fixture }}
-        - { name: base-keys, emptyDir: { medium: Memory, sizeLimit: 1Mi } }
+        - { name: keys, emptyDir: { medium: Memory, sizeLimit: 1Mi } }
         - name: minio-root
-          secret: { secretName: {{ include "lance.fullname" . }}-infra-credentials, items: [{ key: minio-secret-key, path: minio-secret-key }] }
-      {{- /* The data-base fixture's secrets are derived from the root secret as a mounted file, in the openbao image whose
-             busybox sha256sum was measured (2026-10-05); mc reads them from memory, so no key is in a pod spec or an env. */}}
+          secret: { secretName: {{ include "lance.fullname" . }}-infra-credentials, items: [{ key: minio-secret-key, path: minio-secret-key }], defaultMode: 0400 }
+      {{- /* EVERY SECRET IS A FILE ([[XC-004]]): the root as a mounted key of the ESO-written infra-credentials, and each
+             scoped secret derived from it in memory by `lance.scopedSecretFn` — the function the dev OpenBao's seed runs, so
+             the user `mc` creates and the field a service reads agree. In the openbao image, whose busybox sha256sum was
+             measured (2026-10-05). No key is in the pod spec, an env or the render. */}}
       initContainers:
         - name: derive
           image: {{ .Values.openbao.image }}
           {{- include "lance.rootlessSecurityContext" 65532 | nindent 10 }}
           volumeMounts:
-            - { name: base-keys, mountPath: /keys }
+            - { name: keys, mountPath: /keys }
             - { name: minio-root, mountPath: /minio-root, readOnly: true }
+          env:
+            - { name: KEYS, value: /keys }
+            - { name: ROOT_FILE, value: /minio-root/minio-secret-key }
           resources:
             requests: { cpu: "10m", memory: "16Mi" }
             limits: { cpu: "100m", memory: "32Mi" }
@@ -135,12 +138,14 @@ spec:
             - -c
             - |
               set -e
-              root=$(cat /minio-root/minio-secret-key)
-              {{- include "lance.baseFixtureSecretFn" . | nindent 14 }}
-              {{- range $ref, $_ := $fixture }}
-              base_secret {{ $ref }} /keys/{{ $ref }}
+              root=$(cat "$ROOT_FILE")
+              {{- include "lance.scopedSecretFn" . | nindent 14 }}
+              {{- range $id := list $ray $maint $medallion $lineage $catalog $viewer | compact | uniq }}
+              scoped_secret {{ $id }} "$KEYS/{{ $id }}"
               {{- end }}
-        {{- end }}
+              {{- range $ref, $_ := $fixture }}
+              scoped_secret {{ $ref }} "$KEYS/{{ $ref }}"
+              {{- end }}
       containers:
         - name: mc
           {{- /* The store's own image, which carries `mc` beside the server (.docker/minio.dockerfile). */}}
@@ -151,45 +156,14 @@ spec:
                  emptyDir is the pair every app container in this chart already uses. */}}
           volumeMounts:
             {{- include "lance.tmpMount" . | nindent 12 }}
-            {{- if $fixture }}
-            - { name: base-keys, mountPath: /keys, readOnly: true }
-            {{- end }}
+            - { name: keys, mountPath: /keys, readOnly: true }
+            - { name: minio-root, mountPath: /minio-root, readOnly: true }
           resources:
             requests: { cpu: "10m", memory: "32Mi" }
             limits: { cpu: "200m", memory: "128Mi" }
-          {{- /*
-             Every secret arrives as an env var read by `mc`, never interpolated into the rendered
-             command — the same rule the bucket-init Job follows, so a `kubectl get job -o yaml` never
-             discloses a key.
-          */}}
+          {{- /* Every secret is read from a file by `mc`, never interpolated into the rendered command, so a
+                 `kubectl get job -o yaml` never discloses a key. */}}
           env:
-            - name: MINIO_SECRET_KEY
-              valueFrom:
-                secretKeyRef: { name: {{ include "lance.fullname" . }}-infra-credentials, key: minio-secret-key }
-            {{- if $maint }}
-            - name: MAINTENANCE_SECRET_KEY
-              value: {{ include "lance.scopedStorageSecret" (list . .Values.minio.maintenanceAccessKey .Values.minio.maintenanceSecretKey) | quote }}
-            {{- end }}
-            {{- if $ray }}
-            - name: RAY_COMPUTE_SECRET_KEY
-              value: {{ include "lance.scopedStorageSecret" (list . .Values.minio.rayComputeAccessKey .Values.minio.rayComputeSecretKey) | quote }}
-            {{- end }}
-            {{- if $medallion }}
-            - name: MEDALLION_SECRET_KEY
-              value: {{ include "lance.scopedStorageSecret" (list . .Values.minio.medallionAccessKey .Values.minio.medallionSecretKey) | quote }}
-            {{- end }}
-            {{- if $lineage }}
-            - name: LINEAGE_SECRET_KEY
-              value: {{ include "lance.scopedStorageSecret" (list . .Values.minio.lineageAccessKey .Values.minio.lineageSecretKey) | quote }}
-            {{- end }}
-            {{- if $catalog }}
-            - name: CATALOG_SECRET_KEY
-              value: {{ include "lance.scopedStorageSecret" (list . .Values.minio.catalogAccessKey .Values.minio.catalogSecretKey) | quote }}
-            {{- end }}
-            {{- if $viewer }}
-            - name: VIEWER_SECRET_KEY
-              value: {{ include "lance.scopedStorageSecret" (list . .Values.minio.viewerAccessKey .Values.minio.viewerSecretKey) | quote }}
-            {{- end }}
             {{- /* HOME on the tmp emptyDir: this container now runs with a read-only rootfs, and the CLI writes under $HOME. */}}
             - { name: HOME, value: /tmp }
           command:
@@ -197,7 +171,7 @@ spec:
             - -c
             - |
               set -e
-              until mc alias set rfs {{ include "lance.s3Endpoint" . }} {{ .Values.minio.accessKey }} "$MINIO_SECRET_KEY"; do echo wait-minio; sleep 3; done
+              until mc alias set rfs {{ include "lance.s3Endpoint" . }} {{ .Values.minio.accessKey }} "$(cat /minio-root/minio-secret-key)"; do echo wait-minio; sleep 3; done
 
               {{- /*
                 THE BUCKET SET IS NOT KNOWABLE AT RENDER TIME, so neither policy enumerates one.
@@ -320,7 +294,7 @@ spec:
               # `_policies/<kind>/` and are written only by the catalog, which holds a different
               # credential; this user can reach them, and narrowing that needs the stamp to move first.
               mc admin policy create rfs rask-maintenance /tmp/maintenance.json
-              mc admin user add rfs {{ .Values.minio.maintenanceAccessKey }} "$MAINTENANCE_SECRET_KEY" || true
+              mc admin user add rfs {{ .Values.minio.maintenanceAccessKey }} "$(cat /keys/{{ .Values.minio.maintenanceAccessKey }})" || true
               mc admin policy attach rfs rask-maintenance --user {{ .Values.minio.maintenanceAccessKey }} || true
               echo "provisioned scoped user {{ .Values.minio.maintenanceAccessKey }} (rask-maintenance)"
               {{- end }}
@@ -406,7 +380,7 @@ spec:
               # Lance lists with `prefix=medallion/` and `StringLike` does not match a trailing-slash
               # pattern against it, a lesson that cost a cascade the first time this policy was written.
               mc admin policy create rfs rask-ray-compute /tmp/ray-compute.json
-              mc admin user add rfs {{ .Values.minio.rayComputeAccessKey }} "$RAY_COMPUTE_SECRET_KEY" || true
+              mc admin user add rfs {{ .Values.minio.rayComputeAccessKey }} "$(cat /keys/{{ .Values.minio.rayComputeAccessKey }})" || true
               mc admin policy attach rfs rask-ray-compute --user {{ .Values.minio.rayComputeAccessKey }} || true
               echo "provisioned scoped user {{ .Values.minio.rayComputeAccessKey }} (rask-ray-compute)"
               {{- end }}
@@ -477,7 +451,7 @@ spec:
               # blocked output; one that can delete `_trash/` strands bytes behind an undrop that can no
               # longer find them.
               mc admin policy create rfs rask-medallion /tmp/medallion.json
-              mc admin user add rfs {{ .Values.minio.medallionAccessKey }} "$MEDALLION_SECRET_KEY" || true
+              mc admin user add rfs {{ .Values.minio.medallionAccessKey }} "$(cat /keys/{{ .Values.minio.medallionAccessKey }})" || true
               mc admin policy attach rfs rask-medallion --user {{ .Values.minio.medallionAccessKey }} || true
               echo "provisioned scoped user {{ .Values.minio.medallionAccessKey }} (rask-medallion)"
               {{- end }}
@@ -527,7 +501,7 @@ spec:
                 estate. That failure mode is why the read stays wide and the WRITE is what gets scoped.
               */}}
               mc admin policy create rfs rask-lineage /tmp/lineage.json
-              mc admin user add rfs {{ .Values.minio.lineageAccessKey }} "$LINEAGE_SECRET_KEY" || true
+              mc admin user add rfs {{ .Values.minio.lineageAccessKey }} "$(cat /keys/{{ .Values.minio.lineageAccessKey }})" || true
               mc admin policy attach rfs rask-lineage --user {{ .Values.minio.lineageAccessKey }} || true
               echo "provisioned scoped user {{ .Values.minio.lineageAccessKey }} (rask-lineage)"
               {{- end }}
@@ -585,7 +559,7 @@ spec:
                 platform telemetry, not tenant data, and nothing in the catalog reads or writes it.
               */}}
               mc admin policy create rfs rask-catalog /tmp/catalog.json
-              mc admin user add rfs {{ .Values.minio.catalogAccessKey }} "$CATALOG_SECRET_KEY" || true
+              mc admin user add rfs {{ .Values.minio.catalogAccessKey }} "$(cat /keys/{{ .Values.minio.catalogAccessKey }})" || true
               mc admin policy attach rfs rask-catalog --user {{ .Values.minio.catalogAccessKey }} || true
               echo "provisioned scoped user {{ .Values.minio.catalogAccessKey }} (rask-catalog)"
               {{- end }}
@@ -621,7 +595,7 @@ spec:
                 looking at in Perses.
               */}}
               mc admin policy create rfs rask-viewer /tmp/viewer.json
-              mc admin user add rfs {{ $viewer }} "$VIEWER_SECRET_KEY" || true
+              mc admin user add rfs {{ $viewer }} "$(cat /keys/{{ $viewer }})" || true
               mc admin policy attach rfs rask-viewer --user {{ $viewer }} || true
               echo "provisioned scoped user {{ $viewer }} (rask-viewer)"
               {{- end }}

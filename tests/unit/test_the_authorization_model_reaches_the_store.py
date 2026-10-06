@@ -30,6 +30,8 @@ import pytest
 import yaml
 from chart_yaml import FAST_LOADER
 
+from tests.unit.chart_render import ESO_ARGS
+
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -38,7 +40,7 @@ def _render(*extra: str) -> list[dict]:
     if not shutil.which("helm"):  # pragma: no cover - CI installs helm
         pytest.skip("helm not on PATH")
     cmd = ["helm", "template", "rask", str(REPO / "chart")]
-    cmd += ["--set-string", "frontend.oidc.sessionSecret=test-session-secret-32-chars-minimum"]
+    cmd += [*ESO_ARGS]
     cmd += ["--set-string", "frontend.oidc.publicIssuer=http://localhost:8080/dex"]
     cmd += ["--set-string", "frontend.oidc.publicOrigin=http://localhost:8080"]
     cmd += ["--set", "image.localImages=true", *extra]

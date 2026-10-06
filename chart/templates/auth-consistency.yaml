@@ -14,8 +14,8 @@ The catalog then 401s every read the browser attempts. Nothing in the install sa
 halves was forgotten, and the symptom (an empty, scolding UI) looks like a data problem rather than
 a configuration one.
 
-The chart already guards the OPPOSITE direction — frontend.oidc.enabled without a sessionSecret,
-publicIssuer or publicOrigin all fail (frontends.yaml, _helpers.tpl). This is the missing half.
+The chart already guards the OPPOSITE direction — frontend.oidc.enabled without a
+publicIssuer or publicOrigin fails (frontends.yaml, _helpers.tpl). This is the missing half.
 
 Two combinations are deliberately NOT errors:
   * frontend.enabled=false — there is no UI to sign into, so a governed API-only stack is coherent.
@@ -25,5 +25,5 @@ Two combinations are deliberately NOT errors:
     must say so; the point of this guard is that it cannot happen by omission.
 */}}
 {{- if and .Values.auth.enabled .Values.frontend.enabled (not .Values.frontend.oidc.enabled) (not .Values.auth.allowHeadless) }}
-{{- fail (printf "HALF-GOVERNED DEPLOY REFUSED: auth.enabled=true (the backend requires a verified identity) but frontend.oidc.enabled=false (the UI ships no sign-in flow). This install would come up green and then show every user a governed UI with no way to sign in, while the catalog 401s each read — a configuration fault that looks like a data fault. Fix it one of three ways: (1) --set frontend.oidc.enabled=true plus frontend.oidc.{sessionSecret,publicIssuer,publicOrigin}; (2) --set auth.enabled=false for an ungoverned dev stack; or (3) --set auth.allowHeadless=true if this estate is deliberately API-only and no human uses the browser.") }}
+{{- fail (printf "HALF-GOVERNED DEPLOY REFUSED: auth.enabled=true (the backend requires a verified identity) but frontend.oidc.enabled=false (the UI ships no sign-in flow). This install would come up green and then show every user a governed UI with no way to sign in, while the catalog 401s each read — a configuration fault that looks like a data fault. Fix it one of three ways: (1) --set frontend.oidc.enabled=true plus frontend.oidc.{publicIssuer,publicOrigin}; (2) --set auth.enabled=false for an ungoverned dev stack; or (3) --set auth.allowHeadless=true if this estate is deliberately API-only and no human uses the browser.") }}
 {{- end }}

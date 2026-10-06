@@ -136,16 +136,12 @@ spec:
                otherwise healthy. A name the chart writes and the chart seeds cannot drift apart.
             */}}
             - { name: LANCE_DAPR_SECRET_S3_FIELD, value: {{ include "lance.catalogSecretField" . | quote }} }
-            {{- if not (include "lance.secretsViaDapr" .) }}
-            - { name: LANCE_S3_SECRET_ACCESS_KEY, value: {{ ternary (include "lance.scopedStorageSecret" (list . .Values.minio.catalogAccessKey .Values.minio.catalogSecretKey)) .Values.minio.secretKey (not (not $catalogScoped)) | quote }} }
-            {{- else }}
             {{- /*
-               OpenBao on → the S3 secret comes ONLY from the Dapr secret store at boot; it is deliberately
-               NOT in pod env (the audit's 'plaintext still ships' fix). The catalog fails closed if the
-               store can't provide it. Needs the lance-secrets component (scoped to catalog).
+               The S3 secret comes ONLY from the Dapr secret store at boot; it is never in pod env. The
+               catalog fails closed if the store can't provide it. Needs the lance-secrets component
+               (scoped to catalog).
             */}}
             - { name: LANCE_SECRETS_FROM_DAPR, value: "true" }
-            {{- end }}
             {{- with include "lance.signingEnv" (list $root .Values.services.catalog.daprAppId) }}{{ . | nindent 12 }}{{- end }}
             - { name: LANCE_S3_REGION, value: "us-east-1" }
             - { name: LANCE_S3_VIRTUAL_HOSTED, value: "false" }
@@ -496,17 +492,12 @@ spec:
             */}}
 {{- include "lance.appTokenEnv" (list $root $root.Values.services.lineage.daprAppId) | nindent 12 }}
             {{- end }}
-            {{- if not (include "lance.secretsViaDapr" .) }}
-            - { name: LINEAGE_DATABASE_URL, value: "postgresql://{{ .Values.age.user }}:{{ .Values.age.password }}@{{ include "lance.ageConnectHost" . }}:{{ .Values.age.port }}/{{ .Values.age.lineageDb }}" }
-            {{- else }}
             {{- /*
-               OpenBao on → the AGE password is NOT in the connection string in pod env; lineage fetches it
-               from the secret store at boot and splices it into the URL (the audit's 'plaintext still ships'
-               fix). The URL here carries the user/host/db only, no password.
+               The AGE password is NOT in the connection string in pod env; lineage fetches it from the
+               secret store at boot and splices it into the URL. The URL carries user/host/db only.
             */}}
             - { name: LINEAGE_DATABASE_URL, value: "postgresql://{{ .Values.age.user }}@{{ include "lance.ageConnectHost" . }}:{{ .Values.age.port }}/{{ .Values.age.lineageDb }}" }
             - { name: LINEAGE_SECRETS_FROM_DAPR, value: "true" }
-            {{- end }}
             - { name: LINEAGE_GRAPH, value: {{ .Values.age.lineageDb | quote }} }
             - { name: LINEAGE_DOCS, value: {{ .Values.docs.enabled | quote }} }
             {{- /*
@@ -578,15 +569,13 @@ spec:
             {{- end }}
             - { name: LINEAGE_S3_ENDPOINT, value: "{{ include "lance.s3Endpoint" . }}" }
             {{- /* THE LINEAGE PLANE'S SCOPED IDENTITY (§F2-1). The ACCESS KEY alone scopes the plane; the
-                 secret is DERIVED unless supplied (`lance.scopedStorageSecret`), so naming the identity
-                 needs no secret in a values file. Empty falls back to the tenant ROOT, which is what an
+                 secret is DERIVED in-cluster (`lance.scopedSecretFn`), so naming the identity needs no
+                 secret anywhere. Empty falls back to the tenant ROOT, which is what an
                  install runs until one is named — a chart that silently repointed a live service at a
                  credential nobody created would take it down on upgrade. */}}
             {{- $linScoped := .Values.minio.lineageAccessKey }}
             - { name: LINEAGE_S3_ACCESS_KEY_ID, value: {{ ternary .Values.minio.lineageAccessKey .Values.minio.accessKey (not (not $linScoped)) | quote }} }
-            {{- if not (include "lance.secretsViaDapr" .) }}
-            - { name: LINEAGE_S3_SECRET_ACCESS_KEY, value: {{ ternary (include "lance.scopedStorageSecret" (list . .Values.minio.lineageAccessKey .Values.minio.lineageSecretKey)) .Values.minio.secretKey (not (not $linScoped)) | quote }} }
-            {{- else if $linScoped }}
+            {{- if $linScoped }}
             {{- /* THE OTHER HALF OF THE PAIR, and the half that has bitten twice. `dapr_secret_s3_field`
                  defaults to `minio-secret-key` — the tenant ROOT's secret — so a SCOPED access key left
                  on that default is signed with a mismatched pair and every operation fails

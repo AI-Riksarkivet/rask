@@ -59,11 +59,8 @@ CONTROL_PREFIXES = ("_trash",)
 def _render() -> str:
     return _helm_template(
         "minio.maintenanceAccessKey=rask-maintenance",
-        "minio.maintenanceSecretKey=m-secret",
         "minio.rayComputeAccessKey=rask-ray-compute",
-        "minio.rayComputeSecretKey=r-secret",
         "minio.medallionAccessKey=rask-medallion",
-        "minio.medallionSecretKey=d-secret",
     )
 
 

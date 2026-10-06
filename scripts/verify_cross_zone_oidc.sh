@@ -17,7 +17,7 @@ export RASK_EXPECT_CONTEXT
 # installed, and `helm upgrade … --set auth.enabled=true --set medallion.enabled=true
 # --set medallion.produceAdminProject=acme --set ingress.enabled=true --set frontend.oidc.enabled=true
 # --set frontend.oidc.publicIssuer=http://lance-ns-dex:5556/dex
-# --set frontend.oidc.publicOrigin=http://localhost:8090 --set frontend.oidc.sessionSecret=<48>` applied,
+# --set frontend.oidc.publicOrigin=http://localhost:8090` applied,
 # then `kubectl rollout restart deploy/lance-ns-dex deploy/lance-ns-medallion-producer`. This script seeds alice's
 # admin grant + drives the browser (read-only forwards); run it OUTSIDE auto mode (or `!`-prefix).
 #

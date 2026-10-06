@@ -382,17 +382,12 @@ spec:
                  credential, which is what every install ran until this landed. `rask-medallion` reaches
                  data in any warehouse, WRITES `_tasks/` because this plane registers them, and is
                  write-denied on every other control prefix — see `minio-scoped-users.yaml`. */}}
-            {{- /* The ACCESS KEY alone scopes the plane; the secret is derived unless supplied
-                 (`lance.scopedStorageSecret`), so declaring the identity needs no secret in a values file. */ -}}
+            {{- /* The ACCESS KEY alone scopes the plane; the secret is derived in-cluster
+                 (`lance.scopedSecretFn`), so declaring the identity needs no secret anywhere. */ -}}
             {{- $medScoped := .Values.minio.medallionAccessKey }}
             - { name: MEDALLION_S3_ACCESS_KEY_ID, value: {{ ternary .Values.minio.medallionAccessKey .Values.minio.accessKey (not (not $medScoped)) | quote }} }
-            {{- if not (include "lance.secretsViaDapr" .) }}
-            - { name: MEDALLION_S3_SECRET_ACCESS_KEY, value: {{ ternary (include "lance.scopedStorageSecret" (list . .Values.minio.medallionAccessKey .Values.minio.medallionSecretKey)) .Values.minio.secretKey (not (not $medScoped)) | quote }} }
-            {{- else }}
             {{- /*
-               A secret store is configured → the S3 secret comes ONLY from it at boot; not in pod env
-               (Batch 7 closes the gap: the env was already omitted here but nothing told the service to
-               consume the store — a store-on deployment left medallion credential-less). Fails closed.
+               The S3 secret comes ONLY from the secret store at boot; never in pod env. Fails closed.
             */}}
             - { name: MEDALLION_SECRETS_FROM_DAPR, value: "true" }
             {{- if $medScoped }}
@@ -403,7 +398,6 @@ spec:
                pairs both paid for this; the field was already configurable, only the chart had to use it.
             */}}
             - { name: MEDALLION_DAPR_SECRET_S3_FIELD, value: "medallion-s3-secret-key" }
-            {{- end }}
             {{- end }}
             {{- end }}
           {{- include "lance.appProbes" . | nindent 10 }}
@@ -594,15 +588,12 @@ spec:
                  credential, which is what every install ran until this landed. `rask-medallion` reaches
                  data in any warehouse, WRITES `_tasks/` because this plane registers them, and is
                  write-denied on every other control prefix — see `minio-scoped-users.yaml`. */}}
-            {{- /* The ACCESS KEY alone scopes the plane; the secret is derived unless supplied
-                 (`lance.scopedStorageSecret`), so declaring the identity needs no secret in a values file. */ -}}
+            {{- /* The ACCESS KEY alone scopes the plane; the secret is derived in-cluster
+                 (`lance.scopedSecretFn`), so declaring the identity needs no secret anywhere. */ -}}
             {{- $medScoped := $root.Values.minio.medallionAccessKey }}
             - { name: MEDALLION_S3_ACCESS_KEY_ID, value: {{ ternary $root.Values.minio.medallionAccessKey $root.Values.minio.accessKey (not (not $medScoped)) | quote }} }
-            {{- if not (include "lance.secretsViaDapr" $root) }}
-            - { name: MEDALLION_S3_SECRET_ACCESS_KEY, value: {{ ternary (include "lance.scopedStorageSecret" (list $root $root.Values.minio.medallionAccessKey $root.Values.minio.medallionSecretKey)) $root.Values.minio.secretKey (not (not $medScoped)) | quote }} }
-            {{- else }}
             {{- /*
-               Store-on → sole source at boot (see the producer block above). Fails closed.
+               The store is the sole source at boot (see the producer block above). Fails closed.
             */}}
             - { name: MEDALLION_SECRETS_FROM_DAPR, value: "true" }
             {{- if $medScoped }}
@@ -611,7 +602,6 @@ spec:
                with the root's secret and fails `SignatureDoesNotMatch` on every call.
             */}}
             - { name: MEDALLION_DAPR_SECRET_S3_FIELD, value: "medallion-s3-secret-key" }
-            {{- end }}
             {{- end }}
             {{- if $root.Values.medallion.ray }}
             {{- /*

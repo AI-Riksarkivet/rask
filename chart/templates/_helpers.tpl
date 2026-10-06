@@ -66,31 +66,13 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 app.kubernetes.io/component: {{ $component }}
 {{- end -}}
 
-{{/* Ray auth token (gate 7 / R3): explicit value -> lookup-pinned existing Secret -> random.
-     The Secret data key is `auth_token` — the KubeRay operator-Secret convention
-     (RAY_AUTH_TOKEN_SECRET_KEY), which is why rayservice.yaml's spec.authOptions.secretName can
-     hand THIS chart-owned Secret to the 1.6+ operator verbatim (no key rename, and the operator
-     skips generating its own Secret when secretName is set). */}}
-{{- define "rask.rayAuthToken" -}}
-{{- if .Values.ray.auth.token -}}
-{{- .Values.ray.auth.token -}}
-{{- else -}}
-{{- $existing := (lookup "v1" "Secret" .Release.Namespace (printf "%s-ray-auth-token" (include "rask.fullname" .))) -}}
-{{- if and $existing $existing.data (index $existing.data "auth_token") -}}
-{{- index $existing.data "auth_token" | b64dec -}}
-{{- else -}}
-{{- randAlphaNum 32 -}}
-{{- end -}}
-{{- end -}}
-{{- end -}}
-
 {{/* The RAY_AUTH_MODE/RAY_AUTH_TOKEN env pair for FLEET consumers that talk to a token-authed
      Ray (the `rayClient` services — compute). Ray-cluster containers do NOT use this include:
      spec.authOptions (rayservice.yaml, kuberay >= 1.6.0) makes the operator inject the same pair
      into head/worker/autoscaler containers itself. No-op unless ray.auth.enabled — so every
-     consumer flips with the ONE toggle and the secretKeyRef can never dangle (the Secret renders
-     under the same gate in ray-auth-token.yaml; when externalSecrets.enabled the ESO-synced
-     Secret carries the same name+key). Usage: {{- include "rask.rayAuthEnv" . | nindent 16 }} */}}
+     consumer flips with the ONE toggle and the secretKeyRef can never dangle (ESO writes the Secret
+     under the same gate in external-secrets.yaml, data key `auth_token`, the KubeRay
+     operator-Secret convention rayservice.yaml's spec.authOptions.secretName relies on). Usage: {{- include "rask.rayAuthEnv" . | nindent 16 }} */}}
 {{- define "rask.rayAuthEnv" -}}
 {{- if .Values.ray.auth.enabled -}}
 - name: RAY_AUTH_MODE
@@ -103,9 +85,8 @@ app.kubernetes.io/component: {{ $component }}
 {{- end -}}
 {{- end -}}
 
-{{/* rask.minioAccessKey / rask.minioSecretKey are GONE (lance-ns-merge P4 store unification):
-     the ONE store's root credential is minio.accessKey/secretKey everywhere — the Tenant credsSecret,
-     the fleet's AWS_*, infra-credentials, and the hooks all read that single pair. */}}
+{{/* The ONE store's root identity is minio.accessKey (a value) and the store's `minio-secret-key`
+     (never a value): the server, `<release>-infra-credentials` and the hooks all read that pair. */}}
 
 {{/* ── The ONE GPU signal: ray.gpuCount ────────────────────────────────────────────────────────────
      `ray.gpuCount` is the single fact every GPU-shaped decision in this chart derives from. It exists
@@ -142,8 +123,8 @@ app.kubernetes.io/component: {{ $component }}
      THIS helper, so the sidecar contract can never drift between planes (DAPRIFY 2026-07-27). Carries the full union of what the two planes shipped:
        - enabled / app-id / app-port / log-level (the original rask surface)
        - max-body-size (when dapr.maxBodySize is set — Dapr's 4Mi default rejects multi-image batch uploads)
-       - app-token-secret → the shared <release>-dapr-app-token Secret (dapr-app-token.yaml, same
-         dapr.sidecars gate, so the reference can never dangle): Dapr injects APP_API_TOKEN and stamps
+       - app-token-secret → the shared <release>-dapr-app-token Secret (ESO-written, external-secrets.yaml,
+         same dapr.sidecars gate, so the reference can never dangle): Dapr injects APP_API_TOKEN and stamps
          `dapr-api-token` on delivered requests → sidecar-only routes reject forged direct POSTs
        - the daprd resource bounds + disable-builtin-k8s-secret-store (+ optional seccomp) via
          lance.daprSidecarResources
@@ -200,16 +181,6 @@ dapr.io/log-as-json: "true"
 dapr.io/max-body-size: {{ . | quote }}
 {{- end }}
 dapr.io/app-token-secret: {{ $root.Release.Name }}-dapr-app-token
-{{- /* AND ITS CHECKSUM, IN THE SAME PLACE THE TOKEN IS HANDED OVER. The injector reads that
-       Secret at POD CREATION, so a rotated token leaves the sidecar presenting a dead credential
-       while the render, the reference and every probe stay green. This annotation is what turns a
-       rotation into a new pod template, and therefore a restart.
-
-       HERE RATHER THAN PER TEMPLATE, because the two ways to lose it look nothing alike: four
-       lakehouse Deployments lost it to a DUPLICATE `annotations:` key (valid YAML, last key wins)
-       and two more simply never had it. Written beside the annotation it guards, neither is
-       possible — a pod given the token carries the checksum by construction. */}}
-checksum/dapr-app-token: {{ include (print $root.Template.BasePath "/dapr-app-token.yaml") $root | sha256sum }}
 {{- /* THE SIDECAR MUST OUTLIVE THE APP'S DRAIN, not race it. This block emitted nothing about
        shutdown, so daprd took its 5s default while the app was still inside its own preStop sleep —
        and since the kubelet SIGTERMs every container simultaneously, the sidecar was gone before the
@@ -752,6 +723,11 @@ scopes:
   - {{ $app }}
 {{- end -}}
 
+{{- /* Whether the chart generates the dev OpenBao's credentials (external-secrets.yaml): only for a dev store this chart runs. */ -}}
+{{- define "lance.mintsDevCredentials" -}}
+{{- if and .Values.openbao.enabled .Values.openbao.devMode (not .Values.openbao.externalAddr) -}}true{{- end -}}
+{{- end -}}
+
 {{- /* Whether the chart's dev OpenBao issues the NATS credentials: a dev store this chart runs, for a NATS this chart runs. */ -}}
 {{- define "lance.natsMints" -}}
 {{- if and .Values.openbao.enabled .Values.openbao.devMode (not .Values.openbao.externalAddr) .Values.nats.enabled (not .Values.nats.externalUrl) -}}true{{- end -}}
@@ -759,7 +735,7 @@ scopes:
 
 {{- /* Whether a pod with no sidecar gets its NATS credential as a file ESO writes from the store. */ -}}
 {{- define "lance.natsCredsFiles" -}}
-{{- if and (include "lance.secretsViaDapr" .) .Values.externalSecrets.enabled -}}true{{- end -}}
+{{- if include "lance.secretsViaDapr" . -}}true{{- end -}}
 {{- end -}}
 
 {{- /* The Secrets ESO writes for the NATS pods that have no sidecar, as JSON {target: [store secrets]}: the ExternalSecrets and the ESO policy both read it. */ -}}
@@ -1485,32 +1461,6 @@ one bound that applies actually fires here.
 activeDeadlineSeconds: 1800
 {{- end -}}
 
-{{/*
-The secret half of a SCOPED STORAGE IDENTITY, derived rather than stored.
-
-Usage: {{ include "lance.scopedStorageSecret" (list . "rask-medallion" .Values.minio.medallionSecretKey) }}
-
-WHY DERIVED. A scoped identity is the control this estate most wants declared in a values file, and it
-was the one that could not be: declaring it meant committing its secret. So both live scoped users were
-minted by hand, which is drift no render can correct (Helm only patches fields that CHANGED, so a
-hand-set env survives every upgrade and reverts the moment one values edit touches it).
-
-Deriving it makes NAMING the identity sufficient. The third argument is the operator's own value and
-WINS when set — someone supplying a secret from a manager must not have it silently replaced.
-
-ONE OVERRIDE SECURES THE WHOLE SET, which is the reason to seed from `minio.secretKey` rather than
-from a constant: on a real deployment that value must already be overridden (`prod-credentials.yaml`
-refuses the published default), so every secret derived from it is real without a second decision.
-
-DETERMINISTIC, so a re-render is not a rotation: an access key's secret is read at eight sites across
-five templates AND handed to `mc admin user add`, so the two halves agree only by both computing the
-same function of the same inputs.
-*/}}
-{{- define "lance.scopedStorageSecret" -}}
-{{- $root := index . 0 -}}{{- $identity := index . 1 -}}{{- $explicit := index . 2 -}}
-{{- if $explicit -}}{{- $explicit -}}{{- else -}}{{- printf "%s-s3-%s" $identity $root.Values.minio.secretKey | sha256sum | trunc 40 -}}{{- end -}}
-{{- end -}}
-
 {{/* The bundle field the catalog reads its S3 secret from, and so the field a per-base credential carries. */}}
 {{- define "lance.catalogSecretField" -}}
 {{- ternary "catalog-s3-secret-key" "minio-secret-key" (not (not .Values.minio.catalogAccessKey)) -}}
@@ -1536,12 +1486,21 @@ same function of the same inputs.
 {{- $out | toJson -}}
 {{- end -}}
 
-{{/* Writes the fixture secret for reference $1 to file $2 from the store's root secret in $root, never
-to output; the same function as `lance.scopedStorageSecret`, so every caller derives one value. */}}
-{{- define "lance.baseFixtureSecretFn" -}}
-base_secret() {
+{{/*
+The secret half of a SCOPED STORAGE IDENTITY (and of a per-base fixture credential), derived in the
+cluster: `scoped_secret <identity> <file>` writes sha256("<identity>-s3-<root>")[:40] to <file> from the
+store's root secret in `$root`, never to output, argv or the render.
+
+WHY DERIVED. The two halves of a scoped pair are made by two pods, the dev OpenBao's seed (the field a
+service reads) and `minio-scoped-users` (`mc admin user add`), and they agree only by computing the same
+function of the same inputs. Both read the root from a file, so naming an identity in a values file is
+the whole setting and no secret is a value ([[XC-004]]). Deterministic, so a re-run is not a rotation;
+rotating the root rotates every derived secret with it.
+*/}}
+{{- define "lance.scopedSecretFn" -}}
+scoped_secret() {
   s=$(printf '%s-s3-%s' "$1" "$root" | sha256sum | cut -c1-40)
-  [ ${#s} -eq 40 ] || { echo "could not derive the data-base secret for $1" >&2; exit 1; }
+  [ ${#s} -eq 40 ] || { echo "could not derive the scoped secret for $1" >&2; exit 1; }
   (umask 077; printf '%s' "$s" > "$2")
 }
 {{- end -}}

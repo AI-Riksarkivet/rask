@@ -25,6 +25,16 @@ changes reaches the store on the next rollout without touching the trust root th
 `nats-server` and those two before the readiness key; a root it cannot read or use stops the seed, because a store that is
 Ready without its users hands every sidecar an empty credential. The bundle is kept like the signing pairs.
 
+[[XC-004]] makes every other credential of the store a generated one: ESO's Password generator fills
+`<release>-dev-credentials` once, the pod mounts it, and the seed writes each field from the file, deriving
+each scoped storage secret from the root there, so no credential is in the render, an argument list or an
+output stream. The `minio-scoped-users` Job derives the same scoped secrets for `mc admin user add`, and a
+service reads its field by name: the field each service is told to read must hold the secret the Job gives
+the user named by that service's access key, or every S3 call is `SignatureDoesNotMatch`. A store missing a
+generated credential is never Ready. A rotated key of the mounted Secret (and the operator's hf-token) reaches the
+store through the seed's loop, keeping the signing pairs and the bus root, because replacing the pod to re-seed
+would re-mint them.
+
 The scripts run here against stand-ins for the bao, nk and nsc CLIs: the bao stand-in keeps two stores, the pod's
 own server and the one the Service routes to, the nk stand-in hands out generated pairs, and the nsc stand-in issues JWTs
 that carry the permissions it was given.
@@ -33,6 +43,7 @@ that carry the permissions it was given.
 from __future__ import annotations
 
 import base64
+import hashlib
 import io
 import json
 import os
@@ -52,17 +63,22 @@ from tests.unit.openbao_standins import BAO, NK, NSC, install
 _OWN = "http://127.0.0.1:8200"
 _SENTINEL = "secret/openbao-seeded"
 
-#: The first sleep ends the run, unless the scenario restarts the server in place: then the first sleep
+#: The first sleep ends the run, unless the scenario restarts the server in place or rotates a mounted credential
+#: (as kubelet refreshes a mounted Secret): then the first sleep does that, and the second ends the run. On a restart
 #: empties the pod's own store and cuts the Service off, and the second ends the run.
 _SLEEP = """\
 #!/bin/sh
 n=$(cat "$STORES/sleeps" 2>/dev/null || echo 0)
 echo $((n + 1)) > "$STORES/sleeps"
 if [ -e "$STORES/restart" ] && [ "$n" -eq 0 ]; then rm -rf "$STORES/local"; : > "$STORES/served.refused"; exit 0; fi
+if [ -e "$STORES/rotate" ] && [ "$n" -eq 0 ]; then cp "$STORES/rotate" "$DEV_CREDENTIALS/postgres-password"; cp "$STORES/rotate" "$SUPPLIED_CREDENTIALS/hf-token"; exit 0; fi
 exit 1
 """
 
 _WRITES = ("kv put ", "auth ", "write ", "policy ")
+
+#: What ESO's Password generator writes into `<release>-dev-credentials` (templates/external-secrets.yaml).
+_GENERATED = ("minio-secret-key", "postgres-password", "dapr-app-token", "ray-auth-token", "frontend-session-secret")
 
 
 def _seed(docs: tuple[dict, ...]) -> tuple[str, dict]:
@@ -189,6 +205,9 @@ def _arrange_nats(case: str, stores: Path, tmp_path: Path, env: dict[str, str]) 
         pytest.param(DEFAULT_ARGS, "forbidden", "", False, "minted", id="a-served-store-it-cannot-read-stops-the-seed"),
         pytest.param(DEFAULT_ARGS, "lacks", "readonly", False, "minted", id="a-failed-write-stops-the-seed"),
         pytest.param(DEFAULT_ARGS, "lacks", "restart", True, "minted", id="a-server-restarted-in-place-gets-the-same-keys"),
+        pytest.param(
+            (*DEFAULT_ARGS, "--set", "secrets.hfTokenInStore=true"), "lacks", "rotate", True, "minted", id="a-rotated-credential-reaches-the-store-in-place"
+        ),
         pytest.param(DEFAULT_ARGS, "lacks", "", True, "carried", id="a-signing-pair-behind-the-service-is-carried"),
         pytest.param(DEFAULT_ARGS, "lacks", "", True, "rotated", id="a-list-without-its-key-is-a-rotation-that-keeps-one-previous"),
         pytest.param(DEFAULT_ARGS, "lacks", "", True, "kept", id="a-kept-pair-beats-a-new-mint-candidate"),
@@ -201,6 +220,7 @@ def _arrange_nats(case: str, stores: Path, tmp_path: Path, env: dict[str, str]) 
         pytest.param(DEFAULT_ARGS, "lacks", "", True, "nats-carried", id="the-bus-trust-root-and-route-are-carried-and-every-user-issued-afresh"),
         pytest.param(DEFAULT_ARGS, "lacks", "", False, "nats-root-malformed", id="a-bus-trust-root-it-cannot-use-stops-the-seed"),
         pytest.param(DEFAULT_ARGS, "lacks", "", False, "nats-mint-failed", id="a-store-without-its-bus-users-is-never-ready"),
+        pytest.param(DEFAULT_ARGS, "lacks", "", False, "generated-missing", id="a-store-without-a-generated-credential-is-never-ready"),
     ],
 )
 def test_the_dev_store_is_seeded_by_its_own_pod_and_keeps_its_signing_keys(  # noqa: PLR0913, PLR0915 — parametrized, one scenario per row
@@ -226,6 +246,8 @@ def test_the_dev_store_is_seeded_by_its_own_pod_and_keeps_its_signing_keys(  # n
         (stores / "local.readonly").touch()
     elif local == "restart":
         (stores / "restart").touch()
+    elif local == "rotate":
+        (stores / "rotate").write_text("a-rotated-value-the-loop-must-store")
     install(tmp_path, bao=BAO, sleep=_SLEEP, nk=NK, nsc=NSC)
     (tmp_path / "home" / "seed").mkdir(parents=True)
     pool = [event_signer(f"pair-{i}") for i in range(4 * len(ids))]
@@ -236,6 +258,15 @@ def test_the_dev_store_is_seeded_by_its_own_pod_and_keeps_its_signing_keys(  # n
     (tmp_path / "pairs").write_text("".join(f"{pair.seed}\n{pair.public}\n" for pair in [*pool[: len(ids)], *bus_pairs.values()]))
     signing_dir = tmp_path / "signing"
     signing_dir.mkdir()
+    generated_dir = tmp_path / "dev-credentials"
+    generated_dir.mkdir()
+    generated = {key: hashlib.sha256(f"{tmp_path}-{key}".encode()).hexdigest()[:40] for key in _GENERATED}
+    supplied_dir = tmp_path / "supplied"
+    supplied_dir.mkdir()
+    (supplied_dir / "hf-token").write_text("an-operator-supplied-hf-token")
+    for key, value in generated.items():
+        if not (case == "generated-missing" and key == "postgres-password"):
+            (generated_dir / key).write_text(value)
     nats_tools = tmp_path / "nats-tools"
     nats_tools.mkdir()
     [service] = [d for d in docs if d.get("kind") == "Service" and f"Deployment/{d['metadata']['name']}" == workload]
@@ -246,6 +277,8 @@ def test_the_dev_store_is_seeded_by_its_own_pod_and_keeps_its_signing_keys(  # n
         "STORES": str(stores),
         "SERVICE_ADDR": service_addr,
         "SIGNING_DIR": str(signing_dir),
+        "DEV_CREDENTIALS": str(generated_dir),
+        "SUPPLIED_CREDENTIALS": str(supplied_dir),
         "NATS_TOOLS": str(nats_tools),
         "NK_PAIRS": str(tmp_path / "pairs"),
         "NK_STATE": str(tmp_path / "nk-calls"),
@@ -270,14 +303,16 @@ def test_the_dev_store_is_seeded_by_its_own_pod_and_keeps_its_signing_keys(  # n
     assert minted.returncode == 0, f"a failed mint must not stop the pod: exit {minted.returncode}: {minted.stderr[-1000:]}"
     assert not modes, f"mint candidates must be mode 0400 for their owner alone: {modes}"
     assert users, "the seed issues no NATS user, so no pub/sub client can authenticate"
-    calls_text = (stores / "calls").read_text()
+    calls_text = (stores / "calls").read_text() if (stores / "calls").exists() else ""
     calls = calls_text.splitlines()
     nsc_calls = (tmp_path / "nsc-calls").read_text() if (tmp_path / "nsc-calls").exists() else ""
     streams = minted.stdout + minted.stderr + ran.stdout + ran.stderr + calls_text + nsc_calls
     leaked = [pair.seed for pair in [*pool, *bus_pairs.values()] if pair.seed in streams]
     assert not leaked, "a private seed reached an output stream, a bao argument list or an nsc argument list"
+    exposed = [key for key, value in generated.items() if value in streams]
+    assert not exposed, f"the generated {exposed} reached an output stream or a bao argument list"
     writes = [call for call in calls if call.split(" ", 1)[1].startswith(_WRITES)]
-    assert writes, "the seed wrote nothing"
+    assert writes or not succeeds, "the seed wrote nothing"
     assert all(call.startswith(f"{_OWN} ") for call in writes), (
         f"writes reached {sorted({call.split(' ', 1)[0] for call in writes} - {_OWN})}, the Service's pick of OpenBao pod, not the server beside the seed"
     )
@@ -300,7 +335,46 @@ def test_the_dev_store_is_seeded_by_its_own_pod_and_keeps_its_signing_keys(  # n
             assert not bus, f"bus credentials were written from a trust root the seed refused: {bus}"
         return
     assert writes[-1].startswith(f"{_OWN} kv put {_SENTINEL} "), f"the readiness key is not the last write: {writes[-1]}"
-    assert len(seeded) == (2 if local == "restart" else 1), f"seeds that completed: {len(seeded)}"
+
+    bundle = _store(stores, "local", "secret/lance")
+    if local == "rotate":
+        generated["postgres-password"] = (stores / "rotate").read_text()
+        assert _store(stores, "local", "secret/hf-token").get("token") == generated["postgres-password"], "a rotated hf-token never reached the store"
+    assert {key: bundle.get(key) for key in _GENERATED} == generated, "the store does not hold the credentials ESO generated"
+    assert f":{generated['postgres-password']}@" in bundle.get("dapr-state-connection-string", ""), (
+        "the state store DSN is not built from the generated password"
+    )
+    [job] = [d for d in docs if d.get("kind") == "Job" and d["metadata"]["name"].startswith("rask-minio-scoped-users-")]
+    pod_spec = job["spec"]["template"]["spec"]
+    [derive] = pod_spec["initContainers"]
+    [mc] = pod_spec["containers"]
+    keys_dir = tmp_path / "scoped-keys"
+    keys_dir.mkdir()
+    derived = subprocess.run(
+        ["sh", "-c", derive["command"][-1]],  # noqa: S607
+        env={**os.environ, "KEYS": str(keys_dir), "ROOT_FILE": str(generated_dir / "minio-secret-key")},
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert derived.returncode == 0, f"the Job's derive step failed: {derived.stderr[-500:]}"
+    [mc_keys] = [m["mountPath"] for m in mc["volumeMounts"] if m["name"] == "keys"]
+    readers = {
+        (identity, field)
+        for _, _, c in chart_render.containers(docs)
+        for name, field in chart_render.env_of(c).items()
+        if name.endswith("_DAPR_SECRET_S3_FIELD") and (identity := chart_render.env_of(c).get(name.replace("_DAPR_SECRET_S3_FIELD", "_S3_ACCESS_KEY_ID")))
+    }
+    assert readers, "no service reads a scoped storage field, so this pairing would pass vacuously"
+    for identity, field in sorted(readers):
+        minted = (keys_dir / identity).read_text()
+        assert bundle.get(field) == minted, f"{field} in the store is not the secret the Job gives {identity}: every S3 call signs with a mismatched pair"
+        assert minted != generated["minio-secret-key"], f"{identity} is published with the store's ROOT secret"
+        assert f'mc admin user add rfs {identity} "$(cat {mc_keys}/{identity})"' in mc["command"][-1], (
+            f"the Job does not create {identity} with the secret it derived for it"
+        )
+    assert len(seeded) == (2 if local in {"restart", "rotate"} else 1), f"seeds that completed: {len(seeded)}"
 
     root = _store(stores, "local", "secret/nats-server")
     route = _store(stores, "local", "secret/nats-route")

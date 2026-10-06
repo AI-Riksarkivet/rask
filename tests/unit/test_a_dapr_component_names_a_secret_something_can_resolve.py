@@ -183,18 +183,11 @@ def _fields(external_secret: dict) -> set[str]:
 @pytest.mark.parametrize(
     ("overlay", "server"),
     [
-        pytest.param(("--set", "externalSecrets.enabled=true"), False, id="credential-files-while-the-server-takes-anyone"),
-        pytest.param(("--set", "externalSecrets.enabled=true", "--set", "nats.auth.server=true"), True, id="the-server-in-operator-mode"),
-        # Operator mode refuses every client without a user JWT, and its own operator and route credentials arrive through ESO.
-        pytest.param(("--set", "nats.auth.server=true"), None, id="no-operator-mode-without-external-secrets"),
+        pytest.param((), False, id="credential-files-while-the-server-takes-anyone"),
+        pytest.param(("--set", "nats.auth.server=true"), True, id="the-server-in-operator-mode"),
     ],
 )
-def test_every_nats_credential_a_pod_mounts_is_a_file_an_external_secret_writes_from_the_store(overlay: tuple[str, ...], server: bool | None) -> None:  # noqa: FBT001
-    if server is None:
-        with pytest.raises(subprocess.CalledProcessError) as refused:
-            render(*DEFAULT_ARGS, *overlay)
-        assert "externalSecrets.enabled" in refused.value.stderr, "the refusal does not name the switch that delivers the server's credentials"
-        return
+def test_every_nats_credential_a_pod_mounts_is_a_file_an_external_secret_writes_from_the_store(overlay: tuple[str, ...], server: bool) -> None:  # noqa: FBT001
     docs = render(*DEFAULT_ARGS, *overlay)
     users = chart_render.nats_users(docs)
     written = {doc["spec"]["target"]["name"]: doc for doc in docs if doc.get("kind") == "ExternalSecret"}

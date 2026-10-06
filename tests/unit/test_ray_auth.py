@@ -3,10 +3,8 @@
 The live tokenless-rejection proof runs at the cluster gates; these tests pin what
 `helm template` can prove offline:
 
-  * externalSecrets ON -> the ESO ExternalSecret owns the same-named Secret, reads the OpenBao KV
-    property `ray-auth-token`, and the static one is skipped (no plaintext token in the chart).
-  * in every shape (in-cluster or external Ray, static or ESO) -> whatever references the token
-    Secret, the render also creates it exactly once.
+  * in every shape (in-cluster or external Ray) -> whatever references the token Secret, the render
+    also creates it exactly once (the ExternalSecret that writes it from the store's `ray-auth-token`).
 """
 
 from __future__ import annotations
@@ -18,6 +16,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.unit.chart_render import ESO_ARGS
+
 
 REPO = Path(__file__).resolve().parents[2]
 CHART = REPO / "chart"
@@ -28,9 +28,8 @@ def _helm(*set_values: str, check: bool = True) -> subprocess.CompletedProcess[s
     if not Path(helm).exists():
         pytest.skip("helm not available")
     argv = [helm, "template", "rask", str(CHART)]
-    # Since auth defaults ON (2026-08-06) every render needs identity values; the chart refuses OIDC
-    # without a session secret ON PURPOSE.
-    argv += ["--set-string", "frontend.oidc.sessionSecret=test-session-secret-32-chars-minimum"]
+    # Since auth defaults ON (2026-08-06) every render needs identity values, and ESO is a prerequisite.
+    argv += [*ESO_ARGS]
     argv += ["--set-string", "frontend.oidc.publicIssuer=http://localhost:8080/dex"]
     argv += ["--set-string", "frontend.oidc.publicOrigin=http://localhost:8080"]
     # The chart REQUIRES an image registry unless the images are side-loaded into the node
@@ -52,20 +51,8 @@ def _name(doc: str) -> str:
     return m.group(1) if m else "?"
 
 
-def test_external_secrets_owns_the_token_and_the_static_secret_is_skipped() -> None:
-    rendered = _helm("singleTenant.enabled=true", "ray.auth.enabled=true", "externalSecrets.enabled=true").stdout
-    docs = _docs(rendered)
-    static = [d for d in docs if re.search(r"^kind: Secret$", d, re.MULTILINE) and "rask-ray-auth-token" in d]
-    assert not static, "with ESO on, no plaintext token Secret may ship in the chart"
-    es = [d for d in docs if "kind: ExternalSecret" in d and "rask-ray-auth-token" in d]
-    assert len(es) == 1, "the ESO path must sync the same-named Secret from Vault"
-    assert "property: ray-auth-token" in es[0], "token must come from the established secretPath (OpenBao KV property ray-auth-token)"
-    assert "auth_token:" in es[0], "the synced Secret must keep the auth_token data key the consumers reference"
-
-
 @pytest.mark.parametrize("single_tenant", [False, True], ids=["external-ray", "in-cluster-ray"])
-@pytest.mark.parametrize("eso", [False, True], ids=["static-secret", "external-secrets"])
-def test_every_secretKeyRef_to_the_token_has_something_that_creates_it(single_tenant: bool, eso: bool) -> None:
+def test_every_secretKeyRef_to_the_token_has_something_that_creates_it(single_tenant: bool) -> None:
     """The load-bearing symmetry: nothing may REFERENCE the token Secret unless the render also CREATES it.
 
     This is the invariant the individual gate tests keep missing, because each one checks a single
@@ -74,8 +61,6 @@ def test_every_secretKeyRef_to_the_token_has_something_that_creates_it(single_te
     on a cluster, which is the most expensive place to find it.
     """
     args = ["ray.auth.enabled=true", f"singleTenant.enabled={str(single_tenant).lower()}"]
-    if eso:
-        args.append("externalSecrets.enabled=true")
     docs = _docs(_helm(*args).stdout)
 
     referrers = {_name(d) for d in docs if "rask-ray-auth-token" in d and "secretKeyRef" in d}

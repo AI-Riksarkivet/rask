@@ -34,12 +34,8 @@ from tests.unit import chart_render
 from tests.unit.chart_render import DEFAULT_ARGS
 
 
-#: Real values for the credentials `prod-credentials.yaml` refuses to see published, so the refusal under test is this one.
-_REAL = (
-    "--set", "dapr.appToken=a-real-app-token",
-    "--set", "age.password=a-real-age-password",
-    "--set", "minio.secretKey=a-real-rustfs-secret",
-)  # fmt: skip
+#: A real deployment carries no published dev credential: the bundled dev Dex is off, so the refusal under test is this one.
+_REAL = ("--set", "dex.enabled=false")
 
 _SEALED = ("--set", "openbao.devMode=false", *_REAL)
 _EXTERNAL = ("--set", "openbao.enabled=false", "--set", "openbao.externalAddr=https://vault.example:8200")
@@ -160,7 +156,6 @@ def test_a_store_nothing_seeds_is_refused_until_the_operator_attests_its_signing
         ),
         pytest.param(("--set", "signing.enforce=false"), False, "enforce", _ALL_HOSTS, id="lineage-off-when-asked"),
         pytest.param(("--set", "auth.enabled=false"), False, None, _ALL_HOSTS, id="not-without-auth"),
-        pytest.param(("--set", "openbao.enabled=false"), False, None, _ALL_HOSTS, id="not-without-a-store"),
     ],
 )
 def test_lineage_and_every_bus_door_verify_against_exactly_the_rendered_signers_wherever_the_store_and_auth_are_on(

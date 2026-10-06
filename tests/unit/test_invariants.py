@@ -29,6 +29,8 @@ import pytest
 import yaml
 from chart_yaml import FAST_LOADER
 
+from tests.unit.chart_render import ESO_ARGS
+
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -48,11 +50,11 @@ def _helm_template(*set_values: str) -> str:
     # Side-loaded images: see `rask.image` in _helpers.tpl — the chart refuses a bare
     # `<component>:<tag>` unless this is set, because that is docker.io and not a local image.
     argv += ["--set", "image.localImages=true"]
-    # The identity values every render needs since auth defaults ON (2026-08-06). The chart refuses
-    # OIDC without a session secret ON PURPOSE — that refusal is what stops a forgotten values file
-    # installing an ungoverned estate. Supplying dev values HERE keeps every other render test testing
-    # its own subject rather than re-testing the guard.
-    argv += ["--set-string", "frontend.oidc.sessionSecret=test-session-secret-32-chars-minimum"]
+    # The identity values every render needs since auth defaults ON (2026-08-06), and the ESO APIs the
+    # chart requires ([[XC-004]]). The chart refuses OIDC without a public issuer ON PURPOSE — that refusal
+    # is what stops a forgotten values file installing an ungoverned estate. Supplying dev values HERE keeps
+    # every other render test testing its own subject rather than re-testing the guard.
+    argv += [*ESO_ARGS]
     argv += ["--set-string", "frontend.oidc.publicIssuer=http://localhost:8080/dex"]
     argv += ["--set-string", "frontend.oidc.publicOrigin=http://localhost:8080"]
     for value in set_values:
@@ -63,8 +65,8 @@ def _helm_template(*set_values: str) -> str:
 def test_no_SCOPED_storage_identity_is_published_with_the_ROOT_secret() -> None:
     """CONTRACT (security, standing rule): a scoped storage identity's secret is DERIVED, never the root.
 
-    The estate mints five scoped RustFS users and publishes each one's secret into OpenBao for ESO to
-    sync. Four derive it with `lance.scopedStorageSecret`. `ray-compute` alone read
+    The estate mints scoped users and publishes each one's secret into OpenBao for ESO to sync. Four
+    derived it from the root; `ray-compute` alone read
     `rayComputeSecretKey | default minio.secretKey` — and `rayComputeSecretKey` ships empty, so the
     published value WAS the RustFS root credential.
 
@@ -76,14 +78,15 @@ def test_no_SCOPED_storage_identity_is_published_with_the_ROOT_secret() -> None:
     `SignatureDoesNotMatch`. The Ray head's own manifest asserts the opposite in a comment, which is
     how it survived.
 
-    ASSERTED ON THE RENDER, not on the template text: the defect is a value flowing through a
-    `| default` chain, and only rendering shows what a consumer would actually receive. Generic over
-    every identity, so the next one added is covered without remembering this.
+    ASSERTED ON THE RENDER: the root is never in it ([[XC-004]]), so the dev OpenBao's seed writes each
+    field from a file, and a scoped field must name the file `scoped_secret` derived for its identity,
+    never the root's (`$G/minio-secret-key`). Generic over every scoped field the seed writes.
     """
-    root = "SENTINEL-ROOT-SECRET-DO-NOT-PUBLISH"
-    rendered = _helm_template(f"minio.secretKey={root}", "auth.bootstrapAdmin=user:gate-probe")
+    rendered = _helm_template("auth.bootstrapAdmin=user:gate-probe")
 
-    offenders = [line.strip() for line in rendered.splitlines() if root in line and re.search(r"[a-z-]*(?<!minio-)secret[-_]key\s*[=:]", line)]
+    fields = re.findall(r"([a-z-]*(?<!minio-)secret-key)=@\"([^\"]+)\"", rendered)
+    assert fields, "the seed writes no scoped secret field, so this gate would pass vacuously"
+    offenders = [f"{field}={source}" for field, source in fields if "/seed/scoped-" not in source]
     assert offenders == [], "a SCOPED identity is published with the ROOT storage secret:\n  " + "\n  ".join(offenders)
 
 
@@ -342,16 +345,13 @@ def test_every_dapr_annotated_pod_carries_the_injector_webhook_label() -> None:
 
 
 #: A render whose images come from a registry off this node — which `prod-credentials.yaml` reads as a
-#: real deployment and refuses while any well-known dev credential survives. Supplying real values here
-#: keeps a test about IMAGE PINNING testing its own subject, exactly as `_helm_template` does for the
-#: OIDC identity.
+#: real deployment, so it points at the platform's sealed store rather than the dev OpenBao. That keeps
+#: a test about IMAGE PINNING testing its own subject.
 _REAL_REGISTRY = (
     "image.localImages=false",
     "image.repository=reg.example",
     "openbao.devMode=false",
-    "age.password=a-real-secret-value-32-chars-long",
-    "minio.secretKey=a-real-secret-value-32-chars-long",
-    "dapr.appToken=a-real-secret-value-32-chars-long",
+    "dex.enabled=false",
     "signing.provisioned=true",
     "nats.auth.provisioned=true",
 )
@@ -469,8 +469,8 @@ def test_the_object_store_carries_NO_plaintext_credential() -> None:
     a plaintext `value:` — readable in `kubectl get statefulset -o yaml`, `kubectl describe` and
     `helm get manifest` — while every sibling credential in the estate was already behind a guard. It
     sat outside that guard because the object store has no daprd sidecar and so cannot read the Dapr
-    secret store the fleet services use. That is the case `infra-credentials.yaml` exists for, and
-    this asserts the store actually uses it.
+    secret store the fleet services use. That is the case the ESO-written `infra-credentials` exists
+    for, and this asserts the store actually uses it.
 
     Latent-by-default is not a defence: `minio.oidc.enabled` is off in the shipped values, so this
     renders only on estates running STS credential vending — which is precisely where a leaked client
@@ -494,10 +494,9 @@ def test_the_object_store_carries_NO_plaintext_credential() -> None:
                 # The reference must RESOLVE — a secretKeyRef at an absent key is a pod that never
                 # starts, and it would only surface on the enabled path, which is the narrowest
                 # possible place to discover it.
-                secrets = {d["metadata"]["name"]: d for d in docs if d.get("kind") == "Secret"}
-                target = secrets.get(ref["name"])
-                assert target is not None, f"{env['name']} references Secret {ref['name']!r}, which the chart does not render"
-                keys = set(target.get("stringData") or {}) | set(target.get("data") or {})
+                written = _written_secrets(docs)
+                keys = written.get(ref["name"])
+                assert keys is not None, f"{env['name']} references Secret {ref['name']!r}, which nothing the chart renders writes"
                 assert ref["key"] in keys, f"{env['name']} references key {ref['key']!r}, absent from Secret {ref['name']!r} (has {sorted(keys)})"
 
 
@@ -1226,7 +1225,7 @@ def test_no_workload_references_a_secret_the_render_does_not_create() -> None:
     problems: list[str] = []
     for label, extra in combinations:
         docs = _rendered_docs(*extra)
-        secrets = {d["metadata"]["name"] for d in docs if d.get("kind") == "Secret"}
+        secrets = set(_written_secrets(docs))
         # SUBCHART NAMING is a separate concern and not this gate's. A subchart names its workloads
         # `{{ .Release.Name }}-x` while this chart's own Secrets use `lance.fullname`, so the two agree
         # only when the release is named `rask` — which it always is here, and which `_helm_template`
@@ -1241,6 +1240,20 @@ def test_no_workload_references_a_secret_the_render_does_not_create() -> None:
                     continue
                 problems.append(f"[{label}] {doc.get('kind')}/{doc['metadata']['name']} -> missing Secret {name!r}")
     assert not problems, "workloads reference Secrets the render never creates:\n  " + "\n  ".join(sorted(set(problems)))
+
+
+def _written_secrets(docs: list[dict]) -> dict[str, set[str]]:
+    """Each Secret the render creates, with its keys: a chart-rendered Secret, or the target an
+    ExternalSecret writes ([[XC-004]]: every credential reaches a pod without a sidecar that way)."""
+    written: dict[str, set[str]] = {}
+    for d in docs:
+        if d.get("kind") == "Secret":
+            written[d["metadata"]["name"]] = set(d.get("stringData") or {}) | set(d.get("data") or {})
+        elif d.get("kind") == "ExternalSecret":
+            target = d["spec"].get("target") or {}
+            keys = set((target.get("template") or {}).get("data") or {}) or {e["secretKey"] for e in d["spec"].get("data") or []}
+            written[target.get("name") or d["metadata"]["name"]] = keys
+    return written
 
 
 def _secret_refs(doc: object) -> list[str]:

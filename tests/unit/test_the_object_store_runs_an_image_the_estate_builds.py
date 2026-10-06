@@ -21,9 +21,7 @@ DIGEST = "sha256:" + "ab" * 32
 _REGISTRY_ARGS = (
     "--set", "image.repository=reg.example",
     "--set", "openbao.devMode=false",
-    "--set", "age.password=a-real-secret-value-32-chars-long",
-    "--set", "minio.secretKey=a-real-secret-value-32-chars-long",
-    "--set", "dapr.appToken=a-real-secret-value-32-chars-long",
+    "--set", "dex.enabled=false",
     "--set", "signing.provisioned=true",
     "--set", "nats.auth.provisioned=true",
 )  # fmt: skip

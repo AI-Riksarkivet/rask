@@ -25,6 +25,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.unit.chart_render import ESO_ARGS
+
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -55,8 +57,7 @@ class TestB3TheDeployAxisIsFedByTheChart:
             "template",
             "rask",
             str(REPO / "chart"),
-            "--set-string",
-            "frontend.oidc.sessionSecret=test-session-secret-32-chars-minimum",
+            *ESO_ARGS,
             "--set-string",
             "frontend.oidc.publicIssuer=http://localhost:8080/dex",
             "--set-string",
