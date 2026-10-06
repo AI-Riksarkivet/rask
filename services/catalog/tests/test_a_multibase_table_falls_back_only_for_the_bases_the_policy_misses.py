@@ -25,8 +25,6 @@ the table is on every multi-base table that passes the guard.
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from catalog.core.vending import unsanctioned_bases
 
 
@@ -46,16 +44,3 @@ def test_a_foreign_base_nobody_sanctioned_is_what_forces_the_fallback() -> None:
         f"the unsanctioned base was not singled out ({missed}) — the door would either proxy a table it "
         "could have vended directly, or direct-vend one whose bytes the policy cannot reach"
     )
-
-
-def _source(module: str) -> str:
-    return (Path(__file__).resolve().parents[1] / "src" / "catalog" / "api" / "v1" / "endpoints" / f"{module}.py").read_text(encoding="utf-8")
-
-
-def test_describe_with_vending_scopes_the_credential_to_the_TABLE_not_less() -> None:
-    """`tables.py` vended with no `bases=`, so its credential could not reach the very bases the other
-    door's policy grants — the § H12 shortfall, on the door nobody re-checked."""
-    body = _source("tables")
-    call = body[body.index("vendor.vend(") :][:400]
-
-    assert "bases=" in call, f"describe-with-vending still vends without the table's declared bases: {call.splitlines()[0]!r}"

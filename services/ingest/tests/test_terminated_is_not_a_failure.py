@@ -21,9 +21,7 @@ that someone killed the run was rewritten as a crash.
 
 And the promotion whitelist in `merge_workflow_state` is the trap this file exists to keep shut. It
 admits only statuses it names, so a new one is DROPPED rather than rejected — the run then reports
-whatever the engine said (COMPLETE), which is the worst direction for this error to point. That is
-not hypothetical: it is the defect `test_run_deadline.py` was written for when FAILED was missing
-from the same list.
+whatever the engine said (COMPLETE), which is the worst direction for this error to point.
 """
 
 from __future__ import annotations

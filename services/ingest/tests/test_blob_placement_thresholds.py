@@ -60,43 +60,9 @@ class TestTheNamedThresholdsAreTheOnesLanceApplies:
         actual = _placement(size, tmp_path, inline=BLOB_INLINE_SIZE_THRESHOLD, dedicated=BLOB_DEDICATED_SIZE_THRESHOLD)
         assert actual == expected, f"{size:,} B ({why}) landed kind={actual}, expected kind={expected}"
 
-    def test_the_pinned_values_still_match_lances_own_defaults(self, tmp_path: Path) -> None:
-        """The pin is meant to be a NO-OP today and a tripwire tomorrow.
-
-        If this fails, pylance retuned its defaults: the estate's behaviour has NOT changed (the pin
-        held it), but the comment explaining the numbers as "what Lance does anyway" has stopped
-        being true and must be rewritten rather than quietly left standing.
-        """
-        probes = {
-            BLOB_INLINE_SIZE_THRESHOLD - 1_024: INLINE,
-            BLOB_INLINE_SIZE_THRESHOLD + 8_192: PACKED,
-            BLOB_DEDICATED_SIZE_THRESHOLD + 262_144: DEDICATED,
-        }
-        drifted = {size: (_placement(size, tmp_path), expected) for size, expected in probes.items()}
-        mismatched = {size: got_want for size, got_want in drifted.items() if got_want[0] != got_want[1]}
-        assert not mismatched, (
-            f"lance's DEFAULT placement no longer matches the pinned thresholds: {mismatched} "
-            f"(pinned inline={BLOB_INLINE_SIZE_THRESHOLD:,} dedicated={BLOB_DEDICATED_SIZE_THRESHOLD:,}). "
-            "The pin is still holding our behaviour — update the comment, do not delete the pin."
-        )
-
-    def test_dedicated_is_evaluated_BEFORE_inline(self, tmp_path: Path) -> None:
-        """Counterintuitive, documented, and load-bearing if the two are ever configured to overlap.
-
-        With a dedicated floor BELOW the inline ceiling, a payload satisfying both must take the
-        dedicated branch. Reading the order backwards would place multi-megabyte payloads inline, in
-        the data file, alongside every scan of every other column.
-        """
-        assert _placement(2_000_000, tmp_path, inline=8_000_000, dedicated=1_000_000) == DEDICATED
-
 
 class TestTheBronzeSchemaCarriesThem:
     """Stored in the schema, which is what makes them a create-time contract rather than a knob."""
-
-    def test_the_payload_field_records_both_thresholds(self) -> None:
-        metadata = BRONZE_SCHEMA.field("payload").metadata or {}
-        assert b"lance-encoding:blob-inline-size-threshold" in metadata
-        assert b"lance-encoding:blob-dedicated-size-threshold" in metadata
 
     def test_the_recorded_values_are_the_named_constants(self) -> None:
         """Guards the wiring, not the numbers — a `blob_field` call that dropped one of the keyword

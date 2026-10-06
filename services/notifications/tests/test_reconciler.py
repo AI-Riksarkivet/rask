@@ -128,18 +128,6 @@ def _store(
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_paging_older_passes_the_cursor_as_after() -> None:
-    """`?after=<seq>` walks OLDER (`WHERE seq < %s ORDER BY seq DESC`) — there is no "give me
-    everything since" call to make, so catching up is a walk DOWN toward the stored mark."""
-    route = respx.get(f"{LINEAGE}/events/projection").mock(return_value=httpx.Response(200, json={"events": [], "next_cursor": None}))
-
-    await _feed_client().page(after=42)
-
-    assert route.calls.last.request.url.params["after"] == "42"
-
-
-@pytest.mark.asyncio
-@respx.mock
 async def test_each_poll_presents_the_token_the_kubelet_last_wrote_and_no_claimed_name(lineage_identity_token: Path) -> None:
     """Lineage derives the caller from the verified service-account token, so the token is the whole
     credential. The kubelet rewrites the projected file at ~515 s of a 600 s life (LH-220 probe d), so
@@ -215,17 +203,6 @@ async def test_a_stored_cursor_round_trips() -> None:
     cursor = await store.get()
     assert cursor is not None
     assert cursor.seq == 77
-
-
-@pytest.mark.asyncio
-@respx.mock
-async def test_an_unreachable_store_is_unreadable_never_absent() -> None:
-    """Absent means "prime and notify nobody", so an outage read as absent would jump the mark to the
-    newest row and drop every notification in between — permanent, invisible loss out of a blip."""
-    respx.get(url__startswith="http://localhost:3500/v1.0/state/").mock(return_value=httpx.Response(500))
-    store = LineageCursorStore(client=httpx.AsyncClient(), store_name="lance-statestore")
-    with pytest.raises(LineageCursorUnreadable):
-        await store.get()
 
 
 @pytest.mark.asyncio

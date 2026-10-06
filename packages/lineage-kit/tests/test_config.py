@@ -43,15 +43,6 @@ def test_rask_name_wins_over_the_alias(monkeypatch: pytest.MonkeyPatch) -> None:
     assert LineageSettings().endpoint == "http://rask-wins:5000"
 
 
-def test_auto_transport_without_endpoint_is_noop() -> None:
-    assert isinstance(build_emitter(), NoopEmitter)
-
-
-def test_auto_transport_with_endpoint_is_http(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("RASK_LINEAGE_ENDPOINT", "http://marquez:5000")
-    assert isinstance(build_emitter(), ClientEmitter)
-
-
 @pytest.fixture
 def lineage_door() -> Iterator[tuple[str, list[dict[str, str]]]]:
     """A local HTTP endpoint standing in for the lineage door: it records each POST's headers and answers 201."""

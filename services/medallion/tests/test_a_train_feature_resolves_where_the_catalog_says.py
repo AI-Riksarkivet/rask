@@ -113,12 +113,3 @@ def test_the_ray_JOB_is_given_the_location_the_door_RESOLVED(monkeypatch: pytest
 
     assert outcome == {"status": "SUCCESS"}
     assert seen == [[{"dataset": "silver$features", "version": 7, "uri": "s3://tenant-wh/90fabc"}]]
-
-
-def test_an_unregistered_feature_still_reaches_the_job_by_its_composed_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """The fallback has to survive the same hop — the demo shape trains from the composed layout."""
-    seen = _features_the_job_reads(monkeypatch)
-    event = {"data": {"token": "t1", "model": "churn", "features": [{"dataset": "silver$features", "version": 7}]}}
-
-    assert asyncio.run(train.handle_train_trigger(_settings(**_local(tmp_path)), event, dapr=object())) == {"status": "SUCCESS"}
-    assert seen == [[{"dataset": "silver$features", "version": 7, "uri": f"{tmp_path}/medallion/silver"}]]

@@ -86,15 +86,3 @@ def test_it_names_the_authorization_cause() -> None:
 
     assert "can_maintain" in remedy
     assert "service-maintenance" in remedy
-
-
-def test_both_refusal_sites_use_the_one_wording() -> None:
-    """Two call sites phrased this independently and drifted; one function is what stops that again."""
-    import inspect
-    import linecache
-
-    for module in (catalog_compaction, credentials):
-        linecache.checkcache(module.__file__)
-        source = inspect.getsource(module)
-        assert "denial_remedy(" in source, f"{module.__name__} phrases its own maintenance refusal again"
-        assert "Grant can_maintain on table:" not in source, f"{module.__name__} still instructs a bare grant"

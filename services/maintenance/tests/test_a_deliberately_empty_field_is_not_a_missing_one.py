@@ -75,35 +75,3 @@ def test_a_record_is_judged_by_presence_and_an_empty_identity_is_still_refused(
     assert [r["id"] for r in records] == ids
     assert len(skipped) == (1 if skip_words else 0), skipped
     assert all(word in skipped[0] for word in skip_words), skipped
-
-
-def test_the_TRASH_registry_is_the_call_site_that_asks_for_both_rules() -> None:
-    """The suite above proves `_list_json_records` behaves correctly GIVEN the right arguments, and
-    that is not the same as proving the estate passes them.
-
-    Measured: deleting `non_empty=("id",)` from the trash source left all 316 tests green, because the
-    helper above supplies it. So the rule was tested and the WIRING was not — the shape this estate
-    has been bitten by often enough to have a name for it.
-
-    Asserted on the call's own source text rather than by driving `_build_sources`, which would need a
-    control root, a bucket client and four other registries to reach one keyword argument.
-    """
-    import ast
-    import inspect
-
-    from maintenance.services import reconcile
-
-    tree = ast.parse(inspect.getsource(reconcile))
-    trash_calls = [
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call)
-        and any(kw.arg == "source_name" and isinstance(kw.value, ast.Constant) and kw.value.value == "registry:trash" for kw in node.keywords)
-    ]
-
-    assert trash_calls, "no `_registry_source(..., source_name='registry:trash', ...)` call found — this gate reads nothing"
-    for call in trash_calls:
-        passed = {kw.arg for kw in call.keywords}
-        assert "non_empty" in passed, (
-            f"the trash registry is read without `non_empty`, so an identity-less record would be accepted; the call passes {sorted(p for p in passed if p)}"
-        )

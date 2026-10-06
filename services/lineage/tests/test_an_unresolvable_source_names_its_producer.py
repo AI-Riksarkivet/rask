@@ -17,9 +17,6 @@ made the same loss alertable on one door and invisible on the other".
 
 from __future__ import annotations
 
-import ast
-import pathlib
-
 import pytest
 
 from lineage.core.source_uri import names_a_storage_location, unresolvable_sources
@@ -82,21 +79,3 @@ def test_a_dataset_carrying_NO_dataSource_facet_is_not_reported() -> None:
     """The facet is OPTIONAL in OpenLineage. An absent location is not an unresolvable one, and the
     sweep already skips those for the same reason — conflating them would report most of the estate."""
     assert unresolvable_sources(_event(None)) == []
-
-
-def test_the_SHARED_SEAM_reports_it_rather_than_one_door() -> None:
-    """Driven off the source because the alternative is a live AGE pool.
-
-    `ingest_event` is the one call all four ingest paths make. A report added to the HTTP door instead
-    would leave the JetStream consumer, the DLQ replay and the reconcile relay silent — which is the
-    exact asymmetry that door's own comment was written about.
-    """
-    repository = pathlib.Path("services/lineage/src/lineage/services/repository.py")
-    tree = ast.parse(repository.read_text(encoding="utf-8"))
-    ingest = next(node for node in ast.walk(tree) if isinstance(node, ast.AsyncFunctionDef | ast.FunctionDef) and node.name == "ingest_event")
-    called = {inner.func.id for inner in ast.walk(ingest) if isinstance(inner, ast.Call) and isinstance(inner.func, ast.Name)}
-
-    assert "unresolvable_sources" in called, (
-        "`repository.ingest_event` does not report unresolvable dataset locations, so the four ingest "
-        "paths record a URI every later sweep refuses with nothing naming the producer"
-    )

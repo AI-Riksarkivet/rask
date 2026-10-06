@@ -371,7 +371,7 @@ def main() -> None:
     so = _storage_options()
     # THE PLATFORM'S OWN VOCABULARY — `WorkOrder.to_env()`, the ONE serialization, so no adapter hand-rolls it. A job
     # reading a name no order supplies binds it to the empty string, and an empty source URI is a run that scans
-    # nothing and reports success. Pinned by `tests/unit/test_the_submitter_and_the_job_agree_on_the_wire.py`.
+    # nothing and reports success.
     from_uri, to_uri, stage = os.environ["RASK_SOURCE_URI"], os.environ["RASK_DEST_URI"], os.environ["RASK_STAGE"]
     lineage = os.environ.get("RASK_LINEAGE_DOCUMENT", "")
     # THE DELTA BOUNDARY. An order OMITS the floor when there is none rather than blanking it; both spellings arrive

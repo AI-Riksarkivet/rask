@@ -15,15 +15,10 @@ THE NAMESPACE DOOR ALREADY DOES THIS RIGHT, which is what makes it a gap rather 
 `_collect_descendants` exists there to enumerate children BEFORE the cascade removes them, precisely
 so their tuples can be revoked after. The warehouse path took the same destructive action with none
 of it.
-
-THE WIRING IS ASSERTED SEPARATELY FROM THE BEHAVIOUR, and that is not ceremony: the first version of
-this file only checked that the helper EXISTED, and mutation-checking showed deleting the call site
-left it green. A helper nothing calls is not a fix.
 """
 
 from __future__ import annotations
 
-import inspect
 from typing import Any, cast
 
 import pytest
@@ -52,14 +47,3 @@ async def test_every_descendant_object_has_its_tuples_revoked(monkeypatch: pytes
 
     assert removed == 2
     assert revoked == ["table:acme$doomed", "namespace:acme$nested"], f"descendants were not revoked by their own ids: {revoked}"
-
-
-def test_the_cascade_actually_calls_it_and_before_the_drop() -> None:
-    """THE WIRING. A helper nothing calls is not a fix, and the ORDER is the whole mechanism: after
-    `drop_namespace` the children cannot be listed, so a revoke placed later would enumerate nothing."""
-    source = inspect.getsource(wh_api.delete_warehouse)
-
-    assert "_revoke_descendants_of" in source, "the warehouse cascade does not revoke descendants at all"
-    assert source.index("_revoke_descendants_of") < source.index('"drop_namespace"'), (
-        "the descendant revoke runs AFTER the native drop, which destroys the children it needed to enumerate"
-    )

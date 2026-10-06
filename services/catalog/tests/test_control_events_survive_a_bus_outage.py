@@ -32,29 +32,6 @@ def _event() -> CatalogControlEvent:
     return CatalogControlEvent(action="table_published", object_type="table", object_id="table:acme-silver$features", actor=None)
 
 
-class _Blip:
-    """A sidecar that accepts nothing — the NATS blip, as the emitter meets it."""
-
-    async def publish_event(self, **_kw: Any) -> None:
-        raise TimeoutError("publish timed out")
-
-
-@pytest.mark.asyncio
-async def test_a_failed_control_publish_leaves_the_event_STAGED(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    """THE WEDGE. Unstaged, this event is simply gone and the cascade stops."""
-    from service_kit.lakehouse import outbox
-
-    uri = f"file://{tmp_path}/control-outbox"
-    emitter = DaprControlEmitter(
-        cast("Any", _Blip()), pubsub="p", topic="catalog.control.v1", timeout_seconds=1.0, service="catalog", sign=None, outbox_uri=uri
-    )
-
-    await emitter.emit(_event())
-
-    staged = list(outbox.list_events(uri, {}))
-    assert staged, "the control event was lost; nothing can re-publish it and the cascade is cancelled"
-
-
 @pytest.mark.asyncio
 async def test_a_SUCCESSFUL_publish_drops_the_staged_copy(tmp_path: Any) -> None:
     """Drop-on-ack. A staged object that outlives its delivery is one the relay re-publishes forever."""

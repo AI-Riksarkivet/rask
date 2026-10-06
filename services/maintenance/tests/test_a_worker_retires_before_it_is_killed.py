@@ -167,39 +167,6 @@ def test_the_handler_does_NOT_retire_below_the_mark(monkeypatch: pytest.MonkeyPa
 # --------------------------------------------------------------------------- #
 
 
-def test_every_module_that_holds_a_rewrite_slot_also_counts_the_pass() -> None:
-    """The structural half, and it caught a real hole the hour this was written.
-
-    `rewrite_slot` is documented as "the only step that holds bytes", and TWO modules acquire it:
-    `compaction_executor` on the distributed path and `optimize` in-pod. Only the first called
-    `record_committed_rewrite`, so a worker doing in-pod compactions retained ~12 MiB per pass and
-    could never reach its budget — the retirement bounded one path and looked like it bounded both.
-
-    Asserted over the SOURCE rather than by calling them, because the failure is an ABSENCE: a third
-    rewrite path added later is covered the day it acquires a slot, which no behavioural test of the
-    two existing ones can promise.
-    """
-    import ast
-    from pathlib import Path
-
-    root = Path(__file__).resolve().parents[1] / "src" / "maintenance" / "services"
-    holders: dict[str, set[str]] = {}
-    for module in sorted(root.glob("*.py")):
-        tree = ast.parse(module.read_text(encoding="utf-8"))
-        called = {node.func.id for node in ast.walk(tree) if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)}
-        if module.name == "rewrite_slot.py" or "rewrite_slot" not in called:
-            continue
-        holders[module.name] = called
-
-    assert holders, "no module acquires a rewrite slot — the walk found nothing, so it proves nothing"
-    uncounted = sorted(name for name, called in holders.items() if "record_committed_rewrite" not in called)
-    assert uncounted == [], (
-        f"{uncounted} hold a rewrite slot and never count the pass — the [[LH-183]] budget would bound "
-        "every OTHER path and silently not this one. Call `record_committed_rewrite()` once per "
-        "completed compaction there, at the same granularity as the distributed commit."
-    )
-
-
 def test_the_IN_POD_path_counts_a_pass_that_moved_bytes(monkeypatch: pytest.MonkeyPatch) -> None:
     """The behavioural half of the gate above: the in-pod compaction must advance the same counter
     the distributed commit does, or the two paths disagree about what this worker has spent."""

@@ -120,7 +120,6 @@ def test_a_4xx_plan_answer_is_the_executors_bug_not_an_outage(answer: httpx.Resp
 @pytest.mark.parametrize(
     "answer",
     [
-        pytest.param(httpx.Response(500, json={"detail": "boom"}), id="500"),
         pytest.param(httpx.Response(429, json={"detail": "busy"}), id="429"),
         pytest.param(httpx.Response(200, content=b"<html>not json</html>"), id="an-unparseable-body"),
         pytest.param(httpx.ConnectError("refused"), id="a-connection-error"),

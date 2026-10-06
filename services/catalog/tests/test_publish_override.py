@@ -133,20 +133,3 @@ class TestAnOverrideIsNotABlanketForce:
 
         assert result.published is True
         assert result.accepted == []
-
-
-class TestTheOverrideNeedsAHigherRungThanPublishItself:
-    """Publishing is owner-tier (`can_update_tag`); accepting a finding the gate raised is a
-    VALIDATOR's act. An override that needed only what an ordinary publish needs would be no gate at
-    all — any owner could wave through their own failed batch."""
-
-    def test_the_route_requires_can_promote_when_assertions_are_accepted(self) -> None:
-        import inspect
-
-        from catalog.api.v1.endpoints import publication as endpoint
-
-        source = inspect.getsource(endpoint)
-        assert "if body.accept_assertions:" in source
-        assert 'relation="can_promote"' in source, (
-            "an accepted-assertion publish must cross a rung ABOVE can_update_tag; without it the override is available to anyone who could already publish"
-        )

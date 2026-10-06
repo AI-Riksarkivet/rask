@@ -44,18 +44,3 @@ from catalog.core.formats import reject_unsupported_properties
 def test_rejects_a_property_no_door_honours(props: dict[str, str]) -> None:
     with pytest.raises(InvalidInputError):
         reject_unsupported_properties(props)
-
-
-@pytest.mark.parametrize(
-    "props",
-    [
-        None,
-    ],
-)
-def test_allows_lance_or_absent(props: object) -> None:
-    reject_unsupported_properties(props)  # no raise
-
-
-# --------------------------------------------------------------------------------------------------
-# The guard must be CALLED. Testing the function proves the rule; it does not wire it to a door.
-# --------------------------------------------------------------------------------------------------

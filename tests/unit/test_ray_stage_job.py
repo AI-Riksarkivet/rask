@@ -306,8 +306,7 @@ def test_a_declared_cardinality_the_job_cannot_honour_is_refused_at_DECLARATION_
 def test_the_submit_path_FORWARDS_the_declared_cardinality_to_the_job(tmp_path: Path) -> None:
     """A project's declared fan-out reaches the order's stamp, which the job reads as `RASK_CARDINALITY`.
 
-    Driven through the stage lane's order builder over a REAL declaration on `tmp_path` (`to_env()` is pinned by
-    `tests/unit/test_the_submitter_and_the_job_agree_on_the_wire.py`).
+    Driven through the stage lane's order builder over a REAL declaration on `tmp_path`.
     """
     import asyncio
 
