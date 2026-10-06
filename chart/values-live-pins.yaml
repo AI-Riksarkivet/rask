@@ -9,6 +9,7 @@ image:
     gateway: "lakehouse-661140a4"
     ingest: "lakehouse-fdc53bd0"
     lance-rest-catalog: "lakehouse-fdc53bd0"
+    minio: "lakehouse-5b9f199e"
     nats: "2.14.2-alpine"
     notifications: "lakehouse-fdc53bd0"
     web-annotator: "main-90b8d0ed"
