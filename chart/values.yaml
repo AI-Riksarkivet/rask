@@ -3859,7 +3859,7 @@ greptimedb-standalone:
   #     that could report the hole is the thing that died. That blind spot is now covered:
   #     `chart/alerting/rules.yml` carries 29 rules including four GreptimeDB ones (Restarting,
   #     MemoryHigh, Down, MetricsMissing, added in f6af38bf) — though they evaluate nowhere until
-  #     `alerting.enabled` is turned on, which is a separate open decision (see open_alert.md).
+  #     `alerting.enabled` is turned on, which is a separate open decision (see PARK-ALERT-1, #472).
   #   * Whatever was in flight at each OOM was dropped rather than retried, because the Collector had
   #     no `sending_queue`. It has one now (ebcb7f68).
   # Raising the ceiling again is the obvious move and is probably still not the answer: nothing has

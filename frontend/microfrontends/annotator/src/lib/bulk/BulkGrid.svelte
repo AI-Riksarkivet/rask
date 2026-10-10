@@ -107,7 +107,7 @@
 	const producersQuery = $derived(assistProducers(null));
 	// Recipe producers: interactive families whose declared returns include the `tag` an
 	// item-level answer lands as. The picker lists what discovery/config actually offers —
-	// users never type an endpoint (open_assist_discovery.md §"Who configures what").
+	// users never type an endpoint (ADR 0137, "Who configures what").
 	const recipeProducers = $derived.by(() => {
 		const listing = producersQuery.current;
 		if (!listing?.ok) return [];
@@ -384,7 +384,7 @@
 			// appended NOW is absent from that capture by definition — passing the task id would
 			// have the contract filter drop the very answers this fill exists to produce. The
 			// membership rules still apply where they mean something (submit). Capture-refresh
-			// semantics are phase 3b's open question (open_bulk_active.md §6.3).
+			// semantics are phase 3b's open question (PARK-ANNO-1, #473).
 			const result = await requestAssist({
 				key: (task.source.keys ?? []).join(','),
 				dataset: task.source.where ?? null,

@@ -3,9 +3,9 @@
 Seven audits ran as multi-agent workflows on 2026-09-25; this index lists the reports whose findings are
 still cited. Each report below is the audit's own synthesis,
 kept verbatim so every finding keeps its citation; the one edit is that a pointer into a retired register now names
-the row in `open_backlog_left_new2.md` (or states the rule it pointed at). Their findings were turned into rows of
-`open_backlog_left_new2.md` (which superseded `open_backlog_left.md` and `open_backlog_left_new.md` the
-same day); this folder is the evidence those rows cite.
+the row id (or states the rule it pointed at). Their findings were turned into rows of the register that
+superseded two earlier registers the same day; each row is a GitHub issue on `AI-Riksarkivet/rask`, ordered by
+the map issue #478, and this folder is the evidence those rows cite.
 
 Sources read: the vendored `lance_docs/` (see `lance_docs/PROVENANCE.md` for its pins), Lakekeeper at
 `lakekeeper/lakekeeper@a58e401` and `lakekeeper/lakekeeper-charts@cffd5b7`, pylance 12.0.0 and 11.0.0,
@@ -22,7 +22,7 @@ report says otherwise; none ran against the production S3.
 
 The seventh workflow was the backlog re-audit itself: every one of the 197 open rows re-measured
 against the code by an auditor and a skeptic, with the reports above as input. Its output is
-`open_backlog_left_new2.md`, not a report here.
+the row set the GitHub issues carry (map #478), not a report here.
 
 **What is not covered, stated so it is not read as covered.** The `lance_docs` chunk for the branch/tag
 spec, table format and storage layout (`file_format.md` 2696–3251) was read only by an unverified gap

@@ -1,6 +1,6 @@
 # 0137. Model endpoints are Ray Serve, discovered by the `labeling` user_config (2026-08-09)
 
-Source: `open_assist_discovery.md` (repo root; working design of 2026-08-09). The ruling, verbatim from the owner:
+Source: `open_assist_discovery.md` (repo root at `ac158590`; its live-cluster exit criterion is PARK-ANNO-1, #473; working design of 2026-08-09). The ruling, verbatim from the owner:
 *"endpoints of models will and always be models by Ray Serve from our ray-cluster, and the discovery based on models
 for labeling."* Grounded in the Ray Serve REST API reference and the KubeRay RayService and RayService HA guides, read
 against Ray 2.56.1 / KubeRay ≥ 1.6.

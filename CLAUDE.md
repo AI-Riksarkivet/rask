@@ -43,14 +43,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Python follows the ra-skills `writing-python` and `fastapi` references, read before writing:**
   Pydantic-only structured models, typed `lance_namespace` errors from catalog code, `TypeError` for a
   wrong type, no `# type: ignore` / `# ty: ignore` (narrow or cast).
-- **Finish Phase 1 first; the backlog does not grow without the owner.** The work is
-  `open_backlog_left_new2.md`, in FOCUS order. The **production short list** comes first (owner, 2026-10-02): the rows tagged
-  `blocks-prod`, with CP-029 and LH-226 (criterion 3) and their enablers; every other Phase 1 row waits in the
-  register's PHASE 1 · AFTER LAUNCH section. Phase 1 (the lakehouse) is done when its five criteria hold
+- **Finish Phase 1 first; the backlog does not grow without the owner.** The work is the GitHub Issues on
+  `AI-Riksarkivet/rask` (one issue per row, title `LH-243: …`), in the FOCUS order of the pinned map issue
+  #478 "Phase 1 map" (`docs/agents/issue-tracker.md`). The **production short list** comes first (owner, 2026-10-02): the
+  issues labelled `blocks-prod`, with CP-029 and LH-226 (criterion 3) and their enablers; every other Phase 1 row waits
+  under the `phase-1-after-launch` label. Phase 1 (the lakehouse) is done when its five criteria hold
   together on the estate: (1) provenance/lineage correct, (2) catalog correct for lance-ns and
   authz/governance, (3) not coupled to a workflow engine or Ray, (4) events correct, (5) resilient
-  (XC-090 is the proof). Never add a row without asking the owner; a found problem goes to the register's
-  parking list. A row closes when its fix is deployed and read back live, not when it merges.
+  (XC-090 is the proof). Never add a counted issue without asking the owner; a found problem becomes an issue
+  labelled `parked` only with the owner's say, and stays out of every count. A row closes when its fix is deployed
+  and read back live, not when it merges.
   **Phase 1 IS the lakehouse's components, and nothing else comes first** (owner, 2026-09-28, said more than
   once; widened 2026-09-29): **medallion** (bronze→silver→gold), **catalog**, **provenance/lineage**,
   **FGA/governance**, **maintenance**, the **bring-your-own workflow-engine** seam, and the **controlplane** and
@@ -348,7 +350,7 @@ Key facts that aren't obvious from any single file:
 
 ### Issue tracker
 
-GitHub Issues on `AI-Riksarkivet/rask`, one issue per register row (`LH-243: …`), ordered by the pinned `Phase 1 map` issue. See `docs/agents/issue-tracker.md`.
+GitHub Issues on `AI-Riksarkivet/rask`, one issue per row (`LH-243: …`), ordered by the pinned `Phase 1 map` issue. See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 

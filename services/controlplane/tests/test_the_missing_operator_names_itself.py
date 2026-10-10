@@ -9,7 +9,7 @@ the deployment, not a reachability problem.
 `routes.py` collapsed it — with an RBAC 403 and a genuine connection failure — into one
 `503 cannot reach kubernetes api`. The two misdiagnoses that cost sessions:
 
-  * `HANDOFF-lakehouse.md:101-106` recorded the 503 live and attributed it to
+  * `HANDOFF-lakehouse.md:101-106` (at `ac158590`) recorded the 503 live and attributed it to
     **ServiceAccount/RBAC**. The RBAC is correct; the resource type does not exist.
   * the OPEN-WORK register, row G1 (drained 2026-09-10; in git history) concluded from the same 503 that the chart must **ship the CRD** — the one
     fix `docs/adr/0041-watch-enrolment-does-not-wait-for-the-platform-rask-io-crd.md` rules out, because a CRD without its out-of-repo controller yields

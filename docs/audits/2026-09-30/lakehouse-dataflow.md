@@ -2,9 +2,9 @@
 
 Mapped 2026-09-30 at `eb53bfc`, read-only. Every hop cites a file:line opened at that commit; paths are relative to the
 repository root. The code is the source of truth. Design INTENT comes only from what the owner has ruled: CLAUDE.md
-"Engineering principles" and "Architecture", the five Phase 1 criteria (`open_backlog_left_new2.md` lines 5-7) and the
-register's owner rulings (lines 26-46). Where a doc disagrees with the code, it is listed under "Docs that are wrong or
-stale". `open_backlog_left_new2.md` was not edited by this map; its proposed changes are recorded separately.
+"Engineering principles" and "Architecture", the five Phase 1 criteria and the
+register's owner rulings (both now in the map issue #478). Where a doc disagrees with the code, it is listed under "Docs that are wrong or
+stale". The register was not edited by this map; its proposed changes are recorded separately.
 
 Criteria: (1) provenance/lineage correct, (2) catalog correct for lance-ns and authz/governance, (3) not coupled to a
 workflow engine or Ray, (4) events correct, (5) resilient.

@@ -1,6 +1,6 @@
 # 0136. Bulk labeling is a mode of the task, and columns carry recipes (2026-08-09)
 
-Source: `open_bulk_active.md` §5 (repo root; the working spec of 2026-08-09, an analysis of `huggingface/aisheets`
+Source: `open_bulk_active.md` §5 (repo root at `ac158590`; its open phases are PARK-ANNO-1, #473; the working spec of 2026-08-09, an analysis of `huggingface/aisheets`
 at `cadf5cd`), lines 134-238. The owner rulings it records are dated 2026-08-09.
 
 ## Context

@@ -262,8 +262,8 @@
 		<Tabs.Root value="labeling">
 			<Tabs.List>
 				<Tabs.Trigger value="labeling" data-testid="tab-labeling">Labeling</Tabs.Trigger>
-				<!-- BULK IS A MODE OF THE TASK, not a destination (owner ruling, open_bulk_active.md
-				     §5): the same labeling task worked as a table over all its items instead of a
+				<!-- BULK IS A MODE OF THE TASK, not a destination (owner ruling, ADR
+				     0136): the same labeling task worked as a table over all its items instead of a
 				     canvas over one. A tab beside Labeling says exactly that; the old external
 				     "Bulk grid" button said "somewhere else". The /bulk route survives for deep
 				     links; this is the same component over the same snapshot. -->

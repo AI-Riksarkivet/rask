@@ -17,7 +17,7 @@ What follows is only what is true of rask.
 
 ## The row rule
 
-A change works a row of the register, `open_backlog_left_new2.md`, and each row states what it
+A change works a row — a GitHub issue on `AI-Riksarkivet/rask`, title `LH-243: …` (`docs/agents/issue-tracker.md`) — and each row states what it
 *Closes when:*.
 
 1. **Find the test that already drives the seam.** Test files are named per claim, not per module, so
