@@ -513,12 +513,25 @@ class _Sources(BaseModel):
     digests: dict[str, str] = Field(default_factory=dict)
 
     def lines(self, rel: str) -> list[str]:
-        text = (ROOT / rel).read_text(encoding="utf-8")
-        self.digests[rel] = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        """A working-tree path, or `<rev>:<path>` for a file main has deleted; the latter is hashed by its git blob id."""
+        if ":" in rel:
+            text = _git("show", rel)
+            self.digests[rel] = f"git-blob {_git('rev-parse', rel).strip()}"
+        else:
+            text = (ROOT / rel).read_text(encoding="utf-8")
+            self.digests[rel] = hashlib.sha256(text.encode("utf-8")).hexdigest()
         return text.split("\n")
 
     def excerpt(self, rel: str, first: int, last: int) -> str:
         return "\n".join(self.lines(rel)[first - 1 : last])
+
+
+def _git(*args: str) -> str:
+    # argv is git plus literal revisions and paths from this file; no shell.
+    done = subprocess.run(["git", "-C", str(ROOT), *args], capture_output=True, text=True, check=False)  # noqa: S603, S607
+    if done.returncode != 0:
+        raise RuntimeError(f"git {' '.join(args)} failed: {done.stderr.strip()}")
+    return done.stdout
 
 
 def _parked(key: str, title: str, body: str, source: str, *, labels: list[str] | None = None) -> Issue:
@@ -654,7 +667,8 @@ def _todo(src: _Sources) -> Issue:
 
 
 def _trace(src: _Sources) -> list[Issue]:
-    rel = "lakehouse-e2e-trace.md"
+    # Deleted from main after a0e0d704; the recommendations are read from that commit's blob.
+    rel = "a0e0d704:lakehouse-e2e-trace.md"
     lines = src.lines(rel)
     start = next(n for n, ln in enumerate(lines, start=1) if ln.startswith("### Unowned recommendations"))
     recs: dict[int, tuple[int, int]] = {}
