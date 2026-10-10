@@ -13,9 +13,11 @@ root_packages =
     notifications
     annotator
     ingest
+    controlplane
     service_kit
     lineage_kit
     ray_kit
+    compute
     dapr
 include_external_packages = True
 
@@ -28,22 +30,6 @@ forbidden_modules =
     service_kit.exceptions
 allow_indirect_imports = True
 
-# Every planned run (a stage, a training run) reaches Ray through `service_kit.lakehouse.executor`, so the Jobs-API
-# modules belong to the Ray adapter alone (CP-044). PROTECTED rather than forbidden: a forbidden contract whose source
-# package (`medallion`) contains the forbidden modules finds no chain and cannot fail (measured 2026-10-05 with
-# import-linter 2.15: an added `ray_submit` import in train_plans stayed KEPT). Interim: CP-056 moves the adapter out
-# of medallion and replaces this with one contract forbidding every engine adapter to the lakehouse.
-[importlinter:contract:only-the-ray-adapter-speaks-the-jobs-api]
-name = medallion reaches the Ray Jobs API only from its Ray adapter
-type = protected
-protected_modules =
-    medallion.services.ray_jobs_api
-    medallion.services.ray_job_failure
-    medallion.services.ray_submit
-allowed_importers =
-    medallion.services.rayjobs_api_executor
-    medallion.services.ray_jobs_api
-
 [importlinter:contract:the-cascade-publishes-lineage-through-the-signing-door]
 name = medallion publishes lineage only through medallion.core.lineage_publish
 type = forbidden
@@ -55,8 +41,11 @@ ignore_imports =
     medallion.core.lineage_publish -> service_kit.lakehouse.outbox
 allow_indirect_imports = True
 
-[importlinter:contract:the-lakehouse-is-not-built-on-ray]
-name = Phase 1 (3): no lakehouse service imports Ray
+# The lakehouse knows no engine (CP-056): it reaches an out-of-process engine only by service invocation of an app-id
+# its deployment names (`service_kit.lakehouse.engine_door`), so no lakehouse service and no shared kit imports an
+# engine, an engine's kit, or the engine app that hosts the adapter.
+[importlinter:contract:the-lakehouse-knows-no-engine]
+name = Phase 1 (3): no lakehouse service and no service-kit module imports an engine or an engine adapter
 type = forbidden
 source_modules =
     catalog
@@ -64,9 +53,14 @@ source_modules =
     medallion
     maintenance
     notifications
+    ingest
+    controlplane
+    service_kit
+    lineage_kit
 forbidden_modules =
     ray
     ray_kit
+    compute
 allow_indirect_imports = True
 
 [importlinter:contract:the-lakehouse-is-not-built-on-a-workflow-engine]

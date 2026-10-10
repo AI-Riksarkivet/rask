@@ -103,7 +103,7 @@ _DEPLOYED_ROUTE_SETTINGS = {
     "MEDALLION_CONTROL_PUBSUB": "pubsub-control-medallion-producer",  # catalog.controlEmit
     "MEDALLION_DLQ_TOPIC": "dlq.medallion-producer",  # dapr.resiliency.enabled
     "MEDALLION_CASCADE_LAG_BINDING_NAME": "medallion-cascade-lag-cron",  # medallion.cascadeLag.bindingName
-    "MEDALLION_PLAN_SWEEP_BINDING_NAME": "medallion-plan-sweep-cron",  # medallion.planSweep.bindingName, under medallion.ray
+    "MEDALLION_PLAN_SWEEP_BINDING_NAME": "medallion-plan-sweep-cron",  # medallion.planSweep.bindingName, while an engine is enabled
 }
 
 #: Producer operations with no gateway row, and why each has none.

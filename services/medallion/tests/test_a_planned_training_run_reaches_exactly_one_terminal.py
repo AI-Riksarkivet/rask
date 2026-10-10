@@ -1,14 +1,17 @@
-"""A planned training run reaches exactly one terminal, and a running one none (CP-029 S2: clause c).
+"""A planned training run travels to its engine by invocation and reaches exactly one terminal (CP-029 S2 clause c; CP-056).
 
 Driven on real collaborators end to end. The producer's own training consumer (`handle_train_trigger`) plans each run
-into a plan store on `tmp_path` and submits its `WorkOrder` through the real Ray executor adapter (CP-044); the REAL
-training job (`scripts/ray_train_job.py`) runs on exactly the env that submission carried, trains on real pylance and
-stamps its registry commit with the run's marker; the plan sweep reads Ray through the same adapter; and a late report reaches the outcome door of the producer's own app, running its own lifespan, which builds
-the service-account verifier from the env the chart renders and checks the compute head's projected token offline
-against the loopback issuer.
+into a plan store on `tmp_path` and submits its `WorkOrder` by service invocation of the engine its configuration
+names: compute's REAL engine door over uvicorn, which verifies the producer's projected token and submits to Ray. The
+REAL training job (`scripts/ray_train_job.py`) runs on exactly the env that submission carried, trains on real pylance
+and stamps its registry commit with the run's marker; the plan sweep reads the run's state through the same door; and
+a late report reaches the outcome door of the producer's own app, running its own lifespan, which builds the
+service-account verifier from the env the chart renders and checks the compute head's projected token offline against
+the loopback issuer.
 
-What stands in, and only that: the Dapr sidecar (a bus that records each publish) and the Ray dashboard (an httpx
-transport answering each job's scripted state, and 404 once the head has lost the job).
+What stands in, and only that: the Dapr sidecar (a bus that records each publish; the engine is invoked at a direct
+URL) and the Ray dashboard behind compute (an httpx transport answering each job's scripted state, and 404 once the
+head has lost the job).
 """
 
 from __future__ import annotations
@@ -29,7 +32,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from medallion.core.config import MedallionSettings, get_settings
-from medallion.services import ray_submit, train, train_plans
+from medallion.services import train, train_plans
 from service_kit.lakehouse.run_outcomes import OutcomeReport
 from service_kit.lakehouse.run_plans import PlanDocument
 
@@ -38,6 +41,8 @@ _JOB_PATH = Path(__file__).parents[3] / "scripts" / "ray_train_job.py"
 NAMESPACE = "rask"
 #: The compute head's one account, and the subject the chart maps it to at the producer's door.
 HEAD_SA = "rask-sa-ray"
+#: The producer's own account: the one compute's engine door admits it as.
+PRODUCER_SA = "rask-sa-medallion-producer"
 LINEAGE_TOPIC = "lineage.events.v1"
 
 
@@ -70,48 +75,14 @@ class _Bus:
         return [p["data"] for p in self.published if p["topic"] == LINEAGE_TOPIC and p["data"]["run"]["runId"] == run_id]
 
 
-class _Dashboard:
-    """The Ray Jobs API: accepts every submission and keeps its body, and answers each job's scripted states in turn,
-    then 404."""
-
-    def __init__(self) -> None:
-        self.posted: list[str] = []
-        self.bodies: dict[str, dict[str, Any]] = {}
-        self.states: dict[str, list[str]] = {}
-
-    def handle(self, request: httpx.Request) -> httpx.Response:
-        if request.method == "POST" and request.url.path == "/api/jobs/":
-            body = json.loads(request.content)
-            submission = body["submission_id"]
-            self.posted.append(submission)
-            self.bodies[submission] = body
-            return httpx.Response(200, json={"submission_id": submission})
-        job_id = request.url.path.removeprefix("/api/jobs/")
-        scripted = self.states.get(job_id, [])
-        if request.method == "GET" and scripted:
-            return httpx.Response(200, json={"submission_id": job_id, "status": scripted.pop(0)})
-        return httpx.Response(404)
-
-
 @pytest.fixture
-def dashboard(monkeypatch: pytest.MonkeyPatch) -> _Dashboard:
-    fake = _Dashboard()
-    client = httpx.AsyncClient(base_url="http://ray-head:8265", transport=httpx.MockTransport(fake.handle))
-
-    async def _client() -> httpx.AsyncClient:
-        return client
-
-    monkeypatch.setattr(ray_submit, "ray_client", _client)
-    return fake
-
-
-@pytest.fixture
-def producer(tmp_path: Path, sa_issuer: Any, monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[TestClient, _Bus, MedallionSettings]]:
-    """The producer's own app, configured as the chart renders it with `medallion.ray` on, its sidecar the bus."""
+def producer(tmp_path: Path, sa_issuer: Any, compute_engine: Any, monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[TestClient, _Bus, MedallionSettings]]:
+    """The producer's own app, configured as the chart renders it with a Ray engine on compute, its sidecar the bus."""
     base = tmp_path / "medallion"
     lance.write_dataset(pa.table({"amount": [1.0, 3.0]}), str(base / "silver"))
+    engines = {"ray": {**compute_engine.binding(PRODUCER_SA), "tasks": [{"task": "train"}]}}
     env = {
-        "MEDALLION_RAY_ENABLED": "true",
+        "MEDALLION_ENGINES": json.dumps(engines),
         "MEDALLION_COMPUTE_ENABLED": "true",
         "MEDALLION_S3_ENDPOINT": "http://rustfs:9000",
         "MEDALLION_S3_SECRET_ACCESS_KEY": "k",
@@ -173,26 +144,31 @@ def _report(client: TestClient, sa_issuer: Any, plan: PlanDocument, report: Outc
 
 
 def test_a_vanished_training_job_reaches_one_terminal_and_a_running_one_none(
-    producer: tuple[TestClient, _Bus, MedallionSettings], dashboard: _Dashboard, sa_issuer: Any, monkeypatch: pytest.MonkeyPatch
+    producer: tuple[TestClient, _Bus, MedallionSettings], compute_engine: Any, sa_issuer: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Clause c. Three training runs are planned; the head then restarts and loses two of them.
+    """Clause c. Three training runs are planned and invoked on compute; the head then restarts and loses two of them.
 
-    Each submission is the run's `WorkOrder` and carries no empty env value, so it overrides nothing the Ray pod owns
-    (LH-299), and the job runs on that env alone. The one whose job never committed gets exactly one FAIL, bare. The one
-    whose job committed its registry version and then could not reach lineage gets exactly one COMPLETE naming that
-    version, read off its commit marker. The one still training, 25 hours in, gets nothing at all. Neither lost job is
-    resubmitted, and a late report from either cannot add a second terminal.
+    Each submission reaches Ray as the command compute's own table names for task `train`, under the run's key, with
+    the run's `WorkOrder` as its env and no empty value in it, so it overrides nothing the Ray pod owns (LH-299); the
+    job runs on that env alone. The one whose job never committed gets exactly one FAIL, bare. The one whose job
+    committed its registry version and then could not reach lineage gets exactly one COMPLETE naming that version, read
+    off its commit marker. The one still training, 25 hours in, gets nothing at all. Neither lost job is resubmitted,
+    and a late report from either cannot add a second terminal.
     """
     client, bus, settings = producer
+    jobs = compute_engine.jobs
     lost = _plan(settings, bus, "tok-lost")
     landed = _plan(settings, bus, "tok-landed")
     training = _plan(settings, bus, "tok-training")
-    env = dashboard.bodies[landed.action_id]["runtime_env"]["env_vars"]
+    submitted = jobs.bodies[landed.action_id]
+    assert submitted["entrypoint"] == "python /home/ray/jobs/ray_train_job.py"
+    assert submitted["metadata"] == {"rask.originator": "alice", "rask.project": "acme", "rask.token": "tok-landed", "rask.stage": "models"}
+    env = submitted["runtime_env"]["env_vars"]
     assert [name for name, value in env.items() if not value] == [], f"the training submission blanks names the Ray pod owns: {env}"
     committed = _job_commits_and_reaches_nobody(env, monkeypatch)
     store = train_plans.plan_store(settings)
     store.update(training.action_id, lambda p: p.model_copy(update={"submitted_at": p.submitted_at - timedelta(hours=25)}))
-    dashboard.states = {lost.action_id: ["RUNNING"], landed.action_id: ["RUNNING"], training.action_id: ["RUNNING"] * 3}
+    jobs.states = {lost.action_id: ["RUNNING"], landed.action_id: ["RUNNING"], training.action_id: ["RUNNING"] * 3}
 
     for _ in range(3):
         report = asyncio.run(train_plans.sweep(settings, bus))
@@ -212,10 +188,34 @@ def test_a_vanished_training_job_reaches_one_terminal_and_a_running_one_none(
     assert bus.terminals(training.run_id) == [], "a job still running was given a terminal"
     still = store.read(training.action_id)
     assert still is not None and still.outcome is None
-    assert dashboard.posted == [lost.action_id, landed.action_id, training.action_id], "a lost training job was submitted again"
+    assert jobs.posted == [lost.action_id, landed.action_id, training.action_id], "a lost training job was submitted again"
 
     refused = _report(client, sa_issuer, lost, OutcomeReport(status="succeeded"))
     repeated = _report(client, sa_issuer, landed, OutcomeReport(status="succeeded", committed_version=committed))
 
     assert (refused.status_code, repeated.status_code) == (409, 200), (refused.text, repeated.text)
     assert (len(bus.terminals(lost.run_id)), len(bus.terminals(landed.run_id))) == (1, 1)
+
+
+def test_an_unreachable_engine_leaves_a_training_run_open_until_its_job_reports(
+    producer: tuple[TestClient, _Bus, MedallionSettings], compute_engine: Any, sa_issuer: Any
+) -> None:
+    """A3. The engine app goes unreachable while a training job runs, for longer than the old 120 s lease (five sweep
+    ticks, 150 s at the chart's 30 s schedule). Silence is not a lost run: every tick counts an error and leaves the plan
+    as it was, no terminal is emitted and nothing is resubmitted. When the job reports, the run closes succeeded."""
+    client, bus, settings = producer
+    plan = _plan(settings, bus, "tok-outage")
+    compute_engine.jobs.states = {plan.action_id: ["RUNNING"]}
+    assert asyncio.run(train_plans.sweep(settings, bus)).errors == 0
+    unreachable = settings.model_copy(update={"engines": {"ray": settings.engines["ray"].model_copy(update={"url": "http://127.0.0.1:9"})}})
+
+    for _ in range(5):
+        assert asyncio.run(train_plans.sweep(unreachable, bus)).errors == 1
+
+    during = train_plans.plan_store(settings).read(plan.action_id)
+    assert during is not None and during.outcome is None, "an unreachable engine closed a running training run"
+    assert bus.terminals(plan.run_id) == []
+    assert compute_engine.jobs.posted == [plan.action_id]
+    reported = _report(client, sa_issuer, plan, OutcomeReport(status="succeeded"))
+    assert reported.status_code == 200, reported.text
+    assert reported.json()["status"] == "succeeded"

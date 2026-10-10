@@ -1,18 +1,8 @@
-"""The Ray dashboard Jobs API, spoken directly — medallion's adapter for the Ray engine.
+"""The Ray dashboard Jobs API, spoken directly: submit-or-reattach, a job's status, and Ray's stated cause.
 
-MOVED HERE FROM `ray-kit` rather than copied, and the move is what lets `services/medallion` declare
-no compute engine at all. Measured 2026-09-07: this module is pure HTTPX plus OpenTelemetry
-propagation and imports no Ray, while the `ray-kit` PACKAGE declares `ray[default]` for its SDK half
-(`build_client`, `JobSubmissionClient`, the dashboard wrapper). Medallion consumed only this module
-and paid for the whole engine to get it; `services/compute` — the estate's Ray-facing service —
-consumes only the other half and is unaffected. One consumer each, so the split is clean and nothing
-is duplicated.
-
-WHY ENGINE KNOWLEDGE MAY LIVE HERE. It is part of the Ray ADAPTER (`rayjobs_api_executor`), not a consumer: the
-cascade and the training lane reach it through `service_kit.lakehouse.executor`, so swapping the engine means adding a
-sibling adapter rather than editing a planner. Two `.importlinter` contracts encode that —
-`the-lakehouse-is-not-built-on-ray` refuses a `ray` or `ray_kit` import in any lakehouse service, and
-`only-the-ray-adapter-speaks-the-jobs-api` refuses this module to every medallion module but the adapter.
+Pure HTTPX and pydantic. Its consumer is `compute.engine`, the estate's engine app for Ray (CP-056): the lakehouse
+names no engine and reaches this through service invocation of compute's engine door, so the Jobs API is spoken by
+the one service that already holds the dashboard client and its auth.
 """
 
 from __future__ import annotations
@@ -22,21 +12,34 @@ from collections.abc import Mapping
 from typing import Literal
 
 import httpx
-
-from medallion.services.ray_job_failure import RayJobFailure
-from service_kit.lakehouse.executor import EngineError
+from pydantic import BaseModel, ConfigDict
 
 
 log = logging.getLogger(__name__)
 
-#: Ray's terminal job states. SUCCEEDED is the only good one; the other two are terminal-bad and are what
-#: makes a deterministic id safe to reuse (a terminal job can be deleted and resubmitted).
-TERMINAL_OK = "SUCCEEDED"
+#: Ray's terminal-bad job states: what makes a deterministic id safe to reuse (a terminal job can be deleted and
+#: resubmitted).
 TERMINAL_BAD = ("FAILED", "STOPPED")
 
 
-class RayJobError(EngineError):
-    """The Ray dashboard could not be reached, or refused a submit or a read: the port's `EngineError`, for this engine."""
+class RayJobError(RuntimeError):
+    """The Ray dashboard could not be reached, or refused a submit or a read."""
+
+
+class RayJobFailure(BaseModel):
+    """Ray's own account of WHY a job ended badly: the three fields of its job details a post-mortem reads.
+
+    `extra="ignore"` because Ray's `JobDetails` carries `runtime_env` (the job's env vars and working-dir refs) and an
+    arbitrary user `metadata` dict, and retaining either would put a job's whole environment into whatever this is
+    rendered into.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+    error_type: str | None = None
+    #: Ray's driver message, UNBOUNDED: it can be an entire traceback.
+    message: str | None = None
+    #: The driver's process exit code. 137 is SIGKILL, the host-RAM OOM that kills a stage with no other symptom.
+    driver_exit_code: int | None = None
 
 
 async def job_failure(client: httpx.AsyncClient, sub_id: str) -> RayJobFailure | None:
@@ -66,12 +69,9 @@ async def job_failure(client: httpx.AsyncClient, sub_id: str) -> RayJobFailure |
 async def job_status(client: httpx.AsyncClient, sub_id: str) -> str | None:
     """One status read for ``sub_id`` — ``None`` when the job is not (yet) known to the dashboard.
 
-    A SINGLE read, deliberately: this is not the `while True: sleep()` completion poll that A13 deleted
-    from `medallion/services/ray_submit.py`, and it must not grow back into one. That loop was wrong
-    because it held a Dapr ack across the whole job runtime, so a job outliving the redelivery window
-    exhausted it. The fix is not "poll faster" — it is to put the WAITING somewhere durable: a stage's
-    plan sweep and a training run's plan sweep ask on each cron tick, and this function
-    only answers the question once.
+    A SINGLE read, deliberately, and it must not grow into a completion poll: a poll holds whoever waits on it
+    across the job's runtime. The WAITING is durable elsewhere: the planner's plan sweep asks on each cron tick, and
+    this function only answers the question once.
 
     ``None`` rather than a raise for an unknown id, because the two callers mean different things by it:
     a caller asking immediately after submit may legitimately see the id before the dashboard does,
@@ -88,15 +88,6 @@ async def job_status(client: httpx.AsyncClient, sub_id: str) -> str | None:
         raise RayJobError(f"failed to read status of ray job {sub_id}: HTTP {response.status_code}")
     status = response.json().get("status")
     return str(status) if status is not None else None
-
-
-def is_terminal(status: str | None) -> bool:
-    """Whether ``status`` is a state Ray will never move out of.
-
-    Centralised so a caller cannot check only ``SUCCEEDED`` and hang forever on a job that FAILED —
-    the asymmetry that makes "wait for completion" loops subtly wrong.
-    """
-    return status == TERMINAL_OK or status in TERMINAL_BAD
 
 
 async def submit_or_reattach(

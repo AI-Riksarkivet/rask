@@ -70,3 +70,25 @@ class ComputeSettings(GovernedAuthSettings, Settings):
         "`prune_keep_jobs`: failures are rare in a healthy estate, and this is a safety net, not a "
         "second retention policy.",
     )
+
+    # --- the engine door (`compute.engine`, CP-056) -----------------------------------------------
+    engine_tasks: dict[str, str] = Field(
+        default_factory=dict,
+        alias="RASK_COMPUTE_ENGINE_TASKS",
+        description="The tasks this engine runs, task -> the Jobs-API entrypoint (a JSON object). An order naming a task "
+        "absent here is refused 422, so a planner's task key never reaches the cluster as a command. Each script it names "
+        "must be baked into the image the Ray cluster runs.",
+    )
+    engine_outcome_bases: list[str] = Field(
+        default_factory=list,
+        alias="RASK_COMPUTE_ENGINE_OUTCOME_BASES",
+        description="The planners' own addresses (a JSON list), the only hosts a job may report its outcome to: an order "
+        "whose outcome URL is not `<base>/runs/<its key>/outcome` for one of these is refused 422, because the job posts "
+        "its pod's projected token there.",
+    )
+    engine_request_timeout_s: float = Field(
+        default=10.0,
+        gt=0.0,
+        alias="RASK_COMPUTE_ENGINE_REQUEST_TIMEOUT_S",
+        description="The bound on one call to the Ray dashboard's Jobs API from the engine door.",
+    )

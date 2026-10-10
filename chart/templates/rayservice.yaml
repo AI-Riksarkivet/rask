@@ -16,8 +16,7 @@ spec:
        release renders byte-identically and this is not a redeploy. The env below is the PLATFORM's
        half of the contract — replica count, GPU fraction, HF token behaviour — applied to every
        application; a workload's own parameters ride `params`, rendered RASK_PARAM_<KEY> so one
-       cannot reach a platform variable by choosing a colliding name (the rule ray_submit already
-       applies to stage jobs). */}}
+       cannot reach a platform variable by choosing a colliding name (the rule stage jobs follow). */}}
   serveConfigV2: |
     applications:
       {{- range $app := .Values.ray.serveApplications }}

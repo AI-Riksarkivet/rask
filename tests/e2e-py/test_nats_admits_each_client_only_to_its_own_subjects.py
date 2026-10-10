@@ -77,7 +77,7 @@ RIG = "rask-test-rig"
 #: lineage: catalog/core/lineage_emit.py, lineage/services/staged.py (recovered signed bytes), maintenance/core/
 #: lineage_emit.py, medallion/core/lineage_publish.py (producer and stage runners). control: catalog's control_emit
 #: and control_relay.py, medallion/workflow.py `request_approval`, which runs in the producer's promotion_review
-#: workflow, and each stage runner's plan announcement (stage_plans.py) under medallion.ray. maintenance work:
+#: workflow, and each stage runner's plan announcement (stage_plans.py) while an engine is enabled. maintenance work:
 #: catalog/endpoints/maintenance.py and maintenance/services/work_queue.py; index: catalog only. medallion.<tier>: the
 #: producer (ingest_trigger, publication_trigger, rerun, media_produce) and each stage runner's hand-off to its own
 #: topic (stage_plans.py); a stage runner never publishes downstream, promotion goes through
@@ -90,7 +90,8 @@ def _values() -> Path:
 def _control_emitters(values: Path) -> frozenset[str]:
     """Maintenance and the annotator announce on catalog.control.v1 only while the flag that renders their control
     component is on (maintenance.controlEmit, explorer.controlEmit; both false in the chart's values), and the stage
-    runners only while the Ray lane writes (medallion.ray and medallion.compute; both true in the chart's values)."""
+    runners only while an engine runs their stages (services.compute.engines.ray.enabled with medallion.compute; both true
+    in the chart's values)."""
     chart = yaml.safe_load((REPO / "chart" / "values.yaml").read_text()) or {}
     given = yaml.safe_load(values.read_text()) or {}
 
@@ -99,8 +100,14 @@ def _control_emitters(values: Path) -> frozenset[str]:
 
     announcers = frozenset(app for app, section in (("maintenance", "maintenance"), ("annotator", "explorer")) if on(section))
     medallion = {**(chart.get("medallion") or {}), **(given.get("medallion") or {})}
-    # Each stage runner announces its Ray runs' plans while the Ray lane writes (medallion.ray with medallion.compute).
-    return announcers | (frozenset(RUNNERS) if medallion.get("ray") and medallion.get("compute") else frozenset())
+
+    def engine_on(doc: dict) -> bool | None:
+        return ((((doc.get("services") or {}).get("compute") or {}).get("engines") or {}).get("ray") or {}).get("enabled")
+
+    given_engine = engine_on(given)
+    engine = engine_on(chart) if given_engine is None else given_engine
+    # Each stage runner announces its planned runs while an engine runs its stages (with medallion.compute).
+    return announcers | (frozenset(RUNNERS) if engine and medallion.get("compute") else frozenset())
 
 
 PUBLISHERS: dict[str, frozenset[str]] = {

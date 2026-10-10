@@ -26,7 +26,7 @@ import pytest
 from dapr.aio.clients import DaprClient
 
 from lineage.models import Dataset
-from medallion.core.config import MedallionSettings
+from medallion.core.config import EngineDeclaration, MedallionSettings
 from medallion.schemas.events import build_run_event
 from medallion.services import stage_plans
 from medallion.services.compute import measure_stage, seed_bronze, transform_stage
@@ -232,11 +232,11 @@ def _ray_job_write(from_uri: str, to_uri: str, stage: str, lineage: str = "") ->
 
 
 def test_ray_branch_emits_column_edges_reconstructed_from_disk(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    """THE production seam (MEDALLION_COMPUTE_ENABLED + MEDALLION_RAY_ENABLED): the transform runs on the
-    Ray cluster, so handle_stage must still emit real columnLineage — parsed back out by the consumer."""
+    """THE production seam (MEDALLION_COMPUTE_ENABLED + an out-of-process default engine): the transform runs on the
+    engine's cluster, so handle_stage must still emit real columnLineage — parsed back out by the consumer."""
     bronze, silver = str(tmp_path / "bronze"), str(tmp_path / "silver")
     seed_bronze(bronze, {}, rows=4)  # columns [id, payload, stage]
-    settings = _stage_runner_settings(bronze, silver).model_copy(update={"ray_enabled": True})
+    settings = _stage_runner_settings(bronze, silver).model_copy(update={"engines": {"ray": EngineDeclaration(app_id="compute")}, "default_engine": "ray"})
 
     # The handler PLANS the run, and the Ray job runs out-of-process. The fake stands in for the whole of
     # that — the plan, the cluster writing, the outcome resolving SUCCEEDED — so that the second delivery
@@ -245,6 +245,7 @@ def test_ray_branch_emits_column_edges_reconstructed_from_disk(tmp_path: Any, mo
         _settings: Any,
         _dapr: object,
         *,
+        engine: str,
         trigger: Any,
         from_uri: str,
         to_uri: str,
@@ -256,8 +257,8 @@ def test_ray_branch_emits_column_edges_reconstructed_from_disk(tmp_path: Any, mo
         project: str,
     ) -> str:
         # The identity the real dispatch hands the job is accepted and unused here: this test is about the
-        # column edges the STAGE RUNNER reconstructs after the job, and
-        # `test_the_job_is_told_which_tables_it_moves.py` is where that handover is asserted.
+        # column edges the STAGE RUNNER reconstructs after the job, and the planned-stage keeper
+        # (`services/medallion/tests/test_a_planned_stage_reaches_exactly_one_terminal.py`) asserts that handover.
         _ray_job_write(from_uri, to_uri, settings.to_namespace, lineage_doc.to_json())
         return "a" * 40
 
@@ -273,7 +274,7 @@ def test_ray_branch_emits_column_edges_reconstructed_from_disk(tmp_path: Any, mo
 
     dapr = _FakeDapr()
 
-    result = asyncio.run(handle_stage(cast(DaprClient, dapr), settings, {"data": {"token": "t1", "ray_job_done": True}}))
+    result = asyncio.run(handle_stage(cast(DaprClient, dapr), settings, {"data": {"token": "t1", "run_done": True}}))
     assert result == {"status": "SUCCESS"}
 
     lineage = next(p for p in dapr.published if p["topic"] == settings.lineage_topic and p["data"]["eventType"] != "START")

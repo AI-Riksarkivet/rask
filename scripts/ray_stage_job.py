@@ -285,7 +285,7 @@ def _distributed_rows(
 def _extract_trace_parent() -> Any:
     """The submitter-injected W3C trace context, or ``None`` to run untraced.
 
-    The submitting service (services/medallion/services/ray_submit.py) injects its active span as a
+    The submitting planner injects its active span as a
     TRACEPARENT env var in the job's runtime_env. Absent, malformed, or opentelemetry unimportable
     (the ray image ships the SDK, but a telemetry regression must never kill the job) → ``None`` and
     the job runs exactly as before — the trace is only ever continued, never fabricated.

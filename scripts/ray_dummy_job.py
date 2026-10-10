@@ -36,7 +36,7 @@ from dummy_runner.job import main  # ty: ignore[unresolved-import]
 def _extract_trace_parent() -> Any:
     """The submitter-injected W3C trace context, or ``None`` to run untraced.
 
-    The submitting service (services/medallion/services/ray_submit.py) injects its active span as a
+    The submitting planner injects its active span as a
     TRACEPARENT env var in the job's runtime_env. Absent, malformed, or opentelemetry unimportable
     (the ray image ships the SDK, but a telemetry regression must never kill the job) → ``None`` and
     the job runs exactly as before — the trace is only ever continued, never fabricated.
@@ -117,7 +117,7 @@ def _traced_root(name: str, attributes: dict[str, str], *, span_processor: Any =
 
 
 if __name__ == "__main__":
-    # THE SMOKE LANE MUST PROVE THE PROPERTY IT SMOKE-TESTS. `ray_submit` injects TRACEPARENT into
+    # THE SMOKE LANE MUST PROVE THE PROPERTY IT SMOKE-TESTS. The planner injects TRACEPARENT into
     # this lane's runtime_env exactly as it does for the production stage lane, and this script used
     # to discard it — so the estate's own GPU-free end-to-end prover ran untraced, and could not
     # demonstrate the one thing the production lanes depend on. Same shape as ray_stage_job's root:

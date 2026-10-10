@@ -2,8 +2,9 @@
 
 docs/adr/0052-the-compute-plane-is-decoupled-a-port-two-adapters-and-no.md "The compute plane is decoupled", step 1 of the owner-ordered §7.4.
 
-A transform declares a TASK: a key under `<control_root>/_tasks/<hash>.json` naming an engine, a
-command that engine understands, and the shapes it supports. The platform never parses the command
+A transform declares a TASK: a record under `<control_root>/_tasks/<task hash>/<engine hash>.json` naming an
+engine, a command that engine understands, and the shapes it supports. Each engine that can run a task
+registers its own record, and the declaration chooses between them. The platform never parses the command
 and never learns the engine's vocabulary — which is what lets a second engine be declared without a
 catalog change, and keeps the engine noun out of the OpenAPI every API client reads.
 
@@ -54,8 +55,9 @@ class TaskRegistration(BaseModel):
     task: str = Field(min_length=1)
     #: "ray" | "inprocess" | "spark" | … — a string this package never interprets.
     engine: str = Field(min_length=1)
-    #: The ENGINE's business: a command line, an image, a class path. The platform does not parse it.
-    command: str = Field(min_length=1)
+    #: The ENGINE's business: a command line, an image, a class path. The platform does not parse it. Empty for an
+    #: out-of-process engine, which resolves the task to its own command and tells the lakehouse none.
+    command: str = ""
     #: The build this registration describes, so a stale record is detectable.
     code_version: str = ""
     #: Which `stage_stamp.CARDINALITIES` this task can honour. EMPTY MEANS ALL — a task that declares
@@ -72,24 +74,29 @@ class TaskRegistration(BaseModel):
         return not self.cardinalities or cardinality in self.cardinalities
 
 
-def _key(task: str) -> str:
-    """A collision-free record key. The task id is author-supplied, so hash rather than build a path
-    out of it — the same rule `transform_specs._key` states."""
-    digest = hashlib.sha256(task.encode()).hexdigest()[:24]
-    return f"{TASKS_PREFIX}/{digest}.json"
+def _task_dir(task: str) -> str:
+    """The directory every engine's registration of one task lives in. The task id is author-supplied, so
+    hash rather than build a path out of it — the same rule `transform_specs._key` states."""
+    return f"{TASKS_PREFIX}/{hashlib.sha256(task.encode()).hexdigest()[:24]}"
+
+
+def _key(task: str, engine: str) -> str:
+    """One record per (task, engine): two engines registering the same task each keep their own record, and
+    a declaration chooses between them. Keyed on the task alone, the second registrar overwrote the first."""
+    return f"{_task_dir(task)}/{hashlib.sha256(engine.encode()).hexdigest()[:24]}.json"
 
 
 def put_task(control_root: str, storage_options: StorageOptions, registration: TaskRegistration) -> None:
-    """Register one task (overwrite — registering is idempotent)."""
+    """Register one task for its engine (overwrite — registering is idempotent)."""
     fs, base = fs_and_base(control_root, storage_options)
-    key = _key(registration.task)
+    key = _key(registration.task, registration.engine)
     fs.create_dir(f"{base}/{key}".rsplit("/", 1)[0], recursive=True)
     with fs.open_output_stream(f"{base}/{key}") as stream:
         stream.write(registration.model_dump_json().encode("utf-8"))
 
 
-def get_task(control_root: str, storage_options: StorageOptions, task: str) -> TaskRegistration | None:
-    """The registration, or ``None`` when the task was never registered.
+def get_task(control_root: str, storage_options: StorageOptions, task: str, engine: str) -> TaskRegistration | None:
+    """The task's registration for that engine, or ``None`` when that engine never registered it.
 
     ``None`` rather than a default, the contract `get_spec` already states: a caller must be able to
     tell "nobody registered this" from "this is configured", so an unknown task is refused at the door
@@ -97,26 +104,33 @@ def get_task(control_root: str, storage_options: StorageOptions, task: str) -> T
     """
     fs, base = fs_and_base(control_root, storage_options)
     try:
-        stream = fs.open_input_stream(f"{base}/{_key(task)}")
+        stream = fs.open_input_stream(f"{base}/{_key(task, engine)}")
     except FileNotFoundError:
         return None
     with stream:
         raw = stream.readall().decode("utf-8")
-    return _parse(raw, path=_key(task))
+    return _parse(raw, path=_key(task, engine))
 
 
-def delete_task(control_root: str, storage_options: StorageOptions, task: str) -> bool:
-    """Unregister; ``False`` when there was none (delete is idempotent)."""
+def registrations_of(control_root: str, storage_options: StorageOptions, task: str) -> list[TaskRegistration]:
+    """Every engine's registration of one task, sorted by engine; empty when no engine registered it."""
+    fs, base = fs_and_base(control_root, storage_options)
+    found = _read_all(fs, pafs.FileSelector(f"{base}/{_task_dir(task)}", allow_not_found=True, recursive=False))
+    return sorted((r for r in found if r.task == task), key=lambda r: r.engine)
+
+
+def delete_task(control_root: str, storage_options: StorageOptions, task: str, engine: str) -> bool:
+    """Unregister one engine's task; ``False`` when there was none (delete is idempotent)."""
     fs, base = fs_and_base(control_root, storage_options)
     try:
-        fs.delete_file(f"{base}/{_key(task)}")
+        fs.delete_file(f"{base}/{_key(task, engine)}")
     except FileNotFoundError:
         return False
     return True
 
 
 def list_tasks(control_root: str, storage_options: StorageOptions) -> list[TaskRegistration]:
-    """Every readable registration (unordered).
+    """Every readable registration (unordered), one per (task, engine).
 
     ESTATE-WIDE, not per-tenant: a task names what some plane can run, and the same Ray cluster runs
     it for every project. Scoping the records per project would make the same capability need one
@@ -124,13 +138,21 @@ def list_tasks(control_root: str, storage_options: StorageOptions) -> list[TaskR
 
     One corrupt record is SKIPPED with a warning rather than voiding the rest — the rule `list_specs`
     states: a listing that silently emptied would read as "this estate can run nothing" while the
-    tasks keep running.
+    tasks keep running. Only records at `_tasks/<task>/<engine>.json` are read, so a file directly under
+    `_tasks/` is not a registration.
     """
     fs, base = fs_and_base(control_root, storage_options)
+    root = f"{base}/{TASKS_PREFIX}"
+    selector = pafs.FileSelector(root, allow_not_found=True, recursive=True)
+    return _read_all(fs, selector, depth=2, root=root)
+
+
+def _read_all(fs: pafs.FileSystem, selector: pafs.FileSelector, *, depth: int = 1, root: str = "") -> list[TaskRegistration]:
     out: list[TaskRegistration] = []
-    selector = pafs.FileSelector(f"{base}/{TASKS_PREFIX}", allow_not_found=True, recursive=False)
     for info in fs.get_file_info(selector):
         if info.type != pafs.FileType.File or not info.path.endswith(".json"):
+            continue
+        if root and info.path.removeprefix(root).strip("/").count("/") != depth - 1:
             continue
         try:
             with fs.open_input_stream(info.path) as stream:

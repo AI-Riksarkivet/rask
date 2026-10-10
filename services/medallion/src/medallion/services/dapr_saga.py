@@ -1,7 +1,7 @@
 """The Dapr Workflow adapter for the `SagaClient` port — the one place the engine's client is named.
 
 `service-kit`'s `saga.SagaClient` says what the platform may ask of a workflow engine; this says how
-Dapr answers. It is the workflow-plane twin of `inprocess_executor` / `rayjobs_api_executor` one layer
+Dapr answers. It is the workflow-plane twin of `inprocess_executor` / `engine_door.InvokedExecutor` one layer
 down. Its caller is the promotion review's door (`medallion.api.promotions`), which starts, reads and
 answers `promotion_review` through it; no Ray lane starts a saga, since a stage run and a training run
 are each a plan (CP-029).

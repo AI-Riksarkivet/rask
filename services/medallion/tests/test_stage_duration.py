@@ -62,7 +62,7 @@ def test_the_trigger_REFUSES_an_absurd_duration_it_was_handed() -> None:
 
     from medallion.services.trigger_guards import StageTrigger
 
-    assert StageTrigger(ray_duration_seconds=42.0).ray_duration_seconds == 42.0
+    assert StageTrigger(run_duration_seconds=42.0).run_duration_seconds == 42.0
     for bad in (-1.0, 10_000_000.0):
         with pytest.raises(ValidationError):
-            StageTrigger(ray_duration_seconds=bad)
+            StageTrigger(run_duration_seconds=bad)

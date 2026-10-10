@@ -127,7 +127,7 @@ data:
   RASK_EXPLORER_SEARCH_URL: {{ printf "http://%s-search:%v" (include "lance.fullname" .) .Values.explorer.services.search.port | quote }}
   RASK_EXPLORER_ANNOTATOR_URL: {{ printf "http://%s-annotator:%v" (include "lance.fullname" .) .Values.explorer.services.annotator.port | quote }}
   {{- end }}
-  {{- /* The cluster `compute` prunes job history on is the one the cascade submits to, because both read
+  {{- /* The cluster `compute` prunes job history on is the one it submits the cascade's jobs to: one define,
        `rask.rayDashboardUrl` ([[CP-041]]). Absent when the render names no Ray. */}}
   {{- with include "rask.rayDashboardUrl" . }}
   RAY_DASHBOARD_URL: {{ . | quote }}

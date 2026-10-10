@@ -105,7 +105,7 @@ def _unknown_transform(project: str, name: str) -> RequestValidationError:
     )
 
 
-def _unregistered_task(task: str) -> RequestValidationError:
+def _unregistered_task(task: str, engine: str) -> RequestValidationError:
     """The 422 a task nobody registered earns.
 
     REFUSED HERE rather than at submit, which is the whole reason the registry is consulted at the
@@ -118,7 +118,7 @@ def _unregistered_task(task: str) -> RequestValidationError:
             {
                 "type": "value_error",
                 "loc": ("body", "task"),
-                "msg": f"no task is registered as {task!r}; a task is registered by the plane that can run it, under the control root's _tasks/ prefix",
+                "msg": f"no task is registered as {task!r}{f' for engine {engine!r}' if engine else ''}; a task is registered by the plane that can run it, under the control root's _tasks/ prefix",
                 "input": task,
             }
         ]
@@ -173,11 +173,15 @@ async def set_transform(
         spec = TransformSpec.model_validate({**body.model_dump(), "project": project})
     except ValidationError as exc:
         raise _as_request_validation(exc) from None
-    registration = await run_in_threadpool(task_registry.get_task, settings.registry_root, settings.storage_options(), spec.task)
-    if registration is None:
-        raise _unregistered_task(spec.task)
-    if not registration.honours(spec.cardinality):
-        raise _unsupported_cardinality(spec.task, registration.cardinalities, spec.cardinality)
+    registrations = await run_in_threadpool(task_registry.registrations_of, settings.registry_root, settings.storage_options(), spec.task)
+    # A declaration naming an engine binds that engine's registration; one naming none may run on any engine that
+    # registered the task, so each candidate must honour the declared cardinality.
+    candidates = [r for r in registrations if not spec.engine or r.engine == spec.engine]
+    if not candidates:
+        raise _unregistered_task(spec.task, spec.engine)
+    refusing = next((r for r in candidates if not r.honours(spec.cardinality)), None)
+    if refusing is not None:
+        raise _unsupported_cardinality(spec.task, refusing.cardinalities, spec.cardinality)
     await run_in_threadpool(transform_specs.put_spec, settings.registry_root, settings.storage_options(), spec)
     log.info("transform_spec_set", extra={"project": project, "transform": spec.name, "task": spec.task, "code_version": spec.code_version})
     await emit_control(

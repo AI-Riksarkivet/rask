@@ -23,12 +23,15 @@ failed behind one that claims it.
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict
 
-from service_kit.lakehouse.task_registry import TaskRegistration
-from service_kit.lakehouse.work_order import WorkOrder
+
+if TYPE_CHECKING:
+    # Type-only, so an engine app imports the port without the lakehouse extra the registry's object store needs.
+    from service_kit.lakehouse.task_registry import TaskRegistration
+    from service_kit.lakehouse.work_order import WorkOrder
 
 
 class RunState(StrEnum):

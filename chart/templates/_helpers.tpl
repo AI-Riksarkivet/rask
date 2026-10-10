@@ -1265,7 +1265,7 @@ values.yaml `auth.serviceAccountIssuer`. Call: include "lance.identityTokens" (l
 {{/* A verifier door's map of caller service account (full username) -> subject, as JSON. Every key is an
 SA security-sa.yaml renders for a pod that projects this door's audience. A blank identity fails the render: the
 account would authenticate as the empty subject, and every account mapped to it as the same one.
-Call: include "lance.saSubjects" (list $root "catalog"|"lineage"|"producer"|"stage"). */}}
+Call: include "lance.saSubjects" (list $root "catalog"|"lineage"|"producer"|"stage"|"compute"). */}}
 {{- define "lance.saSubjects" -}}
 {{- $root := index . 0 -}}{{- $door := index . 1 -}}{{- $v := $root.Values -}}
 {{- $sa := printf "system:serviceaccount:%s:%s-sa-" $root.Release.Namespace (include "lance.fullname" $root) -}}
@@ -1276,10 +1276,14 @@ Call: include "lance.saSubjects" (list $root "catalog"|"lineage"|"producer"|"sta
 {{- if and $v.medallion.enabled (eq $door "catalog" "lineage") -}}
 {{- range $v.medallion.stageRunners }}{{- $_ := set $m (printf "%s%s" $sa .name) (required (printf "medallion.stageRunners[%s].serviceIdentity is blank" .name) .serviceIdentity) }}{{- end -}}
 {{- end -}}
+{{- if and $v.medallion.enabled (eq $door "compute") (include "lance.outOfProcessEngine" $root) -}}
+{{- $_ := set $m (printf "%smedallion-producer" $sa) $v.medallion.producer.serviceIdentity -}}
+{{- range $v.medallion.stageRunners }}{{- $_ := set $m (printf "%s%s" $sa .name) .serviceIdentity }}{{- end -}}
+{{- end -}}
 {{- if and $v.maintenance.enabled (eq $door "catalog") -}}
 {{- $_ := set $m (printf "%smaintenance" $sa) (required "maintenance.catalogServiceIdentity is blank" $v.maintenance.catalogServiceIdentity) -}}
 {{- end -}}
-{{- if or (eq $door "lineage") (and (eq $door "stage" "producer") $v.medallion.enabled $v.medallion.ray) -}}
+{{- if or (eq $door "lineage") (and (eq $door "stage" "producer") $v.medallion.enabled (include "lance.outOfProcessEngine" $root)) -}}
 {{- if and $v.ray.enabled (or $v.ray.cluster.enabled $v.singleTenant.enabled) }}{{- $_ := set $m (printf "%sray" $sa) (required "medallion.train.trainerIdentity is blank" $v.medallion.train.trainerIdentity) }}{{- end -}}
 {{- end -}}
 {{- if eq $door "lineage" -}}
@@ -1855,7 +1859,7 @@ measured decision, and a second copy would drift without anything saying so. */}
 {{- if $v.maintenance.enabled }}{{- $s = append $s (dict "id" $v.maintenance.catalogServiceIdentity "app" $v.maintenance.daprAppId "role" "maintenance") }}{{- end -}}
 {{- if $v.medallion.enabled }}
 {{- $s = append $s (dict "id" $v.medallion.producer.serviceIdentity "app" $v.medallion.producer.daprAppId "role" "medallion_producer") }}
-{{- range $v.medallion.stageRunners }}{{- $s = append $s (dict "id" .serviceIdentity "app" .daprAppId "role" (ternary "medallion_stage_runner" "" (and $v.medallion.ray $v.medallion.compute $v.catalog.controlEmit))) }}{{- end }}
+{{- range $v.medallion.stageRunners }}{{- $s = append $s (dict "id" .serviceIdentity "app" .daprAppId "role" (ternary "medallion_stage_runner" "" (and (not (not (include "lance.outOfProcessEngine" $))) $v.medallion.compute $v.catalog.controlEmit))) }}{{- end }}
 {{- end -}}
 {{- with (get (($v.services.ingest).env | default dict) "RASK_LINEAGE_SERVICE_IDENTITY") }}
 {{- if or ($v.services.ingest).frontDoor $v.singleTenant.enabled }}{{- $s = append $s (dict "id" . "app" "ingest") }}{{- end }}
@@ -1959,16 +1963,16 @@ keys_shaped() { case "$1" in *,) return 1 ;; *,*) pub_shaped "${1%%,*}" && pub_s
 {{ .Values.vending.externalBlobBases | default (printf "s3://%s/models/" .Values.minio.bucket) }}
 {{- end }}
 
-{{- /* THE ONE RAY PLANE ([[CP-041]]): the dashboard every consumer names (compute's prune and jobs board, the
-       cascade's submits, Serve discovery). `ray.dashboardUrl` when set, else the head Service a rendered
-       RayService or RayCluster creates, else empty; a cascade with Ray on and no head fails the render. */ -}}
+{{- /* THE ONE RAY PLANE ([[CP-041]]): the dashboard every consumer names (compute's submits, prune and jobs board,
+       Serve discovery). `ray.dashboardUrl` when set, else the head Service a rendered
+       RayService or RayCluster creates, else empty; an enabled engine with no head fails the render. */ -}}
 {{- define "rask.rayDashboardUrl" -}}
 {{- if .Values.ray.dashboardUrl -}}
 {{- .Values.ray.dashboardUrl -}}
 {{- else if and .Values.ray.enabled (or .Values.singleTenant.enabled .Values.ray.cluster.enabled) -}}
 {{- printf "http://%s-ray-head-svc:%v" (include "rask.fullname" .) .Values.ray.dashboardPort -}}
-{{- else if and .Values.medallion.enabled .Values.medallion.ray -}}
-{{- fail "medallion.ray submits to a Ray cluster this render does not name: set ray.dashboardUrl to the external Ray dashboard, or enable ray.cluster.enabled (or singleTenant.enabled) for an in-cluster head" -}}
+{{- else if include "lance.outOfProcessEngine" . -}}
+{{- fail "services.compute.engines enables an engine on a Ray cluster this render does not name: set ray.dashboardUrl to the external Ray dashboard, or enable ray.cluster.enabled (or singleTenant.enabled) for an in-cluster head" -}}
 {{- end -}}
 {{- end -}}
 
@@ -1982,4 +1986,23 @@ keys_shaped() { case "$1" in *,) return 1 ;; *,*) pub_shaped "${1%%,*}" && pub_s
 {{- else -}}
 {{- include "rask.rayDashboardUrl" . -}}
 {{- end -}}
+{{- end -}}
+
+{{/* CP-056: "an out-of-process engine is configured" — non-empty iff some `services.compute.engines.*` is enabled. The
+one predicate every lakehouse site gates the planned-run lane on (the plan, its outcome door, its sweep, its announcement). */}}
+{{- define "lance.outOfProcessEngine" -}}
+{{- range $n, $e := ((.Values.services.compute).engines | default dict) }}{{ if $e.enabled }}{{ $n }}{{ end }}{{ end -}}
+{{- end -}}
+
+{{/* MEDALLION_ENGINES: each enabled engine as the planners invoke it (app-id `compute`, the `rask-compute` token), with
+its tasks minus their commands when the caller registers them. A Ray engine's build is the Ray image.
+Call: include "lance.medallionEngines" (list $root <with-tasks>). */}}
+{{- define "lance.medallionEngines" -}}
+{{- $root := index . 0 -}}{{- $out := dict -}}
+{{- range $n, $e := (($root.Values.services.compute).engines | default dict) }}{{- if $e.enabled }}
+{{- $b := dict "app_id" "compute" "token_file" "/var/run/secrets/rask/identity/rask-compute/token" "capabilities" ($e.capabilities | default list) "code_version" ($e.codeVersion | default (ternary (printf "%s:%s" $root.Values.ray.image.repository $root.Values.ray.image.tag) "" (eq $n "ray"))) }}
+{{- if index $ 1 }}{{- $t := list }}{{- range $e.tasks }}{{- $t = append $t (omit . "command") }}{{- end }}{{- $_ := set $b "tasks" $t }}{{- end }}
+{{- $_ := set $out $n $b }}
+{{- end }}{{- end -}}
+{{- toJson $out -}}
 {{- end -}}

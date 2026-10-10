@@ -6,9 +6,8 @@ the plane that says what Ray can run here, and it stamps its own engine rather t
 row to spell it: a typo in `engine` would register a task no submitter answers to, producing a
 declaration that validates at the door and resolves to nothing at submit.
 
-The mirror property is asserted too. A registration for ANOTHER engine is not an error in the
-declaration — it is a transform that belongs to a different executor — and handing its command to
-the Ray Jobs API would submit a string written for something else.
+Each engine's registration of a task is its own record, so two engines registering the same task both keep
+theirs, and a submitter resolves only its own engine's.
 """
 
 from __future__ import annotations
@@ -18,28 +17,32 @@ from pathlib import Path
 import pytest
 
 from medallion.core.config import MedallionSettings
-from medallion.services.task_register import RAY_ENGINE, register_tasks
+from medallion.services.engine_choice import engine_for
+from medallion.services.engine_names import IN_PROCESS_ENGINE
+from medallion.services.task_register import register_tasks
 from medallion.services.transform_spec import UnrunnableTaskError, resolve_task
 from service_kit.lakehouse import task_registry
-from service_kit.lakehouse.task_registry import TaskRegistration
+from service_kit.lakehouse.transform_specs import TransformSpec
 
 
 def _settings(tmp_path: Path, **over: object) -> MedallionSettings:
     base: dict[str, object] = {
         "control_root": str(tmp_path),
-        "ray_code_version": "main-abc1234",
-        "ray_tasks": [
-            {"task": "stage-transform", "command": "python /home/ray/jobs/ray_stage_job.py", "cardinalities": ["1:1", "1:N"]},
-            {"task": "dummy-lane", "command": "python /home/ray/jobs/ray_dummy_job.py", "cardinalities": ["1:1"]},
-        ],
+        "engines": {
+            "ray": {
+                "app_id": "compute",
+                "code_version": "ray-cluster:abc1234",
+                "tasks": [{"task": "stage-transform", "cardinalities": ["1:1", "1:N"]}, {"task": "dummy-lane", "cardinalities": ["1:1"]}],
+            }
+        },
     }
     return MedallionSettings.model_validate(base | over)
 
 
 def test_declaring_no_tasks_writes_NOTHING(tmp_path: Path) -> None:
     """An estate that declares no transforms needs no registry, and boot must not manufacture one."""
-    assert register_tasks(_settings(tmp_path, ray_tasks=[])) == 0
-    assert task_registry.get_task(str(tmp_path), {}, "stage-transform") is None
+    assert register_tasks(_settings(tmp_path, engines={})) == 0
+    assert task_registry.registrations_of(str(tmp_path), {}, "stage-transform") == []
 
 
 def test_an_unwritable_control_root_is_LOGGED_and_not_FATAL(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
@@ -60,24 +63,29 @@ def test_an_UNREGISTERED_task_is_refused_before_anything_is_submitted(tmp_path: 
     """Refusing beats submitting the key as a command: the second reaches the cluster and dies there,
     naming an image rather than the key nobody registered."""
     with pytest.raises(UnrunnableTaskError, match="nobody-registered-this"):
-        resolve_task(_settings(tmp_path), task="nobody-registered-this", engine=RAY_ENGINE)
+        resolve_task(_settings(tmp_path), task="nobody-registered-this", engine="ray")
 
 
-def test_a_task_registered_for_ANOTHER_engine_is_refused_HERE(tmp_path: Path) -> None:
-    """Not a broken declaration — a valid one belonging to a different executor.
+def test_a_task_both_engines_register_resolves_to_each_engines_own_registration(tmp_path: Path) -> None:
+    """Both engines register `stage-transform`, as the chart deploys them, and neither registration overwrites the other:
+    each submitter resolves its own (the out-of-process one with no command and the engine's build, the in-process one
+    with its module and this lakehouse's build), and a declaration naming an engine runs on that engine (CP-056)."""
+    settings = _settings(
+        tmp_path,
+        code_version="lakehouse:abc1234",
+        compute_enabled=True,
+        inprocess_tasks=[{"task": "stage-transform", "command": "medallion.transform_stage", "cardinalities": ["1:1", "1:N"]}],
+    )
+    assert register_tasks(settings) == 3
 
-    This is the property that makes a second engine possible at all: the same `_tasks/` prefix holds
-    both, the catalog validates against both, and each submitter runs only its own.
-    """
-    task_registry.put_task(str(tmp_path), {}, TaskRegistration(task="compact", engine="inprocess", command="maintenance.compaction"))
+    ray = resolve_task(settings, task="stage-transform", engine="ray")
+    inprocess = resolve_task(settings, task="stage-transform", engine=IN_PROCESS_ENGINE)
+    chosen = {engine: engine_for(settings, spec=_declared(engine)) for engine in ("ray", IN_PROCESS_ENGINE)}
 
-    with pytest.raises(UnrunnableTaskError, match="inprocess"):
-        resolve_task(_settings(tmp_path), task="compact", engine=RAY_ENGINE)
+    assert (ray.engine, ray.command, ray.code_version) == ("ray", "", "ray-cluster:abc1234")
+    assert (inprocess.engine, inprocess.command, inprocess.code_version) == (IN_PROCESS_ENGINE, "medallion.transform_stage", "lakehouse:abc1234")
+    assert chosen == {"ray": "ray", IN_PROCESS_ENGINE: IN_PROCESS_ENGINE}
 
 
-def test_a_registered_task_resolves_to_its_command(tmp_path: Path) -> None:
-    """The happy path, and the reason the submit path reads the registry at all: what a transform
-    RUNS comes from the plane that registered it, never from the transform record."""
-    register_tasks(_settings(tmp_path))
-
-    assert resolve_task(_settings(tmp_path), task="stage-transform", engine=RAY_ENGINE).command == "python /home/ray/jobs/ray_stage_job.py"
+def _declared(engine: str) -> TransformSpec:
+    return TransformSpec(name="lane", project="p", from_id="bronze$a", to_id="silver$a", task="stage-transform", engine=engine)

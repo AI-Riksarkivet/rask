@@ -24,16 +24,14 @@ import json
 from pathlib import Path
 from typing import Any
 
-import httpx
 import pytest
 
 from medallion.core.config import MedallionSettings
-from medallion.services import ray_submit, train
+from medallion.services import train
 
 
 def _settings(**overrides: Any) -> MedallionSettings:
     values: dict[str, Any] = {
-        "MEDALLION_RAY_ENABLED": "true",
         "MEDALLION_COMPUTE_ENABLED": "true",
         "MEDALLION_S3_ENDPOINT": "http://rustfs:9000",
         "MEDALLION_S3_SECRET_ACCESS_KEY": "k",
@@ -43,21 +41,14 @@ def _settings(**overrides: Any) -> MedallionSettings:
     return MedallionSettings.model_validate(values)
 
 
-def _features_the_job_reads(monkeypatch: pytest.MonkeyPatch) -> list[list[dict[str, Any]]]:
-    """The Ray Jobs API behind the Ray adapter: each submission's feature list, as the job will read it."""
-    seen: list[list[dict[str, Any]]] = []
+def _features_the_job_reads(compute_engine: Any) -> list[list[dict[str, Any]]]:
+    """What the Ray Jobs API behind compute's engine door was sent: each submission's feature list, as the job reads it."""
+    return [json.loads(body["runtime_env"]["env_vars"]["RASK_PARAM_FEATURES"]) for body in compute_engine.jobs.bodies.values()]
 
-    def handle(request: httpx.Request) -> httpx.Response:
-        seen.append(json.loads(json.loads(request.content)["runtime_env"]["env_vars"]["RASK_PARAM_FEATURES"]))
-        return httpx.Response(200)
 
-    client = httpx.AsyncClient(base_url="http://ray-head:8265", transport=httpx.MockTransport(handle))
-
-    async def _client() -> httpx.AsyncClient:
-        return client
-
-    monkeypatch.setattr(ray_submit, "ray_client", _client)
-    return seen
+def _engines(compute_engine: Any) -> dict[str, Any]:
+    """The producer's `MEDALLION_ENGINES`: compute, which runs task `train`."""
+    return {"MEDALLION_ENGINES": {"ray": compute_engine.binding("rask-sa-medallion-producer") | {"tasks": [{"task": "train"}]}}}
 
 
 def _local(root: Path) -> dict[str, str]:
@@ -90,7 +81,7 @@ def test_a_CATALOG_OUTAGE_falls_back_rather_than_refusing_the_submission(monkeyp
     assert train.feature_uri_for(settings, "silver$features") == "s3://lake/medallion/silver"
 
 
-def test_the_ray_JOB_is_given_the_location_the_door_RESOLVED(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_the_ray_JOB_is_given_the_location_the_door_RESOLVED(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, compute_engine: Any) -> None:
     """The hop the legs above cannot see: validation asks the catalog, the submission composed a path.
 
     `feature_uri_for` is correct and was called in exactly one place — `_resolve_version`, which opens
@@ -105,11 +96,10 @@ def test_the_ray_JOB_is_given_the_location_the_door_RESOLVED(monkeypatch: pytest
     A gate on the innermost call proves nothing about the hop that does the work.
     """
     monkeypatch.setattr(train.catalog_register, "describe_table_location", lambda **_kw: "s3://tenant-wh/90fabc")
-    seen = _features_the_job_reads(monkeypatch)
     event = {"data": {"token": "t1", "model": "churn", "features": [{"dataset": "silver$features", "version": 7}]}}
 
-    local = _settings(MEDALLION_CATALOG_URL="http://catalog:2333", **_local(tmp_path))
+    local = _settings(MEDALLION_CATALOG_URL="http://catalog:2333", **_local(tmp_path), **_engines(compute_engine))
     outcome = asyncio.run(train.handle_train_trigger(local, event, dapr=object()))
 
     assert outcome == {"status": "SUCCESS"}
-    assert seen == [[{"dataset": "silver$features", "version": 7, "uri": "s3://tenant-wh/90fabc"}]]
+    assert _features_the_job_reads(compute_engine) == [[{"dataset": "silver$features", "version": 7, "uri": "s3://tenant-wh/90fabc"}]]

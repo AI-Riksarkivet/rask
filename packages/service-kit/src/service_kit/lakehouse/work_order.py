@@ -29,9 +29,14 @@ make the submitter and the watcher disagree about the same run.
 from __future__ import annotations
 
 import hashlib
-from typing import Literal
+import re
+from typing import Final, Literal
 
 from pydantic import BaseModel, ConfigDict, model_validator
+
+
+#: A params key: a POSIX environment variable name, since it is delivered as `RASK_PARAM_<key>`.
+_PARAM_KEY: Final = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 
 class WorkSource(BaseModel):
@@ -106,13 +111,19 @@ class WorkIdentity(BaseModel):
 
 
 class WorkObservability(BaseModel):
-    """Trace context and OTLP config — standard names, not any engine's."""
+    """Trace context and the job's service name — standard names, not any engine's.
+
+    NO OTLP CONFIGURATION rides the order. The exporter's endpoint and headers belong to the pod that runs the job
+    (the chart renders them on the Ray head from the same derivation as every service, `rask.rayOtelEnv`), by the
+    one-owner rule `WorkIdentity` states for the lineage endpoint. The order crosses a trust boundary into the engine
+    app, and Ray lays the job's env over the pod's, so a free map of variable names here was a caller choosing any
+    variable of the job's process (measured: `PYTHONWARNINGS` plus `BROWSER` runs a command on Python 3.13).
+    """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     traceparent: str = ""
     tracestate: str = ""
-    otlp: dict[str, str] = {}
     service_name: str = ""
 
 
@@ -134,7 +145,8 @@ class WorkOrder(BaseModel):
     stamp: WorkStamp
     identity: WorkIdentity
     observability: WorkObservability = WorkObservability()
-    #: Opaque `str -> str`; the adapter applies its own namespacing on delivery.
+    #: Opaque `str -> str`, delivered as `RASK_PARAM_<key>`; a key is a POSIX variable name, so the prefix is the only
+    #: place it can land.
     params: dict[str, str] = {}
     #: A NAME the executor resolves against its own credential source. NEVER a credential value.
     credential_ref: str = ""
@@ -152,6 +164,13 @@ class WorkOrder(BaseModel):
     #: `SubmitOutcome.ALREADY_FAILED`, because training compute is expensive and a failed run stays failed until a
     #: person asks again under a new token. A submit policy for the adapter, so it is not serialized into the env.
     replace_failed_run: bool = True
+
+    @model_validator(mode="after")
+    def _a_param_names_one_variable(self) -> WorkOrder:
+        bad = sorted(key for key in self.params if not _PARAM_KEY.fullmatch(key))
+        if bad:
+            raise ValueError(f"order {self.idempotency_key!r} names params that are not variable names: {bad}")
+        return self
 
     @model_validator(mode="after")
     def _a_source_declares_its_cardinality(self) -> WorkOrder:
@@ -204,7 +223,6 @@ class WorkOrder(BaseModel):
         )
         env.update({key: value for key, value in optional if value})
         env.update({f"RASK_PARAM_{k}": v for k, v in self.params.items()})
-        env.update(self.observability.otlp)
         return env
 
 
@@ -231,7 +249,7 @@ def derive_idempotency_key(*, stage: str, token: str | None, from_uri: str, to_u
     field's content can straddle the separator.
 
     IT IS THE RUN'S ONE NAME (CP-029 clause a): the plan document's action id, the engine's submission id
-    (`RayJobsApiExecutor` posts it verbatim) and the outcome door's key are this value, so a redelivery
+    (the engine app submits under it verbatim) and the outcome door's key are this value, so a redelivery
     after a deploy that changed ``code_version`` names a different run and submits the new build's job.
     """
     parts = (stage, "\x00" if token is None else token, from_uri, to_uri, code_version)

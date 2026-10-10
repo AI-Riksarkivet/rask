@@ -81,7 +81,7 @@ class _FakeExecutor:
 
 
 def _settings(tmp_path: Path) -> MedallionSettings:
-    return MedallionSettings.model_validate({"control_root": str(tmp_path), "ray_code_version": "main-abc1234"})
+    return MedallionSettings.model_validate({"control_root": str(tmp_path), "code_version": "main-abc1234"})
 
 
 def _lineage_doc() -> LineageDoc:

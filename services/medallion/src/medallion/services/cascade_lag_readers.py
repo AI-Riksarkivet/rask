@@ -172,7 +172,7 @@ def consumed_reader(settings: Any) -> Any:  # noqa: ANN401 — the settings seam
         # was the second route defect in this file's short history, the first being a catalog path
         # that did not exist — a route is not a thing to infer from a prefix convention. `/datasets`
         # mounts the same way (`datasets.router`, no version prefix).
-        url = f"{str(settings.train_lineage_url).rstrip('/')}/datasets/{quote(wanted, safe='')}/producers"
+        url = f"{str(settings.lineage_url).rstrip('/')}/datasets/{quote(wanted, safe='')}/producers"
         # Lineage is a door of its own, so it takes the token projected for ITS audience, `rask-lineage`.
         response = httpx.get(url, timeout=_TIMEOUT_SECONDS, headers=identity_bearer(settings.lineage_identity_token_file))
         if response.status_code in (403, 404):

@@ -37,8 +37,8 @@ from openfga_sdk.client.models import ClientTuple
 
 from medallion.api import cascade_lag_read, produce_auth, stage_ops, stage_runner_ops
 from medallion.api import train as train_api
-from medallion.core.config import MedallionSettings, get_settings
-from medallion.services import ray_submit, stage_plans, train_plans
+from medallion.core.config import EngineDeclaration, MedallionSettings, get_settings
+from medallion.services import engine_registry, stage_plans, train_plans
 from medallion.services import train as train_service
 from medallion.services.cascade_lag import AbsentEdgeMemo, LagTickReport, StalledTier
 from medallion.services.trigger_guards import StageTrigger
@@ -123,10 +123,10 @@ def _train(action_id: str, project: str) -> PlanDocument:
 
 #: The stage runs the stage runner hosts, by action id: the tenant each plan records (None, single-tenant).
 STAGES: dict[str, str | None] = {"stage-mine": "mine", "stage-other": "other", "stage-single": None}
-#: What the Ray dashboard was asked to stop, recorded by `ray_dashboard` and cleared per test.
+#: What the engine was asked to stop, recorded by `engine_door` and cleared per test.
 _RAY_STOPS: list[str] = []
-#: Jobs that had already ENDED when the dashboard was asked to stop them, with the state they ended in; every other
-#: job is RUNNING. Cleared per test.
+#: Jobs that had already ENDED when the engine was asked to stop them, with the state they ended in (the port's
+#: vocabulary); every other job is running. Cleared per test.
 _RAY_ENDED: dict[str, str] = {}
 #: The stage runner's identity: the owner its plans live under.
 _RUNNER_IDENTITY = "service-silver-to-gold"
@@ -262,31 +262,33 @@ def identities(sa_issuer: Any, tmp_path: Any) -> _Identities:
     return _Identities(sa_issuer, tmp_path)
 
 
+#: The engine both apps are deployed with: compute, at a direct URL the `engine_door` transport answers.
+_ENGINES = {"ray": EngineDeclaration(app_id="compute", url="http://compute:8804", tasks=[{"task": "train"}])}
+
+
 @pytest.fixture(autouse=True)
-def ray_dashboard(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The dashboard the real Ray adapter reads a run's state from and stops a job through."""
+def engine_door(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The engine app the real invoked executor reads a run's state from and stops a job through."""
     _RAY_STOPS.clear()
     _RAY_ENDED.clear()
 
     def handle(request: httpx.Request) -> httpx.Response:
-        job = request.url.path.split("/")[3]
-        if request.method == "POST" and request.url.path.endswith("/stop"):
+        path = request.url.path.removeprefix("/engine/runs")
+        if request.method == "POST" and not path:
+            key = json.loads(request.content)["order"]["idempotency_key"]
+            return httpx.Response(200, json={"handle": key, "outcome": "submitted"})
+        job = path.strip("/").split("/")[0]
+        if request.method == "POST" and path.endswith("/cancel"):
             _RAY_STOPS.append(job)
-            # Ray answers the stop of a job that already ended with `stopped: false`.
-            return httpx.Response(200, json={"stopped": job not in _RAY_ENDED})
-        return httpx.Response(200, json={"status": _RAY_ENDED.get(job, "RUNNING")})
+        return httpx.Response(200, json={"state": _RAY_ENDED.get(job, "running")})
 
-    client = httpx.AsyncClient(base_url="http://ray-head:8265", transport=httpx.MockTransport(handle))
-
-    async def _client() -> httpx.AsyncClient:
-        return client
-
-    monkeypatch.setattr(ray_submit, "ray_client", _client)
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handle))
+    monkeypatch.setattr(engine_registry, "_engine_client", lambda _timeout: client)
 
 
 def _stage_runner(stages: dict[str, str | bytes | None], root: Path, identities: _Identities | None = None) -> FastAPI:
     """A stage runner hosting ``stages`` as plans under ``root``; a ``bytes`` value is a plan document that does not parse."""
-    settings = MedallionSettings().model_copy(update={"control_root": str(root), "fga_service_identity": _RUNNER_IDENTITY})
+    settings = MedallionSettings().model_copy(update={"control_root": str(root), "fga_service_identity": _RUNNER_IDENTITY, "engines": _ENGINES})
     store = stage_plans.plan_store(settings)
     for action_id, project in stages.items():
         if isinstance(project, bytes):
@@ -338,6 +340,7 @@ def _producer(
             "oidc_enabled": True,
             "produce_admin_project": CONFIGURED,
             "stage_runner_urls": {RUNNER: "http://sr:8000"},
+            "engines": _ENGINES,
             **({"medallion_identity_token_file": str(identities.token_file)} if identities is not None else {}),
             **(settings_update or {}),
         }
@@ -448,7 +451,7 @@ def test_an_admin_of_one_project_CANNOT_STOP_anothers_stage(producer: TestClient
 def test_an_admin_CAN_stop_their_own_projects_stage(producer: TestClient, stage_runner: FastAPI) -> None:
     """The job had already SUCCEEDED when the stop reached it (its report lost, the sweep's tick not yet come), so the
     run closes as the engine says it ended: succeeded, with its next tier woken, never a FAIL (D-4)."""
-    _RAY_ENDED["stage-mine"] = "SUCCEEDED"
+    _RAY_ENDED["stage-mine"] = "succeeded"
 
     response = producer.post(_stop("stage-mine"), headers=_bearer("alice"))
 
@@ -456,7 +459,7 @@ def test_an_admin_CAN_stop_their_own_projects_stage(producer: TestClient, stage_
     assert _terminated(stage_runner) == ["stage-mine"]
     assert response.json()["status"] == "succeeded", f"a job Ray says SUCCEEDED was closed {response.json()['status']!r} by the stop"
     published = stage_runner.state.dapr.published
-    assert [payload.get("ray_submission_id") for _topic, payload in published if payload.get("ray_job_done")] == ["stage-mine"], (
+    assert [payload.get("run_action_id") for _topic, payload in published if payload.get("run_done")] == ["stage-mine"], (
         f"the succeeded run's next tier was not woken: {published}"
     )
 
@@ -762,7 +765,6 @@ def test_the_training_doors_serve_the_run_the_consumer_PLANS_on_the_configured_p
     update: dict[str, object] = {
         "control_root": str(root / "control"),
         "fga_service_identity": _PRODUCER_IDENTITY,
-        "ray_enabled": True,
         "s3_endpoint": "http://rustfs:9000",
         "bronze_uri": str(root / "medallion" / "bronze"),
     }
@@ -776,7 +778,7 @@ def test_the_training_doors_serve_the_run_the_consumer_PLANS_on_the_configured_p
     planned = asyncio.run(train_plans.read(settings, minted))
     assert planned is not None
     lance.write_dataset(pa.table({"version": [1]}), planned.to_uri, transaction_properties=CommitMarker(action_id=minted).properties())
-    _RAY_ENDED[minted] = "SUCCEEDED"
+    _RAY_ENDED[minted] = "succeeded"
 
     with TestClient(app, raise_server_exceptions=False) as client:
         refused = client.get(f"/trains/{minted}", headers=_bearer("alice"))

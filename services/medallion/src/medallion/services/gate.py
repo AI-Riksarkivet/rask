@@ -8,7 +8,7 @@ has never met the catalog must still be able to resolve the record from the cont
 **Opt-in, and the default is load-bearing.** No declared record means ``None``, and the chart's
 ``quality_key_column`` / ``required_columns`` / ``promotion_review_band`` govern exactly as before.
 An estate that has declared nothing behaves byte-for-byte as it did — the stance ``lane`` and
-``ray_code_version`` already take.
+``code_version`` already take.
 
 **A DECLARED GATE IS NOT A MERGE.** When a record exists it supplies all four values, including the
 ones left at their model defaults. Falling back per-field would make a UI that cleared a list

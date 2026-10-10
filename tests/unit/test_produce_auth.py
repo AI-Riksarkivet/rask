@@ -323,11 +323,12 @@ def _train_client() -> TestClient:
     app.include_router(train_router)
     app.include_router(router)  # /produce mounted alongside, to contrast the per-project behavior
     app.dependency_overrides[get_dapr] = lambda: None
-    # ray_enabled=False → a request PASSING the guard hits the disabled-head 409 (a crisp "guard passed"
+    # No training engine → a request PASSING the guard hits the disabled-head 409 (a crisp "guard passed"
     # signal distinct from the guard's own 403); the acknowledged-open door admits the request with no subject.
-    app.dependency_overrides[get_settings] = lambda: SimpleNamespace(
-        oidc_enabled=False, produce_admin_project="acme", sa_issuer=None, insecure_allow_unauthenticated=True, ray_enabled=False, s3_endpoint="", bronze_uri=""
+    settings = MedallionSettings().model_copy(
+        update={"oidc_enabled": False, "produce_admin_project": "acme", "sa_issuer": None, "insecure_allow_unauthenticated": True}
     )
+    app.dependency_overrides[get_settings] = lambda: settings
     return TestClient(app, raise_server_exceptions=False)
 
 

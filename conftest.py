@@ -254,7 +254,7 @@ def _projected_identity_tokens(tmp_path: pathlib.Path, monkeypatch: pytest.Monke
     sent. So a test that drives such a call reads a file the way the pod does, and the settings find it
     where the chart mounts it. The contents are opaque: the door under test is a double, or a real
     verifier minted its own token. In the ROOT conftest because the callers live in both `services/
-    medallion/tests/` and `tests/unit/`, and two copies is the drift `_reset_pooled_ray_client` names.
+    medallion/tests/` and `tests/unit/`, and two copies is the drift a root fixture avoids.
     """
     for audience in ("catalog", "lineage", "medallion"):
         path = tmp_path / f"projected-rask-{audience}-token"
@@ -263,27 +263,21 @@ def _projected_identity_tokens(tmp_path: pathlib.Path, monkeypatch: pytest.Monke
 
 
 @pytest.fixture(autouse=True)
-def _reset_pooled_ray_client() -> Iterator[None]:
-    """Drop `ray_submit`'s module-level Ray client between tests.
+def _reset_pooled_engine_client() -> Iterator[None]:
+    """Drop the medallion registry's pooled engine client between tests.
 
-    That client is pooled for the WORKER's lifetime — a Dapr workflow activity has no `Request` and no
-    reachable `app.state`, so that is the only lifetime available to it (open_fastapi-audit). Under
-    pytest the "worker" is the whole session, so without this a client built by one test is reused by
-    the next, and a later test installing a `MockTransport` through `httpx.AsyncClient` never sees it
-    because no new client is constructed.
-
-    In the ROOT conftest rather than per-suite: the affected tests live in both `services/medallion/
-    tests/` and `tests/unit/`, and two copies of a reset fixture is the drift this file exists to
-    avoid. Import is local and guarded so a run that never touches medallion pays nothing.
+    The client is pooled for the process (`engine_registry._engine_client`); under pytest the process is the whole
+    session, so a client built on one test's event loop would otherwise serve the next test, whose loop is another.
+    In the ROOT conftest because the callers live in both `services/medallion/tests/` and `tests/unit/`.
     """
     yield
     try:
-        from medallion.services.ray_submit import close_ray_client
+        from medallion.services.engine_registry import close_executors
     except ImportError:  # pragma: no cover - medallion not installed in this env
         return
     import asyncio
 
-    asyncio.run(close_ray_client())
+    asyncio.run(close_executors())
 
 
 class ServiceAccountIssuer:

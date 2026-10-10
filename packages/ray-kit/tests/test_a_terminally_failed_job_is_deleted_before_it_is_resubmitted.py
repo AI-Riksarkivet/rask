@@ -23,7 +23,7 @@ from typing import Any, cast
 import httpx
 import pytest
 
-from medallion.services.ray_jobs_api import submit_or_reattach
+from ray_kit.jobs_api import submit_or_reattach
 
 
 SUB_ID = "stage-bronze-to-silver-0001"
@@ -56,7 +56,7 @@ class _Jobs:
         self._existing = existing
         self.calls: list[tuple[str, str]] = []
 
-    async def post(self, path: str, json: dict[str, Any]) -> _Resp:  # noqa: A002 — httpx's kwarg name
+    async def post(self, path: str, json: dict[str, Any]) -> _Resp:
         self.calls.append(("POST", path))
         return _Resp(self._posts.pop(0))
 

@@ -250,13 +250,13 @@ async def _emit_start_run(
     Best-effort in the same sense the FAIL emit is — through the outbox, so a publish that fails
     leaves a staged copy the relay drains rather than losing the only record that the run began.
     """
-    # ONCE PER RUN, on the pass that actually begins it. The Ray lane re-enters `handle_stage` with
-    # `ray_job_done` set once its outcome hands it back, and that re-entry is the SAME run continuing —
+    # ONCE PER RUN, on the pass that actually begins it. An out-of-process lane re-enters `handle_stage` with
+    # `run_done` set once its outcome hands it back, and that re-entry is the SAME run continuing —
     # its terminal follows within milliseconds. Re-emitting there would put a START on the bus after
     # the work finished, immediately before its own COMPLETE: harmless to the graph, since the outbox
     # key is `run_id@eventType` and it overwrites itself, and misleading to anyone reading the stream
     # in order.
-    if trigger.ray_job_done:
+    if trigger.run_done:
         return
     start_event = build_run_event(
         operation=settings.operation,
@@ -748,7 +748,7 @@ async def _run_in_process(
 ) -> WriteResult:
     """Run the stage on the IN-PROCESS engine, through the platform's `Executor` port (§7.4 step 2).
 
-    THE ORDER IS THE RAY LANE'S ORDER. `stage_submit.build_work_order` builds it for both lanes, so the trigger's
+    THE ORDER IS THE OUT-OF-PROCESS LANE'S ORDER. `stage_submit.build_work_order` builds it for both lanes, so the trigger's
     ``from_version`` reaches this engine as the order's version floor and the stage converges only the window, the
     lane's declared cardinality is checked, and the run key marks the run's last commit, exactly as on Ray.
 
@@ -774,9 +774,10 @@ async def _run_in_process(
     blob-field expression. The capability is what makes that saving conditional on the engine having
     made the measurement, rather than on which class this line happened to name.
     """
-    executor = executor_for(IN_PROCESS_ENGINE, storage_options=settings.storage_options)
+    executor = executor_for(settings, IN_PROCESS_ENGINE)
     order = build_work_order(
         settings,
+        engine=IN_PROCESS_ENGINE,
         spec=declared,
         from_uri=from_uri,
         to_uri=to_uri,
@@ -834,12 +835,13 @@ async def _write_stage(
     # WHICH ENGINE COMES FROM THE RECORD when there is one. A declaration names a task, and the task's
     # registration names the plane that can run it — so a chart boolean deciding here would let the
     # record say one thing while the code did another, with nothing red anywhere. An estate that has
-    # declared nothing still follows `MEDALLION_RAY_ENABLED` exactly as before; see `engine_choice`,
-    # which also carries why ORCHESTRATION (Dapr Workflow) is a separate axis this does not touch.
-    use_ray = await engine_choice.engine_for_async(settings, spec=declared) == engine_choice.RAY_ENGINE
+    # declared nothing runs on `MEDALLION_DEFAULT_ENGINE`; see `engine_choice`, which also carries why
+    # ORCHESTRATION is a separate axis this does not touch.
+    engine = await engine_choice.engine_for_async(settings, spec=declared)
+    out_of_process = engine != IN_PROCESS_ENGINE
     span.set_attribute("lance.medallion.engine_source", "declaration" if declared is not None else "chart")
-    if use_ray and not trigger.ray_job_done:
-        # DISPATCH, and return. `submit_stage_order` returns the instant Ray ACCEPTS the
+    if out_of_process and not trigger.run_done:
+        # DISPATCH, and return. `submit_stage_order` returns the instant the engine ACCEPTS the
         # submission, so measuring here would open the destination before the job wrote it —
         # and against a destination surviving from a prior run that measure SUCCEEDS, so the
         # run would emit a COMPLETE for a write it never made and fire the next tier off it.
@@ -847,10 +849,10 @@ async def _write_stage(
         # The run is PLANNED instead (`stage_plans.dispatch`, CP-029): the job reports its own
         # terminal through this stage runner's outcome door, the sweep resolves one whose report
         # never arrives, and only a run that succeeded re-publishes this trigger with
-        # `ray_job_done`, re-entering this handler through the branch below. The handler acks in
+        # `run_done`, re-entering this handler through the branch below. The handler acks in
         # milliseconds, so nothing holds an ack across the job's runtime (A13).
-        span.set_attribute("lance.medallion.compute", "ray")
-        span.set_attribute("lance.medallion.ray_phase", "dispatched")
+        span.set_attribute("lance.medallion.compute", engine)
+        span.set_attribute("lance.medallion.run_phase", "dispatched")
         # MEASURED HERE, before the job is submitted, because this is the last moment
         # the predecessor exists. `existing_row_count` answers None for an absent or
         # unreadable destination, which the band reads as FIRST_PROMOTION and asks about
@@ -859,6 +861,7 @@ async def _write_stage(
         action_id = await stage_plans.dispatch(
             settings,
             dapr,
+            engine=engine,
             trigger=trigger,
             from_uri=from_uri,
             to_uri=to_uri,
@@ -873,21 +876,21 @@ async def _write_stage(
         )
         log.info("medallion_stage_planned", extra={"transition": transition, "action_id": action_id, "to_uri": to_uri})
         return None  # DISPATCHED: the run's outcome re-publishes the trigger when it lands
-    if use_ray:
+    if out_of_process:
         # The job SUCCEEDED — its outcome was resolved before this trigger was re-published — so
         # the destination exists and measuring it is a question about this run's output rather
         # than a race with it.
-        span.set_attribute("lance.medallion.compute", "ray")
-        span.set_attribute("lance.medallion.ray_phase", "completed")
-        if trigger.ray_submission_id:
-            span.set_attribute("lance.medallion.ray_submission_id", trigger.ray_submission_id)
-        # measure_stage, not a bare measure: the Ray job transformed out-of-process, so the
+        span.set_attribute("lance.medallion.compute", engine)
+        span.set_attribute("lance.medallion.run_phase", "completed")
+        if trigger.run_action_id:
+            span.set_attribute("lance.medallion.run_action_id", trigger.run_action_id)
+        # measure_stage, not a bare measure: the job transformed out-of-process, so the
         # column edges are RECONSTRUCTED from the upstream + written schemas — otherwise the
         # columnLineage facet would be empty on exactly the path production runs. Measured AT the
         # version the run's commit marker named when the outcome found one, so a commit landing
         # between the job and this pass (a compaction) is not described as this run's write.
         result = await run_in_threadpool(
-            partial(measure_stage, version=trigger.ray_committed_version),
+            partial(measure_stage, version=trigger.run_committed_version),
             from_uri,
             to_uri,
             settings.storage_options(),
@@ -1136,7 +1139,7 @@ def _build_stage_event(
     # SECONDS in the graph for a stage that ran for hours; the plan's span from submit to outcome rides
     # the re-published trigger instead. Resolved here and read twice — by this event and by the metric
     # in `_report_success` — so the graph and the metric carry one number.
-    stage_seconds = trigger.ray_duration_seconds if (trigger.ray_job_done and trigger.ray_duration_seconds is not None) else elapsed_seconds
+    stage_seconds = trigger.run_duration_seconds if (trigger.run_done and trigger.run_duration_seconds is not None) else elapsed_seconds
     run_event = build_run_event(
         operation=settings.operation,
         author=settings.author,

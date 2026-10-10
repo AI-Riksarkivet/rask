@@ -75,8 +75,8 @@ class TestB3TheDeployAxisIsFedByTheChart:
         its pre-B3 form — which re-attaches a rolling deploy to the PREVIOUS build's job, so the new
         pod reports success over the old build's output. `test_an_unset_code_version_reproduces_the_
         previous_id_exactly` blesses the empty value on purpose, so nothing else catches this."""
-        assert "MEDALLION_RAY_CODE_VERSION" in self._render(), (
-            "no rendered pod receives MEDALLION_RAY_CODE_VERSION — the deploy axis of the submission "
+        assert "MEDALLION_CODE_VERSION" in self._render(), (
+            "no rendered pod receives MEDALLION_CODE_VERSION — the deploy axis of the submission "
             "id is fed by nothing, and the unit tests bless an empty code as backwards-compatible"
         )
 

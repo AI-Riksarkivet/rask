@@ -323,12 +323,12 @@ def test_the_submit_path_FORWARDS_the_declared_cardinality_to_the_job(tmp_path: 
         {},
         TransformSpec(name="video", project="acme", from_id="acme-bronze$videos", to_id="acme-silver$frames", task="frames", cardinality=ONE_TO_MANY),
     )
-    settings = MedallionSettings.model_validate(
-        {"compute_enabled": True, "ray_enabled": True, "control_root": str(tmp_path), "transform": "video", "to_namespace": "silver"}
-    )
+    settings = MedallionSettings.model_validate({"compute_enabled": True, "control_root": str(tmp_path), "transform": "video", "to_namespace": "silver"})
 
     order, _registration = asyncio.run(
-        stage_submit.build_stage_order(settings, from_uri="s3://acme/bronze", to_uri="s3://acme/silver", stage="silver", token="t", project="acme")
+        stage_submit.build_stage_order(
+            settings, engine="ray", from_uri="s3://acme/bronze", to_uri="s3://acme/silver", stage="silver", token="t", project="acme"
+        )
     )
 
     assert order.stamp.cardinality == ONE_TO_MANY, "the declared fan-out did not reach the order's stamp"

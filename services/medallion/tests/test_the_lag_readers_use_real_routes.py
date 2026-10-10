@@ -37,7 +37,7 @@ class _Settings:
     """
 
     catalog_url = "http://catalog:2333"
-    train_lineage_url = "http://lineage:8000"
+    lineage_url = "http://lineage:8000"
     transform_routes: dict[str, str] = {}
     lane_destinations: dict[str, str] = {"bronze": "silver", "bronze-media": "silver-media"}
     #: The SOURCE and DESTINATION tables of each lane, project-unqualified — the shape

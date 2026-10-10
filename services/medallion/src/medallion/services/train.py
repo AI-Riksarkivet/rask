@@ -75,10 +75,10 @@ def _safe_dataset(value: Any) -> bool:
 
 
 def train_head_enabled(settings: MedallionSettings) -> bool:
-    """The train head needs the Ray path + S3 + a bronze URI to derive stage URIs from, and a control root to
-    keep each run's plan in (CP-029) — 409 otherwise (an explicit contract, like the media head; never a
+    """The train head needs an engine that registers task ``train`` + S3 + a bronze URI to derive stage URIs from, and a
+    control root to keep each run's plan in (CP-029) — 409 otherwise (an explicit contract, like the media head; never a
     KeyError 500, and never a run nobody resolves)."""
-    return bool(settings.ray_enabled and settings.s3_endpoint and settings.bronze_uri and settings.control_root)
+    return bool(settings.train_engine() and settings.s3_endpoint and settings.bronze_uri and settings.control_root)
 
 
 def _stage_base(settings: MedallionSettings) -> str:

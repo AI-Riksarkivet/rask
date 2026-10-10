@@ -271,7 +271,7 @@ observability:
 #   enabled: false                                   # lineage ingest, no cascade. NACK Stream CRs are optional
 #   externalUrl: nats://nats.internal:4222           # (the in-chart provision Job stays idempotent either way).
 #   streamReplicas: 3                                # raft-replicated streams (needs the 3+ node cluster)
-# ray (the one Ray plane, REQUIRED):                 # compute's prune, the cascade's submits and Serve discovery
+# ray (the one Ray plane, REQUIRED):                 # compute's submits and prune, and Serve discovery
 #   dashboardUrl: https://ray.internal:8265          # all read it; unset with no in-cluster head fails the render
 # THE AUDIT STORE (prerequisite, values.yaml `observability`): it refuses unauthenticated writes and deletes on
 #   every listener and admits the Collector's credential, `otel-collector-greptime` in the platform store (username,

@@ -62,6 +62,7 @@
               image: "{{ .Values.ray.image.repository }}:{{ .Values.ray.image.tag }}"
               imagePullPolicy: {{ .Values.ray.image.pullPolicy }}
               env:
+                {{- include "lance.allocatorEnv" (list $) | nindent 16 }}
                 {{- include "rask.rayOtelEnv" (list $ "ray") | nindent 16 }}
                 {{- if include "lance.otelEnabled" . }}
                 {{- /* Ray SERVE tracing — a SEPARATE switch from the core hook above, with a DIFFERENT
@@ -154,11 +155,7 @@
                      An endpoint is NOT a secret — it is public routing information, and an inline
                      value is the right delivery for it where a `secretKeyRef` would only hide it from
                      the reader who needs it. That asymmetry is pinned by
-                     `tests/unit/test_the_ray_pod_owns_every_name_its_jobs_require.py`.
-
-                     It is also what unblocks [[LH-159]]: routing `workflow.py` through
-                     `executor_for(RAY_ENGINE)` sends `WorkOrder.to_env()` and nothing else, and
-                     `WorkOrder` is `extra="forbid"`, so a deployment fact cannot ride the order. */}}
+                     `tests/unit/test_the_ray_pod_owns_every_name_its_jobs_require.py`. A submission carries `WorkOrder.to_env()` and nothing else (`extra="forbid"`). */}}
                 - name: S3_ENDPOINT
                   value: {{ include "lance.s3Endpoint" . | quote }}
                 {{- /* The literal, matching `services.yaml:121` and both maintenance templates. A new

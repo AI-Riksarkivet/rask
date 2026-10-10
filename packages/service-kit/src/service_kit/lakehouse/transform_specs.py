@@ -75,6 +75,9 @@ class TransformSpec(BaseModel):
     #: to this library and to the catalog, which is what keeps an engine's name out of the published
     #: OpenAPI and lets a second engine be declared without a catalog change.
     task: str = Field(min_length=1, description="a task registered in <control_root>/_tasks/")
+    #: Which registration of the task runs it, when more than one engine registered it. Opaque like `task`. Empty
+    #: takes the task's one registration, or the deployment's default engine among several.
+    engine: str = Field(default="", max_length=64, description="the engine whose registration of the task runs it; empty: the deployment chooses")
     params: dict[str, str] = Field(default_factory=dict, description="opaque workload parameters; never secrets")
     #: How many output rows this lane may emit per input row. DECLARED, never inferred: a stage
     #: driver cannot tell a deliberate fan-out from a transform that lost rows, and guessing in

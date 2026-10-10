@@ -29,9 +29,8 @@ from service_kit.lakehouse.transform_specs import TransformSpec
 
 
 def _settings(tmp_path: Path, **over: object) -> MedallionSettings:
-    # `compute_enabled` because the settings refuse `ray_enabled` without it — the Ray path submits
-    # the stage's read->transform->write, which the compute config provides.
-    base: dict[str, object] = {"control_root": str(tmp_path), "to_namespace": "silver", "compute_enabled": True}
+    # Hosting Ray as an engine app, so a refusal below is about the declaration and not an engine this pod lacks.
+    base: dict[str, object] = {"control_root": str(tmp_path), "to_namespace": "silver", "compute_enabled": True, "engines": {"ray": {"app_id": "compute"}}}
     return MedallionSettings.model_validate(base | over)
 
 
@@ -52,7 +51,7 @@ def test_an_engine_NOBODY_here_runs_is_refused_rather_than_silently_defaulted(tm
     spec = transform_specs.get_spec(str(tmp_path), {}, "acme", "lane")
 
     with pytest.raises(engine_choice.UnrunnableTaskError, match="spark"):
-        engine_choice.engine_for(_settings(tmp_path, ray_enabled=True, transform="lane"), spec=spec)
+        engine_choice.engine_for(_settings(tmp_path, transform="lane"), spec=spec)
 
 
 def test_an_UNREGISTERED_task_is_refused_at_dispatch_too(tmp_path: Path) -> None:
@@ -66,13 +65,13 @@ def test_an_UNREGISTERED_task_is_refused_at_dispatch_too(tmp_path: Path) -> None
     spec = transform_specs.get_spec(str(tmp_path), {}, "acme", "lane")
 
     with pytest.raises(engine_choice.UnrunnableTaskError, match="was-registered-once"):
-        engine_choice.engine_for(_settings(tmp_path, ray_enabled=True, transform="lane"), spec=spec)
+        engine_choice.engine_for(_settings(tmp_path, transform="lane"), spec=spec)
 
 
 def test_a_spec_carrying_no_project_cannot_resolve_and_says_so(tmp_path: Path) -> None:
     """A transform is keyed (project, name). Resolution without one is refused upstream; this asserts
     the chooser does not invent a second, laxer path to the same lookup."""
-    settings = _settings(tmp_path, ray_enabled=True, transform="lane")
+    settings = _settings(tmp_path, transform="lane")
     settings = settings.model_copy(update={"control_root": ""})
     spec = TransformSpec(name="lane", project="acme", from_id="a", to_id="b", task="stage-transform")
 

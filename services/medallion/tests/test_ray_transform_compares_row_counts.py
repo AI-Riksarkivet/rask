@@ -69,7 +69,7 @@ def test_the_dispatch_path_passes_the_count_through(carried: int | None) -> None
     dumped = StageTrigger(token="t1", pre_row_count=carried).model_dump()
     if carried is not None:
         assert dumped["pre_row_count"] == carried
-    reparsed = parse_stage_trigger({"data": {**dumped, "ray_job_done": True}})
+    reparsed = parse_stage_trigger({"data": {**dumped, "run_done": True}})
     assert reparsed is not None
     assert reparsed.pre_row_count == carried
-    assert reparsed.ray_job_done is True
+    assert reparsed.run_done is True

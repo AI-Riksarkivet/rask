@@ -113,6 +113,7 @@ spec:
             {{- include "lance.tmpMount" $root | nindent 12 }}
             {{- include "lance.identityTokens" (prepend (include "lance.fleetAudiences" (list $name $svc) | splitList " " | compact) "mounts") | nindent 12 }}
             {{- if and $root.Values.auth.enabled $svc.governedAuth }}{{ include "lance.fgaToken" (list "mounts") | nindent 12 }}{{ end }}
+            {{- if eq $name "compute" }}{{- include "lance.saVerifier" (list $root "mounts" "compute") | nindent 12 }}{{- end }}
           ports:
             - name: http
               containerPort: {{ $svc.port }}
@@ -295,6 +296,16 @@ spec:
             {{- end }}
             {{- with include "lance.signingEnv" (list $root $name) }}{{ . | nindent 12 }}{{- end }}
             {{- if eq $name "notifications" }}{{- with include "lance.doorEnv" (list $root true) }}{{ . | nindent 12 }}{{- end }}{{- end }}
+            {{- if and (eq $name "compute") (include "lance.outOfProcessEngine" $root) }}
+            {{- /* CP-056: the engine door's task table, and who may call it (each planner's account, `lance.saSubjects`). */}}
+            {{- $tasks := dict }}{{- range $e := $svc.engines }}{{- if $e.enabled }}{{- range $e.tasks }}{{- $_ := set $tasks .task .command }}{{- end }}{{- end }}{{- end }}
+            - { name: RASK_COMPUTE_ENGINE_TASKS, value: {{ toJson $tasks | quote }} }
+            {{- $bases := list (printf "http://%s-medallion-producer:%v" (include "lance.fullname" $root) $root.Values.medallion.port) }}
+            {{- range $root.Values.medallion.stageRunners }}{{- $bases = append $bases (printf "http://%s-%s:%v" (include "lance.fullname" $root) .name $root.Values.medallion.port) }}{{- end }}
+            - { name: RASK_COMPUTE_ENGINE_OUTCOME_BASES, value: {{ toJson $bases | quote }} }
+            {{- include "lance.saVerifier" (list $root "env" "compute") | nindent 12 }}
+            {{- if not $root.Values.auth.enabled }}{{- include "lance.governedAuthAck" $root | nindent 12 }}{{- end }}
+            {{- end }}
             {{- /* THE EXTERNAL-BLOB DECISION HOLDS AT BOTH DOORS, from ONE value.
 
                  `services.yaml` renders this onto the catalog; without it here the ingest pod's
@@ -352,6 +363,7 @@ spec:
         {{- include "lance.tmpVolume" $root | nindent 8 }}
         {{- include "lance.identityTokens" (prepend (include "lance.fleetAudiences" (list $name $svc) | splitList " " | compact) "volumes") | nindent 8 }}
         {{- if and $root.Values.auth.enabled $svc.governedAuth }}{{ include "lance.fgaToken" (list "volumes") | nindent 8 }}{{ end }}
+        {{- if eq $name "compute" }}{{- include "lance.saVerifier" (list $root "volumes" "compute") | nindent 8 }}{{- end }}
 ---
 apiVersion: v1
 kind: Service

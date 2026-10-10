@@ -96,9 +96,7 @@ class _Case(BaseModel):
     listed: int = 0
 
 
-def _bronze_write(
-    *, author: str = PRODUCER, operation: str = "lance_ray_ingest", tier: str = "bronze", tables: tuple[str, ...] = ("events",)
-) -> dict[str, Any]:
+def _bronze_write(*, author: str = PRODUCER, operation: str = "ingest_bronze", tier: str = "bronze", tables: tuple[str, ...] = ("events",)) -> dict[str, Any]:
     """A batch landed in tenant `acme`'s tier, for alice: the COMPLETE run `/produce` emits for a bronze write."""
     namespace = f"acme-{tier}"
     return {

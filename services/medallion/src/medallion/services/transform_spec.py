@@ -6,9 +6,9 @@ never met the catalog resolves the record with nothing but the control root — 
 the submit path, which is the same reason the maintenance sweep reads policies directly.
 
 **Opt-in, and the default is load-bearing.** ``MEDALLION_TRANSFORM`` unset means this returns ``None`` and
-the chart's ``ray_entrypoint``/``ray_job_params``/``ray_code_version`` govern exactly as before. An
+the chart's stage task, ``stage_params`` and code version govern exactly as before. An
 estate that has declared nothing is unchanged rather than quietly running under a new scheme — the
-stance ``ray_code_version`` already takes.
+stance ``code_version`` already takes.
 
 **A named-but-undeclared transform REFUSES.** It must never fall back to the chart's own program, because
 that is precisely the failure the record exists to eliminate: the stage runner would run the OLD program
@@ -98,24 +98,18 @@ class UnrunnableTaskError(UndeclaredTransformError):
 
 
 def resolve_task(settings: _TransformSettings, *, task: str, engine: str) -> TaskRegistration:
-    """The registration for a declared task, refusing anything this engine cannot run.
+    """This engine's registration of a declared task, refusing a task this engine never registered.
 
-    Two refusals, and the second is the one a path-shaped allowlist could never make. An
-    UNREGISTERED task means the executor plane never said it could run this — submitting it anyway
-    would run whatever the string happens to mean on the cluster. A registration for ANOTHER engine
-    means the transform is real and belongs to a plane that is not this one; running it here would
-    hand a Ray submitter a command written for something else.
+    An UNREGISTERED task means the executor plane never said it could run this — submitting it anyway
+    would run whatever the string happens to mean on the engine. A task registered only by ANOTHER engine
+    is real and belongs to a plane that is not this one; running it here would hand this engine a command
+    written for something else.
     """
-    registration = task_registry.get_task(settings.control_root, settings.storage_options(), task)
+    registration = task_registry.get_task(settings.control_root, settings.storage_options(), task, engine)
     if registration is None:
         raise UnrunnableTaskError(
-            f"no task is registered as {task!r}; a task is registered by the plane that can run it, "
+            f"task {task!r} is not registered for engine {engine!r}; a task is registered by the plane that can run it, "
             f"under {settings.control_root}/_tasks/. Refusing rather than submitting the key as a command."
-        )
-    if registration.engine != engine:
-        raise UnrunnableTaskError(
-            f"task {task!r} is registered for engine {registration.engine!r}, and this submitter runs {engine!r}. "
-            "The declaration is valid; it belongs to another executor."
         )
     return registration
 

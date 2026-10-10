@@ -35,7 +35,6 @@ from service_kit.lakehouse.transform_specs import TransformSpec
 
 
 def _settings(tmp_path: Path, **over: object) -> MedallionSettings:
-    # `compute_enabled` because the settings refuse `ray_enabled` without it.
     base: dict[str, object] = {"control_root": str(tmp_path), "to_namespace": "silver", "compute_enabled": True}
     return MedallionSettings.model_validate(base | over)
 
@@ -59,5 +58,5 @@ async def test_the_ASYNC_door_refuses_identically(tmp_path: Path) -> None:
     because "the guard was on the other door" is how the estate loses controls it already wrote."""
     spec = _declare(tmp_path, task="stage-transform", engine="ray")
 
-    with pytest.raises(engine_choice.UnrunnableTaskError, match="MEDALLION_RAY_ENABLED"):
-        await engine_choice.engine_for_async(_settings(tmp_path, ray_enabled=False, transform="lane"), spec=spec)
+    with pytest.raises(engine_choice.UnrunnableTaskError, match="MEDALLION_ENGINES names it"):
+        await engine_choice.engine_for_async(_settings(tmp_path, transform="lane"), spec=spec)

@@ -668,27 +668,21 @@ _EXTERNAL_RAY = "https://ray.example.com:8265"
         pytest.param(("--set", "image.localImages=true"), None, id="default-names-no-ray"),
         pytest.param(_PROD_INPUTS, None, id="prod-names-no-ray"),
         pytest.param((*_PROD_INPUTS, "--set-string", f"ray.dashboardUrl={_EXTERNAL_RAY}"), _EXTERNAL_RAY, id="prod-external-ray"),
-        pytest.param(
-            (*_LOCAL_INPUTS, "--set-string", "medallion.rayAddress=http://elsewhere:8265"),
-            "http://rask-ray-head-svc:8265",
-            id="local-in-cluster-head",
-        ),
+        pytest.param(_LOCAL_INPUTS, "http://rask-ray-head-svc:8265", id="local-in-cluster-head"),
     ],
 )
 def test_every_ray_consumer_names_one_cluster_or_the_render_refuses(overlay: tuple[str, ...], address: str | None) -> None:
-    """[[CP-041]]: the cascade must submit to the cluster `compute` prunes job history on.
+    """[[CP-041]]: the cascade's jobs run on the cluster `compute` prunes job history on.
 
-    Two values keys once named the Ray plane — `ray.dashboardUrl` (compute's RAY_DASHBOARD_URL, the only
-    job-history reclaimer, and the annotator's Serve discovery) and `medallion.rayAddress` (where the cascade
-    submits) — and a default render gave compute an external host while four medallion pods submitted to a
-    head Service nothing rendered. A head grown to 81,155 jobs OOMKilled compute that way. Every consumer now
-    renders `rask.rayDashboardUrl`; the local case passes a stale `medallion.rayAddress` to prove no second
-    key can split the plane, and a render that names no Ray with the cascade's lane on refuses.
+    A head grown to 81,155 jobs OOMKilled compute when the cascade submitted to one Ray plane and compute pruned
+    another. Every consumer renders `rask.rayDashboardUrl` (compute submits, reads and prunes on its
+    RAY_DASHBOARD_URL; the annotator discovers Serve on it), and a render that names no Ray with an engine enabled
+    refuses.
     """
     if address is None:
         with pytest.raises(subprocess.CalledProcessError) as refused:
             chart_render.render_chart_text(CHART, "--set", "explorer.enabled=true", *overlay, base=chart_render.UNNAMED_RAY_ARGS)
-        assert "medallion.ray submits to a Ray cluster this render does not name" in refused.value.stderr
+        assert "services.compute.engines enables an engine on a Ray cluster this render does not name" in refused.value.stderr
         return
 
     text = chart_render.render_chart_text(CHART, "--set", "explorer.enabled=true", *overlay, base=chart_render.UNNAMED_RAY_ARGS)
@@ -699,10 +693,10 @@ def test_every_ray_consumer_names_one_cluster_or_the_render_refuses(overlay: tup
             named.setdefault("RAY_DASHBOARD_URL", set()).add(doc["data"]["RAY_DASHBOARD_URL"])
     for _, _, container in chart_render.containers(tuple(docs)):
         for name, value in chart_render.env_of(container).items():
-            if name in {"MEDALLION_RAY_ADDRESS", "MEDIA_SERVE_DISCOVERY_URL"}:
+            if name == "MEDIA_SERVE_DISCOVERY_URL" or "RAY_ADDRESS" in name:
                 named.setdefault(name, set()).add(value)
 
-    assert named == {"RAY_DASHBOARD_URL": {address}, "MEDALLION_RAY_ADDRESS": {address}, "MEDIA_SERVE_DISCOVERY_URL": {address}}
+    assert named == {"RAY_DASHBOARD_URL": {address}, "MEDIA_SERVE_DISCOVERY_URL": {address}}
     if address != _EXTERNAL_RAY:
         heads = {f"http://{doc['metadata']['name']}-head-svc:8265" for doc in docs if doc.get("kind") in {"RayCluster", "RayService"}}
         assert heads == {address}, f"{address} is not the head Service of the one Ray cluster this render creates ({heads})"
