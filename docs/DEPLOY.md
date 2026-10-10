@@ -2,7 +2,7 @@
 
 A Lance lakehouse REST catalog + in-service lineage (OpenLineage → Apache AGE) + governance, running as
 **event-driven microservices on a local kind cluster**, deployed by one umbrella Helm chart and
-iterated by rebuilding with Dagger and redeploying. Diagram: [`k8s-event-driven-architecture.html`](k8s-event-driven-architecture.html).
+iterated by rebuilding with Dagger and redeploying.
 
 ## One command
 

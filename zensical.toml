@@ -15,7 +15,6 @@ nav = [
     { "Quick Start" = "getting-started/index.md" },
     { "Concepts" = "getting-started/concepts.md" },
     { "Configuration" = "getting-started/configuration.md" },
-    { "Zed SSH Port-Forwards" = "zed-port-forwards.md" },
   ]},
   { "Architecture" = [
     { "Overview" = "architecture/index.md" },
@@ -184,10 +183,6 @@ nav = [
     ]},
     { "Diagrams" = [
       { "System Diagram" = "system-diagram.md" },
-      { "Event-Driven Pipeline" = "event-driven-pipeline.md" },
-      { "Image Pipeline" = "image-pipeline-event-driven.md" },
-    ]},
-    { "Design Notes" = [
     ]},
     { "Reports" = [
       { "Coverage" = "COVERAGE.md" },

@@ -159,4 +159,4 @@ the cardinality bug in particular should be re-checked, and this note updated if
 
 ## Who relies on this
 
-The document viewer (`services/viewer/.../pages.py`) is the read path these measurements govern — see [`document-viewer.md`](document-viewer.md).
+The document viewer (`services/viewer/.../pages.py`) is the read path these measurements govern.

@@ -3,9 +3,7 @@
 The single read-this-first narrative of the **information + batch-processing flow as it is actually built
 and tested today**. Each stage links to the deep doc for that subsystem. For the *distributed* variants
 (KubeRay, nats-py pull workers, Dapr-Workflow) see [§7 Future](#7-future--the-distributed-variants) — those
-are aspirational and clearly marked; the docs that describe them
-([`event-driven-pipeline.md`](event-driven-pipeline.md), [`image-pipeline-event-driven.md`](image-pipeline-event-driven.md))
-are design sketches, **not** the current mechanism.
+are aspirational and clearly marked, **not** the current mechanism.
 
 > **What "implemented" means here:** event-driven choreography (Dapr pub/sub over NATS JetStream), real
 > versioned Lance data when compute is on, OpenLineage emitted+ingested to an Apache AGE graph, two opt-in
@@ -137,8 +135,3 @@ What lands when this merges into the sibling `rask` repo (see [`RASK-INTEGRATION
 - **Auto-instrumented lineage (GOAL 3):** instead of the stage runner hand-building the `RunEvent`, the medallion-producer
   OpenLineage integration emits the `outputStatistics`/`dataQualityAssertions` facets **automatically** from
   the runtime — true Marquez-grade auto-lineage.
-- **Other sketches:** [`event-driven-pipeline.md`](event-driven-pipeline.md) and
-  [`image-pipeline-event-driven.md`](image-pipeline-event-driven.md) explore a `POST /jobs` + nats-py pull-worker
-  + `ray.submit_job` + Dapr-Workflow QC-gate design. **These are aspirational** — the implemented system uses
-  Dapr pub/sub subscriptions, the in-process fake-Ray transform, `POST /produce`, the `medallion.*` topics,
-  and the FGA + row-count/not-null gates described above.

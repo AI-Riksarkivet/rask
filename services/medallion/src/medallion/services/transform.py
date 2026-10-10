@@ -510,7 +510,7 @@ async def _preflight(
         # OBSERVABLE, at INFO and on a counter. A DROP is an ack: Dapr does not redeliver it, so
         # without this the app keeps no record of a trigger it will never process again. Before this
         # guard, a bronze$pages arrival drove this stage runner into a deterministic FAIL — and that FAIL is
-        # what live-proof-2026-07-28.md used as evidence the page lane had no consumer. A silent fix
+        # what the 2026-07-28 live kind run took as evidence the page lane had no consumer. A silent fix
         # would have removed the symptom AND the only way to notice the lane is still unlanded.
         # (INFO is not noisy: the cascade head publishes the trigger once per bronze WRITE, in
         # `fire_bronze_arrival`, not once per page — one record per ingest.)

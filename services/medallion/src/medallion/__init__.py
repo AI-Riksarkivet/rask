@@ -13,5 +13,5 @@ each stage a REAL in-process Lance write, so the loop produces actual versioned 
 the same read→transform→write→version contract the distributed ``lance-ray`` (rask KubeRay) swaps into.
 Default off → the cascade is a pure event/lineage demo (no data).
 
-See ``docs/event-driven-pipeline.html`` and ``docs/MEDALLION.md``.
+See ``docs/MEDALLION.md``.
 """

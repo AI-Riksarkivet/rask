@@ -27,8 +27,7 @@ free; the bytes are fetched for one row, by row id, only on the route that serve
 column out of its projection entirely and reports presence and length as unknown, because paying a
 corpus read to fill in two fields is the exact cost this rung exists to refuse.
 
-See ``docs/architecture/lance-blob-v2-findings.md`` for the measurements behind both rules, and
-``docs/architecture/document-viewer.md`` for how this endpoint came to exist.
+See ``docs/architecture/lance-blob-v2-findings.md`` for the measurements behind both rules.
 """
 
 from __future__ import annotations

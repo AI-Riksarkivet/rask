@@ -4,7 +4,7 @@ import { test, expect } from '@playwright/test';
 // base path is `/<domain>` (the old `/default/<domain>` project segment is gone). So
 // RASK_E2E_BASE_URL must point at a host that serves the domain apps — a provisioned
 // project's URL, or a `singleTenant.enabled` install — NOT the front-door host (which
-// serves only `/`, the picker). See docs/superpowers/specs/2026-06-29-openable-projects-design.md.
+// serves only `/`, the picker).
 //
 // Catch-all `/` + every zone's root. Keep this in step with `git ls-files frontend/microfrontends |
 // cut -d/ -f3 | sort -u` — the roster is the same one `@rask/zone-contract`'s manifest test pins.

@@ -16,9 +16,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   path (a browser for UI, the actual client for APIs). Assume nothing is fixed until it's
   been observed working end-to-end.
 - **Plan before editing, and test first.** A non-trivial change gets a plan you can state, a RED test
-  that proves the defect, then the fix — not ad-hoc edits. (This used to name the "superpowers flow";
-  that plugin is not installed, so the instruction pointed at nothing. `docs/superpowers/` is dated
-  residue from when it was — do not treat those plans or specs as current.)
+  that proves the defect, then the fix — not ad-hoc edits.
 - **Tests: invoke the testing skills first, every time.** Before writing, changing, deleting or auditing any test,
   invoke `testing-python` and read `writing-python`'s `references/testing.md` (the principles, which hold for any
   codebase; `fastapi`'s testing reference for a FastAPI door), then `rask-testing` (only rask's pytest wiring,

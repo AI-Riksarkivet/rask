@@ -44,9 +44,6 @@ test-results/
 # vendored helm subcharts — rebuilt via `make k3s-deps` (helm dependency build) from Chart.lock
 chart/charts/
 
-# superpowers SDD scratch (ledger, briefs)
-.superpowers/
-
 # git worktrees created by tooling — a second checkout, never content of this one
 .claude/worktrees/
 

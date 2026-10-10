@@ -90,7 +90,7 @@ app.kubernetes.io/component: {{ $component }}
 
 {{/* ── The ONE GPU signal: ray.gpuCount ────────────────────────────────────────────────────────────
      `ray.gpuCount` is the single fact every GPU-shaped decision in this chart derives from. It exists
-     because a live kind run (docs/architecture/live-proof-2026-07-28.md, defects 3 + 6) needed FOUR
+     because a live kind run (2026-07-28, defects 3 + 6) needed FOUR
      manual overrides to make a GPU-less estate coherent — ray.gpuCount=0, config.RASK_SERVE_GPU_FRAC=0,
      ray.runtimeClassName="" and nvdp off — and getting any one of them wrong wedged the deploy with no
      diagnostic (the RayService stayed `Initializing`, so no stable head Service ever appeared and the

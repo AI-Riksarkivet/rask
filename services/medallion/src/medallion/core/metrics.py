@@ -325,7 +325,7 @@ def record_other_lane(transition: str) -> None:
     `MedallionCascadeDeadLettering` pages on as retry exhaustion, which a deterministic refusal is
     not. This counter is what distinguishes the two. Before the lane guard, a ``bronze$pages`` arrival drove
     the events stage runner into a deterministic FAIL — and that FAIL is precisely the evidence
-    ``docs/architecture/live-proof-2026-07-28.md`` used to show the page lane had no consumer. Fixing
+    the 2026-07-28 live kind run took to show the page lane had no consumer. Fixing
     the wrong behaviour must not also delete the signal that revealed it.
     """
     _stage_other_lane.add(1, {"lance.medallion.transition": transition})
