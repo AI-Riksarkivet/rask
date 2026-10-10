@@ -150,7 +150,7 @@ before they had a record here; each names its source document and the date of th
 | [0135](0135-a-dock-lives-inside-its-zone-2026-08-03.md) |  | A dock lives inside its zone (2026-08-03) |
 | [0136](0136-bulk-labeling-is-a-mode-of-the-task-and-columns-carry-recipes.md) |  | Bulk labeling is a mode of the task, and columns carry recipes (2026-08-09) |
 | [0137](0137-model-endpoints-are-ray-serve-discovered-by-the-labeling.md) |  | Model endpoints are Ray Serve, discovered by the `labeling` user_config (2026-08-09) |
-| [0138](0138-an-erasure-rebases-a-pinning-branch-after-a-seven-day-notice.md) | D4 | An erasure rebases a pinning branch after a seven-day notice (2026-10-10) |
+| [0138](0138-an-erasure-rebases-a-pinning-branch-after-a-seven-day-notice.md) | D4 | An erasure releases a pinning branch or tag after a seven-day notice (2026-10-10) |
 | [0139](0139-training-stays-in-the-producer-and-names-no-engine.md) | CP-044 | Training stays in the lakehouse producer and names no engine (2026-10-10) |
 | [0140](0140-the-engine-adapter-runs-in-the-compute-service.md) | CP-054 | The engine adapter runs in the compute service (2026-10-10) |
 | [0141](0141-the-orphan-scan-reports-and-does-not-gate-the-purge.md) | D13 | The orphan scan reports and does not gate the purge (2026-10-10) |
