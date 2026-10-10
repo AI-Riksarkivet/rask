@@ -14,7 +14,7 @@ The rows are shaped from a real payload: `GET /lakehouse/api/runs` as alice on 2
 cd frontend/packages/ui
 bunx vite --config vite.config.ts harness --port 5411 --strictPort &   # the package config: the
                                                                       # svelte + tailwind plugins
-bun harness/drive.mjs                    # asserts, and writes docs/audits/shots/notifications-*.png
+bun harness/drive.mjs                    # asserts, and writes docs/audits/shots/notifications-*.png (gitignored)
 ```
 
 `--config vite.config.ts` is load-bearing: started without it, vite finds no plugins and serves the

@@ -46,11 +46,9 @@ Markdown companions are in the nav; the interactive HTML originals are served as
 
 - [System diagram](../system-diagram.md) ([interactive](../system-diagram.html))
 
-## Design notes, reports & audits
+## Reports
 
-- Design notes: [Annotation Projects](../DESIGN-annotation-projects.md) · [Interactive State](../DESIGN-interactive-state.md) · [UX Reactive Evidence](../GOAL-UX-REACTIVE-EVIDENCE.md)
-- Reports: [Assessment 2026-07-15](../ASSESSMENT-2026-07-15.md) · [Catalog Bench 2026-07-22](../BENCH-2026-07-22.md) · [Coverage](../COVERAGE.md) · [Lineage Verification](../VERIFY-LINEAGE-OPENLINEAGE.md) · [Open Work](../OPEN-WORK.md)
-- Frontend audits (with screenshots): [Audit index](../audits/README.md) · [MFE Composition](../audits/2026-07-26-mfe-composition.md) · [Routes & IA](../audits/2026-07-26-routes-and-ia.md) · [Svelte 5](../audits/2026-07-26-svelte5.md)
+- [Coverage](../COVERAGE.md)
 
 ## Lance format & SDK reference
 

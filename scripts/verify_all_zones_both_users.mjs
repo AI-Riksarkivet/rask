@@ -18,10 +18,14 @@
  *
  * Run:  node scripts/verify_all_zones_both_users.mjs
  */
+import { mkdirSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { chromium } from '@playwright/test';
 
 const ORIGIN = 'http://localhost:8090';
-const SHOT = '/home/gabriel/Desktop/lance-ns/docs/audits/shots';
+// Screenshots land in the gitignored docs/audits/shots/ at the repo root, wherever this runs from.
+const SHOT = process.env.SHOT_DIR ?? fileURLToPath(new URL('../docs/audits/shots', import.meta.url));
+mkdirSync(SHOT, { recursive: true });
 const ZONES = [
 	{ name: 'home', path: '/' },
 	{ name: 'lakehouse', path: '/lakehouse/' },

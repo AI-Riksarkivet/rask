@@ -26,7 +26,7 @@ export interface RunNotice {
 	run_id: string;
 	/** Who ran it. Dropped from the first version of this trim, and the bell rendered "unknown author" on
 	 *  every row — a field the surface displays is not an optional field. Caught by looking at the
-	 *  screenshot (`docs/audits/shots/live-notification-bell.png`), not by any assertion. */
+	 *  rendered bell, not by any assertion. */
 	author: string | null;
 	job: string | null;
 	state: string | null;

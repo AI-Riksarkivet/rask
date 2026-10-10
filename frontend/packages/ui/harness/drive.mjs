@@ -2,9 +2,13 @@
 // would read, dismisses a row, closes to clear the unread count, then re-opens in dark mode and at
 // phone width. Writes the screenshots this work is evidenced by. See README.md for how to serve it.
 //
+import { mkdirSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { chromium } from '@playwright/test';
 
-const SHOTS = '/home/gabriel/Desktop/lance-ns/docs/audits/shots';
+// Screenshots land in the gitignored docs/audits/shots/ at the repo root, wherever this runs from.
+const SHOTS = process.env.SHOT_DIR ?? fileURLToPath(new URL('../../../../docs/audits/shots', import.meta.url));
+mkdirSync(SHOTS, { recursive: true });
 const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 1100, height: 620 } });
 const fails = [];

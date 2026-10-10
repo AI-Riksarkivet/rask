@@ -128,9 +128,9 @@
 					<div class="flex min-w-0 items-center gap-2">
 						<!-- `leading-none` sets a 14px line box for a 14px font, and `truncate` brings `overflow:hidden`
 						     with it, so every descender is sliced off: measured clientH 14 vs scrollH 16, which rendered
-						     "ingest_events" as "inqest_events" and "aggregate_gold" as "aqqreqate_qold" in
-						     docs/audits/shots/notifications-panel-open.png. It survived a row-by-row reading of that
-						     screenshot because a reader silently corrects the words — it took a 4x zoom to see. -->
+						     "ingest_events" as "inqest_events" and "aggregate_gold" as "aqqreqate_qold" in the open
+						     panel's screenshot. It survived a row-by-row reading of that screenshot because a reader
+						     silently corrects the words — it took a 4x zoom to see. -->
 						<p class="truncate text-sm leading-tight font-medium" title={run.job ?? run.run_id}>
 							{job.name}
 						</p>

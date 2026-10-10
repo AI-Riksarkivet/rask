@@ -219,7 +219,7 @@ const VECTOR_DESCRIPTOR = {
 // /api/health reported `embed.ok: false` the whole time and only the sidebar dot consumed it.
 // FIXME(#123): the fix itself is live-proven — driven against the deployed zone, the selector shows
 // "Vector — encoder offline" and "Hybrid — encoder offline" both disabled while Keyword and Scene stay
-// selectable (docs/audits/shots/12-media-modes-encoder-offline.png). What is NOT done is this hermetic
+// selectable. What is NOT done is this hermetic
 // version. It needs a descriptor fixture whose `vectorSpaces` satisfies `DatasetView.searchModes`
 // (descriptor.ts:388-407: a text-ENCODER space, and for hybrid one that is `onRowTable`), and my first
 // three attempts guessed the wire shape instead of deriving it. Left visible as fixme rather than deleted

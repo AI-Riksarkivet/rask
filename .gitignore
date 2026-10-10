@@ -38,6 +38,9 @@ scripts/batch_ids.txt
 .playwright-cli/
 test-results/
 
+# Browser-verification screenshots (scripts/verify_*.mjs, @rask/ui harness) — evidence, not source
+docs/audits/shots/
+
 # Turborepo
 .turbo
 

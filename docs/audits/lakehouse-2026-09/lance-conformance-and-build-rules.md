@@ -9,7 +9,7 @@
 
 Date: 2026-09-02. Inputs: the full `lance_docs/` set (lancedb SDK, Lance table + file format, Lance Namespace spec + directory catalog + partitioning, lance-ray), the catalog service source, and live probes of the catalog app (dir backend, pylance 10.0.0, lance_namespace 0.11.0) with the shipped reference `RestNamespace` client pointed at it. Every line reference below is to a file in this repository or in `lance_docs/`.
 
-Companion documents: `lakehouse-analysis.md` (state, workflow, Lakekeeper gap matrix, robotics repo), `catalog-build-vs-buy.md` (DIY vs Lakekeeper/Gravitino/Unity/DuckLake), `dapr-coupling-analysis.md`.
+Companion documents: `catalog-build-vs-buy.md` (DIY vs Lakekeeper/Gravitino/Unity/DuckLake), `dapr-coupling-analysis.md`.
 
 ## 1. Answer in one paragraph
 
@@ -433,7 +433,7 @@ The layout half is in the vendored docs (hot/cold tiering, multi-region, shallow
 
 ### 9.8 lance-ray 0.5.0: external blobs have a first-class mode
 
-`write_lance(..., external_blob_mode="reference" | "ingest", allow_external_blob_outside_bases=..., initial_bases=[DatasetBasePath...], base_store_params={base_uri: {...}})`. `"reference"` stores the external URI; `"ingest"` reads the external bytes and writes them into Lance-managed storage. pylance 10.0.0's `write_dataset` carries the same `external_blob_mode`. This is the format's own answer to lakehouse-analysis Q4: a governed table may point at archival bytes in place (reference) or take custody of them (ingest), and the choice is a per-write parameter, not a second table kind. rask's ingest already picks reference when an external base is registered and managed otherwise (`ingest/worker.py:212-216`); the platform should name that choice in the produce contract rather than infer it.
+`write_lance(..., external_blob_mode="reference" | "ingest", allow_external_blob_outside_bases=..., initial_bases=[DatasetBasePath...], base_store_params={base_uri: {...}})`. `"reference"` stores the external URI; `"ingest"` reads the external bytes and writes them into Lance-managed storage. pylance 10.0.0's `write_dataset` carries the same `external_blob_mode`. This is the format's own answer to where archival bytes live: a governed table may point at archival bytes in place (reference) or take custody of them (ingest), and the choice is a per-write parameter, not a second table kind. rask's ingest already picks reference when an external base is registered and managed otherwise (`ingest/worker.py:212-216`); the platform should name that choice in the produce contract rather than infer it.
 
 ### 9.9 The blob-streaming spec (lance.org → `lance-context/docs/src/specs/rollout-blob-streaming.md`)
 
@@ -447,7 +447,7 @@ Three things carry over to rask:
 
 1. **rask already has the streaming half** (`/blobs` streams `take_blobs` chunks; the viewer's media door uses `take_blobs(..., ids=[rowid])`) and **not the admission half**: no service bounds in-flight blob bytes. Under a burst of large media reads, catalog and viewer pods will OOM before they 503. A `RASK_MAX_INFLIGHT_BLOB_BYTES` budget with a 503 + `Retry-After` on the blob doors is a small, contained change and should be on the list in §8.
 2. **MemWAL is a trap for blob columns.** If rask ever adopts MemWAL for high fan-in bronze ingest (the lance-context deployment doc shows the pattern: one shard per stable pod id, no coordinator, PUT-IF-NOT-EXISTS with epoch fencing), governed blob v2 columns will read back `None` through the LSM scanner until upstream fixes it. Document the constraint before anyone reaches for MemWAL.
-3. **Server-id sharding is a coordinator-free alternative to the ingest lease** in lakehouse-analysis §3/§11 C. Each replica writes its own shard keyed by `uuid5(instance_id)`; MemWAL's single-writer invariant holds by construction; reads union all shards from object storage, so no read affinity is needed. The trade-off is one flush per append and throughput scaling by adding shards. It applies to append-only landing, not to the anti-join dedup rask's ingest does today.
+3. **Server-id sharding is a coordinator-free alternative to the ingest lease**. Each replica writes its own shard keyed by `uuid5(instance_id)`; MemWAL's single-writer invariant holds by construction; reads union all shards from object storage, so no read affinity is needed. The trade-off is one flush per append and throughput scaling by adding shards. It applies to append-only landing, not to the anti-join dedup rask's ingest does today.
 
 ### 9.10 Feature flags: the whitelist is out of date, safely
 

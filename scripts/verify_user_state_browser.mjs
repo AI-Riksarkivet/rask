@@ -14,10 +14,14 @@
  *
  * Run:  node scripts/verify_user_state_browser.mjs
  */
+import { mkdirSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { chromium } from '@playwright/test';
 
 const ORIGIN = 'http://localhost:8090';
-const SHOT = '/home/gabriel/Desktop/lance-ns/docs/audits/shots';
+// Screenshots land in the gitignored docs/audits/shots/ at the repo root, wherever this runs from.
+const SHOT = process.env.SHOT_DIR ?? fileURLToPath(new URL('../docs/audits/shots', import.meta.url));
+mkdirSync(SHOT, { recursive: true });
 // Distinctive, so a stale fixture or a coincidental match cannot pass this.
 const VIEW = `cond5-${Date.now().toString(36)}`;
 
