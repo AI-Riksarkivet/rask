@@ -328,7 +328,7 @@ notify somebody.
    shares the pinned dual-auth door (`authorize_ingest_media`, no `?project=`, because the media head's
    target is configured and authorization scope must equal write scope). Still open for
    `services/compute` (`RayJob` has no author field) and the controlplane (the Project CR carries
-   `spec.team`, a literal, not a requester). See `docs/DECISIONS.md` — an emitter without an identity
+   `spec.team`, a literal, not a requester). See `docs/adr/0042-the-compute-service-gets-no-emitter-yet-and-the-blocker-is.md` — an emitter without an identity
    produces events the plane is *designed* to discard, which reads as coverage and is not.
 2. **No principal at all.** Some transitions are caused by a TIMER, not a person: the annotator's
    `lease_expired` fires from an actor reminder with no request and no emitter in scope. The audience
@@ -340,7 +340,7 @@ notify somebody.
    output, so even a perfect emit dies on `notifiable()`'s output rule; the controlplane keys watches
    by CR name while fan-out matches the FGA tenant id, and nothing joins the two namespaces.
 5. **Steady states wearing an event's clothes.** A permanently un-granted stage runner, a repeating denial, a
-   degraded lane — these are METRICS, and `docs/DECISIONS.md` records why lineage must not carry them.
+   degraded lane — these are METRICS, and `docs/adr/0039-lineage-records-what-happened-to-data-an-authorization.md` records why lineage must not carry them.
 
 **The line, worth re-reading before adding anything:** lineage answers *what happened to this dataset
 and who produced it*; the control lane answers *what changed for this person*; metrics answer *how

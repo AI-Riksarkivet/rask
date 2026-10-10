@@ -1573,7 +1573,7 @@ tests:
             users: ["team:eng#member"]
 
   # ── THE ESTATE ROOT ────────────────────────────────────────────────────────────────────────────
-  # [[LH-055]], owner ruling `docs/DECISIONS.md:2240` — "the FGA model shape is a PORT, not a
+  # [[LH-055]], owner ruling `docs/adr/0070-four-owner-answers-and-the-reference-implementation-that.md` — "the FGA model shape is a PORT, not a
   # decision". The reference calls it `type server`; this estate calls it what it is.
   #
   # THE OBJECT `fga_root_object` NAMES, so these assertions are what every estate door resolves through.
@@ -1702,7 +1702,7 @@ tests:
   # [[LH-055]] — the classification VOCABULARY is a tag type with per-tag `apply`
   # ------------------------------------------------------------------------------------------------
   - name: a classifier may apply the tags delegated to them and no others — the vocabulary is per-tag
-    # The ruling (docs/DECISIONS.md, "the FGA model shape is a PORT"): the reference model has no
+    # The ruling (docs/adr/0070-four-owner-answers-and-the-reference-implementation-that.md, "the FGA model shape is a PORT"): the reference model has no
     # `column` type, and column governance is "a TAG type with per-tag `apply` delegation, Independent
     # of `modify` (separation of duties: classify without holding data/DDL rights)".
     #

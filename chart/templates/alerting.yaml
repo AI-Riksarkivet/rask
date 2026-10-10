@@ -4,11 +4,11 @@ guard makes the missing key mean "off" instead (the reuse-values landmine). */ -
 {{- $al := .Values.observability.alerting | default dict }}
 {{- if and .Values.observability.enabled $al.enabled }}
 {{- /*
-The alerting ENGINE (docs/DECISIONS.md "P3b"): vmalert evaluates the proven rules (chart/alerting/rules.yml, proven to fire by
+The alerting ENGINE (docs/adr/0032-p3b-alerting-rule-logic-proven-hermetically-the-live.md "P3b"): vmalert evaluates the proven rules (chart/alerting/rules.yml, proven to fire by
 `make alert-rules-check`) against GreptimeDB's PromQL endpoint every evaluationInterval, and hands firing
 alerts to Alertmanager, which groups + routes them. Gated on observability.alerting.enabled (prod). The one
 piece render-checking can't prove is the live vmalert->GreptimeDB query round-trip + a real receiver route —
-that's a prod drill (docs/DECISIONS.md "P3b"). webhookUrl empty => Alertmanager groups alerts but
+that's a prod drill (docs/adr/0032-p3b-alerting-rule-logic-proven-hermetically-the-live.md "P3b"). webhookUrl empty => Alertmanager groups alerts but
 pages nowhere (black-hole); set it to a Slack/PagerDuty webhook to actually page.
 */ -}}
 {{- $fullname := include "lance.fullname" . }}

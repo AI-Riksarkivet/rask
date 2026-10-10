@@ -1,6 +1,6 @@
 """`_resolve` must reuse the process-wide pooled client, never build one per call.
 
-docs/DECISIONS.md "The Python estate audit" VS-12 — `_resolve` constructed a fresh `httpx.Client(base_url=..., timeout=...)`
+docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit" VS-12 — `_resolve` constructed a fresh `httpx.Client(base_url=..., timeout=...)`
 on every `/api/page` and `/api/pages` request, paying a new TLS handshake and connection pool per
 catalog resolve, while the pooled client built once in the lifespan sits on `state.http` and is
 already reused by `system.py`. `state.http` carries no `base_url`, so the resolve passes the catalog

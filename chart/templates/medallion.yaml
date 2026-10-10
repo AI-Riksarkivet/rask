@@ -547,7 +547,7 @@ spec:
             - { name: MEDALLION_CONTROL_ROOT, value: "s3://{{ $root.Values.minio.bucket }}" }
             {{- if and $root.Values.medallion.goldWarehouse (eq .toNamespace "gold") }}
             {{- /*
-               Gold SERVING warehouse (docs/DECISIONS.md "Medallion tiers"): ONLY the terminal silver→gold
+               Gold SERVING warehouse (docs/adr/0034-medallion-tiers-hybrid-physical-layout-2026-07-24.md "Medallion tiers"): ONLY the terminal silver→gold
                stage runner retargets — its tenant target root becomes the project's serving=="gold" registry
                record when one exists; absent → work-warehouse behavior, byte-identical.
             */}}

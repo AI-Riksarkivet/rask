@@ -1,6 +1,7 @@
 """A stream-provisioning FAILURE must raise; only "already exists" is a non-event.
 
-docs/DECISIONS.md "The Python estate audit" `ingest-flow-17` (E3, low, effort S): `ensure_stream` and `ensure_dlq_stream`
+docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit" `ingest-flow-17` (E3, low, effort S): `ensure_stream` and
+`ensure_dlq_stream`
 wrapped `add_stream` in a bare `except Exception` that logged DEBUG "already exists". Any real
 failure — broker down mid-call, JetStream not enabled, an auth rejection, a malformed config — was
 misreported as the normal in-cluster path, and the first symptom moved downstream to a publish

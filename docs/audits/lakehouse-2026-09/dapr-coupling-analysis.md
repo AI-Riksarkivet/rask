@@ -98,7 +98,7 @@ Component types: 7 `bindings.cron`, 1 `bindings.http`, 1 `bindings.smtp`, 6 `pub
 | --- | --- |
 | `docs/` pages naming Dapr | 40 of 86 |
 | `docs/architecture/` pages naming Dapr | 8 |
-| `docs/DECISIONS.md` headings whose body names Dapr | 9 of 44 |
+| `docs/adr/` headings whose body names Dapr | 9 of 44 |
 | `docs/OPERATORS.md` mentions | 25 |
 | project skills naming Dapr | 5 of 8 |
 | Makefile references | 8 (helm repo, PVC cleanup, the 5 images, an e2e target) |
@@ -164,7 +164,7 @@ Not code. Things the estate relies on that exist only because a sidecar sits bes
 | **injection sweep** | `dapr-inject-sweep.yaml` Job | works around the helm-ordering race where pods are admitted before the injector webhook exists |
 | **network policy** | `network-policy.yaml` | rules for the control plane's API-server egress and the sidecars' OpenBao egress |
 | **discovery endpoints** | `GET /dapr/subscribe`, `/dapr/config` | mounted by `DaprApp`, exported into the generated TypeScript clients |
-| **rulings** | 9 DECISIONS headings, OPERATORS §4 | the outbox ruling, the workflow adoption, the actor-boundary ruling, the "no distributed lock" ruling |
+| **rulings** | 9 docs/adr/ headings, OPERATORS §4 | the outbox ruling, the workflow adoption, the actor-boundary ruling, the "no distributed lock" ruling |
 
 ---
 

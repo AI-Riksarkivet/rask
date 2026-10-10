@@ -8,7 +8,7 @@
 # lancedb and lance-ray cases therefore SKIP from the host with that reason, and the row's closing
 # condition says PASSES — a skip that reads as green is the defect.
 #
-# Owner ruling 2026-09-19 (`docs/DECISIONS.md`): the conformance target runs from inside the cluster.
+# Owner ruling 2026-09-19 (`docs/adr/0066-four-rulings-on-the-lakehouse-s-unblocked-rows-owner-2026.md`): the conformance target runs from inside the cluster.
 # Whether an external client should receive an externally-resolvable endpoint is a product question
 # with its own row; this image answers the test-coverage half and makes no claim about the other.
 #

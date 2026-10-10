@@ -1,6 +1,6 @@
 """A stage run records WHICH SOURCE VERSIONS it consumed, not only which version it wrote.
 
-Found while building the cascade lag detector (docs/DECISIONS.md "Cascade repair" (C3)) and it blocks it. The
+Found while building the cascade lag detector (docs/adr/0051-cascade-repair-detection-and-the-repair-verb-2026-09-04.md "Cascade repair" (C3)) and it blocks it. The
 detector's predicate is "the source's `published` version versus the highest source version the
 destination has actually consumed". The first half is available (`publication.published_version`). The
 second half had **no source at all**:

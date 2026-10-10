@@ -1,7 +1,7 @@
 """A 404 from the k8s API is NOT an outage, and answering it as one has cost this estate twice.
 
 `list_cluster_custom_object` 404s when the cluster registers no `projects.platform.rask.io`
-resource type — i.e. when `rask-operator` (a SEPARATE repo; see `docs/DECISIONS.md`, *"Watch
+resource type — i.e. when `rask-operator` (a SEPARATE repo; see `docs/adr/0041-watch-enrolment-does-not-wait-for-the-platform-rask-io-crd.md`, *"Watch
 enrolment does not wait for the `platform.rask.io` CRD"*, 2026-08-16) is not installed on this
 estate. The API server ANSWERED; it said the type does not exist. That is a permanent property of
 the deployment, not a reachability problem.
@@ -12,7 +12,7 @@ the deployment, not a reachability problem.
   * `HANDOFF-lakehouse.md:101-106` recorded the 503 live and attributed it to
     **ServiceAccount/RBAC**. The RBAC is correct; the resource type does not exist.
   * the OPEN-WORK register, row G1 (drained 2026-09-10; in git history) concluded from the same 503 that the chart must **ship the CRD** — the one
-    fix `docs/DECISIONS.md` rules out, because a CRD without its out-of-repo controller yields
+    fix `docs/adr/0041-watch-enrolment-does-not-wait-for-the-platform-rask-io-crd.md` rules out, because a CRD without its out-of-repo controller yields
     unreconciled CRs that render as projects stuck mid-provision.
 
 So the contract these tests pin is discrimination, not tolerance. THE 404 IS NEVER SWALLOWED: an

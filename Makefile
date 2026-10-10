@@ -92,7 +92,7 @@ fmt:
 storybook:
 	bun --cwd=frontend run storybook
 
-# ---- comment rule (forward-only; docs/DECISIONS.md) -------------------------
+# ---- comment rule (forward-only; docs/adr/0044-comments-carry-rationale-and-provenance-never-a-changelog.md) -------------------------
 # Kind (3) prose — a comment whose subject is a previous comment — is banned in NEW code. The 35,279
 # lines already written are deliberately left alone, so this reads ADDED lines only and is green at
 # HEAD by construction. `prek` runs the same script on `--staged`; CI should run it as
@@ -484,7 +484,7 @@ RAY_HEAD_PORT       ?= 6379
 RAY_DASHBOARD_PORT  ?= 8265
 
 # ray-up exports S3_SECRET (+ the lineage token) to the LOCAL head because the submission body no
-# longer carries them (the Ray Jobs API echoes runtime_env to any reader — docs/DECISIONS.md
+# longer carries them (the Ray Jobs API echoes runtime_env to any reader — docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md
 # "The Python estate audit").
 # In-cluster the pods hold them via secretKeyRef; locally the head process env is the pod. The
 # rustfsadmin default is the same dev constant deploy/ray-lance-demo.yaml already commits.

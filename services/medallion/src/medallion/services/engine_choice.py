@@ -1,6 +1,6 @@
 """WHICH compute engine runs a stage — answered by the RECORD, not by a deployment flag.
 
-docs/DECISIONS.md "The compute plane is decoupled" **Two axes, and this module is only the second one.**
+docs/adr/0052-the-compute-plane-is-decoupled-a-port-two-adapters-and-no.md "The compute plane is decoupled" **Two axes, and this module is only the second one.**
 
 * **ORCHESTRATION** — when a stage runs, what happens next, what happens if it dies — is Dapr
   pub/sub's and the Ray lane's plan (`stage_plans`, CP-029). Nothing here touches it: the trigger, the

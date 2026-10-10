@@ -300,7 +300,7 @@ def _apply_encoding(table: pa.Table, properties: dict[str, str] | None) -> pa.Ta
     """Stamp any ``lance-encoding:*`` create property onto the VARIABLE-WIDTH fields of the schema.
 
     **NOTHING IS SET BY DEFAULT, and that is a measured decision rather than an omission** — recorded in
-    `docs/DECISIONS.md`. General compression runs AFTER FSST/bitpacking/RLE, so on small values it adds a
+    `docs/adr/0066-four-rulings-on-the-lakehouse-s-unblocked-rows-owner-2026.md`. General compression runs AFTER FSST/bitpacking/RLE, so on small values it adds a
     frame per block and buys nothing: measured on this estate's own tier shape it COSTS up to +78% at
     256 B values and only starts saving above ~1 KiB. The tier payload is opaque by design
     (`medallion/schemas/tier.py`), so no one scheme can be right for every table — a workload that knows

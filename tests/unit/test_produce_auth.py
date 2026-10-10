@@ -166,7 +166,7 @@ def test_malformed_authorization_is_401(monkeypatch: pytest.MonkeyPatch) -> None
     _expect(monkeypatch, 401, authz="Basic xyz", verifier=_Verifier())
 
 
-# ── the bearer is verified OFF the event loop (docs/DECISIONS.md "The Python estate audit" ING-02, on this door) ─────────────
+# ── the bearer is verified OFF the event loop (docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit" ING-02, on this door) ─────────────
 
 
 class _ThreadRecordingVerifier:

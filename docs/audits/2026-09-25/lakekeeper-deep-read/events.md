@@ -368,7 +368,7 @@ TODO pointing at distributed-tracing issue 63 (`publisher.rs:156,664-665`).
 **rask today.** daprd propagates W3C trace context through the CloudEvent envelope
 (`lineage_emit.py:745-757` states it). Request id is an edge echo only (rows_05 XC-048).
 
-**Should.** Record D14's XC-048 ruling in `docs/DECISIONS.md` §9: the CloudEvent's `traceparent` set
+**Should.** Record D14's XC-048 ruling in `docs/adr/0008-9-feature-gaps-the-open-backlog.md` §9: the CloudEvent's `traceparent` set
 by daprd is the cross-hop correlation. No request-id extension. rask is already where Lakekeeper's
 TODO points.
 

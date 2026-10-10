@@ -10,7 +10,7 @@ component cannot express, and every one of them is load-bearing:
 
 * `RetentionPolicy.WORK_QUEUE` — a message is REMOVED once acked. That is what makes the stream
   itself the outstanding-work ledger, which is why this plane needs no side ledger — the reasoning
-  that ruled a per-unit transfer ledger out of this estate entirely (docs/DECISIONS.md).
+  that ruled a per-unit transfer ledger out of this estate entirely (docs/adr/0036-ingest-orchestration-dapr-workflow-is-adopted-the-estate-is.md).
 * `max_ack_pending` — bounds in-flight units per worker, i.e. backpressure against a rate-limited
   IIIF endpoint. Without it a worker fetches faster than it can land and the source throttles us.
 * `ack_wait` + explicit `nak(delay)` — a unit that fails transiently is redelivered on OUR schedule,

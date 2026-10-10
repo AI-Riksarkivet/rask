@@ -1,6 +1,7 @@
 """A connect to an unreachable broker must give up, not wedge the run forever.
 
-docs/DECISIONS.md "The Python estate audit" `ingest-flow-02` (E3, HIGH, effort S) — "Three of four NATS connect sites have no
+docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit" `ingest-flow-02` (E3, HIGH, effort S) — "Three of four NATS connect
+sites have no
 timeout, against the file's own measured evidence that a connect to a dead broker never returns".
 
 WHY IT WEDGES RATHER THAN FAILS. `publish_chunk_units`, `drain_chunk_units` and `reconcile_from_queue`

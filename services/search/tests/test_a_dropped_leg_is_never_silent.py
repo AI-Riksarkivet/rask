@@ -1,6 +1,6 @@
 """A leg of a search that did not run must say so — no `except Exception: pass` (VS-07).
 
-docs/DECISIONS.md "The Python estate audit" VS-07. Two wholly silent swallows survived the VS-06 pass, both in the search
+docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit" VS-07. Two wholly silent swallows survived the VS-06 pass, both in the search
 plane, both turning a genuine failure into a normal-looking 200:
 
   * ``service._search_all``'s FTS leg — ``rankings.append(qb.to_list())`` under a bare

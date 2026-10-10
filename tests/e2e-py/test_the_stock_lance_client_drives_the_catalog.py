@@ -5,7 +5,7 @@ Lance*. That claim is about a client nobody here wrote. Until this suite it was 
 doubles — `RestNamespace` and `namespace_client_impl` appear in `tests/integration/`, both driving a
 `TestClient` over a `MagicMock` namespace, and `tests/e2e-py` (the only suite touching a running
 catalog) contained **zero** occurrences of either. The NAME of the conformance was present and the
-conformance was not, which is the pattern `docs/DECISIONS.md` records six other members of: verify
+conformance was not, which is the pattern `docs/adr/0056-a-control-s-name-is-not-evidence-that-it-exists-2026-09-07.md` records six other members of: verify
 where a control's value LANDS, not where its name appears.
 
 So this drives `lance_namespace.connect("rest", …)` — resolving to pylance's own Rust-backed

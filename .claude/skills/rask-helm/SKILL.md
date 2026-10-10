@@ -60,7 +60,7 @@ fixture, read from the working tree, never from the package) was 40,912 packed b
 fills it. v35 on 2026-08-15 (`HELM_DRIVER=sql`, then CNPG's CRDs moved out in `b56a49c9`); the SQL
 store was dropped on 2026-09-08 when it split-brained against the Secret store (SQL rev 42 vs Secret
 rev 108). v194 on 2026-09-21 (template YAML comments turned into `{{/* */}}`, `80783647`). v239 on
-2026-09-24 (`.helmignore` and the `required` guards, `c352a232`/`4bff1036`). `docs/DECISIONS.md`'s
+2026-09-24 (`.helmignore` and the `required` guards, `c352a232`/`4bff1036`). `docs/adr/0038-helm-release-storage-the-sql-driver-stands-the-chart-is-not.md`'s
 2026-08-15 entry attributes the size to `chart/charts/*.tgz`; by Helm's source those bytes are never
 stored, so that entry's premise is false and its chosen answer no longer applies.
 
@@ -79,7 +79,7 @@ second case. Kueue's upstream docs only ever install it as its own release in `k
 - **Kueue is a workload concern in a platform seam.** `values.yaml` sizes it as "how many projects
   transcribe at once" — one runner's GPU admission. No rask template sets `kueue.x-k8s.io/queue-name`,
   and rask's own queue has admitted zero workloads.
-- `DECISIONS.md` (2026-08-15) already calls infra-separated-from-app "the architecturally correct
+- `docs/adr/0038-helm-release-storage-the-sql-driver-stands-the-chart-is-not.md` (2026-08-15) already calls infra-separated-from-app "the architecturally correct
   answer and … the intended end state". It was deferred, not rejected.
 
 ## 3. Removing a subchart that owns CRDs deletes the CRDs AND every object of that kind

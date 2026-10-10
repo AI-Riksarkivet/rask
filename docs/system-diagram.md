@@ -139,7 +139,7 @@ The toggle is the *credential-delivery* shape — both modes run on the **same**
 >    audit fact at `GET /datasets/{id}/creator` (P0 #3). Insert/delete/merge-insert/update and the
 >    compaction sweeper all emit too — the write surface is fully covered.
 >
-> Tracked in [`docs/DECISIONS.md`](DECISIONS.md). Run the whole loop: `make governance-chain` (or
+> Tracked in [`docs/adr/`](adr/README.md). Run the whole loop: `make governance-chain` (or
 > `dagger call governance-chain --demo` for the narrated [`governance_demo.py`](../scripts/governance_demo.py)).
 
 ---
@@ -151,5 +151,5 @@ The toggle is the *credential-delivery* shape — both modes run on the **same**
 - **"Where does lineage come from?"** — run *Promote*; the last two steps (emit → MERGE) show provenance is a **byproduct of the job**. Ingest now **binds the verified author** (P0 #2). The event-driven medallion stage runners that emit this lineage are built & deployed ([`FLOW.md`](FLOW.md)); only the *distributed* lance-ray Ray Data job is still the rask future.
 - **"What's still open?"** — *Lineage query*, steps 2–3 are now the SHIPPED authz gate
   (`RASK_OIDC_ENABLED` + `RASK_FGA_ENABLED`, on in the chart); the remaining opens live in
-  [`docs/DECISIONS.md`](DECISIONS.md#7a--live-verification-residuals) §7a (live-verification residuals) and
-  [§9](DECISIONS.md#9--feature-gaps-the-open-backlog) (feature gaps).
+  [`docs/adr/0007-7a-live-verification-residuals.md`](adr/0007-7a-live-verification-residuals.md) §7a (live-verification residuals) and
+  [§9](adr/0008-9-feature-gaps-the-open-backlog.md) (feature gaps).

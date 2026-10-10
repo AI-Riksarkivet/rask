@@ -1,6 +1,6 @@
 """Holding `can_classify` on a table is not holding the label — the door asks both questions.
 
-[[LH-055]]. The owner ruling (`docs/DECISIONS.md`, *"the FGA model shape is a PORT"*) answers column
+[[LH-055]]. The owner ruling (`docs/adr/0070-four-owner-answers-and-the-reference-implementation-that.md`, *"the FGA model shape is a PORT"*) answers column
 governance as "a TAG type with per-tag `apply` delegation, Independent of `modify` (separation of
 duties: classify without holding data/DDL rights)". `can_classify` alone is ONE BIT: whoever may label
 anything may label everything, so a data-protection officer trusted to mark `pii` is equally able to

@@ -1,6 +1,7 @@
 """What a conforming stage output IS, checked against the DATASET rather than against a claim.
 
-docs/DECISIONS.md "The compute plane is decoupled" The obligations are what `scripts/ray_stage_job.py` enforces on
+docs/adr/0052-the-compute-plane-is-decoupled-a-port-two-adapters-and-no.md "The compute plane is decoupled" The obligations are what `scripts/ray_stage_job.py`
+enforces on
 itself and what nothing enforces on anyone else: today a second engine can write a governed tier
 satisfying none of them and every status reads SUCCESS. Re-deriving them from the written dataset is
 the difference between a contract and a convention.

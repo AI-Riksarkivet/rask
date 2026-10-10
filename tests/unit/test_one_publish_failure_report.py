@@ -1,4 +1,4 @@
-"""Every medallion publish reports its failure the same way (docs/DECISIONS.md "The Python estate audit" DUP-18).
+"""Every medallion publish reports its failure the same way (docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit" DUP-18).
 
 Five call sites published a trigger and each wrapped it in its OWN `try/except` + `log.warning`, and
 the five had drifted into four different reports:

@@ -121,7 +121,10 @@ _NOT_PUBLISHED_AT_THE_EDGE: dict[tuple[str, str], str] = {
     ("post", "/runs/{action_id}/outcome"): "a training job's outcome report, from the compute head over the producer's ClusterIP",
     ("post", "/medallion-plan-sweep-cron"): "the plan sweep's input binding, delivered by the sidecar at the pod root",
     ("options", "/medallion-plan-sweep-cron"): "the sidecar's probe of that binding before it delivers",
-    ("post", "/ingest-media"): "synchronous and capped; docs/DECISIONS.md keeps it a service seam, and /api/ingest is the edge's ingest door",
+    ("post", "/ingest-media"): (
+        "synchronous and capped; docs/adr/0022-ui-operability-boundaries-what-deliberately-has-no-browser.md keeps it a service seam,"
+        " and /api/ingest is the edge's ingest door"
+    ),
 }
 
 

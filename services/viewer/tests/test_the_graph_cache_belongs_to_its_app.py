@@ -1,6 +1,6 @@
 """The KG engine cache must be per-app and per-key, not one module global behind one lock (VS-08).
 
-docs/DECISIONS.md "The Python estate audit" VS-08, two defects in one cache:
+docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit" VS-08, two defects in one cache:
 
 1. **Module-global mutable state.** `create_viewer_app` can build several apps over different
    `AppState`s (the test/composition seam this codebase deliberately has), and they all shared one

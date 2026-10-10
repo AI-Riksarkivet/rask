@@ -1,6 +1,6 @@
 """A tenant that lost its admin tuple can be made administrable again from its own record ([[LH-061]]).
 
-Owner ruling 2026-09-19 (`docs/DECISIONS.md`) overturning the standing "No — not yet" deferral on a
+Owner ruling 2026-09-19 (`docs/adr/0066-four-rulings-on-the-lakehouse-s-unblocked-rows-owner-2026.md`) overturning the standing "No — not yet" deferral on a
 write-capable reconcile: an ADDITIVE tuple rebuild driven from the control-plane registries, dry-run by
 default. The resilience property is the point — the estate could DETECT `unreferenced_projects` (a
 project record holding no tuples at all) and could do nothing about it, and that state is not cosmetic:

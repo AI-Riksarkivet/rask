@@ -154,7 +154,8 @@ def apply_dapr_secrets(settings: SupportsDaprSecrets) -> dict[str, str]:
 
     THE ONE IMPLEMENTATION. This was written four times — ``lineage.core.config``,
     ``medallion.core.config``, ``maintenance.core.config`` and, inline in a lifespan,
-    ``catalog.main`` — which is docs/DECISIONS.md "The Python estate audit" DUP-09, and the copies had already drifted: only the
+    ``catalog.main`` — which is docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit" DUP-09, and the copies had already
+    drifted: only the
     catalog's logged that the store had been consumed, and only the catalog's failed closed when the
     flag was OFF and no plaintext key was configured either.
 

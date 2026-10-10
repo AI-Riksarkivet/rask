@@ -71,7 +71,7 @@ BROWSE_STORAGE = "can_browse_storage"
 
 # ── the corpus gate, as a DECORATOR dependency ──────────────────────────────────────────────────
 #
-# docs/DECISIONS.md "The Python estate audit" (P0): 24 of the viewer's 32 routes served corpus-derived content with no subject
+# docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit" (P0): 24 of the viewer's 32 routes served corpus-derived content with no subject
 # and no checker — the listing was gated while the content behind it was not, so knowing a `doc_id`
 # was authorization. The fix is a dependency FACTORY rather than 24 inline checks, for one hard
 # reason and one design reason. Hard: most of these routes are sync `def` with blocking Lance bodies

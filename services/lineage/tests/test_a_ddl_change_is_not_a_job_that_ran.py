@@ -1,6 +1,6 @@
 """A catalog change no job performed is ingested as a ``DatasetEvent``, not as a run that never ran.
 
-[[LIN-004]], ruled in `docs/DECISIONS.md` § D (2026-09-21): the OpenLineage spec defines `DatasetEvent`
+[[LIN-004]], ruled in `docs/adr/0070-four-owner-answers-and-the-reference-implementation-that.md` § D (2026-09-21): the OpenLineage spec defines `DatasetEvent`
 as "A Dataset sent within static metadata events" and its schema forbids the `job` and `run` members
 outright (`"not": { "required": ["job", "run"] }`), so a DDL change is exactly what it is for. Verified
 against the installed client: `DatasetEvent` carries `eventTime`, `producer`, `schemaURL` and `dataset`

@@ -1,6 +1,6 @@
 """The sweep announces a GOVERNED table it holds no dataset node for at all.
 
-[[LH-004]]. `docs/DECISIONS.md:766-812` accepts the Lance-commit -> lineage-publish window in writing,
+[[LH-004]]. `docs/adr/0037-the-outbox-is-application-side-and-dapr-s-transactional.md` accepts the Lance-commit -> lineage-publish window in writing,
 and the acceptance rests on one clause: *"the goal is not atomicity; it is NO SILENT LOSS: every gap
 either closes itself or announces itself"*. The same entry states the gap this leaves — *"`stage_event`
 runs AFTER the Lance commit, so a crash in the commit->stage gap still loses the event"*.

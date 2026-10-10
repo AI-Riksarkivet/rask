@@ -55,7 +55,7 @@ def new_rows(inserts: Sequence[NewAnnotation], ident: Mapping[str, object], sche
 @router.post("/annotations/{doc_id}/{speech_id}/{chunk_id}")
 def save_annotations(
     state: StateDep,
-    # The VERIFIED subject, never a header (docs/DECISIONS.md "The Python estate audit": any caller could sign another
+    # The VERIFIED subject, never a header (docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit": any caller could sign another
     # person's name onto annotation provenance via `X-User`). `current_subject` is `anon` with
     # OIDC off (byte-identical dev behaviour), the token's `sub` with it on, 401 with no token,
     # 503 when enabled-but-unwired — the same no-header-fallback rule the projects plane got.

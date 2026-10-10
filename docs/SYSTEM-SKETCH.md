@@ -1,7 +1,7 @@
 # System sketch — where we are, the holes, and how we differ from Lakekeeper
 
 > Living status doc (bird's-eye). Detailed design: [`ARCHITECTURE.md`](ARCHITECTURE.md)
-> (catalog) and [`LINEAGE.md`](LINEAGE.md) (provenance). Roadmap: [`docs/DECISIONS.md`](DECISIONS.md).
+> (catalog) and [`LINEAGE.md`](LINEAGE.md) (provenance). Roadmap: [`docs/adr/`](adr/README.md).
 > This file = the sketch of everything + the gap register + the Lakekeeper diff.
 >
 > ⚠️ **Point-in-time markers.** Some ✅/⛔ status cells below are historical. Since this was written,
@@ -54,7 +54,7 @@ emit an OpenLineage event. Layers are **separate Lance tables** (namespaces); pr
 **compute client**, never a catalog endpoint.
 
 > ### ⚠️ Audit-verified corrections (`w8u4rc2tg`, 2026-06-24)
-> A grounded re-audit of the real code (full citations in §6 / [`docs/DECISIONS.md`](DECISIONS.md)) refined three things:
+> A grounded re-audit of the real code (full citations in §6 / [`docs/adr/`](adr/README.md)) refined three things:
 > - **Secret responsibility (least-privilege).** Only the **catalog** and **lineage svc** consume
 >   OpenBao. Compute jobs (**medallion-producer**) never read it — they get short-TTL scoped creds *from the
 >   catalog* and authenticate with **workload identity** (KubeRay SA / OIDC token). The sketch showing

@@ -61,7 +61,7 @@ _stage_other_lane = _meter.create_counter(
 
 #: HOW FAR BEHIND its source a destination tier is, in source versions. A LEVEL, not an event: true
 #: continuously and read by asking, so a gauge evaluated with `for:` rather than a per-tick counter —
-#: docs/DECISIONS.md "A repeating condition is a LEVEL, not an event" records what the other choice costs, one gap counted 1210
+#: docs/adr/0048-a-repeating-condition-is-a-level-not-an-event-2026-08-30.md "A repeating condition is a LEVEL, not an event" records what the other choice costs, one gap counted 1210
 #: times with every other service's errors buried under it.
 #:
 #: SYNCHRONOUS, not observable. The value comes from a catalog read and a lineage query; an observable
@@ -86,7 +86,7 @@ _cascade_lag = _meter.create_gauge(
 #:
 #: A GAUGE SET TO 1, never a per-tick counter. The condition is a LEVEL that persists until someone
 #: creates the destination, grants the rung or repairs the tag, and counting it once a tick is the "one
-#: gap counted 1210 times" mistake docs/DECISIONS.md records. A cell that recovers simply stops receiving points and
+#: gap counted 1210 times" mistake docs/adr/0048-a-repeating-condition-is-a-level-not-an-event-2026-08-30.md records. A cell that recovers simply stops receiving points and
 #: the series goes stale, which is how `medallion.cascade.lag` already resolves and what a `for:`
 #: tolerates.
 #:
@@ -345,7 +345,7 @@ def record_refused(transition: str, reason: str) -> None:
     security-relevant refusals … are the only DROPs that leave no trace", which described the
     vocabulary of the day rather than the handler: three more refusals had a log line and nothing
     else. They are the reason the medallion's lineage lane must NOT carry them — a repeating
-    operational condition is a metric, not an event (`docs/DECISIONS.md`, 2026-08-16) — so this is
+    operational condition is a metric, not an event (`docs/adr/0039-lineage-records-what-happened-to-data-an-authorization.md`, 2026-08-16) — so this is
     where they land.
 
     `reason` is a CLOSED vocabulary set by this module's callers — `malformed`, `unconfined_uri`,

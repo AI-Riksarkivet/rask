@@ -1,6 +1,6 @@
 """The cascade-lag cron door — one tick per firing, read-only.
 
-docs/DECISIONS.md "Cascade repair" (C3). The tick itself (`services/cascade_lag.py`) is pure over two readers; this
+docs/adr/0051-cascade-repair-detection-and-the-repair-verb-2026-09-04.md "Cascade repair" (C3). The tick itself (`services/cascade_lag.py`) is pure over two readers; this
 is the door the Dapr cron binding drives and the place the real catalog and lineage reads are wired.
 
 ONE STRING, THREE TIMES. Dapr delivers an input binding to ``POST /<component-name>`` at the pod ROOT,

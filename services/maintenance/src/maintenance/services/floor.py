@@ -21,7 +21,7 @@ the manifest timestamps that reference them and recreates it wholesale. Measured
 re-uploaded a week after the commit that references it and the whole dataset sat above its own floor.
 
 THE COMMIT IS A REAL VERSION AND ITS COST IS ACCEPTED, not hidden (owner ruling 2026-09-19,
-`docs/DECISIONS.md`): the dataset gains a version representing no data change, written for a GC side
+`docs/adr/0066-four-rulings-on-the-lakehouse-s-unblocked-rows-owner-2026.md`): the dataset gains a version representing no data change, written for a GC side
 effect. The alternative was a one-off deleter over exactly what the scan names, which would have rask
 deleting bytes on a live estate against a floor rule it derived itself — and both datasets in the
 measured case are LIVE, so their residue is superseded-version material inside governed tables rather

@@ -27,7 +27,7 @@
 
    Per-terminal-state rather than `anyTerminal`, because the states are not worth the same. A COMPLETED
    run's history is the least interesting thing in the estate once its lineage event has landed —
-   lineage IS the durable record (docs/DECISIONS.md), so this is a cache of a fact stored elsewhere. A
+   lineage IS the durable record (docs/adr/0023-workflow-history-has-no-browser-surface-the-alert-is-the.md), so this is a cache of a fact stored elsewhere. A
    FAILED or TERMINATED run's history is the post-mortem, and is kept several times longer, because the
    question it answers ("why did this run die") is asked days later.
 

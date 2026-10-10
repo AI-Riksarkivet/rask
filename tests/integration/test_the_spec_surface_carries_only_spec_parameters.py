@@ -104,7 +104,7 @@ def test_a_hidden_parameter_is_still_bound_on_the_wire(client: TestClient, path:
     )
 
 
-#: Non-spec headers the owner ruled STAY in the document (2026-09-20, `docs/DECISIONS.md`). Hiding them
+#: Non-spec headers the owner ruled STAY in the document (2026-09-20, `docs/adr/0067-the-three-mesh-headers-stay-in-the-spec-document-and-the.md`). Hiding them
 #: would weaken `generated-client-freshness.test.ts`, which exists because a client that lost
 #: `dapr-caller-app-id` shipped broken for 19 days — so the document keeps them and this bounds the set.
 #: `authorization` is standard HTTP and needs no exception.
@@ -141,5 +141,6 @@ def test_no_UNRECORDED_header_appears_on_a_spec_route(client: TestClient) -> Non
     assert not unrecorded, (
         "these spec routes carry a non-spec header nobody ruled on — either hide it with "
         "`Header(include_in_schema=False)` or add it to `_RECORDED_HEADER_EXCEPTIONS` with a reason in "
-        "`docs/DECISIONS.md`:\n  " + "\n  ".join(f"{m} {p}: {n}" for (m, p), n in sorted(unrecorded.items()))
+        "`docs/adr/0067-the-three-mesh-headers-stay-in-the-spec-document-and-the.md`:\n  "
+        + "\n  ".join(f"{m} {p}: {n}" for (m, p), n in sorted(unrecorded.items()))
     )

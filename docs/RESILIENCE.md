@@ -140,7 +140,7 @@ semantics, so it must not undercut the slowest handler. Either way the window co
    *Fix (prod):* multi-replica + `streamReplicas=3` for NATS, a real Postgres HA (Patroni/CNPG), a replicated
    object store. Tracked as infra work; **the app tier is already `replicas`-ready** (stateless, PDBs shipped).
 
-6. **Lineage lifecycle-emit gaps (deferred, see `docs/DECISIONS.md`).** Overwrite leaves stale column nodes on
+6. **Lineage lifecycle-emit gaps (deferred, see `docs/adr/0007-7a-live-verification-residuals.md`).** Overwrite leaves stale column nodes on
    the reused id; reconcile false-flags a *deliberately* dropped table as `MISSING_ON_STORAGE` (stale
    `source_uri`). Both are provenance-visibility issues, not corruption. **deregister** now emits a lineage
    marker (was silent — fixed + live-verified). **rename** is unsupported on the `dir` backend (501), so it
@@ -202,7 +202,7 @@ chart and live-verified on kind.
 
 The 2026-07-05 don't-reinvent audit confirmed we **reinvent nothing k8s/Dapr owns** (zero code to delete), but
 several **native switches are off** — deliberately deferred because they are prod-only (kind's default CNI
-ignores NetworkPolicy) and footgun-sequenced. Full list + fix order in [`docs/DECISIONS.md`](DECISIONS.md#12--prod-hardening-backlog-native-switches-off) §12:
+ignores NetworkPolicy) and footgun-sequenced. Full list + fix order in [`docs/adr/0009-12-prod-hardening-backlog-native-switches-off.md`](adr/0009-12-prod-hardening-backlog-native-switches-off.md) §12:
 the big one is **L3 network** (no default-deny; the OpenBao secret store is reachable by any pod today),
 then **least-privilege ServiceAccounts** (~13 pods on `default` with a mountable API token), **infra-pod
 securityContext** (app tier hardened, infra not), and **Pod Security Admission** enforcement. Do not rush

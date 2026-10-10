@@ -142,7 +142,7 @@ class MedallionSettings(OidcSettings, FgaSettings, SignatureDoorSettings, BaseSe
     # the env URIs. Empty (default) = resolution DISABLED: a project-carrying trigger is DROPPED (fail
     # closed — never a fallback to the shared roots), and every project-less path stays byte-identical.
     control_root: str = Field(default="", alias="MEDALLION_CONTROL_ROOT")
-    # Gold SERVING warehouse (DECISIONS "Medallion tiers — hybrid physical layout", opt-in): when set, a
+    # Gold SERVING warehouse (docs/adr/0034-medallion-tiers-hybrid-physical-layout-2026-07-24.md "Medallion tiers — hybrid physical layout", opt-in): when set, a
     # ``project``-carrying trigger's TARGET root becomes the project's gold serving warehouse (the registry
     # record carrying ``"serving": "gold"``) when one exists — the chart wires this env ONLY onto the
     # terminal silver→gold stage runner (medallion.goldWarehouse), so bronze/silver stay in the work

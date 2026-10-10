@@ -485,7 +485,7 @@ def test_projectless_cascade_is_byte_identical_even_with_routing_configured(tmp_
     assert "project" not in silver_event["run"]["facets"]["lance"]
 
 
-# ── gold serving warehouse: the terminal stage runner's tenant target root (DECISIONS "Medallion tiers") ──
+# ── gold serving warehouse: the terminal stage runner's tenant target root (docs/adr/0034-medallion-tiers-hybrid-physical-layout-2026-07-24.md "Medallion tiers") ──
 
 
 def _provision_gold(control: Path, project: str, root: Path) -> None:

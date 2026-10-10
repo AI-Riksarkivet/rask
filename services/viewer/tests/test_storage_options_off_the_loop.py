@@ -1,6 +1,6 @@
 """The blocking S3-secret fetch must never run on the event loop.
 
-docs/DECISIONS.md "The Python estate audit" (E2, P0) — "`Settings.storage_options` is a property that performs a blocking Dapr
+docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit" (E2, P0) — "`Settings.storage_options` is a property that performs a blocking Dapr
 secret fetch and raises", read inline on the event loop by `list_datasets` (it built its registry at
 the top of the `async def`, before the threadpooled `_collect`). The property form is fixed at the
 source (`test_media_s3_secret` pins it is now a method); this pins the one on-loop request-path reader

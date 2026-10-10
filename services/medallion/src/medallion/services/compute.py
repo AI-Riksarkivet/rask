@@ -316,7 +316,7 @@ def transform_stage(
     Returns the marked data version plus the measured output statistics for the emit; an empty delta, which commits
     no data, reports the destination's current version.
 
-    SINGLE-BASE BY DESIGN (P2.1, docs/DECISIONS.md #p21--single-base-cascade-write): the cascade writes to ONE root per
+    SINGLE-BASE BY DESIGN (P2.1, docs/adr/0005-p2-1-single-base-cascade-write.md): the cascade writes to ONE root per
     stage and does not distribute a stage table across #3-B multi-base ``data_bases``. Multi-base registers its bases
     at create time only (``initial_bases``), a tier is created once and merged into thereafter, and the medallion
     already distributes physically at the per-zone bucket level.

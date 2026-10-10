@@ -547,7 +547,7 @@ async def _drain_outbox(
     RETRIED, because dropping on a non-validation error destroys the event's only durable copy — the
     2026-07-14 audit finding this module already carries.
 
-    BOUNDED + OBSERVED (docs/DECISIONS.md P1.1/P1.2 — outbox observability + bounded drain). The drain reads
+    BOUNDED + OBSERVED (docs/adr/0003-p1-1-outbox-observability-the-four-signals.md P1.1/P1.2 — outbox observability + bounded drain). The drain reads
     at most ``outbox_drain_limit`` events per tick, OLDEST FIRST — it previously materialised the whole prefix
     inside the single-flight lock, so a backlog (precisely the situation the outbox exists for) could OOM or
     stall the tick: the relay would fail hardest exactly when it mattered most. The remainder drains next

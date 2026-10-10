@@ -23,7 +23,7 @@
 #
 # THE REAL FIX IS STILL SPLITTING THE CHART (infra vs app), which is what would make the headroom
 # stop mattering. The decision not to split it now, with the four measured alternatives and the
-# conditions that reopen it, is in docs/DECISIONS.md.
+# conditions that reopen it, is in docs/adr/0038-helm-release-storage-the-sql-driver-stands-the-chart-is-not.md.
 #
 # THE HAZARD THIS STILL GUARDS is answering from the wrong store. Every deploy target uses
 # `upgrade --install`, so a call that reads a store which does not hold the release concludes it is
@@ -31,7 +31,7 @@
 #
 # THE REAL FIX IS STILL SPLITTING THE CHART (infra vs app), which would let the app release fit the
 # Secret backend again and delete this file. The decision NOT to split it now — with the four
-# measured alternatives and the conditions that reopen it — is in docs/DECISIONS.md.
+# measured alternatives and the conditions that reopen it — is in docs/adr/0038-helm-release-storage-the-sql-driver-stands-the-chart-is-not.md.
 set -euo pipefail
 
 # Read-only subcommands never touch the release store, and REQUIRING a reachable database for them

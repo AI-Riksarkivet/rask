@@ -101,7 +101,7 @@ So: long-lived lakehouse + provenance, with a compaction/GC lifecycle aging out 
   no-op).
 
 **Known open gaps in the in-cluster path** (accept the loss window or externalize — see
-[DECISIONS.md "P4/P7"](DECISIONS.md) and [RUNBOOK-restore.md](runbooks/RUNBOOK-restore.md)):
+[docs/adr/0033-p4-p7-backups-structural-spofs-the-prod-answer-is.md "P4/P7"](adr/0033-p4-p7-backups-structural-spofs-the-prod-answer-is.md) and [RUNBOOK-restore.md](runbooks/RUNBOOK-restore.md)):
 - **Backup fate-sharing**: the pg_dump lands on RustFS, so a total RustFS loss loses both the Lance data
   *and* the DB dumps. Ship the dumps off-cluster (a second object store / off-site), or externalize
   Postgres to CloudNativePG and use its PITR.

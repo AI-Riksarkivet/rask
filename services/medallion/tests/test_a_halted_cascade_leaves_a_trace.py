@@ -13,7 +13,7 @@ nothing else:
     permanently halts every tenant cascade on this stage runner while nothing is red;
   * a lane whose identity cannot be resolved — an operator's declaration mistake, likewise permanent.
 
-WHY A COUNTER AND NOT A LINEAGE EVENT. Ruled 2026-08-16 (`docs/DECISIONS.md`, "Lineage records what
+WHY A COUNTER AND NOT A LINEAGE EVENT. Ruled 2026-08-16 (`docs/adr/0039-lineage-records-what-happened-to-data-an-authorization.md`, "Lineage records what
 happened to DATA; an authorization denial is not a data event"), against a proposal to emit an
 OpenLineage FAIL from exactly these branches: nothing is read and nothing is written, so a FAIL would
 mint provenance for a run that never ran, and a permanently misconfigured stage runner would emit one on

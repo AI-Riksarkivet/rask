@@ -52,7 +52,7 @@ class _LiveTask:
 
     async def get(self) -> dict[str, Any]:
         # A task document as the ACTOR stores one — `source`/`media` are required on `Task`, and
-        # the task routes publish that model now (docs/DECISIONS.md "The Python estate audit" ANN-07).
+        # the task routes publish that model now (docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit" ANN-07).
         return {
             "state": TaskState.CLAIMED,
             "assignee": SUBJECT,

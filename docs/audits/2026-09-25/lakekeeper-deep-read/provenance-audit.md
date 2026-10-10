@@ -342,7 +342,7 @@ D1, `actor_type=service` means the identity comes from a verified service-accoun
     record.
 
 **What rask should do.** D14 is ruled (XC-048: trace context supersedes request-id).
-1. Write the `docs/DECISIONS.md` §9 entry.
+1. Write the `docs/adr/0008-9-feature-gaps-the-open-backlog.md` §9 entry.
 2. Delete `RequestIDMiddleware` and `request_id_ctx`, so there is no dual path. The W3C trace id
    becomes the only correlation id, and responses echo it (e.g. `traceresponse`). This also removes
    the unvalidated inbound id. Update the gateway's minting (`services/gateway/src/gateway/__init__.py:494-513`)
@@ -523,7 +523,7 @@ Nothing else from Lakekeeper is worth copying in this area.
 
 | Row | Topics | Direction |
 |---|---|---|
-| XC-048 | T8 | Write DECISIONS §9; delete request-id; the trace id goes into audit, outbox, lineage facet and control event |
+| XC-048 | T8 | Write docs/adr/0008-9-feature-gaps-the-open-backlog.md §9; delete request-id; the trace id goes into audit, outbox, lineage facet and control event |
 | XC-058 | T1, T2 | Route on scope or attribute, not body; closed `audit()` |
 | XC-003 | T3 | ESO-written passwd file; separate read and write users |
 | LH-075 | T4, T3 | Rewrite: one read stream; `/readers` from `lance_audit`; delete `lineage_reads` |

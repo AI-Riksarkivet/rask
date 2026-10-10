@@ -353,7 +353,7 @@ async def assist(
 ) -> AssistResult:
     """Run an interactive producer over one media unit and return predicted shapes."""
     # Off the loop: dataset resolution is blocking Lance/S3 under a threading.Lock — inline it
-    # froze the whole loop for the duration of a cold S3 open (docs/DECISIONS.md "The Python estate audit" ANN-01); the
+    # froze the whole loop for the duration of a cold S3 open (docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit" ANN-01); the
     # sibling `def` routes get the threadpool for free.
     handle = await run_in_threadpool(dataset_handle, state, dataset)
     doc_id = validate_doc_key(handle.descriptor.declared, doc_id)

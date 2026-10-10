@@ -1,6 +1,6 @@
 """The three cases that ARE the comment rule, plus the two properties that keep the gate usable.
 
-The rule (docs/DECISIONS.md, owner 2026-08-30) sorts module prose into RATIONALE (keep), PROVENANCE
+The rule (docs/adr/0044-comments-carry-rationale-and-provenance-never-a-changelog.md, owner 2026-08-30) sorts module prose into RATIONALE (keep), PROVENANCE
 (keep, with its measurement) and HISTORY-OF-THE-PROSE (banned in new code). A gate that cannot tell
 the third from the first two would be rejected on its first false positive, so the accept cases are
 load-bearing here in exactly the way the reject case is.
@@ -92,6 +92,6 @@ def test_only_added_lines_are_gated_so_existing_prose_is_untouched() -> None:
 
 
 def test_markdown_is_out_of_scope_because_docs_keep_a_trail() -> None:
-    assert not gate.is_gated("docs/DECISIONS.md")
+    assert not gate.is_gated("docs/adr/0044-comments-carry-rationale-and-provenance-never-a-changelog.md")
     assert gate.is_gated("services/example/src/example/mod.py")
     assert gate.is_gated("frontend/microfrontends/home/src/lib/x.ts")

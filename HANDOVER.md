@@ -55,7 +55,7 @@ If the new machine is x86_64, ignore this section.
 ## 1. What travels by itself
 
 `git pull` and you have it: all source, the Helm chart, every dockerfile, `open_backlog_left_new2.md`, the dated audit reports under `docs/audits/2026-09-25/`,
-`docs/DECISIONS.md`, `.claude/settings.json` (team-shared), the vendored `.claude/skills/rask-*`.
+`docs/adr/`, `.claude/settings.json` (team-shared), the vendored `.claude/skills/rask-*`.
 Working tree is clean and `origin/main` is current.
 
 The doc **"Lakehouse — what is actually left"** lives in the cloud, not the repo:

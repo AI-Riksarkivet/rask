@@ -1,6 +1,6 @@
 """The IN-PROCESS lane reaches the port, and reads a result only from an engine that promises one.
 
-[[LH-158]], decided by the owner 2026-09-17. `docs/DECISIONS.md` describes "a port, TWO adapters" and
+[[LH-158]], decided by the owner 2026-09-17. `docs/adr/0052-the-compute-plane-is-decoupled-a-port-two-adapters-and-no.md` describes "a port, TWO adapters" and
 until this landed NEITHER lane went through it: `transform.py` hand-built
 `InProcessExecutor(settings.storage_options)` at its one call site and `engine_registry.executor_for`
 had ZERO production callers. The row calls keeping an uncalled port "the worst of the three" options,

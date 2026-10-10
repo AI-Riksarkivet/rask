@@ -1,4 +1,4 @@
-"""The cascade's re-run verb: re-drive ONE missed hop — docs/DECISIONS.md "Cascade repair" (C2).
+"""The cascade's re-run verb: re-drive ONE missed hop — docs/adr/0051-cascade-repair-detection-and-the-repair-verb-2026-09-04.md "Cascade repair" (C2).
 
 A hop can be missed four ways (that file's L1..L4) and the estate could DETECT some of them and
 REPAIR none: the only remedy was re-publishing the upstream table, which re-drives every consumer of

@@ -81,7 +81,7 @@ name = "comments carry rationale, not a changelog of the prose"
 # owner ruled it is NOT to be drained — so the gate reads the lines this commit ADDS and nothing else.
 # A whole-tree form would be red on its first run against prose nobody may touch, and a gate that is
 # red by construction is one everybody learns to pass with --no-verify.
-# The rule, and the two kinds of prose it deliberately protects, live in docs/DECISIONS.md.
+# The rule, and the two kinds of prose it deliberately protects, live in docs/adr/0044-comments-carry-rationale-and-provenance-never-a-changelog.md.
 entry = "uv run python scripts/comment_history_gate.py --staged"
 language = "system"
 pass_filenames = false

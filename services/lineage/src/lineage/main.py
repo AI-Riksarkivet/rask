@@ -167,7 +167,7 @@ async def _graph_ready(request: Request) -> Readiness:
     return Readiness(status=ReadinessStatus.ready, components={"database": "healthy"})
 
 
-# THE SHARED LANCE-PLANE ASSEMBLY (docs/DECISIONS.md "The Python estate audit" DUP-12). Logging before the app exists, the docs
+# THE SHARED LANCE-PLANE ASSEMBLY (docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit" DUP-12). Logging before the app exists, the docs
 # gate, the handler pair in the order that makes it work, one request id, and the probes — see
 # `service_kit.lance_app` for what each of those five is for and what a copy of it got wrong.
 #

@@ -128,7 +128,7 @@ def test_an_EMPTY_commit_with_NO_run_id_is_still_refused(dataset_uri: str) -> No
 
 # ── the guard must fail CLOSED ──────────────────────────────────────────────────────────────────
 #
-# docs/DECISIONS.md "The Python estate audit" (E3, P1/high) — "Commit idempotency guard fails OPEN on any storage error,
+# docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit" (E3, P1/high) — "Commit idempotency guard fails OPEN on any storage error,
 # re-enabling the duplicate-append it exists to prevent". Confirmed at HEAD by the independent
 # re-audit, which also noted the gap these tests close: eight tests existed and NONE injected a
 # raising storage layer, so the failure mode was entirely uncovered.

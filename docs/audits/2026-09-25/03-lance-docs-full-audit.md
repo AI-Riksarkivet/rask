@@ -53,7 +53,7 @@ rask today is already (a) in effect, even though its comments claim otherwise. T
 2. A branch grant for 'a' also covers nested branches such as 'a/b' (LK04/P2.8).
 3. A branch-local classification is invisible to the vend door (unverified measurement). Read classifications per ref.
 
-Also record the ruling in DECISIONS.md, add FGA-on router tests pinning both the allowed and the refused half, and rewrite the comments that call the blog digest 'the format'.
+Also record the ruling in docs/adr/, add FGA-on router tests pinning both the allowed and the refused half, and rewrite the comments that call the blog digest 'the format'.
 
 Confidence: medium-high on the recommendation, high on the facts. The docs imply the rung; they do not state it.
 
@@ -301,7 +301,7 @@ There is no privilege gap today, because can_get_metadata, reader and can_read_d
 ### LD30 [next; medium; hours; backlog=new] Encoding create properties are unvalidated and mis-scoped: an invalid value is persisted into the schema at create, and every later write then fails or panics
 - criterion: 5 resilient; 2 catalog
 - doc: file_format.md:578-587, 656-700, 727, 743-748, 765-766
-- rask: services/catalog/.../dataplane.py:187-212 (_is_variable_width, _apply_encoding); docs/DECISIONS.md LH-034
+- rask: services/catalog/.../dataplane.py:187-212 (_is_variable_width, _apply_encoding); docs/adr/0066-four-rulings-on-the-lakehouse-s-unblocked-rows-owner-2026.md LH-034
 - defect: Verified (partial).
 - The door stamps properties only onto top-level string/binary fields. rle-threshold, bss and packed therefore never reach a field they act on, and fixed-width or nested leaves never get general compression. The dict-* and compression keys do work on strings.
 - An empty create stamps values such as compression=bogus or dict-size-ratio=7. Later appends then raise OSError, or pyo3's PanicException, which is a BaseException and escapes 'except Exception'.

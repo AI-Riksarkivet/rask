@@ -304,7 +304,7 @@ async def plan_table_compaction(
     owns and turn a maintenance pass into an availability incident for every other door on it. So the
     protocol is split by credential: this door plans under ROOT creds (a manifest read — no data byte,
     no new version), a WORKER holding vended table-scoped creds runs each task and writes every byte,
-    and ``/compaction_commit`` folds the results back in. See `docs/DECISIONS.md`, "The lakehouse cloud-native cutover".
+    and ``/compaction_commit`` folds the results back in. See `docs/adr/0045-the-lakehouse-cloud-native-cutover-2026-09-03-04.md`, "The lakehouse cloud-native cutover".
 
     Maintainer tier: the router ``authorize`` gate maps this to ``can_maintain``
     (``fga_deps._MAINTENANCE_ACTIONS``), because only the maintenance plane calls it.

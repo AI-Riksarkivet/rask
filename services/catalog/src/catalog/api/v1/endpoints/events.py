@@ -5,7 +5,7 @@ subscription in ``api/dapr.py``) to the admin console: events strictly after the
 the new head cursor, and a ``reset`` flag when the cursor fell off the (bounded, drop-oldest) buffer. An
 event is a **refresh hint**, never authoritative data — the console re-reads real state through the normal
 FGA-governed path — so a lost/duplicated/late event only costs a redundant (or slightly delayed) re-read
-(see ``control_buffer.py`` + ``docs/DECISIONS.md`` #control-events--fail-open-emit-contract).
+(see ``control_buffer.py`` + ``docs/adr/0031-control-events-fail-open-emit-contract.md``).
 
 **Estate-admin gated.** The feed is **estate-wide** — the buffer holds every replica's view of *every*
 project's governance changes (broadcast subscription, no per-tenant partition). Observing it is therefore a
@@ -52,8 +52,8 @@ async def poll_control_events(
     Fail-closed via FGA: a non-estate-admin gets 403, an OpenFGA outage 503, and the gate is a no-op only
     when FGA is off (parity with every other ``require_*`` site). The ring buffer is per-replica + in-memory,
     so ``cursor`` is a per-replica monotonic counter and ``reset`` means the client missed the buffer window
-    (scaling the catalog past one replica needs session affinity or a shared buffer — see docs/DECISIONS.md
-    #control-events--per-replica-cursor-boundary)."""
+    (scaling the catalog past one replica needs session affinity or a shared buffer — see
+    docs/adr/0028-control-events-per-replica-cursor-boundary.md)."""
     # Estate gate: can_observe_events on the fixed root object (NOT a caller-supplied project → no injectable
     # object id, and authz scope == the estate-wide data scope). 403 for a non-estate-admin, 503 on an FGA
     # outage, no-op when FGA is off.

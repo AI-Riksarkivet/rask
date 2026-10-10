@@ -4207,7 +4207,7 @@
     },
     "/search": {
       "get": {
-        "description": "Governed search over the discovery estate (P1 Search tier 1, 2026-07-11).\n\nCase-insensitive substring over dataset NAMES, NAMESPACES, governance TAGS, and the CURRENT\nCOLUMN inventory \u2014 each hit says WHY it matched (``name`` / ``namespace`` / ``tag:\u2026`` /\n``column:\u2026``), so \"which tables have an embedding column\" and \"what's in layer=gold\" are one\nquery. Governance is identical to ``/datasets``: the visibility filter runs over the FULL hit\nset BEFORE the limit, so search can never disclose (or even count) tables outside the caller's\nreach. \ud83d\udccc Tier 2 (Lance FTS + FLAT vector content search, the rask pattern) stays decision-\npinned in docs/DECISIONS.md \u00a79 behind its measured recall gate \u2014 this tier is metadata-only\nby design.",
+        "description": "Governed search over the discovery estate (P1 Search tier 1, 2026-07-11).\n\nCase-insensitive substring over dataset NAMES, NAMESPACES, governance TAGS, and the CURRENT\nCOLUMN inventory \u2014 each hit says WHY it matched (``name`` / ``namespace`` / ``tag:\u2026`` /\n``column:\u2026``), so \"which tables have an embedding column\" and \"what's in layer=gold\" are one\nquery. Governance is identical to ``/datasets``: the visibility filter runs over the FULL hit\nset BEFORE the limit, so search can never disclose (or even count) tables outside the caller's\nreach. \ud83d\udccc Tier 2 (Lance FTS + FLAT vector content search, the rask pattern) stays decision-\npinned in docs/adr/0008-9-feature-gaps-the-open-backlog.md \u00a79 behind its measured recall gate \u2014 this tier is metadata-only\nby design.",
         "operationId": "search_search_get",
         "parameters": [
           {

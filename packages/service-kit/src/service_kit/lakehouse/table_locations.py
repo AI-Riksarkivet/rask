@@ -1,7 +1,8 @@
 """Recover a table's catalog IDENTIFIER from the object-store location it lives at.
 
 TWO CONSUMERS, ONE CONVENTION, which is why this is here and not in either of them. The maintenance
-plane discovers datasets by LISTING BUCKETS — recorded in ``docs/DECISIONS.md`` ("The lakehouse cloud-native cutover"), because rask's
+plane discovers datasets by LISTING BUCKETS — recorded in ``docs/adr/0045-the-lakehouse-cloud-native-cutover-2026-09-03-04.md`` ("The lakehouse cloud-native
+cutover"), because rask's
 catalog is not the commit coordinator and the medallion stage runners write past it — so what it holds is a
 URI while the catalog's credential door needs an id. Its lineage emitter needs the same crossing, for
 a different reason: the id it recovers becomes the OpenLineage ``Dataset`` name AND the OpenFGA object

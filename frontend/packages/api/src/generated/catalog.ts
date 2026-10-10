@@ -858,7 +858,7 @@ export interface paths {
          *     owns and turn a maintenance pass into an availability incident for every other door on it. So the
          *     protocol is split by credential: this door plans under ROOT creds (a manifest read — no data byte,
          *     no new version), a WORKER holding vended table-scoped creds runs each task and writes every byte,
-         *     and ``/compaction_commit`` folds the results back in. See `docs/DECISIONS.md`, "The lakehouse cloud-native cutover".
+         *     and ``/compaction_commit`` folds the results back in. See `docs/adr/0045-the-lakehouse-cloud-native-cutover-2026-09-03-04.md`, "The lakehouse cloud-native cutover".
          *
          *     Maintainer tier: the router ``authorize`` gate maps this to ``can_maintain``
          *     (``fga_deps._MAINTENANCE_ACTIONS``), because only the maintenance plane calls it.
@@ -1646,8 +1646,8 @@ export interface paths {
          *     Fail-closed via FGA: a non-estate-admin gets 403, an OpenFGA outage 503, and the gate is a no-op only
          *     when FGA is off (parity with every other ``require_*`` site). The ring buffer is per-replica + in-memory,
          *     so ``cursor`` is a per-replica monotonic counter and ``reset`` means the client missed the buffer window
-         *     (scaling the catalog past one replica needs session affinity or a shared buffer — see docs/DECISIONS.md
-         *     #control-events--per-replica-cursor-boundary).
+         *     (scaling the catalog past one replica needs session affinity or a shared buffer — see
+         *     docs/adr/0028-control-events-per-replica-cursor-boundary.md).
          */
         get: operations["poll_control_events_v1_events_get"];
         put?: never;
@@ -1677,7 +1677,7 @@ export interface paths {
          *     ``source_query`` blob the namespace server stores without interpreting, so there is no structured list
          *     of source tables to name in a lineage event. Emitting MV lineage is a decision-gate (WONTFIX until an
          *     MV consumer needs it) — it requires either a query parser or a structured ``source_tables`` request
-         *     field; do NOT fabricate an edge from the view's own output schema. See docs/DECISIONS.md #38b.
+         *     field; do NOT fabricate an edge from the view's own output schema. See docs/adr/0017-38b-mv-lineage-is-wontfix-no-source-tables.md #38b.
          */
         post: operations["create_materialized_view_v1_materialized_view__id__create_post"];
         delete?: never;

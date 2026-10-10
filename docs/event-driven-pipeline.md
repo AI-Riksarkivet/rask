@@ -122,4 +122,4 @@ job a worker submits, and "done" becomes a published `*.ready` event. **Where Da
 idempotent batch legs (bronze→silver, silver→silver) need only NATS + Ray. The human-ordered,
 multi-step silver→gold *promotion* uses a **Dapr Workflow** (durable, resumable); auth is checked once at
 the scheduling edge (OIDC) + per-activity (OpenFGA, token-independent), with the verified `sub` captured
-as durable workflow input. See the chat thread / `docs/DECISIONS.md` #16 (Dapr workflow for silver→gold promotion).
+as durable workflow input. See the chat thread / `docs/adr/0006-16-dapr-workflow-for-silver-to-gold-promotion.md` #16 (Dapr workflow for silver→gold promotion).

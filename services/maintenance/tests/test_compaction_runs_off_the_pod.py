@@ -1,4 +1,4 @@
-"""The rewrite's BYTES leave the pod that plans and commits them — docs/DECISIONS.md "Maintenance leaves the planner pod".
+"""The rewrite's BYTES leave the pod that plans and commits them — docs/adr/0049-maintenance-leaves-the-planner-pod-2026-09-04.md "Maintenance leaves the planner pod".
 
 The defect this closes: `compact_files()` does all three phases in one process, so the maintenance
 pod's memory ceiling is a function of the largest table anyone owns. Lance ships the split precisely

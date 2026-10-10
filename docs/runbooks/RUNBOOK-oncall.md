@@ -3,7 +3,7 @@
 Symptom → cause → action for the known failure modes of the Lance-lakehouse estate. Grounded in how this
 stack actually fails. With alerting enabled (`observability.alerting.enabled`, on in prod), the proven
 rules (`chart/alerting/rules.yml`) page via vmalert → Alertmanager — note the live vmalert→GreptimeDB
-round-trip is still an unrehearsed drill (see [DECISIONS.md "P3b"](../DECISIONS.md)). On kind (alerting off),
+round-trip is still an unrehearsed drill (see [docs/adr/0032-p3b-alerting-rule-logic-proven-hermetically-the-live.md "P3b"](../adr/0032-p3b-alerting-rule-logic-proven-hermetically-the-live.md)). On kind (alerting off),
 these are found by watching the Perses dashboards (`make dashboards`) or a user report — not a page.
 
 ## Orientation
@@ -258,7 +258,7 @@ mean something other than the catalog wrote under `_control_outbox`: treat that 
 
 **Cause.** `rustfs` is a single-replica object store backing BOTH the Lance lakehouse and GreptimeDB's
 object storage — a data-plane SPOF (kind). Prod answer is a managed S3 (`rustfs.externalEndpoint` — see
-[DECISIONS.md "P4/P7"](../DECISIONS.md)).
+[docs/adr/0033-p4-p7-backups-structural-spofs-the-prod-answer-is.md "P4/P7"](../adr/0033-p4-p7-backups-structural-spofs-the-prod-answer-is.md)).
 
 **Diagnose.** `kubectl get pods -l app.kubernetes.io/component=rustfs`; check the PVC is bound and the node
 can mount it (RWO + Recreate strategy means it can't move nodes while the old pod holds the volume).
@@ -271,7 +271,7 @@ can mount it (RWO + Recreate strategy means it can't move nodes while the old po
 lineage graph store and OpenFGA's datastore.
 
 **Cause.** Single StatefulSet replica (kind), a dual-purpose SPOF. Prod answer is managed Postgres
-(`age.externalHost` / CloudNativePG — see [DECISIONS.md "P4/P7"](../DECISIONS.md) and docs/CNPG-AGE.md) —
+(`age.externalHost` / CloudNativePG — see [docs/adr/0033-p4-p7-backups-structural-spofs-the-prod-answer-is.md "P4/P7"](../adr/0033-p4-p7-backups-structural-spofs-the-prod-answer-is.md) and docs/CNPG-AGE.md) —
 sized via the `resources.age` tier (1Gi in prod).
 
 **Diagnose.** `kubectl get pods -l app.kubernetes.io/component=age-postgres`; `pg_isready`; PVC bound?

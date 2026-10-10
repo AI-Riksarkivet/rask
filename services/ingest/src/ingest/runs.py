@@ -175,7 +175,7 @@ RUN_STORE_MAX_RECORDS = 10_000
 class InMemoryRunStore:
     """The default store. Deliberately NOT durable — run truth is the workflow's, not this cache.
 
-    The workflow owns run state (docs/DECISIONS.md: Dapr Workflow IS adopted); this is a read-side
+    The workflow owns run state (docs/adr/0036-ingest-orchestration-dapr-workflow-is-adopted-the-estate-is.md: Dapr Workflow IS adopted); this is a read-side
     index so `GET /v1/ingests/{id}` can answer without a workflow query on every poll. Losing it
     costs a re-read, never correctness.
 

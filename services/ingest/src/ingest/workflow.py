@@ -1,6 +1,6 @@
 """The ingest run as a Dapr Workflow.
 
-Adopted by owner ruling 2026-08-03 (docs/DECISIONS.md "Ingest orchestration — Dapr Workflow IS
+Adopted by owner ruling 2026-08-03 (docs/adr/0036-ingest-orchestration-dapr-workflow-is-adopted-the-estate-is.md "Ingest orchestration — Dapr Workflow IS
 adopted"). It executes in the daprd sidecar the chart already injects, on the actor state store that
 already exists — the adoption cost is a dependency, not infrastructure.
 
@@ -25,7 +25,7 @@ replaying a million activity results would melt the state store — the plan sai
 reason a per-unit ledger looked necessary. Chunking answers it: one child workflow per ~1-10k keys
 returns ONE compact result, and the workflow's own durable state becomes the ledger. That, plus the
 work queue's own retention, is why this estate carries no transfer-ledger package at all
-(DECISIONS.md).
+(docs/adr/0036-ingest-orchestration-dapr-workflow-is-adopted-the-estate-is.md).
 
 **Determinism.** Workflow functions replay from history, so every non-deterministic thing — clocks,
 randomness, I/O, network — lives in an ACTIVITY. `ctx.current_utc_datetime` and `ctx.create_timer`

@@ -1,4 +1,4 @@
-"""ONE Dapr secret store, named once and consumed once (docs/DECISIONS.md "The Python estate audit" DUP-09 + DUP-17).
+"""ONE Dapr secret store, named once and consumed once (docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit" DUP-09 + DUP-17).
 
 Two duplications share one surface here:
 

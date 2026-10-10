@@ -1,4 +1,4 @@
-{{- /* DEDICATED MAINTENANCE WORKERS (docs/DECISIONS.md "Maintenance leaves the planner pod").
+{{- /* DEDICATED MAINTENANCE WORKERS (docs/adr/0049-maintenance-leaves-the-planner-pod-2026-09-04.md "Maintenance leaves the planner pod").
 
      The planner's own Deployment, with the cron binding names BLANKED and its own sizing. It
      consumes `maintenance.work.v1` as a competing consumer (the Component carries

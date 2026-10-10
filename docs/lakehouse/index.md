@@ -18,7 +18,7 @@ The load-bearing records, in reading order:
 - [System Sketch](../SYSTEM-SKETCH.md) — where we are, the holes, how we differ from Lakekeeper
 - [End-to-End Flow](../FLOW.md) — the implemented pipeline, in order
 - [Data Contract](../DATA-CONTRACT.md) — what it is, how it is enforced
-- [Decisions](../DECISIONS.md) — consolidated architecture decisions
+- [Decisions](../adr/README.md) — consolidated architecture decisions
 - [Medallion Pipeline](../MEDALLION.md) — event-driven bronze → silver → gold
 - [Lineage](../LINEAGE.md) — OpenLineage → Apache AGE
 - [Authorization](../AUTHZ.md) — who can see and do what, per zone

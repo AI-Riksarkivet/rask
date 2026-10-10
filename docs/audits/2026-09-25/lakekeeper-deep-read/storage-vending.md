@@ -371,7 +371,7 @@ causes:
   - A branch vend narrows the credential: read on main, write on `tree/<b>/*` (`vending.py:444-484`; `credentials.py:61-70`, `:119-120`). A branch that does not exist is refused.
   - LH-056 asks that a `can_write_data` holder on main must not write another branch.
 - **rask should, under D3(a):**
-  - Void that clause of LH-056. Record the ruling in `docs/DECISIONS.md` in the implementing commit.
+  - Void that clause of LH-056. Record the ruling in `docs/adr/` in the implementing commit.
   - Keep branch vending as an **opt-in narrowing** for least privilege, for example a Ray job scoped to its branch.
   - Keep T2's nested-name refusal, because an opt-in narrowing must still be correct.
   - Per-branch trash and undrop stay gated on LH-178, unchanged.

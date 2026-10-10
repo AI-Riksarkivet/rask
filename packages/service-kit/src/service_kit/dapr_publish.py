@@ -90,7 +90,8 @@ async def publish_json(
 ) -> bool:
     """Publish a JSON payload and REPORT rather than raise. ``True`` when it landed.
 
-    THE PUBLISH-AND-REPORT SHAPE, ONCE (docs/DECISIONS.md "The Python estate audit" DUP-18). Five medallion call sites each
+    THE PUBLISH-AND-REPORT SHAPE, ONCE (docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit" DUP-18). Five medallion call
+    sites each
     serialized their payload, set ``application/json``, wrapped the call in their own ``try`` and
     logged their own warning — and the five reports had drifted into four different field sets. Two
     omitted the topic; one omitted the token, which is the only thing that joins a failed trigger to

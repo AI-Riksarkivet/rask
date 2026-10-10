@@ -2,7 +2,7 @@
 
 **DELETES TUPLES AND NOTHING ELSE. It never touches a byte, a registry record or a catalog table**,
 and that bound is the whole reason this is safe to arm against a live estate. Owner ruling 2026-09-19
-(`docs/DECISIONS.md`) overturning the standing "No — not yet" deferral on a write-capable reconcile:
+(`docs/adr/0066-four-rulings-on-the-lakehouse-s-unblocked-rows-owner-2026.md`) overturning the standing "No — not yet" deferral on a write-capable reconcile:
 a repair pass over the drift report, dry-run by DEFAULT with deletion opt-in. `rebuild.py` is the
 additive half; this is the half that can destroy something.
 

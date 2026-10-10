@@ -1,6 +1,6 @@
 """Per-edge cascade lag: how far behind its source a destination tier has fallen.
 
-docs/DECISIONS.md "Cascade repair" (C3), and the ONLY thing that can see the LOSS class. C4 alerts on refusals —
+docs/adr/0051-cascade-repair-detection-and-the-repair-verb-2026-09-04.md "Cascade repair" (C3), and the ONLY thing that can see the LOSS class. C4 alerts on refusals —
 triggers that ARRIVED and were dropped — but a trigger that never arrived increments nothing, runs no
 `_preflight`, writes no log and parks on no DLQ. The only evidence such a hop is missing is that the
 source moved and the destination did not.
@@ -22,7 +22,7 @@ hop, a source that has never published, a destination that has consumed a versio
 passed.
 
 NEVER A COUNTER, NEVER A LOG LINE. A lag is a level, not an event: it is true continuously and is read
-by asking, so it is a GAUGE evaluated with `for:`. docs/DECISIONS.md "A repeating condition is a LEVEL, not an event" is the
+by asking, so it is a GAUGE evaluated with `for:`. docs/adr/0048-a-repeating-condition-is-a-level-not-an-event-2026-08-30.md "A repeating condition is a LEVEL, not an event" is the
 lesson — a repeating condition emitted per tick counted one gap 1210 times and buried every other
 service's errors.
 """

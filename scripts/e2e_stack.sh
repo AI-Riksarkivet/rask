@@ -2,7 +2,7 @@
 # The e2e stack + suite runner — the SINGLE definition used by BOTH `make e2e-ci` and the CI job,
 # so "it passed in CI" and "it passed on my machine" cannot diverge (the repo's dagger/auth-e2e pattern).
 #
-# WHY THIS EXISTS (docs/DECISIONS.md P0.1): every "live-verified" claim in this repo rested on a
+# WHY THIS EXISTS (docs/adr/0001-p0-1-why-e2e-stack-sh-exists-live-verify-honesty.md P0.1): every "live-verified" claim in this repo rested on a
 # MANUAL terminal run while `ci.yml` ran `pytest -m "not e2e"`. Nothing guarded them, so a regression
 # tomorrow would be silent. This script makes the live proof an artifact that runs on every push.
 #

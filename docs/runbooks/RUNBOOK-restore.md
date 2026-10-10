@@ -29,7 +29,7 @@ before trusting it in an incident.
 > RECORDS rather than a whole store, which is the right granularity for "somebody deleted the warehouse
 > bindings".
 
-**Not backed up** (accept the loss window or externalize — see [DECISIONS.md "P4/P7"](../DECISIONS.md) and
+**Not backed up** (accept the loss window or externalize — see [docs/adr/0033-p4-p7-backups-structural-spofs-the-prod-answer-is.md "P4/P7"](../adr/0033-p4-p7-backups-structural-spofs-the-prod-answer-is.md) and
 [DURABILITY.md](../DURABILITY.md)): GreptimeDB local WAL/metadata (metrics — reconstructable), OpenBao's file
 PVC (an open gap — back up the unseal material out-of-band), and note the pg_dump lands on RustFS, so a
 **total RustFS loss loses both the Lance data AND the DB dumps** unless you also ship the dumps

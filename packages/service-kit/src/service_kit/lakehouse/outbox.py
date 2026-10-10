@@ -224,7 +224,7 @@ def _staged_infos(outbox_uri: str, storage_options: StorageOptions) -> list[pafs
 
 
 def backlog(outbox_uri: str, storage_options: StorageOptions) -> tuple[int, float]:
-    """``(depth, oldest_age_seconds)`` — the saturation snapshot (#4 observability, docs/DECISIONS.md P1.1
+    """``(depth, oldest_age_seconds)`` — the saturation snapshot (#4 observability, docs/adr/0003-p1-1-outbox-observability-the-four-signals.md P1.1
     (outbox observability, the four signals)).
 
     A metadata-only LIST: no object bodies are read, so this is cheap enough to run on every reconcile tick
@@ -250,7 +250,7 @@ def list_events(outbox_uri: str, storage_options: StorageOptions, *, limit: int 
     parsed payload, the way `dlq._summary` does — and a catalog DDL change (a ``DatasetEvent``) names no
     run at all, so the key is the only name it has.
 
-    BOUNDED (audit finding, docs/DECISIONS.md P1.2 (bounded drain)): the drain previously materialised the
+    BOUNDED (audit finding, docs/adr/0004-p1-2-bounded-oldest-first-outbox-drain.md P1.2 (bounded drain)): the drain previously materialised the
     ENTIRE prefix into memory inside the single-flight lock, so a backlog (exactly the situation the outbox
     exists for) could OOM or stall the reconcile tick — the relay would fail hardest precisely when it was
     needed most. The cap

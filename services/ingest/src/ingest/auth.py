@@ -170,7 +170,7 @@ async def _resolve_caller(
     caller their token works and they own nothing.
     """
     # Open only when NOTHING is configured to authenticate against, the documented local-dev stack. An absent service
-    # door is never an absent door (docs/DECISIONS.md "The Python estate audit", ING-01): with OIDC or FGA on, a
+    # door is never an absent door (docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit", ING-01): with OIDC or FGA on, a
     # request no verifier answers falls through to the `PermissionDeniedError` the callers below raise.
     if not (settings.sa_issuer or settings.oidc_enabled or settings.fga_enabled):
         return _Caller(mode="open")  # dev: nothing configured to authenticate against, exactly like the estate's other doors
@@ -212,7 +212,7 @@ async def _resolve_caller(
         try:
             # Off the loop: verify() does synchronous OIDC discovery + JWKS fetches (up to 15s) on a
             # cold cache or key rotation — inline it stalled every in-flight request in the pod,
-            # probes included (docs/DECISIONS.md "The Python estate audit" ING-02). The hop lives in
+            # probes included (docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit" ING-02). The hop lives in
             # `service_kit.governed.oidc` so every door inherits it.
             token = await verify_off_loop(verifier, bearer)
         except UnauthenticatedError:

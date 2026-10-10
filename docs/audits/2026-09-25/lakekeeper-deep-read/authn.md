@@ -120,7 +120,7 @@ header that could assert identity (`services/gateway/src/gateway/__init__.py:76-
   - limes' TokenReview is an API-server round trip on every request (`kubernetes.rs:131-147`). The catalog's hot path should not
     inherit that.
   - The default discovery binding already covers every ServiceAccount (M2), while TokenReview needs `tokenreviews:create` cluster-wide.
-  - `docs/DECISIONS.md:303-305` already rules "every service verifies signatures locally (JWKS, cached)".
+  - `docs/adr/0021-gateway-checks-where-auth-lives-2026-07-23.md` already rules "every service verifies signatures locally (JWKS, cached)".
 
   What JWKS costs: no immediate revocation when a pod or SA is deleted. That window is bounded by `expirationSeconds: 600`, the
   minimum a projected token allows. **Name the audience per verifier** (`rask-catalog`, `rask-lineage`, `openfga`, `minio-sts`) so a
@@ -385,7 +385,7 @@ that line). `Identity.auth_token` → `Authorization: Bearer` and `api_key` → 
 
 **rask today:** `x-api-key` is read nowhere, and no `/oauth/token` exists (grep); audit B6 still prescribes a key store (LH-079).
 
-**rask should:** go bearer-only and record it in `docs/DECISIONS.md`; rewrite B6 as a conformance note citing `spec.yaml:81-84`
+**rask should:** go bearer-only and record it in `docs/adr/`; rewrite B6 as a conformance note citing `spec.yaml:81-84`
 (this is P8.6's text). **Rows:** LH-079.
 
 ---
@@ -458,7 +458,7 @@ door. It keys on the D5 principal, so it lands after T3.
 **Lakekeeper:** `roles_claim` (dotted path) → `TokenRoles{project, RoleIdent(provider_id, source_id)}`, which requires a project
 header (`authn.rs:130-134,391-394,607-651`; `limes/jwks.rs:451-505`).
 
-**rask:** team/role administration is WONTFIX until IdP sync (`docs/DECISIONS.md:412-420`). No action; recorded so that a later
+**rask:** team/role administration is WONTFIX until IdP sync (`docs/adr/0024-team-role-administration-wontfix-until-the-keycloak-sync.md`). No action; recorded so that a later
 IdP-to-FGA sync keys roles as `(idp_id, role)`, the same idp-id namespace as T3. **Rows:** none.
 
 ---

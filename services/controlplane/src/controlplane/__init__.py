@@ -8,7 +8,7 @@ called "project" (catalog tenant, k8s CR, annotator labeling project); this serv
 middle one, and nothing joins it to the other two.
 
 The CRs it reads are published by `rask-operator`, a SEPARATE repo. This chart deliberately does not
-ship that CRD (`docs/DECISIONS.md`, *"Watch enrolment does not wait for the `platform.rask.io` CRD"*,
+ship that CRD (`docs/adr/0041-watch-enrolment-does-not-wait-for-the-platform-rask-io-crd.md`, *"Watch enrolment does not wait for the `platform.rask.io` CRD"*,
 2026-08-16): installing it without its controller would yield unreconciled CRs that render as
 projects stuck mid-provision. On an estate without the operator this service therefore has nothing
 to list and says so in those words — `501`, naming the unregistered resource type, never an empty

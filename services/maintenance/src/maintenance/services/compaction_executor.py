@@ -1,6 +1,6 @@
 """Compaction whose BYTES are rewritten outside the process that plans and commits them — M2.
 
-docs/DECISIONS.md "Cascade repair". `ds.optimize.compact_files()` does all three phases in one call, so
+docs/adr/0051-cascade-repair-detection-and-the-repair-verb-2026-09-04.md "Cascade repair". `ds.optimize.compact_files()` does all three phases in one call, so
 this pod's memory ceiling is a function of the largest table anyone owns rather than of its request
 rate. Lance ships the split for exactly this reason and the catalog has served both metadata halves
 since the cloud-native cutover with nothing consuming them:

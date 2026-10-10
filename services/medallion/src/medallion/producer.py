@@ -176,7 +176,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 await fga_client.close()
 
 
-# THE SHARED LANCE-PLANE ASSEMBLY (docs/DECISIONS.md "The Python estate audit" DUP-12). Logging before the app exists, the docs
+# THE SHARED LANCE-PLANE ASSEMBLY (docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit" DUP-12). Logging before the app exists, the docs
 # gate, the handler pair in the order that makes it work, one request id, and the probes — see
 # `service_kit.lance_app` for what each of those five is for and what a copy of it got wrong. The
 # handlers are installed BEFORE any router, so no route can outrun the taxonomy.
@@ -208,7 +208,7 @@ app.include_router(promotions_router)
 # human auth and forwards. See `api/stage_runner_ops.py` for why the split is forced rather than chosen.
 app.include_router(stage_runner_ops_router)
 
-# THE RE-RUN VERB (docs/DECISIONS.md "Cascade repair" (C2)). Beside the operator proxy above but NOT through it:
+# THE RE-RUN VERB (docs/adr/0051-cascade-repair-detection-and-the-repair-verb-2026-09-04.md "Cascade repair" (C2)). Beside the operator proxy above but NOT through it:
 # it mints the stage trigger here rather than forwarding, because the only reason to forward was a
 # Ray-liveness check the design dropped — and this app already mints stage triggers, in the
 # `table_published` subscription. `build_stage_trigger` was written for exactly these two callers.

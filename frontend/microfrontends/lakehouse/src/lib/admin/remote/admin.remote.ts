@@ -17,7 +17,7 @@ const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
 // hand-rolled SSE, no client cursor bookkeeping. No argument: the catalog gates on the estate-admin relation
 // `can_observe_events` over the fixed root object, so a non-estate-admin bearer gets a terminal 403 here.
 // (This also cushions the per-replica-cursor boundary: dedup + reset make a multi-replica catalog degrade
-// noisily, never wrongly — see docs/DECISIONS.md #control-events--per-replica-cursor-boundary.)
+// noisily, never wrongly — see docs/adr/0028-control-events-per-replica-cursor-boundary.md.)
 export const controlEvents = query.live(async function* (): AsyncGenerator<ControlEvent[]> {
 	const { locals, fetch } = getRequestEvent();
 	const bearer = locals.session?.accessToken;

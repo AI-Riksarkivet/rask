@@ -1,6 +1,6 @@
 """The drift repair pass revokes tuples whose OBJECT no longer exists — and touches nothing else.
 
-[[LH-061]]. Owner ruling 2026-09-19 (`docs/DECISIONS.md`) overturned the deferral on a write-capable
+[[LH-061]]. Owner ruling 2026-09-19 (`docs/adr/0066-four-rulings-on-the-lakehouse-s-unblocked-rows-owner-2026.md`) overturned the deferral on a write-capable
 reconcile: a repair pass over the drift report, dry-run by DEFAULT with deletion opt-in, alongside the
 additive `rebuild.py`. The additive half shipped then; this is the half that can DELETE.
 

@@ -67,7 +67,7 @@ Rust `DirectoryNamespace` (backfill/transaction) or a real query engine (MV) —
   `compute.py` only stamps a `stage` column, not the JSONB. The genuine remaining gap is the **distributed**
   producer — **lance-ray** (a Ray Data job; `lr.write_lance`/`read_lance`, the same read→transform→write→
   version contract the fake-Ray compute fills) — which lands when this merges into rask's KubeRay cluster
-  (`docs/DECISIONS.md`). So: event-driven + provenance + (opt-in) in-process data are validated here; the
+  (`docs/adr/`). So: event-driven + provenance + (opt-in) in-process data are validated here; the
   distributed compute + the gold-JSONB-in-the-deployed-path are the rask integration.
 - **Stage recovery works** — `restore_table` (v1→v3 verified) on the native backend; the medallion `WROTE`
   edge records the Lance version (`DatasetVersionDatasetFacet`); `/reconcile` anchors gold to the on-disk

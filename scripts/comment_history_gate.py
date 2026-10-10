@@ -1,4 +1,4 @@
-"""FORWARD gate for the comment rule recorded in `docs/DECISIONS.md` § "Comments carry rationale and
+"""FORWARD gate for the comment rule recorded in `docs/adr/0044-comments-carry-rationale-and-provenance-never-a-changelog.md` § "Comments carry rationale and
 provenance, never a changelog of the prose (2026-08-30, owner ruling)".
 
 WHY THIS EXISTS, AND WHY IT IS DIFF-AWARE
@@ -82,7 +82,7 @@ from pydantic import BaseModel, Field
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 #: The rule's single home. Cited in every finding so the gate never becomes the only statement of it.
-RULE_DOC = 'docs/DECISIONS.md § "Comments carry rationale and provenance, never a changelog of the prose"'
+RULE_DOC = "docs/adr/0044-comments-carry-rationale-and-provenance-never-a-changelog.md"
 
 #: These two files MUST contain the banned phrasings — one defines them, the other is the test that
 #: proves they are caught. There is no per-line pragma on purpose: an escape hatch on a gate this
@@ -96,7 +96,7 @@ EXEMPT_PATHS = frozenset(
 
 #: Python is checked exactly (tokenize tells us which lines are comment or docstring). The others are
 #: checked with a line-prefix heuristic — see `_prose_lines_by_prefix`. Markdown is NOT here: the rule
-#: governs module prose, and docs legitimately keep a trail (DECISIONS.md carries superseded reasoning
+#: governs module prose, and docs legitimately keep a trail (docs/adr/ carries superseded reasoning
 #: under its own heading).
 PYTHON_SUFFIXES = frozenset({".py", ".pyi"})
 PREFIX_COMMENT_SUFFIXES = frozenset({".ts", ".tsx", ".js", ".mjs", ".cjs", ".svelte", ".go"})

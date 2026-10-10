@@ -486,7 +486,7 @@ def test_create_warehouse_rejects_models_and_multibase_buckets(tmp_path: Any, mo
 
 
 # --------------------------------------------------------------------------- #
-# serving designation (gold serving warehouse — DECISIONS "Medallion tiers")
+# serving designation (gold serving warehouse — docs/adr/0034-medallion-tiers-hybrid-physical-layout-2026-07-24.md "Medallion tiers")
 # --------------------------------------------------------------------------- #
 
 

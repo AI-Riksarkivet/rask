@@ -1,6 +1,6 @@
 """Raising the listing floor makes Lance reclaim residue it had gone permanently blind to ([[LH-094]]).
 
-Owner ruling 2026-09-19 (`docs/DECISIONS.md`): rask does not delete the stranded bytes. It writes one
+Owner ruling 2026-09-19 (`docs/adr/0066-four-rulings-on-the-lakehouse-s-unblocked-rows-owner-2026.md`): rask does not delete the stranded bytes. It writes one
 metadata-only commit, which moves the dataset's floor above them, and Lance's own
 `cleanup_old_versions` does the deleting under its own rule on the next ordinary sweep.
 

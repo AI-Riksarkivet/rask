@@ -194,7 +194,7 @@ export const RETYPE_TYPES = [
 export type CreateIndexBody = { column: string; index_type: string; distance_type?: string };
 
 /** A warehouse record with the medallion serving class: `serving === "gold"` marks the project's
- * per-tenant SERVING warehouse (the gold tier's separate bucket — DECISIONS "Medallion tiers");
+ * per-tenant SERVING warehouse (the gold tier's separate bucket — docs/adr/0034-medallion-tiers-hybrid-physical-layout-2026-07-24.md "Medallion tiers");
  * absent = a work warehouse. Additive over the generated shape until the spec regenerates. */
 export type WarehouseRecord = Warehouse & { serving?: string | null };
 /** The create body with the optional `serving: "gold"` class (same additive rationale). */

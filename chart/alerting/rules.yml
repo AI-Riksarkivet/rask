@@ -2,7 +2,7 @@
 # (:4000/v1/prometheus), routed by Alertmanager. Deployed by chart/templates/alerting.yaml when
 # observability.alerting.enabled. Seeded from the Perses panels already labelled "alertable" — every metric
 # below is one this estate actually emits. Proven to FIRE on synthetic series by rules_test.yml
-# (`make alert-rules-check` → promtool). The live datasource round-trip is a drill (see docs/DECISIONS.md "P3b").
+# (`make alert-rules-check` → promtool). The live datasource round-trip is a drill (see docs/adr/0032-p3b-alerting-rule-logic-proven-hermetically-the-live.md "P3b").
 # The point: these turn SILENT failures (data quietly stops flowing) into a page. See docs/runbooks/RUNBOOK-oncall.md.
 groups:
   - name: lance-lineage
@@ -250,7 +250,7 @@ groups:
             events are reaching the bus, or a signer broke.
             Runbook: docs/runbooks/RUNBOOK-oncall.md#a-bus-door-refusing-events
 
-      # [[LH-004]]. `docs/DECISIONS.md:766-812` accepts the Lance-commit -> lineage-publish window in
+      # [[LH-004]]. `docs/adr/0037-the-outbox-is-application-side-and-dapr-s-transactional.md` accepts the Lance-commit -> lineage-publish window in
       # writing, and the acceptance rests entirely on one clause: "the goal is not atomicity; it is NO
       # SILENT LOSS: every gap either closes itself or announces itself". These three rules ARE the
       # announcing half for the gap that entry names — "`stage_event` runs AFTER the Lance commit, so a

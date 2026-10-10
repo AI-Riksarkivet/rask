@@ -1,6 +1,6 @@
 """The source version a run CONSUMED survives into the run board, and survives a later bare event.
 
-docs/DECISIONS.md "Cascade repair" (C3b). `498b5531` put `from_version`/`to_version` into the `lance` run facet, so
+docs/adr/0051-cascade-repair-detection-and-the-repair-verb-2026-09-04.md "Cascade repair" (C3b). `498b5531` put `from_version`/`to_version` into the `lance` run facet, so
 the cascade's delta boundary is finally recorded — and it is still unqueryable, which is one layer
 further along than the gap that commit closed. `RunStatus` folds `operation`, `source_run_id` and
 `promotion_status` off that facet and not the range, so nothing can answer *"what source version has

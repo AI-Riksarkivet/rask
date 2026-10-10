@@ -9,7 +9,7 @@ where we are right now, and what's next**. Skim the diagrams; read the section y
 >
 > 🔬 **Are we correct, and what do we lack vs the other catalogs?** See **[`BENCH-2026-07-22.md`](BENCH-2026-07-22.md)** —
 > the current feature bench (Lakekeeper / Polaris / Unity / Gravitino / Nessie) — and the recorded
-> spec deviations in **[`DECISIONS.md`](DECISIONS.md)** ("FEATURE-GAP minor deviations").
+> spec deviations in **[`docs/adr/0020-feature-gap-minor-deviations-1-7-the-spec-deviation-register.md`](adr/0020-feature-gap-minor-deviations-1-7-the-spec-deviation-register.md)** ("FEATURE-GAP minor deviations").
 >
 > 📜 **What contract do producers and consumers actually rely on?** See **[`DATA-CONTRACT.md`](DATA-CONTRACT.md)** —
 > "the Lance manifest is the schema, the version is the handshake": the storage/bus/identity

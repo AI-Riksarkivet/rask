@@ -185,7 +185,7 @@ def test_an_id_the_control_plane_could_not_MINT_is_refused(value: object) -> Non
     assert not is_safe_project(value)
 
 
-# ── gold serving warehouses (DECISIONS "Medallion tiers — hybrid physical layout") ───────────────────
+# ── gold serving warehouses (docs/adr/0034-medallion-tiers-hybrid-physical-layout-2026-07-24.md "Medallion tiers — hybrid physical layout") ───────────────────
 
 
 def test_gold_root_resolves_only_serving_gold_records(tmp_path: Path) -> None:

@@ -1,6 +1,6 @@
 """How far behind its source a destination tier has fallen — the cascade's LOSS detector.
 
-docs/DECISIONS.md "Cascade repair" (C3). C4 alerts on refusals, which are triggers that ARRIVED and were dropped;
+docs/adr/0051-cascade-repair-detection-and-the-repair-verb-2026-09-04.md "Cascade repair" (C3). C4 alerts on refusals, which are triggers that ARRIVED and were dropped;
 this is the other class and the one O2 names. A trigger that never arrived increments no counter, runs
 no `_preflight`, writes no log and parks on no DLQ — the only evidence it is missing is that the source
 moved and the destination did not.
@@ -28,7 +28,7 @@ belongs in a lag calculation — separating them is what makes a first-ever hop,
 and a backwards tag drivable in a unit test.
 
 A LAG IS A LEVEL, NOT AN EVENT: true continuously, read by asking. So it is a GAUGE evaluated with a
-`for:` clause, never a per-tick counter or log line — docs/DECISIONS.md "A repeating condition is a LEVEL, not an event" is what
+`for:` clause, never a per-tick counter or log line — docs/adr/0048-a-repeating-condition-is-a-level-not-an-event-2026-08-30.md "A repeating condition is a LEVEL, not an event" is what
 that mistake costs, one gap counted 1210 times and every other service's errors buried.
 """
 
@@ -54,7 +54,7 @@ class EdgeNotMeasurable(Exception):
 
     Neither of the two existing outcomes fits. Counted FAILED, an estate holding abandoned projects
     reports hundreds of permanent failures per tick and buries a real outage in them — the repeating-
-    condition noise docs/DECISIONS.md "A repeating condition is a LEVEL, not an event" cost. Read as "never published" it becomes
+    condition noise docs/adr/0048-a-repeating-condition-is-a-level-not-an-event-2026-08-30.md "A repeating condition is a LEVEL, not an event" cost. Read as "never published" it becomes
     lag 0, a fabricated healthy series for a cascade that does not exist. So it is its own count, and
     publishes nothing.
     """

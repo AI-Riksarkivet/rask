@@ -515,7 +515,7 @@ job `runtime_env`), repoint `medallion.rayAddress` at the KubeRay head Service, 
 | `ratch/cli/media.py`, `cli/speaker.py`, `modalities/av/cluster.py`, `runners/{topics,voiceprint}` | in-process `compact_files` / `create_scalar_index` | **DELIBERATE** — single-box CLI/runner paths over local `.lance` dirs; `ratch/features/indexing.py` is the distributed entry when one is wanted | none |
 | `ratch/core/driver.py` `read_lance` ×4 | no `storage_options` | **DELIBERATE** — ratch is a local-`--db` CLI; add `storage_options` only when a ratch dataset lands on S3 | none |
 | backfill sites (`lr.add_columns`, `ds.add_columns`, `attach_values_by_rowid`, `medallion_demo` caption) | data evolution | **CORRECT** — new column files beside existing fragments, no base rewrite; old versions still pin the old schema (asserted in `ray_lance_job`) | none |
-| medallion cascade writes | `mode="overwrite"` whole-dataset | **DELIBERATE** — documented single-base overwrite contract (`docs/DECISIONS.md #p21`); each run's output IS the dataset, so this is not a backfill-by-rewrite | none |
+| medallion cascade writes | `mode="overwrite"` whole-dataset | **DELIBERATE** — documented single-base overwrite contract (`docs/adr/0005-p2-1-single-base-cascade-write.md`); each run's output IS the dataset, so this is not a backfill-by-rewrite | none |
 | `runners/htr` pipeline + `/transcribe`, `/htrflow` Serve | Ray Data actors, Ray Serve | out of the medallion-producer surface (no Lance IO); GPU sizing pinned in `pipeline.py` | none |
 
 ### Recorded, not fixed (with the reason)

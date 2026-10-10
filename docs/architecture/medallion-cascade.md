@@ -94,7 +94,7 @@ that gives up, the change to make is 202-with-persisted-intent, decided as an AP
 ## 12. REVIEWED 2026-08-16 — `stage_run` is idiomatic; its operator surface is event-driven by design
 
 **Superseded by CP-029 (2026-10-05):** `stage_run` and its activities are deleted; a Ray stage is a plan resolved by
-its job's outcome door and a cron sweep (`docs/DECISIONS.md`, "A Ray stage run is a plan, closed by its job's report or
+its job's outcome door and a cron sweep (`docs/adr/0088-a-ray-stage-run-is-a-plan-closed-by-its-job-s-report-or-the.md`, "A Ray stage run is a plan, closed by its job's report or
 the sweep"). This section records the review of the workflow that lane used.
 
 The Diagrid `review-workflow-{determinism,activity,management}` checklists, run over

@@ -819,7 +819,7 @@ export interface paths {
          *     query. Governance is identical to ``/datasets``: the visibility filter runs over the FULL hit
          *     set BEFORE the limit, so search can never disclose (or even count) tables outside the caller's
          *     reach. 📌 Tier 2 (Lance FTS + FLAT vector content search, the rask pattern) stays decision-
-         *     pinned in docs/DECISIONS.md §9 behind its measured recall gate — this tier is metadata-only
+         *     pinned in docs/adr/0008-9-feature-gaps-the-open-backlog.md §9 behind its measured recall gate — this tier is metadata-only
          *     by design.
          */
         get: operations["search_search_get"];

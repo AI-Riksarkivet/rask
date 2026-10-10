@@ -2,7 +2,7 @@
 # `make alert-rules-check` runs `promtool check rules rules.yml` + `promtool test rules rules_test.yml`.
 # This is the "prove it fires" that render-checking alone can't give: the render can be valid while the
 # PromQL never trips. The remaining unproven piece is only the live vmalert->GreptimeDB query round-trip
-# (a drill, docs/DECISIONS.md "P3b").
+# (a drill, docs/adr/0032-p3b-alerting-rule-logic-proven-hermetically-the-live.md "P3b").
 rule_files:
   - rules.yml
 
@@ -538,7 +538,7 @@ tests:
   # ── M24: the six rules that had no fire-proof ────────────────────────────────────────────────────
   # `promtool test rules` only evaluates the cases declared here, so a rule with no case is never
   # touched and promtool still exits 0. Six of twenty alerts were in that state while `rules.yml:4-5`
-  # and `docs/DECISIONS.md` both assert the whole file is "proven to FIRE". Each rule below gets a
+  # and `docs/adr/0032-p3b-alerting-rule-logic-proven-hermetically-the-live.md` both assert the whole file is "proven to FIRE". Each rule below gets a
   # case that FIRES, and — where silence is a real outcome rather than the absence of one — a paired
   # case that must NOT fire, because a rule that pages forever is its own outage.
 

@@ -121,7 +121,7 @@ Each `Dataset` node also carries `source_uri` (where the table physically lives 
 location, from the standard `dataSource` facet) and `tags` (governance labels like `layer=silver`,
 `pii=false`, from the standard `tags` facet). *Dataset-level only: column-level lineage (which
 output column came from which input column) is emitted as a facet but not yet stored as graph
-nodes/edges — see `docs/DECISIONS.md`.*
+nodes/edges — see `docs/adr/0007-7a-live-verification-residuals.md`.*
 
 `author` is read from a custom OpenLineage `author` run facet (the OIDC sub of whoever ran
 the job), falling back to the standard `ownership` job facet so events from external producers

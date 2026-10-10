@@ -339,8 +339,8 @@ single file:
   load-bearing — stays; **(2) provenance** — "measured 2026-08-26", "pinned by `test_x.py`" — stays,
   with its measurement; **(3) history** — "this used to say X", "an earlier version claimed Y" — is
   **banned in new code**. Falsified prose is REWRITTEN, and rewriting means the old claim is gone, not
-  annotated as wrong. Where the history genuinely matters, it belongs in `docs/DECISIONS.md` or the
-  commit message, both of which are built to hold it.
+  annotated as wrong. Where the history genuinely matters, it belongs in a new ADR under `docs/adr/` or
+  the commit message, both of which are built to hold it.
   **The rule is FORWARD-ONLY and that is deliberate**: the ~35,000 existing prose lines are not to be
   drained, because a retroactive pass is a large unreviewable diff that would delete the measurements
   the prose exists to preserve. `scripts/comment_history_gate.py` enforces it on CHANGED lines only;

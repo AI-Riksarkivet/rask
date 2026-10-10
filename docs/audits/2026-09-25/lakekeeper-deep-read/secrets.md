@@ -288,13 +288,13 @@ What rask should build, on Lance + lance-namespace, Dapr, OpenBao/ESO, OpenFGA a
   - Zones take the lineage token as a mounted file re-read per call (XC-001 row text).
   - The Ray head still carries 6 `secretKeyRef` entries plus `S3_KEY` as a value (deploy/ray-lance-demo.yaml:67, 74-86, 102-129),
     and the job reads `S3_KEY`/`S3_SECRET` from env (scripts/ray_stage_job.py:84-89).
-  - `docs/DECISIONS.md` has no ruling on `secretKeyRef`: a grep for `secretKeyRef` returns 0 (XC-002 evidence, re-grepped).
+  - `docs/adr/` has no ruling on `secretKeyRef`: a grep for `secretKeyRef` returns 0 (XC-002 evidence, re-grepped).
 - **rask should:**
   - State the rule as three delivery paths, which is the posture the owner described:
     1. a pod with a sidecar reads the Dapr secret store;
     2. a pod without a sidecar gets an ESO-written Secret as a **mounted file**, narrowed with `items`, re-read per use, with the env carrying the path;
     3. anything reaching object storage holds an STS session.
-  - Recon P0.2 reads the owner's verbatim rule as requiring ESO-to-file. Write that in DECISIONS in the implementing
+  - Recon P0.2 reads the owner's verbatim rule as requiring ESO-to-file. Write that in docs/adr/ in the implementing
     row's commit, and make the gate count every manifest the estate applies (chart + `deploy/*.yaml`, both value shapes).
   - Third-party images (greptime, age, minio, openfga) either take `*_FILE` or a mounted config, or are recorded as named residue.
 - **Rows:** LH-160, XC-002, XC-001, XC-004, LH-161, LH-129.

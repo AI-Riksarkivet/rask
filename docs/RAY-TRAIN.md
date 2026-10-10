@@ -9,7 +9,7 @@ deployed bus would have rejected every publish — now provisioned), a masked-er
 registry create-vs-append branch, N+1 sequential FGA round trips (now ONE `batch_check`), a missing
 `dataSource` facet (the reconcile back-fill key), and head/consumer name-validation asymmetry (the
 head now 422s what the consumer would DROP). Open: the chart values passthrough (deferred until helm
-render-verification is possible) and the live kind drive — see `docs/DECISIONS.md` #115a-c.** The platform must host BOTH batch/ETL
+render-verification is possible) and the live kind drive — see `docs/adr/0010-115a-c-ray-train-vs-ray-data-one-platform-both-workload.md` #115a-c.** The platform must host BOTH batch/ETL
 (today's medallion cascade — the Ray *Data* shape) and TRAINING workloads (Ray *Train*). They are
 different workload classes and get different runtime treatment — but ONE provenance model, ONE
 authz model, and ONE storage substrate.
@@ -77,7 +77,7 @@ The job stamps that id on its registry commit (the commit marker) and, once its 
 terminal to the producer's outcome door (`POST /runs/{id}/outcome`, URL in `RASK_OUTCOME_URL`). The producer's plan
 sweep resolves a run that never reported: a job Ray says FAILED or STOPPED is one FAIL; one that succeeded or vanished
 is a COMPLETE naming the registry version its marker records, or one FAIL when there is none; a RUNNING job is left
-alone at any age. Nothing is resubmitted. See `docs/DECISIONS.md`, "The train lane is the same plan".
+alone at any age. Nothing is resubmitted. See `docs/adr/0088-a-ray-stage-run-is-a-plan-closed-by-its-job-s-report-or-the.md`, "The train lane is the same plan".
 
 ## D3 — Lineage shape: official facets only, spec-true
 

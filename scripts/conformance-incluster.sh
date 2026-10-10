@@ -6,7 +6,7 @@
 # IS routable from this host (`10.43.44.177` answers) and `rask-minio` does NOT resolve on it — the
 # barrier is DNS, and it belongs to where the process runs rather than to the clients. So the lancedb
 # and lance-ray cases skip from the host with that reason, and `make e2e-spec-conformance` reports a
-# green that has not proved the byte read. Owner ruling 2026-09-19 (`docs/DECISIONS.md`): the
+# green that has not proved the byte read. Owner ruling 2026-09-19 (`docs/adr/0066-four-rulings-on-the-lakehouse-s-unblocked-rows-owner-2026.md`): the
 # conformance target runs from inside the cluster.
 #
 # NOT A REPLACEMENT for `make e2e-spec-conformance`. That one still proves resolution and credential

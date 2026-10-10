@@ -147,7 +147,7 @@ async def create_warehouse(
     warehouse_id = _validate_id(body.id, what="warehouse id")
     project = _validate_id(body.project, what="project id")
     bucket = _validate_id(body.bucket or body.id, what="bucket name")
-    # Serving designation (DECISIONS "Medallion tiers"): only the one class the resolver knows is
+    # Serving designation (docs/adr/0034-medallion-tiers-hybrid-physical-layout-2026-07-24.md "Medallion tiers"): only the one class the resolver knows is
     # accepted — an unknown value would mint a record neither project_root nor project_gold_root ever
     # matches (an unroutable warehouse), so it is rejected up front like a malformed id.
     if body.serving is not None and body.serving != "gold":

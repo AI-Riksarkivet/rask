@@ -369,7 +369,7 @@ def project_root(
     the lowest warehouse ``id`` (warned) so routing never flaps between roots.
 
     Only WORK records match — a record carrying ``"serving": "gold"`` (the project's gold SERVING
-    warehouse, DECISIONS "Medallion tiers") is excluded here so registering a gold warehouse can never
+    warehouse, docs/adr/0034-medallion-tiers-hybrid-physical-layout-2026-07-24.md "Medallion tiers") is excluded here so registering a gold warehouse can never
     hijack the stage routing (its id sorting below the work warehouse's would otherwise win the
     lowest-id determinism); resolve it with :func:`project_gold_root`.
 
@@ -393,7 +393,7 @@ def project_gold_root(
     """The ACTIVE **gold serving** warehouse ``root_uri`` for ``project``, or ``None`` when it has none.
 
     The mirror of :func:`project_root` matching only records carrying ``"serving": "gold"`` (created via
-    ``POST /v1/warehouses`` with the ``serving`` field — DECISIONS "Medallion tiers — hybrid physical
+    ``POST /v1/warehouses`` with the ``serving`` field — docs/adr/0034-medallion-tiers-hybrid-physical-layout-2026-07-24.md "Medallion tiers — hybrid physical
     layout"): the silver→gold stage runner's tenant TARGET root when ``MEDALLION_GOLD_WAREHOUSE_ENABLED`` is on.
     Same lowest-id determinism, same positive-only TTL cache (partitioned by serving class, so a cached
     work root never answers a gold lookup). ``None`` means the project has no gold warehouse — the caller

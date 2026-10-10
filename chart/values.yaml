@@ -1121,7 +1121,7 @@ catalog:
   # Why the control lane needs durability at all, when the events are documented as refresh hints: most
   # of them are, and `table_published` is not. The stage runner does not fire the next stage's topic, and
   # `/publication-arrival` receiving this event is the ONLY thing that WAKES silver->gold. The cascade-lag
-  # cron re-reads the `published` tag since docs/DECISIONS.md "Cascade repair" (C3), but it only MEASURES: it reports
+  # cron re-reads the `published` tag since docs/adr/0051-cascade-repair-detection-and-the-repair-verb-2026-09-04.md "Cascade repair" (C3), but it only MEASURES: it reports
   # how far a tier has fallen behind and advances nothing, so this lane's durability is still the whole
   # of what carries the cascade forward. A 5s publish timeout during a NATS
   # blip ended the cascade outright with every pod green.
@@ -1237,7 +1237,7 @@ medallion:
   # would process EVERY trigger — up to 8× at gold with 2 replicas per stage). Stage runners are idempotent on
   # top (MERGE on run_id). medallion-producer is a subscriber too (/bronze-arrival). All stateless.
   producerReplicas: 1
-  # THE CASCADE LAG DETECTOR (docs/DECISIONS.md "Cascade repair" (C3)) — the LOSS half of cascade monitoring.
+  # THE CASCADE LAG DETECTOR (docs/adr/0051-cascade-repair-detection-and-the-repair-verb-2026-09-04.md "Cascade repair" (C3)) — the LOSS half of cascade monitoring.
   #
   # C4's refusal alerts see triggers that ARRIVED and were dropped. A trigger that never arrived
   # increments no counter, runs no `_preflight`, writes no log and parks on no DLQ: the only evidence
@@ -1609,7 +1609,7 @@ maintenance:
   # PAYOFF rather than this fix: one planner enqueueing is all the split needs, because what moves off
   # the pod is the EXECUTION, not the planning.
   workTopic: "maintenance.work.v1"
-  # DEDICATED MAINTENANCE WORKERS (docs/DECISIONS.md "Maintenance leaves the planner pod").
+  # DEDICATED MAINTENANCE WORKERS (docs/adr/0049-maintenance-leaves-the-planner-pod-2026-09-04.md "Maintenance leaves the planner pod").
   #
   # One deployment does the planning AND the compaction today, at `replicas: 1` and 512Mi — so the
   # work is bounded to fit the pod (`compactThreads`, `scanBatchSize`) rather than the pod sized to fit
@@ -1737,7 +1737,7 @@ maintenance:
   # 2026-09-09 — the whole-service form of it announces itself once per process instead of silently
   # (`maintenance/services/credentials.py::_announce_vending_is_off`), which is what made the estate-wide
   # case invisible. So this is a bounded improvement that reports its own bounds, not a switch that
-  # either works or fails. See `docs/DECISIONS.md`, "The lakehouse cloud-native cutover".
+  # either works or fails. See `docs/adr/0045-the-lakehouse-cloud-native-cutover-2026-09-03-04.md`, "The lakehouse cloud-native cutover".
   vendWriteCredentials: true
   # WHERE THE REWRITE'S BYTES ARE MOVED. Off = one in-pod `compact_files()`, which plans, executes and
   # commits in a single call — so this pod's memory ceiling is a function of the largest table anyone
@@ -1900,7 +1900,7 @@ maintenance:
   # dataset, which moves the floor past the residue; Lance then does the deleting on the next sweep.
   #
   # OFF BY DEFAULT because the commit is a real version on a GOVERNED table, written for a GC side
-  # effect (owner ruling 2026-09-19, docs/DECISIONS.md). The rejected alternative had this service
+  # effect (owner ruling 2026-09-19, docs/adr/0066-four-rulings-on-the-lakehouse-s-unblocked-rows-owner-2026.md). The rejected alternative had this service
   # delete the named bytes itself, on live tables, against a floor rule it derived rather than one
   # upstream enforces.
   floorRaise: false
@@ -2172,7 +2172,7 @@ stateStore:
     # STATE: Dapr Workflow orchestrates the ingest run (`services/ingest/src/ingest/workflow.py`), and
     # the workflow engine runs on the ACTOR runtime, which requires an actorStateStore this app-id can
     # load. This comment used to say the OPPOSITE — that the state grant merely "rides along" because
-    # state ⊆ secrets, citing a DECISIONS.md ruling that Dapr Workflow was un-adopted. That ruling was
+    # state ⊆ secrets, citing a docs/adr/0036-ingest-orchestration-dapr-workflow-is-adopted-the-estate-is.md ruling that Dapr Workflow was un-adopted. That ruling was
     # REVERSED on 2026-08-03 ("Ingest orchestration — Dapr Workflow IS adopted"); the comment was never
     # updated, so it sat here inviting exactly the removal that stops the plane dead.
     #
@@ -3053,7 +3053,7 @@ dapr:
   #
   # PER-TERMINAL-STATE, because the states are not worth the same:
   #   · `completed` — short. A successful run's history is a cache of a fact stored durably elsewhere:
-  #     the lineage event IS the record (docs/DECISIONS.md), so once it has landed the history answers
+  #     the lineage event IS the record (docs/adr/0023-workflow-history-has-no-browser-surface-the-alert-is-the.md), so once it has landed the history answers
   #     nothing lineage does not. 7 days is a comfortable margin over the reconciler's own windows.
   #   · `failed` / `terminated` — long. This is the post-mortem, and "why did that run die" is a
   #     question asked days later, usually after someone notices downstream. 30 days.

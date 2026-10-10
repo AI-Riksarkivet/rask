@@ -1,6 +1,6 @@
 """Register what this estate's planes can run — the WRITE half of the task registry.
 
-docs/DECISIONS.md "The compute plane is decoupled" step 1. A transform declares a TASK; the registry says what
+docs/adr/0052-the-compute-plane-is-decoupled-a-port-two-adapters-and-no.md "The compute plane is decoupled" step 1. A transform declares a TASK; the registry says what
 running it means. The two are separated so the catalog's declaration door can refuse an unrunnable
 transform without learning any engine's vocabulary — which is only true if the registry is written
 by a plane that HAS one.

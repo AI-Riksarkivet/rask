@@ -423,7 +423,7 @@ Separately, `LK/templates/_validations.tpl:1-4` guards `authz.backend ∈ {allow
 
 **What rask does today:** `version: 0.3.0` on every revision (`rask/chart/Chart.yaml:14`; XC-055: 193 revisions). The recovery verbs have no seam (XC-056). Upgrade hazards live in commit messages and skills.
 
-**What rask should do:** have the Dagger chart lane stamp `version` / `appVersion` from git (for example `0.3.0-<n>+<sha>`; `helm.sh/chart` already sanitises `+`, `LK/_helpers.tpl:66`), so `helm history rask` names what each revision deployed. Keep upgrade hazards in `docs/DECISIONS.md`, which is where rask's comment rule puts history. Skip helm-docs: rask's `values.yaml` prose is free in the release (`SKILL.md:35-37`), and a generated README adds nothing the values file lacks.
+**What rask should do:** have the Dagger chart lane stamp `version` / `appVersion` from git (for example `0.3.0-<n>+<sha>`; `helm.sh/chart` already sanitises `+`, `LK/_helpers.tpl:66`), so `helm history rask` names what each revision deployed. Keep upgrade hazards in `docs/adr/`, which is where rask's comment rule puts history. Skip helm-docs: rask's `values.yaml` prose is free in the release (`SKILL.md:35-37`), and a generated README adds nothing the values file lacks.
 
 **Rows:** XC-055, XC-056.
 

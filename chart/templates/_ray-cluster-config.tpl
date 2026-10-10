@@ -122,7 +122,7 @@
                       name: {{ include "rask.fullname" . }}-hf-token
                       key: token
                 {{- end }}
-                {{- /* THE JOB SECRETS LIVE ON THE POD, NOT IN THE SUBMISSION (docs/DECISIONS.md "The Python estate audit"
+                {{- /* THE JOB SECRETS LIVE ON THE POD, NOT IN THE SUBMISSION (docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit"
                      P0, fixed 2026-08-28). They rode `runtime_env.env_vars`, and the Ray Jobs API
                      echoes runtime_env back on `GET /api/jobs/<id>` — an unauthenticated dashboard,
                      proxied by compute at /api/ray/*, published at the edge: one GET yielded the

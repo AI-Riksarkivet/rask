@@ -42,7 +42,7 @@ def _is_unregistered_resource_type(exc: BaseException) -> bool:
 
     `list_cluster_custom_object` 404s only when the cluster registers no
     `projects.platform.rask.io` type — i.e. `rask-operator`, which lives in a separate repo and is
-    deliberately not shipped by this chart (`docs/DECISIONS.md`, 2026-08-16), is not installed on
+    deliberately not shipped by this chart (`docs/adr/0041-watch-enrolment-does-not-wait-for-the-platform-rask-io-crd.md`, 2026-08-16), is not installed on
     this estate. That is a permanent property of the deployment; an RBAC 403 and a refused
     connection are not, and this predicate is what keeps the three answers apart. Reporting all
     three as "cannot reach kubernetes api" sent one session after the ServiceAccount

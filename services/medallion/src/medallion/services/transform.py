@@ -392,7 +392,7 @@ async def _authorize(
             )
             return _RETRY
         if not allowed:
-            # DROP, COUNT, LOG — AND EMIT NO LINEAGE. Ruled 2026-08-16 (`docs/DECISIONS.md`, "Lineage
+            # DROP, COUNT, LOG — AND EMIT NO LINEAGE. Ruled 2026-08-16 (`docs/adr/0039-lineage-records-what-happened-to-data-an-authorization.md`, "Lineage
             # records what happened to DATA; an authorization denial is not a data event") against a
             # proposal to emit a FAIL from exactly this branch, and the reasoning covers every
             # PRE-FLIGHT halt above and below it — a malformed payload, an unsafe project, an
@@ -544,7 +544,7 @@ async def _preflight(
         # A DEPLOYMENT gap, and therefore permanent: every tenant trigger this stage runner ever receives
         # halts here until an operator sets the registry root, and an operator is not prompted by a
         # log line nobody is reading. A counted, alertable steady state is the instrument
-        # `docs/DECISIONS.md` names for exactly this (a repeating operational condition is a metric).
+        # `docs/adr/0039-lineage-records-what-happened-to-data-an-authorization.md` names for exactly this (a repeating operational condition is a metric).
         record_refused(transition, "routing_disabled")
         return _drop("routing_disabled")
     # WHAT THIS RUN READS AND WRITES — the declared lane record when there is one, else the env,
@@ -626,7 +626,7 @@ async def _resolve_roots(settings: MedallionSettings, *, project: str, from_data
         to_uri = f"{root}/medallion/{settings.to_namespace}"
 
     if project and settings.gold_warehouse_enabled:
-        # Gold tier (DECISIONS "Medallion tiers"): the chart sets this env ONLY on the terminal
+        # Gold tier (docs/adr/0034-medallion-tiers-hybrid-physical-layout-2026-07-24.md "Medallion tiers"): the chart sets this env ONLY on the terminal
         # silver→gold stage runner, whose tenant TARGET root becomes the project's gold SERVING
         # warehouse (the serving=="gold" registry record) when one exists. The upstream READ
         # stays in the work warehouse; no gold warehouse → fall through to the work root above,

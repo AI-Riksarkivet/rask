@@ -1,6 +1,6 @@
 """Reading the estate's object stores takes the same privilege as attaching one.
 
-docs/DECISIONS.md "The Python estate audit" `catalog-api-02` (E1, HIGH) — "GET /v1/stores and /v1/stores/tiers disclose the
+docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit" `catalog-api-02` (E1, HIGH) — "GET /v1/stores and /v1/stores/tiers disclose the
 whole estate's buckets and hosts with no authorization gate, while the sibling POST calls that same
 registry estate-admin gated".
 
@@ -193,7 +193,7 @@ def test_every_route_the_router_guard_waves_through_has_a_reason() -> None:
 
 # ── the error ENVELOPE: rask-extension routes still speak the spec's problem dialect ─────────────
 #
-# docs/DECISIONS.md "The Python estate audit" `catalog-api-01` + `RV-03` — one defect, two modules: stores.py and members.py
+# docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit" `catalog-api-01` + `RV-03` — one defect, two modules: stores.py and members.py
 # imported the FLEET taxonomy (`service_kit.exceptions`) instead of `lance_namespace`, so their
 # bodies rendered as problem+json (that half was fixed by `745af135` installing `register_handlers`)
 # but carried only four keys — no `code`, no `error`, and a `type` in `about:blank#` rather than

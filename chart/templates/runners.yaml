@@ -2,7 +2,7 @@
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
 # Model runners (runners/ — the lance-audio fold's model homes). Only the CPU-viable subset deploys
 # here; the CUDA-pinned runners (asr/diarize/voiceprint) and the LLM-dependent batch runners
-# (topics/kg) stay undeployed on this GPU-less estate — see docs/DECISIONS.md "Runner deployment".
+# (topics/kg) stay undeployed on this GPU-less estate — see docs/adr/0035-runner-deployment-the-cpu-viable-subset-is-real-the-rest-is.md "Runner deployment".
 #
 # assist: the annotator's interactive AI-assist server (GroundingDINO-tiny detection + SAM-ViT-base
 # segmentation, CPU, weights baked into the image). The annotator's MEDIA_ASSIST_URL (media.yaml)

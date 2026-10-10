@@ -126,7 +126,7 @@ dependency for crash-recovery semantics we already get from idempotency keys.
 > **SUPERSEDED for the ingest lane 2026-08-03 (owner ruling) — Dapr Workflow IS adopted there.**
 > The criterion below was written in the orchestrator-and-polling era; the estate has since gone
 > event-driven with Dapr Workflow, so "can we avoid an engine?" is no longer the question asked of a
-> durable multi-step path. The ingest run is orchestrated by Dapr Workflow — see docs/DECISIONS.md
+> durable multi-step path. The ingest run is orchestrated by Dapr Workflow — see docs/adr/0036-ingest-orchestration-dapr-workflow-is-adopted-the-estate-is.md
 > § "Ingest orchestration — Dapr Workflow IS adopted". This pin still describes the ANNOTATION publish
 > saga accurately (it is token-keyed idempotent and needs no engine); it is no longer an estate-wide
 > prohibition. The analysis that follows is kept because its idempotency reasoning remains true and
@@ -140,7 +140,7 @@ dependency for crash-recovery semantics we already get from idempotency keys.
 > from a tag advance — so nothing is minted mid-run and the honest signal never fires. The one real
 > gap, a run whose enumeration dies half-published, is closed by making enumeration itself chunked
 > work-queue messages rather than by adopting an engine. Full reasoning, including the strongest
-> argument for adopting anyway and why it loses: `docs/DECISIONS.md` § "Ingest orchestration — Dapr
+> argument for adopting anyway and why it loses: `docs/adr/0036-ingest-orchestration-dapr-workflow-is-adopted-the-estate-is.md` § "Ingest orchestration — Dapr
 > Workflow stays un-adopted".
 
 **Lance — no operator exists, none is missing.** Lance is a format + libraries; its "control
@@ -155,7 +155,7 @@ DOES have are already owned elsewhere:
 | version/feature pinning (`pylance`, `lance-ray`, data_storage_version) | image pins + probe-before-callsite (§0) + docs/RAY.md landmines | process, not software |
 
 So: nothing to install for either. The single actionable follow-up either way is the **orphan
-janitor** (already tracked in docs/DECISIONS.md #blob-pointer-lifecycle-gc--never-collect-referenced-artifacts as blob-pointer lifecycle — GC must never collect
+janitor** (already tracked in docs/adr/0011-blob-pointer-lifecycle-gc-never-collect-referenced-artifacts.md as blob-pointer lifecycle — GC must never collect
 registry-referenced artifact objects, and crashed-run tokens need a sweep).
 
 ## 5 · Secrets: the dev-mode fragility, and the operator plan (added 2026-07-14)
@@ -176,7 +176,7 @@ stuck pod under a watchdog; fixed by re-running the seed (the chart's own hook) 
    OpenBao runs `server -config` against its **already-provisioned PVC**. Secrets then survive pod
    restarts, and the seed Job becomes first-boot-only. Cost: OpenBao then needs a real
    `operator init` + unseal step (no fixed root token) — which is the exact chore the operator
-   removes, so this is the bridge, not the destination. Tracked in `docs/DECISIONS.md`.
+   removes, so this is the bridge, not the destination. Tracked in `docs/adr/`.
 2. **Prod — a secrets operator (the destination):** adopt **External Secrets Operator** (cloud-agnostic,
    syncs from any backend into k8s Secrets / Dapr), the **Vault/OpenBao operator**, or **bank-vaults**
    for **auto-unseal** (no manual init/unseal) + **declarative secret sync** (retire `openbao-seed`

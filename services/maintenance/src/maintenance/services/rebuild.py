@@ -3,7 +3,7 @@
 **ADDITIVE ONLY. This module writes tuples and never deletes one**, which is what makes it safe to
 run against a live store: every tuple it writes is one the registry record already justifies, so it
 cannot widen access beyond what the control plane itself recorded. Owner ruling 2026-09-19
-(`docs/DECISIONS.md`) overturning the standing "No — not yet" deferral on a write-capable reconcile.
+(`docs/adr/0066-four-rulings-on-the-lakehouse-s-unblocked-rows-owner-2026.md`) overturning the standing "No — not yet" deferral on a write-capable reconcile.
 
 WHY IT EXISTS. `reconcile.py` detects `unreferenced_projects` — a project record holding no tuples at
 all — and could do nothing about it. That state is not cosmetic: the project-admin tuple is what makes

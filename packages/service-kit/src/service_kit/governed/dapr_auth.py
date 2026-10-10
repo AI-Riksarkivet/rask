@@ -193,7 +193,7 @@ def refuse_unconfigured_door(*, caller: str | None = None) -> None:
     sidecar-delivered door refused; `medallion.api.produce_auth.authorize_produce` returned a
     service-caller result and admitted. Nothing in either said which was intended, so a reader of one
     learned the wrong rule about the other — and the door that opened is the cascade head. Owner ruling
-    2026-09-19: an unset token is a refusal everywhere (`docs/DECISIONS.md`).
+    2026-09-19: an unset token is a refusal everywhere (`docs/adr/0066-four-rulings-on-the-lakehouse-s-unblocked-rows-owner-2026.md`).
 
     FAILING CLOSED IS NOT SEVERITY, IT IS THE CONTROL EXISTING. A guard with no expected value cannot
     distinguish a legitimate delivery from a forged one, so admitting is the control being absent while

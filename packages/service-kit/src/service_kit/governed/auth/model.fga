@@ -101,7 +101,7 @@ type project
 # Concentric rungs inherit from the project (admins own; members read).
 type estate
     relations
-        # THE ESTATE ROOT ([[LH-055]], owner ruling docs/DECISIONS.md:2240 — "the FGA model shape is a
+        # THE ESTATE ROOT ([[LH-055]], owner ruling docs/adr/0070-four-owner-answers-and-the-reference-implementation-that.md — "the FGA model shape is a
         # PORT"). The reference model calls it `type server` with `define project: [project]` beneath
         # it; the name here says what it IS in this estate rather than what it is in a web service.
         #
@@ -649,7 +649,7 @@ type table
 # a data-plane write — while `reader` only reads the view + its metadata.
 type classification
     relations
-        # THE CLASSIFICATION VOCABULARY ([[LH-055]], owner ruling docs/DECISIONS.md — "the FGA model
+        # THE CLASSIFICATION VOCABULARY ([[LH-055]], owner ruling docs/adr/0070-four-owner-answers-and-the-reference-implementation-that.md — "the FGA model
         # shape is a PORT"). The reference model declares no `column` type; column governance is a TAG
         # type with per-tag `apply`, "Independent of `modify` (separation of duties: classify without
         # holding data/DDL rights)".

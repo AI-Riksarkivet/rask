@@ -94,7 +94,7 @@ SQL triggers — mechanical, but not free, and `rules_test.yml`'s synthetic-seri
 over.
 
 **C. Decide the estate does not page.** Delete `chart/alerting/`, `chart/templates/alerting.yaml`,
-the `alerting:` values block and `make alert-rules-check`. Record it in `docs/DECISIONS.md`.
+the `alerting:` values block and `make alert-rules-check`. Record it in `docs/adr/`.
 
 **There is no fourth option where the Collector or Perses covers this.** Perses is dashboards only.
 

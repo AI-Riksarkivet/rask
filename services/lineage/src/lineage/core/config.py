@@ -165,7 +165,7 @@ class LineageSettings(GovernedAuthSettings, BaseSettings):
     # (a crash between the Lance commit and the publish), then deleting it. Empty = drain disabled. Must
     # point at the SAME object-store prefix as ``MEDALLION_LINEAGE_OUTBOX_URI``.
     outbox_uri: str = Field(default="", alias="LINEAGE_OUTBOX_URI")
-    # Max staged events one reconcile tick drains, OLDEST FIRST (docs/DECISIONS.md P1.2 (bounded drain)).
+    # Max staged events one reconcile tick drains, OLDEST FIRST (docs/adr/0004-p1-2-bounded-oldest-first-outbox-drain.md P1.2 (bounded drain)).
     # The drain used to materialise the ENTIRE prefix in memory inside the single-flight lock, so a backlog
     # — precisely the situation the outbox exists to survive — could OOM or stall the tick, making the relay
     # fail hardest

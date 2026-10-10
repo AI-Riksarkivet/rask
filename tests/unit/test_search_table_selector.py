@@ -175,7 +175,7 @@ def test_a_LEGACY_single_table_corpus_resolves_exactly_as_before() -> None:
     assert target.row_table_name == "chunks"
 
 
-# ── the result cache must SEE the selector (docs/DECISIONS.md "The Python estate audit" VS-04) ─────────────────────────────
+# ── the result cache must SEE the selector (docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit" VS-04) ─────────────────────────────
 #
 # `cache_key` omitted `spec.table` and `version_signature` read the DEFAULT `declared.search`, so
 # two searches over different tables of one corpus collided on one entry — and the stale rows carry

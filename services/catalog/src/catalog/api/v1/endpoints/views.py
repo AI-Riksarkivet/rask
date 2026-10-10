@@ -41,7 +41,7 @@ async def create_materialized_view(
     ``source_query`` blob the namespace server stores without interpreting, so there is no structured list
     of source tables to name in a lineage event. Emitting MV lineage is a decision-gate (WONTFIX until an
     MV consumer needs it) — it requires either a query parser or a structured ``source_tables`` request
-    field; do NOT fabricate an edge from the view's own output schema. See docs/DECISIONS.md #38b.
+    field; do NOT fabricate an edge from the view's own output schema. See docs/adr/0017-38b-mv-lineage-is-wontfix-no-source-tables.md #38b.
     """
     segments = parse_identifier(id, settings.delimiter)
     body.id = reconcile_body_id(segments, body.id)

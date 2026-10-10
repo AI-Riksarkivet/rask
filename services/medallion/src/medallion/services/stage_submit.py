@@ -1,6 +1,6 @@
 """Submitting one stage of the cascade — WHAT to run, in no engine's vocabulary.
 
-`docs/DECISIONS.md` "The compute plane is decoupled" ([[LH-159]]). The lakehouse must be driveable BY
+`docs/adr/0052-the-compute-plane-is-decoupled-a-port-two-adapters-and-no.md` "The compute plane is decoupled" ([[LH-159]]). The lakehouse must be driveable BY
 Ray without depending ON it, so no module named for one engine sits on the cascade's submit path.
 
 Nothing here names an engine except the dispatch's own answer. `transform.py` asks

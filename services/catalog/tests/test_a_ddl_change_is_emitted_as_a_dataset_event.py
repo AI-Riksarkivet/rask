@@ -1,6 +1,6 @@
 """A catalog DDL change goes on the wire as a ``DatasetEvent``; a data write stays a ``RunEvent``.
 
-[[LIN-004]], ruled in `docs/DECISIONS.md` § D. `build_write_event` wrapped EVERY catalog operation in
+[[LIN-004]], ruled in `docs/adr/0070-four-owner-answers-and-the-reference-implementation-that.md` § D. `build_write_event` wrapped EVERY catalog operation in
 a synthetic run, so a schema change minted a `(:Run)` that never executed and a `(:Job)` that never
 ran — named per table per operation, so the phantom population grew with the table count. The `/jobs`
 governance fold makes a Job's output set its access handle, which makes each one an access-control

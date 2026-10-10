@@ -255,7 +255,7 @@ def test_OIDC_on_with_NO_fga_client_fails_CLOSED(_oidc_on: None) -> None:
 
 def test_with_OIDC_on_and_no_service_door_an_anonymous_request_is_refused(_oidc_on: None) -> None:
     """The open posture means NOTHING is configured to authenticate against; a deployment with no service-account
-    issuer but OIDC on is not open (docs/DECISIONS.md "The Python estate audit", ING-01)."""
+    issuer but OIDC on is not open (docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit", ING-01)."""
     with TestClient(_app(fga=object()), raise_server_exceptions=False) as client:
         assert client.post("/ingests", json={"project": "demo"}).status_code == 403
 

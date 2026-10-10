@@ -16,7 +16,7 @@ dependencies = [
     "validate",
     "httpx>=0.27",
     "uvicorn>=0.30",
-    # The run orchestrator (docs/DECISIONS.md "Ingest orchestration — Dapr Workflow IS adopted").
+    # The run orchestrator (docs/adr/0036-ingest-orchestration-dapr-workflow-is-adopted-the-estate-is.md "Ingest orchestration — Dapr Workflow IS adopted").
     # Executes in the daprd sidecar the chart already injects, on the actor state store that already
     # exists — no new infrastructure, which is most of why it was adopted.
     "dapr-ext-workflow>=1.18",

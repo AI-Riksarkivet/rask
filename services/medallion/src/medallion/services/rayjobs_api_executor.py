@@ -1,7 +1,7 @@
 """The Ray lane as an `Executor` — the compute engine behind the port, not an orchestrator.
 
 [[LH-158]] THE PORT EXISTED AND NOTHING IMPLEMENTED IT. `service_kit.lakehouse.executor.Executor` is
-declared, `docs/DECISIONS.md` describes "a port, TWO adapters", and until this landed neither lane went
+declared, `docs/adr/0052-the-compute-plane-is-decoupled-a-port-two-adapters-and-no.md` describes "a port, TWO adapters", and until this landed neither lane went
 through it: `transform.py` hand-built `InProcessExecutor`, the Ray lane dispatched straight to the
 workflow, and `engine_registry.executor_for` had zero production callers. A port nothing implements is
 a decision record describing an architecture that does not exist, which is the condition the estate's

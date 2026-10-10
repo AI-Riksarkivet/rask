@@ -8,7 +8,7 @@ the other half: the thing that reads that prefix and delivers what it finds.
 buffer or a tag-polling reader loses a redraw. ``table_published`` is not: the stage runner does not fire the
 next stage's topic, and ``/publication-arrival`` receiving this event is the ONLY thing that WAKES
 silver->gold. The medallion's cascade-lag cron re-reads the ``published`` tag since
-`docs/DECISIONS.md "Cascade repair"` C3, and that does not weaken this argument by a word: it MEASURES how far a
+`docs/adr/0051-cascade-repair-detection-and-the-repair-verb-2026-09-04.md "Cascade repair"` C3, and that does not weaken this argument by a word: it MEASURES how far a
 tier has fallen behind and advances nothing, so a lost publish is still a cascade that stops. A dropped one ends the cascade with the tag advanced, the data consumable, the
 route 200, every pod green, and nothing red.
 
@@ -82,7 +82,7 @@ type StagedVerifier = Callable[[Mapping[str, Any]], VerifiedSignature]
 #: Bounds what a staged object's own text puts on a log line: its key and its action are whatever its writer chose.
 _MAX_LOGGED_CHARS: Final = 300
 
-#: How many staged events one tick drains. The lineage drain learned this the hard way (DECISIONS.md
+#: How many staged events one tick drains. The lineage drain learned this the hard way (docs/adr/0004-p1-2-bounded-oldest-first-outbox-drain.md
 #: P1.2): materialising a whole prefix inside the tick makes the relay fail hardest exactly when a
 #: backlog exists, which is the only situation it is for. The remainder drains next tick, oldest-first,
 #: so nothing starves. A literal rather than a knob because the control lane's event rate is bounded by

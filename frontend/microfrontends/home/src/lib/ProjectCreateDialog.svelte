@@ -1,7 +1,7 @@
 <script lang="ts">
 	// Project creation — an estate-admin flow that COMPOSES existing APIs: it registers the project,
 	// then provisions its first (work) warehouse under it; an optional second create with
-	// serving:"gold" provisions the per-tenant gold serving warehouse (DECISIONS "Medallion tiers"); the
+	// serving:"gold" provisions the per-tenant gold serving warehouse (docs/adr/0034-medallion-tiers-hybrid-physical-layout-2026-07-24.md "Medallion tiers"); the
 	// initial admin grant is one raw FGA tuple written through the shared `writeTuple` remote command
 	// (estate-admin gated at the catalog, like /v1/events). Every step toasts success/failure honestly —
 	// a partial outcome (work warehouse up, gold or grant failed) is NAMED, never rolled into a fake

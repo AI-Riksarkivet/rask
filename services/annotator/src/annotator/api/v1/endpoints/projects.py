@@ -124,7 +124,7 @@ async def create_annotation_project(payload: CreateProjectRequest, checker: Chec
     #
     # So a failure past this point undoes what it wrote, in reverse, and then fails. The
     # compensations are idempotent and `discard` refuses anything but an empty draft, which is what
-    # keeps this a create saga rather than a delete door (docs/DECISIONS.md "The Python estate audit" ANN-10).
+    # keeps this a create saga rather than a delete door (docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit" ANN-10).
     registered = False
     try:
         # REGISTER it in the tenant index — the actor `GET /projects` lists through. Synchronous and

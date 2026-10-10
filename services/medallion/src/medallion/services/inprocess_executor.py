@@ -1,6 +1,6 @@
 """The IN-PROCESS engine, as the platform's `Executor` port sees it — §7.4 step 2.
 
-docs/DECISIONS.md "The compute plane is decoupled" calls this "the cheapest possible proof the contract is real, because
+docs/adr/0052-the-compute-plane-is-decoupled-a-port-two-adapters-and-no.md "The compute plane is decoupled" calls this "the cheapest possible proof the contract is real, because
 the second engine already exists". A port with one implementation is a description; this is what
 makes it a contract.
 
