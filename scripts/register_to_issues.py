@@ -891,7 +891,10 @@ def _apply(plan: Plan) -> None:
         url = _gh("issue", "create", "-R", REPO, "--title", MAP_TITLE, "--body-file", "-", "--label", MAP_LABEL, stdin=plan.map_issue.body)
         map_number = _issue_number(url)
         print(f"map -> #{map_number}")
-    if not json.loads(_gh("issue", "view", str(map_number), "-R", REPO, "--json", "isPinned"))["isPinned"]:
+    # `gh issue view --json` has no isPinned field (gh 2.x); the GraphQL Issue object does.
+    owner, name = REPO.split("/")
+    pin_query = f'query{{repository(owner:"{owner}",name:"{name}"){{issue(number:{map_number}){{isPinned}}}}}}'
+    if not json.loads(_gh("api", "graphql", "-f", f"query={pin_query}"))["data"]["repository"]["issue"]["isPinned"]:
         _gh("issue", "pin", str(map_number), "-R", REPO)
         print(f"map #{map_number} pinned")
 
