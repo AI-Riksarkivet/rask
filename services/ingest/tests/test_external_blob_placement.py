@@ -50,9 +50,8 @@ def _dir_bytes(path: Path) -> int:
 def _resolves(uri: str) -> int:
     """How many rows hand back real payload bytes.
 
-    `blob_handling="all_binary"` rather than `read_blobs`/`take_blobs`: those two silently DROP null
-    rows, so a count taken through them cannot distinguish "the pointer is dead" from "the row was
-    skipped" — the exact ambiguity this test exists to remove.
+    One `blob_handling="all_binary"` scan of the whole column: every row's payload as bytes and a null
+    as None on its own row, so the count is of rows whose bytes are really there.
     """
     table = lance.dataset(uri).scanner(columns=["payload"], blob_handling="all_binary").to_table()
     return sum(1 for value in table.column("payload").to_pylist() if value)

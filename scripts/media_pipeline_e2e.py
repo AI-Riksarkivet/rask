@@ -111,8 +111,8 @@ def _seed_source(fs: pafs.S3FileSystem) -> None:
 
 def _silver() -> list[dict[str, str]]:
     bronze = lance.dataset(BRONZE, storage_options=SO)
-    # ONE row-aligned scan (blob_handling="all_binary") for the source URIs AND the payload bytes —
-    # read_blobs DROPS null payloads and would misalign `images` against `sources` (the R27 landmine).
+    # ONE row-aligned scan (blob_handling="all_binary") for the source URIs AND the payload bytes, a
+    # null payload as None on its own row, so `images` pairs with `sources` by position.
     aligned = blobs.read_aligned_table(bronze, columns=["source_uri", "payload"])
     rows = aligned.num_rows
     images = aligned.column("payload").to_pylist()

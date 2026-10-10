@@ -20,7 +20,6 @@ from typing import Any
 
 import lance
 import pyarrow as pa
-import pytest
 from lance import blob_array, blob_field
 from lance.blob import Blob
 
@@ -136,71 +135,42 @@ class TestTheManagedPathIsUnchanged:
         assert set(out.column("stage").to_pylist()) == {"silver"}
 
 
-class TestTheDerivabilityProbeIsBounded:
-    """Deciding "is this derivable" must not cost the tier — §8 change 3, second half.
+class TestTheDerivabilityProbeReadsOnePayload:
+    """Deciding "is this derivable" must not cost the tier — §8 change 3, second half ([[CP-051]]).
 
-    `derive_artifacts` dispatches on the FIRST non-null payload, so the question is what KIND of
-    payload the column holds, and one row answers it. The first version of `_payloads_if_derivable`
-    asked that question with an unbounded `read_aligned_table` and then looked at one element — so
-    the probe materialised every payload in the tier. At ten million page images that is the whole
-    corpus read to answer a question about one row: the defect the change exists to remove,
-    reintroduced inside the fix.
-
-    Asserted on ROWS SCANNED rather than a byte ratio, because rows are scale-invariant: the bound
-    must hold at 500 rows and at 10,000,000.
+    The deriver is chosen by the column's first NON-null payload, so the probe needs exactly that one
+    payload. A failed harvest writes a null blob (R27), so a long prefix of nulls is a real shape, and a
+    probe that reads forward through it, or falls back to reading the column, reads the corpus to answer
+    a question about one row.
     """
 
-    def test_the_probe_scans_a_bounded_window_not_the_tier(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        from medallion.services.compute import _DERIVE_PROBE_ROWS, _payloads_if_derivable
+    def test_a_null_prefix_is_probed_by_reading_only_the_first_non_null_payload(self, tmp_path: Path) -> None:
+        """Every object after the first non-null row is deleted, so any read past that row fails the stage.
 
-        source = tmp_path / "corpus"
-        uris = _corpus(source, count=_DERIVE_PROBE_ROWS * 6, size=2_000)
-        bronze = str(tmp_path / "bronze.lance")
-        _bronze(bronze, uris, base=str(source))
-
-        scanned: list[int] = []
-        real = blobs.read_aligned_table
-
-        def counting(dataset: Any, **kw: Any) -> Any:
-            table = real(dataset, **kw)
-            scanned.append(table.num_rows)
-            return table
-
-        monkeypatch.setattr(blobs, "read_aligned_table", counting)
-        _payloads_if_derivable(lance.dataset(bronze), ["payload"], len(uris))
-
-        assert scanned, "the probe made no scan at all — the instrumentation is broken, not the code"
-        assert max(scanned) <= _DERIVE_PROBE_ROWS, (
-            f"the probe scanned {max(scanned)} rows of a {len(uris)}-row tier; it must stay within "
-            f"{_DERIVE_PROBE_ROWS}. An unbounded probe reads the whole corpus to classify one payload."
-        )
-
-    def test_an_ALL_NULL_window_falls_back_rather_than_guessing(self, tmp_path: Path) -> None:
-        """A failed harvest writes a null blob (R27), so a prefix of nulls is a real shape.
-
-        Answering "nothing to derive" from an all-null window would silently skip derivation for a
-        tier whose later rows are fine — a wrong answer that costs nothing to reach. The fallback
-        pays for the full read instead, which is the correct trade at the rare shape.
+        The payloads are not images, so nothing derives and the stage forwards the external pointers without
+        opening them: the probe is the only reader of payload bytes in this run. The prefix is longer than
+        the 64-row window an earlier probe read before falling back to the whole column.
         """
-        from medallion.services.compute import _DERIVE_PROBE_ROWS, _payloads_if_derivable
-
         source = tmp_path / "corpus"
-        real_uris = _corpus(source, count=4, size=2_000)
-        n_null = _DERIVE_PROBE_ROWS + 2
-        payloads: list[Any] = [None] * n_null + [Blob.from_uri(u) for u in real_uris]
-
+        uris = _corpus(source, count=4, size=2_000)
+        nulls = 100
+        payloads: list[Any] = [None] * nulls + [Blob.from_uri(u) for u in uris]
         schema = pa.schema([pa.field("id", pa.int64()), blob_field("payload", nullable=True)])
-        uri = str(tmp_path / "sparse.lance")
+        bronze = str(tmp_path / "bronze.lance")
         lance.write_dataset(
             pa.table({"id": pa.array(range(len(payloads)), pa.int64()), "payload": blob_array(payloads)}, schema=schema),
-            uri,
+            bronze,
             mode="create",
             data_storage_version="2.2",
             enable_stable_row_ids=True,
             initial_bases=[lance.DatasetBasePath(str(source), "source")],
         )
+        for uri in uris[1:]:
+            Path(uri[7:]).unlink()
 
-        got = _payloads_if_derivable(lance.dataset(uri), ["payload"], len(payloads))
-        # The fixture's payloads are not images, so nothing derives — the property under test is that
-        # the all-null window did not short-circuit before looking past it.
-        assert got == {} or len(got["payload"]) == len(payloads)
+        silver = str(tmp_path / "silver.lance")
+        transform_stage(bronze, silver, {}, stage="silver")
+
+        out = lance.dataset(silver).to_table(columns=["id", "payload"]).sort_by("id")
+        assert out.num_rows == len(payloads)
+        assert [row is None for row in out.column("payload").to_pylist()] == [True] * nulls + [False] * len(uris)

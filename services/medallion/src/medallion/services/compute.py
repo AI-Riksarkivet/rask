@@ -20,6 +20,7 @@ rask. Blocking Lance/S3 IO; callers run it in the threadpool.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from typing import Any, cast
 
 import lance
@@ -27,8 +28,8 @@ import pyarrow as pa
 from pydantic import BaseModel, Field
 
 from lineage_kit.consume import LineageDoc, LineageEdge, as_json_rows
-from medallion.core.config import shared_lance_session
-from medallion.services.derivers import ARTIFACT_COLUMNS, derive_artifacts, is_derivable
+from medallion.core.config import get_settings, shared_lance_session
+from medallion.services.derivers import ARTIFACT_COLUMNS, Deriver, deriver_for
 from service_kit.lakehouse import auto_cleanup, blobs, schema, tier_write
 from service_kit.lakehouse.commit_marker import CommitMarker
 
@@ -300,14 +301,20 @@ def transform_stage(
 ) -> WriteResult:
     """Read the upstream Lance dataset, transform it in this process, and land it on the downstream tier.
 
-    THE ROWS ARE THIS ENGINE'S; THE WRITE IS THE CASCADE'S. This function produces the transformed table in memory:
-    every stage stamps the ``stage`` provenance column in place, threads ``source_rowid`` (minted at the first derive
-    from the bronze ``_rowid``, carried thereafter), carries blob columns of any media kind through intact
-    (``_carry_forward``), derives what the blob content supports (``derive_artifacts``), and stamps this run's
-    ``lineage`` document as a column of the same table, so provenance lands in the same commit as the data (R26).
-    Everything from that table to the run's one marked commit is `service_kit.lakehouse.tier_write`, the module the
-    Ray stage job writes through too: the window decision, create-or-converge, widening, the declared dataset id, the
-    governance labels, the lineage index and the stage contract.
+    THE ROWS ARE THIS ENGINE'S; THE WRITE IS THE CASCADE'S. This function produces the transformed rows: every stage
+    stamps the ``stage`` provenance column in place, threads ``source_rowid`` (minted at the first derive from the
+    bronze ``_rowid``, carried thereafter), carries blob columns of any media kind through intact, derives what the
+    blob content supports (`derivers.deriver_for`), and stamps this run's ``lineage`` document as a column of the
+    same rows, so provenance lands in the same commit as the data (R26). Everything from those rows to the run's one
+    marked commit is `service_kit.lakehouse.tier_write`, the module the Ray stage job writes through too: the window
+    decision, create-or-converge, widening, the declared dataset id, the governance labels, the lineage index and the
+    stage contract.
+
+    A BLOB UPSTREAM IS PRODUCED AS A STREAM OF SLICES ([[CP-051]]), the Ray media producer's shape: one bounded scan
+    in ``MEDALLION_STAGE_BATCH_ROWS`` slices, each carried, stamped and derived on its own, handed to the write as a
+    re-runnable stream that lands one slice at a time. The stage holds a slice, never the tier, so an upstream larger
+    than the pod's memory limit converges under it. A TABULAR upstream is read as one table, which the delta lane
+    requires (`tier_write.write_tier` converges a bounded window from a table).
 
     ``version_floor`` is the order's delta boundary: when `tier_write.plan_window` keeps it, only the upstream rows
     changed since it are read and merged, and the upstream's deletions in the window are retracted. ``marker`` is the
@@ -326,15 +333,26 @@ def transform_stage(
     previous_rows = existing_row_count(to_uri, storage_options)
     target = tier_write.TierTarget(uri=to_uri, storage_options=storage_options, dataset_id=dataset_id or "", cardinality=cardinality, marker=marker)
     window = tier_write.plan_window(ds, target, version_floor, session=shared_lance_session())
-    out, blob_payloads = _carry_forward(ds, stage, row_filter=window.row_filter)
-    out = derive_artifacts(out, blob_payloads)
-    if lineage is not None:
-        out = out.append_column(pa.field(_LINEAGE_COLUMN, pa.json_()), _lineage_column(lineage, out.num_rows))
-    written = tier_write.write_tier(ds, out, window, target, session=shared_lance_session())
+    blob_cols = blobs.blob_field_names(ds.schema)
+    rows: tier_write.RowSource
+    if blob_cols:
+        if window.row_filter is not None:
+            raise ValueError(f"a blob upstream converges whole; {ds.uri} was read under the window {window.row_filter!r}")
+        settings = get_settings()
+        rows, out_schema = _blob_slices(
+            ds, stage, blob_cols, lineage, dataset_id, batch_rows=settings.stage_batch_rows, io_buffer_bytes=settings.stage_io_buffer_mb << 20
+        )
+        out_names = out_schema.names
+    else:
+        table = _stamp_stage(_drop_inherited_lineage(ds.to_table(with_row_id=True, filter=window.row_filter)), stage, stable_row_ids=ds.has_stable_row_ids)
+        if lineage is not None:
+            table = table.append_column(pa.field(_LINEAGE_COLUMN, pa.json_()), _lineage_column(lineage, table.num_rows))
+        rows, out_names = table, table.column_names
+    written = tier_write.write_tier(ds, rows, window, target, session=shared_lance_session())
     result = measure(to_uri, storage_options, version=written.version).model_copy(update={"previous_row_count": previous_rows})
-    # Declare the input→output column edges for the columnLineage facet (#1) — blob_payloads' keys ARE this
-    # stage's blob columns (the deriver source). The stage runner attaches the single upstream dataset identity.
-    result.column_map = _column_map(ds.schema, out.column_names, set(blob_payloads))
+    # Declare the input→output column edges for the columnLineage facet (#1): the blob columns are this stage's
+    # deriver sources. The stage runner attaches the single upstream dataset identity.
+    result.column_map = _column_map(ds.schema, out_names, set(blob_cols))
     return result
 
 
@@ -365,82 +383,114 @@ def _column_map(in_schema: pa.Schema, out_names: list[str], blob_cols: set[str])
     return deps
 
 
-def _carry_forward(ds: lance.LanceDataset, stage: str, *, row_filter: str | None = None) -> tuple[pa.Table, dict[str, list[bytes | None]]]:
-    """Read the upstream table and stamp the ``stage`` column, carrying any blob-v2 column through intact.
+def _blob_slices(
+    ds: lance.LanceDataset,
+    stage: str,
+    blob_cols: list[str],
+    lineage: LineageDoc | None,
+    dataset_id: str | None,
+    *,
+    batch_rows: int,
+    io_buffer_bytes: int,
+) -> tuple[Callable[[], pa.RecordBatchReader], pa.Schema]:
+    """A blob upstream's rows as a factory of one stream of carried, stamped and derived slices, and the slices' schema.
 
-    A plain ``to_table()`` demotes a blob column to its descriptions struct (tagged with the legacy
-    ``lance-encoding:blob`` key), which the 2.2 write then rejects — so blob columns are re-materialised
-    as bytes and re-wrapped with ``blob_array``. A stage with no blob column keeps the cheap
-    straight-through path. Returns the stamped table AND the materialised blob payloads per column
-    (``None`` where the upstream payload is null), so a media stage can derive artifacts without a second
-    blob pass.
+    A FACTORY, because `tier_write` re-plans a marked merge that lost a commit race and a consumed stream cannot be read
+    twice. Each slice is one row-aligned scan batch: tabular and blob columns arrive together and a null payload stays
+    on its own row (R27), so a null blob carries forward as null with null artifacts.
 
-    NULL-SAFE BY CONSTRUCTION (R27): the read is ONE ``blobs.read_aligned_table`` scan
-    (``blob_handling="all_binary"``), not ``to_table()`` + a positional ``read_blobs``. ``read_blobs``
-    DROPS null rows (measured, pylance 9.0.0 — docs/architecture/lance-blob-v2-findings.md), so the old
-    two-scan shape hard-failed the whole stage on a single un-harvested page with an opaque
-    ``ArrowInvalid: … expected length 3 but got length 2`` — routed as a TRANSIENT error into a RETRY
-    storm and the DLQ. A null payload now carries forward AS null and the cascade proceeds.
+    MANAGED VS EXTERNAL is decided by the upstream's registered base (`blobs.external_base_of`). A managed upstream's
+    bytes exist nowhere else, so the scan reads them (``blob_handling="all_binary"``) and the slice carries them. An
+    external upstream is scanned as descriptors and carried by POINTER, so a tier costs a few KB instead of another
+    corpus (§4.1/§4.2, change 3); its rows the dataset itself holds are read by row id (`blobs.carried_blob_values`),
+    and its bytes are read for a deriver only when one matched (:func:`_deriver_of`).
 
-    ``row_filter`` is the delta window's predicate (`tier_write.Window.row_filter`). A blob upstream always converges
-    whole (`tier_write.plan_window`), so only the tabular read takes one.
+    THE SCAN IS BOUNDED BY THE SLICE, not by Lance's defaults: ``batch_size`` rows decoded at a time, one batch and one
+    fragment of read-ahead, and ``io_buffer_size`` bytes buffered from storage (``lance_docs/guide.md:3050-3071``: a
+    scan holds up to ``2 * io_buffer_size + batch_size * threads``; the default buffer is 2 GB).
     """
-    blob_cols = blobs.blob_field_names(ds.schema)
-    if not blob_cols:
-        return _stamp_stage(_drop_inherited_lineage(ds.to_table(with_row_id=True, filter=row_filter)), stage, stable_row_ids=ds.has_stable_row_ids), {}
-    if row_filter is not None:
-        raise ValueError(f"a blob upstream converges whole; {ds.uri} was read under the window {row_filter!r}")
-
-    # EXTERNAL UPSTREAM: FORWARD THE POINTER, DO NOT RE-PERSIST THE BYTES (§4.1/§4.2, change 3).
-    #
-    # When the upstream declares an external base, its payloads live at URIs the dataset does not own,
-    # and every tier that copied them was storing the corpus again to express a readiness state.
-    # Measured over one corpus: bronze 0.16% + silver 0.19% carried this way, against ~100% per tier
-    # materialised. The descriptor is mapped, not copied — the read and write shapes differ, and both
-    # of the differences fail silently if got wrong (see `carry_external_descriptor`).
-    #
-    # The DERIVERS still get bytes; they are just no longer a side effect of carrying. A read for a
-    # model is not a copy into the lakehouse, which is exactly the distinction §4.2 draws.
     external_base = blobs.external_base_of(ds)
-    if external_base:
-        return _carry_forward_external(ds, stage, blob_cols, external_base)
+    carried = [f.name for f in ds.schema if f.name not in _RESTAMPED_COLUMNS]
+    derivation = _deriver_of(ds, blob_cols)
 
-    # MANAGED UPSTREAM: the bytes exist nowhere else, so carrying them IS the only option.
-    #
-    # ONE aligned scan for tabular AND blob columns — cardinality-preserving (nulls arrive as None) and
-    # half the IO of the old scan-plus-read_blobs pair. Full-materialises payloads into memory, which is
-    # fine for this in-process fake-Ray stand-in over the cascade's small overwrite-written datasets; a
-    # distributed job streams instead. with_row_id so the first derive off bronze can mint source_rowid
-    # from the SAME scan the rows come from (a carried source_rowid is a plain column already in this read).
-    aligned = blobs.read_aligned_table(
-        ds,
-        columns=[f.name for f in ds.schema if f.name not in _RESTAMPED_COLUMNS],
-        with_row_id=True,
-    )
-    rows = aligned.num_rows
-    row_ids = aligned.column("_rowid").to_pylist()
-    columns: dict[str, Any] = {}
-    fields: list[pa.Field] = []
-    blob_payloads: dict[str, list[bytes | None]] = {}
-    for f in ds.schema:
-        if f.name in _RESTAMPED_COLUMNS:
-            continue  # re-stamped by the caller so the value reflects THIS run, not the upstream's
-        if f.name in blob_cols:
-            payloads = aligned.column(f.name).to_pylist()
-            blob_payloads[f.name] = payloads
-            field, columns[f.name] = tier_write.carried_blob_column(ds, f.name, payloads, row_ids, None)
-            fields.append(field)
-        else:
-            fields.append(aligned.schema.field(f.name))
-            columns[f.name] = aligned.column(f.name)
-    return _with_root_provenance(columns, fields, aligned.column("_rowid"), ds, stage=stage, rows=rows), blob_payloads
+    def scanner(**kwargs: Any) -> lance.LanceScanner:
+        return ds.scanner(
+            columns=carried,
+            blob_handling=tier_write.blob_handling(external_base),
+            with_row_id=True,
+            batch_size=batch_rows,
+            batch_readahead=1,
+            fragment_readahead=1,
+            io_buffer_size=io_buffer_bytes,
+            **kwargs,
+        )
+
+    def produce(aligned: pa.Table) -> pa.Table:
+        row_ids = aligned.column("_rowid").to_pylist()
+        columns: dict[str, Any] = {}
+        fields: list[pa.Field] = []
+        for name in carried:
+            if name in blob_cols:
+                field, columns[name] = tier_write.carried_blob_column(ds, name, aligned.column(name), row_ids, external_base)
+                fields.append(field)
+            else:
+                fields.append(aligned.schema.field(name))
+                columns[name] = aligned.column(name)
+        out = _with_root_provenance(columns, fields, aligned.column("_rowid"), ds, stage=stage, rows=aligned.num_rows)
+        if derivation is not None:
+            column, deriver = derivation
+            out = deriver(out, _slice_payloads(ds, aligned, column, row_ids, external_base))
+        if lineage is not None:
+            out = out.append_column(pa.field(_LINEAGE_COLUMN, pa.json_()), _lineage_column(lineage, out.num_rows))
+        return declare_dataset_id(out, dataset_id)
+
+    # The schema of an empty slice, so a source of zero rows still creates the tier with every column it would carry.
+    schema = produce(scanner(limit=0).to_table()).schema
+
+    def stream() -> pa.RecordBatchReader:
+        slices = (out for raw in scanner().to_batches() for out in produce(pa.Table.from_batches([raw])).to_batches())
+        return pa.RecordBatchReader.from_batches(schema, slices)
+
+    return stream, schema
 
 
-#: How many rows the derivability probe reads. Bounded because the question is "what KIND of payload
-#: is in this column", which one row answers — while an unbounded read answers it by materialising
-#: the tier. Larger than 1 so a prefix of failed harvests (null blobs, R27) does not force the
-#: fallback on a healthy tier.
-_DERIVE_PROBE_ROWS = 64
+def _slice_payloads(ds: lance.LanceDataset, aligned: pa.Table, column: str, row_ids: list[int], external_base: str | None) -> list[bytes | None]:
+    """One slice's payload bytes for the deriver, row-aligned, ``None`` where the payload is null.
+
+    A managed slice was scanned as bytes. An external slice holds descriptors, so its bytes are read by row id:
+    ``read_blobs`` keeps a null row's slot, answering ``(address, None)`` (measured on pylance 12.0.0: ids ``[0, 99]``
+    over a null row 0 and an external row 99 answered ``[(0, None), (<address>, 1000 bytes)]``).
+    """
+    if external_base is None:
+        return aligned.column(column).to_pylist()
+    if not row_ids:
+        return []
+    return [payload for _, payload in ds.read_blobs(column, ids=row_ids, preserve_order=True)]
+
+
+def _deriver_of(ds: lance.LanceDataset, blob_cols: list[str]) -> tuple[str, Deriver] | None:
+    """The blob column this stage derives artifacts from, and its deriver; ``None`` when nothing derives.
+
+    Decided ONCE, before the stream, because the derived columns are part of the schema every slice must share. The
+    source is the first blob column by name, and its first NON-NULL payload decides: a failed harvest writes a null
+    blob (R27), so row 0 cannot speak for the column. A tier that already carries the artifacts derives nothing, so a
+    later hop carries them forward instead of appending a duplicate column.
+
+    THE PROBE READS ONE PAYLOAD. It scans the column's descriptors (default blob handling, which reads no payload
+    bytes) under ``filter="<col> IS NOT NULL", limit=1``, then reads that one row's bytes by row id. Measured on
+    pylance 12.0.0 over 99 null rows followed by external payloads whose objects past the first had been deleted: the
+    probe answered row 99 and read only its object, where a byte-reading scan of the column raised ``Not found`` on the
+    first deleted one.
+    """
+    if not blob_cols or any(name in ds.schema.names for name in ARTIFACT_COLUMNS):
+        return None
+    column = min(blob_cols)
+    first = ds.scanner(columns=[column], filter=f"{column} IS NOT NULL", limit=1, with_row_id=True).to_table()
+    if not first.num_rows:
+        return None
+    payload = next(payload for _, payload in ds.read_blobs(column, ids=first.column("_rowid").to_pylist()))
+    deriver = deriver_for(payload) if payload is not None else None
+    return (column, deriver) if deriver is not None else None
 
 
 def open_to_commit(uri: str, storage_options: dict[str, str]) -> lance.LanceDataset:
@@ -468,81 +518,6 @@ def dataset_exists(uri: str, storage_options: dict[str, str]) -> bool:
     except Exception:  # noqa: BLE001 — absent, unreadable, or not a dataset: all mean "create"
         return False
     return True
-
-
-def _carry_forward_external(ds: lance.LanceDataset, stage: str, blob_cols: list[str], external_base: str) -> tuple[pa.Table, dict[str, list[bytes | None]]]:
-    """Carry an external blob column by POINTER, and read its bytes only if a deriver wants them.
-
-    Two separate wins, and they are worth naming apart because only the first is change 3:
-
-    **The copy goes.** The output carries descriptors resolved against the upstream's declared base,
-    so the tier costs a few KB instead of the corpus. `blob_array` accepts the mapped `Blob` values
-    and Lance writes pointers. Rows of the same column that the dataset itself holds (inline, packed
-    or dedicated) are carried as bytes beside them (`blobs.carried_blob_values`).
-
-    **And the external rows' bytes are read only when a deriver wants them.** `derive_artifacts`
-    dispatches on the FIRST non-null payload and passes tabular / unrecognised content straight
-    through — yet the managed path materialises EVERY payload before asking. Here the probe reads one
-    row, and the full read happens only when a deriver actually matched, so a gold aggregation over
-    ten million external page images reads one image, not ten million. Rows the dataset owns are
-    always read, because carrying them needs their bytes; when the column is also derivable, the full
-    read reads them a second time.
-    """
-    table = ds.to_table(columns=[f.name for f in ds.schema if f.name not in _RESTAMPED_COLUMNS], with_row_id=True)
-    rows = table.num_rows
-    row_ids = table.column("_rowid").to_pylist()
-    columns: dict[str, Any] = {}
-    fields: list[pa.Field] = []
-    for f in ds.schema:
-        if f.name in _RESTAMPED_COLUMNS:
-            continue
-        if f.name in blob_cols:
-            field, columns[f.name] = tier_write.carried_blob_column(ds, f.name, table.column(f.name).to_pylist(), row_ids, external_base)
-            fields.append(field)
-        else:
-            fields.append(table.schema.field(f.name))
-            columns[f.name] = table.column(f.name)
-    out = _with_root_provenance(columns, fields, table.column("_rowid"), ds, stage=stage, rows=rows)
-    return out, _payloads_if_derivable(ds, blob_cols, rows)
-
-
-def _payloads_if_derivable(ds: lance.LanceDataset, blob_cols: list[str], rows: int) -> dict[str, list[bytes | None]]:
-    """The bytes, but ONLY when a deriver will actually consume them.
-
-    `derive_artifacts` keys its dispatch on the first non-null payload of the first blob column
-    (sorted), and returns the table untouched for tabular, unrecognised or already-derived content.
-    So probing one row answers whether the full read is worth paying for, and on the overwhelmingly
-    common path it is not.
-
-    Returns `{}` when nothing matches, which `derive_artifacts` reads as "nothing to derive" — the
-    same answer it reaches today after materialising the whole corpus to find out.
-
-    **THE PROBE IS BOUNDED, and the first version of this function was not.** It called
-    `read_aligned_table` with no limit and then looked at one element — so deciding "is this
-    derivable" read every payload in the tier. At ten million page images that is the whole corpus
-    materialised to answer a question about one row: exactly the defect this function exists to
-    remove, reintroduced inside the fix, with a docstring claiming the opposite.
-
-    An all-null WINDOW falls back to the full read rather than guessing. A failed harvest writes a
-    null blob (R27), so a prefix of nulls is a real shape, and answering "nothing to derive" from it
-    would silently skip derivation for a tier whose later rows are fine. Rare, and correctness wins.
-    """
-    if not rows:
-        return {}
-    column = min(blob_cols)
-    window = blobs.read_aligned_table(ds, columns=[column], limit=_DERIVE_PROBE_ROWS)
-    first = next((payload for payload in window.column(column).to_pylist() if payload is not None), None)
-    if first is None and rows > _DERIVE_PROBE_ROWS:
-        # The window was ALL NULL and there are more rows behind it. Cannot answer cheaply; pay for
-        # the full read rather than skip a derivation that may be owed.
-        full = blobs.read_aligned_table(ds, columns=blob_cols)
-        payloads = {name: full.column(name).to_pylist() for name in blob_cols}
-        probe_all = next((p for p in payloads[column] if p is not None), None)
-        return payloads if probe_all is not None and is_derivable(probe_all) else {}
-    if first is None or not is_derivable(first):
-        return {}
-    aligned = blobs.read_aligned_table(ds, columns=blob_cols)
-    return {name: aligned.column(name).to_pylist() for name in blob_cols}
 
 
 def _drop_inherited_lineage(table: pa.Table) -> pa.Table:

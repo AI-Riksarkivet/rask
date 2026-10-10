@@ -107,6 +107,16 @@ class MedallionSettings(OidcSettings, FgaSettings, SignatureDoorSettings, BaseSe
     #: a literal cannot track `resources.limits.memory`; `shared_lance_session` clamps them to the cgroup.
     lance_metadata_cache_mb: int = Field(default=128, ge=8, alias="MEDALLION_LANCE_METADATA_CACHE_MB")
     lance_index_cache_mb: int = Field(default=256, ge=8, alias="MEDALLION_LANCE_INDEX_CACHE_MB")
+    #: How many rows one slice of an in-process blob stage carries ([[CP-051]]). The stage's peak is set by the
+    #: slice, not the upstream: measured on pylance 12.0.0 over 1 MiB blob rows with the pods' allocator bound, a
+    #: re-run in a fresh process (0.18 GB VmHWM after imports) peaked at 0.37 GB over both a 256 and an 800 MiB
+    #: upstream at 8 rows, at 0.46-0.51 GB at 16 rows and at 0.68 GB at 64. The stage runner idles at ~210 Mi
+    #: under a 512 Mi limit, so 8 rows leaves room for ~1.8 MB page images. Rows, because a Lance scan batches by
+    #: rows; raise it for small payloads.
+    stage_batch_rows: int = Field(default=8, ge=1, alias="MEDALLION_STAGE_BATCH_ROWS")
+    #: How many MiB the blob stage's scan may buffer from storage ahead of the slice being produced. Lance's
+    #: default is 2 GiB and a scan may hold up to twice it (`lance_docs/guide.md:3050-3071`).
+    stage_io_buffer_mb: int = Field(default=64, ge=1, alias="MEDALLION_STAGE_IO_BUFFER_MB")
 
     # --- shared Dapr wiring (same component + lineage topic as catalog/lineage) -----------------
     pubsub: str = Field(default="lineage-pubsub", alias="MEDALLION_PUBSUB")

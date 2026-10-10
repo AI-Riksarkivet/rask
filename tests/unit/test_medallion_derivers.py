@@ -17,7 +17,6 @@ from lance import blob_array, blob_field
 from PIL import Image
 
 from medallion.services.compute import transform_stage
-from medallion.services.derivers import derive_artifacts
 from service_kit.lakehouse import media
 
 
@@ -101,7 +100,15 @@ def test_unrecognised_media_carries_through_untouched(tmp_path: Path) -> None:
     assert payload is not None and bytes(payload).startswith(b"RIFF")  # survived the hop byte-for-byte
 
 
-def test_derive_skips_when_artifacts_already_present() -> None:
-    """A later stage carries derived artifacts forward instead of re-deriving them."""
-    table = pa.table({"id": pa.array([0], pa.int64()), "thumbnail": pa.array([b"t"], pa.large_binary())})
-    assert derive_artifacts(table, {"payload": [_png((9, 9, 9))]}) is table
+def test_a_later_stage_carries_derived_artifacts_forward_instead_of_re_deriving(tmp_path: Path) -> None:
+    """silver already carries `thumbnail` and `embedding`, so gold carries them rather than appending a second pair."""
+    bronze = _bronze_media(tmp_path, [_png((200, 40, 40)), _png((40, 40, 200))])
+    silver, gold = str(tmp_path / "silver_media"), str(tmp_path / "gold_media")
+    transform_stage(bronze, silver, {}, stage="silver-media")
+
+    transform_stage(silver, gold, {}, stage="gold-media")
+
+    names = lance.dataset(gold).schema.names
+    assert (names.count("thumbnail"), names.count("embedding")) == (1, 1)
+    carried = lance.dataset(gold).to_table(columns=["id", "thumbnail"]).sort_by("id")
+    assert carried.equals(lance.dataset(silver).to_table(columns=["id", "thumbnail"]).sort_by("id"))

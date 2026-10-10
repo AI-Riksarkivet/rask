@@ -118,7 +118,7 @@ def _derivable_blob_column(ds: lance.LanceDataset, blob_cols: list[str]) -> str 
     """Which blob column (if any) gets a thumbnail and an embedding, decided ONCE before the stream.
 
     The derived columns are part of the SCHEMA, so every slice must agree; the probe scans forward for the first
-    non-null payload, the same "first non-null decides" contract as `derivers.derive_artifacts`. A tier that already
+    non-null payload, the same "first non-null decides" contract as `compute._deriver_of`. A tier that already
     carries the artifacts derives nothing, so a second hop carries them forward instead of appending a duplicate
     `thumbnail` (`LanceError(Schema): Duplicate field name`).
     """

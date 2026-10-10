@@ -36,6 +36,7 @@ from typing import Final, Literal
 import lance
 import pyarrow as pa
 from lance import blob_array
+from lance.blob import BlobType
 from lance.commit import CommitConflictError
 from lance.indices.builder import IndexConfig
 from pydantic import BaseModel, ConfigDict
@@ -192,7 +193,7 @@ def plan_window(upstream: lance.LanceDataset, target: TierTarget, version_floor:
 
 
 def carried_blob_column(
-    upstream: lance.LanceDataset, name: str, scanned: list[object], row_ids: list[int], external_base: str | None
+    upstream: lance.LanceDataset, name: str, scanned: list[object] | pa.ChunkedArray, row_ids: list[int], external_base: str | None
 ) -> tuple[pa.Field, pa.Array]:
     """One upstream blob column as a downstream write takes it: the UPSTREAM field, and the values to write.
 
@@ -204,9 +205,35 @@ def carried_blob_column(
     was ``blob_handling="all_binary"`` and the values are the payload bytes. With one it was the default handling and
     the values are descriptors: kind-3 rows are forwarded as pointers and every other non-null row's bytes are read by
     row id (`blobs.carried_blob_values`), because an external base does not make every row external.
+
+    Managed bytes handed over as the scanned Arrow column are wrapped without leaving Arrow (:func:`_bytes_as_blobs`);
+    a list goes through `blob_array`, which copies every payload into Python and back.
     """
-    values = blobs.carried_blob_values(upstream, name, scanned, row_ids, external_base) if external_base else scanned
-    return upstream.schema.field(name), blob_array(values)
+    field = upstream.schema.field(name)
+    if external_base:
+        descriptors = scanned.to_pylist() if isinstance(scanned, pa.ChunkedArray) else scanned
+        return field, blob_array(blobs.carried_blob_values(upstream, name, descriptors, row_ids, external_base))
+    if isinstance(scanned, pa.ChunkedArray):
+        return field, _bytes_as_blobs(scanned)
+    return field, blob_array(scanned)
+
+
+def _bytes_as_blobs(scanned: pa.ChunkedArray) -> pa.Array:
+    """A scanned ``large_binary`` payload column as the blob array `blob_array` would build from the same bytes.
+
+    The storage `lance.blob.BlobArray.from_pylist` builds for inline bytes is ``struct<data, uri, position, size>``
+    with only ``data`` set and the struct null where the payload is; this builds it around the scanned buffer instead
+    of copying each payload through a Python ``bytes`` (measured on pylance 12.0.0: storage-equal to
+    ``blob_array(scanned.to_pylist())`` over ``[10 B, None, 1 MiB]``, and the written tier reads back byte-identical).
+    """
+    data = scanned.combine_chunks() if scanned.num_chunks != 1 else scanned.chunk(0)
+    rows = len(data)
+    storage = pa.StructArray.from_arrays(
+        [data.cast(pa.large_binary()), pa.nulls(rows, pa.utf8()), pa.nulls(rows, pa.uint64()), pa.nulls(rows, pa.uint64())],
+        names=["data", "uri", "position", "size"],
+        mask=data.is_null(),
+    )
+    return pa.ExtensionArray.from_storage(BlobType(), storage)
 
 
 def blob_handling(external_base: str | None) -> Literal["all_binary"] | None:

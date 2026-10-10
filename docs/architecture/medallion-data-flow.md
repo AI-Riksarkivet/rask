@@ -179,10 +179,10 @@ through the handle that read the schema; Lance refuses it when another commit pa
 (pylance 12.0.0), and the tier is re-read rather than written by position. Writing only the rows whose
 content changed is [[LH-212]]'s conditioned merge.
 
-**Derivation reads bytes; carrying does not.** `derive_artifacts` dispatches on the first non-null
-payload, so the probe reads a bounded window (64 rows, `_DERIVE_PROBE_ROWS`) rather than the tier.
-When a deriver *matches*, the full read follows — and that read is unbounded by design, which is why
-derivation at corpus scale belongs on the distributed Ray lane rather than the in-process fallback.
+**Derivation reads bytes; carrying does not.** The deriver is chosen by the column's first non-null
+payload, and the probe reads exactly that one payload: a `filter="<col> IS NOT NULL", limit=1` scan of
+the descriptors, then one read by row id (`compute._deriver_of`). When a deriver *matches*, each slice's
+bytes are read with the slice, so the in-process engine holds a slice, never the tier ([[CP-051]]).
 
 ## 6a. The provenance recipe — what a NEW lane must stamp
 
@@ -195,7 +195,7 @@ the transform declares its shape, the tier does not. Each of the other four earn
 
 | column | why it is generic |
 | --- | --- |
-| `id` | selection is BY id, never by position — `read_blobs`/`take_blobs` drop null rows, so positional pairing misattributes every row after the first gap |
+| `id` | selection is BY id, never by position — a merge, delete or compaction moves rows, so a position names a row only until the next write |
 | `stage` | the cascade multiplexes lanes onto shared topics; a row that cannot say which tier it is in cannot be routed or audited |
 | `lineage` | the producing run's provenance, as Lance JSONB. Gold is what an external consumer takes away, and provenance is unrecoverable once the row leaves the platform |
 | `source_rowid` | row-level provenance to the upstream's stable `_rowid`, **rooted at bronze** — what makes a gold row traceable to its bytes without a join through the graph |

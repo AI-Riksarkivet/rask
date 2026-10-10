@@ -16,9 +16,9 @@ HTR's shape or forking the stage runners. Audio, tabular records and embeddings 
 WHAT IS ACTUALLY GENERIC, and why each one earns its place:
 
 ``id``
-    Row identity within the dataset. Selection is BY id, never by row position — ``read_blobs`` and
-    ``take_blobs`` silently drop null rows, so positional pairing misattributes every row after the
-    first gap (docs/architecture/lance-blob-v2-findings.md).
+    Row identity within the dataset, and the key every tier converges on (``merge_insert("id")``).
+    Selection is BY id, never by row position: a merge, a delete or a compaction moves rows, so a
+    position names a row only until the next write.
 ``payload``
     The workload's own columns. Opaque here by construction: the moment the medallion names a field
     inside it, the medallion has an opinion about the workload again.
@@ -53,14 +53,13 @@ stamp rather than rebuilt beside it.
 
 SCOPED HONESTLY: that now holds for the RAY driver (``scripts/ray_stage_job.py``), which is where the
 gold tier died. It is NOT yet true of every writer. The in-process driver's blob path still builds the
-order by hand — ``medallion/services/compute.py`` ``_carry_forward`` and ``_carry_forward_external``
-append ``source_rowid``/``stage`` themselves, and ``transform_stage`` appends ``lineage`` after
-``derive_artifacts`` — so one media lane yields two silver schemas depending on
+order by hand — ``medallion/services/compute.py`` ``_blob_slices`` appends ``source_rowid``/``stage``
+itself and ``lineage`` after the deriver's artifacts — so one media lane yields two silver schemas depending on
 ``MEDALLION_RAY_ENABLED``:
     in-process : id, payload, source_rowid, stage, thumbnail, embedding, lineage
     ray driver : id, payload, source_rowid, stage, lineage, thumbnail, embedding
 (measured over one real image bronze; they reconverge at gold, which is why it has not bitten). That
-divergence PRE-DATES this change and is untouched by it. Routing those three sites through
+divergence PRE-DATES this change and is untouched by it. Routing that producer through
 ``stamp_stage`` is what would make the sentence above unconditional; until then, read it as the ray
 driver's rule, not the estate's. Promoting a canonical
 order here instead would not have removed an order, it would have added one: a governed row also

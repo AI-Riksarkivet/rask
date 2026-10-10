@@ -9,8 +9,8 @@ the payloads; blob serving, the cascade's column map, the stage job's media lane
 Detection picks no storage version: no writer chooses one from the schema, and every create in
 ``services/``, ``packages/`` and ``scripts/`` names ``data_storage_version="2.2"`` (grep, 2026-09-25).
 
-:func:`read_aligned_table` is the READ counterpart: the one blob read path that keeps
-row alignment when a payload is null (the ``read_blobs``/``take_blobs`` landmine).
+:func:`read_aligned_table` is the READ counterpart: one scan whose blob columns arrive as bytes,
+row-aligned with the tabular columns and with a null payload as ``None`` on its own row.
 """
 
 from __future__ import annotations
@@ -132,8 +132,8 @@ def carried_blob_values(ds: lance.LanceDataset, column: str, descriptors: list[o
     [3, 0, 1, 2, null], and mapping only kind 3 wrote [Blob, None, None, None, None] ([[LH-217]]).
 
     `descriptors` and `row_ids` are one scan's blob descriptors and `_rowid`s, row-aligned. The managed
-    rows are read by row id with `preserve_order=True`, and only they are read: a null row is not
-    selected, so `read_blobs` dropping nulls cannot misalign the result.
+    rows are read by row id with `preserve_order=True`, and only they are read: a null row keeps the `None`
+    its descriptor mapped to, and no external row's object is opened.
     """
     values = [carry_external_descriptor(descriptor, base) for descriptor in descriptors]
     managed = [i for i, d in enumerate(descriptors) if isinstance(d, dict) and d.get("kind") != EXTERNAL_KIND]
@@ -153,27 +153,19 @@ def read_aligned_table(
 ) -> pa.Table:
     """One ROW-ALIGNED scan whose blob-v2 columns arrive as ``large_binary`` bytes, **nulls included**.
 
-    THE null-blob landmine guard (``docs/architecture/lance-blob-v2-findings.md``, re-measured on pylance
-    9.0.0): ``read_blobs`` / ``take_blobs`` silently DROP null rows — 3 selected rows with one null blob
-    return 2 payloads — so pairing their output positionally against a second scan of the tabular columns
-    is length-mismatched the moment ONE payload is null. That is precisely the medallion's own
-    "a failed harvest, a skipped page" case, and it turned a single null page into an opaque
-    ``ArrowInvalid: Column 1 named payload expected length 3 but got length 2`` that the stage runners route as a
-    TRANSIENT failure (RETRY storm → DLQ) even though redelivery can never fix it.
+    ``blob_handling="all_binary"`` returns tabular and blob columns from the same scan, with a null payload as
+    ``None`` on its own row, so a caller pairing payloads with the rest of the row needs no second read to keep them
+    aligned, and the payload list can be handed straight back to :func:`lance.blob_array` (which accepts ``None``
+    entries) to re-wrap a blob column for a 2.2 write.
 
-    ``blob_handling="all_binary"`` is the read path that preserves logical cardinality (measured: 5 rows in,
-    5 rows out, the nulls correctly ``None``), so alignment holds **by construction** — no presence mask to
-    maintain, one scan instead of two, and the payload list can be handed straight back to
-    :func:`lance.blob_array` (which accepts ``None`` entries) to re-wrap a blob column for a 2.2 write.
+    ``read_blobs`` and ``take_blobs`` keep a null row's slot too (measured on pylance 12.0.0: ``read_blobs`` over
+    indices ``[0, 1, 2]`` with a null in slot 1 answers ``[(0, b'a'), (1, None), (2, b'c')]``, and ``take_blobs``
+    answers ``[BlobFile, None, BlobFile]``). They read by row, and are the reads for single-row serving and for a
+    known set of row ids (:func:`carried_blob_values`, :func:`blob_column_resolves`, the viewer's blob endpoints).
 
-    ``limit`` bounds the scan. It exists because a caller that only needs to LOOK at a payload — to
-    decide whether a deriver applies, say — otherwise materialises the whole corpus to answer a
-    question about one row. Unbounded stays the default: every caller that consumes payloads by row
-    position needs all of them, and a silent cap there would misalign the output.
-
-    Prefer this over ``read_blobs``/``take_blobs`` whenever payloads are consumed BY ROW POSITION. The
-    take-path remains correct for single-row serving (``ids=[rowid]``, where an empty result IS the null
-    signal) — see :func:`blob_column_resolves` and the viewer's blob endpoints.
+    THIS IS A WHOLE-RESULT READ: ``to_table`` holds every selected payload at once. ``limit`` bounds it for a caller
+    that needs a few rows; a caller that consumes every payload streams a bounded scanner instead
+    (``medallion.services.compute._blob_slices``, [[CP-051]]).
     """
     return ds.scanner(columns=columns, blob_handling="all_binary", with_row_id=with_row_id, limit=limit).to_table()
 

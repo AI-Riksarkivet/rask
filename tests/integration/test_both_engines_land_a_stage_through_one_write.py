@@ -382,7 +382,7 @@ def test_a_media_rerun_retracts_and_ends_on_its_marked_commit_keeping_the_surviv
 
 
 #: One stage write in a FRESH process, so its VmHWM is the write's own peak and nothing an earlier test allocated.
-#: ``converge`` is the Ray media lane's real path; ``control`` lands the same stream as ONE whole-tier merge.
+#: ``ray`` and ``inprocess`` are each engine's real path; ``control`` lands the same stream as ONE whole-tier merge.
 _PEAK_SCRIPT = """
 import importlib.util, sys
 import lance
@@ -391,8 +391,11 @@ spec = importlib.util.spec_from_file_location("job", job_path)
 job = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(job)
 from service_kit.lakehouse.commit_marker import CommitMarker
-if mode == "converge":
+if mode == "ray":
     job._run_stage(bronze, silver, "silver", {}, marker=CommitMarker(action_id="peak"))
+elif mode == "inprocess":
+    from medallion.services.compute import transform_stage
+    transform_stage(bronze, silver, {}, stage="silver", marker=CommitMarker(action_id="peak"))
 else:
     rows = job._media_rows(lance.dataset(bronze), stage="silver", lineage="", dataset_id="")
     tier = lance.dataset(silver)
@@ -404,18 +407,26 @@ print(next(line for line in open("/proc/self/status") if line.startswith("VmHWM"
 def _peak_mb(mode: str, bronze: str, silver: str) -> int:
     # The allocator bound every lakehouse pod carries (`lance.allocatorEnv`): without it glibc keeps one arena per host
     # core and RSS settles at the sum of their high-water marks, which measures the allocator rather than the write.
-    env = {**os.environ, "RASK_STAGE_MEDIA_BATCH_ROWS": "16", "MALLOC_ARENA_MAX": "2", "ARROW_DEFAULT_MEMORY_POOL": "system", "PYTHONWARNINGS": "ignore"}
+    env = {
+        **os.environ,
+        "RASK_STAGE_MEDIA_BATCH_ROWS": "16",
+        "MEDALLION_STAGE_BATCH_ROWS": "16",
+        "MALLOC_ARENA_MAX": "2",
+        "ARROW_DEFAULT_MEMORY_POOL": "system",
+        "PYTHONWARNINGS": "ignore",
+    }
     out = subprocess.run([sys.executable, "-c", _PEAK_SCRIPT, mode, str(_JOB_PATH), bronze, silver], capture_output=True, text=True, env=env, check=True)
     return int(out.stdout.strip().splitlines()[-1]) // 1024
 
 
-def test_a_media_converge_holds_a_slice_not_the_tier(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("lane", LANES)
+def test_a_media_converge_holds_a_slice_not_the_tier(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, lane: str) -> None:
     """A media re-run over a 256 MiB tier (256 blob rows of 1 MiB) in 16-row slices peaks well under one whole-tier merge.
 
-    Measured on pylance 12.0.0 with 16-row slices and the lakehouse pods' allocator bound: the slice-bounded converge
-    peaked at 0.48 and 0.51 GB VmHWM over 256 and 800 MiB tiers, where one whole-tier merge of the same stream peaked at
-    1.23 and 2.74 GB. Each measurement runs in its own process against the same tier, so the write's shape is the only
-    variable.
+    Measured on pylance 12.0.0 with 16-row slices and the lakehouse pods' allocator bound: the Ray lane's slice-bounded
+    converge peaked at 0.48 and 0.51 GB VmHWM over 256 and 800 MiB tiers, where one whole-tier merge of the same stream
+    peaked at 1.23 and 2.74 GB. The in-process engine is held to the same bound ([[CP-051]]). Each measurement runs in
+    its own process against the same tier, so the write's shape is the only variable.
     """
     bronze, silver = str(tmp_path / "bronze.lance"), str(tmp_path / "silver.lance")
     schema = pa.schema([pa.field("id", pa.int64()), blob_field("payload")])
@@ -427,10 +438,10 @@ def test_a_media_converge_holds_a_slice_not_the_tier(tmp_path: Path, monkeypatch
     monkeypatch.setattr(job, "MEDIA_BATCH_ROWS", 16)
     job._run_stage(bronze, silver, "silver", {})
 
-    bounded = _peak_mb("converge", bronze, silver)
+    bounded = _peak_mb(lane, bronze, silver)
     control = _peak_mb("control", bronze, silver)
 
-    assert bounded * 2 < control, f"the media converge peaked at {bounded} MB, against {control} MB for one whole-tier merge of the same stream"
+    assert bounded * 2 < control, f"the {lane} media converge peaked at {bounded} MB, against {control} MB for one whole-tier merge of the same stream"
 
 
 @pytest.mark.parametrize("lane", LANES)

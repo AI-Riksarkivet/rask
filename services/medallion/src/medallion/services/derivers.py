@@ -73,7 +73,8 @@ def _image_artifacts(table: pa.Table, payloads: list[bytes | None]) -> pa.Table:
             thumbnails.append(media.derive_thumbnail(payload))
             embeddings.append(media.derive_embedding(payload))
         except Exception as exc:
-            raise UnderivableMediaError(f"blob payload at row {index} matched the image probe but failed to decode: {exc}") from exc
+            key = table.column("id")[index].as_py() if "id" in table.column_names else index
+            raise UnderivableMediaError(f"blob payload of row id {key!r} matched the image probe but failed to decode: {exc}") from exc
     table = table.append_column(
         pa.field(_THUMBNAIL_COLUMN, pa.large_binary()),
         pa.array(thumbnails, pa.large_binary()),
@@ -89,42 +90,15 @@ def _image_artifacts(table: pa.Table, payloads: list[bytes | None]) -> pa.Table:
 _DERIVERS: tuple[tuple[Callable[[bytes], bool], Deriver], ...] = ((media.is_image, _image_artifacts),)
 
 
-def is_derivable(payload: bytes) -> bool:
-    """Whether ANY registered deriver would claim this payload.
+def deriver_for(payload: bytes) -> Deriver | None:
+    """The registered deriver that claims this payload, or ``None`` when no deriver does.
 
-    Public because the caller needs to answer "are these bytes worth reading at all" BEFORE reading
-    them. `derive_artifacts` asks the same question of the same `_DERIVERS` table, but only after its
-    caller has already materialised every payload to hand it one — which is the whole cost when the
-    answer is no, and it is no for tabular, audio-until-a-deriver-exists, and anything unrecognised.
+    The decision is made ONCE per stage, from the first non-null payload of the column (a
+    content-homogeneous blob column is the contract), and the deriver it answers is then applied to
+    every slice of the stage. Deciding per slice would let a slice of nulls or of other content leave
+    out the artifact columns its neighbours carry, and the slices land as one stream with one schema.
 
-    Kept here rather than exported as `_DERIVERS` so the dispatch table stays private to the module
-    that owns it: a new modality adds a row, and no caller has to learn the shape.
+    The dispatch table stays private to this module: a new modality adds a row to ``_DERIVERS``, and no
+    caller has to learn the shape.
     """
-    return any(probe(payload) for probe, _ in _DERIVERS)
-
-
-def derive_artifacts(table: pa.Table, blob_payloads: dict[str, list[bytes | None]]) -> pa.Table:
-    """Derive whatever the stage's blob content supports; pass everything else through untouched.
-
-    Skips when the upstream already carries the artifact columns (a later stage carries them forward
-    rather than re-deriving) and when there is nothing to probe (tabular / zero-row / unrecognised
-    content). Dispatch keys on the first NON-NULL payload of the FIRST blob column (sorted —
-    deterministic): a content-HOMOGENEOUS blob column is the contract; a mixed column derives-or-passes by
-    that payload, and a matched-then-undecodable payload raises :class:`UnderivableMediaError` (→ DROP).
-
-    Probing the first NON-null payload matters: a page whose harvest failed is a null blob (R27), and
-    keying dispatch on ``payloads[0]`` would make a whole column's derivation depend on whether row 0
-    happened to land.
-    """
-    if not blob_payloads:
-        return table
-    if _THUMBNAIL_COLUMN in table.column_names or _EMBEDDING_COLUMN in table.column_names:
-        return table
-    payloads = blob_payloads[min(blob_payloads)]
-    first = next((payload for payload in payloads if payload is not None), None)
-    if first is None:  # empty column, or every payload null — nothing to dispatch on
-        return table
-    for probe, deriver in _DERIVERS:
-        if probe(first):
-            return deriver(table, payloads)
-    return table
+    return next((deriver for probe, deriver in _DERIVERS if probe(payload)), None)

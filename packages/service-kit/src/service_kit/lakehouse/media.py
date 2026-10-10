@@ -33,7 +33,7 @@ EMBEDDING_DIMS = 8
 #: drivers append them and both have to recognise a tier that already CARRIES them. The Ray driver
 #: held its own literals and no such check, so a media stage reading a tier its predecessor had
 #: already derived appended a second `thumbnail` and died `LanceError(Schema): Duplicate field name`
-#: — the in-process driver's `derive_artifacts` had the guard, its copy did not.
+#: — the in-process driver's probe (`compute._deriver_of`) has the guard.
 THUMBNAIL_COLUMN = "thumbnail"
 EMBEDDING_COLUMN = "embedding"
 ARTIFACT_COLUMNS: tuple[str, ...] = (THUMBNAIL_COLUMN, EMBEDDING_COLUMN)

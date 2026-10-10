@@ -187,9 +187,8 @@ def write_silver() -> None:
     opts = _storage_options()
     bronze = lance.dataset(_BRONZE, storage_options=opts)
     # ONE row-aligned scan for the keys AND the payload bytes (blobs.read_aligned_table wraps
-    # blob_handling="all_binary"): read_blobs would DROP any null payload and misalign `images` against
-    # `base` — the R27 landmine. This demo seeds three real PNGs, so nothing is null here; using the
-    # aligned read anyway keeps the demo a correct example of the pattern.
+    # blob_handling="all_binary"), a null payload as None on its own row, so `images` pairs with `base`
+    # by position without a second read.
     base = blobs.read_aligned_table(bronze, columns=["id", "payload_src", "payload"])
     rows = base.num_rows
     images = base.column("payload").to_pylist()
