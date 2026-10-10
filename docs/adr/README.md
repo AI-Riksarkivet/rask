@@ -1,13 +1,9 @@
 # Architecture decision records
 
-Extracted from the retired `GOAL-prove-it.md` / `DESIGN-catalog-parity.md` progress docs so code + docs
-can cite a permanent record. Those two files were goal-tracking logs; the *decisions* they contained are
-still load-bearing and are captured below, one section per cited label. Headings preserve the original
-labels (`P1.1`, `#38b`, `#3-A`, …) so existing citations resolve to a stable anchor here.
-
-The two source docs recorded a much larger body of progress prose (proof logs, live-drive transcripts,
-audit dispositions). Only the parts other files actually cite survive here — the durable decision plus its
-rationale, not the day-by-day tracking.
+One numbered file per decision, each with its rationale, so code and docs cite a permanent record.
+The earliest records came out of two goal-tracking logs (`GOAL-prove-it.md`, `DESIGN-catalog-parity.md`);
+only the decisions other files cite were kept, not the day-by-day tracking. A record's title keeps its
+original label (`P1.1`, `#38b`, `#3-A`, …), so a citation by label finds it through the table below.
 
 Each record is one numbered file, `NNNN-<slug>.md`, numbered in the order the decisions were
 recorded; the title keeps the original label. A new decision is a new file with the next number,
