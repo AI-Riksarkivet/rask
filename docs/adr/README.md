@@ -151,3 +151,17 @@ before they had a record here; each names its source document and the date of th
 | [0136](0136-bulk-labeling-is-a-mode-of-the-task-and-columns-carry-recipes.md) |  | Bulk labeling is a mode of the task, and columns carry recipes (2026-08-09) |
 | [0137](0137-model-endpoints-are-ray-serve-discovered-by-the-labeling.md) |  | Model endpoints are Ray Serve, discovered by the `labeling` user_config (2026-08-09) |
 | [0138](0138-an-erasure-rebases-a-pinning-branch-after-a-seven-day-notice.md) | D4 | An erasure rebases a pinning branch after a seven-day notice (2026-10-10) |
+| [0139](0139-training-stays-in-the-producer-and-names-no-engine.md) | CP-044 | Training stays in the lakehouse producer and names no engine (2026-10-10) |
+| [0140](0140-the-engine-adapter-runs-in-the-compute-service.md) | CP-054 | The engine adapter runs in the compute service (2026-10-10) |
+| [0141](0141-the-orphan-scan-reports-and-does-not-gate-the-purge.md) | D13 | The orphan scan reports and does not gate the purge (2026-10-10) |
+| [0142](0142-no-observability-backend-receives-the-object-store-root-key.md) | LH-161 | No observability backend receives the object store's root key (2026-10-10) |
+| [0143](0143-a-project-is-created-by-an-estate-admin-or-an-operator.md) | D2 | A project is created by an estate admin or an operator (2026-10-10) |
+| [0144](0144-storage-credentials-are-vended-to-any-authenticated-client.md) | D9 | Storage credentials are vended to any authenticated client, wherever it runs (2026-10-10) |
+| [0145](0145-the-unused-project-admin-relations-are-deleted.md) | CTL-019 | The unused project admin relations are deleted (2026-10-10) |
+| [0146](0146-an-expired-drop-releases-its-grants-and-its-name.md) | LH-228 | An expired drop releases its grants and its name (2026-10-10) |
+| [0147](0147-produce-asks-the-catalog-where-bronze-lives.md) | D6 | /produce asks the catalog where bronze lives (2026-10-10) |
+| [0148](0148-classification-governs-delivery-not-column-reads.md) | LH-288 | Classification governs delivery, not column reads (2026-10-10) |
+| [0149](0149-one-token-grammar-for-every-door.md) | LH-300 | One token grammar for every door (2026-10-10) |
+| [0150](0150-protection-guards-deletion-not-history-reclaim.md) | LH-300 | Protection guards deletion, not history reclaim (2026-10-10) |
+| [0151](0151-a-boot-bound-secret-rotates-only-for-consumers-rask-owns.md) | D8 | A boot-bound secret rotates only for consumers rask owns in production (2026-10-10) |
+| [0152](0152-service-kit-ships-py-typed-and-skips-report-zeros.md) | PS | service-kit ships py.typed, and skip attribution reports zeros (2026-10-10) |
