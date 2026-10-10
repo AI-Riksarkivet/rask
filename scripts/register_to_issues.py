@@ -21,8 +21,15 @@ The parse, both modes share it:
 - Every register line is accounted for: assigned to an issue, to the map, skipped as closed, or listed in
   the preview as unassigned. A blank line is counted, not listed.
 
-`--apply` is idempotent: labels that exist are kept, an issue whose title already starts with its row key
-is skipped, the map is created once, and an edge GitHub already holds is not posted again.
+Beside the register, owner 2026-10-10: open items from HANDOFF-lakehouse.md (re-checked against the code),
+open_alert.md, open_anno_active.md, TODO.md and lakehouse-e2e-trace.md become `parked` issues keyed
+`PARK-<SOURCE>-<n>`, and each NEW ROWS body of docs/audits/2026-09-26/lakehouse-map.md is appended to its
+parked issue. Every issue with a HIGH/MEDIUM/LOW tag gets `severity:high|medium|low`.
+
+`--apply` refuses unless the plan derived now is byte-identical to the reviewed plan.json, and is
+resumable: labels that exist are kept, the four pre-existing issues gain `parked` only if they lack it, an
+issue whose title already starts with its key is skipped, the map is created once and pinned if it is not,
+and an edge GitHub already holds is not posted again. A secondary rate limit is retried with backoff.
 """
 
 from __future__ import annotations
@@ -61,6 +68,10 @@ STRAY_TRAILERS: dict[tuple[str, str], str | None] = {
 #: Cue matches read by hand on 2026-10-10 and found not to be a dependency, keyed (blocked, blocker).
 EDGE_EXCLUSIONS: dict[tuple[str, str], str] = {
     ("LH-099", "LH-227"): "excluded by hand: the sentence says which row owns the orphan-.txn case, not that LH-099 waits on it",
+    ("LH-330", "LH-164"): "excluded (owner, 2026-10-10): LH-330 waits on decision D6, which LH-164 part 1 names, not on the row",
+    ("LH-256", "LH-283"): "excluded by hand: LH-256's How moves a site a later row touches into that row's commit, so LH-256 closes without LH-283",
+    ("LH-207", "LH-288"): "excluded by hand: LH-207's closes-when names no client-side copy case; LH-288's ruling bounds a hole LH-207 says it only narrows",
+    ("LH-218", "LH-129"): "excluded by hand: LH-218's closes-when is the in-process lane only and says the Ray lane's root credential is LH-129's",
 }
 
 SECTION_LABEL: dict[str, str] = {
@@ -93,6 +104,9 @@ LABELS: dict[str, tuple[str, str]] = {
     "ready-for-agent": ("0e8a16", "Fully specified, ready for an AFK agent"),
     "ready-for-human": ("0e8a16", "Requires human implementation"),
     "wontfix": ("ffffff", "This will not be worked on"),
+    "severity:high": ("b60205", "The row's severity tag: HIGH"),
+    "severity:medium": ("fbca04", "The row's severity tag: MEDIUM"),
+    "severity:low": ("c5def5", "The row's severity tag: LOW"),
     MAP_LABEL: ("000000", "The pinned map: order, short list, rulings, open decisions"),
 }
 
@@ -104,6 +118,7 @@ _WHY = re.compile(r"^- \*Why:\* (.*)$")
 _BLOCKED = re.compile(r"^- \*\*blocked:\*\*")
 _NOT_WORKABLE = re.compile(r"^- \*\*not workable now:\*\*")
 _PARKED_ITEM = re.compile(r"^- ([A-Z]+-\d+(?: \(prod half\))?) · (.+)$")
+_ISSUE_KEY = re.compile(r"^([A-Z]+(?:-[A-Z]+)*-\d+(?: \(prod half\))?): ")
 _PARKED_SEVERITY = re.compile(r"^(HIGH|MEDIUM|LOW|OBSERVATION)\b")
 _TITLE_CRITERION = re.compile(r"^Criterion ([1-5]) proof\b")
 _CLOSED_ITEM = re.compile(r"^- ([A-Z]+-\d+) — ")
@@ -185,6 +200,9 @@ class RegisterLine(BaseModel):
 class Plan(BaseModel):
     source: str
     source_sha256: str
+    extra_sources: dict[str, str] = Field(default_factory=dict, description="path -> sha256 of every non-register source read")
+    notes: list[str] = Field(default_factory=list, description="what the extra-source pass dropped, folded or could not match")
+    severity_unlabelled: list[str] = Field(default_factory=list)
     source_lines: int
     labels: list[LabelSpec]
     issues: list[Issue]
@@ -486,6 +504,248 @@ def _edges(issues: list[Issue]) -> tuple[list[Edge], list[DroppedEdge]]:
     return edges, dropped
 
 
+_BFF_CALL = re.compile(r"\brequestJSON\(")
+
+
+class _Sources(BaseModel):
+    """Every non-register file the extra-source pass reads, with its sha256 for the --apply guard."""
+
+    digests: dict[str, str] = Field(default_factory=dict)
+
+    def lines(self, rel: str) -> list[str]:
+        text = (ROOT / rel).read_text(encoding="utf-8")
+        self.digests[rel] = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        return text.split("\n")
+
+    def excerpt(self, rel: str, first: int, last: int) -> str:
+        return "\n".join(self.lines(rel)[first - 1 : last])
+
+
+def _parked(key: str, title: str, body: str, source: str, *, labels: list[str] | None = None) -> Issue:
+    return Issue(
+        key=key,
+        title=_title(key, title),
+        kind="parked",
+        section="Outside the register",
+        group=source,
+        labels=["parked", *(labels or [])],
+        body=f"{body}\n\n---\n_Parked from `{source}` (owner, 2026-10-10)._",
+        first_line=0,
+        last_line=0,
+    )
+
+
+def _handoff(src: _Sources, notes: list[str]) -> list[Issue]:
+    rel = "HANDOFF-lakehouse.md"
+    out: list[Issue] = []
+    calls: list[str] = []
+    for zone_file in ("storage/storage.ts", "data/catalog.ts"):
+        zrel = f"frontend/microfrontends/lakehouse/src/lib/{zone_file}"
+        calls.extend(f"`{zrel}:{n}`" for n, ln in enumerate(src.lines(zrel), start=1) if _BFF_CALL.search(ln) and "const requestJSON" not in ln)
+    if calls:
+        out.append(
+            _parked(
+                "PARK-HANDOFF-1",
+                "The lakehouse zone still reads the S3 browser and the table history through the BFF JSON helper",
+                f"Re-checked 2026-10-10: still open. BFF `requestJSON` call sites today: {', '.join(calls)}.\n\n{src.excerpt(rel, 9, 30)}",
+                f"{rel}:9-30",
+                labels=["frontend"],
+            )
+        )
+    else:
+        notes.append("HANDOFF §1 (requestJSON sites) dropped: no BFF requestJSON call remains in storage.ts or catalog.ts.")
+
+    pairs = {
+        "createWarehouse": (
+            "frontend/microfrontends/home/src/lib/remote/warehouses.remote.ts",
+            "frontend/microfrontends/lakehouse/src/lib/data/remote/warehouses.remote.ts",
+        ),
+        "checkAccess": (
+            "frontend/microfrontends/home/src/lib/remote/access.remote.ts",
+            "frontend/microfrontends/lakehouse/src/lib/data/remote/access-objects.remote.ts",
+        ),
+    }
+    still: list[str] = []
+    for name, files in pairs.items():
+        sites = [f"`{f}:{n}`" for f in files for n, ln in enumerate(src.lines(f), start=1) if f"export const {name} = " in ln]
+        if len(sites) == len(files):
+            still.append(f"{name} at {' and '.join(sites)}")
+    if still:
+        out.append(
+            _parked(
+                "PARK-HANDOFF-2",
+                "The createWarehouse and checkAccess schemas are hand-copied in the home and lakehouse zones",
+                f"Re-checked 2026-10-10: still open, each declared twice: {'; '.join(still)}.\n\n{src.excerpt(rel, 46, 70)}",
+                f"{rel}:46-70",
+                labels=["frontend"],
+            )
+        )
+    else:
+        notes.append("HANDOFF §2 (duplicated schemas) dropped: createWarehouse and checkAccess are no longer both declared in both zones.")
+
+    shell = ["frontend/packages/ui/src/lib/shell/project-switcher.svelte", "frontend/packages/ui/src/lib/shell/app-shell.svelte"]
+    templated = [f"{f}:{n}" for f in shell for n, ln in enumerate(src.lines(f), start=1) if "href" in ln and ("displayName" in ln or "shellProject" in ln)]
+    if templated:
+        out.append(
+            _parked(
+                "PARK-HANDOFF-3",
+                "The project switcher templates its 'Select project' placeholder into a link",
+                f"Re-checked 2026-10-10: still open at {', '.join(templated)}.\n\n{src.excerpt(rel, 94, 101)}",
+                f"{rel}:94-101",
+                labels=["frontend"],
+            )
+        )
+    else:
+        notes.append(
+            "HANDOFF §5 half B (placeholder as href) dropped, already fixed: the switcher's links come from the membership list and `/projects` "
+            "(project-switcher.svelte:92,105), and the breadcrumb links a project only when one is active (app-shell.svelte:139-141); "
+            "no href is built from the 'Select project' text."
+        )
+    return out
+
+
+def _alert(src: _Sources) -> Issue:
+    rel = "open_alert.md"
+    lines = src.lines(rel)
+    decision = next(n for n, ln in enumerate(lines, start=1) if ln.startswith("## 4. The decision"))
+    end = next(n for n, ln in enumerate(lines, start=1) if n > decision and ln.startswith("## 5."))
+    body = (
+        "Decision: does the estate page? (A) `alerting.enabled: true` with a real `alerting.webhookUrl`; "
+        "(B) GreptimeDB Enterprise triggers replace vmalert; (C) declare that the estate does not page and delete `chart/alerting/`.\n\n"
+        "Owner ruling 2026-10-04: everything downstream of the OTel Collector is out of scope (GreptimeDB is being replaced "
+        "by OpenObserve or the Grafana stack), so no GreptimeDB or vmalert fixes. See also parked XC-118.\n\n"
+        f"{src.excerpt(rel, 1, 7)}\n\n{src.excerpt(rel, decision, end - 1)}"
+    )
+    return _parked(
+        "PARK-ALERT-1",
+        "Decide whether the estate pages: alerting on, GreptimeDB Enterprise, or no paging",
+        body,
+        f"{rel}:1-7,{decision}-{end - 1}",
+        labels=["needs-info"],
+    )
+
+
+def _anno(src: _Sources) -> Issue:
+    rel = "open_anno_active.md"
+    lines = src.lines(rel)
+    checklist = [
+        f"- [ ] {ln.removeprefix('### ').removeprefix('## ')} ({rel}:{n})"
+        for n, ln in enumerate(lines, start=1)
+        if 236 <= n <= 507 and (ln.startswith("### ") or n == 236)
+    ]
+    body = (
+        "Epic: the annotator plane's open gap list. Annotation is outside Phase 1 (owner, 2026-09-28), so this stays parked.\n\n"
+        f"### Recommended order ({rel}:41-61)\n\n{src.excerpt(rel, 41, 61)}\n\n### Gaps\n\n" + "\n".join(checklist) + "\n\n"
+        f"Sections 6 and 7 ({rel}:508-560) are implementation conventions and comparison caveats, not gaps; they are in the full text below.\n\n"
+        f"<details><summary>Full text, {rel}:236-560</summary>\n\n{src.excerpt(rel, 236, 560)}\n\n</details>"
+    )
+    return _parked("PARK-ANNO-1", "Annotation, AI-assist and active-learning gaps (epic)", body, f"{rel}:41-61,236-560")
+
+
+def _todo(src: _Sources) -> Issue:
+    rel = "TODO.md"
+    items: list[str] = []
+    for n, ln in enumerate(src.lines(rel), start=1):
+        if m := re.match(r"^(\d+[a-z]?)\. (.*)$", ln):
+            tracked = " (tracked by LOW-016)" if m.group(1) == "17" else ""
+            items.append(f"- [ ] {m.group(1)}. {m.group(2)}{tracked} ({rel}:{n})")
+    body = f"The owner's UI and product notes, {len(items)} entries, verbatim.\n\n" + "\n".join(items)
+    return _parked("PARK-TODO-1", "UI and product notes from TODO.md (umbrella)", body, rel)
+
+
+def _trace(src: _Sources) -> list[Issue]:
+    rel = "lakehouse-e2e-trace.md"
+    lines = src.lines(rel)
+    start = next(n for n, ln in enumerate(lines, start=1) if ln.startswith("### Unowned recommendations"))
+    recs: dict[int, tuple[int, int]] = {}
+    current: int | None = None
+    for n in range(start + 1, len(lines) + 1):
+        ln = lines[n - 1]
+        if m := re.match(r"^(\d)\. ", ln):
+            current = int(m.group(1))
+            recs[current] = (n, n)
+        elif current is not None and ln.startswith("   "):
+            recs[current] = (recs[current][0], n)
+        elif ln.startswith(("---", "## ")):
+            break
+    titles = {
+        2: "Decide whether a cascade started through the shared app token names an originator",
+        3: "Decide how a Ray stage job that fails after committing records its committed version in lineage",
+        4: "Decide whether table_published notifies watchers",
+    }
+    return [
+        _parked(
+            f"PARK-TRACE-{k}",
+            titles[k],
+            f"Recommendation {k} of `{rel}` (a recommendation, not a ruling or a row):\n\n{src.excerpt(rel, *recs[k])}",
+            f"{rel}:{recs[k][0]}-{recs[k][1]}",
+            labels=["needs-info"],
+        )
+        for k in (2, 3, 4)
+    ]
+
+
+def _fold_lakehouse_map(src: _Sources, issues: list[Issue], notes: list[str]) -> None:
+    """Append each NEW ROWS full body of the 2026-09-26 map to its parked issue; the register says the full text lives only there."""
+    rel = "docs/audits/2026-09-26/lakehouse-map.md"
+    lines = src.lines(rel)
+    first = next(n for n, ln in enumerate(lines, start=1) if ln.startswith("## 1. NEW ROWS"))
+    last = next(n for n, ln in enumerate(lines, start=1) if n > first and ln.startswith("## ") and not ln.startswith("## 1."))
+    parked = {iss.key: iss for iss in issues if iss.kind == "parked"}
+    counted = {iss.key for iss in issues if iss.kind == "counted"}
+    folded: list[str] = []
+    elsewhere: list[str] = []
+    n = first
+    while n < last:
+        m = _ROW_HEAD.match(lines[n - 1])
+        if m is None:
+            n += 1
+            continue
+        end = n + 1
+        while end < last and not (_ROW_HEAD.match(lines[end - 1]) or lines[end - 1].startswith("#")):
+            end += 1
+        stop = end - 1
+        while stop > n and not lines[stop - 1].strip():
+            stop -= 1
+        key = m.group(1)
+        if key in parked:
+            iss = parked[key]
+            row, footer = iss.body.split("\n\n---\n_Migrated", 1)
+            iss.body = f"{row}\n\n## Full finding\n\n_From `{rel}:{n}-{stop}`._\n\n{src.excerpt(rel, n, stop)}\n\n---\n_Migrated{footer}"
+            folded.append(key)
+        else:
+            elsewhere.append(f"{key} ({'an open row' if key in counted else 'not open or parked in the register'})")
+        n = end
+    notes.append(f"lakehouse-map NEW ROWS folded into their parked issues ({len(folded)}): {', '.join(folded)}.")
+    notes.append(f"lakehouse-map NEW ROWS not folded because the row is not parked ({len(elsewhere)}): {', '.join(elsewhere)}.")
+
+
+def _severity(issues: list[Issue]) -> list[str]:
+    unlabelled: list[str] = []
+    for iss in issues:
+        word = iss.severity.replace(",", " ").split()[0] if iss.severity else ""
+        if word in {"HIGH", "MEDIUM", "LOW"}:
+            iss.labels.append(f"severity:{word.lower()}")
+        else:
+            unlabelled.append(f"{iss.key} ({iss.severity or 'no severity'})")
+    return unlabelled
+
+
+def build_plan() -> Plan:
+    plan = _parse(REGISTER.read_text(encoding="utf-8"))
+    src = _Sources()
+    notes: list[str] = []
+    _fold_lakehouse_map(src, plan.issues, notes)
+    plan.issues.extend([*_handoff(src, notes), _alert(src), _anno(src), _todo(src), *_trace(src)])
+    plan.severity_unlabelled = _severity(plan.issues)
+    keys = Counter(iss.key for iss in plan.issues)
+    if dupes := [k for k, c in keys.items() if c > 1]:
+        raise ValueError(f"issue keys are not unique: {dupes}")
+    plan.extra_sources = src.digests
+    plan.notes = notes
+    return plan
+
+
 def _preview(plan: Plan) -> str:
     out: list[str] = [
         "# Register to GitHub Issues: dry-run preview",
@@ -496,7 +756,8 @@ def _preview(plan: Plan) -> str:
         "## Totals",
         "",
         f"- Issues: **{len(plan.issues)}** ({sum(i.kind == 'counted' for i in plan.issues)} counted rows, "
-        f"{sum(i.kind == 'parked' for i in plan.issues)} parked findings), plus 1 map issue.",
+        f"{sum(i.kind == 'parked' and i.first_line > 0 for i in plan.issues)} parked findings from the register, "
+        f"{sum(i.first_line == 0 for i in plan.issues)} parked issues from files outside it), plus 1 map issue.",
         f"- Blocked-by edges: **{len(plan.edges)}**; candidate edges dropped (one end not migrated, or excluded by hand): **{len(plan.dropped_edges)}**.",
         f"- Closed rows skipped (`Left this register`): **{len(plan.skipped_closed)}**.",
         f"- Register lines assigned to nothing: **{len(plan.unassigned)}** non-blank; {plan.blank_lines} blank lines are not listed.",
@@ -509,9 +770,11 @@ def _preview(plan: Plan) -> str:
     counts = Counter(lab for iss in plan.issues for lab in iss.labels)
     out.extend(f"| `{name}` | {counts.get(name, 0)} |" for name in LABELS if name != MAP_LABEL)
     out.append(f"| `{MAP_LABEL}` | 1 (the map) |")
-    sev = Counter((iss.kind, iss.severity or "none") for iss in plan.issues)
-    out += ["", "Severity is not a label (the tracker conventions name none); it stays in each body's tag line. By kind:", ""]
-    out.extend(f"- {kind} {s}: {n}" for (kind, s), n in sorted(sev.items()))
+    out += ["", f"Issues with no `severity:*` label ({len(plan.severity_unlabelled)}): {', '.join(plan.severity_unlabelled)}."]
+    out += ["", "## Sources outside the register", "", "| File | sha256 |", "| --- | --- |"]
+    out.extend(f"| `{path}` | `{digest[:16]}` |" for path, digest in sorted(plan.extra_sources.items()))
+    out += ["", "### What the extra-source pass dropped, folded or left", ""]
+    out.extend(f"- {note}" for note in plan.notes)
 
     out += ["", "## Issue titles", "", "| Key | Labels | Title |", "| --- | --- | --- |"]
     for iss in plan.issues:
@@ -542,13 +805,28 @@ def _preview(plan: Plan) -> str:
     return "\n".join(out)
 
 
+_RATE_LIMITED = re.compile(r"secondary rate limit|rate limit exceeded|submitted too quickly|HTTP 429|abuse detection", re.IGNORECASE)
+_RETRY_AFTER = re.compile(r"retry-after:\s*(\d+)", re.IGNORECASE)
+_MAX_ATTEMPTS = 7
+
+
 def _gh(*args: str, stdin: str | None = None) -> str:
+    """Run gh, backing off on GitHub's secondary rate limit (403/429), honouring a Retry-After when gh prints one."""
     argv = ["gh", *args]
-    # argv is gh plus the plan's own strings and never passes through a shell.
-    done = subprocess.run(argv, input=stdin, capture_output=True, text=True, check=False)  # noqa: S603
-    if done.returncode != 0:
-        raise RuntimeError(f"gh {' '.join(args[:3])} failed ({done.returncode}): {done.stderr.strip()}")
-    return done.stdout
+    delay = 60.0
+    for attempt in range(1, _MAX_ATTEMPTS + 1):
+        # argv is gh plus the plan's own strings and never passes through a shell.
+        done = subprocess.run(argv, input=stdin, capture_output=True, text=True, check=False)  # noqa: S603
+        if done.returncode == 0:
+            return done.stdout
+        err = done.stderr.strip()
+        if not _RATE_LIMITED.search(err) or attempt == _MAX_ATTEMPTS:
+            raise RuntimeError(f"gh {' '.join(args[:3])} failed ({done.returncode}): {err}")
+        wait = float(m.group(1)) if (m := _RETRY_AFTER.search(err)) else delay
+        print(f"rate limited ({attempt}/{_MAX_ATTEMPTS}), sleeping {wait:.0f}s: {err[:160]}", file=sys.stderr)
+        time.sleep(wait)
+        delay = min(delay * 2, 900.0)
+    raise AssertionError("unreachable")
 
 
 def _issue_number(url: str) -> int:
@@ -558,12 +836,23 @@ def _issue_number(url: str) -> int:
     return int(m.group(1))
 
 
+#: Issues that predate the migration; owner 2026-10-10: label them `parked`, do not close them.
+PREEXISTING_TO_PARK = (23, 95, 96, 97)
+
+
 def _apply(plan: Plan) -> None:
+    """Every step checks GitHub before it writes, so a re-run after any failure resumes where the last one stopped."""
     existing_labels = {row["name"] for row in json.loads(_gh("label", "list", "-R", REPO, "--limit", "500", "--json", "name"))}
     for spec in plan.labels:
         if spec.name not in existing_labels:
             _gh("label", "create", spec.name, "-R", REPO, "--color", spec.color, "--description", spec.description)
             print(f"label + {spec.name}")
+
+    for number in PREEXISTING_TO_PARK:
+        held = {row["name"] for row in json.loads(_gh("issue", "view", str(number), "-R", REPO, "--json", "labels"))["labels"]}
+        if "parked" not in held:
+            _gh("issue", "edit", str(number), "-R", REPO, "--add-label", "parked")
+            print(f"#{number} + parked")
 
     listed = json.loads(_gh("issue", "list", "-R", REPO, "--state", "all", "--limit", "5000", "--json", "number,title"))
     number_of: dict[str, int] = {}
@@ -572,7 +861,7 @@ def _apply(plan: Plan) -> None:
         title = str(row["title"])
         if title == MAP_TITLE:
             map_number = int(row["number"])
-        if m := re.match(r"^([A-Z]+-\d+(?: \(prod half\))?): ", title):
+        if m := _ISSUE_KEY.match(title):
             number_of[m.group(1)] = int(row["number"])
 
     for iss in plan.issues:
@@ -587,21 +876,28 @@ def _apply(plan: Plan) -> None:
     if map_number is None:
         url = _gh("issue", "create", "-R", REPO, "--title", MAP_TITLE, "--body-file", "-", "--label", MAP_LABEL, stdin=plan.map_issue.body)
         map_number = _issue_number(url)
+        print(f"map -> #{map_number}")
+    if not json.loads(_gh("issue", "view", str(map_number), "-R", REPO, "--json", "isPinned"))["isPinned"]:
         _gh("issue", "pin", str(map_number), "-R", REPO)
-        print(f"map -> #{map_number} (pinned)")
+        print(f"map #{map_number} pinned")
 
     db_id: dict[int, int] = {}
     for e in plan.edges:
         blocked, blocker = number_of[e.blocked], number_of[e.blocker]
         if blocker not in db_id:
             db_id[blocker] = int(_gh("api", f"repos/{REPO}/issues/{blocker}", "--jq", ".id"))
-        held = {int(x["id"]) for x in json.loads(_gh("api", f"repos/{REPO}/issues/{blocked}/dependencies/blocked_by"))}
+        held = {int(x["id"]) for x in json.loads(_gh("api", f"repos/{REPO}/issues/{blocked}/dependencies/blocked_by?per_page=100"))}
         if db_id[blocker] in held:
             print(f"edge {e.blocked} <- {e.blocker} exists")
             continue
         _gh("api", "--method", "POST", f"repos/{REPO}/issues/{blocked}/dependencies/blocked_by", "-F", f"issue_id={db_id[blocker]}")
         print(f"edge {e.blocked} (#{blocked}) blocked by {e.blocker} (#{blocker})")
         time.sleep(0.5)
+
+
+def _plan_json(plan: Plan) -> str:
+    # Bodies are left out: --apply re-derives them from the sources, and each body_sha256 pins what it will send.
+    return plan.model_dump_json(indent=2, exclude={"issues": {"__all__": {"body"}}}) + "\n"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -612,11 +908,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", type=Path, default=OUT_DIR, help="where the dry run writes plan.json and preview.md")
     args = parser.parse_args(argv)
 
-    plan = _parse(REGISTER.read_text(encoding="utf-8"))
+    plan = build_plan()
     if args.apply:
-        reviewed = json.loads((args.out / "plan.json").read_text(encoding="utf-8"))
-        if reviewed["source_sha256"] != plan.source_sha256:
-            print("refusing: the register changed since the reviewed plan.json; re-run --dry-run and review again", file=sys.stderr)
+        if (args.out / "plan.json").read_text(encoding="utf-8") != _plan_json(plan):
+            print("refusing: the plan derived now differs from the reviewed plan.json; re-run --dry-run and review again", file=sys.stderr)
             return 1
         if plan.unassigned:
             print(f"refusing: {len(plan.unassigned)} register lines are assigned to nothing; see preview.md", file=sys.stderr)
@@ -625,9 +920,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     args.out.mkdir(parents=True, exist_ok=True)
-    # Bodies are left out of plan.json: --apply re-derives them from the register, and body_sha256 pins what it will send.
-    plan_json = plan.model_dump_json(indent=2, exclude={"issues": {"__all__": {"body"}}})
-    (args.out / "plan.json").write_text(plan_json + "\n", encoding="utf-8")
+    (args.out / "plan.json").write_text(_plan_json(plan), encoding="utf-8")
     (args.out / "preview.md").write_text(_preview(plan), encoding="utf-8")
     print(f"{len(plan.issues)} issues, {len(plan.edges)} edges, {len(plan.unassigned)} unassigned lines -> {args.out}")
     return 0

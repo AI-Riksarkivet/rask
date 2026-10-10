@@ -4,8 +4,8 @@ Source `open_backlog_left_new2.md`, 2130 lines, sha256 `dfe0451022a76ee4114eab17
 
 ## Totals
 
-- Issues: **367** (191 counted rows, 176 parked findings), plus 1 map issue.
-- Blocked-by edges: **30**; candidate edges dropped (one end not migrated, or excluded by hand): **25**.
+- Issues: **375** (191 counted rows, 176 parked findings from the register, 8 parked issues from files outside it), plus 1 map issue.
+- Blocked-by edges: **26**; candidate edges dropped (one end not migrated, or excluded by hand): **29**.
 - Closed rows skipped (`Left this register`): **95**.
 - Register lines assigned to nothing: **0** non-blank; 242 blank lines are not listed.
 
@@ -22,389 +22,407 @@ Source `open_backlog_left_new2.md`, 2130 lines, sha256 `dfe0451022a76ee4114eab17
 | `phase-1` | 12 |
 | `phase-1-after-launch` | 116 |
 | `phase-2` | 19 |
-| `frontend` | 7 |
+| `frontend` | 9 |
 | `low` | 37 |
-| `parked` | 176 |
+| `parked` | 184 |
 | `needs-triage` | 0 |
-| `needs-info` | 6 |
+| `needs-info` | 10 |
 | `ready-for-agent` | 0 |
 | `ready-for-human` | 0 |
 | `wontfix` | 0 |
+| `severity:high` | 32 |
+| `severity:medium` | 114 |
+| `severity:low` | 208 |
 | `wayfinder:map` | 1 (the map) |
 
-Severity is not a label (the tracker conventions name none); it stays in each body's tag line. By kind:
+Issues with no `severity:*` label (21): LH-372 (OBSERVATION), LH-373 (OBSERVATION), XC-120 (OBSERVATION), XC-006 (no severity), XC-007 (no severity), XC-008 (no severity), XC-025 (no severity), XC-030 (no severity), XC-027 (no severity), LH-262 (no severity), XC-013 (prod half) (no severity), XC-031 (prod half) (no severity), XC-032 (prod half) (no severity), PARK-HANDOFF-1 (no severity), PARK-HANDOFF-2 (no severity), PARK-ALERT-1 (no severity), PARK-ANNO-1 (no severity), PARK-TODO-1 (no severity), PARK-TRACE-2 (no severity), PARK-TRACE-3 (no severity), PARK-TRACE-4 (no severity).
 
-- counted HIGH: 31
-- counted LOW: 82
-- counted MEDIUM: 78
-- parked HIGH: 1
-- parked LOW: 126
-- parked MEDIUM: 35
-- parked MEDIUM, verdict split 1-1: 1
-- parked OBSERVATION: 3
-- parked none: 10
+## Sources outside the register
+
+| File | sha256 |
+| --- | --- |
+| `HANDOFF-lakehouse.md` | `e5bc4dafd869eeba` |
+| `TODO.md` | `ff6bc51ac0612221` |
+| `docs/audits/2026-09-26/lakehouse-map.md` | `4e17249c75966df4` |
+| `frontend/microfrontends/home/src/lib/remote/access.remote.ts` | `69d33a0794eb1423` |
+| `frontend/microfrontends/home/src/lib/remote/warehouses.remote.ts` | `39f2621112c25968` |
+| `frontend/microfrontends/lakehouse/src/lib/data/catalog.ts` | `0dfa03f505c684de` |
+| `frontend/microfrontends/lakehouse/src/lib/data/remote/access-objects.remote.ts` | `526d712d9ea11818` |
+| `frontend/microfrontends/lakehouse/src/lib/data/remote/warehouses.remote.ts` | `4a30616aab8662fa` |
+| `frontend/microfrontends/lakehouse/src/lib/storage/storage.ts` | `bb764a17210d56de` |
+| `frontend/packages/ui/src/lib/shell/app-shell.svelte` | `90ab879a9478b755` |
+| `frontend/packages/ui/src/lib/shell/project-switcher.svelte` | `212dd8d7a7909775` |
+| `lakehouse-e2e-trace.md` | `95f2c7c8eabf6f1f` |
+| `open_alert.md` | `28cfb1d42aa56c30` |
+| `open_anno_active.md` | `756b471ff9965af3` |
+
+### What the extra-source pass dropped, folded or left
+
+- lakehouse-map NEW ROWS folded into their parked issues (26): LH-282, LH-283, LH-284, LH-285, LH-286, LH-287, LH-288, LH-289, LH-290, LH-291, LH-292, LH-293, LH-294, LH-295, LH-296, LH-298, LH-299, LH-300, XC-098, XC-099, XC-100, XC-101, XC-102, LOW-031, LOW-032, LOW-033.
+- lakehouse-map NEW ROWS not folded because the row is not parked (8): LH-277 (not open or parked in the register), LH-278 (not open or parked in the register), LH-279 (not open or parked in the register), LH-280 (not open or parked in the register), LH-281 (not open or parked in the register), LH-297 (not open or parked in the register), XC-096 (an open row), XC-097 (not open or parked in the register).
+- HANDOFF §5 half B (placeholder as href) dropped, already fixed: the switcher's links come from the membership list and `/projects` (project-switcher.svelte:92,105), and the breadcrumb links a project only when one is active (app-shell.svelte:139-141); no href is built from the 'Select project' text.
 
 ## Issue titles
 
 | Key | Labels | Title |
 | --- | --- | --- |
-| CP-041 | phase-1, blocks-prod, criterion-5 | CP-041: Two values keys name the Ray plane, so a default render prunes one cluster and submits to a Service that does not exist |
-| CP-051 | phase-1, blocks-prod, criterion-3, criterion-5 | CP-051: The in-process engine materialises every upstream payload in the stage runner, including a full read when the derivability probe sees only nulls |
-| CP-056 | phase-1, criterion-3 | CP-056: The lakehouse ships the Ray engine: its adapter, the Ray stage and train jobs, and an engine registry that hard-codes Ray |
-| XC-004 | phase-1, blocks-prod, criterion-2 | XC-004: Every credential is minted or carried by the chart render, and nothing installs the ESO operator the chart needs |
-| XC-003 | phase-1, blocks-prod, criterion-2 | XC-003: GreptimeDB accepts unauthenticated SQL in-cluster, so any pod can erase the `lance_audit` trail |
-| XC-090 | phase-1, blocks-prod | XC-090: Phase 1 has no acceptance proof: nothing defines, drives or schedules the scenario that shows the five criteria hold together on the estate |
-| XC-091 | phase-1, criterion-1 | XC-091: Criterion 1 proof: no drive checks that every version a scenario commits carries exactly one correctly attributed lineage edge |
-| XC-092 | phase-1, criterion-2 | XC-092: Criterion 2 proof: 36 of the 54 spec operations are never round-tripped through the stock client's typed requests, and no drive asserts authorization as a principal × door matrix |
-| XC-093 | phase-1, criterion-3 | XC-093: Criterion 3 proof: decoupling is proven statically only; nothing runs the lakehouse with no workflow engine installed and no Ray reachable |
-| XC-094 | phase-1, criterion-4 | XC-094: Criterion 4 proof: no drive checks a scenario's events for schema, signature, targeting and delivery count, or reads the DLQ afterwards |
-| XC-095 | phase-1, criterion-5 | XC-095: Criterion 5 proof: only two dependency outages are drilled, none ends by proving the estate provenance-clean, and a plain live drive already runs a chaos module against the estate |
-| XC-096 | phase-1, criterion-5 | XC-096: The kind CI stacks cannot come up: pods starve for CPU, the CNPG operator crash-loops without its CRDs, and the "ray-OFF" core lane runs its stage runners in Ray mode |
-| LH-197 | phase-1-after-launch, criterion-1 | LH-197: One lakehouse image serves eleven deployments, so no lakehouse service can ship on its own |
-| LH-178 | phase-1-after-launch, criterion-2, needs-info | LH-178: An erasure cannot complete while a branch pins the fork-point version holding the subject, and no person is told |
-| LH-207 | phase-1-after-launch, criterion-2 | LH-207: Classification is laundered or hidden from the vend check: drop_columns, a same-type re-type, or a label on a nested or branch-local field leaves the raw bytes directly vendable |
-| LH-212 | phase-1-after-launch, criterion-1, criterion-4, criterion-5 | LH-212: Every full-lane stage write rewrites every row and the media lane retracts by run id, so the change feed sees the whole tier as changed and two overlapping runs empty it |
-| LH-215 | phase-1-after-launch, criterion-2 | LH-215: A rename does not carry the table's name-keyed governance: direct grants are revoked silently and a forced rename leaves protection at the old id |
-| LH-218 | phase-1-after-launch | LH-218: The medallion discards the table-scoped write credential it asks for and signs every byte with its estate-wide static key |
-| LH-219 | phase-1-after-launch | LH-219: Maintenance rewrites fall back to the static key or the ambient AWS chain whenever a vend is skipped or refused |
-| LH-270 | phase-1-after-launch | LH-270: An empty per-base credential reference silently falls back to the estate credential |
-| LH-177 | phase-1-after-launch, criterion-2 | LH-177: The vended S3 endpoint is the STS endpoint and cannot be set per warehouse |
-| LH-141 | phase-1-after-launch | LH-141: Nothing repairs a relative Dataset `source_uri`, and the shipped restamp would be refused at the bus door |
-| LH-063 | phase-1-after-launch | LH-063: FGA grants key on Dex's raw `sub`; the ruled `<idp-id>~<claim>` principal key is not implemented |
-| LH-072 | phase-1-after-launch, criterion-2 | LH-072: A vended credential is an untyped dict, so nothing stops its secret and session token reaching a repr, log or error echo |
-| LH-075 | phase-1-after-launch, criterion-1 | LH-075: 'Read by' answers from lineage-page views, not from data reads: two read-audit streams share one name |
-| LH-076 | phase-1-after-launch | LH-076: Every estate-admin door checks `can_observe_events`, one relation named for reading the event feed |
-| CTL-019 | phase-1-after-launch, criterion-2, needs-info | CTL-019: The project admin split (security_admin, data_admin, role_creator) reaches no rung and no code |
-| LH-097 | phase-1-after-launch, criterion-5 | LH-097: Silver copies every managed blob payload from bronze; one base-path commit can carry lineage without the copy |
-| LH-150 | phase-1-after-launch, criterion-2, criterion-5 | LH-150: Five settings let a service spell FGA object ids with a different delimiter |
-| LH-164 | phase-1-after-launch, criterion-2 | LH-164: The cascade head and stage-runner env still compose a second, chart-side home per medallion tier |
-| LH-195 | phase-1-after-launch, criterion-5 | LH-195: With the event lane on by default, the sweep still re-plans the whole estate every 120 s |
-| CP-031 | phase-1-after-launch, criterion-3 | CP-031: No lane is declared, so every stage runner runs the settings-default Ray entrypoint, and the medallion keeps an env fallback beside the TransformSpec |
-| CP-025 | phase-1-after-launch, criterion-5 | CP-025: Dapr workflows are registered unversioned, so a deploy replays in-flight instances against new code |
-| LH-096 | phase-1-after-launch, criterion-5 | LH-096: Ingest opens Lance bare nine times and exports no Lance IO metrics |
-| CP-005 | phase-1-after-launch, criterion-2 | CP-005: An ingest run whose source enumerates nothing still leaves a newly created bronze table and namespace registered behind a COMPLETE |
-| CP-006 | phase-1-after-launch | CP-006: StagingOverlapError's docstring claims the worker can produce a partial overlap |
-| CP-007 | phase-1-after-launch, criterion-2 | CP-007: Ingest signs source reads and fragment writes with the ambient AWS chain whenever no scoped credential resolves |
-| CP-008 | phase-1-after-launch, criterion-5 | CP-008: Ingest has no byte ceiling, and the worker holds each whole object in memory |
-| CP-015 | phase-1-after-launch | CP-015: /train falls back to a composed tier path when the catalog cannot resolve a named feature table |
-| CP-027 | phase-1-after-launch, criterion-5 | CP-027: No test asserts report_stage_outcome records verdict=failed on the counter the alert reads |
-| LH-221 | phase-1-after-launch, criterion-2 | LH-221: Both transaction doors check a table-scoped transaction id against a namespace object nothing seeds, and alter answers SUCCEEDED having applied nothing |
-| LH-222 | phase-1-after-launch, criterion-5 | LH-222: can_get_metadata recurses down through every child while each child walks back up, so a denied describe costs about 4 ms per descendant |
-| LH-223 | phase-1-after-launch, criterion-2 | LH-223: Listings filter through one estate-wide list_objects capped at 1,000, so a principal who reaches more tables sees a small namespace listed short |
-| LH-224 | phase-1-after-launch, criterion-2 | LH-224: Identifier segments are not shape-checked: a '$' in rename's target plants a table in another namespace, empty segments create unnamed objects, and '${' reaches the vended policy |
-| LH-227 | phase-1-after-launch, criterion-2, criterion-5 | LH-227: The trash purge is blocked indefinitely by orphan-scan findings the estate never clears |
-| LH-228 | phase-1-after-launch, criterion-2 | LH-228: In the default chart a drop never completes: the purge is off, and expiry is fused with it, so grants stay live and the name stays locked |
-| LH-229 | phase-1-after-launch, criterion-2, criterion-5 | LH-229: Stock Lance clients opening through the namespace get no credential and silently sign with their ambient one |
-| LH-230 | phase-1-after-launch, criterion-1 | LH-230: The latest-schema query orders by event time, so a back-filled old version becomes the latest schema |
-| LH-231 | phase-1-after-launch, criterion-2 | LH-231: Audit records carry no format version and an open action vocabulary, read doors leave holes, and no test proves every door emits |
-| LH-232 | phase-1-after-launch, criterion-1, criterion-2 | LH-232: Destructive reclaim leaves no per-file audit record, although Lance emits one per deleted file when asked |
-| LH-233 | phase-1-after-launch, criterion-2 | LH-233: No principal record and no door that revokes every tuple naming a departed subject |
-| LH-234 | phase-1-after-launch, criterion-5 | LH-234: Idempotency records are never reclaimed, and the purge's hand-written control-prefix list misses four prefixes |
-| LH-235 | phase-1-after-launch, criterion-2 | LH-235: No test drives the catalog door against a real OpenFGA store, so authorization OUTCOMES are unproven |
-| LH-236 | phase-1-after-launch, criterion-2 | LH-236: A reader of one child can tell which hidden siblings exist: describe answers 403 for them and 404 for absent names |
-| LH-237 | phase-1-after-launch, criterion-2 | LH-237: The route-gate completeness test passes on a docstring, and require_relation silently no-ops without a client |
-| LH-238 | phase-1-after-launch | LH-238: Ambient AWS_* env overrides what a vended or explicit storage dict says: the endpoint loses to AWS_ENDPOINT_URL in about half of processes, and an ambient AWS_ALLOW_HTTP beats the scheme-derived allow_http |
-| LH-240 | phase-1-after-launch, criterion-1, criterion-2 | LH-240: The compaction commit door commits a client RewriteResult whose rows can vanish or be rebound to other stable row ids, and tells a stale caller to re-send |
-| LH-244 | phase-1-after-launch, criterion-4, criterion-5 | LH-244: Compaction and index builds still conflict with stable row ids and the fragment reuse index, so a compaction during _index_lineage fails a stage whose data committed |
-| LH-246 | phase-1-after-launch, criterion-2, criterion-5 | LH-246: Encoding create properties are unvalidated and mis-scoped, so one bad create makes every later write fail or panic |
-| LH-248 | phase-1-after-launch, criterion-2 | LH-248: The index door drops spec parameters, returns ids nobody can track, and forwards a base_tokenizer Lance follows out of its model home |
-| LH-249 | phase-1-after-launch, criterion-1, criterion-3 | LH-249: Stage attestation checks the wrong things and runs nowhere: O7 reads the manifest default, O8 cannot see a demoted blob column, and verify_stage_output has no production caller |
-| LH-250 | phase-1-after-launch, criterion-5 | LH-250: LH-172's removal of LANCE_CPU_THREADS rests on the wrong thread pool: the variable does bound Lance's compute pool on pylance 12 |
-| LH-251 | phase-1-after-launch, criterion-2, criterion-5 | LH-251: Nothing reclaims __manifest: every namespace operation rewrites it as a new version, every old version is kept, and dropped ids stay readable in its history |
-| LH-253 | phase-1-after-launch, criterion-3 | LH-253: Shared maintenance sizes fragments by tier name using page-image row widths, so one modality's shape sizes every bronze tier |
-| LH-271 | phase-1-after-launch, criterion-2, criterion-5 | LH-271: An unknown branch on compaction_plan answers 503 'storage fault' |
-| LH-056 | phase-1-after-launch | LH-056: Record D3 (a table writer writes every branch) and pin both halves |
-| LH-016 | phase-1-after-launch, criterion-2 | LH-016: Nested-namespace `features` copies still occupy `lakehouse-wh` |
-| LIN-002 | phase-1-after-launch | LIN-002: The omission of NominalTimeRunFacet is not recorded, and cron-planned maintenance runs are undecided |
-| LH-074 | phase-1-after-launch, criterion-2, criterion-5 | LH-074: Storage is accounted per warehouse, but no byte quota is enforced |
-| LH-035 | phase-1-after-launch | LH-035: The inline-bytes won't-do is unrecorded, and the `/blobs` door's docstring names a route that does not exist |
-| LH-041 | phase-1-after-launch | LH-041: A tag move is last-writer-wins, and that is not recorded |
-| LH-099 | phase-1-after-launch, criterion-4 | LH-099: A compaction's no-control-event decline is unrecorded |
-| LH-148 | phase-1-after-launch, criterion-1, criterion-4 | LH-148: A parked lineage delivery has no path back to the graph once its cause is fixed |
-| LH-171 | phase-1-after-launch, criterion-1 | LH-171: Nine legacy transform records fail TransformSpec and still sit under `_transforms/` |
-| LH-048 | phase-1-after-launch, criterion-2, needs-info | LH-048: Measured pylance 12.0.0 upstream defects are unfiled: REST GET vs spec POST, and alter_columns' annotation |
-| LH-050 | phase-1-after-launch, criterion-5 | LH-050: The no-query-store decision is unrecorded and its reopen alert evaluates nowhere |
-| LH-079 | phase-1-after-launch, criterion-2 | LH-079: An audit doc still prescribes an x-api-key principal that D1 withdrew |
-| LH-225 | phase-1-after-launch, criterion-1 | LH-225: A crash between the Lance commit and the outbox stage loses the event's author and inputs, although Lance can commit who and which run with the manifest |
-| LH-254 | phase-1-after-launch, criterion-5 | LH-254: The CAS guarantee every commit rests on was last proven on RustFS while the estate runs MinIO |
-| LH-255 | phase-1-after-launch, criterion-2 | LH-255: Live refusal tests check a bare status, never the problem code, the unchanged state, or a cross-tenant leak |
-| LH-256 | phase-1-after-launch | LH-256: Comments the pylance 12 upgrade and the audits proved false, where no other row's commit rewrites them |
-| LH-257 | phase-1-after-launch, criterion-5 | LH-257: On non-stable datasets with a user index, the sweep defers index remap then optimizes, and the fragment reuse index grows a version per compaction |
-| LH-258 | phase-1-after-launch, criterion-2 | LH-258: Lance Namespace conformance defects on edge paths (batched) |
-| LH-259 | phase-1-after-launch, criterion-5 | LH-259: add_columns loses to any write that commits during it, and ingest treats the resulting code 14 as fatal |
-| LOW-029 | phase-1-after-launch, criterion-5 | LOW-029: The catalog's merge_insert door runs Lance's default conflict_retries, so a stale merge re-executes and silently reverts a concurrent edit to the same row |
-| LH-260 | phase-1-after-launch, criterion-1, criterion-5 | LH-260: Clients cannot learn a table's file version, and no estate census of 2.1 or mixed tables has run |
-| LH-261 | phase-1-after-launch | LH-261: The vendored lance_docs bundle predates pylance 12 and contradicts it, while the owner's rule makes it the authority |
-| LH-274 | phase-1-after-launch | LH-274: The trash-window 409 names an undrop route that 404s |
-| LH-276 | phase-1-after-launch | LH-276: The shared catalog client is half-used by the medallion |
-| LH-329 | phase-1-after-launch, criterion-4 | LH-329: /ingest-media starts the cascade itself instead of the arrival event |
-| LH-330 | phase-1-after-launch, criterion-2 | LH-330: The catalog is not the sole committer and announcer of tier writes: /produce, /ingest-media, the in-process lane and the Ray lane write and commit Lance directly, and no writer-tier door commits a client-written fragment set as anything but an App… |
-| XC-005 | phase-1-after-launch, criterion-5 | XC-005: The OpenBao seed runs in the same upgrade wave as the ExternalSecrets that read it, so a new property is absent when its consumers start |
-| XC-001 | phase-1-after-launch | XC-001: A secret rotation does not reach the zones' session key or the infra stores that bind credentials at boot |
-| LH-160 | phase-1-after-launch | LH-160: Zone and infra secrets still arrive through env |
-| LH-129 | phase-1-after-launch | LH-129: Ray jobs sign with a static S3 key and lineage tokens from pod env; they should open tables through the namespace with a projected SA token |
-| XC-049 | phase-1-after-launch, criterion-5 | XC-049: rask's release ships Kueue for a lane it does not use, on CRDs that another team's htr-batch Workloads depend on |
-| XC-009 | phase-1-after-launch | XC-009: No Dapr accessControl on any callee, and the NetworkPolicy prose misstates k3s |
-| FE-002 | phase-1-after-launch, criterion-2 | FE-002: The lineage pages hand-roll fetch state over a pass-through that serves signed-out readers as the zone's service identity |
-| XC-079 | phase-1-after-launch | XC-079: Every daprd authenticates to OpenBao as ROOT in dev and with one shared, unprovisioned static token in prod |
-| XC-080 | phase-1-after-launch | XC-080: Every sidecar'd app can read the tenant ROOT S3 pair, the AGE password and every peer's scoped S3 key from the shared secret/lance bundle |
-| XC-081 | phase-1-after-launch | XC-081: With no secret store configured the chart renders plaintext S3 secrets as literal env, and every hermetic lane boots the catalog on env secrets |
-| XC-083 | phase-1-after-launch | XC-083: The credential vendor's own parent is a static key: AssumeRole is signed with rask-catalog, and the catalog's own IO runs on the same pair |
-| XC-084 | phase-1-after-launch | XC-084: Six static per-service MinIO users (Allow * and */*, keys that never expire) and backup jobs that sign as the tenant ROOT |
-| XC-011 | phase-1-after-launch, criterion-2 | XC-011: Bootstrap is re-applied on every upgrade and leaves no record |
-| XC-031 | phase-1-after-launch, criterion-2, criterion-5 | XC-031: The stage-runner FGA grants come from a manual script, not the chart, and there is no ordered prod install runbook |
-| XC-033 | phase-1-after-launch | XC-033: 14 of 26 live e2e modules run in no CI lane, and the ephemeral lanes that do run are red |
-| LH-161 | phase-1-after-launch | LH-161: GreptimeDB holds the object store's root key pair through envFrom |
-| XC-048 | phase-1-after-launch, criterion-1, criterion-4 | XC-048: The trace-context ruling is unrecorded, request-id is still a second correlation path, and durable records carry no trace id |
-| XC-061 | phase-1-after-launch, criterion-2 | XC-061: The secret store, IdP, AGE and MinIO render unhardened by default behind a dev-off flag, and the NATS stream Job runs as root |
-| XC-067 | phase-1-after-launch, criterion-5 | XC-067: `HttpServerLatencyHigh` cannot fire for any lakehouse service: the eight agent-launched apps never get the bucket View |
-| XC-064 | phase-1-after-launch, criterion-1, criterion-5 | XC-064: No CI lane proves an app's OTLP export reaches the backend through the Collector |
-| XC-058 | phase-1-after-launch, criterion-1 | XC-058: The Collector selects the audit trail by log body text, and nothing pins `audit()` as the only writer to `lance.audit` |
-| XC-082 | phase-1-after-launch, criterion-5 | XC-082: Secrets fetched from the store are cached for the life of the process, so a rotation made in OpenBao reaches no running pod |
-| XC-085 | phase-1-after-launch, criterion-5, needs-info | XC-085: The remaining operators (nvdp, kuberay, nats, dapr, cnpg, openfga, greptimedb, perses) still ride in the app release, and the recorded no-split decision rests on a store the estate has left |
-| XC-112 | phase-1-after-launch, criterion-2 | XC-112: rask ships no Kyverno policy, so nothing at admission enforces the controls XC-076, XC-061 and XC-009 put in the chart |
-| XC-017 | phase-1-after-launch | XC-017: The zero-trust §B gap list is not mapped to owning rows |
-| XC-032 | phase-1-after-launch, criterion-5 | XC-032: values-prod.yaml names no registry or digests, and its example keys pin nothing |
-| XC-013 | phase-1-after-launch, criterion-5 | XC-013: pg dumps land in the store they back up, VolumeSnapshots are never pruned, and the snapshot selector matches no live PVC |
-| XC-039 | phase-1-after-launch | XC-039: Thirteen live e2e modules probe /livez once with a 5 s timeout, and e2e_live.sh passes on skips |
-| XC-109 | phase-1-after-launch, criterion-3 | XC-109: ingest and controlplane are in neither import-linter decoupling contract, so criterion 3's static gate does not see the bronze landing |
-| CTL-001 | phase-1-after-launch, criterion-2 | CTL-001: The gateway proxies the catalog's and lineage's whole root: unlisted paths such as /dapr/subscribe and the demo UI answer at the edge |
-| CTL-006 | phase-1-after-launch, criterion-5 | CTL-006: The gateway has no body cap, rate limit or access line, and lance-plane services built by the factory accept unbounded bodies |
-| CTL-022 | phase-1-after-launch, criterion-2 | CTL-022: Notifications has no door that erases a subject's inbox, prefs, cursor and watch enrolment |
-| CTL-025 | phase-1-after-launch, criterion-5 | CTL-025: The inbox row cap is enforced only by a 6-hourly reminder, so each delivery rewrites an unbounded partition between ticks |
-| CTL-023 | phase-1-after-launch, criterion-5 | CTL-023: A sidecar transport failure on an inbox or watch actor call answers 500 instead of 503 |
-| CTL-024 | phase-1-after-launch | CTL-024: The rask-notifications skill contradicts services/notifications on the reason set, line refs and actors |
-| CTL-026 | phase-1-after-launch, criterion-5 | CTL-026: Every 30 s reconcile tick re-reads the newest 500 full OpenLineage payloads, however few are new |
-| CTL-027 | phase-1-after-launch, criterion-4 | CTL-027: A group-grant fan-out stops at the first failing member, so later members are never told |
-| CP-032 | phase-2 | CP-032: Six of the nine runners have no uv.lock and seven have no installable `runner` entrypoint |
-| CP-037 | phase-2, criterion-1, criterion-4 | CP-037: Compute-plane lineage lanes emit fire-and-forget: no START, no terminal-once, no staging |
-| CP-043 | phase-2, criterion-5 | CP-043: The Ray cluster is head-only: every task and every driver runs in the pod that holds GCS |
-| CP-010 | phase-2, criterion-2 | CP-010: Ray dashboards serve the job and cluster APIs with no token, rask's own chart-rendered head included |
-| LH-010 | phase-2, criterion-1, criterion-3 | LH-010: The htr runner's output lands outside the catalog as loose ALTO files, not as a governed table |
-| CP-036 | phase-2, criterion-5 | CP-036: Ray GCS job records are lost on a head restart: the RocksDB toggle ships off and, if enabled, drops the head's whole env |
-| CP-042 | phase-2, criterion-3, criterion-5 | CP-042: The hand-applied `ray-lance-head` still runs beside the chart's RayCluster, and defaults, docs and the e2e lane still point at it |
-| CP-046 | phase-2, criterion-5 | CP-046: The Ray adapter advertises CANCEL but sends DELETE, which Ray refuses for a running job, and the terminate doors never call it |
-| CP-050 | phase-2, criterion-5 | CP-050: The Ray head image bypasses `rask.image`, so pins never reach it and the rendered stem differs from the running one |
-| CP-014 | phase-2, criterion-1 | CP-014: submit_or_reattach reports 'reattached' after reading only the existing job's status, never its program |
-| CP-018 | phase-2, criterion-5 | CP-018: Ray core, driver and Serve replica logs stay as files in the head container; nothing ships them |
-| CP-017 | phase-2, criterion-5 | CP-017: RayMetricsMissing's runbook names a deleted file, and the external ray-pods scrape spec survives only in the register |
-| CP-003 | phase-2, criterion-2 | CP-003: The `/api/serve` proxy forwards any GET under /api/serve/, although every consumer reads only `applications/` |
-| CP-022 | phase-2 | CP-022: Two Ray Jobs API clients (compute's SDK in ray-kit, the medallion's httpx one), and compute's private 1536Mi tier rests on a cause that is gone |
-| CP-002 | phase-2 | CP-002: The live compute pod runs a 2026-09-02 image without DiagnosticFormatter, so its extra= diagnostics are dropped from stdout |
-| CP-004 | phase-2, criterion-2 | CP-004: No recorded ruling on execution governance, and compute shows every job's record and driver log to any estate reader |
-| CP-053 | phase-2, needs-info | CP-053: Kueue cannot admit stage jobs: the Ray adapter submits to a standing cluster through the Jobs API, so no per-stage object exists |
-| XC-002 | phase-2 | XC-002: Delete the hand-applied Ray S3 Secret and align two skills with the recorded secrets ruling |
-| LH-239 | phase-2, criterion-1, criterion-2 | LH-239: Resetting a legacy (non-stable) destination wipes its directory around the catalog, destroying every version and tag with no drop, lineage or trash |
-| LH-127 | frontend, criterion-4, criterion-5 | LH-127: The admin streams view flags a missing expected consumer but never an unexpected durable |
-| FE-005 | frontend, criterion-5 | FE-005: No zone surface shows a cascade-dropped namespace's deadline or offers its undrop |
-| FE-012 | frontend | FE-012: Zones name the gateway through four env vars, two of them legacy LANCE_* names defaulting to the lineage port :8001 |
-| FE-007 | frontend | FE-007: The admin control-events live query yields only on change, so an edge idle timeout severs it |
-| FE-008 | frontend | FE-008: Six lakehouse-zone write sites re-read their list after the write, although most commands already refreshed it |
-| FE-011 | frontend | FE-011: Estate Settings names new-project defaults and credentials, but neither has anything behind it |
-| FE-009 | frontend, criterion-2 | FE-009: Project and warehouse have no per-object grants door or Access tab |
-| LOW-027 | low, criterion-2 | LOW-027: The explorer trio finds and opens the corpus off a volume or bucket root with a deployment-wide key, not through the catalog |
-| LOW-003 | low | LOW-003: The annotator canvas writes a Lance version per save through the per-row path instead of the task draft |
-| LOW-009 | low, criterion-4 | LOW-009: No event marks an annotation publish's terminal outcome, and a crash-converged retry emits nothing |
-| LOW-002 | low, criterion-5 | LOW-002: A consensus send with a 62-64 character task_id mints replica ids no route can address, wedging that project's publish |
-| LOW-010 | low, criterion-1 | LOW-010: Publish stamps the project's current ontology instead of each task's captured one, and ontology modality is never checked |
-| LOW-017 | low, criterion-5 | LOW-017: Studio inference uploads are buffered whole in the SvelteKit zone pod |
-| LOW-018 | low | LOW-018: The studio model picker invents an HTTP route for Serve apps that have none and presents dashboard status as callability |
-| LOW-022 | low | LOW-022: The flows service has no Serve origin in-cluster: model nodes POST to the pod's own localhost:8000 |
-| LOW-011 | low, criterion-2, criterion-3 | LOW-011: Batch-labeling submit is refused at the annotator's door, and no governed runner sits behind it |
-| LOW-012 | low | LOW-012: The annotator's API and FGA model still say project/task where every screen says labeling task/item |
-| LOW-014 | low | LOW-014: Every send surface stamps items as images, and reading order is a typed integer |
-| LOW-019 | low | LOW-019: The flows durable lane has never run a flow in-cluster, and a failed schedule silently degrades to inline |
-| LOW-020 | low | LOW-020: Studio's node vocabulary is a second hand-kept list beside /flows/catalog, and nothing pins the two together |
-| LOW-021 | low | LOW-021: Studio flows cannot read a governed table, and show no per-node progress while a run is live |
-| LOW-024 | low | LOW-024: The EAD archive_catalog table has no governed landing, and search cannot serve a catalog table anyway |
-| LOW-026 | low | LOW-026: The search descriptor keeps a legacy `search` alias beside `searches`, with fallbacks on both planes, and joins only on identity |
-| LOW-016 | low, needs-info | LOW-016: No annotation export: COCO/YOLO/CSV/HF serializers and the exporter they would live in do not exist |
-| LOW-028 | low, criterion-2 | LOW-028: The model registry's authorization on `table:models$<model>` is not recorded, so the opaque-asset question will be asked again |
-| XC-043 | low | XC-043: Architecture docs, CLAUDE.md and code comments still present retired services, zones, `/default/` bases, a protocol-specific ingest door and a dataflow the code no longer runs as live |
-| LH-168 | low, criterion-2, criterion-5 | LH-168: The live `lance-secrets` Component lacks the search and viewer scopes, and nothing detects Component drift |
-| XC-041 | low | XC-041: The dev seed pins labeling items to literal keys and `dataset_version: 1`, and assumes release `rask` and fixed ports |
-| FE-013 | low | FE-013: The annotator /bulk grid has no LASSO embedding-selection mode (owner three-mode ruling 2026-08-09) |
-| LOW-030 | low, criterion-5 | LOW-030: The search and viewer read plane runs lancedb 0.34's bundled Lance 8.0 core, four majors behind the pylance 12 writers |
-| XC-035 | low | XC-035: Single-component test files live in tests/unit instead of their component's testpath |
-| XC-036 | low, criterion-5 | XC-036: Nothing stops a release whose subchart Secret names and hosts do not match what the chart renders |
-| XC-046 | low | XC-046: Stale remote branch `claude/flyte-2-dapr-audit-19cyc2` still on origin |
-| XC-055 | low, criterion-5 | XC-055: Helm revisions cannot be told apart (chart version fixed at 0.3.0), and the recovery verbs run bare helm outside the seam |
-| XC-060 | low | XC-060: A pyproject dependency edit without a re-lock passes the unit gate, because the gate re-locks inside its container |
-| XC-062 | low | XC-062: Nothing proposes dependency bumps: CVE scans detect, and nothing remediates |
-| XC-063 | low | XC-063: `make bootstrap` keeps the tool version it downloaded first, so raising a pin changes nothing on existing hosts |
-| XC-070 | low, criterion-5 | XC-070: The estate has never been brought up on arm64 |
-| XC-071 | low | XC-071: No suite-wide gate refuses a test that builds a real Dapr ActorProxyFactory, and a stray fake sidecar hides CI's refused-port condition locally |
-| XC-086 | low, criterion-5 | XC-086: The chart has no values.schema.json, so a misspelled or empty key reaches a pod |
-| XC-037 | low | XC-037: About 24 chart gates still shell out to `helm template` themselves instead of using chart_render.py |
-| XC-052 | low, criterion-5 | XC-052: A hand-applied, Helm-labelled rask-assist pair and a hand-set annotator env sit outside the release |
-| CP-019 | low, criterion-5 | CP-019: Serve tracing is wired on the chart head but never observed, and a sealed-runner replica cannot import the span-processor path |
-| CTL-013 | low, criterion-2 | CTL-013: The Python gateway still fronts every /api/* row |
-| LH-282 | parked | LH-282: The lineage reconcile never reads a branch: its version axis lists main only, so a lost branch-write event is never back-filled and never reported |
-| LH-283 | parked | LH-283: Branch create leaves the name grammar to Lance, which writes a branch dataset before refusing the name; the residue cannot be deleted, is maintained forever, and makes the valid name it collapses to answer 500 |
-| LH-284 | parked | LH-284: Five tag resolvers drop the tag's branch, so describe?tag, the publish guard, published_version, the model 'blessed' tag and the cascade-lag gauge read a branch tag as main@N |
-| LH-285 | parked | LH-285: pylance 12 panics reading a Clone transaction, and the history door, the /commit replay guard, the ingest marker probe, the orphan scan and the lineage reconcile do not guard against it |
-| LH-286 | parked | LH-286: Nothing reclaims bytes in a table's non-root data base: an overwrite strands whole base files, and deleted or updated rows stay in base fragments forever |
-| LH-287 | parked | LH-287: The query-plane doors pass Lance's raw error through: caller mistakes at /query, /explain_plan and /analyze_plan answer 500, and 4xx details echo storage paths and Lance's build paths |
-| LH-288 | parked | LH-288: `rask.classification` changes only how bytes are delivered, and no ruling says so: any can_read_data holder queries, filters, FTS-searches and counts a classified column through the catalog |
-| LH-289 | parked | LH-289: The catalog resolver ranks a suffix by its trailing word, so a new owner-tier door ending in a read word would ship at the reader rung |
-| LH-290 | parked | LH-290: Platform buckets are not reserved, so a project admin may register, or purge, a warehouse over rask-observability or a minio.buckets entry |
-| LH-291 | parked | LH-291: A MISCONFIGURED stage is counted, logged and acked as a quality block, and every refused promotion names the lane key rather than the table the run wrote |
-| LH-292 | parked | LH-292: Ingest's GET /sources has no door, and GET /ingests authenticates only when the page has rows: anonymous callers read the source registry and an empty run list |
-| LH-293 | parked | LH-293: Maintenance addresses a table by the id derived from its location, so a renamed table is refused on every tick forever |
-| LH-294 | parked | LH-294: Nothing reports MemWAL state: a table carrying the `__lance_mem_wal` index is not flagged, and its `_mem_wal/` bytes are never reclaimed or read |
-| LH-295 | parked | LH-295: The catalog runs the dir backend in compatibility mode by default, and its list door dir-scans the root, so a Lance dataset written straight to the catalog root is listed as a table nothing governs |
-| LH-296 | parked | LH-296: The catalog guard authorizes on scope['path'], so serving it under a root_path would skip every FGA check |
-| LH-298 | parked | LH-298: Producer-door answer hygiene: a malformed ?project= is reported twice, a 502 carries the transport error text, and a stage runner's non-JSON error body becomes a 500 |
-| LH-299 | parked | LH-299: The TRAIN lane sends empty ORIGINATOR, TRAIN_PROJECT and OTEL_* values to Ray |
-| LH-300 | parked | LH-300: Two inconsistencies need one recorded answer each: /train's dot-free token grammar, and whether protection guards maintenance/run's history reclaim |
-| XC-098 | parked | XC-098: Lineage, ingest and the medallion producer write no authn audit record for a bearer they refuse or verify |
-| XC-099 | parked | XC-099: `make seed-dev`'s lakehouse step has failed on every run since 2026-09-13: the bronze seed registers with OVERWRITE, which the register door refuses, and leaves an ungoverned bronze dataset behind |
-| XC-100 | parked | XC-100: Literal copies of the platform bucket names do not follow their values |
-| XC-101 | parked | XC-101: A malformed RASK_OIDC_DISCOVERY_URL escapes verify untyped, and it is answered 500 and audited as the caller's bad token |
-| XC-102 | parked | XC-102: Production code carries 15 `ty: ignore` comments and 14 `@dataclass` models, against the Python house rules |
-| XC-103 | parked | XC-103: docs/lineage-openapi.json carries five `$ref`s to schemas it does not define, so the lineage TS client cannot be regenerated and `make openapi` stops before the catalog step |
-| LOW-031 | parked | LOW-031: A caller's raw `where` of about 650 OR terms crashes the explorer search process (SIGSEGV) on lancedb 0.34, on both the FTS and vector paths |
-| LOW-032 | parked | LOW-032: The viewer's Cypher REPL has no work bound: one disconnected MATCH pins the pod's CPU and approaches its memory limit |
-| LOW-033 | parked | LOW-033: The explorer's Phrase mode fails on every FTS index built with defaults: it answers 400 'search failed' in search and 500 at the catalog's /query |
-| LH-301 | parked | LH-301: A write body that is valid Arrow but that Lance will not store answers 500 code 18 at create, insert and merge_insert: a list_view or run-end-encoded column (`LanceError(Schema): Unsupported data type`) and a `lance.blob.v2` value whose external u… |
-| LH-302 | parked | LH-302: Create's rollback (`_write_blob_into`) catches Exception only, so a pylance `PanicException` (a BaseException) during the write skips it and leaves a declared table with no dataset (`describe` answers, `open` 404s); measured with an unaligned deci… |
-| LH-305 | parked | LH-305: The catalog's control-event broadcast consumer is ephemeral by design (one per replica, no queue group), so a NATS restart removes it and the sidecar does not re-create it: its `GET /v1/events` ring buffer and cross-replica binding-cache invalidat… |
-| XC-105 | parked | XC-105: The annotator's import converts a VALID body row by row (`to_pylist`, then `Shape`), and decimal, odd-timezone timestamp and duplicate-struct-name columns raise there and answer 500 |
-| XC-106 | parked | XC-106: `scripts/k3s-pins.sh --check-only` stages `chart/values-live-pins.yaml.tmp` INSIDE the chart directory and removes it on exit, so a `helm template chart/` running at the same moment fails with `lstat ... .tmp: no such file or directory`; measured… |
-| XC-107 | parked | XC-107: The annotator's task import materialises every row an honest body carries through `to_pylist` before any row check, so a small body still exhausts the pod: a 440-byte zstd body of 30M booleans grew it 5.8 GB, and a value shared by many rows is cop… |
-| LH-306 | parked | LH-306: pylance 12's RestNamespace sends no Content-Type on create, insert or merge_insert (measured on the wire), and the catalog's write load-shed recognises a bulk write only by `content-type: application/vnd.apache.arrow.stream` (load_shed.py:41-49),… |
-| LH-307 | parked | LH-307: 38 lineage Dataset nodes name 18 buckets that no longer exist (test and proof warehouses such as `e2edel-*` and `durproof-wh`, and the retired `lakehouse` and `landing` buckets); the reconcile reports each as `ungoverned` with a NoSuchBucket reaso… |
-| LH-308 | parked | LH-308: A tag or branch created while a version reclaim runs is not seen by it: Lance reads the refs once per `cleanup_old_versions` and no door serializes `tags/create`, `tags/update` or `branches/create` with a reclaim, so the new ref names a deleted ve… |
-| LH-309 | parked | LH-309: `auth.fgaModelId` (`RASK_FGA_MODEL_ID`, values.yaml:968, rendered in six places across five templates) still pins every service to one model id and skips the by-body resolve, so set, it puts every image on one body whether its code carries it or n… |
-| LH-310 | parked | LH-310: A non-fatal service whose resolve runs out its 120 s deadline (OpenFGA down at boot, or the carried model not yet written) builds no FGA client and answers 503 on its gated doors until the pod restarts; nothing retries the resolve |
-| LH-311 | parked | LH-311: Five scripts and two JS e2e drivers still write or check tuples against the store's newest model (they name no model, or, in auth_chain.sh, `authorization_models[0]`), and three of them pick `stores[0]` or the newest store of any name: e2e_stack.s… |
-| LH-312 | parked | LH-312: fga_seed_demo.py's `_TUPLE_RE` strips double quotes but keeps single quotes, so 21 of the 92 model.fga.yaml fixture tuples (for example `'namespace:depth_1'`) go out quoted and are refused; identical before LH-201 |
-| LH-313 | parked | LH-313: Every uvicorn runs as PID 1: the chart's `command` replaces the images' tini ENTRYPOINT (rest-catalog, gateway and notifications dockerfiles), so the kernel drops uvicorn's closing re-raise of SIGTERM and thread-bound work (maintenance's execute_u… |
-| LH-314 | parked | LH-314: On pod termination the Dapr sidecar's `dapr.io/block-shutdown-duration` (20 s) ends before the app's drain (preStop 5 s + bound 25 s, or 105 s on maintenance), against the chart's own "the sidecar must outlive the app's drain" invariant; a respons… |
-| LH-315 | parked | LH-315: A refused second drain arm inside the notifications and both medallion lifespans (which bind `_disarm_drain` inside `try:`) surfaces as UnboundLocalError and skips the rest of their `finally` (Dapr client close, workflow runtime shutdown); reachab… |
-| LH-317 | parked | LH-317: A backslash spelling (`sub\..\..\victim`) is judged the table's own and reads another table only on `file://` roots, where pylance's URL parser splits on `\`; on `s3://` it reads nothing, and the register door already refuses `\..\` |
-| LH-318 | parked | LH-318: The sweep's trash exclusion keys `_trash/` records by the encoded spelling, so a recoverably dropped table with a non-ASCII or `%` name is not excluded and the sweep may rewrite bytes an undrop would restore |
-| LH-319 | parked | LH-319: A purge of a table with a non-ASCII or `%` name reclaims none of its bytes: pylance 12's dir namespace writes `.lance-reserved` under the literal encoded prefix while the data lands under the decoded one, so `delete_location` refuses or deletes no… |
-| LH-320 | parked | LH-320: The per-dataset reconcile door (`GET .../reconcile`) returns `unrecorded_bases: []` without running the drift axis, so it answers "found nothing" for a table the sweep reports as drifting |
-| LH-321 | parked | LH-321: A branch's owning root is looked up among readable datasets only, so a transient failure to open the parent yields one tick's false `maintenance_unrecorded_base` finding and leaves the parent unprotected for that tick |
-| LH-322 | parked | LH-322: `LINEAGE_CONTROL_ROOT` follows `maintenance.controlRoot` but the catalog's control root is fixed to the estate bucket, so an operator who moves maintenance's control root would make lineage and maintenance read base records where the catalog never… |
-| LH-323 | parked | LH-323: Native data ops that carry no version (`get_table_stats`, main-arm insert/merge_insert, `alter_table_backfill_columns`, index creation) are judged on the latest manifest, so a base planted between the judge and the native open is read or written u… |
-| XC-108 | parked | XC-108: About 29 surviving test files in catalog, medallion, maintenance and lineage still read source (`inspect.getsource`, `ast.parse`), and a few carry `ty: ignore` (four in services/medallion/tests/test_promotion_read_is_gated.py), both of which CLAUD… |
-| XC-110 | parked | XC-110: service-kit's optional `lancekit` extra pulls lancedb 0.34 (packages/service-kit/pyproject.toml:50-60) only for the search and viewer read plane; catalog, lineage and maintenance declare `[governed,lakehouse]` yet import `service_kit.lancekit` mod… |
-| LH-325 | parked | LH-325: Maintenance reconcile and repair carry annotator-specific orphan checks (`OrphanedAnnotationTask`, the `annotation_project` edge; reconcile.py:289,607-678, repair.py:189,218), so the lakehouse knows the annotator; LOW-012 only renames them |
-| LH-326 | parked | LH-326: The Ray lane's tier-write semantics in scripts/ray_stage_job.py: full-lane merges use an unconditioned `when_matched_update_all()` and the media lane merges per batch then retracts by run id (:291,570; LH-212's Ray half), the delta lane checks has… |
-| LH-327 | parked | LH-327: Two Ray-lane appends still name a file version: ray_stage_job.py:852 and ray_lance_job.py:95 pass data_storage_version to `write_lance(mode='append')`, safe by construction today (LH-260's Ray half) |
-| LH-328 | parked | LH-328: The Ray stage and train runtime_env set no LANCE_CPU_THREADS, so Lance's compute pool is host-sized in Ray jobs (LH-250's Ray half) |
-| LOW-034 | parked | LOW-034: Vector index sizing is dropped on both index paths: the queued path passes only the metric (`_pylance_kwargs`, indices.py:322), the sync path's native create_table_index ignores num_partitions, num_sub_vectors, m and ef_construction (indices.py:8… |
-| LOW-035 | parked | LOW-035: Two annotator write sites re-read their list after a command that already refreshed it (ProjectsLanding:277, tasks/[id]:161), and fireProjectEvent does not refresh its query (projects.remote.ts:198-209); FE-008's annotator half |
-| LOW-036 | parked | LOW-036: The `e2etrain*` datasets written by ray_train_job.py (2026-09-07 to 09-14) sit under the model-registry root; at helm rev 249 the reconcile's `ungoverned_live` class names eight `models$e2etrain*` and the catalog answers them not found. Reap them… |
-| LOW-037 | parked | LOW-037: Explorer still launches under `opentelemetry-instrument` (chart/templates/explorer.yaml:88), so its latency buckets stop at 10 s and HttpServerLatencyHigh cannot fire for it (XC-067's viewer half) |
-| LOW-038 | parked | LOW-038: The viewer dereferences external blob pointers without the caller's scoped credential (LH-209's viewer half) |
-| XC-111 | parked | XC-111: tests/unit/repo_tree.py has no importer left once the repo-shape gates were pruned (XC-089 and LH-316 dropped), so it is dead code for deletion |
-| LH-331 | parked | LH-331: The medallion and notifications DLQs only park: both routes count, log and ack and republish nothing (medallion api/dlq.py:30-75; notifications api/dlq.py:32-56), the parks alert (MedallionCascadeDeadLettering, chart/alerting/rules.yml:329; Notifi… |
-| XC-113 | parked | XC-113: The audit trail has no immutable copy: `lance.audit` records reach only GreptimeDB (the audit pipeline's one exporter, otel-collector.yaml:574-576) under a 400-day TTL (values.yaml:3336), XC-003's credential stops anonymous deletes but not a holde… |
-| LH-332 | parked | LH-332: Erasure reaches one table only and tells the graph nothing: erase() follows neither DERIVED_FROM nor source_rowid into the tiers derived from the erased table, and its commits (branch deletes, main delete, compaction, reclaim) emit no lineage even… |
-| LH-333 | parked | LH-333: Stage runs name no input version: the medallion builds its inputs bare (medallion schemas/events.py:379), lineage sets a READ version only when one is sent (lineage services/repository.py:355-365), and DERIVED_FROM is a dataset-to-dataset edge wit… |
-| LH-334 | parked | LH-334: One ingest commit is announced twice: the catalog emits the /commit write (data.py:220-229) and ingest's own COMPLETE also names the table with its version (ingest lineage.py:85-86,412-438), so one version gets two WROTE edges from two runs, again… |
-| LH-335 | parked | LH-335: The stage lanes' lineage-index rebuild commits a `CreateIndex` version of its own under the stage identity that no event names (medallion services/compute.py:180-186, the event carries the data version captured before it), while XC-091 clause (b)… |
-| XC-114 | parked | XC-114: Audit records carry no actor type (person, service, system) and no privilege source, and a refused event signature is only logged (lineage api/fga_deps.py:335, `log.info`), never audited; Lakekeeper records both on every audit record and audits si… |
-| CP-054 | parked | CP-054: Owner question, not a defect: the Ray engine adapters (services/engine_registry.py, rayjobs_api_executor.py) and the Dapr Workflow runtime that runs stage_run and train_run (medallion stage_runner.py:83-114) are hosted in the medallion deployable,… |
-| LH-336 | parked | LH-336: Image-specific derivation lives in the shared cascade: medallion services/derivers.py derives a thumbnail and an embedding for image payloads only (derivers.py:9,54-89; compute.py:12-14), and leaves audio and every other kind untouched, against CL… |
-| XC-115 | parked | XC-115: CLAUDE.md names RustFS as the object store (CLAUDE.md:314-315: "Lance datasets on RustFS S3", the RustFS operator and `rask-rustfs-io:9000`, the observability bucket on RustFS), and chart/Chart.yaml:9 lists RustFS too, while the chart deploys MinI… |
-| LH-337 | parked | LH-337: The commit verdict has no 'read version garbage-collected' answer beside NO_BASE, so a commit whose read_version an erasure or a cleanup reclaimed is told it made a client error (packages/service-kit/src/service_kit/lancekit/commit_verdict.py:66);… |
-| LH-338 | parked | LH-338: The erasure test's oracle greps raw object bytes, so an identifier Lance stores compressed would pass unseen (services/catalog/tests/test_erasure_verifies_what_storage_holds.py) |
-| LH-339 | parked | LH-339: The erasure's holder walk is exponential in the depth of a nested-branch chain whose intermediate versions stay retained (services/catalog/src/catalog/services/erasure.py `_holders`) |
-| LH-340 | parked | LH-340: The issuer-discovery ClusterRoleBinding adds nothing on k3s (the default binding grants every SA), the catalog and lineage pods mount no API token for it yet, and its comment and the gate's assertion say the JWKS is served only to that grant (char… |
-| LH-341 | parked | LH-341: The secrets gate judges only `secrets` and `tokenreviews`: kueue-setup patches deployments cluster-wide, otel-collector reads nodes/proxy, and an aggregated ClusterRole or pods/create, serviceaccounts/token create, impersonate, bind or escalate gr… |
-| LH-342 | parked | LH-342: The secretReader prose says the Role binds the release namespace's `default` SA; the Dapr subchart pins secretReader.namespace to `default` (chart/values.yaml, .claude/skills/rask-helm §8) |
-| LH-343 | parked | LH-343: NATS rolls in the same wave as the nats-stream Job, whose drift loop reads a failed `consumer info` during a leader move as drift and can recreate a healthy durable with deliverPolicy=new (chart/templates/nats-stream-job.yaml) |
-| LH-344 | parked | LH-344: The SA gate keeps ServiceAccount subjects only in namespace `default`, so a render with -n checks nothing, and it is silent on runners.yaml and rayservice.yaml, which no gated overlay renders (tests/unit/test_a_first_party_pod_cannot_read_a_secret… |
-| LH-345 | parked | LH-345: The shared-identity allowlist (the seven zones on rask-sa-web, the maintenance pair on rask-sa-maintenance) relaxes one SA per service on a judgment the closes-when does not state |
-| LH-346 | parked | LH-346: Dex runs memory storage, so its pod's SA change, like any Dex restart, ends every login session |
-| LH-347 | parked | LH-347: The dev seed reads "connection refused" from the Service as no pod holding a minted token; an outgoing pod that is alive but NotReady answers the same, so a rollout started then mints afresh and rotates the token under its callers (chart/templates… |
-| LH-348 | parked | LH-348: Any exit of the seed container takes a seeded OpenBao out of the Service until it restarts, and its sh runs as PID 1 with no TERM trap, so each OpenBao termination waits the full grace period (chart/templates/openbao.yaml) |
-| LH-349 | parked | LH-349: The seed test cannot fail on a Service-read timeout read as absence; it is the branch its 403 case takes (tests/unit/test_the_dev_openbao_is_seeded_by_its_own_pod.py) |
-| LH-351 | parked | LH-351: A sealed runner's job on the shared Ray head reports lineage as the head's account, `service-trainer`, which holds no rung on a stage namespace; the dummy-lane e2e still sends `LINEAGE_SERVICE_ID` and expects `service-bronze-to-silver`, and deploy… |
-| LH-352 | parked | LH-352: The verifier's settings accept an unbounded leeway, an absent CA pin and fetch credential, and a blank subject; the chart now refuses a blank identity, the app does not (packages/service-kit/src/service_kit/governed/settings.py) |
-| LH-353 | parked | LH-353: The producer's and ingest's doors verify a service-account bearer before refusing a public caller, so an anonymous request costs a JWKS refetch and learns whether a token is valid; the catalog and lineage refuse first (medallion/api/service_door.p… |
-| LH-354 | parked | LH-354: With auth off the stage runners render no RASK_SA_* and no acknowledgement, and the producer's forward reads an identity file the auth-off render does not project, so stage show and terminate refuse (chart/templates/medallion.yaml, medallion/api/s… |
-| LH-355 | parked | LH-355: The governed-union and ray-train e2e lanes and scripts/verify_produce_door.sh post the producer's write doors with the retired shared token, so each fails at its first POST with a 403 that reads as an auth defect (tests/e2e-py/test_governed_union_… |
-| LH-356 | parked | LH-356: Falsified prose the cutover left: the gateway's strip comment, the FGA model comment, the sweep test docstring (services/gateway/src/gateway/__init__.py:81); RASK_INGEST_SECRETS_FROM_DAPR is ingest's signing switch since LH-064, and the identity d… |
-| LH-357 | parked | LH-357: The catalog's http-transport lineage emitter forwards a service principal's catalog-audience token to the lineage URL; the chart pins the dapr transport (services/catalog/src/catalog/core/lineage_emit.py:731) |
-| LH-358 | parked | LH-358: The verifier's warm() reports ready without fetching the key set, nothing serves stale keys or throttles refetches (each unknown kid costs a synchronous fetch), an unmapped account is refused with nothing naming it, the per-fetch re-read and the i… |
-| LH-359 | parked | LH-359: The seven zone images were not rebuilt with LH-220 (owner, 2026-10-02: frontend out of scope for now), so a signed-out zone's lineage read answers 401 until they are |
-| LH-360 | parked | LH-360: The author, lance and model facets are unprefixed, which the OpenLineage spec forbids for custom facets ('Custom facets must use a distinct prefix named after the project', spec/OpenLineage.md); renaming them is a flag day across six image stems,… |
-| LH-361 | parked | LH-361: A medallion activity that emits while its signing key is unresolved after boot (a store blip) raises inside best_effort, which logs and completes the activity, so a stage FAIL, a train outcome or a promotion decision's durable record is lost with… |
-| LH-362 | parked | LH-362: One failed public-list read drops a signer's verified key: /readyz flaps and the catalog's emits in that window are withheld rather than staged (packages/service-kit/src/service_kit/governed/signing_key.py) |
-| LH-363 | parked | LH-363: The OpenBao pod pulls a second public-registry image (natsio/nats-box) for its mint init container, so an unpullable image blocks the secret store's start although a failing mint script does not, and that container mounts OpenBao's system:auth-del… |
-| LH-364 | parked | LH-364: A forged bus body the HTTP layer cannot parse (an integer literal past 4300 digits) is answered 400 and dead-lettered, never reaching the verifier, so it pages as lost provenance (services/lineage/src/lineage/api/dapr.py) |
-| LH-365 | parked | LH-365: No test asserts the refusal and verified-per-identity counters, the only trace of an acked refusal, and the key cache's 60 s TTL is unpinned (services/lineage/src/lineage/services/signature.py) |
-| LH-366 | parked | LH-366: The lineage consumer's module header and the alert rules' prose describe an ephemeral deliverPolicy=all consumer that replays the stream on restart; since LH-303 it is the durable `lineage-durable` (services/lineage/src/lineage/services/consumer.p… |
-| LH-367 | parked | LH-367: The catalog door's signability check refuses a 61- or 62-level run-facet header on a create with no source pin although that DatasetEvent could carry it, only the refusal side of the boundary is pinned, and a sibling of the rewritten DaprEmitter p… |
-| LH-368 | parked | LH-368: The migrated C6 gate requires a store-scoped Configuration only for lineage and the signing apps, the naming test drives one overlay (a deny-list edit), and a doc line counts the per-app Configurations as 14 where values-local renders 13 (tests/un… |
-| LH-369 | parked | LH-369: The signer holders' lifespan ordering (installed before the workflow runtime starts, withdrawn after it shuts down) is pinned by no test in ingest or medallion, and ingest's non_signer fixture depends on the ambient environment not configuring a s… |
-| LH-370 | parked | LH-370: The unknown-kid first-sighting LRU avalanches once one identity's pending distinct unknown kids exceed 8,192, a first sighting is never cleared once decided, the test helper maps every RETRY to 'retried' without checking nothing was recorded, and… |
-| LH-371 | parked | LH-371: RASK_INGEST_SECRETS_FROM_DAPR is the only signer switch set by hand in values (the others derive from lance.secretsViaDapr), so an overlay that rewrites services.ingest.env silently turns ingest's signing off; deriving it beside lance.signingEnv c… |
+| CP-041 | phase-1, blocks-prod, criterion-5, severity:medium | CP-041: Two values keys name the Ray plane, so a default render prunes one cluster and submits to a Service that does not exist |
+| CP-051 | phase-1, blocks-prod, criterion-3, criterion-5, severity:medium | CP-051: The in-process engine materialises every upstream payload in the stage runner, including a full read when the derivability probe sees only nulls |
+| CP-056 | phase-1, criterion-3, severity:high | CP-056: The lakehouse ships the Ray engine: its adapter, the Ray stage and train jobs, and an engine registry that hard-codes Ray |
+| XC-004 | phase-1, blocks-prod, criterion-2, severity:high | XC-004: Every credential is minted or carried by the chart render, and nothing installs the ESO operator the chart needs |
+| XC-003 | phase-1, blocks-prod, criterion-2, severity:high | XC-003: GreptimeDB accepts unauthenticated SQL in-cluster, so any pod can erase the `lance_audit` trail |
+| XC-090 | phase-1, blocks-prod, severity:high | XC-090: Phase 1 has no acceptance proof: nothing defines, drives or schedules the scenario that shows the five criteria hold together on the estate |
+| XC-091 | phase-1, criterion-1, severity:high | XC-091: Criterion 1 proof: no drive checks that every version a scenario commits carries exactly one correctly attributed lineage edge |
+| XC-092 | phase-1, criterion-2, severity:high | XC-092: Criterion 2 proof: 36 of the 54 spec operations are never round-tripped through the stock client's typed requests, and no drive asserts authorization as a principal × door matrix |
+| XC-093 | phase-1, criterion-3, severity:medium | XC-093: Criterion 3 proof: decoupling is proven statically only; nothing runs the lakehouse with no workflow engine installed and no Ray reachable |
+| XC-094 | phase-1, criterion-4, severity:high | XC-094: Criterion 4 proof: no drive checks a scenario's events for schema, signature, targeting and delivery count, or reads the DLQ afterwards |
+| XC-095 | phase-1, criterion-5, severity:medium | XC-095: Criterion 5 proof: only two dependency outages are drilled, none ends by proving the estate provenance-clean, and a plain live drive already runs a chaos module against the estate |
+| XC-096 | phase-1, criterion-5, severity:high | XC-096: The kind CI stacks cannot come up: pods starve for CPU, the CNPG operator crash-loops without its CRDs, and the "ray-OFF" core lane runs its stage runners in Ray mode |
+| LH-197 | phase-1-after-launch, criterion-1, severity:high | LH-197: One lakehouse image serves eleven deployments, so no lakehouse service can ship on its own |
+| LH-178 | phase-1-after-launch, criterion-2, needs-info, severity:high | LH-178: An erasure cannot complete while a branch pins the fork-point version holding the subject, and no person is told |
+| LH-207 | phase-1-after-launch, criterion-2, severity:high | LH-207: Classification is laundered or hidden from the vend check: drop_columns, a same-type re-type, or a label on a nested or branch-local field leaves the raw bytes directly vendable |
+| LH-212 | phase-1-after-launch, criterion-1, criterion-4, criterion-5, severity:high | LH-212: Every full-lane stage write rewrites every row and the media lane retracts by run id, so the change feed sees the whole tier as changed and two overlapping runs empty it |
+| LH-215 | phase-1-after-launch, criterion-2, severity:high | LH-215: A rename does not carry the table's name-keyed governance: direct grants are revoked silently and a forced rename leaves protection at the old id |
+| LH-218 | phase-1-after-launch, severity:high | LH-218: The medallion discards the table-scoped write credential it asks for and signs every byte with its estate-wide static key |
+| LH-219 | phase-1-after-launch, severity:high | LH-219: Maintenance rewrites fall back to the static key or the ambient AWS chain whenever a vend is skipped or refused |
+| LH-270 | phase-1-after-launch, severity:high | LH-270: An empty per-base credential reference silently falls back to the estate credential |
+| LH-177 | phase-1-after-launch, criterion-2, severity:medium | LH-177: The vended S3 endpoint is the STS endpoint and cannot be set per warehouse |
+| LH-141 | phase-1-after-launch, severity:medium | LH-141: Nothing repairs a relative Dataset `source_uri`, and the shipped restamp would be refused at the bus door |
+| LH-063 | phase-1-after-launch, severity:medium | LH-063: FGA grants key on Dex's raw `sub`; the ruled `<idp-id>~<claim>` principal key is not implemented |
+| LH-072 | phase-1-after-launch, criterion-2, severity:medium | LH-072: A vended credential is an untyped dict, so nothing stops its secret and session token reaching a repr, log or error echo |
+| LH-075 | phase-1-after-launch, criterion-1, severity:medium | LH-075: 'Read by' answers from lineage-page views, not from data reads: two read-audit streams share one name |
+| LH-076 | phase-1-after-launch, severity:medium | LH-076: Every estate-admin door checks `can_observe_events`, one relation named for reading the event feed |
+| CTL-019 | phase-1-after-launch, criterion-2, needs-info, severity:low | CTL-019: The project admin split (security_admin, data_admin, role_creator) reaches no rung and no code |
+| LH-097 | phase-1-after-launch, criterion-5, severity:medium | LH-097: Silver copies every managed blob payload from bronze; one base-path commit can carry lineage without the copy |
+| LH-150 | phase-1-after-launch, criterion-2, criterion-5, severity:medium | LH-150: Five settings let a service spell FGA object ids with a different delimiter |
+| LH-164 | phase-1-after-launch, criterion-2, severity:medium | LH-164: The cascade head and stage-runner env still compose a second, chart-side home per medallion tier |
+| LH-195 | phase-1-after-launch, criterion-5, severity:medium | LH-195: With the event lane on by default, the sweep still re-plans the whole estate every 120 s |
+| CP-031 | phase-1-after-launch, criterion-3, severity:medium | CP-031: No lane is declared, so every stage runner runs the settings-default Ray entrypoint, and the medallion keeps an env fallback beside the TransformSpec |
+| CP-025 | phase-1-after-launch, criterion-5, severity:medium | CP-025: Dapr workflows are registered unversioned, so a deploy replays in-flight instances against new code |
+| LH-096 | phase-1-after-launch, criterion-5, severity:medium | LH-096: Ingest opens Lance bare nine times and exports no Lance IO metrics |
+| CP-005 | phase-1-after-launch, criterion-2, severity:medium | CP-005: An ingest run whose source enumerates nothing still leaves a newly created bronze table and namespace registered behind a COMPLETE |
+| CP-006 | phase-1-after-launch, severity:low | CP-006: StagingOverlapError's docstring claims the worker can produce a partial overlap |
+| CP-007 | phase-1-after-launch, criterion-2, severity:medium | CP-007: Ingest signs source reads and fragment writes with the ambient AWS chain whenever no scoped credential resolves |
+| CP-008 | phase-1-after-launch, criterion-5, severity:low | CP-008: Ingest has no byte ceiling, and the worker holds each whole object in memory |
+| CP-015 | phase-1-after-launch, severity:medium | CP-015: /train falls back to a composed tier path when the catalog cannot resolve a named feature table |
+| CP-027 | phase-1-after-launch, criterion-5, severity:low | CP-027: No test asserts report_stage_outcome records verdict=failed on the counter the alert reads |
+| LH-221 | phase-1-after-launch, criterion-2, severity:medium | LH-221: Both transaction doors check a table-scoped transaction id against a namespace object nothing seeds, and alter answers SUCCEEDED having applied nothing |
+| LH-222 | phase-1-after-launch, criterion-5, severity:medium | LH-222: can_get_metadata recurses down through every child while each child walks back up, so a denied describe costs about 4 ms per descendant |
+| LH-223 | phase-1-after-launch, criterion-2, severity:medium | LH-223: Listings filter through one estate-wide list_objects capped at 1,000, so a principal who reaches more tables sees a small namespace listed short |
+| LH-224 | phase-1-after-launch, criterion-2, severity:medium | LH-224: Identifier segments are not shape-checked: a '$' in rename's target plants a table in another namespace, empty segments create unnamed objects, and '${' reaches the vended policy |
+| LH-227 | phase-1-after-launch, criterion-2, criterion-5, severity:medium | LH-227: The trash purge is blocked indefinitely by orphan-scan findings the estate never clears |
+| LH-228 | phase-1-after-launch, criterion-2, severity:medium | LH-228: In the default chart a drop never completes: the purge is off, and expiry is fused with it, so grants stay live and the name stays locked |
+| LH-229 | phase-1-after-launch, criterion-2, criterion-5, severity:medium | LH-229: Stock Lance clients opening through the namespace get no credential and silently sign with their ambient one |
+| LH-230 | phase-1-after-launch, criterion-1, severity:medium | LH-230: The latest-schema query orders by event time, so a back-filled old version becomes the latest schema |
+| LH-231 | phase-1-after-launch, criterion-2, severity:medium | LH-231: Audit records carry no format version and an open action vocabulary, read doors leave holes, and no test proves every door emits |
+| LH-232 | phase-1-after-launch, criterion-1, criterion-2, severity:medium | LH-232: Destructive reclaim leaves no per-file audit record, although Lance emits one per deleted file when asked |
+| LH-233 | phase-1-after-launch, criterion-2, severity:medium | LH-233: No principal record and no door that revokes every tuple naming a departed subject |
+| LH-234 | phase-1-after-launch, criterion-5, severity:medium | LH-234: Idempotency records are never reclaimed, and the purge's hand-written control-prefix list misses four prefixes |
+| LH-235 | phase-1-after-launch, criterion-2, severity:medium | LH-235: No test drives the catalog door against a real OpenFGA store, so authorization OUTCOMES are unproven |
+| LH-236 | phase-1-after-launch, criterion-2, severity:medium | LH-236: A reader of one child can tell which hidden siblings exist: describe answers 403 for them and 404 for absent names |
+| LH-237 | phase-1-after-launch, criterion-2, severity:medium | LH-237: The route-gate completeness test passes on a docstring, and require_relation silently no-ops without a client |
+| LH-238 | phase-1-after-launch, severity:medium | LH-238: Ambient AWS_* env overrides what a vended or explicit storage dict says: the endpoint loses to AWS_ENDPOINT_URL in about half of processes, and an ambient AWS_ALLOW_HTTP beats the scheme-derived allow_http |
+| LH-240 | phase-1-after-launch, criterion-1, criterion-2, severity:medium | LH-240: The compaction commit door commits a client RewriteResult whose rows can vanish or be rebound to other stable row ids, and tells a stale caller to re-send |
+| LH-244 | phase-1-after-launch, criterion-4, criterion-5, severity:medium | LH-244: Compaction and index builds still conflict with stable row ids and the fragment reuse index, so a compaction during _index_lineage fails a stage whose data committed |
+| LH-246 | phase-1-after-launch, criterion-2, criterion-5, severity:medium | LH-246: Encoding create properties are unvalidated and mis-scoped, so one bad create makes every later write fail or panic |
+| LH-248 | phase-1-after-launch, criterion-2, severity:medium | LH-248: The index door drops spec parameters, returns ids nobody can track, and forwards a base_tokenizer Lance follows out of its model home |
+| LH-249 | phase-1-after-launch, criterion-1, criterion-3, severity:medium | LH-249: Stage attestation checks the wrong things and runs nowhere: O7 reads the manifest default, O8 cannot see a demoted blob column, and verify_stage_output has no production caller |
+| LH-250 | phase-1-after-launch, criterion-5, severity:medium | LH-250: LH-172's removal of LANCE_CPU_THREADS rests on the wrong thread pool: the variable does bound Lance's compute pool on pylance 12 |
+| LH-251 | phase-1-after-launch, criterion-2, criterion-5, severity:medium | LH-251: Nothing reclaims __manifest: every namespace operation rewrites it as a new version, every old version is kept, and dropped ids stay readable in its history |
+| LH-253 | phase-1-after-launch, criterion-3, severity:medium | LH-253: Shared maintenance sizes fragments by tier name using page-image row widths, so one modality's shape sizes every bronze tier |
+| LH-271 | phase-1-after-launch, criterion-2, criterion-5, severity:medium | LH-271: An unknown branch on compaction_plan answers 503 'storage fault' |
+| LH-056 | phase-1-after-launch, severity:low | LH-056: Record D3 (a table writer writes every branch) and pin both halves |
+| LH-016 | phase-1-after-launch, criterion-2, severity:low | LH-016: Nested-namespace `features` copies still occupy `lakehouse-wh` |
+| LIN-002 | phase-1-after-launch, severity:low | LIN-002: The omission of NominalTimeRunFacet is not recorded, and cron-planned maintenance runs are undecided |
+| LH-074 | phase-1-after-launch, criterion-2, criterion-5, severity:low | LH-074: Storage is accounted per warehouse, but no byte quota is enforced |
+| LH-035 | phase-1-after-launch, severity:low | LH-035: The inline-bytes won't-do is unrecorded, and the `/blobs` door's docstring names a route that does not exist |
+| LH-041 | phase-1-after-launch, severity:low | LH-041: A tag move is last-writer-wins, and that is not recorded |
+| LH-099 | phase-1-after-launch, criterion-4, severity:low | LH-099: A compaction's no-control-event decline is unrecorded |
+| LH-148 | phase-1-after-launch, criterion-1, criterion-4, severity:low | LH-148: A parked lineage delivery has no path back to the graph once its cause is fixed |
+| LH-171 | phase-1-after-launch, criterion-1, severity:low | LH-171: Nine legacy transform records fail TransformSpec and still sit under `_transforms/` |
+| LH-048 | phase-1-after-launch, criterion-2, needs-info, severity:low | LH-048: Measured pylance 12.0.0 upstream defects are unfiled: REST GET vs spec POST, and alter_columns' annotation |
+| LH-050 | phase-1-after-launch, criterion-5, severity:low | LH-050: The no-query-store decision is unrecorded and its reopen alert evaluates nowhere |
+| LH-079 | phase-1-after-launch, criterion-2, severity:low | LH-079: An audit doc still prescribes an x-api-key principal that D1 withdrew |
+| LH-225 | phase-1-after-launch, criterion-1, severity:low | LH-225: A crash between the Lance commit and the outbox stage loses the event's author and inputs, although Lance can commit who and which run with the manifest |
+| LH-254 | phase-1-after-launch, criterion-5, severity:low | LH-254: The CAS guarantee every commit rests on was last proven on RustFS while the estate runs MinIO |
+| LH-255 | phase-1-after-launch, criterion-2, severity:low | LH-255: Live refusal tests check a bare status, never the problem code, the unchanged state, or a cross-tenant leak |
+| LH-256 | phase-1-after-launch, severity:low | LH-256: Comments the pylance 12 upgrade and the audits proved false, where no other row's commit rewrites them |
+| LH-257 | phase-1-after-launch, criterion-5, severity:low | LH-257: On non-stable datasets with a user index, the sweep defers index remap then optimizes, and the fragment reuse index grows a version per compaction |
+| LH-258 | phase-1-after-launch, criterion-2, severity:low | LH-258: Lance Namespace conformance defects on edge paths (batched) |
+| LH-259 | phase-1-after-launch, criterion-5, severity:low | LH-259: add_columns loses to any write that commits during it, and ingest treats the resulting code 14 as fatal |
+| LOW-029 | phase-1-after-launch, criterion-5, severity:low | LOW-029: The catalog's merge_insert door runs Lance's default conflict_retries, so a stale merge re-executes and silently reverts a concurrent edit to the same row |
+| LH-260 | phase-1-after-launch, criterion-1, criterion-5, severity:low | LH-260: Clients cannot learn a table's file version, and no estate census of 2.1 or mixed tables has run |
+| LH-261 | phase-1-after-launch, severity:low | LH-261: The vendored lance_docs bundle predates pylance 12 and contradicts it, while the owner's rule makes it the authority |
+| LH-274 | phase-1-after-launch, severity:low | LH-274: The trash-window 409 names an undrop route that 404s |
+| LH-276 | phase-1-after-launch, severity:low | LH-276: The shared catalog client is half-used by the medallion |
+| LH-329 | phase-1-after-launch, criterion-4, severity:medium | LH-329: /ingest-media starts the cascade itself instead of the arrival event |
+| LH-330 | phase-1-after-launch, criterion-2, severity:high | LH-330: The catalog is not the sole committer and announcer of tier writes: /produce, /ingest-media, the in-process lane and the Ray lane write and commit Lance directly, and no writer-tier door commits a client-written fragment set as anything but an App… |
+| XC-005 | phase-1-after-launch, criterion-5, severity:high | XC-005: The OpenBao seed runs in the same upgrade wave as the ExternalSecrets that read it, so a new property is absent when its consumers start |
+| XC-001 | phase-1-after-launch, severity:high | XC-001: A secret rotation does not reach the zones' session key or the infra stores that bind credentials at boot |
+| LH-160 | phase-1-after-launch, severity:high | LH-160: Zone and infra secrets still arrive through env |
+| LH-129 | phase-1-after-launch, severity:high | LH-129: Ray jobs sign with a static S3 key and lineage tokens from pod env; they should open tables through the namespace with a projected SA token |
+| XC-049 | phase-1-after-launch, criterion-5, severity:high | XC-049: rask's release ships Kueue for a lane it does not use, on CRDs that another team's htr-batch Workloads depend on |
+| XC-009 | phase-1-after-launch, severity:medium | XC-009: No Dapr accessControl on any callee, and the NetworkPolicy prose misstates k3s |
+| FE-002 | phase-1-after-launch, criterion-2, severity:medium | FE-002: The lineage pages hand-roll fetch state over a pass-through that serves signed-out readers as the zone's service identity |
+| XC-079 | phase-1-after-launch, severity:high | XC-079: Every daprd authenticates to OpenBao as ROOT in dev and with one shared, unprovisioned static token in prod |
+| XC-080 | phase-1-after-launch, severity:high | XC-080: Every sidecar'd app can read the tenant ROOT S3 pair, the AGE password and every peer's scoped S3 key from the shared secret/lance bundle |
+| XC-081 | phase-1-after-launch, severity:high | XC-081: With no secret store configured the chart renders plaintext S3 secrets as literal env, and every hermetic lane boots the catalog on env secrets |
+| XC-083 | phase-1-after-launch, severity:high | XC-083: The credential vendor's own parent is a static key: AssumeRole is signed with rask-catalog, and the catalog's own IO runs on the same pair |
+| XC-084 | phase-1-after-launch, severity:high | XC-084: Six static per-service MinIO users (Allow * and */*, keys that never expire) and backup jobs that sign as the tenant ROOT |
+| XC-011 | phase-1-after-launch, criterion-2, severity:medium | XC-011: Bootstrap is re-applied on every upgrade and leaves no record |
+| XC-031 | phase-1-after-launch, criterion-2, criterion-5, severity:medium | XC-031: The stage-runner FGA grants come from a manual script, not the chart, and there is no ordered prod install runbook |
+| XC-033 | phase-1-after-launch, severity:medium | XC-033: 14 of 26 live e2e modules run in no CI lane, and the ephemeral lanes that do run are red |
+| LH-161 | phase-1-after-launch, severity:medium | LH-161: GreptimeDB holds the object store's root key pair through envFrom |
+| XC-048 | phase-1-after-launch, criterion-1, criterion-4, severity:medium | XC-048: The trace-context ruling is unrecorded, request-id is still a second correlation path, and durable records carry no trace id |
+| XC-061 | phase-1-after-launch, criterion-2, severity:medium | XC-061: The secret store, IdP, AGE and MinIO render unhardened by default behind a dev-off flag, and the NATS stream Job runs as root |
+| XC-067 | phase-1-after-launch, criterion-5, severity:medium | XC-067: `HttpServerLatencyHigh` cannot fire for any lakehouse service: the eight agent-launched apps never get the bucket View |
+| XC-064 | phase-1-after-launch, criterion-1, criterion-5, severity:medium | XC-064: No CI lane proves an app's OTLP export reaches the backend through the Collector |
+| XC-058 | phase-1-after-launch, criterion-1, severity:medium | XC-058: The Collector selects the audit trail by log body text, and nothing pins `audit()` as the only writer to `lance.audit` |
+| XC-082 | phase-1-after-launch, criterion-5, severity:medium | XC-082: Secrets fetched from the store are cached for the life of the process, so a rotation made in OpenBao reaches no running pod |
+| XC-085 | phase-1-after-launch, criterion-5, needs-info, severity:medium | XC-085: The remaining operators (nvdp, kuberay, nats, dapr, cnpg, openfga, greptimedb, perses) still ride in the app release, and the recorded no-split decision rests on a store the estate has left |
+| XC-112 | phase-1-after-launch, criterion-2, severity:medium | XC-112: rask ships no Kyverno policy, so nothing at admission enforces the controls XC-076, XC-061 and XC-009 put in the chart |
+| XC-017 | phase-1-after-launch, severity:low | XC-017: The zero-trust §B gap list is not mapped to owning rows |
+| XC-032 | phase-1-after-launch, criterion-5, severity:low | XC-032: values-prod.yaml names no registry or digests, and its example keys pin nothing |
+| XC-013 | phase-1-after-launch, criterion-5, severity:low | XC-013: pg dumps land in the store they back up, VolumeSnapshots are never pruned, and the snapshot selector matches no live PVC |
+| XC-039 | phase-1-after-launch, severity:low | XC-039: Thirteen live e2e modules probe /livez once with a 5 s timeout, and e2e_live.sh passes on skips |
+| XC-109 | phase-1-after-launch, criterion-3, severity:medium | XC-109: ingest and controlplane are in neither import-linter decoupling contract, so criterion 3's static gate does not see the bronze landing |
+| CTL-001 | phase-1-after-launch, criterion-2, severity:medium | CTL-001: The gateway proxies the catalog's and lineage's whole root: unlisted paths such as /dapr/subscribe and the demo UI answer at the edge |
+| CTL-006 | phase-1-after-launch, criterion-5, severity:medium | CTL-006: The gateway has no body cap, rate limit or access line, and lance-plane services built by the factory accept unbounded bodies |
+| CTL-022 | phase-1-after-launch, criterion-2, severity:medium | CTL-022: Notifications has no door that erases a subject's inbox, prefs, cursor and watch enrolment |
+| CTL-025 | phase-1-after-launch, criterion-5, severity:medium | CTL-025: The inbox row cap is enforced only by a 6-hourly reminder, so each delivery rewrites an unbounded partition between ticks |
+| CTL-023 | phase-1-after-launch, criterion-5, severity:low | CTL-023: A sidecar transport failure on an inbox or watch actor call answers 500 instead of 503 |
+| CTL-024 | phase-1-after-launch, severity:low | CTL-024: The rask-notifications skill contradicts services/notifications on the reason set, line refs and actors |
+| CTL-026 | phase-1-after-launch, criterion-5, severity:low | CTL-026: Every 30 s reconcile tick re-reads the newest 500 full OpenLineage payloads, however few are new |
+| CTL-027 | phase-1-after-launch, criterion-4, severity:low | CTL-027: A group-grant fan-out stops at the first failing member, so later members are never told |
+| CP-032 | phase-2, severity:high | CP-032: Six of the nine runners have no uv.lock and seven have no installable `runner` entrypoint |
+| CP-037 | phase-2, criterion-1, criterion-4, severity:high | CP-037: Compute-plane lineage lanes emit fire-and-forget: no START, no terminal-once, no staging |
+| CP-043 | phase-2, criterion-5, severity:high | CP-043: The Ray cluster is head-only: every task and every driver runs in the pod that holds GCS |
+| CP-010 | phase-2, criterion-2, severity:high | CP-010: Ray dashboards serve the job and cluster APIs with no token, rask's own chart-rendered head included |
+| LH-010 | phase-2, criterion-1, criterion-3, severity:medium | LH-010: The htr runner's output lands outside the catalog as loose ALTO files, not as a governed table |
+| CP-036 | phase-2, criterion-5, severity:medium | CP-036: Ray GCS job records are lost on a head restart: the RocksDB toggle ships off and, if enabled, drops the head's whole env |
+| CP-042 | phase-2, criterion-3, criterion-5, severity:medium | CP-042: The hand-applied `ray-lance-head` still runs beside the chart's RayCluster, and defaults, docs and the e2e lane still point at it |
+| CP-046 | phase-2, criterion-5, severity:medium | CP-046: The Ray adapter advertises CANCEL but sends DELETE, which Ray refuses for a running job, and the terminate doors never call it |
+| CP-050 | phase-2, criterion-5, severity:medium | CP-050: The Ray head image bypasses `rask.image`, so pins never reach it and the rendered stem differs from the running one |
+| CP-014 | phase-2, criterion-1, severity:medium | CP-014: submit_or_reattach reports 'reattached' after reading only the existing job's status, never its program |
+| CP-018 | phase-2, criterion-5, severity:medium | CP-018: Ray core, driver and Serve replica logs stay as files in the head container; nothing ships them |
+| CP-017 | phase-2, criterion-5, severity:low | CP-017: RayMetricsMissing's runbook names a deleted file, and the external ray-pods scrape spec survives only in the register |
+| CP-003 | phase-2, criterion-2, severity:low | CP-003: The `/api/serve` proxy forwards any GET under /api/serve/, although every consumer reads only `applications/` |
+| CP-022 | phase-2, severity:low | CP-022: Two Ray Jobs API clients (compute's SDK in ray-kit, the medallion's httpx one), and compute's private 1536Mi tier rests on a cause that is gone |
+| CP-002 | phase-2, severity:low | CP-002: The live compute pod runs a 2026-09-02 image without DiagnosticFormatter, so its extra= diagnostics are dropped from stdout |
+| CP-004 | phase-2, criterion-2, severity:low | CP-004: No recorded ruling on execution governance, and compute shows every job's record and driver log to any estate reader |
+| CP-053 | phase-2, needs-info, severity:low | CP-053: Kueue cannot admit stage jobs: the Ray adapter submits to a standing cluster through the Jobs API, so no per-stage object exists |
+| XC-002 | phase-2, severity:medium | XC-002: Delete the hand-applied Ray S3 Secret and align two skills with the recorded secrets ruling |
+| LH-239 | phase-2, criterion-1, criterion-2, severity:medium | LH-239: Resetting a legacy (non-stable) destination wipes its directory around the catalog, destroying every version and tag with no drop, lineage or trash |
+| LH-127 | frontend, criterion-4, criterion-5, severity:low | LH-127: The admin streams view flags a missing expected consumer but never an unexpected durable |
+| FE-005 | frontend, criterion-5, severity:low | FE-005: No zone surface shows a cascade-dropped namespace's deadline or offers its undrop |
+| FE-012 | frontend, severity:low | FE-012: Zones name the gateway through four env vars, two of them legacy LANCE_* names defaulting to the lineage port :8001 |
+| FE-007 | frontend, severity:low | FE-007: The admin control-events live query yields only on change, so an edge idle timeout severs it |
+| FE-008 | frontend, severity:low | FE-008: Six lakehouse-zone write sites re-read their list after the write, although most commands already refreshed it |
+| FE-011 | frontend, severity:low | FE-011: Estate Settings names new-project defaults and credentials, but neither has anything behind it |
+| FE-009 | frontend, criterion-2, severity:low | FE-009: Project and warehouse have no per-object grants door or Access tab |
+| LOW-027 | low, criterion-2, severity:low | LOW-027: The explorer trio finds and opens the corpus off a volume or bucket root with a deployment-wide key, not through the catalog |
+| LOW-003 | low, severity:low | LOW-003: The annotator canvas writes a Lance version per save through the per-row path instead of the task draft |
+| LOW-009 | low, criterion-4, severity:low | LOW-009: No event marks an annotation publish's terminal outcome, and a crash-converged retry emits nothing |
+| LOW-002 | low, criterion-5, severity:low | LOW-002: A consensus send with a 62-64 character task_id mints replica ids no route can address, wedging that project's publish |
+| LOW-010 | low, criterion-1, severity:low | LOW-010: Publish stamps the project's current ontology instead of each task's captured one, and ontology modality is never checked |
+| LOW-017 | low, criterion-5, severity:low | LOW-017: Studio inference uploads are buffered whole in the SvelteKit zone pod |
+| LOW-018 | low, severity:low | LOW-018: The studio model picker invents an HTTP route for Serve apps that have none and presents dashboard status as callability |
+| LOW-022 | low, severity:low | LOW-022: The flows service has no Serve origin in-cluster: model nodes POST to the pod's own localhost:8000 |
+| LOW-011 | low, criterion-2, criterion-3, severity:low | LOW-011: Batch-labeling submit is refused at the annotator's door, and no governed runner sits behind it |
+| LOW-012 | low, severity:low | LOW-012: The annotator's API and FGA model still say project/task where every screen says labeling task/item |
+| LOW-014 | low, severity:low | LOW-014: Every send surface stamps items as images, and reading order is a typed integer |
+| LOW-019 | low, severity:low | LOW-019: The flows durable lane has never run a flow in-cluster, and a failed schedule silently degrades to inline |
+| LOW-020 | low, severity:low | LOW-020: Studio's node vocabulary is a second hand-kept list beside /flows/catalog, and nothing pins the two together |
+| LOW-021 | low, severity:low | LOW-021: Studio flows cannot read a governed table, and show no per-node progress while a run is live |
+| LOW-024 | low, severity:low | LOW-024: The EAD archive_catalog table has no governed landing, and search cannot serve a catalog table anyway |
+| LOW-026 | low, severity:low | LOW-026: The search descriptor keeps a legacy `search` alias beside `searches`, with fallbacks on both planes, and joins only on identity |
+| LOW-016 | low, needs-info, severity:low | LOW-016: No annotation export: COCO/YOLO/CSV/HF serializers and the exporter they would live in do not exist |
+| LOW-028 | low, criterion-2, severity:low | LOW-028: The model registry's authorization on `table:models$<model>` is not recorded, so the opaque-asset question will be asked again |
+| XC-043 | low, severity:low | XC-043: Architecture docs, CLAUDE.md and code comments still present retired services, zones, `/default/` bases, a protocol-specific ingest door and a dataflow the code no longer runs as live |
+| LH-168 | low, criterion-2, criterion-5, severity:low | LH-168: The live `lance-secrets` Component lacks the search and viewer scopes, and nothing detects Component drift |
+| XC-041 | low, severity:low | XC-041: The dev seed pins labeling items to literal keys and `dataset_version: 1`, and assumes release `rask` and fixed ports |
+| FE-013 | low, severity:low | FE-013: The annotator /bulk grid has no LASSO embedding-selection mode (owner three-mode ruling 2026-08-09) |
+| LOW-030 | low, criterion-5, severity:low | LOW-030: The search and viewer read plane runs lancedb 0.34's bundled Lance 8.0 core, four majors behind the pylance 12 writers |
+| XC-035 | low, severity:low | XC-035: Single-component test files live in tests/unit instead of their component's testpath |
+| XC-036 | low, criterion-5, severity:low | XC-036: Nothing stops a release whose subchart Secret names and hosts do not match what the chart renders |
+| XC-046 | low, severity:low | XC-046: Stale remote branch `claude/flyte-2-dapr-audit-19cyc2` still on origin |
+| XC-055 | low, criterion-5, severity:medium | XC-055: Helm revisions cannot be told apart (chart version fixed at 0.3.0), and the recovery verbs run bare helm outside the seam |
+| XC-060 | low, severity:medium | XC-060: A pyproject dependency edit without a re-lock passes the unit gate, because the gate re-locks inside its container |
+| XC-062 | low, severity:low | XC-062: Nothing proposes dependency bumps: CVE scans detect, and nothing remediates |
+| XC-063 | low, severity:low | XC-063: `make bootstrap` keeps the tool version it downloaded first, so raising a pin changes nothing on existing hosts |
+| XC-070 | low, criterion-5, severity:low | XC-070: The estate has never been brought up on arm64 |
+| XC-071 | low, severity:low | XC-071: No suite-wide gate refuses a test that builds a real Dapr ActorProxyFactory, and a stray fake sidecar hides CI's refused-port condition locally |
+| XC-086 | low, criterion-5, severity:medium | XC-086: The chart has no values.schema.json, so a misspelled or empty key reaches a pod |
+| XC-037 | low, severity:low | XC-037: About 24 chart gates still shell out to `helm template` themselves instead of using chart_render.py |
+| XC-052 | low, criterion-5, severity:low | XC-052: A hand-applied, Helm-labelled rask-assist pair and a hand-set annotator env sit outside the release |
+| CP-019 | low, criterion-5, severity:low | CP-019: Serve tracing is wired on the chart head but never observed, and a sealed-runner replica cannot import the span-processor path |
+| CTL-013 | low, criterion-2, severity:medium | CTL-013: The Python gateway still fronts every /api/* row |
+| LH-282 | parked, severity:medium | LH-282: The lineage reconcile never reads a branch: its version axis lists main only, so a lost branch-write event is never back-filled and never reported |
+| LH-283 | parked, severity:medium | LH-283: Branch create leaves the name grammar to Lance, which writes a branch dataset before refusing the name; the residue cannot be deleted, is maintained forever, and makes the valid name it collapses to answer 500 |
+| LH-284 | parked, severity:medium | LH-284: Five tag resolvers drop the tag's branch, so describe?tag, the publish guard, published_version, the model 'blessed' tag and the cascade-lag gauge read a branch tag as main@N |
+| LH-285 | parked, severity:medium | LH-285: pylance 12 panics reading a Clone transaction, and the history door, the /commit replay guard, the ingest marker probe, the orphan scan and the lineage reconcile do not guard against it |
+| LH-286 | parked, severity:medium | LH-286: Nothing reclaims bytes in a table's non-root data base: an overwrite strands whole base files, and deleted or updated rows stay in base fragments forever |
+| LH-287 | parked, severity:medium | LH-287: The query-plane doors pass Lance's raw error through: caller mistakes at /query, /explain_plan and /analyze_plan answer 500, and 4xx details echo storage paths and Lance's build paths |
+| LH-288 | parked, severity:medium | LH-288: `rask.classification` changes only how bytes are delivered, and no ruling says so: any can_read_data holder queries, filters, FTS-searches and counts a classified column through the catalog |
+| LH-289 | parked, severity:medium | LH-289: The catalog resolver ranks a suffix by its trailing word, so a new owner-tier door ending in a read word would ship at the reader rung |
+| LH-290 | parked, severity:medium | LH-290: Platform buckets are not reserved, so a project admin may register, or purge, a warehouse over rask-observability or a minio.buckets entry |
+| LH-291 | parked, severity:medium | LH-291: A MISCONFIGURED stage is counted, logged and acked as a quality block, and every refused promotion names the lane key rather than the table the run wrote |
+| LH-292 | parked, severity:medium | LH-292: Ingest's GET /sources has no door, and GET /ingests authenticates only when the page has rows: anonymous callers read the source registry and an empty run list |
+| LH-293 | parked, severity:medium | LH-293: Maintenance addresses a table by the id derived from its location, so a renamed table is refused on every tick forever |
+| LH-294 | parked, severity:low | LH-294: Nothing reports MemWAL state: a table carrying the `__lance_mem_wal` index is not flagged, and its `_mem_wal/` bytes are never reclaimed or read |
+| LH-295 | parked, severity:low | LH-295: The catalog runs the dir backend in compatibility mode by default, and its list door dir-scans the root, so a Lance dataset written straight to the catalog root is listed as a table nothing governs |
+| LH-296 | parked, severity:low | LH-296: The catalog guard authorizes on scope['path'], so serving it under a root_path would skip every FGA check |
+| LH-298 | parked, severity:low | LH-298: Producer-door answer hygiene: a malformed ?project= is reported twice, a 502 carries the transport error text, and a stage runner's non-JSON error body becomes a 500 |
+| LH-299 | parked, severity:low | LH-299: The TRAIN lane sends empty ORIGINATOR, TRAIN_PROJECT and OTEL_* values to Ray |
+| LH-300 | parked, severity:low | LH-300: Two inconsistencies need one recorded answer each: /train's dot-free token grammar, and whether protection guards maintenance/run's history reclaim |
+| XC-098 | parked, severity:medium | XC-098: Lineage, ingest and the medallion producer write no authn audit record for a bearer they refuse or verify |
+| XC-099 | parked, severity:medium | XC-099: `make seed-dev`'s lakehouse step has failed on every run since 2026-09-13: the bronze seed registers with OVERWRITE, which the register door refuses, and leaves an ungoverned bronze dataset behind |
+| XC-100 | parked, severity:low | XC-100: Literal copies of the platform bucket names do not follow their values |
+| XC-101 | parked, severity:low | XC-101: A malformed RASK_OIDC_DISCOVERY_URL escapes verify untyped, and it is answered 500 and audited as the caller's bad token |
+| XC-102 | parked, severity:low | XC-102: Production code carries 15 `ty: ignore` comments and 14 `@dataclass` models, against the Python house rules |
+| XC-103 | parked, severity:medium | XC-103: docs/lineage-openapi.json carries five `$ref`s to schemas it does not define, so the lineage TS client cannot be regenerated and `make openapi` stops before the catalog step |
+| LOW-031 | parked, severity:medium | LOW-031: A caller's raw `where` of about 650 OR terms crashes the explorer search process (SIGSEGV) on lancedb 0.34, on both the FTS and vector paths |
+| LOW-032 | parked, severity:medium | LOW-032: The viewer's Cypher REPL has no work bound: one disconnected MATCH pins the pod's CPU and approaches its memory limit |
+| LOW-033 | parked, severity:low | LOW-033: The explorer's Phrase mode fails on every FTS index built with defaults: it answers 400 'search failed' in search and 500 at the catalog's /query |
+| LH-301 | parked, severity:medium | LH-301: A write body that is valid Arrow but that Lance will not store answers 500 code 18 at create, insert and merge_insert: a list_view or run-end-encoded column (`LanceError(Schema): Unsupported data type`) and a `lance.blob.v2` value whose external u… |
+| LH-302 | parked, severity:low | LH-302: Create's rollback (`_write_blob_into`) catches Exception only, so a pylance `PanicException` (a BaseException) during the write skips it and leaves a declared table with no dataset (`describe` answers, `open` 404s); measured with an unaligned deci… |
+| LH-305 | parked, severity:medium | LH-305: The catalog's control-event broadcast consumer is ephemeral by design (one per replica, no queue group), so a NATS restart removes it and the sidecar does not re-create it: its `GET /v1/events` ring buffer and cross-replica binding-cache invalidat… |
+| XC-105 | parked, severity:low | XC-105: The annotator's import converts a VALID body row by row (`to_pylist`, then `Shape`), and decimal, odd-timezone timestamp and duplicate-struct-name columns raise there and answer 500 |
+| XC-106 | parked, severity:low | XC-106: `scripts/k3s-pins.sh --check-only` stages `chart/values-live-pins.yaml.tmp` INSIDE the chart directory and removes it on exit, so a `helm template chart/` running at the same moment fails with `lstat ... .tmp: no such file or directory`; measured… |
+| XC-107 | parked, severity:high | XC-107: The annotator's task import materialises every row an honest body carries through `to_pylist` before any row check, so a small body still exhausts the pod: a 440-byte zstd body of 30M booleans grew it 5.8 GB, and a value shared by many rows is cop… |
+| LH-306 | parked, severity:medium | LH-306: pylance 12's RestNamespace sends no Content-Type on create, insert or merge_insert (measured on the wire), and the catalog's write load-shed recognises a bulk write only by `content-type: application/vnd.apache.arrow.stream` (load_shed.py:41-49),… |
+| LH-307 | parked, severity:low | LH-307: 38 lineage Dataset nodes name 18 buckets that no longer exist (test and proof warehouses such as `e2edel-*` and `durproof-wh`, and the retired `lakehouse` and `landing` buckets); the reconcile reports each as `ungoverned` with a NoSuchBucket reaso… |
+| LH-308 | parked, severity:medium | LH-308: A tag or branch created while a version reclaim runs is not seen by it: Lance reads the refs once per `cleanup_old_versions` and no door serializes `tags/create`, `tags/update` or `branches/create` with a reclaim, so the new ref names a deleted ve… |
+| LH-309 | parked, severity:low | LH-309: `auth.fgaModelId` (`RASK_FGA_MODEL_ID`, values.yaml:968, rendered in six places across five templates) still pins every service to one model id and skips the by-body resolve, so set, it puts every image on one body whether its code carries it or n… |
+| LH-310 | parked, severity:low | LH-310: A non-fatal service whose resolve runs out its 120 s deadline (OpenFGA down at boot, or the carried model not yet written) builds no FGA client and answers 503 on its gated doors until the pod restarts; nothing retries the resolve |
+| LH-311 | parked, severity:low | LH-311: Five scripts and two JS e2e drivers still write or check tuples against the store's newest model (they name no model, or, in auth_chain.sh, `authorization_models[0]`), and three of them pick `stores[0]` or the newest store of any name: e2e_stack.s… |
+| LH-312 | parked, severity:low | LH-312: fga_seed_demo.py's `_TUPLE_RE` strips double quotes but keeps single quotes, so 21 of the 92 model.fga.yaml fixture tuples (for example `'namespace:depth_1'`) go out quoted and are refused; identical before LH-201 |
+| LH-313 | parked, severity:low | LH-313: Every uvicorn runs as PID 1: the chart's `command` replaces the images' tini ENTRYPOINT (rest-catalog, gateway and notifications dockerfiles), so the kernel drops uvicorn's closing re-raise of SIGTERM and thread-bound work (maintenance's execute_u… |
+| LH-314 | parked, severity:low | LH-314: On pod termination the Dapr sidecar's `dapr.io/block-shutdown-duration` (20 s) ends before the app's drain (preStop 5 s + bound 25 s, or 105 s on maintenance), against the chart's own "the sidecar must outlive the app's drain" invariant; a respons… |
+| LH-315 | parked, severity:low | LH-315: A refused second drain arm inside the notifications and both medallion lifespans (which bind `_disarm_drain` inside `try:`) surfaces as UnboundLocalError and skips the rest of their `finally` (Dapr client close, workflow runtime shutdown); reachab… |
+| LH-317 | parked, severity:low | LH-317: A backslash spelling (`sub\..\..\victim`) is judged the table's own and reads another table only on `file://` roots, where pylance's URL parser splits on `\`; on `s3://` it reads nothing, and the register door already refuses `\..\` |
+| LH-318 | parked, severity:low | LH-318: The sweep's trash exclusion keys `_trash/` records by the encoded spelling, so a recoverably dropped table with a non-ASCII or `%` name is not excluded and the sweep may rewrite bytes an undrop would restore |
+| LH-319 | parked, severity:medium | LH-319: A purge of a table with a non-ASCII or `%` name reclaims none of its bytes: pylance 12's dir namespace writes `.lance-reserved` under the literal encoded prefix while the data lands under the decoded one, so `delete_location` refuses or deletes no… |
+| LH-320 | parked, severity:low | LH-320: The per-dataset reconcile door (`GET .../reconcile`) returns `unrecorded_bases: []` without running the drift axis, so it answers "found nothing" for a table the sweep reports as drifting |
+| LH-321 | parked, severity:low | LH-321: A branch's owning root is looked up among readable datasets only, so a transient failure to open the parent yields one tick's false `maintenance_unrecorded_base` finding and leaves the parent unprotected for that tick |
+| LH-322 | parked, severity:low | LH-322: `LINEAGE_CONTROL_ROOT` follows `maintenance.controlRoot` but the catalog's control root is fixed to the estate bucket, so an operator who moves maintenance's control root would make lineage and maintenance read base records where the catalog never… |
+| LH-323 | parked, severity:low | LH-323: Native data ops that carry no version (`get_table_stats`, main-arm insert/merge_insert, `alter_table_backfill_columns`, index creation) are judged on the latest manifest, so a base planted between the judge and the native open is read or written u… |
+| XC-108 | parked, severity:low | XC-108: About 29 surviving test files in catalog, medallion, maintenance and lineage still read source (`inspect.getsource`, `ast.parse`), and a few carry `ty: ignore` (four in services/medallion/tests/test_promotion_read_is_gated.py), both of which CLAUD… |
+| XC-110 | parked, severity:medium | XC-110: service-kit's optional `lancekit` extra pulls lancedb 0.34 (packages/service-kit/pyproject.toml:50-60) only for the search and viewer read plane; catalog, lineage and maintenance declare `[governed,lakehouse]` yet import `service_kit.lancekit` mod… |
+| LH-325 | parked, severity:medium | LH-325: Maintenance reconcile and repair carry annotator-specific orphan checks (`OrphanedAnnotationTask`, the `annotation_project` edge; reconcile.py:289,607-678, repair.py:189,218), so the lakehouse knows the annotator; LOW-012 only renames them |
+| LH-326 | parked, severity:medium | LH-326: The Ray lane's tier-write semantics in scripts/ray_stage_job.py: full-lane merges use an unconditioned `when_matched_update_all()` and the media lane merges per batch then retracts by run id (:291,570; LH-212's Ray half), the delta lane checks has… |
+| LH-327 | parked, severity:low | LH-327: Two Ray-lane appends still name a file version: ray_stage_job.py:852 and ray_lance_job.py:95 pass data_storage_version to `write_lance(mode='append')`, safe by construction today (LH-260's Ray half) |
+| LH-328 | parked, severity:low | LH-328: The Ray stage and train runtime_env set no LANCE_CPU_THREADS, so Lance's compute pool is host-sized in Ray jobs (LH-250's Ray half) |
+| LOW-034 | parked, severity:low | LOW-034: Vector index sizing is dropped on both index paths: the queued path passes only the metric (`_pylance_kwargs`, indices.py:322), the sync path's native create_table_index ignores num_partitions, num_sub_vectors, m and ef_construction (indices.py:8… |
+| LOW-035 | parked, severity:low | LOW-035: Two annotator write sites re-read their list after a command that already refreshed it (ProjectsLanding:277, tasks/[id]:161), and fireProjectEvent does not refresh its query (projects.remote.ts:198-209); FE-008's annotator half |
+| LOW-036 | parked, severity:low | LOW-036: The `e2etrain*` datasets written by ray_train_job.py (2026-09-07 to 09-14) sit under the model-registry root; at helm rev 249 the reconcile's `ungoverned_live` class names eight `models$e2etrain*` and the catalog answers them not found. Reap them… |
+| LOW-037 | parked, severity:low | LOW-037: Explorer still launches under `opentelemetry-instrument` (chart/templates/explorer.yaml:88), so its latency buckets stop at 10 s and HttpServerLatencyHigh cannot fire for it (XC-067's viewer half) |
+| LOW-038 | parked, severity:low | LOW-038: The viewer dereferences external blob pointers without the caller's scoped credential (LH-209's viewer half) |
+| XC-111 | parked, severity:low | XC-111: tests/unit/repo_tree.py has no importer left once the repo-shape gates were pruned (XC-089 and LH-316 dropped), so it is dead code for deletion |
+| LH-331 | parked, severity:low | LH-331: The medallion and notifications DLQs only park: both routes count, log and ack and republish nothing (medallion api/dlq.py:30-75; notifications api/dlq.py:32-56), the parks alert (MedallionCascadeDeadLettering, chart/alerting/rules.yml:329; Notifi… |
+| XC-113 | parked, severity:low | XC-113: The audit trail has no immutable copy: `lance.audit` records reach only GreptimeDB (the audit pipeline's one exporter, otel-collector.yaml:574-576) under a 400-day TTL (values.yaml:3336), XC-003's credential stops anonymous deletes but not a holde… |
+| LH-332 | parked, severity:medium | LH-332: Erasure reaches one table only and tells the graph nothing: erase() follows neither DERIVED_FROM nor source_rowid into the tiers derived from the erased table, and its commits (branch deletes, main delete, compaction, reclaim) emit no lineage even… |
+| LH-333 | parked, severity:medium | LH-333: Stage runs name no input version: the medallion builds its inputs bare (medallion schemas/events.py:379), lineage sets a READ version only when one is sent (lineage services/repository.py:355-365), and DERIVED_FROM is a dataset-to-dataset edge wit… |
+| LH-334 | parked, severity:medium | LH-334: One ingest commit is announced twice: the catalog emits the /commit write (data.py:220-229) and ingest's own COMPLETE also names the table with its version (ingest lineage.py:85-86,412-438), so one version gets two WROTE edges from two runs, again… |
+| LH-335 | parked, severity:medium | LH-335: The stage lanes' lineage-index rebuild commits a `CreateIndex` version of its own under the stage identity that no event names (medallion services/compute.py:180-186, the event carries the data version captured before it), while XC-091 clause (b)… |
+| XC-114 | parked, severity:low | XC-114: Audit records carry no actor type (person, service, system) and no privilege source, and a refused event signature is only logged (lineage api/fga_deps.py:335, `log.info`), never audited; Lakekeeper records both on every audit record and audits si… |
+| CP-054 | parked, severity:low | CP-054: Owner question, not a defect: the Ray engine adapters (services/engine_registry.py, rayjobs_api_executor.py) and the Dapr Workflow runtime that runs stage_run and train_run (medallion stage_runner.py:83-114) are hosted in the medallion deployable,… |
+| LH-336 | parked, severity:medium | LH-336: Image-specific derivation lives in the shared cascade: medallion services/derivers.py derives a thumbnail and an embedding for image payloads only (derivers.py:9,54-89; compute.py:12-14), and leaves audio and every other kind untouched, against CL… |
+| XC-115 | parked, severity:low | XC-115: CLAUDE.md names RustFS as the object store (CLAUDE.md:314-315: "Lance datasets on RustFS S3", the RustFS operator and `rask-rustfs-io:9000`, the observability bucket on RustFS), and chart/Chart.yaml:9 lists RustFS too, while the chart deploys MinI… |
+| LH-337 | parked, severity:medium | LH-337: The commit verdict has no 'read version garbage-collected' answer beside NO_BASE, so a commit whose read_version an erasure or a cleanup reclaimed is told it made a client error (packages/service-kit/src/service_kit/lancekit/commit_verdict.py:66);… |
+| LH-338 | parked, severity:low | LH-338: The erasure test's oracle greps raw object bytes, so an identifier Lance stores compressed would pass unseen (services/catalog/tests/test_erasure_verifies_what_storage_holds.py) |
+| LH-339 | parked, severity:low | LH-339: The erasure's holder walk is exponential in the depth of a nested-branch chain whose intermediate versions stay retained (services/catalog/src/catalog/services/erasure.py `_holders`) |
+| LH-340 | parked, severity:low | LH-340: The issuer-discovery ClusterRoleBinding adds nothing on k3s (the default binding grants every SA), the catalog and lineage pods mount no API token for it yet, and its comment and the gate's assertion say the JWKS is served only to that grant (char… |
+| LH-341 | parked, severity:low | LH-341: The secrets gate judges only `secrets` and `tokenreviews`: kueue-setup patches deployments cluster-wide, otel-collector reads nodes/proxy, and an aggregated ClusterRole or pods/create, serviceaccounts/token create, impersonate, bind or escalate gr… |
+| LH-342 | parked, severity:low | LH-342: The secretReader prose says the Role binds the release namespace's `default` SA; the Dapr subchart pins secretReader.namespace to `default` (chart/values.yaml, .claude/skills/rask-helm §8) |
+| LH-343 | parked, severity:low | LH-343: NATS rolls in the same wave as the nats-stream Job, whose drift loop reads a failed `consumer info` during a leader move as drift and can recreate a healthy durable with deliverPolicy=new (chart/templates/nats-stream-job.yaml) |
+| LH-344 | parked, severity:low | LH-344: The SA gate keeps ServiceAccount subjects only in namespace `default`, so a render with -n checks nothing, and it is silent on runners.yaml and rayservice.yaml, which no gated overlay renders (tests/unit/test_a_first_party_pod_cannot_read_a_secret… |
+| LH-345 | parked, severity:low | LH-345: The shared-identity allowlist (the seven zones on rask-sa-web, the maintenance pair on rask-sa-maintenance) relaxes one SA per service on a judgment the closes-when does not state |
+| LH-346 | parked, severity:low | LH-346: Dex runs memory storage, so its pod's SA change, like any Dex restart, ends every login session |
+| LH-347 | parked, severity:medium | LH-347: The dev seed reads "connection refused" from the Service as no pod holding a minted token; an outgoing pod that is alive but NotReady answers the same, so a rollout started then mints afresh and rotates the token under its callers (chart/templates… |
+| LH-348 | parked, severity:low | LH-348: Any exit of the seed container takes a seeded OpenBao out of the Service until it restarts, and its sh runs as PID 1 with no TERM trap, so each OpenBao termination waits the full grace period (chart/templates/openbao.yaml) |
+| LH-349 | parked, severity:low | LH-349: The seed test cannot fail on a Service-read timeout read as absence; it is the branch its 403 case takes (tests/unit/test_the_dev_openbao_is_seeded_by_its_own_pod.py) |
+| LH-351 | parked, severity:low | LH-351: A sealed runner's job on the shared Ray head reports lineage as the head's account, `service-trainer`, which holds no rung on a stage namespace; the dummy-lane e2e still sends `LINEAGE_SERVICE_ID` and expects `service-bronze-to-silver`, and deploy… |
+| LH-352 | parked, severity:low | LH-352: The verifier's settings accept an unbounded leeway, an absent CA pin and fetch credential, and a blank subject; the chart now refuses a blank identity, the app does not (packages/service-kit/src/service_kit/governed/settings.py) |
+| LH-353 | parked, severity:low | LH-353: The producer's and ingest's doors verify a service-account bearer before refusing a public caller, so an anonymous request costs a JWKS refetch and learns whether a token is valid; the catalog and lineage refuse first (medallion/api/service_door.p… |
+| LH-354 | parked, severity:low | LH-354: With auth off the stage runners render no RASK_SA_* and no acknowledgement, and the producer's forward reads an identity file the auth-off render does not project, so stage show and terminate refuse (chart/templates/medallion.yaml, medallion/api/s… |
+| LH-355 | parked, severity:low | LH-355: The governed-union and ray-train e2e lanes and scripts/verify_produce_door.sh post the producer's write doors with the retired shared token, so each fails at its first POST with a 403 that reads as an auth defect (tests/e2e-py/test_governed_union_… |
+| LH-356 | parked, severity:low | LH-356: Falsified prose the cutover left: the gateway's strip comment, the FGA model comment, the sweep test docstring (services/gateway/src/gateway/__init__.py:81); RASK_INGEST_SECRETS_FROM_DAPR is ingest's signing switch since LH-064, and the identity d… |
+| LH-357 | parked, severity:low | LH-357: The catalog's http-transport lineage emitter forwards a service principal's catalog-audience token to the lineage URL; the chart pins the dapr transport (services/catalog/src/catalog/core/lineage_emit.py:731) |
+| LH-358 | parked, severity:low | LH-358: The verifier's warm() reports ready without fetching the key set, nothing serves stale keys or throttles refetches (each unknown kid costs a synchronous fetch), an unmapped account is refused with nothing naming it, the per-fetch re-read and the i… |
+| LH-359 | parked, severity:low | LH-359: The seven zone images were not rebuilt with LH-220 (owner, 2026-10-02: frontend out of scope for now), so a signed-out zone's lineage read answers 401 until they are |
+| LH-360 | parked, severity:low | LH-360: The author, lance and model facets are unprefixed, which the OpenLineage spec forbids for custom facets ('Custom facets must use a distinct prefix named after the project', spec/OpenLineage.md); renaming them is a flag day across six image stems,… |
+| LH-361 | parked, severity:low | LH-361: A medallion activity that emits while its signing key is unresolved after boot (a store blip) raises inside best_effort, which logs and completes the activity, so a stage FAIL, a train outcome or a promotion decision's durable record is lost with… |
+| LH-362 | parked, severity:low | LH-362: One failed public-list read drops a signer's verified key: /readyz flaps and the catalog's emits in that window are withheld rather than staged (packages/service-kit/src/service_kit/governed/signing_key.py) |
+| LH-363 | parked, severity:low | LH-363: The OpenBao pod pulls a second public-registry image (natsio/nats-box) for its mint init container, so an unpullable image blocks the secret store's start although a failing mint script does not, and that container mounts OpenBao's system:auth-del… |
+| LH-364 | parked, severity:low | LH-364: A forged bus body the HTTP layer cannot parse (an integer literal past 4300 digits) is answered 400 and dead-lettered, never reaching the verifier, so it pages as lost provenance (services/lineage/src/lineage/api/dapr.py) |
+| LH-365 | parked, severity:low | LH-365: No test asserts the refusal and verified-per-identity counters, the only trace of an acked refusal, and the key cache's 60 s TTL is unpinned (services/lineage/src/lineage/services/signature.py) |
+| LH-366 | parked, severity:low | LH-366: The lineage consumer's module header and the alert rules' prose describe an ephemeral deliverPolicy=all consumer that replays the stream on restart; since LH-303 it is the durable `lineage-durable` (services/lineage/src/lineage/services/consumer.p… |
+| LH-367 | parked, severity:low | LH-367: The catalog door's signability check refuses a 61- or 62-level run-facet header on a create with no source pin although that DatasetEvent could carry it, only the refusal side of the boundary is pinned, and a sibling of the rewritten DaprEmitter p… |
+| LH-368 | parked, severity:low | LH-368: The migrated C6 gate requires a store-scoped Configuration only for lineage and the signing apps, the naming test drives one overlay (a deny-list edit), and a doc line counts the per-app Configurations as 14 where values-local renders 13 (tests/un… |
+| LH-369 | parked, severity:low | LH-369: The signer holders' lifespan ordering (installed before the workflow runtime starts, withdrawn after it shuts down) is pinned by no test in ingest or medallion, and ingest's non_signer fixture depends on the ambient environment not configuring a s… |
+| LH-370 | parked, severity:low | LH-370: The unknown-kid first-sighting LRU avalanches once one identity's pending distinct unknown kids exceed 8,192, a first sighting is never cleared once decided, the test helper maps every RETRY to 'retried' without checking nothing was recorded, and… |
+| LH-371 | parked, severity:low | LH-371: RASK_INGEST_SECRETS_FROM_DAPR is the only signer switch set by hand in values (the others derive from lance.secretsViaDapr), so an overlay that rewrites services.ingest.env silently turns ingest's signing off; deriving it beside lance.signingEnv c… |
 | LH-372 | parked | LH-372: MAINTENANCE_WORK's maintenance-work-durable held 284,518 to 287,410 pending with 72 in flight between 2026-10-02 and 2026-10-04, growing up to ~8/s faster than the worker drains, while the LINEAGE stream stayed still for 1.5 days; whether the prod… |
 | LH-373 | parked | LH-373: The INGEST stream carries 3,090 consumers named ingest-r<8 hex> (about 1,030 per node), several with pending or in-flight messages; per-run, per-pod or test residue is not established |
-| LH-374 | parked | LH-374: scripts/backlog_close.py re-derives the phase table counting only `blocked:` rows as not workable, so the two `not workable now:` rows count as workable (AFTER LAUNCH read 113 for 111 at LH-064's close, hand-corrected), and its headline regex no l… |
-| LH-376 | parked | LH-376: maintenance's /maintenance-work and /maintenance-index act on a bus unit with no signature, so a forged unit names any URI to rewrite or index; XC-078 slice 2's subject permissions limit who can publish (found building XC-078 slice 1) |
-| LH-377 | parked | LH-377: A CloudEvent whose `data` is not an object, or whose `outputs` is a scalar, makes maintenance's triggering_write and the bronze head's selector raise: 500, redelivery, a DLQ park, against their fail-closed docstrings |
-| LH-378 | parked | LH-378: The door tests pin OFF at only /lineage-events, drive the door-less handle_bronze_arrival/handle_publication that production no longer calls (34 references, 9 files), never pin maintenance's keys-unreadable RETRY, and hard-code the control-signer… |
-| LH-379 | parked | LH-379: report_stage_outcome and report_train_outcome sign inside best_effort, so a producer key miss drops their FAIL record after one attempt, a provenance gap (promotion_review's outcome got a retry budget in XC-078) |
-| LH-380 | parked | LH-380: Byte-free operations outside the maintenance set (drop_index, metadata and column operations) still fire the bronze head on the bronze table, and the medallion's copy of the maintenance-operation set is not pinned against the emitters as lineage's… |
-| LH-381 | parked | LH-381: Every cascade trigger is delivered twice about 30 s apart with the same token (MEDALLION 1976..1998, 2026-10-02..04): a head acks its first delivery late or not at all; the token-seeded batch id absorbs it |
-| LH-382 | parked | LH-382: A control event the catalog emits while it has no key (a table_published included) is withheld and lost, counted in catalog_control_emit_failed_total{reason="unsigned"} but paging nobody; the keyless catalog reports not ready, the window LH-064 ac… |
-| LH-383 | parked | LH-383: notifications: the feed reconciler's lane is ungated (its /lineage-events enforcement holds while lineage enforces); NAMED_ACTIONS events with no extra.subject are refused under enforce though the handler ignores them; an exempt (R3/R5) annotator… |
-| LH-384 | parked | LH-384: Both maintenance Deployments host /maintenance-arrival, so the dedicated workers plan arrivals too |
-| LH-385 | parked | LH-385: A staged control-outbox object naming an unknown kid inside lineage-kit's 30 s refresh window stalls the catalog relay's pass about one tick before it is retired; nothing forged is published |
-| LH-389 | parked | LH-389: On a release that first narrows a machine identity to a new rung, the model is written pre-upgrade and the grant post-upgrade, so the new lineage refuses the reconciler (403, cursor held, nothing lost) until bootstrap-admin has run; the hook's own… |
-| LH-390 | parked | LH-390: tests/e2e/verify_notifications_two_users.mjs still seeds `user:notifications reader table:<OUTPUT>` with the governed-feed rationale CTL-021 retired, so each run re-adds a data rung the reconciler no longer uses (the live `reader table:bronze$even… |
-| LH-391 | parked | LH-391: model.fga.yaml asserts no `event_stager` holder is refused can_read_event_feed and no `role#assignee` tuple on event_reader is refused, so folding the stager into the feed rung flips no check (found reviewing CTL-021) |
-| LH-392 | parked | LH-392: A supplied-token rerun against a CLOSED stage plan: succeeded re-drives nothing even when pass 2 died into the DLQ; failed reopens with attempt 1's stored order, ignoring the rerun's from/to versions and originator (found reviewing CP-029; medalli… |
-| LH-393 | parked | LH-393: Plan close is not attempt-guarded: a sweep resolve that read attempt 1 can close a just-reopened attempt 2; close/reopen can drop the open-index entry; sweep update lambdas do not check is_open (narrow windows; found reviewing CP-029; service-kit… |
-| LH-394 | parked | LH-394: A succeeded Ray stage records medallion.stage.duration twice (hand_off and pass 2), against trigger_guards' one-recording-site comment (found reviewing CP-029) |
-| LH-395 | parked | LH-395: MEDALLION_CONTROL_ROOT now renders under medallion.ray even with projectsEnabled=false, turning on #84 tenant routing in an overlay that opted out (found reviewing CP-029; chart medallion.yaml) |
-| LH-396 | parked | LH-396: The train sweep's never-registered FAIL can race a Dapr-redelivered submit retry: the retry then trains and COMPLETEs a run already closed failed (found reviewing CP-029; train_plans.py dispatch) |
-| LH-397 | parked | LH-397: services/maintenance test_two_readings_move_with_the_heap fails intermittently under -n 16 (passes alone; seen twice 2026-10-05 on trees that touch no maintenance code) |
-| LH-398 | parked | LH-398: The lance.medallion.verdict span attribute and medallion_stage_outcome_total{verdict} lost their only tests with stage_run's suite (found reviewing CP-029) |
-| LH-399 | parked | LH-399: The chart's post-upgrade hook rask-kueue-setup hangs when Kueue's conversion webhook fails TLS verification (`conversion webhook for kueue.x-k8s.io/v1beta2 ... tls: failed to verify certificate`), so helm marks the release failed although every ob… |
-| LH-400 | parked | LH-400: A project that declares its own review_enabled while the chart's qualityReview is off holds promotions on a producer that hosts no review runtime; since LH-226 the hold is DROPped to the DLQ instead of waiting forever, but the declared review is s… |
-| LH-401 | parked | LH-401: LH-211's detached commit for blob tables leaves one `_transactions/*.txn` per commit, a crash between the detached commit and its DeleteObject leaves a `d<N>.manifest` Lance cleanup does not remove (logged, uncounted), and with an empty endpoint t… |
-| LH-402 | parked | LH-402: LH-211's 400-vs-503 split rests on substring matches of pylance's error wording, pinned only by its tests; footer reads build one object store per file, and blob commits write a full detached manifest plus a boto3 client each (found reviewing LH-2… |
-| LH-403 | parked | LH-403: /commit does not check file CONTENTS: inline blob descriptors and NULLs in non-nullable columns pass the footer checks (found building LH-211) |
-| LH-404 | parked | LH-404: The viewer's attached stores (POST /v1/stores, `secret: null`) make the viewer sign the deployment's own env credentials toward a host an estate admin chose (services/viewer objects.py:126-130; viewer ignored for Phase 1) (found reviewing LH-205) |
-| LH-405 | parked | LH-405: LH-205's endpoint comparison is exact, so another hostname of the estate store (the cluster-local FQDN, the external name) or a trailing path is refused; it fails closed and nothing sends one today (found reviewing LH-205) |
+| LH-374 | parked, severity:low | LH-374: scripts/backlog_close.py re-derives the phase table counting only `blocked:` rows as not workable, so the two `not workable now:` rows count as workable (AFTER LAUNCH read 113 for 111 at LH-064's close, hand-corrected), and its headline regex no l… |
+| LH-376 | parked, severity:medium | LH-376: maintenance's /maintenance-work and /maintenance-index act on a bus unit with no signature, so a forged unit names any URI to rewrite or index; XC-078 slice 2's subject permissions limit who can publish (found building XC-078 slice 1) |
+| LH-377 | parked, severity:low | LH-377: A CloudEvent whose `data` is not an object, or whose `outputs` is a scalar, makes maintenance's triggering_write and the bronze head's selector raise: 500, redelivery, a DLQ park, against their fail-closed docstrings |
+| LH-378 | parked, severity:low | LH-378: The door tests pin OFF at only /lineage-events, drive the door-less handle_bronze_arrival/handle_publication that production no longer calls (34 references, 9 files), never pin maintenance's keys-unreadable RETRY, and hard-code the control-signer… |
+| LH-379 | parked, severity:medium | LH-379: report_stage_outcome and report_train_outcome sign inside best_effort, so a producer key miss drops their FAIL record after one attempt, a provenance gap (promotion_review's outcome got a retry budget in XC-078) |
+| LH-380 | parked, severity:low | LH-380: Byte-free operations outside the maintenance set (drop_index, metadata and column operations) still fire the bronze head on the bronze table, and the medallion's copy of the maintenance-operation set is not pinned against the emitters as lineage's… |
+| LH-381 | parked, severity:low | LH-381: Every cascade trigger is delivered twice about 30 s apart with the same token (MEDALLION 1976..1998, 2026-10-02..04): a head acks its first delivery late or not at all; the token-seeded batch id absorbs it |
+| LH-382 | parked, severity:medium | LH-382: A control event the catalog emits while it has no key (a table_published included) is withheld and lost, counted in catalog_control_emit_failed_total{reason="unsigned"} but paging nobody; the keyless catalog reports not ready, the window LH-064 ac… |
+| LH-383 | parked, severity:low | LH-383: notifications: the feed reconciler's lane is ungated (its /lineage-events enforcement holds while lineage enforces); NAMED_ACTIONS events with no extra.subject are refused under enforce though the handler ignores them; an exempt (R3/R5) annotator… |
+| LH-384 | parked, severity:low | LH-384: Both maintenance Deployments host /maintenance-arrival, so the dedicated workers plan arrivals too |
+| LH-385 | parked, severity:low | LH-385: A staged control-outbox object naming an unknown kid inside lineage-kit's 30 s refresh window stalls the catalog relay's pass about one tick before it is retired; nothing forged is published |
+| LH-389 | parked, severity:low | LH-389: On a release that first narrows a machine identity to a new rung, the model is written pre-upgrade and the grant post-upgrade, so the new lineage refuses the reconciler (403, cursor held, nothing lost) until bootstrap-admin has run; the hook's own… |
+| LH-390 | parked, severity:low | LH-390: tests/e2e/verify_notifications_two_users.mjs still seeds `user:notifications reader table:<OUTPUT>` with the governed-feed rationale CTL-021 retired, so each run re-adds a data rung the reconciler no longer uses (the live `reader table:bronze$even… |
+| LH-391 | parked, severity:low | LH-391: model.fga.yaml asserts no `event_stager` holder is refused can_read_event_feed and no `role#assignee` tuple on event_reader is refused, so folding the stager into the feed rung flips no check (found reviewing CTL-021) |
+| LH-392 | parked, severity:low | LH-392: A supplied-token rerun against a CLOSED stage plan: succeeded re-drives nothing even when pass 2 died into the DLQ; failed reopens with attempt 1's stored order, ignoring the rerun's from/to versions and originator (found reviewing CP-029; medalli… |
+| LH-393 | parked, severity:low | LH-393: Plan close is not attempt-guarded: a sweep resolve that read attempt 1 can close a just-reopened attempt 2; close/reopen can drop the open-index entry; sweep update lambdas do not check is_open (narrow windows; found reviewing CP-029; service-kit… |
+| LH-394 | parked, severity:low | LH-394: A succeeded Ray stage records medallion.stage.duration twice (hand_off and pass 2), against trigger_guards' one-recording-site comment (found reviewing CP-029) |
+| LH-395 | parked, severity:low | LH-395: MEDALLION_CONTROL_ROOT now renders under medallion.ray even with projectsEnabled=false, turning on #84 tenant routing in an overlay that opted out (found reviewing CP-029; chart medallion.yaml) |
+| LH-396 | parked, severity:low | LH-396: The train sweep's never-registered FAIL can race a Dapr-redelivered submit retry: the retry then trains and COMPLETEs a run already closed failed (found reviewing CP-029; train_plans.py dispatch) |
+| LH-397 | parked, severity:low | LH-397: services/maintenance test_two_readings_move_with_the_heap fails intermittently under -n 16 (passes alone; seen twice 2026-10-05 on trees that touch no maintenance code) |
+| LH-398 | parked, severity:low | LH-398: The lance.medallion.verdict span attribute and medallion_stage_outcome_total{verdict} lost their only tests with stage_run's suite (found reviewing CP-029) |
+| LH-399 | parked, severity:low | LH-399: The chart's post-upgrade hook rask-kueue-setup hangs when Kueue's conversion webhook fails TLS verification (`conversion webhook for kueue.x-k8s.io/v1beta2 ... tls: failed to verify certificate`), so helm marks the release failed although every ob… |
+| LH-400 | parked, severity:low | LH-400: A project that declares its own review_enabled while the chart's qualityReview is off holds promotions on a producer that hosts no review runtime; since LH-226 the hold is DROPped to the DLQ instead of waiting forever, but the declared review is s… |
+| LH-401 | parked, severity:low | LH-401: LH-211's detached commit for blob tables leaves one `_transactions/*.txn` per commit, a crash between the detached commit and its DeleteObject leaves a `d<N>.manifest` Lance cleanup does not remove (logged, uncounted), and with an empty endpoint t… |
+| LH-402 | parked, severity:low | LH-402: LH-211's 400-vs-503 split rests on substring matches of pylance's error wording, pinned only by its tests; footer reads build one object store per file, and blob commits write a full detached manifest plus a boto3 client each (found reviewing LH-2… |
+| LH-403 | parked, severity:low | LH-403: /commit does not check file CONTENTS: inline blob descriptors and NULLs in non-nullable columns pass the footer checks (found building LH-211) |
+| LH-404 | parked, severity:low | LH-404: The viewer's attached stores (POST /v1/stores, `secret: null`) make the viewer sign the deployment's own env credentials toward a host an estate admin chose (services/viewer objects.py:126-130; viewer ignored for Phase 1) (found reviewing LH-205) |
+| LH-405 | parked, severity:low | LH-405: LH-205's endpoint comparison is exact, so another hostname of the estate store (the cluster-local FQDN, the external name) or a trailing path is refused; it fails closed and nothing sends one today (found reviewing LH-205) |
 | XC-120 | parked | XC-120: Upstream, track only: dapr 1.18.1's sidecar panics (nil pointer) on a workflow API call from an app-id with no actor state store in scope, instead of returning an error (measured live 2026-10-05 on the producer; LH-226 made the app not call it) |
-| LH-406 | parked | LH-406: Branch answers still inconsistent after LH-272: restore on main to a missing version answers 500 (an upstream RuntimeError); version/list and version/describe answer a missing branch with code 4 and a storage path instead of 22; tags/create and ta… |
-| LH-407 | parked | LH-407: register and undrop re-registers still attach a dataset's own lineage.* / rask.* schema metadata (undrop cannot refuse lineage.*: a re-registered table carries the catalog's own stamp); field-level rask.* (classification) in a create payload is no… |
-| LH-408 | parked | LH-408: LH-208's reserved-key guard matches exact keys: case, whitespace and unicode variants (`Lineage.dataset_id`, ` lineage.x`, a zero-width joiner) pass with no reader keyed on them today; a failed pylance create_branch('victim$payroll') leaves tree/v… |
-| LH-409 | parked | LH-409: Ingest's catalog_service._create_empty sends external_blob_base only when it creates the table: on a 409 for an existing dataset nothing is registered, so a second ingest from a different approved bucket into the same dataset is refused by Lance a… |
-| LH-410 | parked | LH-410: After LH-209 the blob door, the viewer and the medallion still dereference external pointers with their service's own credential; an approved LANCE_EXTERNAL_BLOB_BASES entry is open to every creator (any prefix inside it); LANCE_ALLOW_EXTERNAL_BLO… |
-| LH-411 | parked | LH-411: A rename's lineage event names the SOURCE as its input, and lineage authorizes it asynchronously after the rename has moved the source's FGA tuples to the new id, so the event is refused (`can_get_metadata required on inputs: <src>`) and dead-lett… |
-| LH-412 | parked | LH-412: tests/unit/test_invariants.py helm-render tests (and test_lineage_emission_wiring, test_a_scoped_identity_needs_only_its_name) fail intermittently under -n 16 and pass alone; seen on five trees 2026-10-05 that touched no chart file |
-| LH-413 | parked | LH-413: LH-203/LH-204/LH-214 residuals: the branch delete control event names only the requested branch, not the nested ones it removed; two concurrent branch creates can both pass the nesting check; version/delete's nested refusal is untested; location-c… |
-| LH-414 | parked | LH-414: LH-263 residuals: an index segment whose creating commit was reclaimed, or that a merge or delta built, counts as unproven, so its retained version stays a residual even if it never held the subject (over-reports, never under-reports); FTS segment… |
-| LH-415 | parked | LH-415: LH-242 residuals: a create Overwrite's control event is still table_created (distinguishable only by extra.mode); insert?mode=overwrite stays at writer tier (found building LH-242) |
-| LH-416 | parked | LH-416: LH-037 residuals: create_namespace ExistOk on an existing warehouse-bound top-level id still hits the warehouse guard; a Skip over an absent namespace cannot list its descendants, so their stale grants are not reached; the Overwrite can_delete den… |
-| LH-417 | parked | LH-417: LH-216 residuals: seed_bronze's `id` still carries no ingest primary-key metadata (adding `lance-schema:unenforced-primary-key` made the stage re-run merge fail with "Primary key column and all its ancestors must not be nullable", undiagnosed); th… |
-| LH-418 | parked | LH-418: LH-241 residuals: the window's transaction walk makes one read_transaction per version in (begin, end] with no bound (belongs with LH-247's request bounds); a seventh contract statement survives at services/ingest/src/ingest/catalog.py:225; script… |
-| LH-419 | parked | LH-419: LH-202 residuals: a writer's Put on data/* can overwrite a committed data file's bytes (a session policy cannot refuse an overwriting Put; recorded in build_session_policy); the medallion producer's service identity may create in bronze but holds… |
-| LH-420 | parked | LH-420: LH-194 residuals, both D6's: a producer that dies between a fresh register and its unwind leaves a byte-less record that the next /produce treats as existing (only the drift report's absent_datasets names it); two concurrent first produces can hav… |
-| LH-421 | parked | LH-421: LH-245 residuals: anyone holding a maintain-tier vend or a static key can still arm a table out of band (every catalog door and both medallion lanes then disarm it on their next commit, and the sweep is the backstop); the Ray job's staging dataset… |
-| LH-422 | parked | LH-422: CP-044 residuals: ray_jobs_api.is_terminal and TERMINAL_OK have no production caller; MEDALLION_TRAIN_LINEAGE_URL's only reader is now cascade_lag_readers.py:175 (the producer's lineage address), so the name is wrong and its rename is a chart chan… |
-| LH-423 | parked | LH-423: LH-273/LH-252 residuals: the native doors (query, count, explain, analyze, stats, backfill, branchless merge_insert) answer 406 for a table on a base with its own credential, because the native reader takes no per-base parameters (serving them thr… |
-| LH-424 | parked | LH-424: LH-243 residuals: /commit keeps a race window between its held-key check and its real commit (pylance 12 has no race-free Append), documented; a key nested inside a struct is checked only within a write's rows; the Ray lane ends an ambiguous merge… |
-| LH-425 | parked | LH-425: LH-247 residuals: the change window's transaction walk is still unbounded (LH-418); explain_plan does not bound k/offset and nprobes/ef/refine_factor are unbounded on every query door; analyze_plan answers 500 on Lance's invalid-input error (not w… |
-| LH-426 | parked | LH-426: XC-077 residuals: a change to the FGA client set is refused until OpenFGA's pods restart (subjects come from a ConfigMap read at start; fail-closed, documented); the exclusive NetworkPolicy ingress for OpenFGA waits on XC-009; OpenFGA's Postgres D… |
-| LH-427 | parked | LH-427: XC-075 residuals: the empty-image-cache upgrade was shown only for the estate MinIO image (the node pulled it fresh); a node empty of everything waits on XC-096's fresh kind stack; .docker/minio.dockerfile runs as root by default (live data is roo… |
-| LH-428 | parked | LH-428: Rules left without a behavioural test after the 2026-10-06 prune deleted their source-reading tests (CLAUDE.md: no test reads source): the can_promote rung on an accept_assertions publish; revoke-before-drop on a warehouse cascade; the describe do… |
-| LH-386 | parked | LH-386: Stale prose: ingest/lineage.py complete() says ingest's COMPLETE fires the bronze head (its _emitter says ingest never publishes to the topic); maintenance/services/arrival.py lists ingest and the annotator among topic writers; scripts/ray_e2e_sta… |
-| XC-117 | parked | XC-117: Nothing ties a non-off signature-door mode to a reachable secret store: an enforcing door with no store answers RETRY to every delivery it would act on |
-| XC-118 | parked | XC-118: Downstream of the OTel Collector, not to be fixed (owner 2026-10-04: GreptimeDB is being replaced by OpenObserve or the Grafana stack): vmalert v1.106.1 POSTs every query with no Content-Type and GreptimeDB answers 415, so all 59 rules are health=… |
-| XC-119 | parked | XC-119: The INGEST stream reports 3,090 consumers and MAINTENANCE_WORK holds 290,607 messages (272 MiB), seen in passing 2026-10-04; provenance not established |
-| LH-387 | parked | LH-387: `RASK_INGEST_SECRETS_FROM_DAPR` is hard-coded "true" in values.yaml, so a render with no secret store pays ~2 minutes of boot retries before ingest connects without its NATS user; render it from lance.secretsViaDapr (found in XC-078 slice 3) |
-| LH-388 | parked | LH-388: Ingest reads `nats-user-ingest` once at startup: a store unreachable for the whole boot window leaves it without a user until restart, refused under NATS auth; a background re-resolve like the signing holder's would heal in place (found in XC-078… |
+| LH-406 | parked, severity:low | LH-406: Branch answers still inconsistent after LH-272: restore on main to a missing version answers 500 (an upstream RuntimeError); version/list and version/describe answer a missing branch with code 4 and a storage path instead of 22; tags/create and ta… |
+| LH-407 | parked, severity:low | LH-407: register and undrop re-registers still attach a dataset's own lineage.* / rask.* schema metadata (undrop cannot refuse lineage.*: a re-registered table carries the catalog's own stamp); field-level rask.* (classification) in a create payload is no… |
+| LH-408 | parked, severity:low | LH-408: LH-208's reserved-key guard matches exact keys: case, whitespace and unicode variants (`Lineage.dataset_id`, ` lineage.x`, a zero-width joiner) pass with no reader keyed on them today; a failed pylance create_branch('victim$payroll') leaves tree/v… |
+| LH-409 | parked, severity:low | LH-409: Ingest's catalog_service._create_empty sends external_blob_base only when it creates the table: on a 409 for an existing dataset nothing is registered, so a second ingest from a different approved bucket into the same dataset is refused by Lance a… |
+| LH-410 | parked, severity:low | LH-410: After LH-209 the blob door, the viewer and the medallion still dereference external pointers with their service's own credential; an approved LANCE_EXTERNAL_BLOB_BASES entry is open to every creator (any prefix inside it); LANCE_ALLOW_EXTERNAL_BLO… |
+| LH-411 | parked, severity:medium | LH-411: A rename's lineage event names the SOURCE as its input, and lineage authorizes it asynchronously after the rename has moved the source's FGA tuples to the new id, so the event is refused (`can_get_metadata required on inputs: <src>`) and dead-lett… |
+| LH-412 | parked, severity:low | LH-412: tests/unit/test_invariants.py helm-render tests (and test_lineage_emission_wiring, test_a_scoped_identity_needs_only_its_name) fail intermittently under -n 16 and pass alone; seen on five trees 2026-10-05 that touched no chart file |
+| LH-413 | parked, severity:low | LH-413: LH-203/LH-204/LH-214 residuals: the branch delete control event names only the requested branch, not the nested ones it removed; two concurrent branch creates can both pass the nesting check; version/delete's nested refusal is untested; location-c… |
+| LH-414 | parked, severity:low | LH-414: LH-263 residuals: an index segment whose creating commit was reclaimed, or that a merge or delta built, counts as unproven, so its retained version stays a residual even if it never held the subject (over-reports, never under-reports); FTS segment… |
+| LH-415 | parked, severity:low | LH-415: LH-242 residuals: a create Overwrite's control event is still table_created (distinguishable only by extra.mode); insert?mode=overwrite stays at writer tier (found building LH-242) |
+| LH-416 | parked, severity:low | LH-416: LH-037 residuals: create_namespace ExistOk on an existing warehouse-bound top-level id still hits the warehouse guard; a Skip over an absent namespace cannot list its descendants, so their stale grants are not reached; the Overwrite can_delete den… |
+| LH-417 | parked, severity:low | LH-417: LH-216 residuals: seed_bronze's `id` still carries no ingest primary-key metadata (adding `lance-schema:unenforced-primary-key` made the stage re-run merge fail with "Primary key column and all its ancestors must not be nullable", undiagnosed); th… |
+| LH-418 | parked, severity:low | LH-418: LH-241 residuals: the window's transaction walk makes one read_transaction per version in (begin, end] with no bound (belongs with LH-247's request bounds); a seventh contract statement survives at services/ingest/src/ingest/catalog.py:225; script… |
+| LH-419 | parked, severity:low | LH-419: LH-202 residuals: a writer's Put on data/* can overwrite a committed data file's bytes (a session policy cannot refuse an overwriting Put; recorded in build_session_policy); the medallion producer's service identity may create in bronze but holds… |
+| LH-420 | parked, severity:low | LH-420: LH-194 residuals, both D6's: a producer that dies between a fresh register and its unwind leaves a byte-less record that the next /produce treats as existing (only the drift report's absent_datasets names it); two concurrent first produces can hav… |
+| LH-421 | parked, severity:low | LH-421: LH-245 residuals: anyone holding a maintain-tier vend or a static key can still arm a table out of band (every catalog door and both medallion lanes then disarm it on their next commit, and the sweep is the backstop); the Ray job's staging dataset… |
+| LH-422 | parked, severity:low | LH-422: CP-044 residuals: ray_jobs_api.is_terminal and TERMINAL_OK have no production caller; MEDALLION_TRAIN_LINEAGE_URL's only reader is now cascade_lag_readers.py:175 (the producer's lineage address), so the name is wrong and its rename is a chart chan… |
+| LH-423 | parked, severity:low | LH-423: LH-273/LH-252 residuals: the native doors (query, count, explain, analyze, stats, backfill, branchless merge_insert) answer 406 for a table on a base with its own credential, because the native reader takes no per-base parameters (serving them thr… |
+| LH-424 | parked, severity:low | LH-424: LH-243 residuals: /commit keeps a race window between its held-key check and its real commit (pylance 12 has no race-free Append), documented; a key nested inside a struct is checked only within a write's rows; the Ray lane ends an ambiguous merge… |
+| LH-425 | parked, severity:low | LH-425: LH-247 residuals: the change window's transaction walk is still unbounded (LH-418); explain_plan does not bound k/offset and nprobes/ef/refine_factor are unbounded on every query door; analyze_plan answers 500 on Lance's invalid-input error (not w… |
+| LH-426 | parked, severity:low | LH-426: XC-077 residuals: a change to the FGA client set is refused until OpenFGA's pods restart (subjects come from a ConfigMap read at start; fail-closed, documented); the exclusive NetworkPolicy ingress for OpenFGA waits on XC-009; OpenFGA's Postgres D… |
+| LH-427 | parked, severity:low | LH-427: XC-075 residuals: the empty-image-cache upgrade was shown only for the estate MinIO image (the node pulled it fresh); a node empty of everything waits on XC-096's fresh kind stack; .docker/minio.dockerfile runs as root by default (live data is roo… |
+| LH-428 | parked, severity:low | LH-428: Rules left without a behavioural test after the 2026-10-06 prune deleted their source-reading tests (CLAUDE.md: no test reads source): the can_promote rung on an accept_assertions publish; revoke-before-drop on a warehouse cascade; the describe do… |
+| LH-386 | parked, severity:low | LH-386: Stale prose: ingest/lineage.py complete() says ingest's COMPLETE fires the bronze head (its _emitter says ingest never publishes to the topic); maintenance/services/arrival.py lists ingest and the annotator among topic writers; scripts/ray_e2e_sta… |
+| XC-117 | parked, severity:low | XC-117: Nothing ties a non-off signature-door mode to a reachable secret store: an enforcing door with no store answers RETRY to every delivery it would act on |
+| XC-118 | parked, severity:low | XC-118: Downstream of the OTel Collector, not to be fixed (owner 2026-10-04: GreptimeDB is being replaced by OpenObserve or the Grafana stack): vmalert v1.106.1 POSTs every query with no Content-Type and GreptimeDB answers 415, so all 59 rules are health=… |
+| XC-119 | parked, severity:low | XC-119: The INGEST stream reports 3,090 consumers and MAINTENANCE_WORK holds 290,607 messages (272 MiB), seen in passing 2026-10-04; provenance not established |
+| LH-387 | parked, severity:low | LH-387: `RASK_INGEST_SECRETS_FROM_DAPR` is hard-coded "true" in values.yaml, so a render with no secret store pays ~2 minutes of boot retries before ingest connects without its NATS user; render it from lance.secretsViaDapr (found in XC-078 slice 3) |
+| LH-388 | parked, severity:low | LH-388: Ingest reads `nats-user-ingest` once at startup: a store unreachable for the whole boot window leaves it without a user until restart, refused under NATS auth; a background re-resolve like the signing holder's would heal in place (found in XC-078… |
 | XC-006 | parked | XC-006: OpenBao has no auto-unseal and no sealed-state alert |
 | XC-007 | parked | XC-007: Every in-cluster store hop is plaintext: S3, OpenFGA, the AGE DSNs, OpenBao, NATS and OTLP |
 | XC-008 | parked | XC-008: The lineage graph and OpenFGA run on a TLS-off `rask-age` StatefulSet, and the built CNPG path is not taken; every prerequisite was measured met live (k3s v1.36.2, CNPG 1.29.1, ImageVolume on, the AGE extension image age-cnpg-ext:1.7.0-18 built; o… |
@@ -415,6 +433,14 @@ Severity is not a label (the tracker conventions name none); it stays in each bo
 | XC-013 (prod half) | parked | XC-013 (prod half): an off-cluster pg dump destination and a real snapshotClassName |
 | XC-031 (prod half) | parked | XC-031 (prod half): the ordered RUNBOOK-prod-install.md |
 | XC-032 (prod half) | parked | XC-032 (prod half): a prod registry and per-component digests |
+| PARK-HANDOFF-1 | parked, frontend | PARK-HANDOFF-1: The lakehouse zone still reads the S3 browser and the table history through the BFF JSON helper |
+| PARK-HANDOFF-2 | parked, frontend | PARK-HANDOFF-2: The createWarehouse and checkAccess schemas are hand-copied in the home and lakehouse zones |
+| PARK-ALERT-1 | parked, needs-info | PARK-ALERT-1: Decide whether the estate pages: alerting on, GreptimeDB Enterprise, or no paging |
+| PARK-ANNO-1 | parked | PARK-ANNO-1: Annotation, AI-assist and active-learning gaps (epic) |
+| PARK-TODO-1 | parked | PARK-TODO-1: UI and product notes from TODO.md (umbrella) |
+| PARK-TRACE-2 | parked, needs-info | PARK-TRACE-2: Decide whether a cascade started through the shared app token names an originator |
+| PARK-TRACE-3 | parked, needs-info | PARK-TRACE-3: Decide how a Ray stage job that fails after committing records its committed version in lineage |
+| PARK-TRACE-4 | parked, needs-info | PARK-TRACE-4: Decide whether table_published notifies watchers |
 
 ## Blocked-by edges
 
@@ -435,23 +461,19 @@ Read: *blocked* is blocked by *blocker*. Check each against its sentence.
 | 11 | XC-094 | LH-148 | cue 'preconditions' | XC-094 | Preconditions LH-148 and CP-037 are still open. |
 | 12 | XC-094 | CP-037 | cue 'preconditions' | XC-094 | Preconditions LH-148 and CP-037 are still open. |
 | 13 | XC-090 | XC-095 | tag **enabler: X** | XC-095 | **enabler: XC-090** |
-| 14 | LH-207 | LH-288 | cue 'needs' | LH-207 | A writer is also a reader (model.fga:431-432,551-552) and the server-mediated path does not mask (credentials.py:136-139), so client-side copying needs LH-288's ruling. |
-| 15 | XC-084 | LH-218 | cue 'precondition for' | LH-218 | also the precondition for deleting the medallion MinIO user (XC-084). |
-| 16 | XC-084 | LH-219 | cue 'precondition for' | LH-219 | also the precondition for deleting the maintenance user (XC-084). |
-| 17 | LH-254 | XC-096 | cue 'needs' | LH-254 | That needs XC-075 and XC-096 to let the lane come up. |
-| 18 | LH-256 | LH-283 | cue 'waits on' | LH-256 | Sites that belong to another row's commit: index_specs.py:14-17 (LH-248), dataplane.py:277-279 and core/config.py:459-461 (LH-273), and services/catalog/tests/test_tag_and_branch_failures_carry_their_spec_code.py:147-153, which waits on LH-283 (parked and uncounted). |
-| 19 | LH-330 | LH-164 | cue 'waits on' | LH-330 | Partly blocked: how the heads' and the lanes' non-Append writes reach the catalog is the commit-door decision under **Decisions still open**, and /produce's location also waits on D6 (LH-164 part 1, LH-194). |
-| 20 | LH-218 | LH-129 | cue 'enabler of' | LH-129 | - *Why:* Phase 1 takes it as the stated enabler of CP-029 (jobs vend their own credentials), LH-218 (the Ray lane's root-key byte path is this row's). |
-| 21 | XC-081 | XC-004 | cue 'needs' | XC-081 | - *How:* Move the e2e stacks to openbao-on plus ESO (needs XC-004's installer). |
-| 22 | XC-090 | XC-033 | X's enabler | XC-033 | - *Why:* XC-090's enabler, with XC-096. |
-| 23 | XC-033 | XC-096 | cue 'preconditions before wiring more modules' | XC-033 | - *How:* Preconditions before wiring more modules: XC-075, XC-096, and XC-049 for the kueue-setup hook. |
-| 24 | XC-033 | XC-049 | cue 'preconditions before wiring more modules' | XC-033 | - *How:* Preconditions before wiring more modules: XC-075, XC-096, and XC-049 for the kueue-setup hook. |
-| 25 | CTL-022 | LH-233 | cue 'waits on' | CTL-022 | - **not workable now:** waits on LH-233's principal-deleted event. |
-| 26 | CP-053 | XC-049 | cue 'waits on' | CP-053 | either shape then also waits on XC-049 (Kueue leaves rask's release, D11). |
-| 27 | LOW-024 | LOW-027 | cue 'depends on' | LOW-024 | Serving depends on LOW-027 (search resolves only DatasetRegistry paths today). |
-| 28 | LH-426 | XC-009 | cue 'waits on' | LH-426 | the exclusive NetworkPolicy ingress for OpenFGA waits on XC-009 |
-| 29 | LH-427 | XC-096 | cue 'waits on' | LH-427 | a node empty of everything waits on XC-096's fresh kind stack |
-| 30 | LH-262 | LH-177 | cue 'waits on' | LH-262 | - LH-262 · A vended credential under SSE-KMS cannot use the key: the session policy grants no kms:* action · waits on: an AWS deployment with a customer-managed key (the kms statement and its unit test can land after LH-177's endpoint split) |
+| 14 | XC-084 | LH-218 | cue 'precondition for' | LH-218 | also the precondition for deleting the medallion MinIO user (XC-084). |
+| 15 | XC-084 | LH-219 | cue 'precondition for' | LH-219 | also the precondition for deleting the maintenance user (XC-084). |
+| 16 | LH-254 | XC-096 | cue 'needs' | LH-254 | That needs XC-075 and XC-096 to let the lane come up. |
+| 17 | XC-081 | XC-004 | cue 'needs' | XC-081 | - *How:* Move the e2e stacks to openbao-on plus ESO (needs XC-004's installer). |
+| 18 | XC-090 | XC-033 | X's enabler | XC-033 | - *Why:* XC-090's enabler, with XC-096. |
+| 19 | XC-033 | XC-096 | cue 'preconditions before wiring more modules' | XC-033 | - *How:* Preconditions before wiring more modules: XC-075, XC-096, and XC-049 for the kueue-setup hook. |
+| 20 | XC-033 | XC-049 | cue 'preconditions before wiring more modules' | XC-033 | - *How:* Preconditions before wiring more modules: XC-075, XC-096, and XC-049 for the kueue-setup hook. |
+| 21 | CTL-022 | LH-233 | cue 'waits on' | CTL-022 | - **not workable now:** waits on LH-233's principal-deleted event. |
+| 22 | CP-053 | XC-049 | cue 'waits on' | CP-053 | either shape then also waits on XC-049 (Kueue leaves rask's release, D11). |
+| 23 | LOW-024 | LOW-027 | cue 'depends on' | LOW-024 | Serving depends on LOW-027 (search resolves only DatasetRegistry paths today). |
+| 24 | LH-426 | XC-009 | cue 'waits on' | LH-426 | the exclusive NetworkPolicy ingress for OpenFGA waits on XC-009 |
+| 25 | LH-427 | XC-096 | cue 'waits on' | LH-427 | a node empty of everything waits on XC-096's fresh kind stack |
+| 26 | LH-262 | LH-177 | cue 'waits on' | LH-262 | - LH-262 · A vended credential under SSE-KMS cannot use the key: the session policy grants no kms:* action · waits on: an AWS deployment with a customer-managed key (the kms statement and its unit test can land after LH-177's endpoint split) |
 
 ### Candidate edges dropped
 
@@ -473,11 +495,15 @@ Read: *blocked* is blocked by *blocker*. Check each against its sentence.
 | XC-094 | LH-064 | XC-094 | LH-064 is not an open or parked row (closed, merged or unknown) | Preconditions are LH-148 and CP-037 (LH-199, LH-064, XC-078 and CTL-021 are closed). |
 | XC-094 | XC-078 | XC-094 | XC-078 is not an open or parked row (closed, merged or unknown) | Preconditions are LH-148 and CP-037 (LH-199, LH-064, XC-078 and CTL-021 are closed). |
 | XC-094 | CTL-021 | XC-094 | CTL-021 is not an open or parked row (closed, merged or unknown) | Preconditions are LH-148 and CP-037 (LH-199, LH-064, XC-078 and CTL-021 are closed). |
+| LH-207 | LH-288 | LH-207 | excluded by hand: LH-207's closes-when names no client-side copy case; LH-288's ruling bounds a hole LH-207 says it only narrows | A writer is also a reader (model.fga:431-432,551-552) and the server-mediated path does not mask (credentials.py:136-139), so client-side copying needs LH-288's ruling. |
 | CP-031 | LH-220 | CP-031 | LH-220 is not an open or parked row (closed, merged or unknown) | - *How:* Seed through `POST /v1/project/{id}/transform/set` from a chart hook authenticating as its own ServiceAccount, which needs the catalog to accept SA tokens (LH-220) |
 | LH-099 | LH-227 | LH-099 | excluded by hand: the sentence says which row owns the orphan-.txn case, not that LH-099 waits on it | The purge blocked by one orphan .txn is LH-227. |
 | LH-254 | XC-075 | LH-254 | XC-075 is not an open or parked row (closed, merged or unknown) | That needs XC-075 and XC-096 to let the lane come up. |
+| LH-256 | LH-283 | LH-256 | excluded by hand: LH-256's How moves a site a later row touches into that row's commit, so LH-256 closes without LH-283 | Sites that belong to another row's commit: index_specs.py:14-17 (LH-248), dataplane.py:277-279 and core/config.py:459-461 (LH-273), and services/catalog/tests/test_tag_and_branch_failures_carry_their_spec_code.py:147-153, which waits on LH-283 (parked and uncounted). |
+| LH-330 | LH-164 | LH-330 | excluded (owner, 2026-10-10): LH-330 waits on decision D6, which LH-164 part 1 names, not on the row | Partly blocked: how the heads' and the lanes' non-Append writes reach the catalog is the commit-door decision under **Decisions still open**, and /produce's location also waits on D6 (LH-164 part 1, LH-194). |
 | LH-330 | LH-194 | LH-330 | LH-194 is not an open or parked row (closed, merged or unknown) | Partly blocked: how the heads' and the lanes' non-Append writes reach the catalog is the commit-door decision under **Decisions still open**, and /produce's location also waits on D6 (LH-164 part 1, LH-194). |
 | CP-029 | LH-129 | LH-129 | CP-029 is not an open or parked row (closed, merged or unknown) | - *Why:* Phase 1 takes it as the stated enabler of CP-029 (jobs vend their own credentials), LH-218 (the Ray lane's root-key byte path is this row's). |
+| LH-218 | LH-129 | LH-129 | excluded by hand: LH-218's closes-when is the in-process lane only and says the Ray lane's root credential is LH-129's | - *Why:* Phase 1 takes it as the stated enabler of CP-029 (jobs vend their own credentials), LH-218 (the Ray lane's root-key byte path is this row's). |
 | LH-220 | XC-009 | XC-009 | LH-220 is not an open or parked row (closed, merged or unknown) | - *Why:* The governance enabler of D1/LH-220 (per-service identity) |
 | XC-033 | XC-075 | XC-033 | XC-075 is not an open or parked row (closed, merged or unknown) | - *How:* Preconditions before wiring more modules: XC-075, XC-096, and XC-049 for the kueue-setup hook. |
 | CTL-026 | CTL-021 | CTL-026 | CTL-021 is not an open or parked row (closed, merged or unknown) | - **not workable now:** waits on CTL-021 moving the walk to /events/projection. |

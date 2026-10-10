@@ -1,6 +1,50 @@
 {
   "source": "open_backlog_left_new2.md",
   "source_sha256": "dfe0451022a76ee4114eab178568229061c911e3032bb455a96a5102870633e0",
+  "extra_sources": {
+    "docs/audits/2026-09-26/lakehouse-map.md": "4e17249c75966df46a7c51da71046341ee2b24760976c2e1ab30147bcd4cea64",
+    "frontend/microfrontends/lakehouse/src/lib/storage/storage.ts": "bb764a17210d56de8aa5513d2cfc996c6536695a5b5260f00a67073d69a57897",
+    "frontend/microfrontends/lakehouse/src/lib/data/catalog.ts": "0dfa03f505c684deef7c25443eaefdde0c2b2422e3a4aff75eaab40c714afd06",
+    "HANDOFF-lakehouse.md": "e5bc4dafd869eeba6fa3c0d0f387c4083306ae87a478c822ed36c883d4c93a85",
+    "frontend/microfrontends/home/src/lib/remote/warehouses.remote.ts": "39f2621112c25968605f7d8dcc0da0cc1f4b6278430e0a220fdcda28889ad587",
+    "frontend/microfrontends/lakehouse/src/lib/data/remote/warehouses.remote.ts": "4a30616aab8662fa264ee1e1f22b9dbf8cae628df4350051349b4fbc555663e6",
+    "frontend/microfrontends/home/src/lib/remote/access.remote.ts": "69d33a0794eb1423e06db701a6c47d4adeeb8eccf43950963ad9df2275f92719",
+    "frontend/microfrontends/lakehouse/src/lib/data/remote/access-objects.remote.ts": "526d712d9ea11818586d6110fe136fa4c3ab3e8058bea9e4c6dbe30b03f08897",
+    "frontend/packages/ui/src/lib/shell/project-switcher.svelte": "212dd8d7a7909775e46e843faa5f643f03aad14938dada3b647b17e38aaf0154",
+    "frontend/packages/ui/src/lib/shell/app-shell.svelte": "90ab879a9478b75548d316a92d7f7da61216b4a4182d7d8e006e2ccd660818cd",
+    "open_alert.md": "28cfb1d42aa56c308075e5ec3c6bb8ab073730976ef38bc9969032bd84d7eb15",
+    "open_anno_active.md": "756b471ff9965af352af9cbcfb2c1df46e0c4385df1922a00175e5814723a002",
+    "TODO.md": "ff6bc51ac0612221a15aa6ac862a4343d1ccdd82ee09e26262f54b17bcb9282c",
+    "lakehouse-e2e-trace.md": "95f2c7c8eabf6f1fd2017f1b83da921fb0a1f5d8e0d06659df673c8255a85025"
+  },
+  "notes": [
+    "lakehouse-map NEW ROWS folded into their parked issues (26): LH-282, LH-283, LH-284, LH-285, LH-286, LH-287, LH-288, LH-289, LH-290, LH-291, LH-292, LH-293, LH-294, LH-295, LH-296, LH-298, LH-299, LH-300, XC-098, XC-099, XC-100, XC-101, XC-102, LOW-031, LOW-032, LOW-033.",
+    "lakehouse-map NEW ROWS not folded because the row is not parked (8): LH-277 (not open or parked in the register), LH-278 (not open or parked in the register), LH-279 (not open or parked in the register), LH-280 (not open or parked in the register), LH-281 (not open or parked in the register), LH-297 (not open or parked in the register), XC-096 (an open row), XC-097 (not open or parked in the register).",
+    "HANDOFF §5 half B (placeholder as href) dropped, already fixed: the switcher's links come from the membership list and `/projects` (project-switcher.svelte:92,105), and the breadcrumb links a project only when one is active (app-shell.svelte:139-141); no href is built from the 'Select project' text."
+  ],
+  "severity_unlabelled": [
+    "LH-372 (OBSERVATION)",
+    "LH-373 (OBSERVATION)",
+    "XC-120 (OBSERVATION)",
+    "XC-006 (no severity)",
+    "XC-007 (no severity)",
+    "XC-008 (no severity)",
+    "XC-025 (no severity)",
+    "XC-030 (no severity)",
+    "XC-027 (no severity)",
+    "LH-262 (no severity)",
+    "XC-013 (prod half) (no severity)",
+    "XC-031 (prod half) (no severity)",
+    "XC-032 (prod half) (no severity)",
+    "PARK-HANDOFF-1 (no severity)",
+    "PARK-HANDOFF-2 (no severity)",
+    "PARK-ALERT-1 (no severity)",
+    "PARK-ANNO-1 (no severity)",
+    "PARK-TODO-1 (no severity)",
+    "PARK-TRACE-2 (no severity)",
+    "PARK-TRACE-3 (no severity)",
+    "PARK-TRACE-4 (no severity)"
+  ],
   "source_lines": 2130,
   "labels": [
     {
@@ -89,6 +133,21 @@
       "description": "This will not be worked on"
     },
     {
+      "name": "severity:high",
+      "color": "b60205",
+      "description": "The row's severity tag: HIGH"
+    },
+    {
+      "name": "severity:medium",
+      "color": "fbca04",
+      "description": "The row's severity tag: MEDIUM"
+    },
+    {
+      "name": "severity:low",
+      "color": "c5def5",
+      "description": "The row's severity tag: LOW"
+    },
+    {
       "name": "wayfinder:map",
       "color": "000000",
       "description": "The pinned map: order, short list, rulings, open decisions"
@@ -105,7 +164,8 @@
       "labels": [
         "phase-1",
         "blocks-prod",
-        "criterion-5"
+        "criterion-5",
+        "severity:medium"
       ],
       "first_line": 115,
       "last_line": 122,
@@ -123,7 +183,8 @@
         "phase-1",
         "blocks-prod",
         "criterion-3",
-        "criterion-5"
+        "criterion-5",
+        "severity:medium"
       ],
       "first_line": 124,
       "last_line": 131,
@@ -139,7 +200,8 @@
       "severity": "HIGH",
       "labels": [
         "phase-1",
-        "criterion-3"
+        "criterion-3",
+        "severity:high"
       ],
       "first_line": 133,
       "last_line": 140,
@@ -156,7 +218,8 @@
       "labels": [
         "phase-1",
         "blocks-prod",
-        "criterion-2"
+        "criterion-2",
+        "severity:high"
       ],
       "first_line": 145,
       "last_line": 152,
@@ -173,7 +236,8 @@
       "labels": [
         "phase-1",
         "blocks-prod",
-        "criterion-2"
+        "criterion-2",
+        "severity:high"
       ],
       "first_line": 154,
       "last_line": 161,
@@ -189,7 +253,8 @@
       "severity": "HIGH",
       "labels": [
         "phase-1",
-        "blocks-prod"
+        "blocks-prod",
+        "severity:high"
       ],
       "first_line": 163,
       "last_line": 170,
@@ -205,7 +270,8 @@
       "severity": "HIGH",
       "labels": [
         "phase-1",
-        "criterion-1"
+        "criterion-1",
+        "severity:high"
       ],
       "first_line": 172,
       "last_line": 179,
@@ -221,7 +287,8 @@
       "severity": "HIGH",
       "labels": [
         "phase-1",
-        "criterion-2"
+        "criterion-2",
+        "severity:high"
       ],
       "first_line": 181,
       "last_line": 188,
@@ -237,7 +304,8 @@
       "severity": "MEDIUM",
       "labels": [
         "phase-1",
-        "criterion-3"
+        "criterion-3",
+        "severity:medium"
       ],
       "first_line": 190,
       "last_line": 197,
@@ -253,7 +321,8 @@
       "severity": "HIGH",
       "labels": [
         "phase-1",
-        "criterion-4"
+        "criterion-4",
+        "severity:high"
       ],
       "first_line": 199,
       "last_line": 206,
@@ -269,7 +338,8 @@
       "severity": "MEDIUM",
       "labels": [
         "phase-1",
-        "criterion-5"
+        "criterion-5",
+        "severity:medium"
       ],
       "first_line": 208,
       "last_line": 215,
@@ -285,7 +355,8 @@
       "severity": "HIGH",
       "labels": [
         "phase-1",
-        "criterion-5"
+        "criterion-5",
+        "severity:high"
       ],
       "first_line": 217,
       "last_line": 223,
@@ -301,7 +372,8 @@
       "severity": "HIGH",
       "labels": [
         "phase-1-after-launch",
-        "criterion-1"
+        "criterion-1",
+        "severity:high"
       ],
       "first_line": 236,
       "last_line": 243,
@@ -318,7 +390,8 @@
       "labels": [
         "phase-1-after-launch",
         "criterion-2",
-        "needs-info"
+        "needs-info",
+        "severity:high"
       ],
       "first_line": 245,
       "last_line": 253,
@@ -334,7 +407,8 @@
       "severity": "HIGH",
       "labels": [
         "phase-1-after-launch",
-        "criterion-2"
+        "criterion-2",
+        "severity:high"
       ],
       "first_line": 255,
       "last_line": 262,
@@ -352,7 +426,8 @@
         "phase-1-after-launch",
         "criterion-1",
         "criterion-4",
-        "criterion-5"
+        "criterion-5",
+        "severity:high"
       ],
       "first_line": 264,
       "last_line": 271,
@@ -368,7 +443,8 @@
       "severity": "HIGH",
       "labels": [
         "phase-1-after-launch",
-        "criterion-2"
+        "criterion-2",
+        "severity:high"
       ],
       "first_line": 273,
       "last_line": 280,
@@ -383,7 +459,8 @@
       "group": "From lakehouse",
       "severity": "HIGH",
       "labels": [
-        "phase-1-after-launch"
+        "phase-1-after-launch",
+        "severity:high"
       ],
       "first_line": 282,
       "last_line": 289,
@@ -398,7 +475,8 @@
       "group": "From lakehouse",
       "severity": "HIGH",
       "labels": [
-        "phase-1-after-launch"
+        "phase-1-after-launch",
+        "severity:high"
       ],
       "first_line": 291,
       "last_line": 298,
@@ -413,7 +491,8 @@
       "group": "From lakehouse",
       "severity": "HIGH",
       "labels": [
-        "phase-1-after-launch"
+        "phase-1-after-launch",
+        "severity:high"
       ],
       "first_line": 300,
       "last_line": 307,
@@ -429,7 +508,8 @@
       "severity": "MEDIUM",
       "labels": [
         "phase-1-after-launch",
-        "criterion-2"
+        "criterion-2",
+        "severity:medium"
       ],
       "first_line": 309,
       "last_line": 316,
@@ -444,7 +524,8 @@
       "group": "From lakehouse",
       "severity": "MEDIUM",
       "labels": [
-        "phase-1-after-launch"
+        "phase-1-after-launch",
+        "severity:medium"
       ],
       "first_line": 318,
       "last_line": 325,
@@ -459,7 +540,8 @@
       "group": "From lakehouse",
       "severity": "MEDIUM",
       "labels": [
-        "phase-1-after-launch"
+        "phase-1-after-launch",
+        "severity:medium"
       ],
       "first_line": 327,
       "last_line": 334,
@@ -475,7 +557,8 @@
       "severity": "MEDIUM",
       "labels": [
         "phase-1-after-launch",
-        "criterion-2"
+        "criterion-2",
+        "severity:medium"
       ],
       "first_line": 336,
       "last_line": 343,
@@ -491,7 +574,8 @@
       "severity": "MEDIUM",
       "labels": [
         "phase-1-after-launch",
-        "criterion-1"
+        "criterion-1",
+        "severity:medium"
       ],
       "first_line": 345,
       "last_line": 352,
@@ -506,7 +590,8 @@
       "group": "From lakehouse",
       "severity": "MEDIUM",
       "labels": [
-        "phase-1-after-launch"
+        "phase-1-after-launch",
+        "severity:medium"
       ],
       "first_line": 354,
       "last_line": 361,
@@ -523,7 +608,8 @@
       "labels": [
         "phase-1-after-launch",
         "criterion-2",
-        "needs-info"
+        "needs-info",
+        "severity:low"
       ],
       "first_line": 363,
       "last_line": 371,
@@ -539,7 +625,8 @@
       "severity": "MEDIUM",
       "labels": [
         "phase-1-after-launch",
-        "criterion-5"
+        "criterion-5",
+        "severity:medium"
       ],
       "first_line": 373,
       "last_line": 380,
@@ -556,7 +643,8 @@
       "labels": [
         "phase-1-after-launch",
         "criterion-2",
-        "criterion-5"
+        "criterion-5",
+        "severity:medium"
       ],
       "first_line": 382,
       "last_line": 389,
@@ -572,7 +660,8 @@
       "severity": "MEDIUM",
       "labels": [
         "phase-1-after-launch",
-        "criterion-2"
+        "criterion-2",
+        "severity:medium"
       ],
       "first_line": 391,
       "last_line": 398,
@@ -588,7 +677,8 @@
       "severity": "MEDIUM",
       "labels": [
         "phase-1-after-launch",
-        "criterion-5"
+        "criterion-5",
+        "severity:medium"
       ],
       "first_line": 400,
       "last_line": 407,
@@ -604,7 +694,8 @@
       "severity": "MEDIUM",
       "labels": [
         "phase-1-after-launch",
-        "criterion-3"
+        "criterion-3",
+        "severity:medium"
       ],
       "first_line": 409,
       "last_line": 416,
@@ -620,7 +711,8 @@
       "severity": "MEDIUM",
       "labels": [
         "phase-1-after-launch",
-        "criterion-5"
+        "criterion-5",
+        "severity:medium"
       ],
       "first_line": 418,
       "last_line": 425,
@@ -636,7 +728,8 @@
       "severity": "MEDIUM",
       "labels": [
         "phase-1-after-launch",
-        "criterion-5"
+        "criterion-5",
+        "severity:medium"
       ],
       "first_line": 427,
       "last_line": 434,
@@ -652,7 +745,8 @@
       "severity": "MEDIUM",
       "labels": [
         "phase-1-after-launch",
-        "criterion-2"
+        "criterion-2",
+        "severity:medium"
       ],
       "first_line": 436,
       "last_line": 443,
@@ -667,7 +761,8 @@
       "group": "From lakehouse",
       "severity": "LOW",
       "labels": [
-        "phase-1-after-launch"
+        "phase-1-after-launch",
+        "severity:low"
       ],
       "first_line": 445,
       "last_line": 452,
@@ -683,7 +778,8 @@
       "severity": "MEDIUM",
       "labels": [
         "phase-1-after-launch",
-        "criterion-2"
+        "criterion-2",
+        "severity:medium"
       ],
       "first_line": 454,
       "last_line": 461,
@@ -699,7 +795,8 @@
       "severity": "LOW",
       "labels": [
         "phase-1-after-launch",
-        "criterion-5"
+        "criterion-5",
+        "severity:low"
       ],
       "first_line": 463,
       "last_line": 470,
@@ -714,7 +811,8 @@
       "group": "From lakehouse",
       "severity": "MEDIUM",
       "labels": [
-        "phase-1-after-launch"
+        "phase-1-after-launch",
+        "severity:medium"
       ],
       "first_line": 472,
       "last_line": 479,
@@ -730,7 +828,8 @@
       "severity": "LOW",
       "labels": [
         "phase-1-after-launch",
-        "criterion-5"
+        "criterion-5",
+        "severity:low"
       ],
       "first_line": 481,
       "last_line": 488,
@@ -746,7 +845,8 @@
       "severity": "MEDIUM",
       "labels": [
         "phase-1-after-launch",
-        "criterion-2"
+        "criterion-2",
+        "severity:medium"
       ],
       "first_line": 490,
       "last_line": 497,
@@ -762,7 +862,8 @@
       "severity": "MEDIUM",
       "labels": [
         "phase-1-after-launch",
-        "criterion-5"
+        "criterion-5",
+        "severity:medium"
       ],
       "first_line": 499,
       "last_line": 506,
@@ -778,7 +879,8 @@
       "severity": "MEDIUM",
       "labels": [
         "phase-1-after-launch",
-        "criterion-2"
+        "criterion-2",
+        "severity:medium"
       ],
       "first_line": 508,
       "last_line": 515,
@@ -794,7 +896,8 @@
       "severity": "MEDIUM",
       "labels": [
         "phase-1-after-launch",
-        "criterion-2"
+        "criterion-2",
+        "severity:medium"
       ],
       "first_line": 517,
       "last_line": 524,
@@ -811,7 +914,8 @@
       "labels": [
         "phase-1-after-launch",
         "criterion-2",
-        "criterion-5"
+        "criterion-5",
+        "severity:medium"
       ],
       "first_line": 526,
       "last_line": 533,
@@ -827,7 +931,8 @@
       "severity": "MEDIUM",
       "labels": [
         "phase-1-after-launch",
-        "criterion-2"
+        "criterion-2",
+        "severity:medium"
       ],
       "first_line": 535,
       "last_line": 542,
@@ -844,7 +949,8 @@
       "labels": [
         "phase-1-after-launch",
         "criterion-2",
-        "criterion-5"
+        "criterion-5",
+        "severity:medium"
       ],
       "first_line": 544,
       "last_line": 551,
@@ -860,7 +966,8 @@
       "severity": "MEDIUM",
       "labels": [
         "phase-1-after-launch",
-        "criterion-1"
+        "criterion-1",
+        "severity:medium"
       ],
       "first_line": 553,
       "last_line": 560,
@@ -876,7 +983,8 @@
       "severity": "MEDIUM",
       "labels": [
         "phase-1-after-launch",
-        "criterion-2"
+        "criterion-2",
+        "severity:medium"
       ],
       "first_line": 562,
       "last_line": 569,
@@ -893,7 +1001,8 @@
       "labels": [
         "phase-1-after-launch",
         "criterion-1",
-        "criterion-2"
+        "criterion-2",
+        "severity:medium"
       ],
       "first_line": 571,
       "last_line": 578,
@@ -909,7 +1018,8 @@
       "severity": "MEDIUM",
       "labels": [
         "phase-1-after-launch",
-        "criterion-2"
+        "criterion-2",
+        "severity:medium"
       ],
       "first_line": 580,
       "last_line": 587,
@@ -925,7 +1035,8 @@
       "severity": "MEDIUM",
       "labels": [
         "phase-1-after-launch",
-        "criterion-5"
+        "criterion-5",
+        "severity:medium"
       ],
       "first_line": 589,
       "last_line": 596,
@@ -941,7 +1052,8 @@
       "severity": "MEDIUM",
       "labels": [
         "phase-1-after-launch",
-        "criterion-2"
+        "criterion-2",
+        "severity:medium"
       ],
       "first_line": 598,
       "last_line": 605,
@@ -957,7 +1069,8 @@
       "severity": "MEDIUM",
       "labels": [
         "phase-1-after-launch",
-        "criterion-2"
+        "criterion-2",
+        "severity:medium"
       ],
       "first_line": 607,
       "last_line": 614,
@@ -973,7 +1086,8 @@
       "severity": "MEDIUM",
       "labels": [
         "phase-1-after-launch",
-        "criterion-2"
+        "criterion-2",
+        "severity:medium"
       ],
       "first_line": 616,
       "last_line": 623,
@@ -988,7 +1102,8 @@
       "group": "From lakehouse",
       "severity": "MEDIUM",
       "labels": [
-        "phase-1-after-launch"
+        "phase-1-after-launch",
+        "severity:medium"
       ],
       "first_line": 625,
       "last_line": 632,
@@ -1005,7 +1120,8 @@
       "labels": [
         "phase-1-after-launch",
         "criterion-1",
-        "criterion-2"
+        "criterion-2",
+        "severity:medium"
       ],
       "first_line": 634,
       "last_line": 641,
@@ -1022,7 +1138,8 @@
       "labels": [
         "phase-1-after-launch",
         "criterion-4",
-        "criterion-5"
+        "criterion-5",
+        "severity:medium"
       ],
       "first_line": 643,
       "last_line": 650,
@@ -1039,7 +1156,8 @@
       "labels": [
         "phase-1-after-launch",
         "criterion-2",
-        "criterion-5"
+        "criterion-5",
+        "severity:medium"
       ],
       "first_line": 652,
       "last_line": 659,
@@ -1055,7 +1173,8 @@
       "severity": "MEDIUM",
       "labels": [
         "phase-1-after-launch",
-        "criterion-2"
+        "criterion-2",
+        "severity:medium"
       ],
       "first_line": 661,
       "last_line": 668,
@@ -1072,7 +1191,8 @@
       "labels": [
         "phase-1-after-launch",
         "criterion-1",
-        "criterion-3"
+        "criterion-3",
+        "severity:medium"
       ],
       "first_line": 670,
       "last_line": 677,
@@ -1088,7 +1208,8 @@
       "severity": "MEDIUM",
       "labels": [
         "phase-1-after-launch",
-        "criterion-5"
+        "criterion-5",
+        "severity:medium"
       ],
       "first_line": 679,
       "last_line": 686,
@@ -1105,7 +1226,8 @@
       "labels": [
         "phase-1-after-launch",
         "criterion-2",
-        "criterion-5"
+        "criterion-5",
+        "severity:medium"
       ],
       "first_line": 688,
       "last_line": 695,
@@ -1121,7 +1243,8 @@
       "severity": "MEDIUM",
       "labels": [
         "phase-1-after-launch",
-        "criterion-3"
+        "criterion-3",
+        "severity:medium"
       ],
       "first_line": 697,
       "last_line": 704,
@@ -1138,7 +1261,8 @@
       "labels": [
         "phase-1-after-launch",
         "criterion-2",
-        "criterion-5"
+        "criterion-5",
+        "severity:medium"
       ],
       "first_line": 706,
       "last_line": 713,
@@ -1153,7 +1277,8 @@
       "group": "From lakehouse",
       "severity": "LOW",
       "labels": [
-        "phase-1-after-launch"
+        "phase-1-after-launch",
+        "severity:low"
       ],
       "first_line": 715,
       "last_line": 722,
@@ -1169,7 +1294,8 @@
       "severity": "LOW",
       "labels": [
         "phase-1-after-launch",
-        "criterion-2"
+        "criterion-2",
+        "severity:low"
       ],
       "first_line": 724,
       "last_line": 731,
@@ -1184,7 +1310,8 @@
       "group": "From lakehouse",
       "severity": "LOW",
       "labels": [
-        "phase-1-after-launch"
+        "phase-1-after-launch",
+        "severity:low"
       ],
       "first_line": 733,
       "last_line": 740,
@@ -1201,7 +1328,8 @@
       "labels": [
         "phase-1-after-launch",
         "criterion-2",
-        "criterion-5"
+        "criterion-5",
+        "severity:low"
       ],
       "first_line": 742,
       "last_line": 749,
@@ -1216,7 +1344,8 @@
       "group": "From lakehouse",
       "severity": "LOW",
       "labels": [
-        "phase-1-after-launch"
+        "phase-1-after-launch",
+        "severity:low"
       ],
       "first_line": 751,
       "last_line": 758,
@@ -1231,7 +1360,8 @@
       "group": "From lakehouse",
       "severity": "LOW",
       "labels": [
-        "phase-1-after-launch"
+        "phase-1-after-launch",
+        "severity:low"
       ],
       "first_line": 760,
       "last_line": 767,
@@ -1247,7 +1377,8 @@
       "severity": "LOW",
       "labels": [
         "phase-1-after-launch",
-        "criterion-4"
+        "criterion-4",
+        "severity:low"
       ],
       "first_line": 769,
       "last_line": 776,
@@ -1264,7 +1395,8 @@
       "labels": [
         "phase-1-after-launch",
         "criterion-1",
-        "criterion-4"
+        "criterion-4",
+        "severity:low"
       ],
       "first_line": 778,
       "last_line": 785,
@@ -1280,7 +1412,8 @@
       "severity": "LOW",
       "labels": [
         "phase-1-after-launch",
-        "criterion-1"
+        "criterion-1",
+        "severity:low"
       ],
       "first_line": 787,
       "last_line": 794,
@@ -1297,7 +1430,8 @@
       "labels": [
         "phase-1-after-launch",
         "criterion-2",
-        "needs-info"
+        "needs-info",
+        "severity:low"
       ],
       "first_line": 796,
       "last_line": 804,
@@ -1313,7 +1447,8 @@
       "severity": "LOW",
       "labels": [
         "phase-1-after-launch",
-        "criterion-5"
+        "criterion-5",
+        "severity:low"
       ],
       "first_line": 806,
       "last_line": 813,
@@ -1329,7 +1464,8 @@
       "severity": "LOW",
       "labels": [
         "phase-1-after-launch",
-        "criterion-2"
+        "criterion-2",
+        "severity:low"
       ],
       "first_line": 815,
       "last_line": 822,
@@ -1345,7 +1481,8 @@
       "severity": "LOW",
       "labels": [
         "phase-1-after-launch",
-        "criterion-1"
+        "criterion-1",
+        "severity:low"
       ],
       "first_line": 824,
       "last_line": 831,
@@ -1361,7 +1498,8 @@
       "severity": "LOW",
       "labels": [
         "phase-1-after-launch",
-        "criterion-5"
+        "criterion-5",
+        "severity:low"
       ],
       "first_line": 833,
       "last_line": 840,
@@ -1377,7 +1515,8 @@
       "severity": "LOW",
       "labels": [
         "phase-1-after-launch",
-        "criterion-2"
+        "criterion-2",
+        "severity:low"
       ],
       "first_line": 842,
       "last_line": 849,
@@ -1392,7 +1531,8 @@
       "group": "From lakehouse",
       "severity": "LOW",
       "labels": [
-        "phase-1-after-launch"
+        "phase-1-after-launch",
+        "severity:low"
       ],
       "first_line": 851,
       "last_line": 858,
@@ -1408,7 +1548,8 @@
       "severity": "LOW",
       "labels": [
         "phase-1-after-launch",
-        "criterion-5"
+        "criterion-5",
+        "severity:low"
       ],
       "first_line": 860,
       "last_line": 867,
@@ -1424,7 +1565,8 @@
       "severity": "LOW",
       "labels": [
         "phase-1-after-launch",
-        "criterion-2"
+        "criterion-2",
+        "severity:low"
       ],
       "first_line": 869,
       "last_line": 876,
@@ -1440,7 +1582,8 @@
       "severity": "LOW",
       "labels": [
         "phase-1-after-launch",
-        "criterion-5"
+        "criterion-5",
+        "severity:low"
       ],
       "first_line": 878,
       "last_line": 885,
@@ -1456,7 +1599,8 @@
       "severity": "LOW",
       "labels": [
         "phase-1-after-launch",
-        "criterion-5"
+        "criterion-5",
+        "severity:low"
       ],
       "first_line": 887,
       "last_line": 894,
@@ -1473,7 +1617,8 @@
       "labels": [
         "phase-1-after-launch",
         "criterion-1",
-        "criterion-5"
+        "criterion-5",
+        "severity:low"
       ],
       "first_line": 896,
       "last_line": 903,
@@ -1488,7 +1633,8 @@
       "group": "From lakehouse",
       "severity": "LOW",
       "labels": [
-        "phase-1-after-launch"
+        "phase-1-after-launch",
+        "severity:low"
       ],
       "first_line": 905,
       "last_line": 912,
@@ -1503,7 +1649,8 @@
       "group": "From lakehouse",
       "severity": "LOW",
       "labels": [
-        "phase-1-after-launch"
+        "phase-1-after-launch",
+        "severity:low"
       ],
       "first_line": 914,
       "last_line": 921,
@@ -1518,7 +1665,8 @@
       "group": "From lakehouse",
       "severity": "LOW",
       "labels": [
-        "phase-1-after-launch"
+        "phase-1-after-launch",
+        "severity:low"
       ],
       "first_line": 923,
       "last_line": 930,
@@ -1534,7 +1682,8 @@
       "severity": "MEDIUM",
       "labels": [
         "phase-1-after-launch",
-        "criterion-4"
+        "criterion-4",
+        "severity:medium"
       ],
       "first_line": 932,
       "last_line": 939,
@@ -1550,7 +1699,8 @@
       "severity": "HIGH",
       "labels": [
         "phase-1-after-launch",
-        "criterion-2"
+        "criterion-2",
+        "severity:high"
       ],
       "first_line": 941,
       "last_line": 948,
@@ -1566,7 +1716,8 @@
       "severity": "HIGH",
       "labels": [
         "phase-1-after-launch",
-        "criterion-5"
+        "criterion-5",
+        "severity:high"
       ],
       "first_line": 952,
       "last_line": 959,
@@ -1581,7 +1732,8 @@
       "group": "From cross-cutting",
       "severity": "HIGH",
       "labels": [
-        "phase-1-after-launch"
+        "phase-1-after-launch",
+        "severity:high"
       ],
       "first_line": 961,
       "last_line": 968,
@@ -1596,7 +1748,8 @@
       "group": "From cross-cutting",
       "severity": "HIGH",
       "labels": [
-        "phase-1-after-launch"
+        "phase-1-after-launch",
+        "severity:high"
       ],
       "first_line": 970,
       "last_line": 977,
@@ -1611,7 +1764,8 @@
       "group": "From cross-cutting",
       "severity": "HIGH",
       "labels": [
-        "phase-1-after-launch"
+        "phase-1-after-launch",
+        "severity:high"
       ],
       "first_line": 979,
       "last_line": 986,
@@ -1627,7 +1781,8 @@
       "severity": "HIGH",
       "labels": [
         "phase-1-after-launch",
-        "criterion-5"
+        "criterion-5",
+        "severity:high"
       ],
       "first_line": 988,
       "last_line": 995,
@@ -1642,7 +1797,8 @@
       "group": "From cross-cutting",
       "severity": "MEDIUM",
       "labels": [
-        "phase-1-after-launch"
+        "phase-1-after-launch",
+        "severity:medium"
       ],
       "first_line": 997,
       "last_line": 1004,
@@ -1658,7 +1814,8 @@
       "severity": "MEDIUM",
       "labels": [
         "phase-1-after-launch",
-        "criterion-2"
+        "criterion-2",
+        "severity:medium"
       ],
       "first_line": 1006,
       "last_line": 1013,
@@ -1673,7 +1830,8 @@
       "group": "From cross-cutting",
       "severity": "HIGH",
       "labels": [
-        "phase-1-after-launch"
+        "phase-1-after-launch",
+        "severity:high"
       ],
       "first_line": 1015,
       "last_line": 1022,
@@ -1688,7 +1846,8 @@
       "group": "From cross-cutting",
       "severity": "HIGH",
       "labels": [
-        "phase-1-after-launch"
+        "phase-1-after-launch",
+        "severity:high"
       ],
       "first_line": 1024,
       "last_line": 1031,
@@ -1703,7 +1862,8 @@
       "group": "From cross-cutting",
       "severity": "HIGH",
       "labels": [
-        "phase-1-after-launch"
+        "phase-1-after-launch",
+        "severity:high"
       ],
       "first_line": 1033,
       "last_line": 1040,
@@ -1718,7 +1878,8 @@
       "group": "From cross-cutting",
       "severity": "HIGH",
       "labels": [
-        "phase-1-after-launch"
+        "phase-1-after-launch",
+        "severity:high"
       ],
       "first_line": 1042,
       "last_line": 1049,
@@ -1733,7 +1894,8 @@
       "group": "From cross-cutting",
       "severity": "HIGH",
       "labels": [
-        "phase-1-after-launch"
+        "phase-1-after-launch",
+        "severity:high"
       ],
       "first_line": 1051,
       "last_line": 1058,
@@ -1749,7 +1911,8 @@
       "severity": "MEDIUM",
       "labels": [
         "phase-1-after-launch",
-        "criterion-2"
+        "criterion-2",
+        "severity:medium"
       ],
       "first_line": 1060,
       "last_line": 1067,
@@ -1766,7 +1929,8 @@
       "labels": [
         "phase-1-after-launch",
         "criterion-2",
-        "criterion-5"
+        "criterion-5",
+        "severity:medium"
       ],
       "first_line": 1069,
       "last_line": 1076,
@@ -1781,7 +1945,8 @@
       "group": "From cross-cutting",
       "severity": "MEDIUM",
       "labels": [
-        "phase-1-after-launch"
+        "phase-1-after-launch",
+        "severity:medium"
       ],
       "first_line": 1078,
       "last_line": 1085,
@@ -1796,7 +1961,8 @@
       "group": "From cross-cutting",
       "severity": "MEDIUM",
       "labels": [
-        "phase-1-after-launch"
+        "phase-1-after-launch",
+        "severity:medium"
       ],
       "first_line": 1087,
       "last_line": 1094,
@@ -1813,7 +1979,8 @@
       "labels": [
         "phase-1-after-launch",
         "criterion-1",
-        "criterion-4"
+        "criterion-4",
+        "severity:medium"
       ],
       "first_line": 1096,
       "last_line": 1103,
@@ -1829,7 +1996,8 @@
       "severity": "MEDIUM",
       "labels": [
         "phase-1-after-launch",
-        "criterion-2"
+        "criterion-2",
+        "severity:medium"
       ],
       "first_line": 1105,
       "last_line": 1112,
@@ -1845,7 +2013,8 @@
       "severity": "MEDIUM",
       "labels": [
         "phase-1-after-launch",
-        "criterion-5"
+        "criterion-5",
+        "severity:medium"
       ],
       "first_line": 1114,
       "last_line": 1121,
@@ -1862,7 +2031,8 @@
       "labels": [
         "phase-1-after-launch",
         "criterion-1",
-        "criterion-5"
+        "criterion-5",
+        "severity:medium"
       ],
       "first_line": 1123,
       "last_line": 1130,
@@ -1878,7 +2048,8 @@
       "severity": "MEDIUM",
       "labels": [
         "phase-1-after-launch",
-        "criterion-1"
+        "criterion-1",
+        "severity:medium"
       ],
       "first_line": 1132,
       "last_line": 1139,
@@ -1894,7 +2065,8 @@
       "severity": "MEDIUM",
       "labels": [
         "phase-1-after-launch",
-        "criterion-5"
+        "criterion-5",
+        "severity:medium"
       ],
       "first_line": 1141,
       "last_line": 1148,
@@ -1911,7 +2083,8 @@
       "labels": [
         "phase-1-after-launch",
         "criterion-5",
-        "needs-info"
+        "needs-info",
+        "severity:medium"
       ],
       "first_line": 1150,
       "last_line": 1158,
@@ -1927,7 +2100,8 @@
       "severity": "MEDIUM",
       "labels": [
         "phase-1-after-launch",
-        "criterion-2"
+        "criterion-2",
+        "severity:medium"
       ],
       "first_line": 1160,
       "last_line": 1167,
@@ -1942,7 +2116,8 @@
       "group": "From cross-cutting",
       "severity": "LOW",
       "labels": [
-        "phase-1-after-launch"
+        "phase-1-after-launch",
+        "severity:low"
       ],
       "first_line": 1169,
       "last_line": 1176,
@@ -1958,7 +2133,8 @@
       "severity": "LOW",
       "labels": [
         "phase-1-after-launch",
-        "criterion-5"
+        "criterion-5",
+        "severity:low"
       ],
       "first_line": 1178,
       "last_line": 1185,
@@ -1974,7 +2150,8 @@
       "severity": "LOW",
       "labels": [
         "phase-1-after-launch",
-        "criterion-5"
+        "criterion-5",
+        "severity:low"
       ],
       "first_line": 1187,
       "last_line": 1194,
@@ -1989,7 +2166,8 @@
       "group": "From cross-cutting",
       "severity": "LOW",
       "labels": [
-        "phase-1-after-launch"
+        "phase-1-after-launch",
+        "severity:low"
       ],
       "first_line": 1196,
       "last_line": 1203,
@@ -2005,7 +2183,8 @@
       "severity": "MEDIUM",
       "labels": [
         "phase-1-after-launch",
-        "criterion-3"
+        "criterion-3",
+        "severity:medium"
       ],
       "first_line": 1205,
       "last_line": 1212,
@@ -2021,7 +2200,8 @@
       "severity": "MEDIUM",
       "labels": [
         "phase-1-after-launch",
-        "criterion-2"
+        "criterion-2",
+        "severity:medium"
       ],
       "first_line": 1216,
       "last_line": 1223,
@@ -2037,7 +2217,8 @@
       "severity": "MEDIUM",
       "labels": [
         "phase-1-after-launch",
-        "criterion-5"
+        "criterion-5",
+        "severity:medium"
       ],
       "first_line": 1225,
       "last_line": 1232,
@@ -2053,7 +2234,8 @@
       "severity": "MEDIUM",
       "labels": [
         "phase-1-after-launch",
-        "criterion-2"
+        "criterion-2",
+        "severity:medium"
       ],
       "first_line": 1234,
       "last_line": 1242,
@@ -2069,7 +2251,8 @@
       "severity": "MEDIUM",
       "labels": [
         "phase-1-after-launch",
-        "criterion-5"
+        "criterion-5",
+        "severity:medium"
       ],
       "first_line": 1244,
       "last_line": 1251,
@@ -2085,7 +2268,8 @@
       "severity": "LOW",
       "labels": [
         "phase-1-after-launch",
-        "criterion-5"
+        "criterion-5",
+        "severity:low"
       ],
       "first_line": 1253,
       "last_line": 1260,
@@ -2100,7 +2284,8 @@
       "group": "From controlplane and notifications",
       "severity": "LOW",
       "labels": [
-        "phase-1-after-launch"
+        "phase-1-after-launch",
+        "severity:low"
       ],
       "first_line": 1262,
       "last_line": 1269,
@@ -2116,7 +2301,8 @@
       "severity": "LOW",
       "labels": [
         "phase-1-after-launch",
-        "criterion-5"
+        "criterion-5",
+        "severity:low"
       ],
       "first_line": 1271,
       "last_line": 1279,
@@ -2132,7 +2318,8 @@
       "severity": "LOW",
       "labels": [
         "phase-1-after-launch",
-        "criterion-4"
+        "criterion-4",
+        "severity:low"
       ],
       "first_line": 1281,
       "last_line": 1288,
@@ -2147,7 +2334,8 @@
       "group": null,
       "severity": "HIGH",
       "labels": [
-        "phase-2"
+        "phase-2",
+        "severity:high"
       ],
       "first_line": 1292,
       "last_line": 1298,
@@ -2164,7 +2352,8 @@
       "labels": [
         "phase-2",
         "criterion-1",
-        "criterion-4"
+        "criterion-4",
+        "severity:high"
       ],
       "first_line": 1300,
       "last_line": 1306,
@@ -2180,7 +2369,8 @@
       "severity": "HIGH",
       "labels": [
         "phase-2",
-        "criterion-5"
+        "criterion-5",
+        "severity:high"
       ],
       "first_line": 1308,
       "last_line": 1314,
@@ -2196,7 +2386,8 @@
       "severity": "HIGH",
       "labels": [
         "phase-2",
-        "criterion-2"
+        "criterion-2",
+        "severity:high"
       ],
       "first_line": 1316,
       "last_line": 1322,
@@ -2213,7 +2404,8 @@
       "labels": [
         "phase-2",
         "criterion-1",
-        "criterion-3"
+        "criterion-3",
+        "severity:medium"
       ],
       "first_line": 1324,
       "last_line": 1330,
@@ -2229,7 +2421,8 @@
       "severity": "MEDIUM",
       "labels": [
         "phase-2",
-        "criterion-5"
+        "criterion-5",
+        "severity:medium"
       ],
       "first_line": 1332,
       "last_line": 1338,
@@ -2246,7 +2439,8 @@
       "labels": [
         "phase-2",
         "criterion-3",
-        "criterion-5"
+        "criterion-5",
+        "severity:medium"
       ],
       "first_line": 1340,
       "last_line": 1346,
@@ -2262,7 +2456,8 @@
       "severity": "MEDIUM",
       "labels": [
         "phase-2",
-        "criterion-5"
+        "criterion-5",
+        "severity:medium"
       ],
       "first_line": 1348,
       "last_line": 1354,
@@ -2278,7 +2473,8 @@
       "severity": "MEDIUM",
       "labels": [
         "phase-2",
-        "criterion-5"
+        "criterion-5",
+        "severity:medium"
       ],
       "first_line": 1356,
       "last_line": 1362,
@@ -2294,7 +2490,8 @@
       "severity": "MEDIUM",
       "labels": [
         "phase-2",
-        "criterion-1"
+        "criterion-1",
+        "severity:medium"
       ],
       "first_line": 1364,
       "last_line": 1370,
@@ -2310,7 +2507,8 @@
       "severity": "MEDIUM",
       "labels": [
         "phase-2",
-        "criterion-5"
+        "criterion-5",
+        "severity:medium"
       ],
       "first_line": 1372,
       "last_line": 1378,
@@ -2326,7 +2524,8 @@
       "severity": "LOW",
       "labels": [
         "phase-2",
-        "criterion-5"
+        "criterion-5",
+        "severity:low"
       ],
       "first_line": 1380,
       "last_line": 1386,
@@ -2342,7 +2541,8 @@
       "severity": "LOW",
       "labels": [
         "phase-2",
-        "criterion-2"
+        "criterion-2",
+        "severity:low"
       ],
       "first_line": 1388,
       "last_line": 1394,
@@ -2357,7 +2557,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "phase-2"
+        "phase-2",
+        "severity:low"
       ],
       "first_line": 1396,
       "last_line": 1402,
@@ -2372,7 +2573,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "phase-2"
+        "phase-2",
+        "severity:low"
       ],
       "first_line": 1404,
       "last_line": 1410,
@@ -2388,7 +2590,8 @@
       "severity": "LOW",
       "labels": [
         "phase-2",
-        "criterion-2"
+        "criterion-2",
+        "severity:low"
       ],
       "first_line": 1412,
       "last_line": 1418,
@@ -2404,7 +2607,8 @@
       "severity": "LOW",
       "labels": [
         "phase-2",
-        "needs-info"
+        "needs-info",
+        "severity:low"
       ],
       "first_line": 1420,
       "last_line": 1427,
@@ -2419,7 +2623,8 @@
       "group": null,
       "severity": "MEDIUM",
       "labels": [
-        "phase-2"
+        "phase-2",
+        "severity:medium"
       ],
       "first_line": 1429,
       "last_line": 1435,
@@ -2436,7 +2641,8 @@
       "labels": [
         "phase-2",
         "criterion-1",
-        "criterion-2"
+        "criterion-2",
+        "severity:medium"
       ],
       "first_line": 1437,
       "last_line": 1443,
@@ -2453,7 +2659,8 @@
       "labels": [
         "frontend",
         "criterion-4",
-        "criterion-5"
+        "criterion-5",
+        "severity:low"
       ],
       "first_line": 1447,
       "last_line": 1453,
@@ -2469,7 +2676,8 @@
       "severity": "LOW",
       "labels": [
         "frontend",
-        "criterion-5"
+        "criterion-5",
+        "severity:low"
       ],
       "first_line": 1455,
       "last_line": 1461,
@@ -2484,7 +2692,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "frontend"
+        "frontend",
+        "severity:low"
       ],
       "first_line": 1463,
       "last_line": 1469,
@@ -2499,7 +2708,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "frontend"
+        "frontend",
+        "severity:low"
       ],
       "first_line": 1471,
       "last_line": 1477,
@@ -2514,7 +2724,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "frontend"
+        "frontend",
+        "severity:low"
       ],
       "first_line": 1479,
       "last_line": 1485,
@@ -2529,7 +2740,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "frontend"
+        "frontend",
+        "severity:low"
       ],
       "first_line": 1487,
       "last_line": 1493,
@@ -2545,7 +2757,8 @@
       "severity": "LOW",
       "labels": [
         "frontend",
-        "criterion-2"
+        "criterion-2",
+        "severity:low"
       ],
       "first_line": 1495,
       "last_line": 1501,
@@ -2561,7 +2774,8 @@
       "severity": "LOW",
       "labels": [
         "low",
-        "criterion-2"
+        "criterion-2",
+        "severity:low"
       ],
       "first_line": 1505,
       "last_line": 1511,
@@ -2576,7 +2790,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "low"
+        "low",
+        "severity:low"
       ],
       "first_line": 1513,
       "last_line": 1519,
@@ -2592,7 +2807,8 @@
       "severity": "LOW",
       "labels": [
         "low",
-        "criterion-4"
+        "criterion-4",
+        "severity:low"
       ],
       "first_line": 1521,
       "last_line": 1527,
@@ -2608,7 +2824,8 @@
       "severity": "LOW",
       "labels": [
         "low",
-        "criterion-5"
+        "criterion-5",
+        "severity:low"
       ],
       "first_line": 1529,
       "last_line": 1535,
@@ -2624,7 +2841,8 @@
       "severity": "LOW",
       "labels": [
         "low",
-        "criterion-1"
+        "criterion-1",
+        "severity:low"
       ],
       "first_line": 1537,
       "last_line": 1543,
@@ -2640,7 +2858,8 @@
       "severity": "LOW",
       "labels": [
         "low",
-        "criterion-5"
+        "criterion-5",
+        "severity:low"
       ],
       "first_line": 1545,
       "last_line": 1551,
@@ -2655,7 +2874,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "low"
+        "low",
+        "severity:low"
       ],
       "first_line": 1553,
       "last_line": 1559,
@@ -2670,7 +2890,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "low"
+        "low",
+        "severity:low"
       ],
       "first_line": 1561,
       "last_line": 1567,
@@ -2687,7 +2908,8 @@
       "labels": [
         "low",
         "criterion-2",
-        "criterion-3"
+        "criterion-3",
+        "severity:low"
       ],
       "first_line": 1569,
       "last_line": 1575,
@@ -2702,7 +2924,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "low"
+        "low",
+        "severity:low"
       ],
       "first_line": 1577,
       "last_line": 1583,
@@ -2717,7 +2940,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "low"
+        "low",
+        "severity:low"
       ],
       "first_line": 1585,
       "last_line": 1591,
@@ -2732,7 +2956,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "low"
+        "low",
+        "severity:low"
       ],
       "first_line": 1593,
       "last_line": 1599,
@@ -2747,7 +2972,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "low"
+        "low",
+        "severity:low"
       ],
       "first_line": 1601,
       "last_line": 1607,
@@ -2762,7 +2988,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "low"
+        "low",
+        "severity:low"
       ],
       "first_line": 1609,
       "last_line": 1615,
@@ -2777,7 +3004,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "low"
+        "low",
+        "severity:low"
       ],
       "first_line": 1617,
       "last_line": 1623,
@@ -2792,7 +3020,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "low"
+        "low",
+        "severity:low"
       ],
       "first_line": 1625,
       "last_line": 1631,
@@ -2808,7 +3037,8 @@
       "severity": "LOW",
       "labels": [
         "low",
-        "needs-info"
+        "needs-info",
+        "severity:low"
       ],
       "first_line": 1633,
       "last_line": 1640,
@@ -2824,7 +3054,8 @@
       "severity": "LOW",
       "labels": [
         "low",
-        "criterion-2"
+        "criterion-2",
+        "severity:low"
       ],
       "first_line": 1642,
       "last_line": 1648,
@@ -2839,7 +3070,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "low"
+        "low",
+        "severity:low"
       ],
       "first_line": 1650,
       "last_line": 1656,
@@ -2856,7 +3088,8 @@
       "labels": [
         "low",
         "criterion-2",
-        "criterion-5"
+        "criterion-5",
+        "severity:low"
       ],
       "first_line": 1658,
       "last_line": 1664,
@@ -2871,7 +3104,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "low"
+        "low",
+        "severity:low"
       ],
       "first_line": 1666,
       "last_line": 1672,
@@ -2886,7 +3120,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "low"
+        "low",
+        "severity:low"
       ],
       "first_line": 1674,
       "last_line": 1680,
@@ -2902,7 +3137,8 @@
       "severity": "LOW",
       "labels": [
         "low",
-        "criterion-5"
+        "criterion-5",
+        "severity:low"
       ],
       "first_line": 1682,
       "last_line": 1688,
@@ -2917,7 +3153,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "low"
+        "low",
+        "severity:low"
       ],
       "first_line": 1690,
       "last_line": 1696,
@@ -2933,7 +3170,8 @@
       "severity": "LOW",
       "labels": [
         "low",
-        "criterion-5"
+        "criterion-5",
+        "severity:low"
       ],
       "first_line": 1698,
       "last_line": 1704,
@@ -2948,7 +3186,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "low"
+        "low",
+        "severity:low"
       ],
       "first_line": 1706,
       "last_line": 1712,
@@ -2964,7 +3203,8 @@
       "severity": "MEDIUM",
       "labels": [
         "low",
-        "criterion-5"
+        "criterion-5",
+        "severity:medium"
       ],
       "first_line": 1714,
       "last_line": 1720,
@@ -2979,7 +3219,8 @@
       "group": null,
       "severity": "MEDIUM",
       "labels": [
-        "low"
+        "low",
+        "severity:medium"
       ],
       "first_line": 1722,
       "last_line": 1728,
@@ -2994,7 +3235,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "low"
+        "low",
+        "severity:low"
       ],
       "first_line": 1730,
       "last_line": 1736,
@@ -3009,7 +3251,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "low"
+        "low",
+        "severity:low"
       ],
       "first_line": 1738,
       "last_line": 1744,
@@ -3025,7 +3268,8 @@
       "severity": "LOW",
       "labels": [
         "low",
-        "criterion-5"
+        "criterion-5",
+        "severity:low"
       ],
       "first_line": 1746,
       "last_line": 1752,
@@ -3040,7 +3284,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "low"
+        "low",
+        "severity:low"
       ],
       "first_line": 1754,
       "last_line": 1760,
@@ -3056,7 +3301,8 @@
       "severity": "MEDIUM",
       "labels": [
         "low",
-        "criterion-5"
+        "criterion-5",
+        "severity:medium"
       ],
       "first_line": 1762,
       "last_line": 1768,
@@ -3071,7 +3317,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "low"
+        "low",
+        "severity:low"
       ],
       "first_line": 1770,
       "last_line": 1776,
@@ -3087,7 +3334,8 @@
       "severity": "LOW",
       "labels": [
         "low",
-        "criterion-5"
+        "criterion-5",
+        "severity:low"
       ],
       "first_line": 1778,
       "last_line": 1784,
@@ -3103,7 +3351,8 @@
       "severity": "LOW",
       "labels": [
         "low",
-        "criterion-5"
+        "criterion-5",
+        "severity:low"
       ],
       "first_line": 1786,
       "last_line": 1792,
@@ -3119,7 +3368,8 @@
       "severity": "MEDIUM",
       "labels": [
         "low",
-        "criterion-2"
+        "criterion-2",
+        "severity:medium"
       ],
       "first_line": 1794,
       "last_line": 1800,
@@ -3134,12 +3384,13 @@
       "group": null,
       "severity": "MEDIUM",
       "labels": [
-        "parked"
+        "parked",
+        "severity:medium"
       ],
       "first_line": 1908,
       "last_line": 1908,
-      "body_sha256": "96a3e892404e47d7f092e9e9ee920adabbb8501143e678b9a42452b01cd19ebf",
-      "body_chars": 616
+      "body_sha256": "29eb2f4452bc0a595f3a9a87405696edf29836ea2ed728a6f9d1667bfaeaa29c",
+      "body_chars": 2959
     },
     {
       "key": "LH-283",
@@ -3149,12 +3400,13 @@
       "group": null,
       "severity": "MEDIUM",
       "labels": [
-        "parked"
+        "parked",
+        "severity:medium"
       ],
       "first_line": 1909,
       "last_line": 1909,
-      "body_sha256": "f13f680243e1ee9edafbf2926f8b50ad9f5b40a8e3d80d9e9d94a6844ab068aa",
-      "body_chars": 692
+      "body_sha256": "758982e7497fa397556bf4f2a24e89beddda71609221a09aa8dfda9195eaf5de",
+      "body_chars": 4863
     },
     {
       "key": "LH-284",
@@ -3164,12 +3416,13 @@
       "group": null,
       "severity": "MEDIUM",
       "labels": [
-        "parked"
+        "parked",
+        "severity:medium"
       ],
       "first_line": 1910,
       "last_line": 1910,
-      "body_sha256": "3cb6a248b28f88438377272663ad64ba3a91acc122b3749babe792a391ced51e",
-      "body_chars": 666
+      "body_sha256": "74852cbe3236dbf6bddb842c121913a024375cdb64d2b4f8747e8ddda3138bbf",
+      "body_chars": 4412
     },
     {
       "key": "LH-285",
@@ -3179,12 +3432,13 @@
       "group": null,
       "severity": "MEDIUM",
       "labels": [
-        "parked"
+        "parked",
+        "severity:medium"
       ],
       "first_line": 1911,
       "last_line": 1911,
-      "body_sha256": "9f29a73e3df41b706d7deab96837fcebd54657d97e7dac11ea9eae430ec9fdd0",
-      "body_chars": 685
+      "body_sha256": "5f8f9804f469c49c5588e3a7b9ae77bfcae9182396488c033a630cc65da72d54",
+      "body_chars": 4409
     },
     {
       "key": "LH-286",
@@ -3194,12 +3448,13 @@
       "group": null,
       "severity": "MEDIUM",
       "labels": [
-        "parked"
+        "parked",
+        "severity:medium"
       ],
       "first_line": 1912,
       "last_line": 1912,
-      "body_sha256": "61f95d34ed587acce024729817d6162aadbeaf46eaff000078d55c5fea7db19a",
-      "body_chars": 636
+      "body_sha256": "e5799c14fa185509da35a5aa7513158aa60adc31bd46394b666e4e1bfe006ea9",
+      "body_chars": 3032
     },
     {
       "key": "LH-287",
@@ -3209,12 +3464,13 @@
       "group": null,
       "severity": "MEDIUM",
       "labels": [
-        "parked"
+        "parked",
+        "severity:medium"
       ],
       "first_line": 1913,
       "last_line": 1913,
-      "body_sha256": "63a2895d8690787b6bb6836133fc0e7b05f2e9c729a605b626e33d7c501c85df",
-      "body_chars": 666
+      "body_sha256": "cd88fdd4bd42fd99638b2024964984f0d370a015edd0633879e0c7e995622f1e",
+      "body_chars": 4381
     },
     {
       "key": "LH-288",
@@ -3224,12 +3480,13 @@
       "group": null,
       "severity": "MEDIUM",
       "labels": [
-        "parked"
+        "parked",
+        "severity:medium"
       ],
       "first_line": 1914,
       "last_line": 1914,
-      "body_sha256": "3144a06a4647c15afdbd973282d8ec3d0ce16cdaa15edc162b68eb8d6fcf729f",
-      "body_chars": 659
+      "body_sha256": "883d3c698a0665b0e33aa841a67783ee87ee12c1d8fc8ca36393bfe8aec42537",
+      "body_chars": 3805
     },
     {
       "key": "LH-289",
@@ -3239,12 +3496,13 @@
       "group": null,
       "severity": "MEDIUM",
       "labels": [
-        "parked"
+        "parked",
+        "severity:medium"
       ],
       "first_line": 1915,
       "last_line": 1915,
-      "body_sha256": "92d71a0ce535dffaeef7c45cdaa5d29fefab3eb35185c3e7413f920eeaad22db",
-      "body_chars": 604
+      "body_sha256": "5a17aed07bc6dd1f150467cd7236a507433691732c4b2193e0acd7ed64abc7dd",
+      "body_chars": 2303
     },
     {
       "key": "LH-290",
@@ -3254,12 +3512,13 @@
       "group": null,
       "severity": "MEDIUM",
       "labels": [
-        "parked"
+        "parked",
+        "severity:medium"
       ],
       "first_line": 1916,
       "last_line": 1916,
-      "body_sha256": "1d5727aff116b9d4d128b5b7aa403ac81287fb6907e6077cb3b8f082c3127c70",
-      "body_chars": 615
+      "body_sha256": "2a23d17c4b2632fa172980186dab657c877c1d2eb3bb8ae93695bcfdd6ed5a25",
+      "body_chars": 2349
     },
     {
       "key": "LH-291",
@@ -3269,12 +3528,13 @@
       "group": null,
       "severity": "MEDIUM",
       "labels": [
-        "parked"
+        "parked",
+        "severity:medium"
       ],
       "first_line": 1917,
       "last_line": 1917,
-      "body_sha256": "e629093cc1266add34ef2bec7b7227bc90b219a1263aebc2bd402cb928704a72",
-      "body_chars": 625
+      "body_sha256": "1a12e1292f5a6087aca90609d091122ce3244694a5770313dc809b94a5360cc8",
+      "body_chars": 2672
     },
     {
       "key": "LH-292",
@@ -3284,12 +3544,13 @@
       "group": null,
       "severity": "MEDIUM",
       "labels": [
-        "parked"
+        "parked",
+        "severity:medium"
       ],
       "first_line": 1918,
       "last_line": 1918,
-      "body_sha256": "fb963ea3ead4976a0498044dcc145737ba860f8aa8a850119434dadf94b6cd83",
-      "body_chars": 628
+      "body_sha256": "885c0afd00e19255848e1587eba8531004942c769781c54b24a4ffdc8bbe570f",
+      "body_chars": 2694
     },
     {
       "key": "LH-293",
@@ -3299,12 +3560,13 @@
       "group": null,
       "severity": "MEDIUM",
       "labels": [
-        "parked"
+        "parked",
+        "severity:medium"
       ],
       "first_line": 1919,
       "last_line": 1919,
-      "body_sha256": "57245ccfbf9888f2f0f0f72f605f4e4fff2e96b3719d95e2aba06606c106cb65",
-      "body_chars": 601
+      "body_sha256": "c01e2aa0cff17b490c6bb6e7109ef7742e1b9f3859eff0ffefb6a5e18ba7d03f",
+      "body_chars": 2717
     },
     {
       "key": "LH-294",
@@ -3314,12 +3576,13 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 1920,
       "last_line": 1920,
-      "body_sha256": "2ed4b016305abd3926bc304079261b4d48108b7c9bf871dc5189e33bd06a5ad4",
-      "body_chars": 624
+      "body_sha256": "1ecf60da34b2cf45f7aaa975e06e2bfe560eb0ab33b8ae8a1c582feae0e785b8",
+      "body_chars": 2569
     },
     {
       "key": "LH-295",
@@ -3329,12 +3592,13 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 1921,
       "last_line": 1921,
-      "body_sha256": "ea59e9c112632685f39cbc2ce9209dd16a584b348588807fa7e56c3cf6375902",
-      "body_chars": 664
+      "body_sha256": "fb770870b3247641d98a433ec337427443c7aa89010f62fe1ba9b779ddaa25d4",
+      "body_chars": 2785
     },
     {
       "key": "LH-296",
@@ -3344,12 +3608,13 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 1922,
       "last_line": 1922,
-      "body_sha256": "d6099af4df80b1f8542f6ad8915a6740eef189b0ea3ac9f5fa433b36095347d3",
-      "body_chars": 572
+      "body_sha256": "9a2cecd7fd4061a11c8e30ec2e187fbe87619fedc5346659a1534721dc827770",
+      "body_chars": 1743
     },
     {
       "key": "LH-298",
@@ -3359,12 +3624,13 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 1923,
       "last_line": 1923,
-      "body_sha256": "8899cbbaec2d58e9b1746a63e3d46a5778cf44f95937e300ec50c6324b6c9268",
-      "body_chars": 634
+      "body_sha256": "df0b24a0fe1f0e6d312bf577515b0902c3cbfb813e20f80677e59eb8602c4cb9",
+      "body_chars": 2099
     },
     {
       "key": "LH-299",
@@ -3374,12 +3640,13 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 1924,
       "last_line": 1924,
-      "body_sha256": "105f3dab1d710ed922dc5526a0a7ac8e14bd3adaa7a334ca873d2bc47cfa00e3",
-      "body_chars": 546
+      "body_sha256": "36a083b7cc7aa1d896974d331978846103ee17e58a72f4de5f9179d55178c24a",
+      "body_chars": 2226
     },
     {
       "key": "LH-300",
@@ -3389,12 +3656,13 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 1925,
       "last_line": 1925,
-      "body_sha256": "626165380509536ebb0e157658856baea603a09c614b5034a3dcac3ad5db9ce3",
-      "body_chars": 631
+      "body_sha256": "7d05527047cb739f40a9972304583655c9982e8fa35202240067fe52605ad6d9",
+      "body_chars": 2121
     },
     {
       "key": "XC-098",
@@ -3404,12 +3672,13 @@
       "group": null,
       "severity": "MEDIUM",
       "labels": [
-        "parked"
+        "parked",
+        "severity:medium"
       ],
       "first_line": 1926,
       "last_line": 1926,
-      "body_sha256": "bcbf72700bd25a1794c35e770bb149b69fbf4ac0739ee36cdc48744300c64d97",
-      "body_chars": 607
+      "body_sha256": "21fb40eb6ba30b8a11debd22ab7a2d07761db808f1c1f66676170dd217ab9a32",
+      "body_chars": 2195
     },
     {
       "key": "XC-099",
@@ -3419,12 +3688,13 @@
       "group": null,
       "severity": "MEDIUM",
       "labels": [
-        "parked"
+        "parked",
+        "severity:medium"
       ],
       "first_line": 1927,
       "last_line": 1927,
-      "body_sha256": "5f2de6e28c7081f7283a82f9e98f8e2f86c133d1f0ae00f21d51cce2676530d1",
-      "body_chars": 666
+      "body_sha256": "d83d58c9cf4c0acedc7d7944bbc1683f3902310d7b46ee08986db0aa67665781",
+      "body_chars": 2390
     },
     {
       "key": "XC-100",
@@ -3434,12 +3704,13 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 1928,
       "last_line": 1928,
-      "body_sha256": "6c281d3c06785ea117f14418f97287857c827893b25a543a52da11478d2e2a4d",
-      "body_chars": 548
+      "body_sha256": "db10d61dfdd17541a677a66efaf30ef653ceee6452f3486b48aa26963f6b9e3b",
+      "body_chars": 2123
     },
     {
       "key": "XC-101",
@@ -3449,12 +3720,13 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 1929,
       "last_line": 1929,
-      "body_sha256": "154819c39a2480f5ff741c58f70ba9bc6fd2aadfd520d252ce0df3a0f7a79615",
-      "body_chars": 591
+      "body_sha256": "a5fa125c97f9dc38d0da617d8da3ce1081fac9e2daff3bc56b65057075553617",
+      "body_chars": 2312
     },
     {
       "key": "XC-102",
@@ -3464,12 +3736,13 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 1930,
       "last_line": 1930,
-      "body_sha256": "e589dffb1302dc020acb650221eccfad5d377037409fb74b443ecc99442d5dad",
-      "body_chars": 630
+      "body_sha256": "39b48da516d35f518fd65e367576b624ea4b0fe2ad2750e06ba2d4ef70e779f9",
+      "body_chars": 2330
     },
     {
       "key": "XC-103",
@@ -3479,7 +3752,8 @@
       "group": null,
       "severity": "MEDIUM",
       "labels": [
-        "parked"
+        "parked",
+        "severity:medium"
       ],
       "first_line": 1931,
       "last_line": 1931,
@@ -3494,12 +3768,13 @@
       "group": null,
       "severity": "MEDIUM",
       "labels": [
-        "parked"
+        "parked",
+        "severity:medium"
       ],
       "first_line": 1932,
       "last_line": 1932,
-      "body_sha256": "0235e0524ef49a0ecb10872ed1a2e4b379ae0967aac1182212a37ee28a099680",
-      "body_chars": 610
+      "body_sha256": "3c601ba8944d13aeceb3786509c6ccaedbe50a97ddda3bf421ba571b9a53fe89",
+      "body_chars": 2780
     },
     {
       "key": "LOW-032",
@@ -3509,12 +3784,13 @@
       "group": null,
       "severity": "MEDIUM",
       "labels": [
-        "parked"
+        "parked",
+        "severity:medium"
       ],
       "first_line": 1933,
       "last_line": 1933,
-      "body_sha256": "1828fec205c538e1cf4502b0ffff00f26f6db173173773d9b100c4fed5ec8c81",
-      "body_chars": 587
+      "body_sha256": "3a90e8f2c6b0c47e91c26b299af6917450c11e8802695612719eaefd1d62546d",
+      "body_chars": 2569
     },
     {
       "key": "LOW-033",
@@ -3524,12 +3800,13 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 1934,
       "last_line": 1934,
-      "body_sha256": "726da270803f22a22adc8495b64ef25cd331db6d8a1753406038d05111da79b9",
-      "body_chars": 645
+      "body_sha256": "121cbf7eb8a1f00c23fd9f62077d7a4e9a9be94771bec4eb9b039ca9c7a2ff15",
+      "body_chars": 3141
     },
     {
       "key": "LH-301",
@@ -3539,7 +3816,8 @@
       "group": null,
       "severity": "MEDIUM",
       "labels": [
-        "parked"
+        "parked",
+        "severity:medium"
       ],
       "first_line": 1938,
       "last_line": 1938,
@@ -3554,7 +3832,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 1939,
       "last_line": 1939,
@@ -3569,7 +3848,8 @@
       "group": null,
       "severity": "MEDIUM",
       "labels": [
-        "parked"
+        "parked",
+        "severity:medium"
       ],
       "first_line": 1940,
       "last_line": 1940,
@@ -3584,7 +3864,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 1941,
       "last_line": 1941,
@@ -3599,7 +3880,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 1942,
       "last_line": 1942,
@@ -3614,7 +3896,8 @@
       "group": null,
       "severity": "HIGH",
       "labels": [
-        "parked"
+        "parked",
+        "severity:high"
       ],
       "first_line": 1946,
       "last_line": 1946,
@@ -3629,7 +3912,8 @@
       "group": null,
       "severity": "MEDIUM",
       "labels": [
-        "parked"
+        "parked",
+        "severity:medium"
       ],
       "first_line": 1947,
       "last_line": 1947,
@@ -3644,7 +3928,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 1951,
       "last_line": 1951,
@@ -3659,7 +3944,8 @@
       "group": null,
       "severity": "MEDIUM",
       "labels": [
-        "parked"
+        "parked",
+        "severity:medium"
       ],
       "first_line": 1955,
       "last_line": 1955,
@@ -3674,7 +3960,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 1959,
       "last_line": 1959,
@@ -3689,7 +3976,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 1960,
       "last_line": 1960,
@@ -3704,7 +3992,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 1961,
       "last_line": 1961,
@@ -3719,7 +4008,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 1962,
       "last_line": 1962,
@@ -3734,7 +4024,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 1966,
       "last_line": 1966,
@@ -3749,7 +4040,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 1967,
       "last_line": 1967,
@@ -3764,7 +4056,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 1968,
       "last_line": 1968,
@@ -3779,7 +4072,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 1972,
       "last_line": 1972,
@@ -3794,7 +4088,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 1973,
       "last_line": 1973,
@@ -3809,7 +4104,8 @@
       "group": null,
       "severity": "MEDIUM",
       "labels": [
-        "parked"
+        "parked",
+        "severity:medium"
       ],
       "first_line": 1974,
       "last_line": 1974,
@@ -3824,7 +4120,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 1975,
       "last_line": 1975,
@@ -3839,7 +4136,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 1976,
       "last_line": 1976,
@@ -3854,7 +4152,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 1977,
       "last_line": 1977,
@@ -3869,7 +4168,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 1978,
       "last_line": 1978,
@@ -3884,7 +4184,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 1982,
       "last_line": 1982,
@@ -3899,7 +4200,8 @@
       "group": null,
       "severity": "MEDIUM",
       "labels": [
-        "parked"
+        "parked",
+        "severity:medium"
       ],
       "first_line": 1983,
       "last_line": 1983,
@@ -3914,7 +4216,8 @@
       "group": null,
       "severity": "MEDIUM",
       "labels": [
-        "parked"
+        "parked",
+        "severity:medium"
       ],
       "first_line": 1984,
       "last_line": 1984,
@@ -3929,7 +4232,8 @@
       "group": null,
       "severity": "MEDIUM",
       "labels": [
-        "parked"
+        "parked",
+        "severity:medium"
       ],
       "first_line": 1985,
       "last_line": 1985,
@@ -3944,7 +4248,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 1986,
       "last_line": 1986,
@@ -3959,7 +4264,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 1987,
       "last_line": 1987,
@@ -3974,7 +4280,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 1988,
       "last_line": 1988,
@@ -3989,7 +4296,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 1989,
       "last_line": 1989,
@@ -4004,7 +4312,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 1990,
       "last_line": 1990,
@@ -4019,7 +4328,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 1991,
       "last_line": 1991,
@@ -4034,7 +4344,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 1992,
       "last_line": 1992,
@@ -4049,7 +4360,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 1993,
       "last_line": 1993,
@@ -4064,7 +4376,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 1997,
       "last_line": 1997,
@@ -4079,7 +4392,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 1998,
       "last_line": 1998,
@@ -4094,7 +4408,8 @@
       "group": null,
       "severity": "MEDIUM",
       "labels": [
-        "parked"
+        "parked",
+        "severity:medium"
       ],
       "first_line": 1999,
       "last_line": 1999,
@@ -4109,7 +4424,8 @@
       "group": null,
       "severity": "MEDIUM",
       "labels": [
-        "parked"
+        "parked",
+        "severity:medium"
       ],
       "first_line": 2000,
       "last_line": 2000,
@@ -4124,7 +4440,8 @@
       "group": null,
       "severity": "MEDIUM",
       "labels": [
-        "parked"
+        "parked",
+        "severity:medium"
       ],
       "first_line": 2001,
       "last_line": 2001,
@@ -4139,7 +4456,8 @@
       "group": null,
       "severity": "MEDIUM",
       "labels": [
-        "parked"
+        "parked",
+        "severity:medium"
       ],
       "first_line": 2002,
       "last_line": 2002,
@@ -4154,7 +4472,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2003,
       "last_line": 2003,
@@ -4169,7 +4488,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2004,
       "last_line": 2004,
@@ -4184,7 +4504,8 @@
       "group": null,
       "severity": "MEDIUM",
       "labels": [
-        "parked"
+        "parked",
+        "severity:medium"
       ],
       "first_line": 2008,
       "last_line": 2008,
@@ -4199,7 +4520,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2009,
       "last_line": 2009,
@@ -4214,7 +4536,8 @@
       "group": null,
       "severity": "MEDIUM",
       "labels": [
-        "parked"
+        "parked",
+        "severity:medium"
       ],
       "first_line": 2013,
       "last_line": 2013,
@@ -4229,7 +4552,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2014,
       "last_line": 2014,
@@ -4244,7 +4568,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2015,
       "last_line": 2015,
@@ -4259,7 +4584,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2019,
       "last_line": 2019,
@@ -4274,7 +4600,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2020,
       "last_line": 2020,
@@ -4289,7 +4616,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2021,
       "last_line": 2021,
@@ -4304,7 +4632,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2022,
       "last_line": 2022,
@@ -4319,7 +4648,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2023,
       "last_line": 2023,
@@ -4334,7 +4664,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2024,
       "last_line": 2024,
@@ -4349,7 +4680,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2025,
       "last_line": 2025,
@@ -4364,7 +4696,8 @@
       "group": null,
       "severity": "MEDIUM, verdict split 1-1",
       "labels": [
-        "parked"
+        "parked",
+        "severity:medium"
       ],
       "first_line": 2026,
       "last_line": 2026,
@@ -4379,7 +4712,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2027,
       "last_line": 2027,
@@ -4394,7 +4728,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2028,
       "last_line": 2028,
@@ -4409,7 +4744,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2032,
       "last_line": 2032,
@@ -4424,7 +4760,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2033,
       "last_line": 2033,
@@ -4439,7 +4776,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2034,
       "last_line": 2034,
@@ -4454,7 +4792,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2035,
       "last_line": 2035,
@@ -4469,7 +4808,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2036,
       "last_line": 2036,
@@ -4484,7 +4824,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2037,
       "last_line": 2037,
@@ -4499,7 +4840,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2038,
       "last_line": 2038,
@@ -4514,7 +4856,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2039,
       "last_line": 2039,
@@ -4529,7 +4872,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2040,
       "last_line": 2040,
@@ -4544,7 +4888,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2041,
       "last_line": 2041,
@@ -4559,7 +4904,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2045,
       "last_line": 2045,
@@ -4574,7 +4920,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2046,
       "last_line": 2046,
@@ -4589,7 +4936,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2047,
       "last_line": 2047,
@@ -4604,7 +4952,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2048,
       "last_line": 2048,
@@ -4619,7 +4968,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2049,
       "last_line": 2049,
@@ -4634,7 +4984,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2050,
       "last_line": 2050,
@@ -4649,7 +5000,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2051,
       "last_line": 2051,
@@ -4664,7 +5016,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2052,
       "last_line": 2052,
@@ -4679,7 +5032,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2053,
       "last_line": 2053,
@@ -4694,7 +5048,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2054,
       "last_line": 2054,
@@ -4709,7 +5064,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2055,
       "last_line": 2055,
@@ -4754,7 +5110,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2058,
       "last_line": 2058,
@@ -4769,7 +5126,8 @@
       "group": null,
       "severity": "MEDIUM",
       "labels": [
-        "parked"
+        "parked",
+        "severity:medium"
       ],
       "first_line": 2059,
       "last_line": 2059,
@@ -4784,7 +5142,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2060,
       "last_line": 2060,
@@ -4799,7 +5158,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2061,
       "last_line": 2061,
@@ -4814,7 +5174,8 @@
       "group": null,
       "severity": "MEDIUM",
       "labels": [
-        "parked"
+        "parked",
+        "severity:medium"
       ],
       "first_line": 2062,
       "last_line": 2062,
@@ -4829,7 +5190,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2063,
       "last_line": 2063,
@@ -4844,7 +5206,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2064,
       "last_line": 2064,
@@ -4859,7 +5222,8 @@
       "group": null,
       "severity": "MEDIUM",
       "labels": [
-        "parked"
+        "parked",
+        "severity:medium"
       ],
       "first_line": 2065,
       "last_line": 2065,
@@ -4874,7 +5238,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2066,
       "last_line": 2066,
@@ -4889,7 +5254,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2067,
       "last_line": 2067,
@@ -4904,7 +5270,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2068,
       "last_line": 2068,
@@ -4919,7 +5286,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2069,
       "last_line": 2069,
@@ -4934,7 +5302,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2070,
       "last_line": 2070,
@@ -4949,7 +5318,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2071,
       "last_line": 2071,
@@ -4964,7 +5334,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2072,
       "last_line": 2072,
@@ -4979,7 +5350,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2073,
       "last_line": 2073,
@@ -4994,7 +5366,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2074,
       "last_line": 2074,
@@ -5009,7 +5382,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2075,
       "last_line": 2075,
@@ -5024,7 +5398,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2076,
       "last_line": 2076,
@@ -5039,7 +5414,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2077,
       "last_line": 2077,
@@ -5054,7 +5430,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2078,
       "last_line": 2078,
@@ -5069,7 +5446,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2079,
       "last_line": 2079,
@@ -5084,7 +5462,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2080,
       "last_line": 2080,
@@ -5099,7 +5478,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2081,
       "last_line": 2081,
@@ -5114,7 +5494,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2082,
       "last_line": 2082,
@@ -5129,7 +5510,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2083,
       "last_line": 2083,
@@ -5144,7 +5526,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2084,
       "last_line": 2084,
@@ -5159,7 +5542,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2085,
       "last_line": 2085,
@@ -5189,7 +5573,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2087,
       "last_line": 2087,
@@ -5204,7 +5589,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2088,
       "last_line": 2088,
@@ -5219,7 +5605,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2089,
       "last_line": 2089,
@@ -5234,7 +5621,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2090,
       "last_line": 2090,
@@ -5249,7 +5637,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2091,
       "last_line": 2091,
@@ -5264,7 +5653,8 @@
       "group": null,
       "severity": "MEDIUM",
       "labels": [
-        "parked"
+        "parked",
+        "severity:medium"
       ],
       "first_line": 2092,
       "last_line": 2092,
@@ -5279,7 +5669,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2093,
       "last_line": 2093,
@@ -5294,7 +5685,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2094,
       "last_line": 2094,
@@ -5309,7 +5701,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2095,
       "last_line": 2095,
@@ -5324,7 +5717,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2096,
       "last_line": 2096,
@@ -5339,7 +5733,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2097,
       "last_line": 2097,
@@ -5354,7 +5749,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2098,
       "last_line": 2098,
@@ -5369,7 +5765,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2099,
       "last_line": 2099,
@@ -5384,7 +5781,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2100,
       "last_line": 2100,
@@ -5399,7 +5797,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2101,
       "last_line": 2101,
@@ -5414,7 +5813,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2102,
       "last_line": 2102,
@@ -5429,7 +5829,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2103,
       "last_line": 2103,
@@ -5444,7 +5845,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2104,
       "last_line": 2104,
@@ -5459,7 +5861,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2105,
       "last_line": 2105,
@@ -5474,7 +5877,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2106,
       "last_line": 2106,
@@ -5489,7 +5893,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2107,
       "last_line": 2107,
@@ -5504,7 +5909,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2108,
       "last_line": 2108,
@@ -5519,7 +5925,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2109,
       "last_line": 2109,
@@ -5534,7 +5941,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2110,
       "last_line": 2110,
@@ -5549,7 +5957,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2111,
       "last_line": 2111,
@@ -5564,7 +5973,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2112,
       "last_line": 2112,
@@ -5579,7 +5989,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2113,
       "last_line": 2113,
@@ -5594,7 +6005,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2114,
       "last_line": 2114,
@@ -5609,7 +6021,8 @@
       "group": null,
       "severity": "LOW",
       "labels": [
-        "parked"
+        "parked",
+        "severity:low"
       ],
       "first_line": 2115,
       "last_line": 2115,
@@ -5765,6 +6178,132 @@
       "last_line": 2130,
       "body_sha256": "093ed165a389aa13fa5d1123651ca650eae4488f70a24d9fc2d3aaf57c67e5a9",
       "body_chars": 507
+    },
+    {
+      "key": "PARK-HANDOFF-1",
+      "title": "PARK-HANDOFF-1: The lakehouse zone still reads the S3 browser and the table history through the BFF JSON helper",
+      "kind": "parked",
+      "section": "Outside the register",
+      "group": "HANDOFF-lakehouse.md:9-30",
+      "severity": null,
+      "labels": [
+        "parked",
+        "frontend"
+      ],
+      "first_line": 0,
+      "last_line": 0,
+      "body_sha256": "7c607d4a3167cfd82e460091b8f0d3972643a24170f07cae7ede313982d658fe",
+      "body_chars": 1679
+    },
+    {
+      "key": "PARK-HANDOFF-2",
+      "title": "PARK-HANDOFF-2: The createWarehouse and checkAccess schemas are hand-copied in the home and lakehouse zones",
+      "kind": "parked",
+      "section": "Outside the register",
+      "group": "HANDOFF-lakehouse.md:46-70",
+      "severity": null,
+      "labels": [
+        "parked",
+        "frontend"
+      ],
+      "first_line": 0,
+      "last_line": 0,
+      "body_sha256": "11997774765494822130cf6edec8710f3445278088ed298777105979c968a05b",
+      "body_chars": 2002
+    },
+    {
+      "key": "PARK-ALERT-1",
+      "title": "PARK-ALERT-1: Decide whether the estate pages: alerting on, GreptimeDB Enterprise, or no paging",
+      "kind": "parked",
+      "section": "Outside the register",
+      "group": "open_alert.md:1-7,81-100",
+      "severity": null,
+      "labels": [
+        "parked",
+        "needs-info"
+      ],
+      "first_line": 0,
+      "last_line": 0,
+      "body_sha256": "dc32652d5e311bc613acee23967d55e3eb8d53d16fee2404245624f3897bd203",
+      "body_chars": 2290
+    },
+    {
+      "key": "PARK-ANNO-1",
+      "title": "PARK-ANNO-1: Annotation, AI-assist and active-learning gaps (epic)",
+      "kind": "parked",
+      "section": "Outside the register",
+      "group": "open_anno_active.md:41-61,236-560",
+      "severity": null,
+      "labels": [
+        "parked"
+      ],
+      "first_line": 0,
+      "last_line": 0,
+      "body_sha256": "f54bd99bf4c45880104b46668cdaabf39912f8e601d83b3344e2fa3d49efdb7c",
+      "body_chars": 25740
+    },
+    {
+      "key": "PARK-TODO-1",
+      "title": "PARK-TODO-1: UI and product notes from TODO.md (umbrella)",
+      "kind": "parked",
+      "section": "Outside the register",
+      "group": "TODO.md",
+      "severity": null,
+      "labels": [
+        "parked"
+      ],
+      "first_line": 0,
+      "last_line": 0,
+      "body_sha256": "fe3b4ebcf9f18437ea1286a7b0c21a58fb0f4bb680a2011cbac75091f9bce8fc",
+      "body_chars": 2513
+    },
+    {
+      "key": "PARK-TRACE-2",
+      "title": "PARK-TRACE-2: Decide whether a cascade started through the shared app token names an originator",
+      "kind": "parked",
+      "section": "Outside the register",
+      "group": "lakehouse-e2e-trace.md:311-314",
+      "severity": null,
+      "labels": [
+        "parked",
+        "needs-info"
+      ],
+      "first_line": 0,
+      "last_line": 0,
+      "body_sha256": "f7224f44c810d62d5191027420a564c312b48ec9d50c8cd9597cfa9bd7b91d12",
+      "body_chars": 595
+    },
+    {
+      "key": "PARK-TRACE-3",
+      "title": "PARK-TRACE-3: Decide how a Ray stage job that fails after committing records its committed version in lineage",
+      "kind": "parked",
+      "section": "Outside the register",
+      "group": "lakehouse-e2e-trace.md:315-319",
+      "severity": null,
+      "labels": [
+        "parked",
+        "needs-info"
+      ],
+      "first_line": 0,
+      "last_line": 0,
+      "body_sha256": "6d7d1817bfbc47883272b47363b871bafd8df281fb961e36955ede165fd5aaa4",
+      "body_chars": 726
+    },
+    {
+      "key": "PARK-TRACE-4",
+      "title": "PARK-TRACE-4: Decide whether table_published notifies watchers",
+      "kind": "parked",
+      "section": "Outside the register",
+      "group": "lakehouse-e2e-trace.md:320-321",
+      "severity": null,
+      "labels": [
+        "parked",
+        "needs-info"
+      ],
+      "first_line": 0,
+      "last_line": 0,
+      "body_sha256": "b7eee444af00e4cb2f90ec354fbc50ec6aefc67fb80e7010a0bf946af5bfff78",
+      "body_chars": 385
     }
   ],
   "map_issue": {
@@ -5867,13 +6406,6 @@
       "sentence": "**enabler: XC-090**"
     },
     {
-      "blocked": "LH-207",
-      "blocker": "LH-288",
-      "source_row": "LH-207",
-      "rule": "cue 'needs'",
-      "sentence": "A writer is also a reader (model.fga:431-432,551-552) and the server-mediated path does not mask (credentials.py:136-139), so client-side copying needs LH-288's ruling."
-    },
-    {
       "blocked": "XC-084",
       "blocker": "LH-218",
       "source_row": "LH-218",
@@ -5893,27 +6425,6 @@
       "source_row": "LH-254",
       "rule": "cue 'needs'",
       "sentence": "That needs XC-075 and XC-096 to let the lane come up."
-    },
-    {
-      "blocked": "LH-256",
-      "blocker": "LH-283",
-      "source_row": "LH-256",
-      "rule": "cue 'waits on'",
-      "sentence": "Sites that belong to another row's commit: index_specs.py:14-17 (LH-248), dataplane.py:277-279 and core/config.py:459-461 (LH-273), and services/catalog/tests/test_tag_and_branch_failures_carry_their_spec_code.py:147-153, which waits on LH-283 (parked and uncounted)."
-    },
-    {
-      "blocked": "LH-330",
-      "blocker": "LH-164",
-      "source_row": "LH-330",
-      "rule": "cue 'waits on'",
-      "sentence": "Partly blocked: how the heads' and the lanes' non-Append writes reach the catalog is the commit-door decision under **Decisions still open**, and /produce's location also waits on D6 (LH-164 part 1, LH-194)."
-    },
-    {
-      "blocked": "LH-218",
-      "blocker": "LH-129",
-      "source_row": "LH-129",
-      "rule": "cue 'enabler of'",
-      "sentence": "- *Why:* Phase 1 takes it as the stated enabler of CP-029 (jobs vend their own credentials), LH-218 (the Ray lane's root-key byte path is this row's)."
     },
     {
       "blocked": "XC-081",
@@ -6100,6 +6611,13 @@
       "sentence": "Preconditions are LH-148 and CP-037 (LH-199, LH-064, XC-078 and CTL-021 are closed)."
     },
     {
+      "blocked": "LH-207",
+      "blocker": "LH-288",
+      "source_row": "LH-207",
+      "reason": "excluded by hand: LH-207's closes-when names no client-side copy case; LH-288's ruling bounds a hole LH-207 says it only narrows",
+      "sentence": "A writer is also a reader (model.fga:431-432,551-552) and the server-mediated path does not mask (credentials.py:136-139), so client-side copying needs LH-288's ruling."
+    },
+    {
       "blocked": "CP-031",
       "blocker": "LH-220",
       "source_row": "CP-031",
@@ -6121,6 +6639,20 @@
       "sentence": "That needs XC-075 and XC-096 to let the lane come up."
     },
     {
+      "blocked": "LH-256",
+      "blocker": "LH-283",
+      "source_row": "LH-256",
+      "reason": "excluded by hand: LH-256's How moves a site a later row touches into that row's commit, so LH-256 closes without LH-283",
+      "sentence": "Sites that belong to another row's commit: index_specs.py:14-17 (LH-248), dataplane.py:277-279 and core/config.py:459-461 (LH-273), and services/catalog/tests/test_tag_and_branch_failures_carry_their_spec_code.py:147-153, which waits on LH-283 (parked and uncounted)."
+    },
+    {
+      "blocked": "LH-330",
+      "blocker": "LH-164",
+      "source_row": "LH-330",
+      "reason": "excluded (owner, 2026-10-10): LH-330 waits on decision D6, which LH-164 part 1 names, not on the row",
+      "sentence": "Partly blocked: how the heads' and the lanes' non-Append writes reach the catalog is the commit-door decision under **Decisions still open**, and /produce's location also waits on D6 (LH-164 part 1, LH-194)."
+    },
+    {
       "blocked": "LH-330",
       "blocker": "LH-194",
       "source_row": "LH-330",
@@ -6132,6 +6664,13 @@
       "blocker": "LH-129",
       "source_row": "LH-129",
       "reason": "CP-029 is not an open or parked row (closed, merged or unknown)",
+      "sentence": "- *Why:* Phase 1 takes it as the stated enabler of CP-029 (jobs vend their own credentials), LH-218 (the Ray lane's root-key byte path is this row's)."
+    },
+    {
+      "blocked": "LH-218",
+      "blocker": "LH-129",
+      "source_row": "LH-129",
+      "reason": "excluded by hand: LH-218's closes-when is the in-process lane only and says the Ray lane's root credential is LH-129's",
       "sentence": "- *Why:* Phase 1 takes it as the stated enabler of CP-029 (jobs vend their own credentials), LH-218 (the Ray lane's root-key byte path is this row's)."
     },
     {

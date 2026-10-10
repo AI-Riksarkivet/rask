@@ -11,8 +11,9 @@ Issues and specs for this repo live as GitHub issues on `AI-Riksarkivet/rask`. U
 - **No new issue without the owner.** A skill that finds a problem proposes it; it does not open a
   counted issue on its own. Unadmitted findings get the `parked` label and stay out of every count.
 - **Labels carry the register's markers:** `blocks-prod`, `criterion-1` … `criterion-5`,
-  `phase-1`, `phase-1-after-launch`, `phase-2`, `frontend`, `low`, and the triage roles in
-  `triage-labels.md`.
+  `phase-1`, `phase-1-after-launch`, `phase-2`, `frontend`, `low`, `parked`, the row's severity tag as
+  `severity:high` / `severity:medium` / `severity:low` (an OBSERVATION or an untagged item carries
+  none), and the triage roles in `triage-labels.md`.
 - **The order lives in the pinned map issue** (label `wayfinder:map`, title `Phase 1 map`): its body
   holds FOCUS NOW, the production short list, owner rulings in force and decisions still open.
 - **An issue closes when its fix is deployed and read back live, not when it merges.** Close it with a
