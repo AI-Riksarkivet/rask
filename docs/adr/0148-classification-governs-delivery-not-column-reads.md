@@ -19,9 +19,13 @@ A column carrying `rask.classification` makes the vend answer `server_mediated`
   catalog's data operations, never by a vended credential.
 - Refusing to vend for a classified table when the caller sets `vend_credentials=true` deviates from the spec's SHOULD.
   The deviation is deliberate and stated in the refusal.
-- The comment at `credentials.py:147-149` is rewritten to say exactly that.
+- The comment block at `credentials.py:132-150` (its "does not mask" clause at 148-150) is rewritten to say exactly
+  that.
 
 ## Consequences
 
-- No column-level read control exists; one would be a new row with its own surface.
+- No column-level read control exists; one would be a new row with its own surface. Its surface would include the
+  explain-plan and analyze-plan doors, describe-index, and queries with `with_row_id`, beside the query, filter and
+  full-text paths (`lance_docs/ns_catalog/namespace/operations/models/ExplainTableQueryPlanRequest.md:14-15`,
+  `QueryTableRequest.md:31`); unconfirmed which of those rask serves today.
 - LH-288 closes as decided.

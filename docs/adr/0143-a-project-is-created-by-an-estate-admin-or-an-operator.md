@@ -5,7 +5,7 @@ Source: owner decision, 2026-10-10 grilling session (D2, LH-076).
 ## Context
 
 The Lance namespace spec has no project level. Its security model is a bearer, OAuth2 or API-key credential
-(`lance_docs/ns_catalog/spec.yaml:80-83`) and an `Identity` (`spec.yaml:2451-2470`). A project sits above the
+(`lance_docs/ns_catalog/spec.yaml:81-84`) and an `Identity` (`spec.yaml:2451-2470`). A project sits above the
 namespace and is rask's own tenancy level, so who may create one is rask's authorization policy, not a format question.
 
 `POST /v1/projects` checks `can_observe_events` (estate `owner`) at

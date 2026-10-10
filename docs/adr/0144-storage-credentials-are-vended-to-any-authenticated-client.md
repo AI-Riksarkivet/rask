@@ -34,4 +34,8 @@ Idea taken from: Lakekeeper's separate `sts-endpoint` setting.
 - Off-cluster readers are not funnelled through the catalog's data operations.
 - `warehouses.py:159-163`, which refuses any endpoint other than the estate store, is revisited when a client endpoint
   becomes configurable.
+- Per-base vending is a Lance SDK convention rask carries, not spec: the spec's `storage_options` is a flat map. Its
+  constraints: base ids are assigned by the manifest, so the vendor reads them from it; `base_store_params`, keyed by
+  URI, takes precedence over `base_<id>.<key>` (`guide.md:2373-2378`); and an S3-compatible client needs both region
+  and endpoint (`guide.md:2423-2425`).
 - Unconfirmed: whether `vending.py` already scopes per base for multi-base and shallow-cloned tables; LH-177 checks it.

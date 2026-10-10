@@ -25,9 +25,13 @@ Idea taken from: Lakekeeper's two-step expiry (mark first, reclaim later).
   control event. The event carries a new `ControlAction` and `NotificationReason` and goes to the requester and the
   table's owners. It names the branch or tag and the deadline.
 - **Then release, always.** When the grace period ends, a pinning branch is deleted and recreated at main's
-  post-erasure head (`create_branch(name, reference=<clean head>)`, `guide.md:4031-4032`), and a pinning tag is deleted.
-  These are the format's only ways to make the pinned version reclaimable. The owner may copy work out before the
-  deadline; a branch loses its fork point and a tag its name.
+  post-erasure head, and a pinning tag is deleted. A branch has no update operation, so delete-and-recreate is its only
+  release (`lance_docs/ns_catalog/namespace/operations/index.md:85-92`; CreateTableBranch takes `fromBranch` /
+  `fromVersion`, `ns_catalog/namespace/operations/models/CreateTableBranchRequest.md:13-15`). The `reference=` keyword
+  of `create_branch` is the installed pylance 12.0.0 signature; `guide.md:4031-4032` shows the call positionally. A tag
+  could instead be moved to the clean head (UpdateTableTag, `ns_catalog/namespace/operations/models/UpdateTableTagRequest.md:13-14`),
+  which keeps its name; the owner chose deletion. The owner may copy work out before the deadline; a branch loses its
+  fork point and a tag its name.
 - **The grace period is 7 days by default**, set as a catalog chart value. The erasure report and the notification
   both show the deadline. GDPR expects erasure without undue delay and within a month, and a week leaves margin.
 - **No override.** There is no door that cancels or extends the release: an erasure that can be blocked is not an
@@ -37,15 +41,31 @@ Idea taken from: Lakekeeper's two-step expiry (mark first, reclaim later).
 
 ## Consequences
 
-- The erased bytes leave storage only after three things, in order: the grace period ends and the pin is released; the
-  fragments holding the subject are rewritten by compaction, since a delete is a deletion file over an unchanged data
-  file until "deletions can be materialized by rewriting data files" (`lance_docs/file_format.md:2984`); and cleanup's
-  `older_than` window passes (7 days by default, `guide.md:3810`). The erasure report states that bound, not only the
-  grace period.
+- The erased bytes leave storage only after all of these, and the erasure report states that bound, not only the
+  grace period:
+  - the grace period ends and every pin is released;
+  - compaction rewrites the fragments holding the subject, since a delete is a deletion file over an unchanged data
+    file until "deletions can be materialized by rewriting data files" (`lance_docs/file_format.md:2984`);
+  - every index over an erased column is rebuilt, because index files are immutable (`file_format.md:1091-1093`), a
+    delete only masks rows at query time and only an index built after it leaves them out (`file_format.md:1103-1106`,
+    `2984-2985`), and BTree, bitmap/label-list, FTS and FLAT indices store the column values themselves. A fragment
+    reuse index (`compact_files(defer_index_remap=True)`) defers the remap, and dropping an index does not delete its
+    files (`lance_sdk.md:561`);
+  - cleanup's `older_than` window passes. rask's window is `maintenance.olderThanDays` (`chart/values.yaml:1800`,
+    default 7), which a table's policy overrides with `retention_days` (`services/maintenance/src/maintenance/services/sweep.py:554-555`);
+    pylance's own default is 14 days (`lance_sdk.md:925-931`).
+- Until cleanup runs, a restore of a retained pre-erasure version brings the rows back (`file_format.md:5358-5373`), so
+  restore stays a high-privilege door.
+- Other holders the erasure must account for: the delete predicate, which names the subject, persists in the
+  transaction file (`file_format.md:4783-4789`); blob v2 `.blob` sidecars are not rewritten by compaction and
+  external-URI blobs are never reclaimed by Lance (`guide.md:301-303`, `326-327`); a shallow clone made with
+  `clone_table` shares the source's data, deletion and index files (`lance_sdk.md:3680-3689`); and a tag can sit on a
+  non-main branch, so the pin census reads the tag's branch as well as its version.
 - `pinned_by` must stop over-reporting a branch whose own head is already a residual head, because the notice now
   goes to a person rather than only into a report.
 - The pending release must survive a restart, so it is durable state with a due time, not an in-memory timer.
 - XC-092's erasure end state (criterion 2) can now be specified, so XC-090 is no longer blocked on D4.
-- Unconfirmed: how Lance behaves when the pinning branch has child branches (`parent_branch` set to it,
-  `lancemultibasebranchingblobv2.md:480-487`). lance_docs does not say; LH-178 measures it before relying on the
-  delete-and-recreate step for such a branch.
+- Unconfirmed, and measured by LH-178 on the installed pylance before it relies on them: how Lance behaves when the
+  pinning branch has child branches (`parent_branch` set to it, `lancemultibasebranchingblobv2.md:484-487`;
+  DeleteTableBranch has no cascade flag); when cleanup reclaims superseded index files, `.txn` files and unreferenced
+  `.blob` files; and whether rask's erasure reaches shallow clones.

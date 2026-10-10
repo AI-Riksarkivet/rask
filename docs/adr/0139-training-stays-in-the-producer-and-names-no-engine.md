@@ -8,7 +8,9 @@ The training head (`/train`), its trigger consumer and the training plan live in
 lines across `api/train.py`, `api/train_outcomes.py`, `services/train.py` and `services/train_plans.py`, plus
 `scripts/ray_train_job.py`. The gateway routes `/api/train` and `/api/trains` to medallion
 (`services/gateway/src/gateway/__init__.py:238-241`), and the models zone calls them. Training already runs through the
-executor port (ADR 0105), but `train_plans.py:44-45,250,262` still names `RAY_ENGINE`. CP-056 (approved 2026-10-05)
+executor port (ADR 0105, `executor_for` at `train_plans.py:45,262`), but `train_plans.py` still names Ray
+directly: the `RAY_ENGINE` import (`:44`) and `engine=RAY_ENGINE` (`:250`), and the `ray_executor` import (`:46`) and
+its calls (`:317,359,383`). CP-056 (approved 2026-10-05)
 makes the lakehouse know no engine.
 
 ## Decision
