@@ -18,7 +18,8 @@
    lance.signingIdentities, two secrets: signing-public-<identity> (field `keys`) and then signing-key-<identity>
    (field `seed`), described in values.yaml `signing:`; the render refuses a non-dev store until an operator
    created them and signing.provisioned says so. Likewise nats-user-<user> per values.yaml `nats.auth` user, and
-   nats-route (and nats-server, in operator mode), attested by nats.auth.provisioned. The devMode seed below is the
+   nats-route (and nats-server, in operator mode), attested by nats.auth.provisioned. With the in-chart Collector,
+   otel-collector-greptime (fields username, password), the credential the audit store admits. The devMode seed below is the
    authoritative list — keep this comment and that `bao kv put` in sync.
 
    TWO CONSUMERS, ONE KEY (2026-08-09). `publisher-oidc-client-secret` now serves the publish saga AND
@@ -34,6 +35,8 @@
 {{- $nats := include "lance.natsMints" . }}
 {{- $natsUsers := include "lance.natsUsers" . | splitList " " | compact }}
 {{- $natsTable := include "lance.natsTable" . | fromJson }}
+{{- $otel := .Values.observability.otelCollector | default dict }}
+{{- $otelSeed := and .Values.observability.enabled $otel.enabled (not $otel.externalEndpoint) }}
 {{- if not .Values.openbao.devMode }}
 apiVersion: v1
 kind: ConfigMap
@@ -246,10 +249,6 @@ spec:
               mkdir -p "$HOME/seed"
               {{- /* nsc reads its working directory, and the image's is not readable as this user (measured in nats-box 0.19.7). */}}
               cd "$HOME"
-              {{- if or $mint $nats }}
-              {{- /* ONE PAIR PER SIGNING IDENTITY, chosen from the kept copy, the store behind the Service, then the mint candidate
-                     (values.yaml `signing:`). A value travels through shell variables, files and `@file` arguments, never argv or output. */}}
-              {{- include "lance.signingShapes" . | nindent 14 }}
               svc_get() {
                 if got=$(BAO_ADDR=http://{{ include "lance.openbaoHost" . }}:{{ .Values.openbao.port }} BAO_CLIENT_TIMEOUT=5s bao kv get -field="$2" "secret/$1" 2>&1); then return 0; fi
                 case "$got" in
@@ -258,6 +257,10 @@ spec:
                 echo "cannot read secret/$1 behind the Service, refusing to write over it: $got" >&2
                 exit 1
               }
+              {{- if or $mint $nats }}
+              {{- /* ONE PAIR PER SIGNING IDENTITY, chosen from the kept copy, the store behind the Service, then the mint candidate
+                     (values.yaml `signing:`). A value travels through shell variables, files and `@file` arguments, never argv or output. */}}
+              {{- include "lance.signingShapes" . | nindent 14 }}
               put_pair() {
                 k="$HOME/seed/signing-key-$1"; p="$HOME/seed/signing-public-$1"
                 if [ -f "$k" ] && [ -f "$p" ] && seed_shaped "$(cat "$k")" && keys_shaped "$(cat "$p")"; then
@@ -434,6 +437,16 @@ spec:
                 {{- end }}
 
               echo "seeded secret/lance into OpenBao"
+              {{- if $otelSeed }}
+              {{- /* THE COLLECTOR'S AUDIT-STORE CREDENTIAL ([[XC-003]]), create-if-absent: kept, else carried from the store behind
+                     the Service, else minted. */}}
+              c="$HOME/seed/otel-collector-greptime"
+              if [ ! -s "$c" ]; then
+                if svc_get otel-collector-greptime password; then v=$got; else v=$(head -c 30 /dev/urandom | base64 | tr '+/' '-_' | tr -d '\n'); fi
+                (umask 077; printf '%s' "$v" > "$c")
+              fi
+              bao kv put secret/otel-collector-greptime username=otel-collector password=@"$c" >/dev/null
+              {{- end }}
 
               {{- if $nats }}
               nats_bundle
@@ -502,6 +515,9 @@ spec:
               {{- end }}{{- end }}
               {{- if $.Values.secrets.hfTokenInStore }}
               path "{{ $.Values.externalSecrets.kvMount }}/data/hf-token" { capabilities = ["read"] }
+              {{- end }}
+              {{- if $otelSeed }}
+              path "{{ $.Values.externalSecrets.kvMount }}/data/otel-collector-greptime" { capabilities = ["read"] }
               {{- end }}
               POLICY
               bao write auth/{{ $.Values.externalSecrets.kubernetesAuthPath }}/role/{{ $.Values.externalSecrets.role }} \

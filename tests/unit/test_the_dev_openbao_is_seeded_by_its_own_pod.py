@@ -25,6 +25,9 @@ changes reaches the store on the next rollout without touching the trust root th
 `nats-server` and those two before the readiness key; a root it cannot read or use stops the seed, because a store that is
 Ready without its users hands every sidecar an empty credential. The bundle is kept like the signing pairs.
 
+[[XC-003]] puts the in-chart Collector's audit-store credential through it: `otel-collector-greptime` is kept, else carried
+from the store behind the Service, else minted, so a surge keeps the credential the store admits.
+
 [[XC-004]] makes every other credential of the store a generated one: ESO's Password generator fills
 `<release>-dev-credentials` once, the pod mounts it, and the seed writes each field from the file, deriving
 each scoped storage secret from the root there, so no credential is in the render, an argument list or an
@@ -219,7 +222,13 @@ def _arrange_nats(case: str, stores: Path, tmp_path: Path, env: dict[str, str]) 
         tar.add(root, arcname=".")
     (served / "nats-root").write_text(f"nsc={base64.b64encode(packed.getvalue()).decode()}\n")
     (served / "nats-route").write_text("user=route\npassword=an-earlier-route-password\n")
-    return {"operator": (root / "operator").read_text(), "account": (root / "APP.pub").read_text(), "password": "an-earlier-route-password"}
+    (served / "otel-collector-greptime").write_text("username=otel-collector\npassword=an-earlier-collector-password\n")
+    return {
+        "operator": (root / "operator").read_text(),
+        "account": (root / "APP.pub").read_text(),
+        "password": "an-earlier-route-password",
+        "collector": "an-earlier-collector-password",
+    }
 
 
 @pytest.mark.parametrize(
@@ -243,7 +252,7 @@ def _arrange_nats(case: str, stores: Path, tmp_path: Path, env: dict[str, str]) 
         pytest.param(DEFAULT_ARGS, "lacks", "", False, "key-without-list", id="a-key-without-its-list-stops-the-seed"),
         pytest.param(DEFAULT_ARGS, "lacks", "", False, "malformed-pair", id="a-malformed-pair-behind-the-service-is-refused"),
         pytest.param(DEFAULT_ARGS, "lacks", "", False, "malformed-list", id="a-malformed-list-is-not-rotated-onto"),
-        pytest.param(DEFAULT_ARGS, "lacks", "", True, "nats-carried", id="the-bus-trust-root-and-route-are-carried-and-every-user-issued-afresh"),
+        pytest.param(DEFAULT_ARGS, "lacks", "", True, "nats-carried", id="carried-bus-root-route-and-collector-credential-every-user-issued-afresh"),
         pytest.param(DEFAULT_ARGS, "lacks", "", False, "nats-root-malformed", id="a-bus-trust-root-it-cannot-use-stops-the-seed"),
         pytest.param(DEFAULT_ARGS, "lacks", "", False, "nats-mint-failed", id="a-store-without-its-bus-users-is-never-ready"),
         pytest.param(DEFAULT_ARGS, "lacks", "", False, "generated-missing", id="a-store-without-a-generated-credential-is-never-ready"),
@@ -419,6 +428,12 @@ def test_the_dev_store_is_seeded_by_its_own_pod_and_keeps_its_signing_keys(  # n
         assert root["operator"] == carried["operator"] and route["password"] == carried["password"], (
             "the trust root or the route credential behind the Service was replaced, so the running server refuses every new client"
         )
+    collector = _store(stores, "local", "secret/otel-collector-greptime")
+    assert collector.get("username") == "otel-collector" and collector.get("password"), f"the Collector's audit-store credential is not seeded: {collector}"
+    assert collector["password"] == (carried.get("collector") or (tmp_path / "home" / "seed" / "otel-collector-greptime").read_text()), (
+        "the Collector's credential was neither carried from the store behind the Service nor kept for a restart in place"
+    )
+    assert collector["password"] not in streams, "the Collector's credential reached an output stream or a bao argument list"
     for user, (publish, subscribe) in users.items():
         issued = _store(stores, "local", f"secret/nats-user-{user}")
         claim = _claim(issued.get("jwt", "eyJ.e30"))

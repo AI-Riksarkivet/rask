@@ -273,6 +273,9 @@ observability:
 #   streamReplicas: 3                                # raft-replicated streams (needs the 3+ node cluster)
 # medallion (KubeRay RayCluster):                    # point the Ray submit seam at the operator-managed cluster
 #   rayAddress: http://lance-raycluster-head-svc:8265 # the RayCluster head's dashboard svc (Jobs REST is agnostic)
+# THE AUDIT STORE (prerequisite, values.yaml `observability`): it refuses unauthenticated writes and deletes on
+#   every listener and admits the Collector's credential, `otel-collector-greptime` in the platform store (username,
+#   password). The bundled GreptimeDB does not enforce it, so a deploy that keeps it keeps an erasable audit trail.
 # observability (OpenTelemetry Collector):           # ship telemetry to an off-cluster / OTel-operator Collector
 #   enabled: false                                   # apps + Dapr still emit OTLP (otelEnabled tracks the endpoint,
 #   externalOtlpEndpoint: http://otel-collector.observability:4318/v1/otlp # not just observability.enabled)

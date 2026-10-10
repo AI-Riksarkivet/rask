@@ -3705,6 +3705,16 @@ allocator:
 # RESOLVED (owner ruling 2026-07-27): the OTel Collector's filelog receiver owns log shipping
 # (infra-pod logs → `opentelemetry_logs`). The Vector subchart is retired — its Chart.yaml dep,
 # the `vector:` values block, and its Chart.lock entry are gone; exactly ONE log-shipping path remains.
+#
+# THE AUDIT STORE'S CONTRACT, A PREREQUISITE LIKE ESO ([[XC-003]], owner 2026-10-10). Whatever store receives the
+# Collector's export (traces, metrics, and the `lance_audit` trail) must REFUSE an unauthenticated write and an
+# unauthenticated delete on every listener it serves, and admit the credential the Collector presents. The store is
+# downstream of the Collector and so not rask's to configure (R8); what rask owns is the Collector's half: the in-chart
+# Collector sends HTTP basic auth on all three exporters, read from files ESO writes from the store's
+# `otel-collector-greptime` secret (fields username, password; the dev OpenBao mints it, a platform store must hold it).
+# An operator Collector (`otelCollector.externalEndpoint`) carries the same duty. GAP, stated: the bundled dev
+# GreptimeDB has no user provider, so it ignores the credential and any pod in the namespace can still delete from
+# `lance_audit` until the store that replaces it (XC-118) enforces this contract.
 observability:
   enabled: true
   environment: rask # deployment.environment.name resource attr — override per deploy (dev / staging / prod)

@@ -76,6 +76,11 @@ data:
       # and manages its own offset persistence. fsGroup 65534 makes the dir writable by the non-root runtime.
       file_storage:
         directory: /var/lib/otelcol/file_storage
+      # The audit store's credential (values.yaml `observability`), from files ESO writes; watched, so a rotation needs no restart.
+      basicauth/greptime:
+        client_auth:
+          username_file: /var/run/secrets/rask/greptime/username
+          password_file: /var/run/secrets/rask/greptime/password
     receivers:
       otlp:
         protocols:
@@ -500,6 +505,7 @@ data:
         headers:
           x-greptime-db-name: {{ $o.dbName | quote }}
           x-greptime-pipeline-name: {{ $o.tracePipeline | quote }}
+        auth: { authenticator: basicauth/greptime }
         sending_queue:
           enabled: true
           storage: file_storage
@@ -520,6 +526,7 @@ data:
         headers:
           x-greptime-db-name: {{ $o.dbName | quote }}
           x-greptime-log-table-name: {{ $o.auditTable | quote }}
+        auth: { authenticator: basicauth/greptime }
         sending_queue:
           enabled: true
           storage: file_storage
@@ -533,6 +540,7 @@ data:
         endpoint: {{ $greptime | quote }}
         headers:
           x-greptime-db-name: {{ $o.dbName | quote }}
+        auth: { authenticator: basicauth/greptime }
         sending_queue:
           enabled: true
           storage: file_storage
@@ -543,7 +551,7 @@ data:
           max_interval: 30s
           max_elapsed_time: 300s
     service:
-      extensions: [health_check, file_storage]
+      extensions: [health_check, file_storage, basicauth/greptime]
       pipelines:
         {{- /* THE WORKFLOW KEEPALIVE IS FILTERED, by `filter/drop_keepalive` in the traces pipeline
                below. `/TaskHubSidecarService/Hello` is the engine's health ping to its own sidecar and
@@ -641,6 +649,7 @@ spec:
                filelog offset checkpoints (file_storage extension) — writable via fsGroup 65534.
             */}}
             - { name: offsets, mountPath: /var/lib/otelcol/file_storage }
+            - { name: greptime-credential, mountPath: /var/run/secrets/rask/greptime, readOnly: true }
       volumes:
         - name: config
           configMap: { name: {{ $sa }} }
@@ -651,6 +660,8 @@ spec:
            filelog's read offsets — without it a store outage trades dropped telemetry for a full node.
         */}}
         - { name: offsets, emptyDir: { sizeLimit: 2Gi } }
+        {{- /* 0440 under the pod's fsGroup 65534, the group the Collector's uid reads its SA token through already. */}}
+        - { name: greptime-credential, secret: { secretName: {{ $sa }}-greptime, defaultMode: 0440 } }
 ---
 apiVersion: v1
 kind: Service
