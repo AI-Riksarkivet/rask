@@ -102,17 +102,16 @@ spec:
       {{- /* The Kubernetes auth backend reviews ESO's login with THIS pod's token and reads the API
            server's CA beside it (openbao-auth-delegator.yaml). ESO is a prerequisite, so it always holds one. */}}
       automountServiceAccountToken: true
-      {{- if .Values.security.infraContexts.enabled }}
-      # Per-image uid/fsGroup from values (the audit: data/secret holders need runAsUser+fsGroup for
-      # their PVCs — no blind helper reuse). Flag default OFF: flip after the kind boot check (§7a).
       securityContext:
+        {{- if .Values.security.infraContexts.enabled }}
+        # Per-image uid/fsGroup from values (the audit: data/secret holders need runAsUser+fsGroup for
+        # their PVCs — no blind helper reuse). Flag default OFF: flip after the kind boot check (§7a).
         runAsNonRoot: true
         runAsUser: {{ .Values.security.infraContexts.openbao.runAsUser }}
-        {{- with .Values.security.infraContexts.openbao.fsGroup }}
-        fsGroup: {{ . }}
-        {{- end }}
         seccompProfile: { type: RuntimeDefault }
-      {{- end }}
+        {{- end }}
+        {{- /* The seed (uid 65532) reads 0400 credential volumes, readable only through the pod's fsGroup. */}}
+        fsGroup: {{ and .Values.security.infraContexts.enabled .Values.security.infraContexts.openbao.fsGroup | default 65532 }}
       {{- if or $mint $nats }}
       initContainers:
         {{- /* MINT: a candidate pair per signing identity on a memory volume the server never mounts, and nsc and nk for the seed's bus users
