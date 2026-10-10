@@ -68,12 +68,12 @@ _SENTINEL = "secret/openbao-seeded"
 
 #: The first sleep ends the run, unless the scenario restarts the server in place or rotates a mounted credential
 #: (as kubelet refreshes a mounted Secret): then the first sleep does that, and the second ends the run. On a restart
-#: empties the pod's own store and cuts the Service off, and the second ends the run.
+#: empties the pod's own store (kept aside as before-restart, what the first seed wrote) and cuts the Service off, and the second ends the run.
 _SLEEP = """\
 #!/bin/sh
 n=$(cat "$STORES/sleeps" 2>/dev/null || echo 0)
 echo $((n + 1)) > "$STORES/sleeps"
-if [ -e "$STORES/restart" ] && [ "$n" -eq 0 ]; then rm -rf "$STORES/local"; : > "$STORES/served.refused"; exit 0; fi
+if [ -e "$STORES/restart" ] && [ "$n" -eq 0 ]; then mv "$STORES/local" "$STORES/before-restart"; : > "$STORES/served.refused"; exit 0; fi
 if [ -e "$STORES/rotate" ] && [ "$n" -eq 0 ]; then cp "$STORES/rotate" "$DEV_CREDENTIALS/postgres-password"; cp "$STORES/rotate" "$SUPPLIED_CREDENTIALS/hf-token"; exit 0; fi
 exit 1
 """
@@ -430,9 +430,11 @@ def test_the_dev_store_is_seeded_by_its_own_pod_and_keeps_its_signing_keys(  # n
         )
     collector = _store(stores, "local", "secret/otel-collector-greptime")
     assert collector.get("username") == "otel-collector" and collector.get("password"), f"the Collector's audit-store credential is not seeded: {collector}"
-    assert collector["password"] == (carried.get("collector") or (tmp_path / "home" / "seed" / "otel-collector-greptime").read_text()), (
-        "the Collector's credential was neither carried from the store behind the Service nor kept for a restart in place"
-    )
+    if carried:
+        assert collector["password"] == carried["collector"], "the Collector's credential behind the Service was replaced, so the store refuses it"
+    if local == "restart":
+        first = _store(stores, "before-restart", "secret/otel-collector-greptime").get("password")
+        assert first and collector["password"] == first, "a server restarted in place was seeded a new Collector credential, not the one it held"
     assert collector["password"] not in streams, "the Collector's credential reached an output stream or a bao argument list"
     for user, (publish, subscribe) in users.items():
         issued = _store(stores, "local", f"secret/nats-user-{user}")
