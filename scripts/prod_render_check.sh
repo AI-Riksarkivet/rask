@@ -12,7 +12,8 @@ CHART="${CHART:-chart}"
 # Every value the chart's `required` guards demand before it will render at all. values-prod sets
 # auth.enabled AND frontend.oidc.enabled — a governed backend with a UI that can sign in — so
 # templates/{auth-consistency,frontends}.yaml demand the three OIDC values on EVERY render here, and
-# _helpers.tpl demands a registry-qualified image.repository.
+# _helpers.tpl demands a registry-qualified image.repository and, with the cascade's Ray lane on and no
+# in-cluster head, the estate's Ray dashboard (`rask.rayDashboardUrl`).
 # One array, used by all four helm calls below: adding a fifth without them would fail the whole script
 # at that line with no message (set -e + command substitution), which is how this reached CI red.
 # Dummies on purpose: they satisfy the fail-closed guards and thereby also prove the guards do not block
@@ -32,7 +33,8 @@ COMMON=(--api-versions external-secrets.io/v1/ExternalSecret
         --set frontend.oidc.publicOrigin=https://lance.example.com
         --set image.repository=ghcr.io/example/rask
         --set signing.provisioned=true
-        --set nats.auth.provisioned=true)
+        --set nats.auth.provisioned=true
+        --set-string ray.dashboardUrl=https://ray.example.com:8265)
 OUT="$(mktemp)"
 trap 'rm -f "$OUT"' EXIT
 

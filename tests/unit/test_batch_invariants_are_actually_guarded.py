@@ -25,7 +25,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.unit.chart_render import ESO_ARGS
+from tests.unit.chart_render import ESO_ARGS, RAY_ARGS
 
 
 REPO = Path(__file__).resolve().parents[2]
@@ -58,6 +58,7 @@ class TestB3TheDeployAxisIsFedByTheChart:
             "rask",
             str(REPO / "chart"),
             *ESO_ARGS,
+            *RAY_ARGS,
             "--set-string",
             "frontend.oidc.publicIssuer=http://localhost:8080/dex",
             "--set-string",

@@ -150,18 +150,11 @@ spec:
                    auto-instrumentation packages depend on Node loader hooks Bun implements incompletely,
                    and nothing here needs them. */}}
             {{- include "rask.zoneOtelEnv" (list $root (printf "web-%s" .name)) | nindent 12 }}
-            {{- /* DERIVED from ray.dashboardUrl, not defaulted to the in-cluster Service — discovery and
-                   INVOCATION must name the same cluster or the builder lists apps it cannot call.
-                   `compute` reads that dashboard for /api/serve, and its comment says the quiet part:
-                   "rask's Ray is managed outside this repo, so an external address is the normal case".
-                   Defaulting to `<release>-ray-serve-svc` (as this line first did) pointed inference at
-                   the chart's OWN KubeRay, which serves only `htrflow` — so a Model node aimed at
-                   `gemma-31b` got Ray Serve's own "Path '/gemma-31b/v1/chat/completions' not found",
-                   twice, because a re-render silently replaced a hand-set env. Verified 2026-08-06: the
-                   dashboard host also serves the Serve apps (`dev-kuberay.ra.se/gemma-31b/v1/...`
-                   answers), which is what makes deriving it correct rather than merely convenient.
-                   `frontend.serveUrl` still wins when Serve genuinely lives somewhere else. */}}
-            {{- $serveOrigin := $root.Values.frontend.serveUrl | default $root.Values.ray.dashboardUrl | default (printf "http://%s-ray-serve-svc:8000" (include "rask.fullname" $root)) }}
+            {{- /* DERIVED from the one Ray plane (`rask.rayServeOrigin` over `rask.rayDashboardUrl`): discovery
+                   and INVOCATION must name the same cluster or the builder lists apps it cannot call.
+                   Verified 2026-08-06: an external dashboard host also serves the Serve apps
+                   (`dev-kuberay.ra.se/gemma-31b/v1/...` answers). `frontend.serveUrl` wins when Serve
+                   genuinely lives somewhere else; a render naming no Ray leaves the env unset. */}}
             {{- /*
                Ray Serve's HTTP INGRESS — a different endpoint from the dashboard the compute service
                reads for `/api/serve` discovery, and nothing routes to it: inference is the one call the
@@ -170,8 +163,10 @@ spec:
                defaults to `http://localhost:8000` in code — which inside a pod is the pod. Studio takes
                the ORIGIN, because it appends `?app=` per request.
             */}}
+            {{- with include "rask.rayServeOrigin" $root }}
             - name: STUDIO_SERVE_URL
-              value: {{ $serveOrigin | quote }}
+              value: {{ . | quote }}
+            {{- end }}
             {{- /*
                NO `COMPUTE_SERVE_URL`, and its absence removed a whole class of trap with it.
 

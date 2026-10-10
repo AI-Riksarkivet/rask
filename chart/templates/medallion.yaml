@@ -140,7 +140,7 @@ spec:
                never be configured through the chart (409 "train head not configured" on every POST).
             */}}
             - { name: MEDALLION_RAY_ENABLED, value: "true" }
-            - { name: MEDALLION_RAY_ADDRESS, value: {{ .Values.medallion.rayAddress | default (printf "http://%s-ray-head-svc:8265" (include "rask.fullname" .)) | quote }} }
+            - { name: MEDALLION_RAY_ADDRESS, value: {{ include "rask.rayDashboardUrl" . | quote }} }
             {{- if .Values.medallion.rayTasks }}
             {{- /*
                WHAT THIS RAY PLANE CAN RUN, registered into `<control_root>/_tasks/` at this app's boot.
@@ -611,7 +611,7 @@ spec:
                cluster (deploy/ray-lance-demo.yaml). Default off — fake-Ray in-process stays the default path.
             */}}
             - { name: MEDALLION_RAY_ENABLED, value: "true" }
-            - { name: MEDALLION_RAY_ADDRESS, value: {{ $root.Values.medallion.rayAddress | default (printf "http://%s-ray-head-svc:8265" (include "rask.fullname" $root)) | quote }} }
+            - { name: MEDALLION_RAY_ADDRESS, value: {{ include "rask.rayDashboardUrl" $root | quote }} }
             {{- if .stageJob }}
             {{- /*
                P7b seam: this stage runner's stage-job entrypoint (stageRunners[].stageJob) — how the HTR lanes select

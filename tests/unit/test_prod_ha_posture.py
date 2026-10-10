@@ -25,7 +25,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from chart_yaml import FAST_LOADER
 from test_invariants import _first_party_deployments  # noqa: E402
 
-from tests.unit.chart_render import ESO_ARGS
+from tests.unit.chart_render import ESO_ARGS, RAY_ARGS
 
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
@@ -41,6 +41,7 @@ _PROD_ARGS = [
     "--set", "backups.volumeSnapshot.snapshotClassName=csi-snapclass",
     "--set", "ingress.host=lance.example.com",
     *ESO_ARGS,
+    *RAY_ARGS,
     "--set", "frontend.oidc.publicIssuer=https://auth.example.com/dex",
     "--set", "frontend.oidc.publicOrigin=https://lance.example.com",
     "--set", "image.repository=ghcr.io/example/rask",

@@ -42,19 +42,13 @@ explorer:
     # but that is luck, not a contract" is wrong in both halves: it is not luck, and it does not bind.
     accessMode: ReadWriteOnce
 
-# THE RAY THE CASCADE REACHES, and it is now the name the chart already derives. That derivation —
-# `http://<release>-ray-head-svc:8265` — used to come only from the RayService, which renders under
-# `singleTenant.enabled` and is off here, so the name resolved to nothing and every stage died
-# `RayJobError: [Errno -3] Temporary failure in name resolution` with nothing naming DNS as the cause.
-# The fix then was to point this at a hand-applied head instead.
+# The cascade's Ray is not set here: the RayCluster below renders `<release>-ray-head-svc`, and every
+# Ray consumer derives that one address from `rask.rayDashboardUrl` ([[CP-041]]).
 #
-# The RayCluster below creates exactly that Service, so this is no longer a fork from the chart. It
-# stays written out rather than removed because it must live in a FILE: a `--set` does not survive
-# into `helm get values`, so an upgrade reusing the live values drops it — measured 2026-08-25, when
-# two upgrades put the stage runners back on a name that resolved to nothing and the cascade died
-# again. The value being correct is not the same as the value being durable.
+# A value the estate depends on lives in a FILE: a `--set` does not survive into `helm get values`, so
+# an upgrade reusing the live values drops it — measured 2026-08-25, when two upgrades put the stage
+# runners back on a name that resolved to nothing and the cascade died again.
 medallion:
-  rayAddress: http://rask-ray-head-svc:8265
   # THE QUALITY GATE, IN A FILE FOR THE REASON THE PARAGRAPH ABOVE GIVES. It was live as a
   # `kubectl set env` on the producer and absent from `helm get values`, so the next upgrade would
   # have silently turned it off — measured 2026-09-20 by diffing every live deployment's env against
@@ -109,20 +103,14 @@ maintenance:
   tombstoneSweep: true
   tombstoneSweepDryRun: true
 
-# THE OPERATOR-MANAGED HEAD ([[CP-042]]), which is what makes the derivation above unnecessary: a
-# RayCluster named `<release>-ray` gives KubeRay's own `<release>-ray-head-svc`, the exact name the
-# chart already derives and which resolved to nothing here.
+# THE OPERATOR-MANAGED HEAD ([[CP-042]]): a RayCluster named `<release>-ray` gives KubeRay's own
+# `<release>-ray-head-svc`, the one address compute prunes on and the cascade submits to ([[CP-041]]),
+# so `ray.dashboardUrl` stays empty here.
 #
 # The image is spelled with its registry because the Ray templates do not go through `rask.image`
 # (that is [[CP-050]]), so `localImages` does not reach them and a bare `ray-cluster:dev` would resolve
 # to Docker Hub.
 ray:
-  # ONE RAY PLANE, NOT TWO ([[CP-041]]). `dashboardUrl` feeds `RAY_DASHBOARD_URL`, which is what
-  # `compute` prunes job history against, serves its jobs board from and proxies `/api/serve` to —
-  # while `medallion.rayAddress` decides where the cascade SUBMITS. They are independent keys with no
-  # cross-check, and until now they named different clusters: the cascade's jobs accumulated on one
-  # head while the only reclaimer swept another. Both now name the operator-managed head.
-  dashboardUrl: http://rask-ray-head-svc:8265
   cluster:
     enabled: true
   # The registry only. The TAG comes from the live release or chart/values-live-pins.yaml: this file is

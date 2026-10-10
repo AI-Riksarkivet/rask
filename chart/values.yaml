@@ -791,12 +791,10 @@ frontend:
   # route, so the answer is not our problem+json and the UI can only say "HTTP 413". Kept ABOVE the
   # BFF's own 25 MB inference guard so that guard is what a user actually reads.
   bodySizeLimit: 32M
-  # Ray Serve's HTTP ingress origin, for the zones that run inference (studio's flow builder, models'
-  # playground). Empty = the in-cluster KubeRay Serve service, `<release>-ray-serve-svc:8000`. Set it
-  # when Serve lives on a cluster this chart does not own — the address is NOT derivable from the Ray
-  # DASHBOARD the compute service reads, and the two can be different clusters entirely.
-  # Empty => `ray.dashboardUrl` (the cluster `compute` discovers apps on — so the builder cannot list
-  # an app it is unable to call), and only if THAT is empty too, the in-cluster KubeRay Service.
+  # Ray Serve's HTTP ingress origin, for the zones that run inference (studio's flow builder, the
+  # annotator's producer calls). Empty => derived from the one Ray plane (`rask.rayServeOrigin`): a
+  # RayService's `<release>-ray-serve-svc:8000`, else the dashboard every Ray consumer names (an
+  # external dashboard host serves the apps too), so the builder cannot list an app it is unable to call.
   # Set this ONLY when Serve lives somewhere the dashboard does not.
   serveUrl: ''
   image:
@@ -1320,7 +1318,7 @@ medallion:
   #     kubectl apply -f deploy/ray-lance-demo.yaml     # after correcting image + S3 for your estate
   #     ./scripts/helm.sh upgrade rask ./chart -f <live values> \
   #       --set medallion.ray=true \
-  #       --set-string medallion.rayAddress=http://ray-lance-head:8265
+  #       --set-string ray.dashboardUrl=http://ray-lance-head:8265
   #
   # No stage runner restart is part of it: a Ray stage is planned and resolved without a workflow runtime (CP-029), so
   # the flag moves no stage runner into `lance-statestore`'s scopes and no sidecar caches a scope it would miss. The
@@ -1348,18 +1346,10 @@ medallion:
   # (`stage-ray-silver-3beb0dd2…`) ran as a Dapr Workflow, the watcher polled the head's
   # `/api/jobs/<id>` 200, the orchestration COMPLETED and the stage runner moved the stage.
   #
+  # The cluster the lane submits to has NO key here ([[CP-041]]): it is `rask.rayDashboardUrl`, the one
+  # address `compute` also prunes job history on, from `ray.dashboardUrl` or the in-cluster head. With
+  # this on and neither present the render fails, rather than submitting to a Service nothing creates.
   ray: true
-  # DERIVED from the RayService this chart renders, not a hardcoded hostname. `ray-lance-head` was the
-  # on-kind demo's raw head and does not exist in a KubeRay deployment — measured 2026-08-15, it fails
-  # DNS from inside a pod while `rask-ray-head-svc` answers `/api/version` with ray 2.56.1.
-  #
-  # `<release>-ray-head-svc` is KubeRay's STABLE head service for a RayService: the RayCluster it owns
-  # carries a generated suffix (`rask-ray-22nls`) that no chart can name, and pinning the suffixed
-  # `-head-svc` would break on every RayService re-provision.
-  # EMPTY MEANS DERIVE — values.yaml is not templated, so a `{{ }}` here would ship literal braces.
-  # The template defaults it to `<release>-ray-head-svc:8265`; set it only to point at a Ray outside
-  # this release.
-  rayAddress: ""
   # The Kueue LocalQueue a submitted RayJob is admitted through (§7.4 step 4). Empty means no
   # admission control and the CR is created unlabelled AND unsuspended — deliberately, and the two go
   # together: Kueue admits by UNSUSPENDING, so a workload created running has already bypassed the
@@ -2467,14 +2457,17 @@ minio:
 
 ray:
   enabled: true
-  # The Ray dashboard `compute` talks to. Set => used verbatim and NO in-cluster Ray is needed;
-  # empty => fall back to the in-cluster head Service, which exists only under singleTenant.
-  # rask's Ray is managed outside this repo, so an external address is the normal case.
-  dashboardUrl: "https://dev-kuberay.ra.se"
+  # THE ONE RAY PLANE ([[CP-041]]): every Ray consumer renders its address from `rask.rayDashboardUrl`
+  # — compute's RAY_DASHBOARD_URL (job-history prune, jobs board, /api/serve), the cascade's
+  # MEDALLION_RAY_ADDRESS, the annotator's Serve discovery and the zones' Serve origin. Set => an
+  # external Ray, used verbatim; empty => the in-cluster head Service a RayService (singleTenant) or
+  # RayCluster (`cluster.enabled`) creates; neither, with `medallion.ray` on, fails the render. No
+  # default host: an estate names its Ray, as it names its OIDC issuer.
+  dashboardUrl: ""
   # THE BATCH LANE'S OWN CLUSTER — a RayCluster the KubeRay operator owns, as opposed to the
   # RayService `singleTenant` renders (which wraps a cluster of its own to run Serve applications).
-  # Mutually exclusive with it: two objects would give the estate two heads, and whichever one
-  # `medallion.rayAddress` does not name is the one nobody notices is idle.
+  # Mutually exclusive with it: two objects would give the estate two heads, and the one the Ray
+  # plane does not name is the one nobody notices is idle.
   #
   # OFF by default because an estate pointed at an external Ray (`dashboardUrl` set) must not gain a
   # second one it did not ask for. On, it replaces the hand-applied `deploy/ray-lance-demo.yaml` head

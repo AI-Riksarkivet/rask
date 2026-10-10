@@ -127,19 +127,8 @@ data:
   RASK_EXPLORER_SEARCH_URL: {{ printf "http://%s-search:%v" (include "lance.fullname" .) .Values.explorer.services.search.port | quote }}
   RASK_EXPLORER_ANNOTATOR_URL: {{ printf "http://%s-annotator:%v" (include "lance.fullname" .) .Values.explorer.services.annotator.port | quote }}
   {{- end }}
-  {{- /* EXTERNAL Ray wins when set. The in-cluster head Service renders only under ray.enabled AND
-       singleTenant.enabled (rayservice.yaml), so deriving this from ray.enabled ALONE pointed compute
-       at a Service that does not exist on a default install — the dashboard call then failed on DNS
-       rather than saying "no Ray here". rask's Ray is managed outside this repo, so an external
-       address is the NORMAL case and the in-cluster head is the opt-in. */}}
-  {{- if .Values.ray.dashboardUrl }}
-  RAY_DASHBOARD_URL: {{ .Values.ray.dashboardUrl | quote }}
-  {{- else if or .Values.singleTenant.enabled .Values.ray.cluster.enabled }}
-  {{- /* `ray.cluster.enabled` belongs in this fallback beside `singleTenant`, and its absence was
-         [[CP-041]]: a RayCluster creates the SAME `<release>-ray-head-svc` a RayService does, so an
-         estate rendering one had a real in-cluster head while this key kept the external default.
-         The cascade then submitted to one cluster and `compute` — the only job-history reclaimer —
-         pruned another, which fails NOTHING: every job succeeds on the head it was sent to and is
-         simply counted by nobody. */}}
-  RAY_DASHBOARD_URL: {{ printf "http://%s-ray-head-svc:%v" (include "rask.fullname" .) .Values.ray.dashboardPort | quote }}
+  {{- /* The cluster `compute` prunes job history on is the one the cascade submits to, because both read
+       `rask.rayDashboardUrl` ([[CP-041]]). Absent when the render names no Ray. */}}
+  {{- with include "rask.rayDashboardUrl" . }}
+  RAY_DASHBOARD_URL: {{ . | quote }}
   {{- end }}

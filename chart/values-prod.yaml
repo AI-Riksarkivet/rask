@@ -271,8 +271,8 @@ observability:
 #   enabled: false                                   # lineage ingest, no cascade. NACK Stream CRs are optional
 #   externalUrl: nats://nats.internal:4222           # (the in-chart provision Job stays idempotent either way).
 #   streamReplicas: 3                                # raft-replicated streams (needs the 3+ node cluster)
-# medallion (KubeRay RayCluster):                    # point the Ray submit seam at the operator-managed cluster
-#   rayAddress: http://lance-raycluster-head-svc:8265 # the RayCluster head's dashboard svc (Jobs REST is agnostic)
+# ray (the one Ray plane, REQUIRED):                 # compute's prune, the cascade's submits and Serve discovery
+#   dashboardUrl: https://ray.internal:8265          # all read it; unset with no in-cluster head fails the render
 # THE AUDIT STORE (prerequisite, values.yaml `observability`): it refuses unauthenticated writes and deletes on
 #   every listener and admits the Collector's credential, `otel-collector-greptime` in the platform store (username,
 #   password). The bundled GreptimeDB does not enforce it, so a deploy that keeps it keeps an erasable audit trail.

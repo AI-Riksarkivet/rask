@@ -36,28 +36,38 @@ ESO_ARGS: tuple[str, ...] = (
     "--api-versions", "generators.external-secrets.io/v1alpha1/Password",
 )  # fmt: skip
 
-#: The fail-closed OIDC guards' dummy inputs, plus the ESO APIs. Without them `frontends.yaml` refuses
-#: to render at all, so every caller needs them and none of them is testing OIDC.
-OIDC_ARGS: tuple[str, ...] = (
+#: The Ray an estate names ([[CP-041]]): with the cascade's Ray lane on (the default) and no in-cluster
+#: head, a render that names no Ray dashboard refuses. An external one keeps every caller's render free
+#: of a RayCluster it is not testing. A `--set` beats any `-f`, so a gate of the in-cluster derivation
+#: renders without it.
+RAY_ARGS: tuple[str, ...] = ("--set-string", "ray.dashboardUrl=http://ray.example.com:8265")
+
+#: The fail-closed OIDC guards' dummy inputs plus the ESO APIs, naming no Ray: the base of a gate of the
+#: Ray guard itself.
+UNNAMED_RAY_ARGS: tuple[str, ...] = (
     "--set-string", "frontend.oidc.publicIssuer=https://auth.example.com/dex",
     "--set-string", "frontend.oidc.publicOrigin=https://lance.example.com",
     *ESO_ARGS,
 )  # fmt: skip
 
+#: Every input the chart refuses to render without. Every caller needs them and none of them is testing
+#: those guards.
+OIDC_ARGS: tuple[str, ...] = (*UNNAMED_RAY_ARGS, *RAY_ARGS)
+
 #: The local-development overlay: side-loaded images, MinIO on.
 DEFAULT_ARGS: tuple[str, ...] = ("--set", "image.localImages=true", "--set", "minio.enabled=true")
 
 
-def render_chart_text(chart: pathlib.Path, *extra: str) -> str:
-    """Helm's raw stdout for the chart at ``chart`` under `OIDC_ARGS` plus ``extra``, uncached.
+def render_chart_text(chart: pathlib.Path, *extra: str, base: tuple[str, ...] = OIDC_ARGS) -> str:
+    """Helm's raw stdout for the chart at ``chart`` under ``base`` (default `OIDC_ARGS`) plus ``extra``, uncached.
 
     For a gate that renders a modified COPY of the chart: no `--set` reaches a file the chart reads with `.Files.Get`,
-    and no other gate can share a copy's render.
+    and no other gate can share a copy's render. A gate of one of the required inputs passes a ``base`` without it.
     """
     helm = shutil.which("helm") or str(REPO / ".localbin/helm")
     if not pathlib.Path(helm).exists():
         pytest.skip("helm not available")
-    argv = [helm, "template", "rask", str(chart), *OIDC_ARGS, *extra]
+    argv = [helm, "template", "rask", str(chart), *base, *extra]
     return subprocess.run(argv, capture_output=True, text=True, check=True).stdout  # noqa: S603
 
 

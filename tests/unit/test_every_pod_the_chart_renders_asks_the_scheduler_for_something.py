@@ -33,13 +33,14 @@ import pytest
 import yaml
 from chart_yaml import FAST_LOADER
 
-from tests.unit.chart_render import ESO_ARGS
+from tests.unit.chart_render import ESO_ARGS, RAY_ARGS
 
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 
 _OIDC_ARGS = [
     *ESO_ARGS,
+    *RAY_ARGS,
     "--set-string", "frontend.oidc.publicIssuer=https://auth.example.com/dex",
     "--set-string", "frontend.oidc.publicOrigin=https://lance.example.com",
 ]  # fmt: skip

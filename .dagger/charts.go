@@ -169,7 +169,10 @@ func (m *Rask) Charts(
 // real-registry shape turns it off as values-prod.yaml does. `signing.provisioned` is the operator's attestation
 // that the event-signing keys exist, without which `templates/signing-provisioned.yaml` refuses a sealed store;
 // `nats.auth.provisioned` attests every bus client's NATS user the same way (`templates/nats-provisioned.yaml`).
+// `ray.dashboardUrl` names the estate's Ray: with the cascade's Ray lane on and no in-cluster head the
+// chart refuses to render, because nothing else names the cluster it submits to ([[CP-041]]).
 const renderArgs = "--set image.repository=ghcr.io/example/rask " +
+	"--set-string ray.dashboardUrl=http://ray.example.com:8265 " +
 	"--api-versions external-secrets.io/v1/ExternalSecret " +
 	"--set-string frontend.oidc.publicIssuer=http://localhost:8080/dex " +
 	"--set-string frontend.oidc.publicOrigin=http://localhost:8080 " +

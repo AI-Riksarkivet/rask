@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.unit.chart_render import ESO_ARGS
+from tests.unit.chart_render import ESO_ARGS, RAY_ARGS
 
 
 REPO = Path(__file__).resolve().parents[2]
@@ -29,7 +29,7 @@ def _helm(*set_values: str, check: bool = True) -> subprocess.CompletedProcess[s
         pytest.skip("helm not available")
     argv = [helm, "template", "rask", str(CHART)]
     # Since auth defaults ON (2026-08-06) every render needs identity values, and ESO is a prerequisite.
-    argv += [*ESO_ARGS]
+    argv += [*ESO_ARGS, *RAY_ARGS]
     argv += ["--set-string", "frontend.oidc.publicIssuer=http://localhost:8080/dex"]
     argv += ["--set-string", "frontend.oidc.publicOrigin=http://localhost:8080"]
     # The chart REQUIRES an image registry unless the images are side-loaded into the node

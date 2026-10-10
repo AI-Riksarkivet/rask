@@ -1958,3 +1958,28 @@ keys_shaped() { case "$1" in *,) return 1 ;; *,*) pub_shaped "${1%%,*}" && pub_s
 {{- define "lance.externalBlobBases" -}}
 {{ .Values.vending.externalBlobBases | default (printf "s3://%s/models/" .Values.minio.bucket) }}
 {{- end }}
+
+{{- /* THE ONE RAY PLANE ([[CP-041]]): the dashboard every consumer names (compute's prune and jobs board, the
+       cascade's submits, Serve discovery). `ray.dashboardUrl` when set, else the head Service a rendered
+       RayService or RayCluster creates, else empty; a cascade with Ray on and no head fails the render. */ -}}
+{{- define "rask.rayDashboardUrl" -}}
+{{- if .Values.ray.dashboardUrl -}}
+{{- .Values.ray.dashboardUrl -}}
+{{- else if and .Values.ray.enabled (or .Values.singleTenant.enabled .Values.ray.cluster.enabled) -}}
+{{- printf "http://%s-ray-head-svc:%v" (include "rask.fullname" .) .Values.ray.dashboardPort -}}
+{{- else if and .Values.medallion.enabled .Values.medallion.ray -}}
+{{- fail "medallion.ray submits to a Ray cluster this render does not name: set ray.dashboardUrl to the external Ray dashboard, or enable ray.cluster.enabled (or singleTenant.enabled) for an in-cluster head" -}}
+{{- end -}}
+{{- end -}}
+
+{{- /* Ray Serve's HTTP ingress on the same plane: `frontend.serveUrl` when Serve lives elsewhere; a RayService's
+       load-balanced serve Service; else the dashboard itself, whose external host serves the apps too. */ -}}
+{{- define "rask.rayServeOrigin" -}}
+{{- if .Values.frontend.serveUrl -}}
+{{- .Values.frontend.serveUrl -}}
+{{- else if and .Values.ray.enabled .Values.singleTenant.enabled (not .Values.ray.dashboardUrl) -}}
+{{- printf "http://%s-ray-serve-svc:8000" (include "rask.fullname" .) -}}
+{{- else -}}
+{{- include "rask.rayDashboardUrl" . -}}
+{{- end -}}
+{{- end -}}

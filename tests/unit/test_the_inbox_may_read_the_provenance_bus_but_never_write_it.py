@@ -30,7 +30,7 @@ import pytest
 import yaml
 from chart_yaml import FAST_LOADER
 
-from tests.unit.chart_render import ESO_ARGS
+from tests.unit.chart_render import ESO_ARGS, RAY_ARGS
 
 
 REPO = Path(__file__).resolve().parents[2]
@@ -49,6 +49,7 @@ def _component() -> dict[str, str]:
     argv = [
         helm, "template", "rask", str(REPO / "chart"),
         *ESO_ARGS,
+        *RAY_ARGS,
         "--set-string", "frontend.oidc.publicIssuer=http://auth/dex",
         "--set-string", "frontend.oidc.publicOrigin=http://auth",
         "--set", "image.localImages=true",
@@ -105,6 +106,7 @@ def test_no_sibling_component_carries_these_keys() -> None:
     argv = [
         helm, "template", "rask", str(REPO / "chart"),
         *ESO_ARGS,
+        *RAY_ARGS,
         "--set-string", "frontend.oidc.publicIssuer=http://auth/dex",
         "--set-string", "frontend.oidc.publicOrigin=http://auth",
         "--set", "image.localImages=true",

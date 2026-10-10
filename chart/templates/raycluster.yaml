@@ -2,7 +2,7 @@
 {{- if .Values.singleTenant.enabled }}
 {{- /* ONE RAY, NOT TWO. A RayService already wraps a cluster of its own, so rendering a RayCluster
        beside it gives the estate two heads, two GCSes and two dashboards — and whichever one
-       `medallion.rayAddress` does not name is the one nobody notices is idle, because every job still
+       `rask.rayDashboardUrl` does not name is the one nobody notices is idle, because every job still
        succeeds on the other. Refused at render rather than documented, since the symptom of getting
        it wrong is silence. */}}
 {{- fail "ray.cluster.enabled and singleTenant.enabled both render a Ray head: the RayService wraps its own cluster, so enabling both gives the estate two. Pick the RayService for a Serve estate, the RayCluster for the batch lane." }}

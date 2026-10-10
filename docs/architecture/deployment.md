@@ -105,9 +105,11 @@ flowchart LR
 
 The runner accepts `--address ray://…:10001`. Job submission goes through the **`compute`
 service** (`:8804`, over `ray-kit`'s Job SDK wrapper) to the Ray dashboard REST API at
-`RAY_DASHBOARD_URL` — the orchestrator that used to own this loop was deleted at P7a. With
-`ray.enabled=true` the chart provisions an in-cluster KubeRay RayService; with
-`ray.enabled=false`, `compute` points at an external cluster via `RASK_RAY_DASHBOARD_URL`.
+`RAY_DASHBOARD_URL`. The chart renders that address, the medallion's `MEDALLION_RAY_ADDRESS` and the
+annotator's Serve discovery from one helper, `rask.rayDashboardUrl`, so `compute` prunes job history on
+the cluster the cascade submits to: `ray.dashboardUrl` names an external Ray; left empty, the in-cluster
+head Service of the RayCluster (`ray.cluster.enabled`) or RayService (`singleTenant.enabled`) is used;
+with neither and the cascade's Ray lane on (`medallion.ray`), the render fails.
 
 ## Helm chart (`chart/`)
 

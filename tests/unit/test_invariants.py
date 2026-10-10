@@ -22,6 +22,7 @@ import functools
 import importlib.util
 import json
 import re
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -29,7 +30,8 @@ import pytest
 import yaml
 from chart_yaml import FAST_LOADER
 
-from tests.unit.chart_render import ESO_ARGS
+from tests.unit import chart_render
+from tests.unit.chart_render import ESO_ARGS, RAY_ARGS
 
 
 REPO = Path(__file__).resolve().parents[2]
@@ -54,7 +56,7 @@ def _helm_template(*set_values: str) -> str:
     # chart requires ([[XC-004]]). The chart refuses OIDC without a public issuer ON PURPOSE — that refusal
     # is what stops a forgotten values file installing an ungoverned estate. Supplying dev values HERE keeps
     # every other render test testing its own subject rather than re-testing the guard.
-    argv += [*ESO_ARGS]
+    argv += [*ESO_ARGS, *RAY_ARGS]
     argv += ["--set-string", "frontend.oidc.publicIssuer=http://localhost:8080/dex"]
     argv += ["--set-string", "frontend.oidc.publicOrigin=http://localhost:8080"]
     for value in set_values:
@@ -649,42 +651,61 @@ def test_the_inbox_subscribes_on_a_component_the_chart_actually_renders() -> Non
     assert "notifications" in (component.get("scopes") or []), f"{configured} is not scoped to notifications — its sidecar refuses to load it"
 
 
-def test_the_ray_address_names_a_service_the_chart_actually_creates() -> None:
-    """`ray-lance-head` was the hardcoded default and does not exist in a KubeRay deployment.
+#: The operator inputs a prod render needs besides the Ray, as `scripts/prod_render_check.sh` passes them.
+_PROD_INPUTS = (
+    "-f", str(CHART / "values-prod.yaml"),
+    "--set", "image.catalog.tag=v0", "--set", "frontend.image.tag=v0", "--set", "image.repository=ghcr.io/example/rask",
+    "--set", "signing.provisioned=true", "--set", "nats.auth.provisioned=true",
+    "--set", "backups.volumeSnapshot.snapshotClassName=csi-snapclass", "--set", "ingress.host=lance.example.com",
+)  # fmt: skip
+_LOCAL_INPUTS = ("--set", "image.localImages=true", "-f", str(CHART / "values-local.yaml"))
+_EXTERNAL_RAY = "https://ray.example.com:8265"
 
-    Measured 2026-08-15 from inside a pod: `ray-lance-head` fails DNS, `rask-ray-head-svc` answers
-    `/api/version` with ray 2.56.1. The old value was the on-kind demo's raw head, and every stage runner
-    would have submitted into a hostname that does not resolve — a failure that surfaces only when a
-    trigger arrives.
 
-    Derived from the release name rather than pinned, and pointing at the STABLE head service: the
-    RayCluster KubeRay owns carries a generated suffix (`rask-ray-22nls`) that no chart can name and
-    that changes on re-provision.
+@pytest.mark.parametrize(
+    ("overlay", "address"),
+    [
+        pytest.param(("--set", "image.localImages=true"), None, id="default-names-no-ray"),
+        pytest.param(_PROD_INPUTS, None, id="prod-names-no-ray"),
+        pytest.param((*_PROD_INPUTS, "--set-string", f"ray.dashboardUrl={_EXTERNAL_RAY}"), _EXTERNAL_RAY, id="prod-external-ray"),
+        pytest.param(
+            (*_LOCAL_INPUTS, "--set-string", "medallion.rayAddress=http://elsewhere:8265"),
+            "http://rask-ray-head-svc:8265",
+            id="local-in-cluster-head",
+        ),
+    ],
+)
+def test_every_ray_consumer_names_one_cluster_or_the_render_refuses(overlay: tuple[str, ...], address: str | None) -> None:
+    """[[CP-041]]: the cascade must submit to the cluster `compute` prunes job history on.
 
-    RENDERED WITH THE LANE FORCED ON, because the default is now off (no Lance-capable cluster exists
-    — see `test_the_ray_lane_is_OFF_until_a_LANCE_CAPABLE_cluster_exists`) and the address is only
-    emitted when it is on. The property under test is what the value SAYS when it is present, so the
-    fixture has to produce one; asserting against the default would silently test nothing.
+    Two values keys once named the Ray plane — `ray.dashboardUrl` (compute's RAY_DASHBOARD_URL, the only
+    job-history reclaimer, and the annotator's Serve discovery) and `medallion.rayAddress` (where the cascade
+    submits) — and a default render gave compute an external host while four medallion pods submitted to a
+    head Service nothing rendered. A head grown to 81,155 jobs OOMKilled compute that way. Every consumer now
+    renders `rask.rayDashboardUrl`; the local case passes a stale `medallion.rayAddress` to prove no second
+    key can split the plane, and a render that names no Ray with the cascade's lane on refuses.
     """
-    docs = _rendered_docs("medallion.ray=true")
-    services = {(doc.get("metadata") or {}).get("name") for doc in docs if doc.get("kind") == "Service"}
-    addresses = {
-        e.get("value")
-        for doc in docs
-        if doc.get("kind") == "Deployment"
-        for c in doc["spec"]["template"]["spec"]["containers"]
-        for e in (c.get("env") or [])
-        if e.get("name") == "MEDALLION_RAY_ADDRESS"
-    }
-    assert addresses, "no stage runner declares MEDALLION_RAY_ADDRESS"
-    for address in addresses:
-        host = str(address).removeprefix("http://").split(":")[0]
-        assert host.endswith("-ray-head-svc"), f"{address} does not name KubeRay's stable head service"
-        assert "{{" not in str(address), "values.yaml is not templated — a {{ }} default ships literal braces"
-        # The RayService creates it, so it is absent from the rendered docs when ray.enabled is off —
-        # assert the SHAPE unconditionally and the existence only when the chart renders Ray at all.
-        if any(str(s).endswith("-ray-head-svc") for s in services):
-            assert host in services, f"{host} is not a Service this chart creates"
+    if address is None:
+        with pytest.raises(subprocess.CalledProcessError) as refused:
+            chart_render.render_chart_text(CHART, "--set", "explorer.enabled=true", *overlay, base=chart_render.UNNAMED_RAY_ARGS)
+        assert "medallion.ray submits to a Ray cluster this render does not name" in refused.value.stderr
+        return
+
+    text = chart_render.render_chart_text(CHART, "--set", "explorer.enabled=true", *overlay, base=chart_render.UNNAMED_RAY_ARGS)
+    docs = [doc for doc in yaml.load_all(text, Loader=FAST_LOADER) if isinstance(doc, dict)]
+    named: dict[str, set[str]] = {}
+    for doc in docs:
+        if doc.get("kind") == "ConfigMap" and "RAY_DASHBOARD_URL" in (doc.get("data") or {}):
+            named.setdefault("RAY_DASHBOARD_URL", set()).add(doc["data"]["RAY_DASHBOARD_URL"])
+    for _, _, container in chart_render.containers(tuple(docs)):
+        for name, value in chart_render.env_of(container).items():
+            if name in {"MEDALLION_RAY_ADDRESS", "MEDIA_SERVE_DISCOVERY_URL"}:
+                named.setdefault(name, set()).add(value)
+
+    assert named == {"RAY_DASHBOARD_URL": {address}, "MEDALLION_RAY_ADDRESS": {address}, "MEDIA_SERVE_DISCOVERY_URL": {address}}
+    if address != _EXTERNAL_RAY:
+        heads = {f"http://{doc['metadata']['name']}-head-svc:8265" for doc in docs if doc.get("kind") in {"RayCluster", "RayService"}}
+        assert heads == {address}, f"{address} is not the head Service of the one Ray cluster this render creates ({heads})"
 
 
 # `test_the_kubelet_probes_the_inbox_on_a_path_the_service_actually_serves` lived here and is GONE,
