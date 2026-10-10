@@ -58,7 +58,7 @@ spec:
                  resolve to (SSR uses the in-cluster URL instead). It renders in every
                  install (fleet.yaml is not gated), so this rule never dangles.
 
-                 RESOLVED (lance-ns-merge.md decision 4/P4): lance-ns's nginx gateway
+                 RESOLVED (docs/adr/0117-nginx-is-retired-and-the-fastapi-gateway-is-the-in-cluster.md): lance-ns's nginx gateway
                  (top-level `gateway:`, :8080, templates/gateway.yaml) is deleted, so
                  `<fullname>-gateway` names exactly one object — the fleet gateway — and
                  every gateway route below names the fleet gateway's port. kgateway is

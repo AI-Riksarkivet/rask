@@ -1,6 +1,6 @@
 {{- $root := . }}
 {{- $secretName := .Values.existingSecret | default (printf "%s-app" (include "rask.fullname" .)) }}
-{{- /* Plane ownership (lance-ns merge P4 — the render-time collision guard, risk 4): this template
+{{- /* Plane ownership (lance-ns merge P4 — the render-time collision guard, risk 4; docs/adr/0124-chart-unification-one-control-plane-each-one-object-store.md): this template
      owns ONLY the rask fleet entries of .Values.services. The lance-ns lakehouse entries (catalog,
      lineage) are rendered BY NAME by templates/services.yaml under the same resolved fullname
      (`rask-<name>` — rask.fullname and lance.fullname both resolve to "rask" at install), so they

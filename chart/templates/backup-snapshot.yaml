@@ -1,6 +1,6 @@
 {{- if .Values.backups.volumeSnapshot.enabled }}
 # CSI VolumeSnapshot of the lakehouse PVCs on a schedule. Needs an in-cluster CSI snapshotter +
-# a VolumeSnapshotClass. The store is the StatefulSet in templates/minio.yaml (P4: "keep-PVC posture
+# a VolumeSnapshotClass. The store is the StatefulSet in templates/minio.yaml (docs/adr/0124-chart-unification-one-control-plane-each-one-object-store.md: "keep-PVC posture
 # via Tenant spec"), so this snapshots the Tenant's StatefulSet-owned PVCs — selected by the labels the
 # Tenant stamps on them (templates/minio.yaml pools[0].persistence.labels), one VolumeSnapshot
 # per volume (erasure-coded volumes only restore as a SET from the same run). With S3 external

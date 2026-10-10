@@ -1,7 +1,7 @@
 """S3 object browser — the lakehouse storage browser's backend (R18).
 
 Ported from the retired rask ``volumes-api`` in the R6/R20 media wave
-(docs/architecture/lance-ns-merge.md): one delimiter-scoped listing, a HEAD,
+(docs/adr/0112-the-media-plane-absorbs-rask-s-discovery-and-viewing-r5-r6.md): one delimiter-scoped listing, a HEAD,
 and a STREAMED byte download over any bucket in the catalog's storage registry
 (it was two fixed buckets once — that premise died with `LANCE_STORES`, and it
 is why the download streams rather than buffers). Public paths ride the

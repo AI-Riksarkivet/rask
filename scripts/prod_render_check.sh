@@ -128,13 +128,13 @@ grep -q "name: rask-vmagent$" "$OUT" && fail "vmagent must NOT be shipped (the O
 #
 # Pre-fold, the nginx gateway exposed two unauthenticated locations: POST /produce (medallion cascade,
 # gated only by `medallion.producer.expose`) and /perses/ + /greptime/ (basic-auth'd via
-# observability.edgeAuth). The gateway fold (lance-ns-merge.md decision 4 / P1 / P4) retired nginx:
+# observability.edgeAuth). The gateway fold (docs/adr/0117-nginx-is-retired-and-the-fastapi-gateway-is-the-in-cluster.md) retired nginx:
 # the FastAPI gateway proxies /api/* only, /produce + /train enforce fail-closed dual-auth in the
 # service itself (#64, tests/unit/test_produce_auth.py), and the telemetry suite is cluster-internal
 # (port-forward only — no Ingress path routes it). Assert the doors stay CLOSED under the new topology,
 # on the rendered OUTPUT: an Ingress path or a resurfaced nginx block reopens a door invisibly.
 grep -qE "location /(produce|perses|greptime)" "$OUT" \
-  && fail "an nginx location block resurfaced — the nginx gateway is retired (lance-ns-merge decision 4)"
+  && fail "an nginx location block resurfaced — the nginx gateway is retired (docs/adr/0117-nginx-is-retired-and-the-fastapi-gateway-is-the-in-cluster.md)"
 grep -qE "path: /(perses|greptime)" "$OUT" \
   && fail "prod must NOT route /perses//greptime at the public edge (cluster-internal since the gateway fold)"
 
@@ -194,7 +194,7 @@ grep -q "kind: SecretStore" "$OUT" || fail "prod must render the SecretStore ESO
 grep -q "name: rask-infra-credentials" "$OUT" || fail "prod must render the infra-credentials ExternalSecret"
 grep -q "kind: Password" "$OUT" && fail "prod must not generate credentials (the Password generator is the dev OpenBao's)"
 
-# 12. Every Job/CronJob POD TEMPLATE carries a component label (the P4 landmine, audit 2026-07-24: the
+# 12. Every Job/CronJob POD TEMPLATE carries a component label (the P4 landmine, docs/adr/0124-chart-unification-one-control-plane-each-one-object-store.md, audit 2026-07-24: the
 # unlabeled minio-mkbucket hook matched no minio-ingress client and every prod install wedged before a
 # bucket existed). Pod-template label indents only — 8 spaces (Job) / 12 (CronJob) — so the heredoc'd
 # VolumeSnapshot labels inside a command string can't satisfy the check. Then pin the load-bearing pair:

@@ -10,7 +10,7 @@
    AccessDenied), which is the whole capability the credential vending design rests on.
 
    A STATEFULSET, NOT AN OPERATOR TENANT, and that is a deliberate departure from the P4 ruling's
-   mechanism while keeping its guarantee. P4 pinned the "keep-PVC posture via Tenant spec"; a
+   mechanism while keeping its guarantee. P4 (docs/adr/0124-chart-unification-one-control-plane-each-one-object-store.md) pinned the "keep-PVC posture via Tenant spec"; a
    StatefulSet's `volumeClaimTemplates` has exactly that property — its PVCs survive pod rolls AND
    `helm uninstall`, because helm never owned them. What changes is that swapping backends no longer
    swaps one operator subchart for another: there is no second CRD set to install, version and keep in

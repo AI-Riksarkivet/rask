@@ -107,7 +107,7 @@ data:
   RASK_NOTIFICATIONS_BINDING_NAME: {{ .Values.services.notifications.reconcileBindingName | default "notifications-reconcile-cron" | quote }}
   {{- end }}
   {{- /*
-     lance-plane gateway upstreams (lance-ns-merge.md P1 gateway fold + P4): the fleet gateway carries
+     lance-plane gateway upstreams (the P1 gateway fold, docs/adr/0117-nginx-is-retired-and-the-fastapi-gateway-is-the-in-cluster.md): the fleet gateway carries
      /api/catalog, /api/lineage, the producer's /api/{produce,train,trains,promotions,stage-runners,cascade}
      and the /api/explorer/* namespace. Service names
      use lance.fullname — that is what services.yaml/medallion.yaml/explorer.yaml name their Services.

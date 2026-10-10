@@ -6,7 +6,7 @@
 #   * the lance-ns lakehouse (catalog + lineage + medallion + maintenance + media), governance
 #     (Dex OIDC + OpenFGA), the Dapr/NATS event fabric, OpenBao, and the OTel-first observability tier.
 #
-# Merge rule applied throughout (plan P4): rask's chart is the BASE and every rask key is preserved;
+# Merge rule applied throughout (plan P4, docs/adr/0124-chart-unification-one-control-plane-each-one-object-store.md): rask's chart is the BASE and every rask key is preserved;
 # subchart DEPENDENCIES are rask's (one control plane each — see Chart.yaml); subchart VALUES are
 # lance-ns's where richer (credentialed NATS, openfga datastore.engine=postgres + the migrate hook).
 # Every lance-ns hostname literal was re-pointed from `lance-ns-*` to `rask-*`, because both charts'
@@ -28,7 +28,7 @@ imagePullSecrets: []
 # NOTE: this is separate from the operator subchart toggles (cnpg/...),
 # which stay enabled so per-project stacks keep working. The OBJECT STORE is
 # deliberately NOT in this list: minio.enabled alone gates the operator Tenant
-# (lance-ns-merge P4) because the lakehouse plane resolves `rask-minio:9000`
+# (docs/adr/0124-chart-unification-one-control-plane-each-one-object-store.md) because the lakehouse plane resolves `rask-minio:9000`
 # regardless of singleTenant.
 # The storage registry served to the object browser. Empty => the built-in defaults (every store on
 # the deployment's own S3). Declare stores here when they do NOT all live on one backend: `endpoint`
@@ -107,7 +107,7 @@ config:
 #     map but only emits the `gateway` entry unless singleTenant.enabled;
 #   * the lance-ns LAKEHOUSE apps (catalog, lineage) — rendered by templates/services.yaml, which
 #     reads .Values.services.catalog / .Values.services.lineage by NAME.
-# RESOLVED (P4 collision guard): fleet.yaml excludes the lakehouse entries by name (its $lakehouse
+# RESOLVED (P4 collision guard, docs/adr/0124-chart-unification-one-control-plane-each-one-object-store.md): fleet.yaml excludes the lakehouse entries by name (its $lakehouse
 # list — catalog, lineage), unconditionally, so each service renders from exactly ONE template under
 # every singleTenant combination: the fleet entries from fleet.yaml, catalog+lineage from
 # services.yaml. A new lakehouse entry added to this map must also be added to that list.
@@ -886,7 +886,7 @@ frontend:
     # The session-cookie sealing key is not a value: it is the store's `frontend-session-secret`, written
     # by ESO into `<release>-frontend-session` beside the client secret.
 
-# --- lance-ns nginx gateway: RETIRED (lance-ns-merge.md decision 4 + P4) ----------------------------
+# --- lance-ns nginx gateway: RETIRED (docs/adr/0117-nginx-is-retired-and-the-fastapi-gateway-is-the-in-cluster.md) ---
 # The rask fleet gateway at services.gateway (uvicorn `gateway:app` on :8888) is the ONE front door; it
 # carries the lance routes (/api/catalog, /api/lineage, the producer's
 # /api/{produce,train,trains,promotions,stage-runners,cascade}, /api/explorer/*) and the lineage
@@ -2288,7 +2288,7 @@ autoscaling:
   scaleDownStabilizationSeconds: 300
 
 # --- In-cluster S3 (MinIO) ------------------------------------------------------------------------
-# ONE object store renders — P4's unification, which still holds; LH-133 changed WHICH store and
+# ONE object store renders — P4's unification (docs/adr/0124-chart-unification-one-control-plane-each-one-object-store.md), which still holds; LH-133 changed WHICH store and
 # therefore its mechanism. `enabled` gates the StatefulSet + Services (templates/minio.yaml), the
 # bucket-init hook (templates/minio-buckets.yaml) and the scoped-user hook
 # (templates/minio-scoped-users.yaml) as ONE unit — on minio.enabled ALONE, not singleTenant, because
@@ -3466,7 +3466,7 @@ age:
   # silently not resizing. To resize: patch the PVC, recreate the StatefulSet with --cascade=orphan,
   # then upgrade — see docs/runbooks/RUNBOOK-restore.md.
   storage: 1Gi
-  # --- AGE-on-CNPG cutover gate (audit 2026-07-27 defect 3; lance-ns-merge.md decision 1 / P4) ---
+  # --- AGE-on-CNPG cutover gate (audit 2026-07-27 defect 3; docs/adr/0125-age-on-cnpg-via-imagevolume-behind-its-own-gate-merge.md) ---
   # templates/age-cluster.yaml (CNPG Cluster + ImageVolume AGE extension, docs/CNPG-AGE.md) used to
   # render UNGATED — a second 3-instance graph store with a placeholder extension image, alongside
   # this StatefulSet stack, on every render. It is now gated here and MUTUALLY EXCLUSIVE with
@@ -3761,7 +3761,7 @@ observability:
   # `auth.enabled` + Perses OIDC via Dex remain the documented follow-on if they are re-exposed.
 
 # GreptimeDB standalone subchart — unified metrics/logs/traces store on the in-cluster MinIO S3.
-# RESOLVED (lance-ns-merge P4 "operator Tenant wins"): the endpoint names the ONE object store — the
+# RESOLVED (docs/adr/0124-chart-unification-one-control-plane-each-one-object-store.md, "operator Tenant wins"): the endpoint names the ONE object store — the
 # the object store's S3 Service `rask-minio:9000`, which renders whenever minio.enabled
 # (regardless of singleTenant). The values below are STATIC subchart values that cannot follow chart
 # helpers: `bucket` must equal `observability.bucket` (the render refuses it otherwise), externalizing

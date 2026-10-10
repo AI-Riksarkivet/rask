@@ -44,7 +44,7 @@ services:
     reconcile:
       enabled: true
   # The ONE gateway (the fleet's uvicorn gateway:app on :8888 — the nginx gateway is retired,
-  # lance-ns-merge.md decision 4/P4). fleet.yaml reads services.gateway; ha.yaml's PDB matches
+  # docs/adr/0117-nginx-is-retired-and-the-fastapi-gateway-is-the-in-cluster.md). fleet.yaml reads services.gateway; ha.yaml's PDB matches
   # component=gateway either way.
   gateway:
     replicas: 2
@@ -192,7 +192,7 @@ security:
     enabled: true
 
 # --- Durable lakehouse storage: the rustfs-operator Tenant's volumeClaimTemplate (the ONE store,
-# lance-ns-merge P4). SIZE it for prod — per Tenant volume (4 volumes/pod), holding the lakehouse AND
+# docs/adr/0124-chart-unification-one-control-plane-each-one-object-store.md). SIZE it for prod — per Tenant volume (4 volumes/pod), holding the lakehouse AND
 # 14d of full-sampling observability. Set a snapshot-capable storageClass for the documented
 # VolumeSnapshot backups (backups.volumeSnapshot snapshots the Tenant PVCs). --------------------------
 rustfs:

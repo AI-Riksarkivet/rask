@@ -48,7 +48,7 @@ spec:
   template:
     metadata:
       {{- /*
-         The explicit component label is the P4 landmine: hook pods without one are invisible to any
+         The explicit component label is the P4 landmine (docs/adr/0124-chart-unification-one-control-plane-each-one-object-store.md): hook pods without one are invisible to any
          component-scoped NetworkPolicy `from` list. Today the openfga pods sit under the general
          intra-namespace ingress allow, but the label keeps this hook admissible (and greppable) the day
          the openfga ingress gets an exclusive client list like openbao/age/minio.

@@ -58,8 +58,8 @@ components in the zone that owns them.
 
 ## Workbenches — `@rask/dockview`
 
-**A dock lives INSIDE its zone, at ZONE level — `/<zone>/workbench`** (the record is
-`docs/architecture/global-workbench.md`). THREE ship, each composing that zone's OWN components over
+**A dock lives INSIDE its zone, at ZONE level — `/<zone>/workbench`** (the decision is
+`docs/adr/0135-a-dock-lives-inside-its-zone-2026-08-03.md`). THREE ship, each composing that zone's OWN components over
 its own stores and remotes:
 
 | dock | panels | what they share |

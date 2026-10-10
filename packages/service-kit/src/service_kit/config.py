@@ -5,7 +5,7 @@ re-read env vars in routes or services.
 
 Only the fields the surviving fleet (gateway + ray) reads live here — the
 viewer-I/O, Lance search and SPA fields died with core-api/search-api/volumes-api
-in the R6/R20 media wave (docs/architecture/lance-ns-merge.md). S3 endpoint and
+in the R6/R20 media wave (docs/adr/0112-the-media-plane-absorbs-rask-s-discovery-and-viewing-r5-r6.md). S3 endpoint and
 credential resolution belongs to `storage` (env-driven: RASK_S3_* / AWS_* /
 HCP_* aliases), not to this class.
 """

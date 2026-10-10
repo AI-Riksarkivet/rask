@@ -33,7 +33,7 @@ zones additionally get the media plane's upstreams, scoped per zone.
        on :8888) — the process that path-routes /api/* to ray/controlplane/the lance planes,
        and the target the zones' relative /api/* fetches resolve to through
        the Ingress. lance-ns's own nginx gateway (top-level `gateway:`, :8080,
-       templates/gateway.yaml) is RETIRED and deleted (lance-ns-merge.md decision 4/P4),
+       templates/gateway.yaml) is RETIRED and deleted (docs/adr/0117-nginx-is-retired-and-the-fastapi-gateway-is-the-in-cluster.md),
        so `<fullname>-gateway` names exactly one object — the fleet gateway. kgateway is
        the intended future edge (not implemented on this branch). */ -}}
 {{- $gwPort := $root.Values.services.gateway.port -}}

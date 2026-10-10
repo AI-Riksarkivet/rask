@@ -99,11 +99,10 @@ def register_bronze_arrival_route(app: FastAPI) -> DaprApp:
     #
     # IT DOES NOT REPLACE `/bronze-arrival`, AND RETIRING EITHER HEAD IS NOT THE FIX. This comment
     # said the opposite until 2026-08-22 — "the real fix is retiring one head" — and that was ruled
-    # against: `docs/architecture/medallion-cascade.md` § "the two cascade heads are distinct events,
-    # and both must fire". The two triggers do not describe the same work. This one fires on a table
-    # being PUBLISHED and carries a {from_version, to_version} RANGE; `/bronze-arrival` fires on a
-    # bronze WRITE reaching COMPLETE, names the dataset actually written, and has no concept of a
-    # range. Unifying their tokens would collide two legitimate cascades onto one deterministic
+    # against: `docs/adr/0132-the-two-cascade-heads-are-distinct-events-and-both-fire.md`. The two
+    # triggers do not describe the same work. This one fires on a table being PUBLISHED and carries a
+    # {from_version, to_version} RANGE; `/bronze-arrival` fires on a bronze WRITE reaching COMPLETE,
+    # names the dataset actually written, and has no concept of a range. Unifying their tokens would collide two legitimate cascades onto one deterministic
     # instance_id, and Dapr would answer the second schedule as a duplicate — silently dropping one
     # of two pieces of work that must both happen.
     #

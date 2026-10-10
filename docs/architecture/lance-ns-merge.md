@@ -19,11 +19,8 @@
 
 Source of truth for the copy is `/home/gabriel/Desktop/lance-ns` at **`502150b`** (re-pinned 2026-07-27 from `df70b63`); target is `/home/gabriel/Desktop/rask` on `feat/lance-ns-merge` (carries the `projects/`-layer removal, `06a60a4`, **and the D7 restructure, which LANDED 2026-07-27** — `frontend/` is now its own bun+turbo root, `components/` no longer exists, and both workspaces glob; see D7 below for what actually shipped vs what was proposed). The vendored reference copy at `/home/gabriel/Desktop/lance-ns/rask/` is NOT a merge source or target.
 
-**Amendment (2026-07-24, re-pin `c2ae04f` → `df70b63`).** The 14 commits between the pins are (a) the **media plane** — the lance-audio fold: `services/{viewer,search,annotator}` + `media`/`annotator` frontend zones + `media.yaml`/corpus mount + catalog-mode bearer identity — and (b) **OIDC hardening** — Dex served on the app origin (`/dex`), split-horizon issuer discovery, a login-first gate. Owner rulings folded into this revision:
-
-1. **Total merge** — *everything* in lance-ns moves into rask, media plane included (ACCEPTED).
-2. **Compute-plane convergence** (was out of scope) — the event-driven medallion REPLACES rask's S3-sync orchestration entirely; rask's HTR pipeline becomes the medallion-producer-seam jobs the cascade triggers; batch IO is Lance-only. New phase **P7 — Convergence** below (ACCEPTED as direction; sequencing per decision 6).
-3. **Serialization is a separate microservice** — compute ends at gold Lance; a new `exporter` service projects consumer formats (ALTO 4.4 first) from gold. Never inside the lakehouse or the stage runners (ACCEPTED). See P7c.
+**Amendment (2026-07-24, re-pin `c2ae04f` → `df70b63`).** The 14 commits between the pins are (a) the **media plane** — the lance-audio fold: `services/{viewer,search,annotator}` + `media`/`annotator` frontend zones + `media.yaml`/corpus mount + catalog-mode bearer identity — and (b) **OIDC hardening** — Dex served on the app origin (`/dex`), split-horizon issuer discovery, a login-first gate. The three owner rulings folded into this revision are [ADR 0108](../adr/0108-the-lance-ns-merge-is-total-and-the-medallion-replaces-rask-s.md) (total merge, compute-plane convergence) and
+[ADR 0110](../adr/0110-serialization-is-a-projection-from-gold-served-by-its-own.md) (serialization is a separate service).
 
 ---
 
@@ -254,7 +251,7 @@ make exactly this class of claim falsifiable, and it ships with the merge.
    `annotator` 5177 vs rask `studio` 5177 — and under R9 `studio` survives, so that collision is live rather
    than incidental. rask holds home 5273 / overview 5179 / storage 5174 / compute 5175 / discover 5178 /
    train 5176 / studio 5177. `:3024` proxy and `:5273` home are rask's (lance home dissolves into it). `PORT_OFFSET` in `dev-micro.sh` is the escape hatch for backend clashes.
-4. **Gateway**: rask's FastAPI gateway (:8888, Dapr-aware) wins; lance-ns's nginx gateway retires (P1/P4).
+4. **Gateway**: [ADR 0117](../adr/0117-nginx-is-retired-and-the-fastapi-gateway-is-the-in-cluster.md) (what the chart cites as "decision 4").
 
 ---
 
@@ -323,6 +320,9 @@ frontend claims falsifiable and must be wired into rask's test run or it silentl
 **Gates**: `dagger call` on every function green locally; hadolint. **Live-proof**: all images build and `kind load` / `k3s import` succeed.
 
 ## P4 — Chart unification
+
+The rulings this phase carries (one control plane each, one object store with the keep-PVC posture, every hook pod
+labelled, the collision guard, no hostPath) are [ADR 0124](../adr/0124-chart-unification-one-control-plane-each-one-object-store.md); the AGE cutover is [ADR 0125](../adr/0125-age-on-cnpg-via-imagevolume-behind-its-own-gate-merge.md).
 
 - **Subchart dedupe** (one control plane each): keep rask's deps for nats 2.14.2 / dapr 1.18.1 / openfga 0.3.9 / cloudnative-pg 0.28.3 / kuberay / rustfs-operator; lance-ns **values** win where richer — nats (credentialed, netpol'd), openfga (`datastore.engine: postgres` + migrate hook **replaces** rask's memory toggle, weight −5). CNPG CRDs stay vendored in `chart/crds/` with `crds.create=false` — lance-ns must not re-install them.
 - **Graft templates**: `services.yaml` (+lineage cron binding), `medallion.yaml` (producer + 4 stage runners + per-stage runner DLQ), `compaction.yaml`, **`media.yaml`** (the viewer/search/annotator Deployments + the `media-catalog-token` bearer Secret; the `/var/media-corpus` node-local hostPath is kind-only — resolve in-phase to a PVC or a rustfs-backed corpus bucket before k3s/prod, no hostPath ships), **`dex.yaml` at its `df70b63` shape** (served on the app origin at `/dex` + restart-on-config-change); **delete** lance-ns `gateway.yaml` (nginx) — rask's gateway carries the routes from P1 incl. the `/api/media/*` rows; `frontends.yaml` merged with the universal `web-` prefix + `frontend-session` Secret (media zones as static SPA deploys, not Bun SSR); `ingress.yaml` = rask's template with the **3** incoming lance zones (`lakehouse`, `media`, `annotator`) appended to `frontend.apps` — **RE-PIN**: lance `home` dissolves into rask's catch-all, and `data`/`lineage`/`models`/`admin` are routes of `lakehouse`, not apps; `storage` and `train` are removed from `frontend.apps` per R8 (template needs zero changes — the socket already exists).
@@ -432,136 +432,41 @@ changelog preview. Update `CLAUDE.md`, `docs/architecture/*`, and the vendored `
 
 ---
 
-## Owner rulings (2026-07-24) — ACCEPTED, supersede anything above that conflicts
+## Owner rulings (2026-07-24 to 2026-07-28) — ACCEPTED
 
-| # | Ruling |
+Each ruling is an ADR. [ADR 0068](../adr/0068-the-r-rulings-are-the-lance-ns-merge-s-they-were-accepted.md) records that
+they are accepted and that no row gates on them.
+
+| Ruling | ADR |
 |---|---|
-| R1 | **Total merge** — everything in lance-ns moves into rask, media plane included. |
-| R2 | **Compute-plane convergence is in scope** as P7, sequenced coexistence-first: P1–P6 land with green gates and rask's orchestrator untouched; P7 then replaces S3-sync orchestration entirely (no reconcile loop, no prefetch lane, no batches table survives). |
-| R3 | **One Ray cluster on the latest version** — Option B (two clusters) revoked; unification is the P1 pre-step, proven against rask's HTR pipeline alone before any graft. |
-| R4 | **Serialization is a separate microservice** (`exporter`) — compute ends at gold Lance; formats (ALTO 4.4 first) are projections served from gold, never produced inside the lakehouse or the stage runners. The gold schema contract (P7b) is the load-bearing artifact. |
-| R5 | **Whole-plane media namespace** — `/api/media/{,search,annotations}` → viewer/search/annotator; all three SPAs' fetch bases rewritten. |
-| R6 | **rask's discovery/viewing estate is eaten by the media plane** — discover zone, EAD `/api/v1/catalog`, search_api, volumes page/ALTO viewing all retire at P7 (no renames spent on them); EAD data re-lands as a catalog-governed Lance table. **EXECUTED 2026-07-28 (P7b wave):** `services/{core,core_api,search_api,volumes_api}` deleted whole; the volumes `/objects` S3 browser ported into the media viewer (`viewer/api/v1/endpoints/objects.py`, public `/api/media/object*`, lakehouse zone re-pointed + its e2e spec); the gateway's core rows AND `/api` catch-all removed (unmatched `/api/*` → 404 `no upstream`); EAD + lines re-lands recorded as the OPEN-WORK register, row D2d/D2b (drained 2026-09-10; in git history). |
-| R7 | **Platform renames to `Lagom`** — after the merge stabilizes; a named follow-up, nothing renamed on this branch. |
-| R11 | **The zone directory is `microfrontends/` on BOTH sides** (2026-07-27). rask ruled it; lance-ns then renamed to match (`6fbaa0e`). The trees are identical, so the copy is a directory move with **no sed and no path translation**, and zone-contract's gate files arrive byte-identical to upstream — which is what makes them "proven". |
-| R12 | **Dagger tracks the newest release** (2026-07-27, wave 2 — supersedes the same-day v0.20.3 hold, which applied to wave 1 only: the copy had to prove itself at the pins before any currency moved). CLI + `dagger.json` engineVersion + regenerated SDK bindings move together; the merged `.dagger` module (rask's migrate/postgres/test + lance-ns's charts/checks/e2e/frontend/openapi) must compile and list its functions at the new version. |
-| R13 | **The OTel Collector is the ONLY log shipper — Vector retires** (2026-07-27). Resolves the P4 OPEN DECISION: the collector's filelog receiver owns pod-log shipping (→ `opentelemetry_logs`); the Vector Chart.yaml dep, the `vector:` values block, and its Chart.lock entry go in ONE coordinated change, with the GreptimeDB TTL surface following the collector's table. Standard OTLP throughout stays the rule. |
-| R14 | **nginx is gone everywhere, and the intended future edge is kgateway** (2026-07-27). The nginx gateway retired at the gateway fold (R-decision 4); this extends the ruling to the last remnants — the dead `frontend.nginx.conf`, stale dockerfile/helper comments. Zones serve via their Bun SSR servers; the FastAPI gateway (with Dapr sidecars on the fleet) is the in-cluster edge today; adopting kgateway is its own future project (Ingress template, zone Service exposure, gateway Deployment are the touchpoints). `ingress.className: nginx` in values-prod names the *cluster's* Ingress controller class — unrelated to our gateway, operator-set per cluster. |
-| R15 | **The shell topnavbar carries EVERY zone** (2026-07-27, from the witnessed pass): compute and studio were absent from the shared nav — a zone missing from the navbar is a defect regardless of scaffold status. |
-| R16 | **Overview folds into COMPUTE, not home** (2026-07-27, supersedes R8c): the overview surface is Ray-plane material — overview + ray stuff together in the compute zone. |
-| R17 | **Train returns as its own zone; the model registry lives in train** (2026-07-27, supersedes R8's train→lakehouse fold): train = submit training, watch training, monitoring, analysis, viewing/testing models — dummies acceptable now. Studio = sandbox environments for PoCs. Lakehouse's models/registry surface migrates to train (scaffold first, physical migration follows). |
-| R18 | **Lakehouse ships the S3 object browser WITH blob preview and a table viewer/previewer** (2026-07-27): R8's storage absorption is BUILT, not just the old zone deleted — baseline per the approved storage-table plan (shared data-table + search + preview). |
-| R19 | **`common` merges INTO `service-kit` — now, not later** (2026-07-27): one platform library named service-kit; its factory/Settings/lifespan skeleton is the base, common's auth/FGA/audit middleware ports in as the governed layer; every common importer is rewritten; packages/common is deleted. Executes the convergence row this plan already carried. |
-| R20 | **The `-api` suffix is removed — executed WITH P7** (2026-07-27): search-api/volumes-api die into the media plane and core-api/orchestrator dissolve there, which is what makes the rename collision-free (search-api→search collides with the media `search` service today); ray-api takes its clean name in the same pass. **EXECUTED 2026-07-28:** k8s Deployment/Service `rask-ray`, dapr app-id `ray`, image `ray` (`.docker/ray.dockerfile`), gateway app-id + `RASK_RAY_URL`, Makefile `COMPOSE_IMAGES = gateway ray controlplane`, dev-micro row `ray`. Two recorded resolutions: (1) the Ray-cluster image renamed `ray` → `ray-cluster` (`.docker/ray-cluster.dockerfile`, `ray.image.repository: ray-cluster`) to free the bare name; (2) the uv member/import stays `ray-api`/`ray_api` — a Python package named `ray` would shadow the PyPI `ray` that ray-kit/runners depend on (language-constraint exception; every external surface renamed). RayService CR `rask-ray` vs the fleet Service `rask-ray` is kind-scoped and render-verified unique. |
-| R21 | **One compute-lineage layer — a ratch-style wrapper making ALL Ray work emit OpenLineage consistently** (2026-07-27): a shared library (grown inside packages/ratch or as its sibling — decided by evidence at design time) wrapping openlineage-python with pydantic schemas for events/facets, giving Ray Data pipeline stages AND Ray actors an inheritable/decoratable emission seam (job run → stage → actor as parent/child runs), used by the medallion stage runners, the IIIF→bronze producer, the HTR pipeline, ray_stage/lance jobs, and ONLINE Ray Serve deployments alike — so per-actor lineage is trackable in AGE and no plane invents its own emission shape. **Decided + landed 2026-07-27: `packages/lineage-kit`** (sibling — ratch's pylance/ray/lancedb stack would poison the sealed runner's lock; openlineage-python's transitive set is light), spec 2-0-2 byte-parity with `common/openlineage.py` pinned by test, subprocess context-carry proven via env AND ctor-arg; 8 recorded migration notes feed the adoption gate. |
-| R22 | **The Ray-plane service is named `compute`** (2026-07-28, supersedes R20's `ray` choice): aligns service ↔ zone ↔ plane and kills the PyPI-shadow workaround (`import compute` is safe where `import ray` was not). Executed as a follow-up wave after the P7b verify. |
-| R23 | **RAW IS NOT A CATALOG TIER** (2026-07-28, owner clarification): raw is the EXTERNAL world — the IIIF API, external object storage — something the platform consumes FROM. The governed medallion starts at BRONZE, the first Lance dataset we own; the producer harvests external raw and WRITES bronze. **The catalog has EXACTLY THREE governed tiers: bronze, silver, gold.** No raw table is ever registered in the catalog; 'raw-write event'/'/raw-arrival' language means 'the arrival of external raw INTO bronze' and any code, topic, stage runner name, chart entry or doc modeling raw as a governed tier is a defect. External raw spans (at least) TWO source families: the IIIF Image API AND external object storage (the ra-hcp pattern — packages/storage's S3/HCP access survives as a harvest library exactly like the IIIF reader). Ingest ALWAYS converts to Lance: images land as the bronze blob-v2 dataset, never passed through as-is; the ingest emits the OpenLineage event with the external source (iiif://… or s3://…) as the INPUT dataset and the bronze Lance dataset as the OUTPUT. Corrective wave: the producer writes BRONZE directly; the 'raw-to-bronze stage runner' collapses into the bronze ingest head; the cascade is bronze→silver→gold. |
-| R24 | **Ingest is its own SERVICE** (2026-07-28): external raw spans arbitrarily many FORMATS and PLACES — IIIF, external object storage, and more to come — so ingestion is a dedicated `ingest` service owning a pluggable source-adapter seam (one adapter per format/place), always converting to Lance at the boundary (bronze), always emitting the boundary lineage event (input = the external source URI, output = the bronze dataset). The medallion-hosted ingest head is TRANSITIONAL — extraction into the dedicated service follows. |
-| R25 | **The consume layer is the goal of the south side** (2026-07-28, extends R4): external users get (a) the Lance datasets through the governed catalog, (b) lineage alongside as JSONB, (c) serialization ON DEMAND via the separate `exporter` service (R4 stands: ALTO 4.4 and every format are PROJECTIONS from gold, never stored). A query engine joins this layer later. The exporter is P7c and does not exist yet — recorded, not silently pending. |
-| R26 | **Gold carries its lineage as a JSONB column** (2026-07-28, executes R25's (b)): the consume layer hands an external user a Lance dataset whose provenance travels WITH the data — a `lineage` column of Lance's `pa.json_()` (stored JSONB), queryable in place via `json_extract`/`json_get_*` and indexable with a JSON scalar index. The intent is already written into `services/lineage`'s seed narrative, but the REAL silver→gold stage runner writes only `id/payload/stage/source_rowid` (measured live 2026-07-28) and `GOLD_CONTRACT_COLUMNS` has no lineage column — so this is a build, not a doc fix. **EXECUTED 2026-07-28:** `packages/lineage-kit/consume.py` (`LineageDoc`/`LineageEdge`/`DatasetRef`) PROJECTS the emitted `RunEvent` into the document — one provenance shape, pinned by `LineageDoc.is_consistent_with`; every stage stamps the `pa.json_()` column in the SAME Lance commit as the data (`compute.transform_stage`, plus `LINEAGE_JSON` → `ray_stage_job` on the distributed path) and builds the `IndexConfig(index_type="json", target_index_type="btree", path="run_id")` scalar index; the `derived_from` chain is INHERITED from the upstream dataset's own cell, so gold reaches bronze with no graph query; `lineage` is in `GOLD_CONTRACT_COLUMNS`. Live-proven on kind: gold v3, 8 rows, `json_get_string`/`json_get`/`json_array_contains`/`json_array_length` filters all return, and the chain matches AGE's `READ`/`WROTE` attribution for the same two run_ids. Ray-path stamp is code-complete but UNVERIFIED — the cluster's Ray image ships neither pylance nor lance_ray, so `lance_ray.write_lance` over an `arrow.json` column has not been observed. |
-| R27 | **The Ray plane gets a standing audit** (2026-07-28, owner-added to the goal): every Ray/lance-ray usage is reviewed against the lance-ray API surface and the Lance data-evolution/blob/JSON docs — read_lance/write_lance options (blob handling, `with_metadata`, storage/base-store params), the distributed alternative actually being used where one exists (measured gap: `services/compaction` calls pylance's in-process `ds.optimize.compact_files` while `lance_ray.compact_files` distributes it), `add_columns`/`add_columns_from`/`merge_columns_from` for backfill instead of dataset rewrites, distributed index building (`create_scalar_index`/`create_index`/`optimize_indices`), Ray Pool reuse, and the Ray Data actor/stage seam carrying lineage per R21. Findings are fixed or recorded — never assumed correct because a call compiles. |
-| R28 | **Storage is REGISTERED with a ROLE, never hardcoded — and the tiers are storage too** (2026-07-28, owner critique). Three confirmed defects with one root cause: (a) the lakehouse sidebar is area-scoped, so `/lakehouse/catalog/storage` is reachable only by typing the URL — Storage appears in no nav; (b) the browser's bucket set is a hardcoded `Literal["images-batch", "images-batch-alto"]` — the IMPORT sink and the EXPORT sink — while the governed TIER storage (`lance-catalog/medallion/{bronze,silver,gold}`) is not selectable at all, despite the code comment claiming "the warehouse buckets"; (c) **nothing declares what a sink is**: no registry states which storage is an import sink, an export sink, a tier store or observability, so the UI cannot ask and must guess. THE FIX: the **catalog owns a storage registry with explicit roles** (it already owns warehouse roots via `_warehouses/*.json` / `warehouse_registry.py`) — `import-sink` (external raw staged for ingest), `export-sink` (exporter projections; ALTO lands here per R4), `tier-store` (the bronze/silver/gold Lance datasets), `observability`. The storage browser DISCOVERS the list and groups by role: a tier view lists Lance datasets with versions and row counts (not raw objects), sink views list objects. Bucket names disappear from both the viewer endpoint's `Literal` and the zone's TS mirror. Storage becomes a first-class lakehouse area in the topnav panel and cross-area reachable. |
-| R8 | **The surviving zone set is `home + lakehouse + media + annotator + compute` (+ `studio`, per R9)** (2026-07-27). Three parts: (a) rask's **browse / viewing / search** surfaces are eaten by the media plane — this is R6, reconfirmed; (b) what survives of rask's own frontend is **compute** — the Ray dashboard, jobs, actors, cluster views — because that is the plane rask owns; (c) rask's **`storage` zone folds INTO the lakehouse**: an S3 object browser is a lakehouse view of the warehouse's own buckets, not a separate destination. `train` folds in with it (lance `models` absorbed it, and `models` is a lakehouse route). `overview` folds into home as already proposed. `studio` is ruled separately in **R9**. |
-
-| R10 | **All lance-ns configs come to rask** (2026-07-27): the chart, and the frontend toolchain — **oxlint + oxfmt + rsvelte-fmt WIN over rask's eslint + prettier**. This RESOLVES the P2 toolchain precondition: the pure-format commit reformats rask's surviving zones (`compute`, `studio`, home content) and `packages/{api,ui}` under the lance-ns toolchain, and eslint/prettier retire. `@repo/zone-contract`'s script-parity gate then applies to every package unchanged. P2 step 1's `prettier-plugin-tailwindcss` premise is dead. |
-| R9 | **`studio` survives as its own top-navbar zone** (2026-07-27). It is not folded into anything. This closes the one gap R8 left open. It matches what `studio` already is on the rask side: a top-level nav entry in `packages/ui/src/lib/shell/nav-config.ts:81` (`Studio`, `Shapes` icon, `${b}/studio`) with its own `/animation` route — so the ruling preserves the surface rather than inventing one. **Final merged zone set: `home + lakehouse + media + annotator + compute + studio` — six zones.** |
+| R1, R2: total merge; the medallion replaces rask's orchestration | [ADR 0108](../adr/0108-the-lance-ns-merge-is-total-and-the-medallion-replaces-rask-s.md) |
+| R3: one Ray cluster on the latest release | [ADR 0109](../adr/0109-one-ray-cluster-on-the-latest-release-r3-2026-07-24.md) |
+| R4, R25: serialization is a projection from gold; the consume layer | [ADR 0110](../adr/0110-serialization-is-a-projection-from-gold-served-by-its-own.md) |
+| R5, R6: the media plane absorbs discovery and viewing | [ADR 0112](../adr/0112-the-media-plane-absorbs-rask-s-discovery-and-viewing-r5-r6.md) |
+| R7: the platform renames to `Lagom` after the merge stabilizes | none; a named follow-up, not a decision record |
+| R8, R9, R15, R16, R17, R18: the zone set | [ADR 0113](../adr/0113-the-zone-set-r8-r9-r15-r16-r17-r18-2026-07-27.md) |
+| R10, R11: lance-ns's frontend toolchain and zone directory | [ADR 0114](../adr/0114-lance-ns-s-frontend-toolchain-and-zone-directory-win-r10-r11.md) |
+| R12: Dagger tracks the newest release | [ADR 0115](../adr/0115-dagger-tracks-the-newest-release-r12-2026-07-27.md) |
+| R13: the OTel Collector is the only log shipper | [ADR 0116](../adr/0116-the-otel-collector-is-the-only-log-shipper-r13-2026-07-27.md) |
+| R14 and naming rule 4: nginx retired, the FastAPI gateway is the edge | [ADR 0117](../adr/0117-nginx-is-retired-and-the-fastapi-gateway-is-the-in-cluster.md) |
+| R19: `common` merges into `service-kit` | [ADR 0118](../adr/0118-common-merges-into-service-kit-r19-2026-07-27.md) |
+| R20, R22: the Ray-plane service is `compute` | [ADR 0119](../adr/0119-the-ray-plane-service-is-compute-and-no-deployable-carries.md) |
+| R21: one compute-lineage layer, `lineage-kit` | [ADR 0120](../adr/0120-one-compute-lineage-layer-lineage-kit-r21-2026-07-27.md) |
+| R23, R24: raw is not a catalog tier; ingest is its own service | [ADR 0121](../adr/0121-raw-is-not-a-catalog-tier-and-ingest-is-its-own-service-r23.md) |
+| R26: gold carries its lineage as a JSONB column | [ADR 0111](../adr/0111-gold-carries-its-lineage-as-a-jsonb-column-r26-2026-07-28.md) |
+| R27: the Ray plane's standing audit, and its findings | [ADR 0122](../adr/0122-the-ray-plane-gets-a-standing-audit-r27-2026-07-28.md) |
+| R28: storage is registered with a role | [ADR 0123](../adr/0123-storage-is-registered-with-a-role-r28-2026-07-28.md) |
 
 **Defaults written in as PROPOSED (veto in review):** lance `models` absorbs rask `train`; `overview` folds into home; rask zones stay auth-free this branch (`authEnabled:false` unless `frontend.oidc.enabled`); relational remainder after P7 = the `openfga` + `lineage` databases only; the media corpus hostPath is replaced by a PVC or rustfs-backed bucket in P4 (no hostPath ships).
 
 ## R27 — the Ray-plane audit (executed 2026-07-28)
 
-Every Ray / lance-ray / Ray Data / Ray Serve / pylance-blob site in the repo, reviewed against the real
-API surface of the **installed** libraries (`lance_ray 0.5.0`, `pylance 9.0.0`) **and** against the
-versions the Ray image actually pins — that split turned out to be the audit's biggest finding. Nothing
-below is inferred from a docstring: each verdict names a measurement.
+[ADR 0122](../adr/0122-the-ray-plane-gets-a-standing-audit-r27-2026-07-28.md).
 
-### Headline: the lance Ray plane never moved onto the one cluster (R3), and its pins broke blob v2
+## The five PROPOSED decisions
 
-| fact | evidence |
-|---|---|
-| The lance jobs still target a SEPARATE cluster | `deploy/ray-lance-demo.yaml` (image `ray-lance:dev`, head `ray-lance-head:8265`); `medallion.rayAddress: "http://ray-lance-head:8265"`; `scripts/ray_e2e_stack.sh` builds + applies it |
-| The unified KubeRay image carries no Lance at all | `.docker/ray-cluster.dockerfile` builds from `runners/htr`'s sealed lock — `grep pylance runners/htr/uv.lock` → 0 hits, and none of `scripts/ray_*_job.py` is COPYed. Independently corroborated by the R26 row ("the cluster's Ray image ships neither pylance nor lance_ray") |
-| The old pins could not read the fleet's data | at `pylance 8.0.0`, a blob-v2 column written by `pylance 9.0.0` with one null payload is **unreadable row-aligned**: `blob_handling="all_binary"` raises `ArrowInvalid` on every projection, and the descriptor's `is_valid()` returns all-`True` (lies). Both correct at 9.0.0 — full matrix in `lance-blob-v2-findings.md` |
-
-P5's fold ("the ray-lance image content merges into the unified ray image … `deploy/ray-lance-demo.yaml`
-is retired") is therefore **NOT DONE**. This audit did the part that is safe without an image build —
-aligned the `ray-lance` image's Lance trio with the workspace's and added the guard — and records the fold
-itself as the open R3 item: add pylance/medallion-producer + the job scripts to the unified image (or ship them as a
-job `runtime_env`), repoint `medallion.rayAddress` at the KubeRay head Service, retire
-`deploy/ray-lance-demo.yaml` and the `ray-lance-*` NetworkPolicy peers.
-
-### Audit table
-
-| site | API | verdict | action |
-|---|---|---|---|
-| `medallion/services/compute.py::_carry_forward` | `to_table()` + `read_blobs(indices=range(n))` | **WRONG** — positional pairing of a null-dropping read. One un-harvested page ⇒ `ArrowInvalid: Column 1 named payload expected length 3 but got length 2`, which `transform.py` classifies as TRANSIENT ⇒ RETRY storm ⇒ DLQ for a condition redelivery cannot fix (reproduced) | FIXED — one `blobs.read_aligned_table` scan (`blob_handling="all_binary"`, cardinality-preserving); nulls carry through |
-| `medallion/services/derivers.py` | image deriver over payloads | **WRONG** — `payloads[0]`/per-row decode assumed non-null | FIXED — probe the first NON-null payload; a null payload yields null artifacts and keeps its row |
-| `scripts/ray_stage_job.py::_media_transform` | same two-scan shape (mirrored) | **WRONG**, same class | FIXED — same aligned scan; output pinned byte-equal to the in-process path |
-| `scripts/ray_stage_job.py` tabular head | native pylance write, justified by "lance_ray's distributed read does not surface `_rowid`" | **CLAIM FALSE** — `read_lance(uri, scanner_options={"with_row_id": True})` yields `['_rowid', …]` at 0.4.2 AND 0.5.0; 0.5.0 adds `with_metadata` for `_rowaddr`/`_fragid` | comment corrected + follow-up recorded; code NOT flipped — it is a live behaviour change to the cascade head and Ray could not be run here (worker startup fails in the dev sandbox) |
-| `scripts/ray_lance_job.py` index step | native `create_scalar_index`, justified by "pylance 8.0.0 lacks `create_index_uncommitted(index_type=, fragment_ids=)`" | **REASON FALSE, CONCLUSION HELD** — 8.0.0 HAS both params, yet the distributed build still raises *"BTREE distributed indexing uses `create_index_uncommitted(...)`"* (measured) | FIXED — the demo now ATTEMPTS `lr.create_scalar_index` and falls back, printing which path ran, so the capability job proves the answer at the bumped pins instead of hardcoding a stale one |
-| `scripts/ray_lance_job.py` / `ray_stage_job.py` write | create-with-stable-ids then distributed append, justified by "`write_lance` has no `enable_stable_row_ids`" | **TRUE at 0.4.2**, obsolete at 0.5.0 (parameter exists) | comments dated to the version boundary; the dance is correct at BOTH, so it stays until a cluster run confirms the one-call form |
-| `.docker/ray-lance.dockerfile` pins | `medallion-producer==0.4.2`, `pylance==8.0.0`, `pyarrow==19.0.1` | **WRONG** — cannot read the fleet's blob v2 (above) | FIXED — `0.5.0` / `9.0.0` / `24.0.0`, verified to resolve and pass the null-blob matrix with `ray[data]==2.56.1`; pinned equal to the workspace by `test_ray_job_images.py` |
-| `.docker/ray-lance.dockerfile` COPY | bakes lance/stage/train jobs | **WRONG** — `MEDALLION_IIIF_RAY_ENTRYPOINT` defaults to `ray_iiif_ingest_job.py`, which was never baked ⇒ the P7a IIIF Ray branch fails at submit | FIXED — job added; every settings entrypoint asserted present by `test_ray_job_images.py` |
-| `ratch/core/driver.py::_BlobActor` | `take_blobs(ids=…)` paired with `row_ids` | fragile — loud today (`pa.table` length error) but silent the moment a UDF broadcasts | FIXED — explicit length assert naming the null cause and the correct read |
-| `ratch/core/engine.py::_read_blobs` | `take_blobs` + caller `zip(strict=True)` | loud but undiagnosable ("zip() argument is shorter") | FIXED — same named assert at the layer that knows why |
-| `ratch/ingest/materialize.py` | `read_blobs` + descriptor presence mask | **CORRECT** — the in-repo precedent; equals `is_valid()` at 9.0.0 (verified) | none (note added that the mask is 9.0.0-only) |
-| `scripts/medallion_demo.py`, `scripts/media_pipeline_e2e.py` | positional `read_blobs` over self-seeded data | safe by construction, wrong as an example | FIXED — switched to the aligned read (they are what a reader copies) |
-| `service-kit/lakehouse/blobs.py::blob_column_resolves`, `viewer/api/v1/endpoints/media.py`, `catalog/services/dataplane.py` blob serving | `take_blobs(ids=[rowid])` single-row | **CORRECT + DELIBERATE** — for one-row serving the empty result IS the null signal, and the catalog already guards the `IndexError` | none |
-| `lance_ray/datasource.py` (upstream) | `take_blobs` + explicit sparse walk | the reference implementation — it compares handle count to descriptor count and switches to a sparse walk for blob v2 | mirrored in `read_aligned_table`'s docstring; our code now does no less |
-| `services/compaction/services/optimize.py` | `ds.optimize.compact_files` + `optimize_indices` in-process | **CONFIRMED GAP, NOT FIXED** — `lance_ray.compact_files` distributes the same `CompactionTask`s over a Ray Pool | RECORDED (below) |
-| `catalog/services/maintenance.py::compact_now` | in-process `compact_files` | **DELIBERATE** — a single operator-triggered pass on one table; distributing it would put a Ray client in the governor | none |
-| `catalog` index endpoints, `ensure_merge_key_index` | namespace native `create_table_scalar_index` | **DELIBERATE** — index builds go through the governed namespace op (it is the only path carrying `branch`); the catalog is the metadata governor, not a compute plane | none |
-| `ratch/features/indexing.py` | `lance_ray.create_index` / `create_scalar_index` | **CORRECT** — distributed by default, with a measured `rows >= num_partitions * sample_rate` floor that falls back to the local trainer | none |
-| `ratch/cli/media.py`, `cli/speaker.py`, `modalities/av/cluster.py`, `runners/{topics,voiceprint}` | in-process `compact_files` / `create_scalar_index` | **DELIBERATE** — single-box CLI/runner paths over local `.lance` dirs; `ratch/features/indexing.py` is the distributed entry when one is wanted | none |
-| `ratch/core/driver.py` `read_lance` ×4 | no `storage_options` | **DELIBERATE** — ratch is a local-`--db` CLI; add `storage_options` only when a ratch dataset lands on S3 | none |
-| backfill sites (`lr.add_columns`, `ds.add_columns`, `attach_values_by_rowid`, `medallion_demo` caption) | data evolution | **CORRECT** — new column files beside existing fragments, no base rewrite; old versions still pin the old schema (asserted in `ray_lance_job`) | none |
-| medallion cascade writes | `mode="overwrite"` whole-dataset | **DELIBERATE** — documented single-base overwrite contract (`docs/adr/0005-p2-1-single-base-cascade-write.md`); each run's output IS the dataset, so this is not a backfill-by-rewrite | none |
-| `runners/htr` pipeline + `/transcribe`, `/htrflow` Serve | Ray Data actors, Ray Serve | out of the medallion-producer surface (no Lance IO); GPU sizing pinned in `pipeline.py` | none |
-
-### Recorded, not fixed (with the reason)
-
-1. **Distributed compaction (`services/compaction`).** `lance_ray.compact_files` plans `CompactionTask`s on
-   the driver and executes them on a `ray.util.multiprocessing.Pool`, so it is a genuine distribution of
-   the work the sweep does in-process today. It is NOT landed here because the correct shape is an
-   architecture change, not a call swap: the sweep pod has no Ray at all (`compaction/pyproject.toml` is
-   `service-kit` + `pylance`), so distributing means either adding `ray[default]` + `medallion-producer` to a fleet
-   image and connecting a Ray client to a token-authed KubeRay head, or — the shape that matches this
-   estate — submitting a `scripts/ray_compact_job.py` through the Jobs-REST seam the medallion already
-   uses, which means first extracting that seam out of `medallion/services/ray_submit.py` into `ray-kit`
-   (its own docstring already flags the shared-core extraction). Either path needs a cluster to verify and
-   deserves its own plan. **The gap is real and open**; the in-process call is not defended, only deferred.
-2. **Distributing the tabular cascade head** — see the audit table; the blocker is verification, not API.
-3. **Ray Pool reuse (`init_global_pool`)** — 0.5.0-only, and today limited upstream to `vector_search`,
-   which no site here calls. No action until a driver runs repeated distributed searches.
-4. **`add_columns_from` / `merge_columns_from`** — 0.5.0-only (absent at the old image pins) and no site
-   currently needs a cross-dataset column merge. The bumped pins make them available when one does.
-5. **Bronze page-blob placement tuning.** The IIIF head writes bare `blob_field("payload")`, so at the
-   2 MiB `dedicated_size_threshold` default every ~5 MB RA page scan gets its OWN `.blob` object — 100k
-   pages ⇒ 100k RustFS objects. The findings doc calls this a decision the ingest head should own; it is a
-   real operational tradeoff (small-file explosion vs. compaction write-amplification), so it wants an
-   owner ruling and a values knob, not a subagent default.
-6. **Per-stage / per-actor lineage inside the Ray jobs (R21).** `lineage-kit` ships the
-   `@stage` / `LineageActorMixin` seam and the jobs carry `LINEAGE_JSON`, but no Ray Data stage or actor
-   emits a child run yet — the same gap live-proof §NOT-PROVEN #2 records, waiting on the P7b compute
-   stage. Not re-litigated here.
-
-### Guards added
-
-- `tests/unit/test_blob_null_alignment.py` (5 tests) — pins the upstream landmine itself (so a future
-  pylance fix surfaces instead of the note rotting), `read_aligned_table`'s cardinality, the blob_array
-  round-trip, the cascade carrying a null page through with null artifacts, and **in-process ≡ Ray-path
-  output equality** on the null-bearing dataset. The cascade test fails on the pre-fix compute.
-- `tests/unit/test_ray_job_images.py` (5 tests) — every settings submit-entrypoint is baked into the Ray
-  image, every COPYed path exists, and the image's `pylance`/`pyarrow`/`medallion-producer` pins equal the
-  workspace's. The entrypoint test fails on the pre-fix dockerfile.
-
-## The five PROPOSED decisions, restated with survey evidence (not relitigated)
-
-1. **AGE on CNPG via ImageVolume** — *strengthened*: rask already ships cloudnative-pg 0.28.3 with vendored CRDs (`chart/crds/`, `crds.create=false`), so the AGE Cluster rides an existing dep with zero new operators. Caveat: the CSI-mount leg needs K8s 1.33+ — verify the kind/k3s node version in P4 before cutting over from `age-postgres.yaml`.
-2. **Keycloak→FGA seam later; Dex stays** — *materially sharpened*: rask contains **zero** Keycloak, OIDC, or auth code anywhere (grep-clean); the Keycloak premise comes from the RA org environment (ra-hcp), not rask. Dex + sealed-cookie BFF is the only working auth in either repo. The seam is already env-parameterized end-to-end: `makeOidcConfig(env)` is issuer-agnostic and `frontend.oidc.publicIssuer` is the single knob; Keycloak-later = new issuer value + a subject-sync job into the same FGA tuple space + callback redirect URIs. No shell changes needed.
-3. **Zone names stay as-is** — *holds*: the two zone sets are disjoint except both homes (resolved: rask home absorbs lance home's auth + landing) and the `/data`-as-project catch-all trap (resolved: reserved-segment guard). Chart-level corollary: the `web-` object prefix becomes universal.
-4. **Extend rask's tests/e2e, don't replace** — *holds and is purely additive*: rask `tests/` is playwright-only; every Python gate arrives with no counterpart. New evidence: it needs an execution vehicle (rask GH CI is docs-only) → merged Dagger module + Makefile; and rask's floating `>=0.20` lance dev-specs should be pinned at lance-ns levels so rask's e2e re-resolves rather than keeping two resolutions.
-5. **NATS HA / nack operator stays parked (#20)** — *holds*: rask's JetStream is on but streamless (decorative); lance-ns's stream-job + Dapr pubsub are the first real consumers, single nats subchart with lance-ns's richer values. rask's orchestrator loop is self-declared transitional toward a JetStream consumer — a real convergence hook, explicitly out of scope here.
+Decision 1, AGE on CNPG via ImageVolume: [ADR 0125](../adr/0125-age-on-cnpg-via-imagevolume-behind-its-own-gate-merge.md). Decisions 2–5 (Dex stays, zone names stay, extend rask's
+tests/e2e, NATS HA parked): [ADR 0126](../adr/0126-the-merge-s-other-four-decisions-dex-stays-zone-names-stay.md).
 
 ---
 

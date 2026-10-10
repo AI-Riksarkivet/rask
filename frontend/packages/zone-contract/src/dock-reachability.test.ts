@@ -75,7 +75,7 @@ const DOCKS = dockRoutes();
 describe('dock reachability', () => {
 	it('pins the docks the estate ships — one per zone that has one, all navigable', () => {
 		// 2026-08-04: docks belong INSIDE the zones and the global compositor is RETIRED
-		// (docs/architecture/global-workbench.md). A zone's dock composes that zone's own components
+		// (docs/adr/0135-a-dock-lives-inside-its-zone-2026-08-03.md). A zone's dock composes that zone's own components
 		// over its own stores and remotes — full fidelity, no cross-zone transport.
 		//
 		// THREE now, and every one at ZONE level (`/<zone>/workbench`). The lakehouse's briefly sat at

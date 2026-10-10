@@ -23,7 +23,7 @@ maintainers:
 # prod install with external infra can turn them off. k3s itself + helm are the
 # only out-of-chart bootstrap (scripts/k3s-install.sh).
 #
-# lance-ns merge (P4, "one control plane each"): lance-ns declared five subcharts —
+# lance-ns merge (P4, "one control plane each", docs/adr/0124-chart-unification-one-control-plane-each-one-object-store.md): lance-ns declared five subcharts —
 # dapr 1.18.1, nats 2.14.2, openfga 0.3.9, greptimedb-standalone 0.4.5, perses 0.22.0 —
 # and rask already ships all five at the IDENTICAL version and repository, so the dedupe
 # is lossless: no dependency was added, dropped, re-versioned, or aliased. Everything

@@ -8,6 +8,8 @@ original label (`P1.1`, `#38b`, `#3-A`, …), so a citation by label finds it th
 Each record is one numbered file, `NNNN-<slug>.md`, numbered in the order the decisions were
 recorded; the title keeps the original label. A new decision is a new file with the next number,
 and the history the comment rule in `CLAUDE.md` keeps out of code comments is recorded here.
+Records 0107–0137 are decisions that were made in architecture documents, audits and working plans
+before they had a record here; each names its source document and the date of the ruling.
 
 | ADR | Label | Decision |
 | --- | --- | --- |
@@ -117,3 +119,34 @@ and the history the comment rule in `CLAUDE.md` keeps out of code comments is re
 | [0104](0104-a-carried-blob-column-keeps-every-payload-and-its-field.md) |  | A carried blob column keeps every payload and its field metadata (LH-217, 2026-10-05) |
 | [0105](0105-a-training-run-is-a-work-order-and-only-an-engine-that-can.md) |  | A training run is a work order, and only an engine that can lose a record is resubmitted to (CP-044, 2026-10-05) |
 | [0106](0106-the-stage-write-is-one-module-both-engines-land-through-cp.md) |  | The stage write is one module both engines land through (CP-056 step 2, 2026-10-05) |
+| [0107](0107-keep-the-catalog-diy-not-lakekeeper-gravitino-unity-or-ducklake.md) |  | Keep the catalog DIY, not Lakekeeper, Gravitino, Unity or DuckLake (2026-09-02) |
+| [0108](0108-the-lance-ns-merge-is-total-and-the-medallion-replaces-rask-s.md) | R1, R2 | The lance-ns merge is total, and the medallion replaces rask's orchestration (R1, R2, 2026-07-24) |
+| [0109](0109-one-ray-cluster-on-the-latest-release-r3-2026-07-24.md) | R3 | One Ray cluster on the latest release (R3, 2026-07-24) |
+| [0110](0110-serialization-is-a-projection-from-gold-served-by-its-own.md) | R4, R25 | Serialization is a projection from gold, served by its own service (R4, R25, 2026-07-24) |
+| [0111](0111-gold-carries-its-lineage-as-a-jsonb-column-r26-2026-07-28.md) | R26 | Gold carries its lineage as a JSONB column (R26, 2026-07-28) |
+| [0112](0112-the-media-plane-absorbs-rask-s-discovery-and-viewing-r5-r6.md) | R5, R6 | The media plane absorbs rask's discovery and viewing (R5, R6, 2026-07-24) |
+| [0113](0113-the-zone-set-r8-r9-r15-r16-r17-r18-2026-07-27.md) | R8, R9, R15–R18 | The zone set (R8, R9, R15, R16, R17, R18, 2026-07-27) |
+| [0114](0114-lance-ns-s-frontend-toolchain-and-zone-directory-win-r10-r11.md) | R10, R11 | lance-ns's frontend toolchain and zone directory win (R10, R11, 2026-07-27) |
+| [0115](0115-dagger-tracks-the-newest-release-r12-2026-07-27.md) | R12 | Dagger tracks the newest release (R12, 2026-07-27) |
+| [0116](0116-the-otel-collector-is-the-only-log-shipper-r13-2026-07-27.md) | R13 | The OTel Collector is the only log shipper (R13, 2026-07-27) |
+| [0117](0117-nginx-is-retired-and-the-fastapi-gateway-is-the-in-cluster.md) | merge decision 4, R14 | nginx is retired, and the FastAPI gateway is the in-cluster edge (merge decision 4, R14, 2026-07-24) |
+| [0118](0118-common-merges-into-service-kit-r19-2026-07-27.md) | R19 | common merges into service-kit (R19, 2026-07-27) |
+| [0119](0119-the-ray-plane-service-is-compute-and-no-deployable-carries.md) | R20, R22 | The Ray-plane service is `compute`, and no deployable carries `-api` (R20, R22, 2026-07-28) |
+| [0120](0120-one-compute-lineage-layer-lineage-kit-r21-2026-07-27.md) | R21 | One compute-lineage layer, `lineage-kit` (R21, 2026-07-27) |
+| [0121](0121-raw-is-not-a-catalog-tier-and-ingest-is-its-own-service-r23.md) | R23, R24 | Raw is not a catalog tier, and ingest is its own service (R23, R24, 2026-07-28) |
+| [0122](0122-the-ray-plane-gets-a-standing-audit-r27-2026-07-28.md) | R27 | The Ray plane gets a standing audit (R27, 2026-07-28) |
+| [0123](0123-storage-is-registered-with-a-role-r28-2026-07-28.md) | R28 | Storage is registered with a role (R28, 2026-07-28) |
+| [0124](0124-chart-unification-one-control-plane-each-one-object-store.md) | P4 | Chart unification: one control plane each, one object store, every hook pod labelled (P4, 2026-07-24) |
+| [0125](0125-age-on-cnpg-via-imagevolume-behind-its-own-gate-merge.md) | merge decision 1 | AGE on CNPG via ImageVolume, behind its own gate (merge decision 1, 2026-07-24) |
+| [0126](0126-the-merge-s-other-four-decisions-dex-stays-zone-names-stay.md) | merge decisions 2–5 | The merge's other four decisions: Dex stays, zone names stay, e2e is extended, NATS HA is parked (2026-07-24) |
+| [0127](0127-an-existing-lance-table-enters-by-fragment-append-or-the.md) | ingest 1b | An existing Lance table enters by fragment append or the register door, never by overwrite (ingest 1b, 2026-08-07) |
+| [0128](0128-incremental-ingest-is-an-anti-join-against-bronze-on-a-cron.md) | ingest 1c | Incremental ingest is an anti-join against bronze, on a cron (ingest 1c, 2026-08-07) |
+| [0129](0129-ingest-needs-the-warehouse-and-namespace-never-the-table.md) | ingest 1d | Ingest needs the warehouse and namespace, never the table (ingest 1d, 2026-08-07) |
+| [0130](0130-a-manual-push-to-bronze-is-an-authorization-policy-not-a.md) | ingest 2 | A manual push to bronze is an authorization policy, not a tier guard (ingest 2, 2026-08-07) |
+| [0131](0131-annotations-are-derived-and-readiness-is-the-published-tag.md) | ingest 3/4 | Annotations are derived, and readiness is the `published` tag (ingest 3/4, 2026-08-07) |
+| [0132](0132-the-two-cascade-heads-are-distinct-events-and-both-fire.md) | §10 | The two cascade heads are distinct events, and both fire (2026-08-15) |
+| [0133](0133-a-synchronous-head-s-trigger-rides-the-caller-retry-contract.md) | §11 | A synchronous head's trigger rides the caller-retry contract (2026-08-15) |
+| [0134](0134-the-stage-workflow-review-and-its-operator-surface-superseded.md) | §12 | The stage workflow review and its operator surface (2026-08-16, superseded by 0088) |
+| [0135](0135-a-dock-lives-inside-its-zone-2026-08-03.md) |  | A dock lives inside its zone (2026-08-03) |
+| [0136](0136-bulk-labeling-is-a-mode-of-the-task-and-columns-carry-recipes.md) |  | Bulk labeling is a mode of the task, and columns carry recipes (2026-08-09) |
+| [0137](0137-model-endpoints-are-ray-serve-discovered-by-the-labeling.md) |  | Model endpoints are Ray Serve, discovered by the `labeling` user_config (2026-08-09) |

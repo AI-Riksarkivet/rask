@@ -1,10 +1,7 @@
 # The global workbench — built, shipped, RETIRED
 
-*Final ruling 2026-08-03 (evening). The cross-zone compositor zone is DELETED. `@rask/dockview`
-stays and is now used the way it should have been from the start: **a dock lives INSIDE its zone**,
-composing that zone's own components over one shared store. `/explorer/workbench` (results + atlas
-+ player over one search) is the estate's ONE dock — see "The standing decision" for why it is the
-only one.*
+*The cross-zone compositor zone is DELETED. `@rask/dockview` stays, and a dock lives INSIDE its zone, composing that
+zone's own components over one shared store. The decision: [ADR 0135](../adr/0135-a-dock-lives-inside-its-zone-2026-08-03.md).*
 
 ## Why it was retired
 
@@ -113,50 +110,9 @@ worked. It was still wrong, for reasons that were on the record before it was bu
   `ViewSidebar`, the `dock-layout-library` backend envelope, and the dock-reachability gate
   (now an EXACT pin, not a floor: `['/explorer/workbench']`).
 
-## The standing decision (final, 2026-08-03 evening)
+## The standing decision
 
-This section replaces an earlier "ONE global workbench, or none" ruling that the retirement above
-overturned. Two rulings landed after it, in this order:
-
-- **A dock lives INSIDE its zone.** Not a compositor, not custom elements. A dock panel is the
-  zone's REAL component, importing the zone's own remote functions and sharing one store through
-  `createContext` — which is precisely what an element could never do (endpoints are per-app; a
-  `$app`-bound component cannot be mounted from a foreign bundle), and why the compositor's panels
-  had to be mirrored copies. That fidelity cost, not the bundle size, is what retired it.
-- **One dock per zone that earns one, at ZONE level — three today.** The instruction that shaped
-  this was *"why are you putting workbench on lineage? … **start with** workbench actually only in
-  media"*, and it carried two separate corrections that were briefly collapsed into one. The first
-  is permanent: `/lakehouse/lineage/workbench` buried a ZONE surface inside one AREA, so it was
-  invisible from catalog or models — docks now live at `/<zone>/workbench`, full stop. The second
-  was sequencing, not cancellation: prove the recipe on ONE zone before spending it on three. That
-  was read as "media only, forever" for a while; it was not.
-
-  The explorer's dock shipped and was proven end to end (results → atlas ring → player, saved views
-  persisting per subject), so lakehouse and compute followed on the same recipe — lakehouse with
-  lineage graph + runs + events over ONE `LineageState` plus the catalog's own tables and object
-  browser, compute with jobs + cluster + actors + serve over its own remotes.
-
-  A dock is still EARNED, never granted by symmetry: it costs ~100 KB deferred and only pays where a
-  multi-panel view of ONE subject is the actual workflow. train and studio carry placeholder data,
-  home is the catch-all, and the annotator is already a canvas — none of them qualify.
-  `dock-reachability.test.ts` pins the set EXACTLY, so neither a compositor, nor a symmetry-dock,
-  nor a nested path can return unnoticed.
-- **A panel renders the PAGE'S component (added 2026-08-04, after it was got wrong).** Retiring the
-  compositor removed the *structural* cause of mirroring — an element could not import a page
-  component — but not the habit. The in-zone panels were hand-written anyway: `/compute/actors` 416
-  lines against a 49-line `ActorsPanel` sharing nothing, and the same for cluster, jobs, serve and the
-  run board. Five of twelve panels were mirrors while the record, the skill and the PR all claimed
-  none were. The view now lives in one component the route and the panel both render; where the two
-  read different sources, rows arrive as a PROP so the dock keeps its shared store.
-
-- **Panels' domain code stays in its zone** — the lesson of the `@rask/panels` reversal, and now
-  structural rather than a rule to remember: with the dock inside the zone there is no other place
-  for a panel to live. `frontend/packages/*` stays mechanism-only (`@rask/dockview`, `@rask/flow`).
-- **The plan executed spike-first** — one panel proved light-DOM styling and move-without-remount
-  before anything else was built; the work file that tracked it is deleted (see the header).
-- **Iframes remain rejected** for first-party panels (they are the *untrusted-code* tool — VS Code
-  webviews, Grafana plugins) — though the dockview fork's never-re-parent guarantee makes them
-  viable if an untrusted-plugin surface ever appears.
+[ADR 0135](../adr/0135-a-dock-lives-inside-its-zone-2026-08-03.md) (2026-08-03, with the panel rule of 2026-08-04).
 
 ---
 

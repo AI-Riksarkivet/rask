@@ -5,7 +5,7 @@
 # GATED (audit 2026-07-27 defect 3): this file rendered UNCONDITIONALLY — two graph stores in one
 # render, with the un-buildable ghcr.io/REPLACE-ME extension image shipping by default. Decision:
 # the OLD apache/age StatefulSet stack (age-postgres.yaml, age.enabled=true) stays the default until
-# the CNPG-AGE extension image is real; this AGE-on-CNPG cutover (lance-ns-merge.md decision 1 / P4:
+# the CNPG-AGE extension image is real; this AGE-on-CNPG cutover (docs/adr/0125-age-on-cnpg-via-imagevolume-behind-its-own-gate-merge.md:
 # stock image + ImageVolume, docs/CNPG-AGE.md) is opt-in via age.cnpgCluster.enabled, mutually
 # exclusive with age.enabled (the guard above fails the render on both), and the extension image is
 # required() from values so no placeholder can ever render.

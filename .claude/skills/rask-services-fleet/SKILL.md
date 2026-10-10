@@ -5,7 +5,7 @@ description: Gateway (:8888) routing across the rask backend fleet — which ser
 
 # rask services fleet (gateway + per-domain backends)
 
-The day-to-day backend map. The **gateway** on `:8888` is a stateless reverse proxy that path-routes `/api/*` to per-domain services. The old `viewer` monolith is gone; the batches/orchestrator plane died at P7a; and the **R6/R20 media wave (2026-07-28) retired core-api, search-api, and volumes-api** — the S3 object browser now lives in the **explorer viewer** (`/api/explorer/object*`), and lines/EAD FTS re-land as catalog-governed Lance tables behind `/api/explorer/search` (docs/architecture/lance-ns-merge.md). `scripts/dev-micro.sh` is the source of truth for the process list + ports.
+The day-to-day backend map. The **gateway** on `:8888` is a stateless reverse proxy that path-routes `/api/*` to per-domain services. The old `viewer` monolith is gone; the batches/orchestrator plane died at P7a; and the **R6/R20 media wave (2026-07-28) retired core-api, search-api, and volumes-api** — the S3 object browser now lives in the **explorer viewer** (`/api/explorer/object*`), and lines/EAD FTS re-land as catalog-governed Lance tables behind `/api/explorer/search` (docs/adr/0112-the-media-plane-absorbs-rask-s-discovery-and-viewing-r5-r6.md). `scripts/dev-micro.sh` is the source of truth for the process list + ports.
 
 ⚠️ **The frontend's dev proxy is per-zone and inconsistent** — there is no single "the SPA targets :8888":
 

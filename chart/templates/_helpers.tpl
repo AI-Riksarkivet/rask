@@ -548,7 +548,7 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- define "lance.openfgaHost" -}}{{ .Release.Name }}-openfga{{- end -}}
 {{- define "lance.dexHost" -}}{{ .Release.Name }}-dex{{- end -}}
 {{/* The ONE object store's S3 host — the Service in front of the StatefulSet in templates/minio.yaml.
-     P4's store unification still holds ("the ONE store"); what changed with LH-133 is the store and
+     P4's store unification (docs/adr/0124-chart-unification-one-control-plane-each-one-object-store.md) still holds ("the ONE store"); what changed with LH-133 is the store and
      therefore its Service name, since a first-party StatefulSet names its own Service
      to name is deleted, so fleet + lakehouse + observability all resolve the same endpoint. */}}
 {{- define "lance.minioHost" -}}{{ include "rask.fullname" . }}-minio{{- end -}}
@@ -797,7 +797,7 @@ the external Vault WITHOUT falling back to plaintext secrets in pod env (the clo
 the app-api-token the sidecar stamps — they must NEVER be reachable through the public edge, which would
 otherwise proxy them via the gateway's own sidecar (stamping that same trusted token). ONE source for the
 gateway's 403 blocks — add any new Dapr-delivered lineage route here. Since the nginx gateway retired
-(lance-ns-merge.md P1/P4) this renders a COMMA-separated list into the fleet ConfigMap's
+(docs/adr/0117-nginx-is-retired-and-the-fastapi-gateway-is-the-in-cluster.md) this renders a COMMA-separated list into the fleet ConfigMap's
 RASK_LINEAGE_SIDECAR_ONLY_ROUTES, consumed by the FastAPI gateway's `lineage_sidecar_guard` middleware
 (services/gateway). `lineage-events` matches the app's subscription route (lineage/api/dapr.py). The
 reconcile binding is blocked even when reconcile is disabled (the route isn't mounted then — belt and
