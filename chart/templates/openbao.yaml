@@ -102,16 +102,17 @@ spec:
       {{- /* The Kubernetes auth backend reviews ESO's login with THIS pod's token and reads the API
            server's CA beside it (openbao-auth-delegator.yaml). ESO is a prerequisite, so it always holds one. */}}
       automountServiceAccountToken: true
+      {{- if .Values.security.infraContexts.enabled }}
+      # Per-image uid/fsGroup from values (the audit: data/secret holders need runAsUser+fsGroup for
+      # their PVCs — no blind helper reuse). Flag default OFF: flip after the kind boot check (§7a).
       securityContext:
-        {{- if .Values.security.infraContexts.enabled }}
-        # Per-image uid/fsGroup from values (the audit: data/secret holders need runAsUser+fsGroup for
-        # their PVCs — no blind helper reuse). Flag default OFF: flip after the kind boot check (§7a).
         runAsNonRoot: true
         runAsUser: {{ .Values.security.infraContexts.openbao.runAsUser }}
-        seccompProfile: { type: RuntimeDefault }
+        {{- with .Values.security.infraContexts.openbao.fsGroup }}
+        fsGroup: {{ . }}
         {{- end }}
-        {{- /* The seed (uid 65532) reads 0400 credential volumes, readable only through the pod's fsGroup. */}}
-        fsGroup: {{ and .Values.security.infraContexts.enabled .Values.security.infraContexts.openbao.fsGroup | default 65532 }}
+        seccompProfile: { type: RuntimeDefault }
+      {{- end }}
       {{- if or $mint $nats }}
       initContainers:
         {{- /* MINT: a candidate pair per signing identity on a memory volume the server never mounts, and nsc and nk for the seed's bus users
@@ -528,10 +529,14 @@ spec:
         {{- if .Values.openbao.devMode }}
         {{- include "lance.tmpVolume" . | nindent 8 }}
         {{- /* GENERATED IN THE CLUSTER by ESO (external-secrets.yaml); the pod starts once it exists. */}}
-        - { name: dev-credentials, secret: { secretName: {{ include "lance.fullname" . }}-dev-credentials, defaultMode: 0400 } }
+        {{- /* 0444, not 0400 + an fsGroup: the seed (uid 65532) reads these, and an fsGroup would also make the pod's SA token
+               0640 root:<fsGroup>, which the server cannot read once it drops to its own user, so its Kubernetes auth would
+               review ESO's logins with ESO's own token and refuse them (measured 2026-10-10, rev 293). The pod's containers
+               are the store's own server, mint and seed. */}}
+        - { name: dev-credentials, secret: { secretName: {{ include "lance.fullname" . }}-dev-credentials, defaultMode: 0444 } }
         {{- if .Values.secrets.hfTokenInStore }}
         {{- /* THE OPERATOR'S BOOTSTRAP for third-party credentials (`make k3s-up` writes it from HF_TOKEN). */}}
-        - { name: supplied-credentials, secret: { secretName: {{ include "lance.fullname" . }}-supplied-credentials, optional: true, defaultMode: 0400 } }
+        - { name: supplied-credentials, secret: { secretName: {{ include "lance.fullname" . }}-supplied-credentials, optional: true, defaultMode: 0444 } }
         {{- end }}
         {{- if or $mint $nats }}
         - { name: signing, emptyDir: { medium: Memory, sizeLimit: 1Mi } }
