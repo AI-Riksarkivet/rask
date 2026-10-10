@@ -347,6 +347,20 @@ single file:
   its `--report` mode is an advisory whole-tree count and never gates. Passing the gate is a floor
   under the rule, not proof of conformance — only a reader can tell the three kinds apart.
 
+## Agent skills
+
+### Issue tracker
+
+GitHub Issues on `AI-Riksarkivet/rask`, one issue per register row (`LH-243: …`), ordered by the pinned `Phase 1 map` issue. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five default roles (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: root `CONTEXT.md` plus `docs/adr/`. See `docs/agents/domain.md`.
+
 ## Claude Code project config
 
 - All project-local config lives under `.claude/`. **No `.mcp.json` at repo root** by design — the svelte MCP server is registered at `local` scope via `make claude-bootstrap` (idempotent). The install command in the `Makefile` is the source of truth for which MCP servers this project needs.
