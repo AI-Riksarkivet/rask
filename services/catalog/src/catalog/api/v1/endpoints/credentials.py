@@ -71,7 +71,7 @@ async def vend_credentials(
     # [[LH-055]] WHICH branch this credential is for. Naming one narrows the grant rather than widening
     # it — writes land under that branch's own `<table>/tree/<branch>/` (its `data/` at the write tier, its
     # file directories at the maintain tier) and main drops to read — which is the isolation
-    # `lancemultibasebranchingblobv2.md` says the `tree/` layout exists to give: "storage ACLs can be
+    # `lance_docs/lancemultibasebranchingblobv2.md` says the `tree/` layout exists to give: "storage ACLs can be
     # read-only on main and write-only on the branch". Absent = main, exactly as before.
     branch: Annotated[
         str,

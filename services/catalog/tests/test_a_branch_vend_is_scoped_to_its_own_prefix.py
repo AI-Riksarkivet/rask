@@ -1,7 +1,7 @@
 """A branch-scoped write credential may write the BRANCH, and only read main ([[LH-055]]).
 
 THE FORMAT SAYS SO, and this is the mechanism it names rather than one chosen here.
-`lancemultibasebranchingblobv2.md` § "Building block 3" gives branch isolation as a property of the
+`lance_docs/lancemultibasebranchingblobv2.md` § "Building block 3" gives branch isolation as a property of the
 LAYOUT: branch data lives physically under `tree/<branch>/`, which yields "strong governance isolation
 (branch data physically under `tree/<branch>/`, so storage ACLs can be **read-only on main and
 write-only on the branch**)". `lance_docs/file_format.md` fixes the path: branch files sit at

@@ -554,7 +554,7 @@ def build_session_policy(
             raise InvalidInputError(f"branch {branch!r} may not contain an IAM wildcard metacharacter")
         if ".." in branch.split("/"):
             raise InvalidInputError(f"branch {branch!r} may not traverse out of the table's prefix")
-    # READ-ONLY ON MAIN, WRITE-ONLY ON THE BRANCH — `lancemultibasebranchingblobv2.md` § "Building
+    # READ-ONLY ON MAIN, WRITE-ONLY ON THE BRANCH — `lance_docs/lancemultibasebranchingblobv2.md` § "Building
     # block 3" names this as the governance isolation the `tree/` layout exists to give. Main stays
     # READABLE because a branch manifest references its parent's fragments through a base pointing at
     # the dataset root; a credential that could not read them would be scoped to less than the branch is.

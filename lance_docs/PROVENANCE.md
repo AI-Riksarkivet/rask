@@ -143,6 +143,17 @@ the process:
   with `OMP_NUM_THREADS` unset. pyarrow's CPU pool reports `pa.cpu_count() == 64`, and importing
   pyarrow and running a threaded Parquet read added 68 threads.
 
+## A digest, not a copy
+
+`lancemultibasebranchingblobv2.md` is the one file here that is not upstream text. It is a digest
+compiled on 2026-09-02 from four LanceDB blog posts and one lance.org spec page, which its own header
+lists with authors and dates. Blog posts carry no commit, so nothing can be re-vendored or diffed. A
+claim from it is a paraphrase of a design write-up and is weaker than the bundles above: check a
+load-bearing one against `file_format.md` or the installed pylance. Its readers are
+`service_kit/lakehouse/blobs.py` (Blob V2 storage kinds), `catalog/core/vending.py` and
+`catalog/api/v1/endpoints/credentials.py` (branch write isolation under `tree/<branch>/`), and
+`services/catalog/tests/test_a_branch_vend_is_scoped_to_its_own_prefix.py`.
+
 ## Re-vendoring
 
 ```bash
