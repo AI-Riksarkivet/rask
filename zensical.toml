@@ -13,46 +13,22 @@ nav = [
   ]},
   { "Getting Started" = [
     { "Quick Start" = "getting-started/index.md" },
-    { "Concepts" = "getting-started/concepts.md" },
     { "Configuration" = "getting-started/configuration.md" },
   ]},
   { "Architecture" = [
     { "Overview" = "architecture/index.md" },
     { "Monorepo Layout" = "architecture/layout.md" },
-    { "Data Flow" = "architecture/data-flow.md" },
-    { "Data Model" = "architecture/data-model.md" },
     { "Deployment" = "architecture/deployment.md" },
-    { "Microservices (proposed)" = "architecture/microservices.md" },
-    { "Frontend Microfrontends" = "architecture/frontend-microfrontends.md" },
     { "Lance-NS Merge" = "architecture/lance-ns-merge.md" },
-    { "Deep Dives" = [
-      { "System Overview" = "architecture/system-overview.md" },
-      { "Viewer Backend" = "architecture/viewer-backend.md" },
-      { "Viewer Design" = "architecture/viewer-design.md" },
-      { "Frontend Monorepo" = "architecture/frontend-monorepo.md" },
-    ]},
   ]},
   { "Packages" = [
     { "Overview" = "packages/index.md" },
-    { "HTR" = "packages/htr.md" },
     { "Storage" = "packages/storage.md" },
-  ]},
-  { "Components" = [
-    { "Overview" = "components/index.md" },
-    { "Frontends" = "components/frontends.md" },
-    { "Services" = "components/services.md" },
-    { "UI Components" = "components/ui.md" },
-  ]},
-  { "Projects" = [
-    { "Overview" = "projects/index.md" },
-    { "Runner" = "projects/runner.md" },
-    { "Viewer" = "projects/viewer.md" },
   ]},
   { "Lakehouse Platform" = [
     { "Overview" = "lakehouse/index.md" },
     { "Design Records" = [
       { "Architecture & Status" = "ARCHITECTURE.md" },
-      { "System Sketch" = "SYSTEM-SKETCH.md" },
       { "End-to-End Flow" = "FLOW.md" },
       { "Data Contract" = "DATA-CONTRACT.md" },
       { "Decisions" = [

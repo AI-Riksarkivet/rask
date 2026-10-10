@@ -6,12 +6,12 @@ the root `packages/`, TS/Svelte libraries in `frontend/packages/`.
 
 | Package | Language | Imported by | Docs |
 |---|---|---|---|
-| `runners/htr` (the sealed HTR runner) | Python | runner, scripts | [HTR](htr.md) · [API reference](../reference/htr.md) |
+| `runners/htr` (the sealed HTR runner) | Python | runner, scripts | — |
 | `packages/storage` | Python | runner, the media viewer (objects browser), gateway/ray via service-kit, scripts | [Storage](storage.md) · [API reference](../reference/storage.md) |
 | `packages/service-kit` | Python | gateway, ray, the lance planes (`service_kit.media`/`lancekit`/`lakehouse`) | — |
 | `packages/ray-kit` | Python | the compute service, medallion | — |
 | `packages/validate` | Python | (standalone; not yet wired into a component) | — |
-| `frontend/packages/ui` (`@rask/ui`) | TS / Svelte | all 7 frontend apps | [UI Components](../components/ui.md) |
+| `frontend/packages/ui` (`@rask/ui`) | TS / Svelte | all 7 frontend apps | — |
 | `frontend/packages/api` (`@rask/api`) | TS | overview, compute, discover | — |
 | `frontend/packages/zone-contract` (`@rask/zone-contract`) | TS | the cross-zone-reload gate (a test, not a lint rule) | — |
 

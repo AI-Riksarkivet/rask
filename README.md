@@ -152,7 +152,7 @@ Everything hermetic runs identically on your machine: `dagger call <fn>` == the 
 | `make dev-gc`                           | Reclaim the dev loop's two disk leaks (Dagger cache + dev registry)   |
 
 See the `Makefile` (`make help`) for the complete list; `docs/` carries the depth
-(`docs/architecture/system-overview.md`, `layout.md`, `deployment.md`).
+(`docs/architecture/layout.md`, `docs/architecture/deployment.md`).
 
 [uv]: https://docs.astral.sh/uv/
 [Bun]: https://bun.sh

@@ -112,7 +112,7 @@ No — related species, different format and bigger scope on our side:
 | Data movement | none (catalog only) | the event-driven medallion cascade + Ray compute + training are IN scope |
 | Data contracts as a product | no — like us, the table format IS the contract | no registry either; adds the quality/FGA/reconcile gates on top |
 
-We deliberately mined Lakekeeper for patterns (`docs/SYSTEM-SKETCH.md` has the full diff): vended
+We deliberately mined Lakekeeper for patterns: vended
 credentials with `expires_at_millis`, idempotency keys, scoped event emission — adopted; their
 route-enum conformance markers — skipped. Neither system is a "data contract product" like a
 schema registry; the difference is that Iceberg's contract semantics (column-ID-based evolution)
@@ -226,5 +226,5 @@ data.
 ## Related docs
 [`ARCHITECTURE.md`](ARCHITECTURE.md) · [`DURABILITY.md`](DURABILITY.md) (CAS validation) ·
 [`RAY-TRAIN.md`](RAY-TRAIN.md) (D1 pins, D4 registry) · [`RESILIENCE.md`](RESILIENCE.md)
-(delivery semantics) · [`SYSTEM-SKETCH.md`](SYSTEM-SKETCH.md) (Lakekeeper diff) ·
+(delivery semantics) ·
 [`docs/adr/0012-schema-declaration-claim-check-hardening.md`](adr/0012-schema-declaration-claim-check-hardening.md) (schema declaration + claim-check hardening, the tracked gaps)

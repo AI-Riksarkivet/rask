@@ -71,6 +71,5 @@ Connect with `postgresql://rask:rask@localhost:5432/rask`.
 | Storybook (@rask/ui) | `make storybook` (→ `:6006`) |
 | Download the EAD source files | `make harvest-ead` |
 
-Next: read **[Concepts](concepts.md)** for the data model, then
-**[Configuration](configuration.md)** for the environment variables that wire it
+Next: read **[Configuration](configuration.md)** for the environment variables that wire it
 all to storage and clusters.

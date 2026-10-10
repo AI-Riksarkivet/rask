@@ -276,8 +276,7 @@ models, GPU packing, output format) this file deliberately does not describe. An
 only ever an external identifier someone else owns — a model repo, a source URL, the GitHub org — never
 a description of what rask is.
 
-See `docs/architecture/system-overview.md` for the full diagrams. Key facts that aren't obvious from any
-single file:
+Key facts that aren't obvious from any single file:
 
 - **LANCE ONLY, ALWAYS — a permanent ruling (owner, 2026-08-15), not a current-scope note.** The catalog
   stores Lance tables and **no other format, ever**. A create naming a non-Lance format is refused 400

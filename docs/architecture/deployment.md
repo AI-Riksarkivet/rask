@@ -78,7 +78,7 @@ dockerfiles died with their services in the R6/R20 wave.
 
 The frontend topology those images serve — the Turborepo vertical-microfrontend
 proxy, the shared `@rask/ui` shell, and per-app `kit.paths.base` — is documented in
-[Frontend microfrontends](frontend-microfrontends.md).
+the `rask-frontend` project skill (`.claude/skills/rask-frontend`).
 
 ## Ray cluster & Serve (local)
 

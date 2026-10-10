@@ -15,7 +15,6 @@ Its documentation estate lives here. The canonical merge rulings are in
 The load-bearing records, in reading order:
 
 - [Architecture & Status](../ARCHITECTURE.md) — what exists, what state it is in
-- [System Sketch](../SYSTEM-SKETCH.md) — where we are, the holes, how we differ from Lakekeeper
 - [End-to-End Flow](../FLOW.md) — the implemented pipeline, in order
 - [Data Contract](../DATA-CONTRACT.md) — what it is, how it is enforced
 - [Decisions](../adr/README.md) — consolidated architecture decisions

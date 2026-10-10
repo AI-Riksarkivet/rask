@@ -62,15 +62,4 @@ flowchart TB
 ## In this section
 
 - **[Monorepo Layout](layout.md)** — the two language-pure workspace planes and what lives where.
-- **[Data Flow](data-flow.md)** — image → ALTO XML, the batch lifecycle, and the frontend ↔ API ↔ storage map.
 - **[Deployment](deployment.md)** — clusters, container images, CI, and how it ships.
-- **[Microservices](microservices.md)** — the service decomposition history (June 2026) and its R6/R20 retirement down to gateway + ray + controlplane.
-
-## Deep-dive notes (in-repo)
-
-Longer design documents under `docs/architecture/` go beyond this summary:
-[`system-overview.md`](system-overview.md),
-[`viewer-backend.md`](viewer-backend.md) *(superseded — history/rationale for the dissolved viewer)*,
-[`viewer-design.md`](viewer-design.md) *(superseded — history/rationale for the dissolved viewer)*,
-[`frontend-microfrontends.md`](frontend-microfrontends.md),
-[`frontend-monorepo.md`](frontend-monorepo.md).

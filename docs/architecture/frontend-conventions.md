@@ -32,7 +32,7 @@ Scope: the 7 SvelteKit microfrontends — the 6 domain apps under
 `@rask/ui` design system, and the `@rask/api` data client. All of it lives in the
 `frontend/` JS/TS plane, its own bun + Turborepo workspace root, so every task is
 scoped from the repo root (`bun --cwd=frontend run <task>`). It assumes the architecture in
-`frontend-microfrontends.md` and `frontend-monorepo.md` — read those for the
+the `rask-frontend` project skill (`.claude/skills/rask-frontend`) — read that for the
 _why_; this doc is the _rules_.
 
 **How to read each concern.** Every section gives:
@@ -441,7 +441,7 @@ per-app asset prefix.
 - Hardcoding `/default/...` in links; use `base` (and derive `project` from it).
 - A custom error page that doesn't go through `@rask/ui/shell`'s `AppError`.
 - Dynamic/multi-project base paths — deferred **on purpose** (single project
-  `default` for now; see `frontend-microfrontends.md`).
+  `default` for now; see the `rask-frontend` skill).
 
 **Gate:** SSR/hydration crashes surface at `vite build` (in `turbo run build`)
 and `svelte-check`. Base-path correctness and `+error.svelte`/`AppError` usage
@@ -455,7 +455,7 @@ rask **deliberately keeps routing-based MFE zones** — 7 independent
 `svelte-adapter-bun` SSR apps, each at `/default/<domain>`, composed behind the
 Turborepo microfrontends proxy. This overrides the generic "start with a
 monolith" advice: the split is intentional, owned, and documented in
-`frontend-microfrontends.md`. Do not propose collapsing it.
+the `rask-frontend` skill. Do not propose collapsing it.
 
 **THE zone contract** (`microfrontends.json`): each app declares a **fixed local
 port** and a `routing.paths` prefix; the proxy routes by it. Vite binds that

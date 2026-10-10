@@ -1277,7 +1277,7 @@ medallion:
   # (`--set openbao.enabled=false`): the medallion is a dummy producer with no OpenBao secret-fetch (unlike
   # the catalog), so with OpenBao on the plaintext S3 secret is withheld and it fails fast at boot. Real
   # compute is a Ray job at rask.
-  # ON by default: rask is a RAY-FIRST platform (docs/architecture/system-overview.md — Ray batch is
+  # ON by default: rask is a RAY-FIRST platform (Ray batch is
   # core, not an add-on), and a cascade that cannot compute is a cascade that emits lineage for data it
   # never wrote. Off was the demo-safe default and it made the shipped configuration the one nobody
   # runs in anger.

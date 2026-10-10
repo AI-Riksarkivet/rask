@@ -254,10 +254,8 @@ register's XC-043 now owns the passages below, except those it hands to LH-195, 
 - The **controlplane** service is named a Phase 1 component, and one counted row touches `services/controlplane`:
   LH-076, which moves its project listing onto `can_list_all_projects` (controlplane security.py:42,52). The CTL rows
   are gateway and notifications. Whether anything else there is wrong was not examined.
-- The stale docs (below): XC-043 (LOW) covers system-overview.md and microservices.md, and its closes-when grep also
-  catches the `/ingest-iiif` lines at data-flow.md:6 and data-model.md:6, and, among others, the `orchestrator` and
-  `volumes-api` lines at data-flow.md:82-104 and data-model.md:122,132. It does not cover data-flow.md's HTR content (:21-90, beyond the orchestrator lines :82 and :87),
-  medallion-data-flow.md §3, medallion-cascade.md §12, the four CLAUDE.md statements, or the chart and code comments.
+- The stale docs (below): XC-043 (LOW) does not cover medallion-data-flow.md §3, medallion-cascade.md §12, the four
+  CLAUDE.md statements, or the chart and code comments.
 
 ### 3. The FOCUS order (register lines 10-24) against the criteria
 
@@ -284,11 +282,6 @@ XC-078 with LH-064 (already in FOCUS), adds CP-029 with LH-226, LH-218 with LH-1
 
 | Doc:line | Claim | Code |
 |---|---|---|
-| docs/architecture/system-overview.md:40-61 | "a distributed image-to-ALTO-XML pipeline for the Swedish National Archives", batches DB, core-api/orchestrator | CLAUDE.md Architecture forbids exactly this description. The services tree has no core_api, orchestrator or batches (gateway `__init__.py`:223-272) |
-| system-overview.md:424-426; microservices.md:201 | "No event bus", "No auth" | bronze_arrival.py:38-43 (Dapr pub/sub); catalog security.py:50-160; ingest auth.py:1-30 |
-| microservices.md:205-242 | "Decision: do not adopt Dapr" | stage_runner.py:91-97; ingest `__init__.py`:161; workflow.py:252 |
-| system-overview.md:6; data-flow.md:6; microservices.md:17; data-model.md:6 | Ingestion is `POST /ingest-iiif` | No such route: producer.py:176-191; the comment at gateway `__init__.py`:229-235 says the row is gone. |
-| data-flow.md:21-111 | The whole page is the HTR Ray pipeline plus batches; only the header note (:6-9) mentions the medallion | No medallion content; see sections A and B |
 | medallion-data-flow.md:83-91 | Write path: lander "THE one Lance writer", catalog "create + register" | Deployed ingest commits through catalog `/commit` and bypasses the lander (runtime.py:723-744). `/produce` and `/ingest-media` write Lance directly (produce.py:235; media_produce.py:96-104). The lander's own docstring (lander.py:1-24) is also stale |
 | medallion-data-flow.md:98-104; CLAUDE.md Architecture ("driven by the ARRIVAL event rather than by the ingest call") | Every head goes bronze write → event → `/bronze-arrival` | The media head publishes its trigger directly (media_produce.py:251-283) |
 | medallion-cascade.md:142-153 | "medallion exposes no workflow management endpoints" | stage_ops.py:118; stage_runner_ops.py:85-149; rerun.py:214; api/train.py:259; promotions.py:282,313 |

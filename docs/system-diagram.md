@@ -14,8 +14,7 @@ xdg-open docs/system-diagram.html      # Linux
 ```
 
 This markdown is self-sufficient: you can read the whole system here without opening the HTML,
-and vice-versa. For the prose architecture see [`ARCHITECTURE.md`](./ARCHITECTURE.md); for the
-gap register + Lakekeeper diff see [`SYSTEM-SKETCH.md`](./SYSTEM-SKETCH.md).
+and vice-versa. For the prose architecture see [`ARCHITECTURE.md`](./ARCHITECTURE.md).
 
 > **What the HTML adds:** pick a flow tab, press **Space** to play, and watch each request hop
 > light up one wire + one node with its real payload on the side panel. Toggle the **data-plane
