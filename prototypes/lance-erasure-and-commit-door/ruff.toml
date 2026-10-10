@@ -1,0 +1,5 @@
+# Throwaway measurement scripts kept as a primary source (README.md): the repo's code rules do not apply.
+extend = "../../pyproject.toml"
+
+[lint]
+extend-ignore = ["F403", "F405", "ANN", "E501", "TID251", "SIM", "S301", "C408", "UP031", "RUF005", "PERF401", "F841", "E402"]
