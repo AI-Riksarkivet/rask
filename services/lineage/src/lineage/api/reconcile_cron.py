@@ -28,8 +28,10 @@ from lineage.core.config import LineageSettings, declared_columns_map, storage_o
 from lineage.core.metrics import record_base_drift, record_provenance_gaps
 from lineage.core.reconcile import (
     BACKFILLABLE_STATES,
+    MAIN_REF,
     read_dangling_blob_columns,
     read_latest_write_age_hours,
+    read_storage_branches,
     read_storage_schema,
     read_storage_version,
     read_storage_versions,
@@ -73,7 +75,10 @@ class SweepReport(BaseModel):
     dangling_blobs: dict[str, list[str]] = Field(default_factory=dict)
     stale: list[str] = Field(default_factory=list)
     contract_violations: dict[str, list[str]] = Field(default_factory=dict)
-    provenance_holes: dict[str, list[int]] = Field(default_factory=dict)
+    #: Versions on disk the graph held no WROTE edge for, keyed dataset -> ref -> versions ([[LH-282]]).
+    #: Main is keyed ``"main"``, the one name Lance forbids a branch to take, so the ref key is never
+    #: ambiguous; a branch keeps its own version sequence, so a version number alone names no commit.
+    provenance_holes: dict[str, dict[str, list[int]]] = Field(default_factory=dict)
     #: [[LH-279]] Datasets whose current manifest declares bases nothing sanctions, with those bases.
     base_drift: dict[str, list[str]] = Field(default_factory=dict)
     #: Governed tables the graph holds NO dataset node for — the commit->stage gap on a FIRST write,
@@ -169,9 +174,18 @@ def summarize_sweep(statuses: list[ReconcileStatus], *, governed: set[str] | Non
         dangling_blobs={s.dataset: s.dangling_blob_columns for s in statuses if s.dangling_blob_columns},
         stale=[s.dataset for s in statuses if s.stale],
         contract_violations={s.dataset: s.missing_declared_columns for s in statuses if s.missing_declared_columns},
-        provenance_holes={s.dataset: s.versions_without_lineage for s in statuses if s.versions_without_lineage},
+        provenance_holes={
+            s.dataset: holes
+            for s in statuses
+            if (holes := ({MAIN_REF: s.versions_without_lineage} if s.versions_without_lineage else {}) | s.branch_versions_without_lineage)
+        },
         base_drift={s.dataset: s.unrecorded_bases for s in statuses if s.unrecorded_bases},
     )
+
+
+def _hole_count(report: SweepReport) -> int:
+    """Every version without lineage across every dataset and every ref — main's and each branch's alike."""
+    return sum(len(versions) for refs in report.provenance_holes.values() for versions in refs.values())
 
 
 def record_sweep(report: SweepReport) -> None:
@@ -187,7 +201,7 @@ def record_sweep(report: SweepReport) -> None:
     """
     record_provenance_gaps(
         unknown_to_graph=len(report.unknown_to_graph) if report.unknown_to_graph is not None else None,
-        versions_below_tip=sum(len(v) for v in report.provenance_holes.values()),
+        versions_below_tip=_hole_count(report),
     )
     record_base_drift(len(report.base_drift))
 
@@ -267,7 +281,7 @@ def log_sweep(report: SweepReport) -> None:
             extra={
                 "datasets": report.provenance_holes,
                 "count": len(report.provenance_holes),
-                "versions": sum(len(v) for v in report.provenance_holes.values()),
+                "versions": _hole_count(report),
             },
         )
     log.info(
@@ -284,7 +298,7 @@ def log_sweep(report: SweepReport) -> None:
             "dangling_blobs": len(report.dangling_blobs),
             "stale": len(report.stale),
             "contract_violations": len(report.contract_violations),
-            "provenance_holes": sum(len(v) for v in report.provenance_holes.values()),
+            "provenance_holes": _hole_count(report),
             "base_drift": len(report.base_drift),
             "unknown_to_graph": len(report.unknown_to_graph) if report.unknown_to_graph is not None else None,
             "outbox_drained": report.outbox_drained,
@@ -356,7 +370,7 @@ async def _sweep(
         enumerated=enumerated,
         # Recover the per-version schema for a back-filled write too (#24) — pinned to the version
         # being back-filled so a mid-sweep write can't attach a later schema to the recovered edge.
-        read_schema=lambda uri, ver: run_in_threadpool(read_storage_schema, uri, opts, ver),
+        read_schema=lambda uri, ver, ref: run_in_threadpool(read_storage_schema, uri, opts, ver, ref),
         # Blob-pointer health (§9 P1 lifecycle) — the axis version comparison can't see: an
         # external payload deleted AFTER promotion changes no Lance version. Same shared probe
         # the quality gate runs; two 1-byte reads per blob column.
@@ -367,11 +381,15 @@ async def _sweep(
         # Provenance holes BELOW the tip — the axis the two-maxima version comparison is blind to. One
         # manifest-directory listing per dataset, the same one the freshness axis above already pays, and
         # it is what makes "a write's provenance survives it" true for a write that was later superseded.
-        read_versions=lambda uri: run_in_threadpool(read_storage_versions, uri, opts),
+        read_versions=lambda uri, ref: run_in_threadpool(read_storage_versions, uri, opts, ref),
         # Which of those holes are real. A compaction/index/config version commits with no lineage BY
         # DESIGN, so classifying is what keeps the finding worth reading; one transaction read per hole,
         # and a healthy dataset has none.
-        read_operations=lambda uri, versions: run_in_threadpool(read_version_operations, uri, opts, versions),
+        read_operations=lambda uri, versions, ref: run_in_threadpool(read_version_operations, uri, opts, versions, ref),
+        # EVERY BRANCH, on the same hole axis ([[LH-282]]): under D3 every table writer writes branches, and
+        # a branch write whose event was lost is otherwise unattributed for good. Read from `_refs/branches/`,
+        # one small listing per dataset.
+        read_branches=lambda uri: run_in_threadpool(read_storage_branches, uri, opts),
         # BASE DRIFT ([[LH-279]]): the bases each readable dataset declares now that the catalog never
         # sanctioned, judged against its record on the catalog's control root. A state compare, because
         # retention reclaims the `UpdateBases` version while the tip still declares the base.

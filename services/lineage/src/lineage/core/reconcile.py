@@ -96,8 +96,25 @@ def read_storage_version(uri: str, storage_options: dict[str, str]) -> int | Non
         raise StorageUnreadable(reason) from exc
 
 
-def read_storage_schema(uri: str, storage_options: dict[str, str], version: int) -> SchemaFields | None:
-    """The on-disk Lance column schema AT ``version`` as OpenLineage facet fields — ``None`` when unreadable.
+#: The name Lance reserves for the main branch (lance_docs/file_format.md, Branch Name rule 7: a branch
+#: "Cannot be named `main`"), so it can key main beside the branches in one map without colliding with one.
+MAIN_REF: Final = "main"
+
+
+def _at(dataset: lance.LanceDataset, ref: str | None, version: int) -> lance.LanceDataset:
+    """``dataset`` checked out at ``version`` ON ``ref`` — main when ``ref`` is ``None``.
+
+    The ``(branch, version)`` tuple rather than a bare number on a branch handle: a branch carries its own
+    version sequence (lance_docs/lancemultibasebranchingblobv2.md, "time travel within a branch"), so a
+    bare number names main's version as readily as the branch's, and only the tuple says which.
+    ``lance.dataset(uri, version=(ref, n))`` refuses a tuple on pylance 12.0.0 ("version must be an integer
+    or a string", measured), so the checkout goes through the opened handle.
+    """
+    return dataset.checkout_version((ref, version)) if ref is not None else dataset.checkout_version(version)
+
+
+def read_storage_schema(uri: str, storage_options: dict[str, str], version: int, ref: str | None = None) -> SchemaFields | None:
+    """The on-disk Lance column schema AT ``version`` of ``ref`` as OpenLineage facet fields — ``None`` when unreadable.
 
     Used only when back-filling a lost write: the recovered WROTE edge then carries the per-version schema
     (#24). Pinned to the version being back-filled — an unpinned read would open the CURRENT snapshot, so a
@@ -105,14 +122,32 @@ def read_storage_schema(uri: str, storage_options: dict[str, str], version: int)
     edge. Best-effort — a read failure yields ``None`` and the edge stays schemaless.
     """
     try:
-        return facet_fields(lance.dataset(uri, storage_options=storage_options, version=version, session=shared_lance_session()).schema)
+        if ref is None:
+            return facet_fields(lance.dataset(uri, storage_options=storage_options, version=version, session=shared_lance_session()).schema)
+        return facet_fields(_at(lance.dataset(uri, storage_options=storage_options, session=shared_lance_session()), ref, version).schema)
     except BaseException as exc:
         _swallow_dataset_error(exc)
         return None
 
 
-def read_storage_versions(uri: str, storage_options: dict[str, str]) -> list[int] | None:
-    """Every version RETAINED on disk at ``uri``, ascending — ``None`` when the dataset is unreadable.
+def read_storage_branches(uri: str, storage_options: dict[str, str]) -> list[str] | None:
+    """Every branch the dataset at ``uri`` holds, by name — ``None`` when the dataset is unreadable.
+
+    Read the way Lance exposes them: ``branches.list()`` answers from ``_refs/branches/{name}.json``
+    (lance_docs/file_format.md, Branch Metadata Path), the one place a branch is registered. Never by
+    walking ``tree/``: a hierarchical name (``bugfix/issue-123``) is a nested directory there, so a
+    directory is not a branch. Nested branches are listed beside their parents — measured on pylance
+    12.0.0, a branch cut from branch ``b`` is listed with ``parent_branch='b'``.
+    """
+    try:
+        return sorted(lance.dataset(uri, storage_options=storage_options, session=shared_lance_session()).branches.list())
+    except BaseException as exc:
+        _swallow_dataset_error(exc)
+        return None
+
+
+def read_storage_versions(uri: str, storage_options: dict[str, str], ref: str | None = None) -> list[int] | None:
+    """Every version RETAINED on disk at ``uri`` on ``ref`` (main when ``None``), ascending — ``None`` when unreadable.
 
     The version axis compares two maxima, and a maximum cannot see a hole beneath it: a write whose
     lineage event was lost and which a later write then superseded leaves the graph's newest version
@@ -125,9 +160,23 @@ def read_storage_versions(uri: str, storage_options: dict[str, str]) -> list[int
 
     ``None`` rather than ``[]`` for an unreadable or absent dataset: an empty list would read as "this
     dataset has no versions", and every version the graph holds would then look like storage loss.
+
+    A BRANCH ANSWERS ONLY THE VERSIONS IT COMMITTED. Main's ``versions()`` lists main alone, and a branch's
+    own sequence is read off its checkout, ``checkout_version((ref, None)).versions()``
+    (lance_docs/lancemultibasebranchingblobv2.md, Python API). That listing opens at the branch's creation
+    manifest, numbered ``parent_version`` — measured on pylance 12.0.0, a branch cut at main v2 and written
+    twice lists ``[2, 3, 4]``, and its version 2 is the fork point, whose state is the parent's and whose
+    transaction pylance cannot read (``read_transaction(2)`` panics "not yet implemented"). So versions at
+    or below ``parent_version`` are dropped: they belong to the parent, whose own sweep answers for them.
+    A set, so a manifest listed twice counts once (LH-203 measured a nested branch's manifests listed
+    twice in its parent's ``versions()``; 12.0.0 lists each once, measured with a branch cut from a branch).
     """
     try:
-        return sorted(int(v["version"]) for v in lance.dataset(uri, storage_options=storage_options, session=shared_lance_session()).versions())
+        dataset = lance.dataset(uri, storage_options=storage_options, session=shared_lance_session())
+        if ref is None:
+            return sorted(int(v["version"]) for v in dataset.versions())
+        parent_version = int(dataset.branches.list()[ref]["parent_version"])
+        return sorted({int(v["version"]) for v in dataset.checkout_version((ref, None)).versions()} - set(range(parent_version + 1)))
     except BaseException as exc:
         _swallow_dataset_error(exc)
         return None
@@ -160,8 +209,8 @@ def _version_counters(entry: Mapping[str, object]) -> tuple[str, ...] | None:
     return present if len(present) == len(_COUNTER_KEYS) else None
 
 
-def read_version_operations(uri: str, storage_options: dict[str, str], versions: list[int]) -> dict[int, str | None]:
-    """The Lance transaction OPERATION behind each of ``versions`` — ``None`` where it cannot be named.
+def read_version_operations(uri: str, storage_options: dict[str, str], versions: list[int], ref: str | None = None) -> dict[int, str | None]:
+    """The Lance transaction OPERATION behind each of ``versions`` on ``ref`` — ``None`` where it cannot be named.
 
     Read only for versions already found to be provenance holes, which on a healthy dataset is none: the
     cost is one transaction-file read per anomaly, never one per version per tick. One dataset open serves
@@ -184,6 +233,9 @@ def read_version_operations(uri: str, storage_options: dict[str, str], versions:
     """
     try:
         dataset = lance.dataset(uri, storage_options=storage_options, session=shared_lance_session())
+        if ref is not None:
+            # The branch's own handle: its transactions and counters live under `tree/<ref>/`.
+            dataset = dataset.checkout_version((ref, None))
     except BaseException as exc:
         _swallow_dataset_error(exc)
         return dict.fromkeys(versions)
@@ -203,25 +255,25 @@ def read_version_operations(uri: str, storage_options: dict[str, str], versions:
         op = getattr(txn, "operation", None)
         if op is None or type(op) is lance.LanceOperation.BaseOperation:
             here, below = counters.get(version), counters.get(version - 1)
-            operations[version] = _unnamed_with_equal_counters(dataset, version) if here is not None and here == below else None
+            operations[version] = _unnamed_with_equal_counters(dataset, version, ref) if here is not None and here == below else None
             continue
         operations[version] = type(op).__name__
     return operations
 
 
-def _declared_bases(dataset: lance.LanceDataset, version: int) -> frozenset[tuple[str, bool]]:
-    """The bases ``version`` declares, by normalised path and root-ness — what a repoint changes."""
-    return frozenset((normalise(ref.path), ref.is_dataset_root) for ref in manifest_base_path_refs(dataset.checkout_version(version)))
+def _declared_bases(dataset: lance.LanceDataset, version: int, ref: str | None) -> frozenset[tuple[str, bool]]:
+    """The bases ``version`` of ``ref`` declares, by normalised path and root-ness — what a repoint changes."""
+    return frozenset((normalise(base.path), base.is_dataset_root) for base in manifest_base_path_refs(_at(dataset, ref, version)))
 
 
-def _unnamed_with_equal_counters(dataset: lance.LanceDataset, version: int) -> str | None:
+def _unnamed_with_equal_counters(dataset: lance.LanceDataset, version: int, ref: str | None) -> str | None:
     """:data:`INERT_UNKNOWN` when the bases match the version below too, :data:`BASES_CHANGED` when they do not.
 
     Paid only on a hole whose counters already matched, off the handle the caller opened. ``None`` when
     either version's bases cannot be read: an unread fact must not certify a version inert.
     """
     try:
-        here, below = _declared_bases(dataset, version), _declared_bases(dataset, version - 1)
+        here, below = _declared_bases(dataset, version, ref), _declared_bases(dataset, version - 1, ref)
     except BaseException as exc:
         _swallow_dataset_error(exc)
         return None
@@ -335,8 +387,8 @@ class _ReconcileRepo(Protocol):
     async def dropped_at(self, name: str) -> str | None: ...
     async def record_observed_drop(self, name: str, uri: str, observed_at: str) -> bool: ...
     async def latest_write_version(self, name: str) -> int | None: ...
-    async def write_versions(self, name: str) -> set[int]: ...
-    async def backfill_write(self, name: str, version: int, schema: SchemaFields | None = None) -> None: ...
+    async def write_versions(self, name: str, ref: str | None = None) -> set[int]: ...
+    async def backfill_write(self, name: str, version: int, schema: SchemaFields | None = None, ref: str | None = None) -> None: ...
 
 
 # The drift states that mean a real write's lineage event was LOST — storage has data the graph doesn't fully
@@ -400,11 +452,12 @@ async def reconcile_all(
     read_version: Callable[[str], Awaitable[int | None]],
     *,
     backfill: bool,
-    read_schema: Callable[[str, int], Awaitable[SchemaFields | None]] | None = None,
+    read_schema: Callable[[str, int, str | None], Awaitable[SchemaFields | None]] | None = None,
     read_dangling: Callable[[str], Awaitable[list[str]]] | None = None,
     read_age: Callable[[str], Awaitable[float | None]] | None = None,
-    read_versions: Callable[[str], Awaitable[list[int] | None]] | None = None,
-    read_operations: Callable[[str, list[int]], Awaitable[dict[int, str | None]]] | None = None,
+    read_versions: Callable[[str, str | None], Awaitable[list[int] | None]] | None = None,
+    read_operations: Callable[[str, list[int], str | None], Awaitable[dict[int, str | None]]] | None = None,
+    read_branches: Callable[[str], Awaitable[list[str] | None]] | None = None,
     read_unrecorded_bases: Callable[[str], Awaitable[list[str] | None]] | None = None,
     freshness_budget_hours: float = 0,
     declared: dict[str, list[str]] | None = None,
@@ -432,6 +485,12 @@ async def reconcile_all(
     skipped dataset — it reported 1,007 where the true answer was 127. An out-parameter rather than a
     second ``list_datasets()`` in the caller, because two listings of a live graph can disagree and the
     difference between them would surface as a table that appeared or vanished between two queries.
+
+    ``read_branches`` (optional, same threadpool wrapping) names the dataset's branches, and the hole axis
+    then runs on each one exactly as it runs on main ([[LH-282]]): under D3 every table writer writes
+    branches, and a branch write whose event was lost is otherwise unattributed for good. Branch holes ride
+    ``branch_versions_without_lineage``; the two-maxima tip comparison stays main's alone, because the hole
+    axis already covers a branch's whole sequence, its tip included.
 
     ``read_unrecorded_bases`` (optional, same threadpool wrapping) is the BASE-DRIFT axis ([[LH-279]]): the
     bases a readable dataset's current manifest declares that nothing sanctions, onto
@@ -527,7 +586,7 @@ async def reconcile_all(
         # check already classifies unreadable storage; a phantom violation would cry wolf).
         wanted = (declared or {}).get(summary.name)
         if wanted and storage_version is not None and read_schema is not None:
-            fields = await read_schema(uri, storage_version)
+            fields = await read_schema(uri, storage_version, None)
             if fields is not None:
                 present = {f.get("name") for f in fields}
                 status.missing_declared_columns = [c for c in wanted if c not in present]
@@ -535,13 +594,14 @@ async def reconcile_all(
             # Fix the drift as a side effect but keep the found status in the report — a subsequent sweep
             # will show it in_sync, proving the back-fill took. The schema read is pinned to the version
             # being back-filled, so a write landing mid-sweep can't attach a later schema to this edge.
-            schema = await read_schema(uri, storage_version) if read_schema is not None else None
+            schema = await read_schema(uri, storage_version, None) if read_schema is not None else None
             await repository.backfill_write(summary.name, storage_version, schema=schema)
         # Provenance holes BELOW the tip — the axis the two-maxima comparison above is blind to. Only
         # when storage is readable, on the same rule the freshness and declared-column axes follow: an
         # unreadable dataset is already the version check's finding.
         if read_versions is not None and storage_version is not None:
-            status.versions_without_lineage = await _recover_holes(
+            recover = partial(
+                _recover_holes,
                 repository,
                 summary.name,
                 uri,
@@ -550,6 +610,13 @@ async def reconcile_all(
                 read_schema=read_schema,
                 backfill=backfill,
             )
+            # ONE BUDGET PER DATASET, shared by main and every branch: a table's branch count is a writer's
+            # choice, and a per-ref cap would let it multiply one tick's back-fill work.
+            status.versions_without_lineage, budget = await recover(None, budget=MAX_HOLES_BACKFILLED_PER_TICK)
+            for ref in (await read_branches(uri) or []) if read_branches is not None else []:
+                holes, budget = await recover(ref, budget=budget)
+                if holes:
+                    status.branch_versions_without_lineage[ref] = holes
         results.append(status)
     return results
 
@@ -603,8 +670,8 @@ async def _newest_data_version(
     *,
     tip: int,
     floor: int | None,
-    read_versions: Callable[[str], Awaitable[list[int] | None]],
-    read_operations: Callable[[str, list[int]], Awaitable[dict[int, str | None]]],
+    read_versions: Callable[[str, str | None], Awaitable[list[int] | None]],
+    read_operations: Callable[[str, list[int], str | None], Awaitable[dict[int, str | None]]],
 ) -> int:
     """The newest version at or below ``tip`` that WROTE data, walking down from the tip.
 
@@ -615,65 +682,92 @@ async def _newest_data_version(
     Falls back to ``tip`` when nothing can be resolved, never to a guess: an unreadable listing, an empty
     candidate window, or a probe that finds no data operation all leave the comparison exactly as it was.
     """
-    on_disk = await read_versions(uri)
+    on_disk = await read_versions(uri, None)
     if on_disk is None:
         return tip
     candidates = sorted((v for v in on_disk if v <= tip and (floor is None or v > floor)), reverse=True)[:MAX_TIP_PROBE_VERSIONS]
     if not candidates:
         return tip
-    operations = await read_operations(uri, candidates)
+    operations = await read_operations(uri, candidates, None)
     for version in candidates:
         if operations.get(version) in DATA_OPERATIONS:
             return version
     return floor if floor is not None else tip
 
 
-async def _recover_holes(
+async def provenance_holes(
     repository: _ReconcileRepo,
     name: str,
     uri: str,
+    ref: str | None,
     *,
-    read_versions: Callable[[str], Awaitable[list[int] | None]],
-    read_operations: Callable[[str, list[int]], Awaitable[dict[int, str | None]]] | None,
-    read_schema: Callable[[str, int], Awaitable[SchemaFields | None]] | None,
-    backfill: bool,
-) -> list[int]:
-    """Versions on disk the graph holds no WROTE edge for — back-filled when ``backfill``, always reported.
+    read_versions: Callable[[str, str | None], Awaitable[list[int] | None]],
+    read_operations: Callable[[str, list[int], str | None], Awaitable[dict[int, str | None]]] | None,
+) -> tuple[list[int], dict[int, str | None]]:
+    """Versions of ``ref`` (main when ``None``) on disk the graph holds no WROTE edge for, and their operations.
 
     ONE-DIRECTIONAL, and it has to be: ``cleanup_old_versions`` reclaims old manifests, so a maintained
     dataset legitimately has versions in the graph that storage no longer holds. Reading that direction as
     a finding would turn every compacted dataset in the estate permanently red, which is how an axis ends
     up switched off. Only ``on_disk - in_graph`` is a hole.
 
-    The recovered provenance is the same minimal edge the tip back-fill writes — ``author='reconcile'``,
-    no inputs — because that is all storage can supply: it records THAT the version was written and its
-    schema, never who wrote it or what it derived from. That is a floor under the estate's provenance
-    claim, not a replacement for the producer's own event.
+    PER REF, on both sides. A branch keeps its own version sequence, so a branch write at version N and
+    main's version N are different commits: the graph's edges are read for the same ref the storage
+    listing names, and neither side may answer for the other's numbers.
+
+    The operations are returned beside the holes because the caller that recovers needs them to tell a
+    named data write from an unnameable one, and reading them twice would double the per-hole cost.
     """
-    on_disk = await read_versions(uri)
+    on_disk = await read_versions(uri, ref)
     if on_disk is None:
-        return []
-    holes = sorted(set(on_disk) - await repository.write_versions(name))
+        return [], {}
+    holes = sorted(set(on_disk) - await repository.write_versions(name, ref))
+    operations: dict[int, str | None] = {}
     if holes and read_operations is not None:
         # A compaction, an index build and a config change each commit a version and correctly emit no
         # lineage, so without this the axis reports every maintained dataset. Paid ONLY on the holes, which
         # is why the classifier can afford a transaction read at all.
-        operations = await read_operations(uri, holes)
+        operations = await read_operations(uri, holes, ref)
         holes = [v for v in holes if operations.get(v) not in MAINTENANCE_OPERATIONS]
+    return holes, operations
+
+
+async def _recover_holes(
+    repository: _ReconcileRepo,
+    name: str,
+    uri: str,
+    ref: str | None,
+    *,
+    read_versions: Callable[[str, str | None], Awaitable[list[int] | None]],
+    read_operations: Callable[[str, list[int], str | None], Awaitable[dict[int, str | None]]] | None,
+    read_schema: Callable[[str, int, str | None], Awaitable[SchemaFields | None]] | None,
+    backfill: bool,
+    budget: int,
+) -> tuple[list[int], int]:
+    """:func:`provenance_holes` on ``ref`` — back-filled ON THAT REF when ``backfill``, always reported.
+
+    Returns the holes and what is left of ``budget``, the dataset's per-tick back-fill allowance.
+
+    The recovered provenance is the same minimal edge the tip back-fill writes — ``author='reconcile'``,
+    no inputs — because that is all storage can supply: it records THAT the version was written, on which
+    ref, and its schema, never who wrote it or what it derived from. That is a floor under the estate's
+    provenance claim, not a replacement for the producer's own event.
+    """
+    holes, operations = await provenance_holes(repository, name, uri, ref, read_versions=read_versions, read_operations=read_operations)
     if not holes or not backfill:
-        return holes
+        return holes, budget
     # Every hole is REPORTED above; only a NAMED data operation is recovered. An unnameable version is a
     # gap the sweep can see and cannot explain, and a back-filled edge would answer it with a run that
     # never existed — indistinguishable from a real event once written.
     recoverable = [v for v in holes if operations.get(v) in DATA_OPERATIONS] if read_operations is not None else holes
-    for version in recoverable[:MAX_HOLES_BACKFILLED_PER_TICK]:
-        schema = await read_schema(uri, version) if read_schema is not None else None
-        await repository.backfill_write(name, version, schema=schema)
-    if len(recoverable) > MAX_HOLES_BACKFILLED_PER_TICK:
+    for version in recoverable[:budget]:
+        schema = await read_schema(uri, version, ref) if read_schema is not None else None
+        await repository.backfill_write(name, version, schema=schema, ref=ref)
+    if len(recoverable) > budget:
         # NAMED, never silent: a truncated recovery that logged nothing would report the full finding
         # while fixing part of it, and the next tick's smaller finding would read as progress nobody made.
         log.warning(
             "lineage_reconcile_holes_truncated",
-            extra={"dataset": name, "holes": len(holes), "recoverable": len(recoverable), "recovered": MAX_HOLES_BACKFILLED_PER_TICK},
+            extra={"dataset": name, "ref": ref or MAIN_REF, "holes": len(holes), "recoverable": len(recoverable), "recovered": budget},
         )
-    return holes
+    return holes, max(budget - len(recoverable), 0)

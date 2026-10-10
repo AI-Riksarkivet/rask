@@ -70,6 +70,10 @@ class ReconcileStatus(BaseModel):
     # write lost its event and was then superseded. Measured 2026-09-11 on the live estate: bronze$events
     # answered in_sync at 87/87 with versions 76, 80, 82 and 83 carrying no lineage at all.
     versions_without_lineage: list[int] = Field(default_factory=list)
+    # The same axis on each BRANCH, by branch name ([[LH-282]]). Apart from main's because a branch keeps its
+    # own version sequence: its version 3 and main's version 3 are different commits, so one flat list could
+    # not say which one lost its event.
+    branch_versions_without_lineage: dict[str, list[int]] = Field(default_factory=dict)
     # [[LH-279]] Bases the table's CURRENT manifest declares that nothing sanctions — not inside its own
     # root, not a configured external blob base, not in the catalog's base record. A manifest's base list
     # is writable by any holder of the table's write vend, so each is a writer's claim nobody with

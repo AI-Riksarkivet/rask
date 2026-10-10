@@ -826,8 +826,8 @@ class LineageRepository:
         rows = await fetch(self._pool, self._graph, cy.LATEST_WRITE_VERSION, {"name": name}, columns=1)
         return int(rows[0][0]) if rows and rows[0][0] is not None else None
 
-    async def write_versions(self, name: str) -> set[int]:
-        """EVERY main-ref Lance version the graph holds a ``WROTE`` edge for — the set, not the tip.
+    async def write_versions(self, name: str, ref: str | None = None) -> set[int]:
+        """EVERY Lance version on ``ref`` (main when ``None``) the graph holds a ``WROTE`` edge for — the set, not the tip.
 
         :meth:`latest_write_version` answers what the graph believes is CURRENT, which is the right answer
         for the drift classification and the wrong one for finding provenance holes: two maxima can agree
@@ -838,7 +838,10 @@ class LineageRepository:
         property would otherwise make the whole dataset unassessable, and a hole reported for a version
         that does exist is worse than the property being ignored.
         """
-        rows = await fetch(self._pool, self._graph, cy.WRITE_VERSIONS, {"name": name}, columns=1)
+        if ref is None:
+            rows = await fetch(self._pool, self._graph, cy.WRITE_VERSIONS, {"name": name}, columns=1)
+        else:
+            rows = await fetch(self._pool, self._graph, cy.BRANCH_WRITE_VERSIONS, {"name": name, "ref": ref}, columns=1)
         versions: set[int] = set()
         for row in rows:
             try:
@@ -1112,7 +1115,7 @@ class LineageRepository:
         jobs.sort(key=lambda j: j.name)
         return jobs
 
-    async def backfill_write(self, name: str, version: int, schema: SchemaFields | None = None) -> None:
+    async def backfill_write(self, name: str, version: int, schema: SchemaFields | None = None, ref: str | None = None) -> None:
         """Stamp the actual on-disk version onto the graph when a write's lineage event was lost (B4).
 
         The buildable half of the outbox problem: a crash between a Lance write and the sidecar publish drops
@@ -1123,10 +1126,16 @@ class LineageRepository:
         details. ``schema`` (the on-disk column schema reconciliation read) rides the same edge so the
         recovered version carries its per-version schema (#24). The dataset node must already exist (it has
         the dataSource URI reconciliation read from).
+
+        ``ref`` names the BRANCH the version is on ([[LH-282]]); ``None`` is main. It is stamped on the edge
+        exactly as an ingested branch write stamps it (``SET_WROTE_REF``), so the recovered edge answers the
+        branch's own version set and never main's.
         """
-        # Spec-valid UUID runId, deterministic on the (name, version) seed so re-running reconcile MERGEs
-        # the same (:Run) instead of duplicating it — the readable seed is not the id.
-        rid = run_id_for(f"reconcile-{name}-v{version}")
+        # Spec-valid UUID runId, deterministic on the (name, ref, version) seed so re-running reconcile
+        # MERGEs the same (:Run) instead of duplicating it — the readable seed is not the id. The ref joins
+        # the seed because a branch's version N and main's version N are two commits; `@` cannot occur in a
+        # Lance branch name (lance_docs/file_format.md, Branch Name rule 5), so no branch seed collides.
+        rid = run_id_for(f"reconcile-{name}-v{version}" if ref is None else f"reconcile-{name}@{ref}-v{version}")
         tm = datetime.now(UTC).isoformat()
         job = f"lance-reconcile/reconcile.{name}"
         params = {"rid": rid, "name": name}
@@ -1141,6 +1150,8 @@ class LineageRepository:
             # producers() showed it.
             await run_cypher(conn, self._graph, cy.BACKFILL_RUN, {"rid": rid, "tm": tm, "job": job, "outs": name})
             await run_cypher(conn, self._graph, cy.LINK_WROTE, params)
+            if ref is not None:
+                await run_cypher(conn, self._graph, cy.SET_WROTE_REF, {**params, "ref": ref})
             await run_cypher(conn, self._graph, cy.SET_WROTE_VERSION, {**params, "ver": str(version)})
             # Recover the per-version schema onto the same edge when reconciliation could read it off storage.
             if schema:
@@ -1167,7 +1178,9 @@ class LineageRepository:
                 "schemaURL": RUN_EVENT_SCHEMA_URL,
                 "run": {
                     "runId": rid,
-                    "facets": {"lance": custom_facet(_RECONCILE_PRODUCER, operation="reconcile", version=version)},
+                    # `ref` rides the facet the ingest path reads it from (`RunEvent.write_ref`), so a replay
+                    # of this row lands the edge on the same branch.
+                    "facets": {"lance": custom_facet(_RECONCILE_PRODUCER, operation="reconcile", version=version, **({"ref": ref} if ref is not None else {}))},
                 },
                 "job": {"namespace": "lance-reconcile", "name": f"reconcile.{name}"},
                 "inputs": [],

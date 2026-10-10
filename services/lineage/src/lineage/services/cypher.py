@@ -518,6 +518,9 @@ SOURCE_URI: Final = "MATCH (d:Dataset) WHERE d.name = $name RETURN d.source_uri 
 # same reason: a branch carries its own version sequence, so a branch write at version N would otherwise
 # answer for main's version N and hide a real hole there.
 WRITE_VERSIONS: Final = "MATCH (:Run)-[w:WROTE]->(d:Dataset) WHERE d.name = $name AND w.version IS NOT NULL AND w.ref IS NULL RETURN DISTINCT w.version"
+# The same set on ONE BRANCH — every version the graph holds a WROTE edge for whose `ref` names it, so the
+# reconcile compares a branch's own sequence against that branch's edges and never against main's.
+BRANCH_WRITE_VERSIONS: Final = "MATCH (:Run)-[w:WROTE]->(d:Dataset) WHERE d.name = $name AND w.version IS NOT NULL AND w.ref = $ref RETURN DISTINCT w.version"
 # Per-version schema lookup (#24). Latest = the most-recent successful WROTE edge that carries a schema;
 # at-version pins the edge whose version matches. Both return the schema JSON string + its version.
 SCHEMA_LATEST: Final = (

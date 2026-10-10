@@ -39,17 +39,25 @@ from typing import Any, cast
 import lance
 import pyarrow as pa
 
+from lineage.api import reconcile_cron
+from lineage.core.config import LineageSettings
 from lineage.core.reconcile import read_storage_versions, read_version_operations, reconcile_all
 from lineage.schemas import DatasetSummary
 
 
 class _HoledRepo:
-    """A graph that recorded versions 1 and 3 of a four-version dataset — version 2's event was lost."""
+    """A graph holding WROTE edges per ref — main's under ``None``, each branch's under its name.
 
-    def __init__(self, *, graph_versions: set[int], uri: str) -> None:
+    Ref-keyed the way the graph is: a branch write's edge carries ``ref``, and ``write_versions(name, ref)``
+    answers only that ref's versions, exactly as `cypher.WRITE_VERSIONS` / `BRANCH_WRITE_VERSIONS` do.
+    """
+
+    def __init__(self, *, graph_versions: set[int], uri: str, branch_versions: dict[str, set[int]] | None = None) -> None:
         self._graph_versions = graph_versions
+        self._branches = branch_versions or {}
         self._uri = uri
         self.backfilled: list[tuple[str, int]] = []
+        self.backfilled_on_branches: list[tuple[str, int, str]] = []
 
     async def list_datasets(self, namespace: str | None = None, tag: str | None = None) -> list[DatasetSummary]:
         return [DatasetSummary(name="db$t")]
@@ -63,12 +71,19 @@ class _HoledRepo:
     async def latest_write_version(self, name: str) -> int | None:
         return max(self._graph_versions) if self._graph_versions else None
 
-    async def write_versions(self, name: str) -> set[int]:
-        return set(self._graph_versions)
+    async def record_observed_drop(self, name: str, uri: str, observed_at: str) -> bool:
+        return True
 
-    async def backfill_write(self, name: str, version: int, schema: object | None = None) -> None:
-        self.backfilled.append((name, version))
-        self._graph_versions.add(version)
+    async def write_versions(self, name: str, ref: str | None = None) -> set[int]:
+        return set(self._graph_versions if ref is None else self._branches.get(ref, set()))
+
+    async def backfill_write(self, name: str, version: int, schema: object | None = None, ref: str | None = None) -> None:
+        if ref is None:
+            self.backfilled.append((name, version))
+            self._graph_versions.add(version)
+        else:
+            self.backfilled_on_branches.append((name, version, ref))
+            self._branches.setdefault(ref, set()).add(version)
 
 
 def _four_version_dataset(tmp_path: Path) -> str:
@@ -91,31 +106,34 @@ def test_read_storage_versions_returns_every_retained_version(tmp_path: Path) ->
     assert read_storage_versions(str(tmp_path / "missing.lance"), {}) is None
 
 
-def test_a_lost_event_below_the_tip_is_found_and_back_filled(tmp_path: Path) -> None:
-    """THE GATE. Graph tip == storage tip, so the version axis says in_sync — and version 2 has no edge.
+def test_a_lost_event_is_found_and_back_filled_on_main_and_on_each_branch(tmp_path: Path) -> None:
+    """THE GATE, through one cron tick over real Lance: a lost event is recovered on whichever ref it was lost.
 
-    Before this axis existed the sweep returned `in_sync=True` with an empty finding set and called it a
-    healthy dataset. The assertion that matters is `backfilled`: a report naming the hole while leaving
-    it unrecovered would be a second control that cannot fire.
+    Main: graph tip == storage tip, so the version axis says in_sync — and version 2 has no edge, which
+    only the hole axis can see.
+
+    Branch ([[LH-282]]): under D3 every table writer writes branches, and a branch keeps its own version
+    sequence under `tree/<branch>/` (lance_docs/file_format.md, Branch Dataset Layout) that main's
+    `versions()` never lists. Branch `b` is cut at main v3 (its creation manifest is numbered 3 and is the
+    parent's state, not a write), written at 4 with its event recorded, then at 5 with its event lost.
+    A sweep that reads main's axis alone leaves version 5 of `b` unattributed for good, and no gauge
+    counts it.
+
+    Asserted on the tick's REPORT and the back-fill together: a report naming a hole while leaving it
+    unrecovered would be a second control that cannot fire, and a back-fill that landed the branch's
+    version on main would answer for main's version 5 — a commit that does not exist.
     """
     uri = _four_version_dataset(tmp_path)
-    repo = _HoledRepo(graph_versions={1, 3, 4}, uri=uri)
+    branch = lance.dataset(uri).checkout_version(3).create_branch("b")
+    branch = lance.write_dataset(pa.table({"id": [30]}), branch, mode="append")
+    lance.write_dataset(pa.table({"id": [31]}), branch, mode="append")
+    repo = _HoledRepo(graph_versions={1, 3, 4}, uri=uri, branch_versions={"b": {4}})
 
-    async def read_version(_uri: str) -> int | None:
-        return 4
+    report = reconcile_cron.summarize_sweep(asyncio.run(reconcile_cron._sweep(cast(Any, repo), LineageSettings(), {})))
 
-    async def read_versions(_uri: str) -> list[int] | None:
-        return [1, 2, 3, 4]
-
-    statuses = asyncio.run(reconcile_all(cast(Any, repo), read_version, backfill=True, read_versions=read_versions))
-
-    assert len(statuses) == 1
-    status = statuses[0]
-    assert status.graph_version == 4
-    assert status.storage_version == 4
-    assert status.in_sync is True, "the version axis is unchanged — the hole is its own axis, like stale"
-    assert status.versions_without_lineage == [2], "version 2 exists on disk and the graph has no WROTE edge for it"
-    assert repo.backfilled == [("db$t", 2)], "the hole must be RECOVERED, not merely reported"
+    assert report.provenance_holes == {"db$t": {"main": [2], "b": [5]}}, "each ref's lost write is reported against that ref"
+    assert repo.backfilled == [("db$t", 2)], "main's hole must be RECOVERED on main"
+    assert repo.backfilled_on_branches == [("db$t", 5, "b")], "the branch's hole must be RECOVERED on the branch, at the branch's version"
 
 
 def test_a_reclaimed_version_the_graph_still_remembers_is_not_a_hole(tmp_path: Path) -> None:
@@ -131,7 +149,7 @@ def test_a_reclaimed_version_the_graph_still_remembers_is_not_a_hole(tmp_path: P
     async def read_version(_uri: str) -> int | None:
         return 4
 
-    async def read_versions(_uri: str) -> list[int] | None:
+    async def read_versions(_uri: str, _ref: str | None) -> list[int] | None:
         return [3, 4]  # versions 1 and 2 reclaimed by a cleanup pass
 
     statuses = asyncio.run(reconcile_all(cast(Any, repo), read_version, backfill=True, read_versions=read_versions))
@@ -170,10 +188,10 @@ def test_a_maintenance_version_is_not_a_provenance_hole(tmp_path: Path) -> None:
     async def read_version(_uri: str) -> int | None:
         return 4
 
-    async def read_versions(_uri: str) -> list[int] | None:
+    async def read_versions(_uri: str, _ref: str | None) -> list[int] | None:
         return [1, 2, 3, 4]
 
-    async def read_operations(_uri: str, versions: list[int]) -> dict[int, str | None]:
+    async def read_operations(_uri: str, versions: list[int], _ref: str | None) -> dict[int, str | None]:
         return {2: "Rewrite", 3: "Update"}  # 2 compacted, 3 is a real write that lost its event
 
     statuses = asyncio.run(reconcile_all(cast(Any, repo), read_version, backfill=True, read_versions=read_versions, read_operations=read_operations))

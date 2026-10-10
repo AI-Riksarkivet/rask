@@ -69,10 +69,10 @@ class _Repo:
     async def latest_write_version(self, name: str) -> int | None:
         return max(self._graph_versions) if self._graph_versions else None
 
-    async def write_versions(self, name: str) -> set[int]:
+    async def write_versions(self, name: str, ref: str | None = None) -> set[int]:
         return set(self._graph_versions)
 
-    async def backfill_write(self, name: str, version: int, schema: object | None = None) -> None:
+    async def backfill_write(self, name: str, version: int, schema: object | None = None, ref: str | None = None) -> None:
         self.backfilled.append(version)
         self._graph_versions.add(version)
 
@@ -100,11 +100,11 @@ def test_the_inert_version_a_compaction_commits_is_not_a_provenance_hole(tmp_pat
     async def read_version(_uri: str) -> int | None:
         return 6
 
-    async def read_versions(_uri: str) -> list[int] | None:
-        return read_storage_versions(uri, {})
+    async def read_versions(_uri: str, ref: str | None) -> list[int] | None:
+        return read_storage_versions(uri, {}, ref)
 
-    async def read_operations(_uri: str, versions: list[int]) -> dict[int, str | None]:
-        return read_version_operations(uri, {}, versions)
+    async def read_operations(_uri: str, versions: list[int], ref: str | None) -> dict[int, str | None]:
+        return read_version_operations(uri, {}, versions, ref)
 
     statuses = asyncio.run(
         reconcile_all(
@@ -141,10 +141,10 @@ def test_an_unnamed_version_that_changed_data_is_reported_and_never_fabricated(t
     async def read_version(_uri: str) -> int | None:
         return 3
 
-    async def read_versions(_uri: str) -> list[int] | None:
+    async def read_versions(_uri: str, _ref: str | None) -> list[int] | None:
         return [1, 2, 3]
 
-    async def read_operations(_uri: str, versions: list[int]) -> dict[int, str | None]:
+    async def read_operations(_uri: str, versions: list[int], _ref: str | None) -> dict[int, str | None]:
         return dict.fromkeys(versions)
 
     statuses = asyncio.run(

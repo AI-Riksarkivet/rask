@@ -1392,6 +1392,16 @@
       "ReconcileStatus": {
         "description": "Whether a dataset's lineage-graph version matches its actual on-disk Lance version (#23).\n\n``dangling_blob_columns`` (\u00a79 P1 lifecycle, 2026-07-12) is the POINTER-health axis the version\ncomparison can't see: a blob-v2 column whose payloads no longer dereference (external object\ndeleted, bucket wiped) leaves the version untouched \u2014 a dataset can be ``in_sync`` and still\nunreadable. Non-empty = those columns failed a real 1-byte probe read.",
         "properties": {
+          "branch_versions_without_lineage": {
+            "additionalProperties": {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            "title": "Branch Versions Without Lineage",
+            "type": "object"
+          },
           "dangling_blob_columns": {
             "items": {
               "type": "string"
@@ -3190,7 +3200,7 @@
     },
     "/datasets/{name}/reconcile": {
       "get": {
-        "description": "Does the lineage graph agree with the **actual Lance file on storage**? (#23)\n\nOur moat over format-unaware catalogs: because we own a Lance lakehouse we\nread the real on-disk version and cross-check it against the version the graph recorded on the\n``WROTE`` edge \u2014 surfacing a write that bypassed lineage (``storage_ahead``) or a lineage claim\nwith no data behind it (``missing_on_storage``). Gated on ``can_get_metadata`` for ``name``; the\nLance read runs in the threadpool so the blocking object-store I/O never stalls the event loop.\n\n``versions_without_lineage`` is the axis the version comparison cannot answer: it compares two\nMAXIMA, so a write whose event was lost and which a later write superseded leaves both equal and the\ndataset reports ``in_sync``. Measured on the live estate 2026-09-11, ``bronze$events`` answered\nin_sync at 87/87 with four retained versions carrying no lineage at all. READ-ONLY here \u2014 this door\nreports the holes and the cron sweep is what recovers them, so an operator asking a question never\nmutates the graph as a side effect.",
+        "description": "Does the lineage graph agree with the **actual Lance file on storage**? (#23)\n\nOur moat over format-unaware catalogs: because we own a Lance lakehouse we\nread the real on-disk version and cross-check it against the version the graph recorded on the\n``WROTE`` edge \u2014 surfacing a write that bypassed lineage (``storage_ahead``) or a lineage claim\nwith no data behind it (``missing_on_storage``). Gated on ``can_get_metadata`` for ``name``; the\nLance read runs in the threadpool so the blocking object-store I/O never stalls the event loop.\n\n``versions_without_lineage`` is the axis the version comparison cannot answer: it compares two\nMAXIMA, so a write whose event was lost and which a later write superseded leaves both equal and the\ndataset reports ``in_sync``. Measured on the live estate 2026-09-11, ``bronze$events`` answered\nin_sync at 87/87 with four retained versions carrying no lineage at all. READ-ONLY here \u2014 this door\nreports the holes and the cron sweep is what recovers them, so an operator asking a question never\nmutates the graph as a side effect. ``branch_versions_without_lineage`` is the same axis on each\nbranch, by name ([[LH-282]]).",
         "operationId": "get_reconcile_datasets__name__reconcile_get",
         "parameters": [
           {

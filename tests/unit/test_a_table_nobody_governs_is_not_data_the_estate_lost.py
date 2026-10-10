@@ -63,10 +63,10 @@ class _Repo:
     async def latest_write_version(self, name: str) -> int | None:
         return 3
 
-    async def write_versions(self, name: str) -> set[int]:
+    async def write_versions(self, name: str, ref: str | None = None) -> set[int]:
         return {1, 2, 3}
 
-    async def backfill_write(self, name: str, version: int, schema: object | None = None) -> None:
+    async def backfill_write(self, name: str, version: int, schema: object | None = None, ref: str | None = None) -> None:
         raise AssertionError("a dataset absent from storage is not a lost write and must never be back-filled")
 
     async def record_observed_drop(self, name: str, uri: str, observed_at: str) -> bool:

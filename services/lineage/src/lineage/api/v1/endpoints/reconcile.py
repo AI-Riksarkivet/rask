@@ -8,6 +8,8 @@ threadpool so the object-store I/O never stalls the event loop.
 
 from __future__ import annotations
 
+from functools import partial
+
 from fastapi import APIRouter, Depends
 from fastapi.concurrency import run_in_threadpool
 
@@ -15,9 +17,10 @@ from lineage.api.dependencies import RepositoryDep, SettingsDep
 from lineage.api.fga_deps import audit_read, require_metadata_access
 from lineage.core.config import storage_options
 from lineage.core.reconcile import (
-    MAINTENANCE_OPERATIONS,
+    provenance_holes,
     read_dangling_blob_columns,
     read_latest_write_age_hours,
+    read_storage_branches,
     read_storage_version,
     read_storage_versions,
     read_version_operations,
@@ -49,7 +52,8 @@ async def get_reconcile(name: str, repository: RepositoryDep, settings: Settings
     dataset reports ``in_sync``. Measured on the live estate 2026-09-11, ``bronze$events`` answered
     in_sync at 87/87 with four retained versions carrying no lineage at all. READ-ONLY here — this door
     reports the holes and the cron sweep is what recovers them, so an operator asking a question never
-    mutates the graph as a side effect.
+    mutates the graph as a side effect. ``branch_versions_without_lineage`` is the same axis on each
+    branch, by name ([[LH-282]]).
     """
     graph_version = await repository.latest_write_version(name)
     uri = await repository.source_uri(name)
@@ -64,13 +68,19 @@ async def get_reconcile(name: str, repository: RepositoryDep, settings: Settings
         if settings.freshness_budget_hours > 0:
             age = await run_in_threadpool(read_latest_write_age_hours, uri, opts)
             status.stale = age is not None and age > settings.freshness_budget_hours
-        on_disk = await run_in_threadpool(read_storage_versions, uri, opts)
-        if on_disk is not None:
-            holes = sorted(set(on_disk) - await repository.write_versions(name))
+        # The sweep's own hole finder, so this door and the cron can never disagree about what a hole is: a
+        # compaction / index build / config change commits a version and emits no lineage by design.
+        holes_on = partial(
+            provenance_holes,
+            repository,
+            name,
+            uri,
+            read_versions=lambda u, ref: run_in_threadpool(read_storage_versions, u, opts, ref),
+            read_operations=lambda u, versions, ref: run_in_threadpool(read_version_operations, u, opts, versions, ref),
+        )
+        status.versions_without_lineage, _ = await holes_on(None)
+        for ref in await run_in_threadpool(read_storage_branches, uri, opts) or []:
+            holes, _ = await holes_on(ref)
             if holes:
-                # A compaction / index build / config change commits a version and emits no lineage by
-                # design; reporting those would make every maintained dataset look un-provenanced.
-                operations = await run_in_threadpool(read_version_operations, uri, opts, holes)
-                holes = [v for v in holes if operations.get(v) not in MAINTENANCE_OPERATIONS]
-            status.versions_without_lineage = holes
+                status.branch_versions_without_lineage[ref] = holes
     return status

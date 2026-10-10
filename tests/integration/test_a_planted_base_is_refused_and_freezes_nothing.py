@@ -340,10 +340,10 @@ class _Graph:
     async def latest_write_version(self, name: str) -> int | None:
         return max(self.versions[name])
 
-    async def write_versions(self, name: str) -> set[int]:
+    async def write_versions(self, name: str, ref: str | None = None) -> set[int]:
         return set(self.versions[name])
 
-    async def backfill_write(self, name: str, version: int, schema: object | None = None) -> None:
+    async def backfill_write(self, name: str, version: int, schema: object | None = None, ref: str | None = None) -> None:
         self.versions[name].add(version)
 
 
@@ -371,7 +371,7 @@ def test_the_reconcile_names_the_plant(estate: _Estate, planted: str) -> None:
 
     report = reconcile_cron.summarize_sweep(asyncio.run(reconcile_cron._sweep(cast(Any, graph), settings, opts)))
 
-    assert report.provenance_holes == {"db$attacker": [plant_version]}, "the planting version was laundered as maintenance"
+    assert report.provenance_holes == {"db$attacker": {"main": [plant_version]}}, "the planting version was laundered as maintenance"
     assert report.base_drift == {"db$attacker": [normalise(planted)]}
 
     estate.open(estate.attacker).insert(_MINE)

@@ -304,8 +304,8 @@ def test_discovery_lists_against_age(dsn: str, sample: _Sample) -> None:
     assert failed.error_message and "OOM" in failed.error_message  # error slot, not swapped with a timestamp
 
 
-async def _forget_recon(pool: AsyncConnectionPool, backfill_rid: str) -> None:
-    """Remove `recon$t` and the two runs that touch it from the graph.
+async def _forget_recon(pool: AsyncConnectionPool, backfill_rid: str, branch_rid: str) -> None:
+    """Remove `recon$t` and the three runs that touch it from the graph.
 
     Shared by this test's setup and its teardown so the two can never drift into cleaning different
     sets — the shape that leaves a node behind while reading as though it does not.
@@ -317,8 +317,8 @@ async def _forget_recon(pool: AsyncConnectionPool, backfill_rid: str) -> None:
         await run_cypher(
             conn,
             "lineage",
-            "MATCH (r:Run) WHERE r.run_id IN ['recon-w1', $rid] DETACH DELETE r",
-            {"rid": backfill_rid},
+            "MATCH (r:Run) WHERE r.run_id IN ['recon-w1', $rid, $brid] DETACH DELETE r",
+            {"rid": backfill_rid, "brid": branch_rid},
         )
 
 
@@ -327,6 +327,11 @@ def test_reconcile_backfills_a_dropped_write(dsn: str, tmp_path: Path) -> None:
 
     Simulates the outbox gap end-to-end against real AGE + real Lance: record a write at v1, land a second
     version on disk WITHOUT its lineage event, then reconcile — the graph must catch up to the on-disk v2.
+
+    And on a BRANCH ([[LH-282]]): branch `b` is cut at main v2 and written at its own v3 with the event
+    lost. The back-filled edge must carry `ref='b'` so the branch's version set answers 3 and main's does
+    not — the ref filters in `cypher.WRITE_VERSIONS` / `BRANCH_WRITE_VERSIONS` only mean anything against
+    real AGE.
     """
     from contextlib import suppress
 
@@ -335,13 +340,14 @@ def test_reconcile_backfills_a_dropped_write(dsn: str, tmp_path: Path) -> None:
     from lineage_boot import booted_repository
 
     from lineage.core.age import make_pool, run_cypher
-    from lineage.core.reconcile import read_storage_version, reconcile_all
+    from lineage.core.reconcile import read_storage_branches, read_storage_version, read_storage_versions, read_version_operations, reconcile_all
     from lineage.models import RunEvent
     from lineage.schemas import ReconcileState
     from service_kit.openlineage import run_id_for
 
     # The back-fill run id is now a deterministic UUID (spec fix), not the readable seed string.
     backfill_rid = run_id_for("reconcile-recon$t-v2")
+    branch_rid = run_id_for("reconcile-recon$t@b-v3")
 
     uri = str(tmp_path / "recon.lance")
     lance.write_dataset(pa.table({"id": [1]}), uri)  # storage v1
@@ -363,22 +369,41 @@ def test_reconcile_backfills_a_dropped_write(dsn: str, tmp_path: Path) -> None:
     )
     # A SECOND write lands on disk but its lineage event is DROPPED (the outbox gap): storage=2, graph=1.
     lance.write_dataset(pa.table({"id": [2]}), uri, mode="append")
+    # A BRANCH write whose event is dropped too: `b` is cut at main v2, so its own first write is v3.
+    lance.write_dataset(pa.table({"id": [3]}), lance.dataset(uri).create_branch("b"), mode="append")
 
     async def read_only_recon(u: str) -> int | None:
         return read_storage_version(u, {}) if u == uri else None  # skip other datasets' (s3) reads
 
-    async def run() -> tuple[int | None, ReconcileState, int | None, list, list]:
+    async def versions_of_recon(u: str, ref: str | None) -> list[int] | None:
+        return read_storage_versions(u, {}, ref) if u == uri else None
+
+    async def operations_of_recon(u: str, versions: list[int], ref: str | None) -> dict[int, str | None]:
+        return read_version_operations(u, {}, versions, ref)
+
+    async def branches_of_recon(u: str) -> list[str] | None:
+        return read_storage_branches(u, {}) if u == uri else None
+
+    async def run() -> tuple[int | None, ReconcileState, int | None, list, list, set[int], set[int], list]:
         pool = make_pool(dsn)
         await pool.open()
         try:
             repo = await booted_repository(pool)
             # The AGE graph persists across runs — clear this test's dataset + runs so it starts clean
             # (else a prior back-fill leaves recon$t at v2 and the "graph behind storage" premise breaks).
-            await _forget_recon(pool, backfill_rid)
+            await _forget_recon(pool, backfill_rid, branch_rid)
             await repo.ingest_event(event)
             before = await repo.latest_write_version("recon$t")
-            statuses = await reconcile_all(repo, read_only_recon, backfill=True)
+            statuses = await reconcile_all(
+                repo,
+                read_only_recon,
+                backfill=True,
+                read_versions=versions_of_recon,
+                read_operations=operations_of_recon,
+                read_branches=branches_of_recon,
+            )
             after = await repo.latest_write_version("recon$t")
+            main_versions, branch_versions = await repo.write_versions("recon$t"), await repo.write_versions("recon$t", "b")
             recon = next(s for s in statuses if s.dataset == "recon$t")
             # Cross-view parity (#10): the back-fill run must carry job + outputs (so /runs sees it, not
             # just producers()), and land a feed row (so /events sees it too). Read both back.
@@ -392,7 +417,14 @@ def test_reconcile_backfills_a_dropped_write(dsn: str, tmp_path: Path) -> None:
                 )
                 feed = await conn.execute("SELECT event_type, outputs FROM public.lineage_events WHERE run_id = %s", (backfill_rid,))
                 feed_rows = await feed.fetchall()
-            return before, recon.status, after, rows, feed_rows
+                branch_edge = await run_cypher(
+                    conn,
+                    "lineage",
+                    "MATCH (r:Run {run_id:$rid})-[w:WROTE]->(d:Dataset) RETURN w.ref, w.version",
+                    {"rid": branch_rid},
+                    columns=2,
+                )
+            return before, recon.status, after, rows, feed_rows, main_versions, branch_versions, branch_edge
         finally:
             # CLEAN AFTER, not only before. `recon$t` is a BARE literal — it carries none of the
             # per-run prefixing `_Sample` gives its datasets — and its `dataSource` is a `tmp_path`
@@ -402,16 +434,19 @@ def test_reconcile_backfills_a_dropped_write(dsn: str, tmp_path: Path) -> None:
             # this repository still regenerates. Cleaning before made the test correct and left the
             # ESTATE dirty, which is the half that shows up in an operator's report.
             with suppress(Exception):
-                await _forget_recon(pool, backfill_rid)
+                await _forget_recon(pool, backfill_rid, branch_rid)
             await pool.close()
 
-    before, status, after, run_rows, feed_rows = asyncio.run(run())
+    before, status, after, run_rows, feed_rows, main_versions, branch_versions, branch_edge = asyncio.run(run())
     assert before == 1  # the graph recorded v1 from the event
     assert status == ReconcileState.STORAGE_AHEAD  # storage v2 > graph v1 — the dropped write
     assert after == 2  # reconcile back-filled the real on-disk version
     # The back-fill run is now consistent across views: job + outputs on the graph node, and a feed row.
     assert run_rows and run_rows[0][0] and run_rows[0][1] == "recon$t"
     assert feed_rows and feed_rows[0][0] == "RECONCILED"
+    # The branch's lost write is back-filled ON the branch, at the branch's version, and main's set is untouched.
+    assert [tuple(str(v) for v in row) for row in branch_edge] == [("b", "3")]
+    assert (main_versions, branch_versions) == ({1, 2}, {3})
 
 
 def test_medallion_column_lineage(dsn: str, sample: _Sample) -> None:

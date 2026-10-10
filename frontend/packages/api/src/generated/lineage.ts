@@ -409,7 +409,8 @@ export interface paths {
          *     dataset reports ``in_sync``. Measured on the live estate 2026-09-11, ``bronze$events`` answered
          *     in_sync at 87/87 with four retained versions carrying no lineage at all. READ-ONLY here — this door
          *     reports the holes and the cron sweep is what recovers them, so an operator asking a question never
-         *     mutates the graph as a side effect.
+         *     mutates the graph as a side effect. ``branch_versions_without_lineage`` is the same axis on each
+         *     branch, by name ([[LH-282]]).
          */
         get: operations["get_reconcile_datasets__name__reconcile_get"];
         put?: never;
@@ -1451,6 +1452,10 @@ export interface components {
          *     unreadable. Non-empty = those columns failed a real 1-byte probe read.
          */
         ReconcileStatus: {
+            /** Branch Versions Without Lineage */
+            branch_versions_without_lineage?: {
+                [key: string]: number[];
+            };
             /** Dangling Blob Columns */
             dangling_blob_columns?: string[];
             /** Dataset */

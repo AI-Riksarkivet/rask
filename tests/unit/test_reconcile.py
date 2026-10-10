@@ -167,7 +167,7 @@ def test_reconcile_all_flags_missing_declared_columns_estate_wide() -> None:
     read = _reader({"broken": 1, "healthy": 1, "undeclared": 1})
     schema_reads: list[str] = []
 
-    async def read_schema(uri: str, _version: int) -> list[dict[str, str]] | None:
+    async def read_schema(uri: str, _version: int, _ref: str | None) -> list[dict[str, str]] | None:
         schema_reads.append(uri)
         if uri.endswith("broken"):
             return [{"name": "id", "type": "int64"}]  # 'embedding' was dropped by a bypassing write
@@ -232,7 +232,7 @@ class _FakeRepo:
     async def latest_write_version(self, name: str) -> int | None:
         return self._graph.get(name)
 
-    async def backfill_write(self, name: str, version: int, schema: object | None = None) -> None:
+    async def backfill_write(self, name: str, version: int, schema: object | None = None, ref: str | None = None) -> None:
         self.backfilled.append((name, version))
         if schema is not None:
             self.backfilled_schemas[name] = schema
@@ -335,7 +335,7 @@ def test_reconcile_all_recovers_schema_pinned_to_backfilled_version() -> None:
     fields: SchemaFields = [{"name": "id", "type": "int64"}]
     pinned: list[int] = []
 
-    async def read_schema(_uri: str, version: int) -> SchemaFields | None:
+    async def read_schema(_uri: str, version: int, _ref: str | None) -> SchemaFields | None:
         pinned.append(version)
         return fields
 
