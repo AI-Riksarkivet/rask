@@ -150,3 +150,4 @@ before they had a record here; each names its source document and the date of th
 | [0135](0135-a-dock-lives-inside-its-zone-2026-08-03.md) |  | A dock lives inside its zone (2026-08-03) |
 | [0136](0136-bulk-labeling-is-a-mode-of-the-task-and-columns-carry-recipes.md) |  | Bulk labeling is a mode of the task, and columns carry recipes (2026-08-09) |
 | [0137](0137-model-endpoints-are-ray-serve-discovered-by-the-labeling.md) |  | Model endpoints are Ray Serve, discovered by the `labeling` user_config (2026-08-09) |
+| [0138](0138-an-erasure-rebases-a-pinning-branch-after-a-seven-day-notice.md) | D4 | An erasure rebases a pinning branch after a seven-day notice (2026-10-10) |
