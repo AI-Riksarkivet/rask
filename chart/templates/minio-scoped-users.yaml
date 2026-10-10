@@ -106,6 +106,9 @@ spec:
         app.kubernetes.io/component: minio-scoped-users
     spec:
       restartPolicy: OnFailure
+      {{- /* Both containers run as 65532 and read the root key from a 0400 secret volume, which kubelet writes as root:root
+             unless the pod names an fsGroup; with one it is root:<fsGroup> and group-readable. */}}
+      securityContext: { fsGroup: 65532 }
       serviceAccountName: {{ include "lance.fullname" . }}-sa-hooks
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:

@@ -87,6 +87,28 @@ def _seed(docs: tuple[dict, ...]) -> tuple[str, dict]:
     return found
 
 
+def _as_mounted(pod_spec: dict, container: dict, volume: str, source: Path, into: Path) -> Path:
+    """Deliver ``source`` as the pod's secret ``volume`` gives it to ``container``'s uid; absent when that uid cannot read it.
+
+    kubelet writes a secret file owned by root, grouped to the pod's fsGroup when one is set, and ORs group-read into a
+    read-only volume's mode under an fsGroup. Measured 2026-10-10 on k3s with a uid-65532 container: defaultMode 0400 and
+    no fsGroup gave `-r-------- 0:0` and `Permission denied`; the same with fsGroup 65532 gave `-r--r----- 0:65532` and
+    the read succeeded. Leaving the file out, rather than chmodding a copy, keeps the refusal under a root test runner.
+    """
+    [secret] = [v["secret"] for v in pod_spec["volumes"] if v["name"] == volume]
+    mode = secret.get("defaultMode", 0o644)
+    fs_group = (pod_spec.get("securityContext") or {}).get("fsGroup")
+    uid = (container.get("securityContext") or {}).get("runAsUser", 0)
+    if fs_group is not None:
+        mode |= 0o440
+    readable = mode & (0o400 if uid == 0 else 0o040 if fs_group is not None else 0o004)
+    into.mkdir()
+    delivered = into / source.name
+    if readable:
+        delivered.write_bytes(source.read_bytes())
+    return delivered
+
+
 def _store(stores: Path, name: str, key: str) -> dict[str, str]:
     path = stores / name / key
     return dict(line.split("=", 1) for line in path.read_text().splitlines()) if path.exists() else {}
@@ -350,9 +372,10 @@ def test_the_dev_store_is_seeded_by_its_own_pod_and_keeps_its_signing_keys(  # n
     [mc] = pod_spec["containers"]
     keys_dir = tmp_path / "scoped-keys"
     keys_dir.mkdir()
+    root_file = _as_mounted(pod_spec, derive, "minio-root", generated_dir / "minio-secret-key", tmp_path / "minio-root")
     derived = subprocess.run(
         ["sh", "-c", derive["command"][-1]],  # noqa: S607
-        env={**os.environ, "KEYS": str(keys_dir), "ROOT_FILE": str(generated_dir / "minio-secret-key")},
+        env={**os.environ, "KEYS": str(keys_dir), "ROOT_FILE": str(root_file)},
         capture_output=True,
         text=True,
         timeout=60,
