@@ -48,7 +48,7 @@ from medallion.services.planned_runs import FAIL_MESSAGE_CAP, MAX_UNSEEN_TICKS, 
 from medallion.services.stage_submit import build_stage_order, submit_stage_order
 from service_kit import dapr_publish
 from service_kit.lakehouse.commit_marker import marked_version
-from service_kit.lakehouse.executor import Capability, Executor, RunState
+from service_kit.lakehouse.executor import Capability, Executor, OrderRefusedError, RunState
 from service_kit.lakehouse.naming import CATALOG_DELIMITER
 from service_kit.lakehouse.run_outcomes import OutcomeNotRecordedError, OutcomeReport, SweepReport, SweepVisit, resolve, sweep_plans
 from service_kit.lakehouse.run_plans import OutcomeConflictError, OutcomeStatus, PlanDocument, PlanKind, PlanStore, RunOutcome
@@ -257,9 +257,17 @@ async def dispatch(
     stored = plan.order if plan.order is not None else order
     try:
         await submit_stage_order(stored, _registration(plan), executor=executor_for(settings, plan.engine))
+    except OrderRefusedError as exc:
+        await _close_refused(plan, exc, plan_store(settings), StageOutcomeLane(settings, dapr))
     except Exception as exc:  # noqa: BLE001 — the plan is open, and the sweep's resubmit budget owns a lost submit
         log.warning("medallion_stage_submit_deferred", extra={"action_id": plan.action_id, "plan_created": created, "error": str(exc)[:300]})
     return plan.action_id
+
+
+async def _close_refused(plan: PlanDocument, exc: OrderRefusedError, store: PlanStore, lane: StageOutcomeLane) -> None:
+    """The engine refused the order: no resubmit can change that, so the run closes failed with the engine's reason."""
+    log.error("medallion_stage_order_refused", extra={"action_id": plan.action_id, "error": str(exc)[:300]})
+    await resolve(store, plan, OutcomeReport(status="failed", error=f"the engine refused the stage order: {exc}"[:FAIL_MESSAGE_CAP]), lane, source="engine")
 
 
 async def _failure_text(executor: Executor, plan: PlanDocument, state: RunState) -> str:
@@ -305,7 +313,11 @@ async def _tick(store: PlanStore, plan: PlanDocument, executor: Executor, lane: 
         )
         log.warning("medallion_stage_resubmitting", extra={"action_id": plan.action_id, "attempt": resubmitted.resubmits, "vanished": vanished})
         if resubmitted.order is not None:
-            await submit_stage_order(resubmitted.order, _registration(resubmitted), executor=executor)
+            try:
+                await submit_stage_order(resubmitted.order, _registration(resubmitted), executor=executor)
+            except OrderRefusedError as exc:
+                await _close_refused(resubmitted, exc, store, lane)
+                return "resolved"
         return "resubmitted"
     lost = "vanished" if vanished else "never registered"
     if durable:

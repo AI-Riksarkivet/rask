@@ -74,7 +74,8 @@ type OutcomeStatus = Literal["succeeded", "failed"]
 
 #: Who decided the outcome: the job through its door, the sweep from the engine's status or the destination's
 #: history, or an operator's terminate.
-type OutcomeSource = Literal["job", "sweep", "operator"]
+#: Who decided the terminal: the job's report, the sweep, an operator, or the engine refusing the order.
+type OutcomeSource = Literal["job", "sweep", "operator", "engine"]
 
 
 class RunOutcome(BaseModel):
@@ -316,7 +317,12 @@ class PlanStore:
         return stale
 
     def prune(self, *, now: datetime) -> int:
-        """Delete closed plans older than :data:`CLOSED_RETENTION`; answer how many went. An unreadable document is kept and logged."""
+        """Delete closed plans older than :data:`CLOSED_RETENTION`; answer how many went.
+
+        A document that no longer parses as a plan (written under another schema, or corrupt) can never be resolved or
+        read by anyone, so it ages out by its OBJECT's age past the same retention, with its open-index entry, and is
+        logged once as it is removed.
+        """
         pruned = 0
         for name, mtime in self._listing("runs"):
             if not name.endswith(".json") or now - mtime <= CLOSED_RETENTION:
@@ -325,7 +331,10 @@ class PlanStore:
             try:
                 plan = self.read(action_id)
             except ValueError as exc:  # not JSON, or not a plan (ValidationError is a ValueError)
-                log.warning("run_plan_unreadable", extra={"owner": self.owner, "action_id": action_id, "error": str(exc)[:300]})
+                delete_record(self.root, self.storage_options, self._plan_key(action_id))
+                delete_record(self.root, self.storage_options, self._entry_key(action_id))
+                log.warning("run_plan_unreadable_pruned", extra={"owner": self.owner, "action_id": action_id, "error": str(exc)[:300]})
+                pruned += 1
                 continue
             if plan is not None and plan.outcome is not None and now - plan.outcome.recorded_at > CLOSED_RETENTION:
                 delete_record(self.root, self.storage_options, self._plan_key(action_id))

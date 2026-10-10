@@ -6,12 +6,13 @@ A planner (a medallion stage runner, or the producer for training) invokes app-i
 Ray's — the command a task runs, the Jobs-API body, the state vocabulary, the SIGKILL classification — lives here.
 
 THE ORDER CROSSES A TRUST BOUNDARY HERE, and Ray lays a job's env over its pod's, so the door admits only what a
-caller may decide. The task resolves through THIS service's table (``RASK_COMPUTE_ENGINE_TASKS``) and an unknown one
-is refused 422, so no caller string becomes a command. The env is `WorkOrder.to_env()`, whose names are the platform's
-own (`RASK_*`, `RASK_PARAM_<variable name>`, `TRACEPARENT`, `TRACESTATE`, `OTEL_SERVICE_NAME`): no OTLP endpoint and
-no free variable name rides an order. The outcome URL must be `<base>/runs/<the key>/outcome` for a planner base in
-``RASK_COMPUTE_ENGINE_OUTCOME_BASES``, because the job posts its pod's projected token there. A run is named only by
-a 40-hex key (`work_order.derive_idempotency_key`), so a caller can neither read nor stop a Ray job no planner
+caller may decide. The task resolves through THIS service's table for the engine the submission names
+(``RASK_COMPUTE_ENGINE_TASKS``, engine -> task -> command) and an unknown engine or task is refused 422, so no caller
+string becomes a command. The env is `WorkOrder.to_env()`, whose names are the platform's own (`RASK_*`,
+`RASK_PARAM_<variable name>`, `TRACEPARENT`, `TRACESTATE`, `OTEL_SERVICE_NAME`): no OTLP endpoint and no free variable
+name rides an order. The outcome URL must be `<base>/runs/<the key>/outcome` for a planner base in
+``RASK_COMPUTE_ENGINE_OUTCOME_BASES``, because the job posts its pod's projected token there. A run is named only by a
+40-hex key (`work_order.derive_idempotency_key`), so a caller can neither read nor stop a Ray job no planner
 submitted. The job reports its own terminal on that outcome door; nothing here watches it.
 
 THE CALLER IS A SERVICE ACCOUNT the door's ``RASK_SA_SUBJECTS`` maps: the planners, each by its projected token for
@@ -145,13 +146,16 @@ async def submit_run(submission: EngineSubmission, settings: ComputeSettingsDep,
     """Start the order's job under its key, or re-attach to the one already running it.
 
     A prior FAILED job under the key is replaced when the order asks for that (a stage) and answered
-    ``already_failed`` otherwise (a training run). 422 for a task this service's table does not name, 502 when Ray
-    cannot be reached or refuses the job.
+    ``already_failed`` otherwise (a training run). 422 for an engine this door does not serve or a task that engine's
+    table does not name, 502 when Ray cannot be reached or refuses the job.
     """
     order = submission.order
-    command = settings.engine_tasks.get(order.task)
+    tasks = settings.engine_tasks.get(submission.engine)
+    if tasks is None:
+        raise UnprocessableEntityError(f"engine {submission.engine!r} is not one this door serves; it serves {sorted(settings.engine_tasks)}")
+    command = tasks.get(order.task)
     if command is None:
-        raise UnprocessableEntityError(f"task {order.task!r} is not one this engine runs; it runs {sorted(settings.engine_tasks)}")
+        raise UnprocessableEntityError(f"task {order.task!r} is not one engine {submission.engine!r} runs here; it runs {sorted(tasks)}")
     if not re.fullmatch(r"[0-9a-f]{40}", order.idempotency_key):
         raise UnprocessableEntityError("the order's key is not a run key (`derive_idempotency_key`)")
     reports_to = {f"{base.rstrip('/')}/runs/{order.idempotency_key}/outcome" for base in settings.engine_outcome_bases}

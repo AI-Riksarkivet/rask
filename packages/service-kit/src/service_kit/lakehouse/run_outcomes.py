@@ -126,6 +126,9 @@ class SweepReport(BaseModel):
     resubmitted: int = 0
     pruned: int = 0
     errors: int = 0
+    #: Open plans whose document no longer parses as a plan: no tick can resolve one, and the prune removes it once
+    #: it is older than the plans' retention.
+    unreadable: int = 0
 
 
 async def sweep_plans(store: PlanStore, *, kind: PlanKind, visit: Callable[[PlanDocument], Awaitable[SweepVisit]]) -> SweepReport:
@@ -133,13 +136,20 @@ async def sweep_plans(store: PlanStore, *, kind: PlanKind, visit: Callable[[Plan
 
     The index entries are read first: one whose plan closed, or never landed past the orphan grace, is removed rather
     than visited. One plan's failure (an outage, a refused hand-off) is counted and logged, never allowed to stop the
-    rest, and the plan is visited again on the next tick.
+    rest, and the plan is visited again on the next tick. An open plan whose document does not parse is counted as
+    ``unreadable`` and logged as an error naming the parse failure: nothing can resolve it, so it is not retried as an
+    outage would be, and the prune removes it past retention.
     """
     now = datetime.now(UTC)
-    counts = {"open": 0, "resolved": 0, "resubmitted": 0, "errors": 0}
+    counts = {"open": 0, "resolved": 0, "resubmitted": 0, "errors": 0, "unreadable": 0}
     for action_id, written_at in await asyncio.to_thread(store.open_entries):
         try:
-            plan = await asyncio.to_thread(store.read, action_id)
+            try:
+                plan = await asyncio.to_thread(store.read, action_id)
+            except ValueError as exc:  # not JSON, or not a plan (ValidationError is a ValueError)
+                counts["unreadable"] += 1
+                log.error("run_plan_unreadable", extra={"owner": store.owner, "kind": kind.value, "action_id": action_id, "error": str(exc)[:300]})
+                continue
             if plan is None or not plan.is_open:
                 await asyncio.to_thread(store.forget_stale_entry, action_id, written_at, now=now)
                 continue

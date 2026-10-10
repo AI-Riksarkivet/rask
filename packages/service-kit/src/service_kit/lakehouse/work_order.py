@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+from collections.abc import Iterable
 from typing import Final, Literal
 
 from pydantic import BaseModel, ConfigDict, model_validator
@@ -37,6 +38,12 @@ from pydantic import BaseModel, ConfigDict, model_validator
 
 #: A params key: a POSIX environment variable name, since it is delivered as `RASK_PARAM_<key>`.
 _PARAM_KEY: Final = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def invalid_param_keys(keys: Iterable[str]) -> list[str]:
+    """The keys that cannot ride an order, sorted. The ONE rule: the declaration door (`TransformSpec`) refuses what
+    every order built from the declaration would refuse, so a lane is never stored that no run can carry."""
+    return sorted(key for key in keys if not _PARAM_KEY.fullmatch(key))
 
 
 class WorkSource(BaseModel):
@@ -167,7 +174,7 @@ class WorkOrder(BaseModel):
 
     @model_validator(mode="after")
     def _a_param_names_one_variable(self) -> WorkOrder:
-        bad = sorted(key for key in self.params if not _PARAM_KEY.fullmatch(key))
+        bad = invalid_param_keys(self.params)
         if bad:
             raise ValueError(f"order {self.idempotency_key!r} names params that are not variable names: {bad}")
         return self

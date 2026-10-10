@@ -16,7 +16,7 @@ import httpx
 import pytest
 
 
-#: compute's task table in these tests, as the chart deploys it.
+#: compute's task table for the `ray` engine in these tests, as the chart deploys it.
 ENGINE_TASKS = {
     "stage-transform": "python /home/ray/jobs/ray_stage_job.py",
     "dummy-lane": "python /home/ray/jobs/ray_dummy_job.py",
@@ -36,7 +36,7 @@ def route_engine_to_compute(monkeypatch: pytest.MonkeyPatch, ray_handler: Callab
     from medallion.services import engine_registry
 
     ray = httpx.AsyncClient(base_url="http://ray-head:8265", transport=httpx.MockTransport(ray_handler))
-    settings = ComputeSettings.model_validate({"RASK_COMPUTE_ENGINE_TASKS": ENGINE_TASKS, "RASK_INSECURE_ALLOW_UNAUTHENTICATED": True})
+    settings = ComputeSettings.model_validate({"RASK_COMPUTE_ENGINE_TASKS": {"ray": ENGINE_TASKS}, "RASK_INSECURE_ALLOW_UNAUTHENTICATED": True})
     monkeypatch.setitem(app.dependency_overrides, get_jobs_api, lambda: ray)
     monkeypatch.setitem(app.dependency_overrides, get_compute_settings, lambda: settings)
     client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://compute")

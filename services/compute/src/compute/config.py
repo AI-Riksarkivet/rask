@@ -72,12 +72,13 @@ class ComputeSettings(GovernedAuthSettings, Settings):
     )
 
     # --- the engine door (`compute.engine`, CP-056) -----------------------------------------------
-    engine_tasks: dict[str, str] = Field(
+    engine_tasks: dict[str, dict[str, str]] = Field(
         default_factory=dict,
         alias="RASK_COMPUTE_ENGINE_TASKS",
-        description="The tasks this engine runs, task -> the Jobs-API entrypoint (a JSON object). An order naming a task "
-        "absent here is refused 422, so a planner's task key never reaches the cluster as a command. Each script it names "
-        "must be baked into the image the Ray cluster runs.",
+        description="The engines this door serves and each one's tasks, engine -> task -> the Jobs-API entrypoint (a JSON "
+        "object). Keyed by engine first, so two engines registering one task each keep their own command. An order for an "
+        "engine or a task absent here is refused 422, so a planner's task key never reaches the cluster as a command. Each "
+        "script it names must be baked into the image the Ray cluster runs.",
     )
     engine_outcome_bases: list[str] = Field(
         default_factory=list,

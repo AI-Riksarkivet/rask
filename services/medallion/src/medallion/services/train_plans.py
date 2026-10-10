@@ -46,7 +46,7 @@ from medallion.services.engine_registry import executor_for
 from medallion.services.planned_runs import FAIL_MESSAGE_CAP, MAX_UNSEEN_TICKS, destination_version, executor_for_plan, outcome_url, publish_plan, run_handle
 from medallion.services.stage_submit import build_stage_order_observability
 from service_kit.lakehouse.commit_marker import marked_version
-from service_kit.lakehouse.executor import EngineError, Executor, RunState, SubmitOutcome
+from service_kit.lakehouse.executor import EngineError, Executor, OrderRefusedError, RunState, SubmitOutcome
 from service_kit.lakehouse.naming import CATALOG_DELIMITER
 from service_kit.lakehouse.run_outcomes import OutcomeNotRecordedError, OutcomeReport, SweepReport, SweepVisit, resolve, sweep_plans
 from service_kit.lakehouse.run_plans import OutcomeConflictError, OutcomeStatus, PlanDocument, PlanKind, PlanStore, RunOutcome
@@ -228,8 +228,9 @@ async def dispatch(
     holds an executor.
 
     Raises:
-        EngineError: the engine could not be reached or refused the submission; the plan stays open, so a redelivery
-            re-attaches and the sweep fails a submission that never registers.
+        EngineError: the engine could not be reached; the plan stays open, so a redelivery re-attaches and the sweep
+            fails a submission that never registers. An engine that REFUSES the order closes the run failed, answered
+            ``already_failed``.
         ServiceUnavailableError: no control root is configured.
     """
     order = train_order(
@@ -264,7 +265,14 @@ async def dispatch(
     plan = await publish_plan(settings, dapr, store, plan)
     registration = TaskRegistration(task=plan.task, engine=plan.engine, command=plan.command, code_version=plan.code_version)
     engine = executor or executor_for(settings, plan.engine)
-    _handle, submitted = await engine.submit(plan.order if plan.order is not None else order, registration)
+    try:
+        _handle, submitted = await engine.submit(plan.order if plan.order is not None else order, registration)
+    except OrderRefusedError as exc:
+        # No redelivery changes a refusal, so the run closes failed now rather than waiting out the sweep.
+        log.error("medallion_train_order_refused", extra={"action_id": plan.action_id, "error": str(exc)[:300]})
+        failed = OutcomeReport(status="failed", error=f"the engine refused the training order: {exc}"[:FAIL_MESSAGE_CAP])
+        await resolve(store, plan, failed, TrainOutcomeLane(settings, dapr), source="engine")
+        return "already_failed"
     log.info("medallion_train_run_planned", extra={"action_id": plan.action_id, "plan_created": created, "submitted": submitted.value})
     return _DISPATCHED[submitted]
 

@@ -19,6 +19,8 @@ import asyncio
 import importlib.util
 import json
 import logging
+import os
+import time
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -45,7 +47,7 @@ from service_kit.lakehouse.executor import Capability, EngineError, Executor, Ru
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 from service_kit.lakehouse.outbox import list_events
 from service_kit.lakehouse.run_outcomes import OutcomeReport
-from service_kit.lakehouse.run_plans import PlanDocument
+from service_kit.lakehouse.run_plans import CLOSED_RETENTION, PLANS_PREFIX, PlanDocument
 from service_kit.lakehouse.stage_stamp import ONE_TO_ONE
 from service_kit.lakehouse.task_registry import TaskRegistration
 from service_kit.lakehouse.tier_write import StageContractError
@@ -401,3 +403,44 @@ def test_a_stage_run_travels_to_its_engine_and_its_killed_driver_closes_it_faile
     )
     with pytest.raises(EngineError, match="answered 401"):
         asyncio.run(executor_for(stranger, "ray").status(RunHandle(engine="ray", handle=plan.action_id)))
+
+
+def _plan_files(settings: MedallionSettings, child: str) -> list[Path]:
+    return sorted((Path(settings.control_root) / PLANS_PREFIX / settings.fga_service_identity / child).glob("*"))
+
+
+def test_an_order_the_engine_app_refuses_closes_its_run_failed_in_pass_one(settings: MedallionSettings, compute_engine: Any) -> None:
+    """CP-056. The submission names the engine its task is registered under, and compute resolves the task through that
+    engine's own table: an engine compute does not serve is refused 422 with nothing reaching Ray. No redelivery changes a
+    refusal, so pass 1 closes the run failed with the engine's reason rather than leaving it to the sweep's budget."""
+    unserved = settings.model_copy(update={"engines": {"flink": settings.engines["ray"]}, "default_engine": "flink"})
+
+    acked = asyncio.run(handle_stage(cast(DaprClient, _Bus()), unserved, {"data": {"token": "tok-refused", "from_version": 1}}))
+
+    assert acked == {"status": "SUCCESS"}
+    ((document,),) = [_plan_files(unserved, "runs")]
+    closed = stage_plans.plan_store(unserved).read(document.stem)
+    assert closed is not None and closed.outcome is not None and (closed.outcome.status, closed.outcome.source) == ("failed", "engine")
+    assert "engine 'flink' is not one this door serves" in (closed.outcome.error or "")
+    assert compute_engine.jobs.bodies == {}
+
+
+def test_a_plan_no_longer_parsing_is_counted_unreadable_and_pruned_past_retention(settings: MedallionSettings) -> None:
+    """A plan stored under an earlier schema (here the order's dropped OTLP map) can be read by no one, so no tick can
+    resolve it. The sweep counts it `unreadable` rather than as an outage, and once its object is older than the plans'
+    retention the prune removes it with its open-index entry, so the store's lifecycle ends for every document."""
+    bus = _Bus()
+    plan = _pass_one(settings, bus, {"token": "tok-old-schema", "from_version": 1})
+    (document,) = _plan_files(settings, "runs")
+    stored = json.loads(document.read_text())
+    stored["order"]["observability"]["otlp"] = {"OTEL_EXPORTER_OTLP_ENDPOINT": "http://collector:4318"}
+    document.write_text(json.dumps(stored))
+
+    young = asyncio.run(stage_plans.sweep(settings, bus))
+    aged = time.time() - CLOSED_RETENTION.total_seconds() - 60
+    os.utime(document, (aged, aged))
+    old = asyncio.run(stage_plans.sweep(settings, bus))
+
+    assert (young.unreadable, young.errors, young.pruned) == (1, 0, 0)
+    assert (old.unreadable, old.pruned) == (1, 1)
+    assert _plan_files(settings, "runs") == [] and _plan_files(settings, "open") == [], f"{plan.action_id} outlived its retention"

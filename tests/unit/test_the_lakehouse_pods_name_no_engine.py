@@ -102,7 +102,7 @@ def test_a_lakehouse_pod_names_ray_only_through_an_enabled_engine_on_compute() -
             if k.startswith(("RASK_SA_", "RASK_COMPUTE_ENGINE"))
         }
     )
-    assert registered and registered <= set(compute.engine_tasks), "a planner registers a task compute's engine cannot run"
+    assert registered and registered <= set(compute.engine_tasks["ray"]), "a planner registers a task compute's engine cannot run"
     assert reports <= set(compute.engine_outcome_bases), "compute refuses a planner's own outcome door"
     assert set(compute.sa_subjects.values()) >= {"service-medallion-producer", "service-bronze-to-silver", "service-silver-to-gold", "service-media-to-silver"}
     head = next(c for d in on if d.get("kind") == "RayCluster" for c in d["spec"]["headGroupSpec"]["template"]["spec"]["containers"])

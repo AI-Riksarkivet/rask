@@ -123,6 +123,11 @@ class EngineError(RuntimeError):
     """
 
 
+class OrderRefusedError(ValueError):
+    """The engine answered that it will not run this order. No redelivery or resubmit changes that answer, so the run
+    is terminal: the caller closes its plan failed with the engine's reason. Not an `EngineError`, whose runs stay open."""
+
+
 class RunHandle(BaseModel):
     """What `submit` returned, carried to every later call.
 

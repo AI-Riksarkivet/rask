@@ -4,7 +4,8 @@ The order crosses a trust boundary into the engine app, and Ray lays a job's `ru
 so whatever variable the order may name, the caller chooses for the job's process. Measured before this door
 refused it: an order carrying `PYTHONWARNINGS` and `BROWSER` in its OTLP map runs a shell command on Python 3.13, one
 carrying `S3_ENDPOINT` or `RASK_LINEAGE_ENDPOINT` overrides the pod's own, and an outcome URL on the caller's host
-receives the job's projected token. Each shape below is refused 422 and nothing reaches Ray.
+receives the job's projected token. A task resolves only through the table of the engine the submission names, so
+another engine's command never runs as this one's. Each shape below is refused 422 and nothing reaches Ray.
 
 Driven at the real app's door in-process; Ray's Jobs API is a transport that records every call. Authentication is
 not the claim (the live keeper `services/medallion/tests/conftest.py::compute_engine` drives the token).
@@ -52,7 +53,10 @@ def door() -> Iterator[tuple[TestClient, list[httpx.Request]]]:
 
     settings = ComputeSettings.model_validate(
         {
-            "RASK_COMPUTE_ENGINE_TASKS": {"stage-transform": "python /home/ray/jobs/ray_stage_job.py"},
+            "RASK_COMPUTE_ENGINE_TASKS": {
+                "ray": {"stage-transform": "python /home/ray/jobs/ray_stage_job.py"},
+                "spark": {"spark-only": "spark-submit job.py"},
+            },
             "RASK_COMPUTE_ENGINE_OUTCOME_BASES": [_PLANNER],
             "RASK_INSECURE_ALLOW_UNAUTHENTICATED": True,
         }
@@ -73,13 +77,21 @@ def door() -> Iterator[tuple[TestClient, list[httpx.Request]]]:
         pytest.param(
             "POST",
             "/engine/runs",
-            {"order": _order(observability={"otlp": {"PYTHONWARNINGS": "all:0:antigravity.x:0:0", "BROWSER": "/bin/sh -c id #%s"}})},
+            {"engine": "ray", "order": _order(observability={"otlp": {"PYTHONWARNINGS": "all:0:antigravity.x:0:0", "BROWSER": "/bin/sh -c id #%s"}})},
             id="a-variable-of-the-callers-choosing",
         ),
-        pytest.param("POST", "/engine/runs", {"order": _order(params={"S3_ENDPOINT=x": "y"})}, id="a-param-that-is-no-variable-name"),
-        pytest.param("POST", "/engine/runs", {"order": _order(outcome_url=f"http://attacker:8000/runs/{_KEY}/outcome")}, id="an-outcome-door-elsewhere"),
-        pytest.param("POST", "/engine/runs", {"order": _order(outcome_url=f"{_PLANNER}/runs/{'f' * 40}/outcome")}, id="another-runs-outcome-door"),
-        pytest.param("POST", "/engine/runs", {"order": _order(idempotency_key="raysubmit_user_job", outcome_url="")}, id="a-job-no-planner-names"),
+        pytest.param("POST", "/engine/runs", {"engine": "ray", "order": _order(params={"S3_ENDPOINT=x": "y"})}, id="a-param-that-is-no-variable-name"),
+        pytest.param(
+            "POST", "/engine/runs", {"engine": "ray", "order": _order(outcome_url=f"http://attacker:8000/runs/{_KEY}/outcome")}, id="an-outcome-door-elsewhere"
+        ),
+        pytest.param(
+            "POST", "/engine/runs", {"engine": "ray", "order": _order(outcome_url=f"{_PLANNER}/runs/{'f' * 40}/outcome")}, id="another-runs-outcome-door"
+        ),
+        pytest.param(
+            "POST", "/engine/runs", {"engine": "ray", "order": _order(idempotency_key="raysubmit_user_job", outcome_url="")}, id="a-job-no-planner-names"
+        ),
+        pytest.param("POST", "/engine/runs", {"engine": "flink", "order": _order()}, id="an-engine-this-door-does-not-serve"),
+        pytest.param("POST", "/engine/runs", {"engine": "ray", "order": _order(task="spark-only")}, id="another-engines-task"),
         pytest.param("POST", "/engine/runs/raysubmit_user_job/cancel", None, id="stopping-a-job-no-planner-submitted"),
         pytest.param("GET", "/engine/runs/raysubmit_user_job/failure", None, id="reading-a-job-no-planner-submitted"),
     ],

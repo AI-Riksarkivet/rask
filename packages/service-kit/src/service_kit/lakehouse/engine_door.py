@@ -3,8 +3,9 @@
 The lakehouse names no engine. An engine is a Dapr app-id in deployment configuration (`EngineBinding`), and every
 verb the `Executor` port has reaches it as a Dapr service invocation of this module's routes:
 
-* submit: ``POST /engine/runs`` with the run's `WorkOrder`; idempotent under the order's key, so a resubmit or a
-  redelivered trigger re-attaches to the run already doing the work;
+* submit: ``POST /engine/runs`` with the run's `WorkOrder` and the engine name the deployment registered it under;
+  idempotent under the order's key, so a resubmit or a redelivered trigger re-attaches to the run already doing the
+  work. A 422 is the engine refusing the order, which `OrderRefusedError` carries to the caller as terminal;
 * status: ``GET /engine/runs/{key}``; ``unknown`` only when the engine answers that it holds no such run;
 * failure: ``GET /engine/runs/{key}/failure``;
 * cancel: ``POST /engine/runs/{key}/cancel``.
@@ -30,7 +31,7 @@ from typing import TYPE_CHECKING, Any, Final
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
-from service_kit.lakehouse.executor import Capability, EngineError, RunFailure, RunHandle, RunState, SubmitOutcome, WrongEngineError
+from service_kit.lakehouse.executor import Capability, EngineError, OrderRefusedError, RunFailure, RunHandle, RunState, SubmitOutcome, WrongEngineError
 from service_kit.lakehouse.work_order import WorkOrder
 
 
@@ -43,10 +44,15 @@ ENGINE_RUNS_PATH: Final = "/engine/runs"
 
 
 class EngineSubmission(BaseModel):
-    """What a planner sends to start a run: the order, which carries everything the engine may know."""
+    """What a planner sends to start a run: the order, and the engine name its task is registered under.
+
+    One app may serve several engines, each with its own task table, so the engine name decides whose command a task
+    resolves to; an app refuses an engine it does not serve.
+    """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
+    engine: str = Field(min_length=1)
     order: WorkOrder
 
 
@@ -115,12 +121,15 @@ class InvokedExecutor:
         return {"Authorization": f"Bearer {token}"}
 
     async def _call(self, method: str, path: str, *, body: dict[str, Any] | None = None) -> dict[str, Any]:
-        """One invocation; any transport failure or non-2xx answer is the port's `EngineError`."""
+        """One invocation; a 422 is the engine refusing the request (`OrderRefusedError`), and any other transport failure or
+        non-2xx answer is the port's `EngineError`."""
         url = f"{self._base}{ENGINE_RUNS_PATH}{path}"
         try:
             response = await self._client.request(method, url, json=body, headers=self._headers())
         except httpx.HTTPError as exc:
             raise EngineError(f"engine {self.name!r} could not be reached at {url}: {type(exc).__name__}: {exc}") from exc
+        if response.status_code == httpx.codes.UNPROCESSABLE_ENTITY:
+            raise OrderRefusedError(f"engine {self.name!r} refused {method} {url}: {response.text[:300]}")
         if response.status_code >= 400:
             raise EngineError(f"engine {self.name!r} answered {response.status_code} to {method} {url}: {response.text[:300]}")
         return response.json()
@@ -135,10 +144,11 @@ class InvokedExecutor:
 
         Raises:
             WrongEngineError: the task is registered for another engine.
-            EngineError: the engine could not be reached or refused the order.
+            OrderRefusedError: the engine answered that it will not run this order.
+            EngineError: the engine could not be reached, or failed to answer.
         """
         self.validate_task(registration)
-        answered = EngineSubmitted.model_validate(await self._call("POST", "", body=EngineSubmission(order=order).model_dump(mode="json")))
+        answered = EngineSubmitted.model_validate(await self._call("POST", "", body=EngineSubmission(engine=self.name, order=order).model_dump(mode="json")))
         return RunHandle(engine=self.name, handle=answered.handle), answered.outcome
 
     async def status(self, handle: RunHandle) -> RunState:

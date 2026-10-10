@@ -42,6 +42,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from service_kit.lakehouse.objectfs import StorageOptions, fs_and_base
 from service_kit.lakehouse.stage_stamp import CARDINALITIES, ONE_TO_ONE
+from service_kit.lakehouse.work_order import invalid_param_keys
 
 
 log = logging.getLogger(__name__)
@@ -112,6 +113,9 @@ class TransformSpec(BaseModel):
         offending = sorted(key for key in value if key.startswith(_RESERVED_PARAM_PREFIX))
         if offending:
             raise ValueError(f"param keys {offending} carry the reserved {_RESERVED_PARAM_PREFIX!r} prefix, which the submit path adds")
+        unnamed = invalid_param_keys(value)
+        if unnamed:
+            raise ValueError(f"param keys {unnamed} are not variable names; each is delivered to the job as RASK_PARAM_<key>")
         return value
 
 

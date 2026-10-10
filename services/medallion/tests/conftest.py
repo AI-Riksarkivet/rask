@@ -113,7 +113,7 @@ def compute_engine(sa_issuer: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPat
         "RASK_SA_SUBJECTS": json.dumps({f"system:serviceaccount:{ENGINE_NAMESPACE}:{sa}": subject for sa, subject in PLANNER_ACCOUNTS.items()}),
         "RASK_SA_FETCH_TOKEN_FILE": str(sa_issuer.fetch_token_file),
         "RASK_SA_CA_FILE": str(sa_issuer.ca_file),
-        "RASK_COMPUTE_ENGINE_TASKS": json.dumps(ENGINE_TASKS),
+        "RASK_COMPUTE_ENGINE_TASKS": json.dumps({"ray": ENGINE_TASKS}),
         # The planner addresses the tests' settings name as their outcome door base.
         "RASK_COMPUTE_ENGINE_OUTCOME_BASES": json.dumps(["http://bronze-to-silver:8000", "http://rask-medallion-producer:8000"]),
     }
