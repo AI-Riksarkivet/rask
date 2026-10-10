@@ -6,7 +6,7 @@ survives in the data itself (the caller emits the ``source -> bronze`` lineage e
 Bronze is the FIRST governed tier (R23 — raw is the external world): the ``stage`` provenance stamp the
 retired raw→bronze stage runner used to apply is written here at ingest, and ``source_rowid`` roots at these
 bronze rows (minted by the first downstream derive from bronze's stable ``_rowid``). The per-stage ML
-then flows the blob forward (``compute._carry_forward``) and derives the silver artifacts.
+then flows the blob forward (``compute._blob_slices``) and derives the silver artifacts.
 """
 
 from __future__ import annotations
@@ -39,7 +39,7 @@ _BRONZE_STAGE = "bronze"
 #: that were harvested — bit-rot detection over the archival master is baseline OAIS practice, and
 #: with no stored digest the estate had no way to make that assertion at all.
 #:
-#: `_carry_forward` reads every column generically, so this travels with the row into silver and gold
+#: A stage carries every upstream column generically (`compute._blob_slices`), so this travels with the row into silver and gold
 #: for free: a gold transcription can be traced to the exact page bytes it was read from.
 _SHA256_COLUMN = "sha256"
 
@@ -94,10 +94,9 @@ class IngestResult(BaseModel):
 def _chunk_batch(chunk: list[SourceObject], first_id: int, extra_columns: ExtraColumns | None = None) -> pa.RecordBatch:
     """One chunk's rows as a RecordBatch; ``first_id`` keeps the positional id GLOBAL across chunks."""
     columns: dict[str, pa.Array] = {
-        # Positional id — the cascade is OVERWRITE-ONLY and compute._carry_forward re-reads blobs by
-        # the same range(rows); batches land in yield order within the single write, so the global
-        # offset keeps id == position. If ingest ever gains true append mode, derive a stable id
-        # from source_uri.
+        # Positional id, GLOBAL across chunks: batches land in yield order within the single write, so
+        # the offset keeps ids unique across the run, and every tier above converges on `id`. If ingest
+        # ever gains true append mode, derive a stable id from source_uri.
         "id": pa.array(range(first_id, first_id + len(chunk)), pa.int64()),
         "payload": blob_array([obj.data for obj in chunk]),
         "source_uri": pa.array([obj.uri for obj in chunk], pa.string()),

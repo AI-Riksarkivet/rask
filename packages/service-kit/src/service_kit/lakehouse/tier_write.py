@@ -1,7 +1,8 @@
 """The stage write: everything from a run's transformed rows to its ONE marked commit on the destination tier.
 
 Both cascade engines import this module and nothing else for their write. The in-process engine
-(``medallion.services.compute.transform_stage``) produces a ``pa.Table`` in memory; the Ray stage job
+(``medallion.services.compute.transform_stage``) produces a table for a tabular upstream and a re-runnable stream
+of slices for a blob upstream; the Ray stage job
 (``scripts/ray_stage_job.py``) produces a table on the driver for the head and delta lanes, a re-runnable stream of
 batches for the media lane, and a staged Lance dataset for the distributed lane. How rows are produced is each
 engine's business. What a tier write MEANS is this module's, so a write-semantics fix lands once for both.
@@ -65,6 +66,11 @@ type RowSource = pa.Table | lance.LanceDataset | Callable[[], pa.RecordBatchRead
 #: `MergeInsertBuilder.conflict_retries` defaults to ("Default is 10", pylance 12.0.0), so a marked merge survives
 #: the contention an unmarked `.execute()` survives.
 MERGE_CONFLICT_RETRIES: Final = 10
+
+#: How many bytes of a streamed run one converge commit carries (:func:`_converge_stream`). 16 MiB keeps an in-process
+#: re-run of 1 MiB rows to ~0.17 GB of growth inside a 512 Mi pod (`medallion.core.config.stage_commit_mb`, measured on
+#: pylance 12.0.0) while a run of small rows commits a few times rather than once per slice.
+STREAM_COMMIT_BYTES: Final = 16 << 20
 
 #: How many times a widening re-reads the tier after another commit passed the version it read. A maintenance
 #: compaction is the expected concurrent writer, and it does not land three times in one run.
@@ -310,7 +316,15 @@ def _literal(key: object) -> str:
     raise TypeError(f"a tier key must be an integer or a string to be retracted by key, not {type(key).__name__}")
 
 
-def write_tier(upstream: lance.LanceDataset, rows: RowSource, window: Window, target: TierTarget, *, session: lance.Session | None = None) -> TierWriteResult:
+def write_tier(
+    upstream: lance.LanceDataset,
+    rows: RowSource,
+    window: Window,
+    target: TierTarget,
+    *,
+    session: lance.Session | None = None,
+    commit_bytes: int = STREAM_COMMIT_BYTES,
+) -> TierWriteResult:
     """Land one run's rows on the destination tier, ending on the run's ONE marked commit.
 
     ``upstream`` is the dataset the engine read, at the version it read; ``rows`` are what the engine produced from
@@ -368,7 +382,7 @@ def write_tier(upstream: lance.LanceDataset, rows: RowSource, window: Window, ta
         version = (
             _converge(rows, target, full_sync=window.floor is None)
             if isinstance(rows, (pa.Table, lance.LanceDataset))
-            else _converge_stream(rows, target, counted, rows_in=rows_in, upstream_uri=upstream.uri)
+            else _converge_stream(rows, target, counted, rows_in=rows_in, upstream_uri=upstream.uri, commit_bytes=commit_bytes)
         )
     rows_out = _known_count(rows)
     if rows_out is None:
@@ -438,8 +452,10 @@ def _converge(rows: pa.Table | lance.LanceDataset, target: TierTarget, *, full_s
     return _marked_merge(clauses, rows, target)
 
 
-def _converge_stream(rows: Callable[[], pa.RecordBatchReader], target: TierTarget, counted: list[int], *, rows_in: int, upstream_uri: str) -> int:
-    """Converge a stream into the destination holding one SLICE at a time, ending on ONE marked commit.
+def _converge_stream(
+    rows: Callable[[], pa.RecordBatchReader], target: TierTarget, counted: list[int], *, rows_in: int, upstream_uri: str, commit_bytes: int
+) -> int:
+    """Converge a stream into the destination holding one COMMIT UNIT at a time, ending on ONE marked commit.
 
     WHY NOT ONE MERGE. Measured on pylance 12.0.0 over blob-v2 rows of 1 MiB: one `merge_insert` over the whole stream
     peaked at 1.29, 3.43 and 6.05 GB VmHWM for 0.2, 0.8 and 1.6 GB of payload, and a `when_not_matched_by_source_delete`
@@ -447,12 +463,19 @@ def _converge_stream(rows: Callable[[], pa.RecordBatchReader], target: TierTarge
     at 0.65 GB, into a 1.6 GB tier at 1.86 GB). A 16-row upsert into either tier peaked at 0.27 GB: an upsert is sized
     by its source. The driver runs in the Ray head, beside the GCS, the dashboard and Serve.
 
-    THE SHAPE. Every slice but the last lands as its own unmarked upsert (`when_matched_update_all` +
-    `when_not_matched_insert_all`, no retraction, so no slice deletes what an earlier one wrote). The last slice is held
-    back. Once the stream is read, the rows to retract are the tier's ids the run did not produce, found from the `id`
-    column alone and deleted by key in chunks. The held-back slice then lands as the run's ONE marked commit, so the
+    THE SHAPE. Slices are gathered into COMMIT UNITS of ``commit_bytes`` (a slice larger than that is a unit alone), and
+    every unit but the last lands as its own unmarked upsert (`when_matched_update_all` + `when_not_matched_insert_all`,
+    no retraction, so no unit deletes what an earlier one wrote). The last unit is held back. Once the stream is read,
+    the rows to retract are the tier's ids the run did not produce, found from the `id` column alone and deleted by key
+    in chunks. The held-back unit then lands as the run's ONE marked commit, so the
     marker sits on the run's last commit and "the marker is found" still means "every write landed". An empty stream
     lands an empty upsert, which still commits a version (measured on 12.0.0).
+
+    THE COMMIT UNIT IS NOT THE SCAN BATCH. An upsert joins its source against the whole target's `id`s and adds a
+    version, so committing every slice made a re-run of N rows cost N / slice commits each sized by the growing tier:
+    measured on pylance 12.0.0, a re-run of 32,000 1 KiB blob rows in 8-row slices took 454 s and 4,001 versions. A
+    byte budget keeps the unit sized by memory whatever the row size, so a column of short clips commits a few times
+    and a column of page images still holds only ``commit_bytes`` of rows.
 
     A key repeated across slices is refused with the message Lance gives a repeated key inside one merge, because a
     per-slice upsert would otherwise keep the last copy silently where one merge refuses ([[LH-243]]).
@@ -465,7 +488,11 @@ def _converge_stream(rows: Callable[[], pa.RecordBatchReader], target: TierTarge
     stream = rows()
     counted.append(0)
     seen: set[object] = set()
+    # `held` is a full unit; a further slice proves it is not the last, so it lands then. At most one unit plus the
+    # slices gathering into the next are held at once.
     held: pa.Table | None = None
+    gathering: list[pa.RecordBatch] = []
+    gathered = 0
     for batch in stream:
         if not batch.num_rows:
             continue
@@ -476,7 +503,13 @@ def _converge_stream(rows: Callable[[], pa.RecordBatchReader], target: TierTarge
         counted[-1] += batch.num_rows
         if held is not None:
             _upsert(target.uri, so).execute(held)
-        held = pa.Table.from_batches([batch])
+            held = None
+        gathering.append(batch)
+        gathered += batch.nbytes
+        if gathered >= commit_bytes:
+            held, gathering, gathered = pa.Table.from_batches(gathering), [], 0
+    if gathering:
+        held = pa.Table.from_batches(gathering)
     if rows_in and not counted[-1]:
         raise EmptyFullSyncError(
             f"the run produced no rows from {upstream_uri}, which holds {rows_in}; refusing a full-sync converge that would empty {target.uri}"

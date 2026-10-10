@@ -359,30 +359,44 @@ def test_a_media_rerun_retracts_and_ends_on_its_marked_commit_keeping_the_surviv
     """A re-run whose source dropped a row retracts it, re-mints no survivor's `_rowid`, and ends on its marked commit.
 
     The tier above stores this tier's stable `_rowid` as its `source_rowid`, so re-minting a survivor detaches its
-    children. The Ray media producer streams one row per slice here: the slices land as upserts, and the run's last
-    data commit, the one the retraction rides, carries the marker and is the version the run reports; only the lineage
-    index follows it.
+    children. Both engines stream one row per slice here, and the slices are gathered into commit units of
+    `tier_write.STREAM_COMMIT_BYTES`: every unit but the last lands as an upsert, the retraction follows, and the last
+    unit carries the marker and is the version the run reports; only the lineage index follows it. A commit per slice
+    would make a re-run of N rows cost N commits, each joined against the whole tier ([[CP-051]]).
     """
+    from medallion.core.config import MedallionSettings
+    from medallion.services import compute
+
     monkeypatch.setattr(job, "MEDIA_BATCH_ROWS", 1)
+    monkeypatch.setattr(compute, "get_settings", lambda: MedallionSettings(stage_batch_rows=1))
     bronze, silver = str(tmp_path / "bronze.lance"), str(tmp_path / "silver.lance")
-    _media_bronze(bronze, [10, 11, 12])
+    ids = list(range(10, 50))
+    _media_bronze(bronze, ids)
     _run(lane, bronze, silver, lineage=_doc("run-one"))
     first = _by_id(silver, "source_rowid")
     rowids = {r["id"]: r["_rowid"] for r in lance.dataset(silver).to_table(columns=["id"], with_row_id=True).to_pylist()}
     lance.dataset(bronze).delete("id = 11")
+    payload_bytes = sum(len(p) for p in blobs.read_aligned_table(lance.dataset(bronze), columns=["payload"]).column("payload").to_pylist())
     before = lance.dataset(silver).version
 
     reported = _run(lane, bronze, silver, lineage=_doc("run-two"), marker=CommitMarker(action_id="media-rerun"))
 
+    survivors = [i for i in ids if i != 11]
     after = {r["id"]: r["_rowid"] for r in lance.dataset(silver).to_table(columns=["id"], with_row_id=True).to_pylist()}
-    assert after == {10: rowids[10], 12: rowids[12]}, f"the rerun did not retract 11 or re-minted a survivor: {rowids} -> {after}"
-    assert _by_id(silver, "source_rowid") == {10: first[10], 12: first[12]}
+    assert after == {i: rowids[i] for i in survivors}, f"the rerun did not retract 11 or re-minted a survivor: {rowids} -> {after}"
+    assert _by_id(silver, "source_rowid") == {i: first[i] for i in survivors}
     assert reported == marked_version(silver, {}, action_id="media-rerun", above=before), "the run's marker is not on the version it reports"
     assert max(_versions(silver)) == cast("int", reported) + 1, "a commit of the run landed after its marked commit, other than the lineage index"
+    units = -(-payload_bytes // tier_write.STREAM_COMMIT_BYTES)
+    assert max(_versions(silver)) - before <= units + 2, (
+        f"the rerun of {len(survivors)} one-row slices ({payload_bytes} B) added {max(_versions(silver)) - before} versions; "
+        f"{units} commit unit(s), the retraction and the lineage index are {units + 2}"
+    )
 
 
-#: One stage write in a FRESH process, so its VmHWM is the write's own peak and nothing an earlier test allocated.
-#: ``ray`` and ``inprocess`` are each engine's real path; ``control`` lands the same stream as ONE whole-tier merge.
+#: One stage write in a FRESH process, so its VmHWM is the write's own peak and nothing an earlier test allocated. It
+#: prints the VmHWM after every import (the mark) and after the write. ``ray`` and ``inprocess`` are each engine's real
+#: path; ``control`` lands the same stream as ONE whole-tier merge.
 _PEAK_SCRIPT = """
 import importlib.util, sys
 import lance
@@ -391,57 +405,66 @@ spec = importlib.util.spec_from_file_location("job", job_path)
 job = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(job)
 from service_kit.lakehouse.commit_marker import CommitMarker
+from medallion.services.compute import transform_stage
+def hwm():
+    return next(line for line in open("/proc/self/status") if line.startswith("VmHWM")).split()[1]
+mark = hwm()
 if mode == "ray":
     job._run_stage(bronze, silver, "silver", {}, marker=CommitMarker(action_id="peak"))
 elif mode == "inprocess":
-    from medallion.services.compute import transform_stage
     transform_stage(bronze, silver, {}, stage="silver", marker=CommitMarker(action_id="peak"))
 else:
     rows = job._media_rows(lance.dataset(bronze), stage="silver", lineage="", dataset_id="")
     tier = lance.dataset(silver)
     tier.merge_insert("id").when_matched_update_all().when_not_matched_insert_all().when_not_matched_by_source_delete().execute_uncommitted(rows())
-print(next(line for line in open("/proc/self/status") if line.startswith("VmHWM")).split()[1])
+print(mark, hwm())
 """
 
+#: What a stage may add to a stage runner: its 512 Mi limit (`resources.default`) less the ~210 Mi it idles at
+#: (`kubectl top`, 2026-10-10).
+_STAGE_RUNNER_HEADROOM_MB = 512 - 210
 
-def _peak_mb(mode: str, bronze: str, silver: str) -> int:
+
+def _peak_mb(mode: str, bronze: str, silver: str) -> tuple[int, int]:
+    """``(peak, growth)`` in MB: the run's VmHWM, and how far it rose above the mark taken after every import."""
     # The allocator bound every lakehouse pod carries (`lance.allocatorEnv`): without it glibc keeps one arena per host
     # core and RSS settles at the sum of their high-water marks, which measures the allocator rather than the write.
-    env = {
-        **os.environ,
-        "RASK_STAGE_MEDIA_BATCH_ROWS": "16",
-        "MEDALLION_STAGE_BATCH_ROWS": "16",
-        "MALLOC_ARENA_MAX": "2",
-        "ARROW_DEFAULT_MEMORY_POOL": "system",
-        "PYTHONWARNINGS": "ignore",
-    }
+    # The in-process engine runs at its deployed defaults; the Ray lane at 16-row slices.
+    env = {**os.environ, "RASK_STAGE_MEDIA_BATCH_ROWS": "16", "MALLOC_ARENA_MAX": "2", "ARROW_DEFAULT_MEMORY_POOL": "system", "PYTHONWARNINGS": "ignore"}
+    for name in ("MEDALLION_STAGE_BATCH_ROWS", "MEDALLION_STAGE_IO_BUFFER_MB", "MEDALLION_STAGE_COMMIT_MB"):
+        env.pop(name, None)
     out = subprocess.run([sys.executable, "-c", _PEAK_SCRIPT, mode, str(_JOB_PATH), bronze, silver], capture_output=True, text=True, env=env, check=True)
-    return int(out.stdout.strip().splitlines()[-1]) // 1024
+    mark, peak = (int(value) // 1024 for value in out.stdout.split()[-2:])
+    return peak, peak - mark
 
 
 @pytest.mark.parametrize("lane", LANES)
 def test_a_media_converge_holds_a_slice_not_the_tier(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, lane: str) -> None:
-    """A media re-run over a 256 MiB tier (256 blob rows of 1 MiB) in 16-row slices peaks well under one whole-tier merge.
+    """A media re-run over a 512 MiB tier (512 blob rows of 1 MiB) is sized by its slice, not by the tier.
 
-    Measured on pylance 12.0.0 with 16-row slices and the lakehouse pods' allocator bound: the Ray lane's slice-bounded
-    converge peaked at 0.48 and 0.51 GB VmHWM over 256 and 800 MiB tiers, where one whole-tier merge of the same stream
-    peaked at 1.23 and 2.74 GB. The in-process engine is held to the same bound ([[CP-051]]). Each measurement runs in
-    its own process against the same tier, so the write's shape is the only variable.
+    The whole-tier control grows with the tier and a sliced converge does not, so the tier is large enough that the
+    ratio is not a coin toss. Measured on pylance 12.0.0 with the lakehouse pods' allocator bound: the Ray lane in
+    16-row slices peaked at 0.48 and 0.51 GB VmHWM over 256 and 800 MiB tiers, where one whole-tier merge of the same
+    stream peaked at 1.23 and 2.74 GB. The in-process engine runs in the stage runner, so at its defaults its growth
+    over the post-import mark must also fit what that pod has left ([[CP-051]]). Each measurement runs in its own
+    process against the same tier, so the write's shape is the only variable.
     """
     bronze, silver = str(tmp_path / "bronze.lance"), str(tmp_path / "silver.lance")
     schema = pa.schema([pa.field("id", pa.int64()), blob_field("payload")])
     slices = (
         pa.record_batch([pa.array(range(s, s + 32), pa.int64()), blob_array([os.urandom(1 << 20) for _ in range(32)])], schema=schema)
-        for s in range(0, 256, 32)
+        for s in range(0, 512, 32)
     )
     lance.write_dataset(pa.RecordBatchReader.from_batches(schema, slices), bronze, data_storage_version="2.2", enable_stable_row_ids=True)
     monkeypatch.setattr(job, "MEDIA_BATCH_ROWS", 16)
     job._run_stage(bronze, silver, "silver", {})
 
-    bounded = _peak_mb(lane, bronze, silver)
-    control = _peak_mb("control", bronze, silver)
+    bounded, growth = _peak_mb(lane, bronze, silver)
+    control, _ = _peak_mb("control", bronze, silver)
 
     assert bounded * 2 < control, f"the {lane} media converge peaked at {bounded} MB, against {control} MB for one whole-tier merge of the same stream"
+    if lane == "inprocess":
+        assert growth < _STAGE_RUNNER_HEADROOM_MB, f"the in-process stage grew {growth} MB, past the {_STAGE_RUNNER_HEADROOM_MB} MB a stage runner has left"
 
 
 @pytest.mark.parametrize("lane", LANES)

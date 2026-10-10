@@ -107,16 +107,23 @@ class MedallionSettings(OidcSettings, FgaSettings, SignatureDoorSettings, BaseSe
     #: a literal cannot track `resources.limits.memory`; `shared_lance_session` clamps them to the cgroup.
     lance_metadata_cache_mb: int = Field(default=128, ge=8, alias="MEDALLION_LANCE_METADATA_CACHE_MB")
     lance_index_cache_mb: int = Field(default=256, ge=8, alias="MEDALLION_LANCE_INDEX_CACHE_MB")
-    #: How many rows one slice of an in-process blob stage carries ([[CP-051]]). The stage's peak is set by the
-    #: slice, not the upstream: measured on pylance 12.0.0 over 1 MiB blob rows with the pods' allocator bound, a
-    #: re-run in a fresh process (0.18 GB VmHWM after imports) peaked at 0.37 GB over both a 256 and an 800 MiB
-    #: upstream at 8 rows, at 0.46-0.51 GB at 16 rows and at 0.68 GB at 64. The stage runner idles at ~210 Mi
-    #: under a 512 Mi limit, so 8 rows leaves room for ~1.8 MB page images. Rows, because a Lance scan batches by
-    #: rows; raise it for small payloads.
-    stage_batch_rows: int = Field(default=8, ge=1, alias="MEDALLION_STAGE_BATCH_ROWS")
+    #: How many rows one scan slice of an in-process blob stage decodes at a time ([[CP-051]]). The STAGE'S
+    #: MEMORY IS SET BY THE SLICE AND THE COMMIT UNIT BELOW, NOT BY THE UPSTREAM. Measured on pylance 12.0.0 at
+    #: 4 rows and 16 MiB commit units, in a fresh process with the pods' allocator bound, as VmHWM growth over
+    #: the post-import mark: a re-run grew 166 MB over a 256 MiB and 159 MB over an 800 MiB upstream of 1 MiB
+    #: rows, 217 MB over 2 MiB rows, 135 MB over 100 KiB rows and 219 MB over 32k 1 KiB rows; a create grew
+    #: ~0.10 GB. The stage runner idles at ~210 Mi under a 512 Mi limit. Rows, because a Lance scan batches by
+    #: rows; 8 rows of 2 MiB grew 261 MB, which leaves too little of that headroom for page images.
+    stage_batch_rows: int = Field(default=4, ge=1, alias="MEDALLION_STAGE_BATCH_ROWS")
     #: How many MiB the blob stage's scan may buffer from storage ahead of the slice being produced. Lance's
     #: default is 2 GiB and a scan may hold up to twice it (`lance_docs/guide.md:3050-3071`).
     stage_io_buffer_mb: int = Field(default=64, ge=1, alias="MEDALLION_STAGE_IO_BUFFER_MB")
+    #: How many MiB of slices one converge commit of a streamed stage carries (`tier_write.STREAM_COMMIT_BYTES`). The
+    #: scan slice bounds what is decoded at once; this bounds what one upsert holds and how many versions a re-run
+    #: adds, whatever the row size. Over 1 MiB rows in 8-row slices a re-run grew 196, 211, 272 and 322 MB at 8, 16,
+    #: 32 and 64 MiB units, so 16 is the largest unit that keeps page images inside the pod; 32k 1 KiB rows re-run in
+    #: 2.5 s at 16 MiB, against 454 s and 4,001 versions when every 8-row slice was its own commit.
+    stage_commit_mb: int = Field(default=16, ge=1, alias="MEDALLION_STAGE_COMMIT_MB")
 
     # --- shared Dapr wiring (same component + lineage topic as catalog/lineage) -----------------
     pubsub: str = Field(default="lineage-pubsub", alias="MEDALLION_PUBSUB")

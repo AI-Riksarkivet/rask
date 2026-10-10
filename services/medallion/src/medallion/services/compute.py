@@ -348,7 +348,7 @@ def transform_stage(
         if lineage is not None:
             table = table.append_column(pa.field(_LINEAGE_COLUMN, pa.json_()), _lineage_column(lineage, table.num_rows))
         rows, out_names = table, table.column_names
-    written = tier_write.write_tier(ds, rows, window, target, session=shared_lance_session())
+    written = tier_write.write_tier(ds, rows, window, target, session=shared_lance_session(), commit_bytes=get_settings().stage_commit_mb << 20)
     result = measure(to_uri, storage_options, version=written.version).model_copy(update={"previous_row_count": previous_rows})
     # Declare the input→output column edges for the columnLineage facet (#1): the blob columns are this stage's
     # deriver sources. The stage runner attaches the single upstream dataset identity.

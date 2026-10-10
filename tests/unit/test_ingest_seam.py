@@ -102,8 +102,8 @@ def test_ingest_ceilings_refuse_without_committing(tmp_path: Path) -> None:
 
 def test_ingest_streams_batches_into_one_atomic_commit(tmp_path: Path) -> None:
     """Lance-native streaming write (2026-07-13): the batch iterator keeps memory at one chunk while
-    the RESULT is a SINGLE commit — global positional ids in insertion order (compute._carry_forward's
-    range(rows) contract), all blobs readable across batch boundaries, stable row ids, and the version
+    the RESULT is a SINGLE commit — global positional ids in insertion order (unique across the run, the
+    key every tier converges on), all blobs readable across batch boundaries, stable row ids, and the version
     bumps exactly ONCE per ingest (fresh → 1, idempotent re-ingest overwrite → 2)."""
     source_dir = tmp_path / "src"
     source_dir.mkdir()
