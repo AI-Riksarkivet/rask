@@ -118,6 +118,9 @@ HELM_SET=(
   --set medallion.fgaEnabled=true
   --set medallion.compute=true
   --set medallion.ray=true
+  # The one Ray plane ([[CP-041]]): this lane's head is deploy/ray-lance-demo.yaml's `ray-lance-head`
+  # Service (dashboard :8265), so the cascade submits to it and compute prunes it.
+  --set-string ray.dashboardUrl=http://ray-lance-head:8265
   --set medallion.quality=true
   --set catalog.warehouses.enabled=true
   --set observability.enabled=false

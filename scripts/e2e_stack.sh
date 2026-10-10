@@ -113,6 +113,9 @@ HELM_SET=(
   --set image.localImages=true
   --set auth.enabled=true
   --set medallion.fgaEnabled=true
+  # The ray-OFF core lane (the Ray path's home is ray_e2e_stack.sh): with the medallion's Ray lane on and
+  # no Ray named, the chart refuses the render ([[CP-041]]).
+  --set medallion.ray=false
   --set catalog.warehouses.enabled=true
   --set-json "catalog.multibase.dataBases=[\"$BASE_A\",\"$BASE_B\"]"
   --set services.lineage.outbox.enabled=true
