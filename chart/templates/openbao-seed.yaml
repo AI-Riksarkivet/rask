@@ -248,6 +248,11 @@ data:
     seed
     while sleep 5; do
       if [ -f "$0" ] && [ "$(sha256sum "$0" 2>/dev/null || true)" != "$self" ]; then
+        {{- if $nats }}
+        # The users are issued again under the root the store holds, read back through the Service: one that answers
+        # without it would have the seed mint a root the running bus refuses, so the seed waits for it instead.
+        if ! svc_get nats-root nsc >/dev/null; then echo "rask's seed changed, and the Service serves no bus trust root yet; waiting" >&2; continue; fi
+        {{- end }}
         echo "rask's seed changed; minting a pair for any new signing identity and seeding again"
         rm -rf "$HOME/seed/nats"
         PATH="$NATS_TOOLS:$PATH" sh "$(dirname "$0")/mint.sh" || true

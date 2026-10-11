@@ -175,7 +175,10 @@ for item in items(sys.stdin.read()):
     IFS=/ read -r kind obj ns old <<<"$entry"
     NS=()
     [ "$ns" != "-" ] && NS=(--namespace "$ns")
-    kubectl annotate "$kind" "$obj" "${NS[@]}" helm.sh/resource-policy=keep --overwrite >/dev/null || true
+    if ! kubectl annotate "$kind" "$obj" "${NS[@]}" helm.sh/resource-policy=keep --overwrite >/dev/null; then
+      echo "!! $name: could not mark $kind/$obj keep, so the old release's next upgrade deletes it" >&2
+      [ "$installed" -ne 0 ] || installed=1
+    fi
     # The orphaned StatefulSet's revisions carry its old selector, which the new one never adopts.
     if [ "$kind" = "StatefulSet" ]; then
       kubectl delete controllerrevisions "${NS[@]}" -l "$old" --ignore-not-found >/dev/null

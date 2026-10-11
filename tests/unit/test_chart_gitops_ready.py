@@ -41,8 +41,8 @@ def _render(*sets: str) -> subprocess.CompletedProcess[str]:
 
 
 def test_the_object_store_does_not_inherit_the_generic_APP_memory_ceiling() -> None:
-    """The development store's server is the minio fixture's ([[XC-131]]). RustFS sat under the whole lakehouse and named no `resources` tier, so it inherited
-    `default` — 512Mi, sized for a stateless FastAPI shell. Measured 2026-08-05 on the dev estate:
+    """The object store sits under the whole lakehouse, and its server is the minio fixture's ([[XC-131]]). With no
+    `resources` tier of its own it inherited `default`: 512Mi, sized for a stateless FastAPI shell. Measured 2026-08-05 on the dev estate:
     370Mi at IDLE and **33 OOMKills**, each one taking every Lance read and write in the cluster
     down with it. The failure is invisible in review (the values file simply lacks a key) and reads
     in the cluster as "the lakehouse is flaky".
