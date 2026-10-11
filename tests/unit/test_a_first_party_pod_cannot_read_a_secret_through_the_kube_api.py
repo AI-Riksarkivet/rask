@@ -16,7 +16,7 @@ ONE TEST PER CLOSES-WHEN CLAUSE a render can see: the grants, and one SA per ser
 every sidecar still loading lance-secrets, is read back on the deployed estate; that the dev store a
 sidecar reads is seeded before it serves is `test_the_dev_openbao_is_seeded_by_its_own_pod.py`.
 
-MUTATION-CHECKED 2026-10-11 ([[XC-128]]). With a template binding a `secrets: get` Role to SA `default` added to the
+MUTATION-CHECKED 2026-10-11 ([[XC-128]]; again with [[XC-130]]). With a template binding a `secrets: get` Role to SA `default` added to the
 chart, the grants test fails in every overlay on `RoleBinding/<name> grants ['secrets'] to SA default` and the
 identity test passes. With `openfga-model` on `rask-sa-jobs`, an ordinary SA no
 earlier revision guarantees, only the identity test fails, on that pre-upgrade hook. With `rask-sa-hooks` rendered as
@@ -288,12 +288,14 @@ def test_no_first_party_service_account_can_read_a_secret_or_review_a_token(over
     openbao = _pod(args, "Deployment/rask-openbao")
     delegated = [b.service_accounts for b in bindings if b.role == ("ClusterRole", "system:auth-delegator")]
 
-    # The walk sees the chart and the classifier sees the subcharts' own grants; without these every
+    # The walk sees the chart's pods and the subcharts', and the classifier reads rendered roles; without these every
     # assertion below passes by parsing nothing.
     assert sum(pod.first_party for pod in pods) >= 25, f"{overlay}: only {sum(p.first_party for p in pods)} first-party pod templates"
     assert any(not pod.first_party for pod in pods), f"{overlay}: no subchart pods rendered; the source split is broken"
-    assert any("secrets" in b.grants for b in bindings), f"{overlay}: no binding classified as granting secrets; the Dapr operator's does"
-    assert any("tokenreviews" in b.grants for b in bindings), f"{overlay}: no binding classified as reviewing tokens; Sentry's does"
+    # No role the render holds grants `secrets` (the operators that needed one are prerequisites, ADR 0153), so the proof that
+    # the classifier recognises one is the planted binding of the module's mutation check.
+    assert any(b.role not in _BUILTIN_GRANTS for b in bindings), f"{overlay}: no binding to a rendered role was classified"
+    assert any("tokenreviews" in b.grants for b in bindings), f"{overlay}: no binding classified as reviewing tokens; OpenBao's auth-delegator does"
 
     assert _offending(args) == [], f"{overlay}: {_offending(args)}"
     assert delegated == [(openbao.service_account,)], f"{overlay}: auth-delegator bound to {delegated}, OpenBao runs as {openbao.service_account}"

@@ -29,8 +29,8 @@ medallion:
   producer:
     expose: false # /produce is the unauthenticated demo entry — the prod head fires from real bronze ingests
 
-# --- HA (P3): multi-replica stateless services + a PodDisruptionBudget. Stateful HA (AGE/RustFS) is the
-# operators' job in rask (CNPG / rustfs-operator), not here. Optionally also set autoscaling.enabled. -----
+# --- HA (P3): multi-replica stateless services + a PodDisruptionBudget. Stateful HA (AGE) is the platform's
+# CloudNativePG operator's job (age.cnpgCluster; docs/architecture/deployment.md), not here. Optionally also set autoscaling.enabled. -----
 services:
   catalog:
     replicas: 2

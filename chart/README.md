@@ -25,14 +25,13 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 
 | Repository | Name | Version |
 |------------|------|---------|
-| https://cloudnative-pg.github.io/charts | cloudnative-pg | 0.28.3 |
 | https://openfga.github.io/helm-charts | openfga | 0.3.12 |
 
 ## Values
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| age.cnpgCluster.enabled | bool | `false` | Render the AGE-on-CNPG `Cluster` (templates/age-cluster.yaml); mutually exclusive with `age.enabled`. Needs an extension image, K8s 1.33+ and CNPG >= 1.27. |
+| age.cnpgCluster.enabled | bool | `false` | Render the AGE-on-CNPG `Cluster` (templates/age-cluster.yaml); mutually exclusive with `age.enabled`. Needs an extension image, K8s 1.33+ and the CloudNativePG operator (>= 1.27), a prerequisite: the render refuses on a cluster that does not serve postgresql.cnpg.io/v1. |
 | age.cnpgCluster.extensionImage | string | `""` | The built AGE extension image for the CNPG cluster (e.g. ghcr.io/<org>/age-cnpg-ext:1.7.0-18); required when `cnpgCluster.enabled`, no default. |
 | age.enabled | bool | `true` | Run the in-cluster apache/age Postgres StatefulSet that serves the lineage graph, OpenFGA and the Dapr state store databases. |
 | age.externalHost | string | `""` | Postgres host lineage, OpenFGA and the Dapr state store use instead of the in-cluster AGE; pair with age.enabled=false. Empty = in-cluster. |
@@ -84,10 +83,6 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | catalog.serviceIdentity | string | `"service-catalog"` | The identity the catalog presents and signs its emitted lineage as (the one delegator). Empty = the catalog emits unsigned lineage. |
 | catalog.trashGraceDays | int | `7` | Days a dropped table or namespace stays undroppable before the trash purge may reclaim it (LANCE_TRASH_GRACE_DAYS). 0 destroys immediately. |
 | catalog.warehouses.enabled | bool | `true` | Per-warehouse physical multi-tenancy: POST /v1/warehouses provisions a bucket per warehouse and binds top-level namespaces to it. Unbound namespaces use `minio.bucket`. |
-| cloudnative-pg.crds.create | bool | `false` | Subchart passthrough: false because the umbrella chart vendors the CNPG CRDs into its own crds/ directory. |
-| cloudnative-pg.resources | object | `{"limits":{"memory":"256Mi"},"requests":{"cpu":"50m","memory":"64Mi"}}` | Subchart passthrough: the CNPG operator pod's requests and limits (requests 50m/64Mi, limit 256Mi). |
-| cloudnative-pg.webhook | object | `{"mutating":{"failurePolicy":"Ignore"},"validating":{"failurePolicy":"Ignore"}}` | Subchart passthrough: CNPG validating and mutating webhook failurePolicy `Ignore`, so a Cluster created before the operator is Ready is admitted. |
-| cnpg.enabled | bool | `true` | Installs the CloudNativePG operator subchart (Chart.yaml condition); a Cluster exists only when `age.cnpgCluster.enabled`. |
 | config.AWS_REGION | string | `"us-east-1"` | AWS region written to the fleet ConfigMap for S3 clients; any value works against RustFS/MinIO. |
 | config.HCP_INSECURE | string | `"true"` | Skips TLS verification for the S3 client (`storage.client` reads it as an alias of RASK_S3_INSECURE). String "true" or "false". |
 | config.RASK_API_PREFIX | string | `"/api"` | Path prefix the fleet apps mount their API under, via the shared fleet ConfigMap. |

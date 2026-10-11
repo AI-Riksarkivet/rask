@@ -50,9 +50,9 @@ already has an owner.
 ## 2 · How rask helps (short version: with all of it)
 
 KubeRay and Kueue are not rask's: they are the engine owner's (ADR 0153; in development the kuberay-operator
-fixture, and Kueue the cluster's own). rask's chart operates CloudNativePG, rustfs-operator,
-NATS, Dapr, OpenFGA-server, Traefik, and the GreptimeDB observability stack
-(`RASK-INTEGRATION.md` §Pre-flight). So the adoption plan is NOT "install operators here"; it is the
+fixture, and Kueue the cluster's own). Neither are the CloudNativePG operator, NATS, the Dapr control plane or the
+observability store: they are prerequisites the platform runs (in development, `deploy/fixtures`). rask's chart
+operates OpenFGA-server and the stores it bundles (`RASK-INTEGRATION.md` §Pre-flight). So the adoption plan is NOT "install operators here"; it is the
 merge itself: flip `age.enabled`/`rustfs.enabled` off, point the externalization values at
 `<release>-postgres-rw` / the rustfs `Tenant`, and retire the raw Ray head into rask's KubeRay
 cluster. In exchange we contribute what rask lacks entirely: lineage, actual OpenFGA *enforcement*

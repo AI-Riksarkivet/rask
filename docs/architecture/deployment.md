@@ -1,12 +1,11 @@
 # Deployment
 
 rask uses a **Helm chart at `chart/`** as the single deploy artifact for both
-local k3s and production Kubernetes. The chart supports in-cluster
-CloudNativePG (Postgres), RustFS (object store), and KubeRay via
-`cnpg.enabled` / `rustfs.enabled` / `ray.enabled` toggles — each toggle gates
-both the operator subchart and the custom resource it manages. Set all three to
-`true` for local k3s; leave them `false` for production (external deps supplied
-via `existingSecret`).
+local k3s and production Kubernetes. The chart is the product (ADR 0153): it
+renders rask's own services, zones and the objects they need, and installs no
+operator or control plane. Those are prerequisites the platform runs, each in the
+sections below; development installs them from `deploy/fixtures`, each its own
+release, before rask's (`make k3s-up`).
 
 ## Prerequisites: the External Secrets Operator and a secret store
 
@@ -52,6 +51,19 @@ What the bus must provide, and the version rask is tested against, are in `deplo
 install `make k3s-up` runs, release `nats`, Service `rask-nats` in rask's namespace): NATS 2.14.2; JetStream on a file
 store; a cluster of at least `nats.streamReplicas` nodes (three); operator mode with one APP account holding JetStream
 and every rask user, so Dapr's pubsub.jetstream can authenticate with a user JWT and NKEY seed.
+
+## Prerequisite: the CloudNativePG operator, for the AGE-on-CNPG path
+
+The default graph store is the `rask-age` StatefulSet, which needs no operator. The AGE-on-CNPG path
+(`age.cnpgCluster.enabled`, docs/CNPG-AGE.md) renders a CloudNativePG `Cluster`, so for it the **CloudNativePG operator
+is a prerequisite** (ADR 0153): the chart installs no operator, and with `age.cnpgCluster.enabled` on it refuses to
+render for a cluster that does not serve `postgresql.cnpg.io/v1` (a cluster-less `helm template` names it:
+`--api-versions postgresql.cnpg.io/v1/Cluster`). The operator's CRDs belong to no Helm release: a release that owned
+them would delete every CNPG CRD, and every `Cluster` with them, on uninstall.
+
+The version rask is tested against is in `deploy/fixtures/cloudnative-pg` (the development install `make k3s-up` runs,
+release `cloudnative-pg` in `cnpg-system`): chart 0.28.3, operator 1.29.1, CRDs applied server-side from
+`chart/crds-bootstrap/` by `make k3s-crds` before it. The path itself needs CNPG >= 1.27 and Kubernetes 1.33+.
 
 ## Local deploy (k3s)
 
@@ -153,8 +165,7 @@ admit as the trainer (`ray.engineServiceAccount`).
   (viewer/search/annotator; the viewer carries the S3 object browser).
 - **frontend zones** — SvelteKit SSR apps on `:3000` each.
 - **Ingress** (Traefik) — `/api` → gateway:8888, `/` → the zone services.
-- **In-cluster deps** (gated by values toggles — each gate covers both the operator subchart and its CR):
-  - `cnpg.enabled` — CloudNativePG operator + `Cluster` named `rask-postgres`; app connects to `rask-postgres-rw:5432`. Values under `cnpg.*` (instances, storage, imageName, user, database).
+- **In-cluster deps** (gated by values toggles; the chart installs no operator):
   - `minio.enabled` — MinIO as a first-party StatefulSet, no operator (LH-133: RustFS gates STS `AssumeRole` to root and cannot grant the right, so the catalog could not hold a scoped identity there). S3 at `rask-minio:9000`, console on `:9001`. 1 pod / 4 PVCs (erasure-coding minimum). Buckets, users and policies are provisioned by the `mc` hooks. Values under `minio.*`.
   - `ray.enabled` — KubeRay `RayService` (head + Serve app). GPU-shaped rendering is derived, see below.
   - `observability.enabled` — the first-party OTel Collector and the fleet's OTLP export to it (see below).

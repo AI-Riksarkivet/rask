@@ -17,7 +17,7 @@ Each directory is one fixture, installed as **its own Helm release** before the 
 chart that declares upstream `dependencies:` has them vendored from its committed `Chart.lock` before the install.
 
 `scripts/fixtures.sh <name>... [-- <helm args>]` installs them in the order named. `make k3s-up` runs it with `FIXTURES`
-(default `external-secrets dapr nats kuberay-operator ray-cluster observability`) before the rask release. A GPU node on which nothing advertises `nvidia.com/gpu` yet adds `nvidia-device-plugin`:
+(default `external-secrets dapr nats cloudnative-pg kuberay-operator ray-cluster observability`) before the rask release. A GPU node on which nothing advertises `nvidia.com/gpu` yet adds `nvidia-device-plugin`:
 
 ```bash
 kubectl get nodes -o jsonpath='{.items[*].status.allocatable}' | tr ' ' '\n' | grep nvidia   # empty: no plugin runs
@@ -41,6 +41,7 @@ says everything in it is throwaway.
 | `external-secrets` | the platform's External Secrets Operator, a prerequisite the rask chart refuses to render without |
 | `dapr` | the platform's Dapr control plane (upstream chart, namespace `dapr-system`, rask's `dapr.controlPlaneNamespace`): fail-closed injector scoped to `dapr.io/enabled`, no `secretReader`; a prerequisite the chart refuses to render `dapr.enabled` without |
 | `nats` | the platform's NATS JetStream bus (local chart over upstream nats 2.14.2, release `nats` in rask's namespace): three nodes at `rask-nats:4222`, the address `deploy/values-local.yaml` names in rask's `nats.url`. With `nats.auth.server` it runs in operator mode, its config written by its own ExternalSecrets from rask's dev OpenBao, so turn it on once rask is installed (`scripts/fixtures.sh nats -- --set nats.auth.server=true`; docs/OPERATORS.md § 7) |
+| `cloudnative-pg` | the platform's CloudNativePG operator (upstream chart 0.28.3, operator 1.29.1, namespace `cnpg-system`): what reconciles the `Cluster` rask renders on the AGE-on-CNPG path, which the chart refuses to render for a cluster without `postgresql.cnpg.io/v1`. `crds.create: false`: its CRDs come from `chart/crds-bootstrap/` (`make k3s-crds`, which `make k3s-up` runs first), so no release owns them |
 | `kuberay-operator` | the engine owner's KubeRay operator (upstream chart, namespace `kuberay-system`) |
 | `ray-cluster` | the engine owner's Ray cluster: one head named `<rask>-ray`, run as `<rask>-sa-ray`, reaching rask by the names a release called `rask` creates (`rask.release`); `HEAD.md` explains each setting |
 | `nvidia-device-plugin` | a GPU node's device plugin, only where nothing advertises `nvidia.com/gpu` yet |

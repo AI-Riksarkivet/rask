@@ -2,7 +2,7 @@
 #
 # Two systems now install from this one file:
 #   * the rask fleet (gateway/compute/controlplane),
-#     KubeRay Serve, CloudNativePG, the MinIO StatefulSet, the SvelteKit microfrontend zones;
+#     KubeRay Serve, the MinIO StatefulSet, the SvelteKit microfrontend zones;
 #   * the lance-ns lakehouse (catalog + lineage + medallion + maintenance + media), governance
 #     (Dex OIDC + OpenFGA), the Dapr/NATS event fabric, OpenBao, and the OTel-first observability tier.
 #
@@ -28,8 +28,7 @@ imagePullSecrets: []
 # domain services + /default frontends + default Postgres/NATS/migration).
 # Default false => front-door-only install (picker + controlplane + gateway +
 # operators). Set true to restore the old single-tenant stack.
-# NOTE: this is separate from the operator subchart toggles (cnpg/...),
-# which stay enabled so per-project stacks keep working. The OBJECT STORE is
+# NOTE: the OBJECT STORE is
 # deliberately NOT in this list: minio.enabled alone gates the operator Tenant
 # (docs/adr/0124-chart-unification-one-control-plane-each-one-object-store.md) because the lakehouse plane resolves `rask-minio:9000`
 # regardless of singleTenant.
@@ -3478,7 +3477,7 @@ age:
   # apache/age StatefulSet today, and the cutover needs a real extension image built + pushed first
   # (.docker/cnpg-age-ext.dockerfile) plus K8s 1.33+ (ImageVolume) and CNPG >= 1.27.
   cnpgCluster:
-    # -- Render the AGE-on-CNPG `Cluster` (templates/age-cluster.yaml); mutually exclusive with `age.enabled`. Needs an extension image, K8s 1.33+ and CNPG >= 1.27.
+    # -- Render the AGE-on-CNPG `Cluster` (templates/age-cluster.yaml); mutually exclusive with `age.enabled`. Needs an extension image, K8s 1.33+ and the CloudNativePG operator (>= 1.27), a prerequisite: the render refuses on a cluster that does not serve postgresql.cnpg.io/v1.
     enabled: false
     # The built AGE extension image (e.g. ghcr.io/<org>/age-cnpg-ext:1.7.0-18). Deliberately NO
     # default — required() when enabled, so a REPLACE-ME placeholder can never render.
@@ -3685,39 +3684,6 @@ externalSecrets:
   serviceAccount: external-secrets
   # -- Namespace of the External Secrets Operator ServiceAccount the Vault role is bound to.
   namespace: external-secrets
-
-# CloudNativePG OPERATOR toggle (Chart.yaml condition cnpg.enabled). The rask app-DB
-# Cluster + its Alembic migration Job died at P7a (the batches table is gone — Lance +
-# the AGE Postgres are the only state); the operator stays for the AGE-on-CNPG path
-# (age.cnpgCluster) and per-project stacks.
-cnpg:
-  # -- Installs the CloudNativePG operator subchart (Chart.yaml condition); a Cluster exists only when `age.cnpgCluster.enabled`.
-  enabled: true
-
-# cloudnative-pg operator subchart (Chart.yaml dep, gated by cnpg.enabled).
-# Webhook failurePolicy=Ignore so a Cluster created before the operator pod is
-# Ready is admitted and reconciled later (the KubeRay/RayService behaviour) —
-# this is what lets the Cluster be a plain template instead of a hook.
-cloudnative-pg:
-  # Memory bound (#139) — see the note under `openfga.resources`. This is the OPERATOR (a controller
-  # loop), not the Postgres it manages, so it is sized as a controller.
-  # -- Subchart passthrough: the CNPG operator pod's requests and limits (requests 50m/64Mi, limit 256Mi).
-  resources:
-    requests: { cpu: 50m, memory: 64Mi }
-    limits: { memory: 256Mi }
-  # CNPG ships its CRDs as templated resources (not a bare crds/ dir), so Helm
-  # cannot map our Cluster CR in the same release on a cold install. We instead
-  # vendor the CNPG CRDs into the umbrella chart's crds/ dir (installed in Helm's
-  # CRD phase, before templates), so the subchart must NOT also create them.
-  crds:
-    # -- Subchart passthrough: false because the umbrella chart vendors the CNPG CRDs into its own crds/ directory.
-    create: false
-  # -- Subchart passthrough: CNPG validating and mutating webhook failurePolicy `Ignore`, so a Cluster created before the operator is Ready is admitted.
-  webhook:
-    validating:
-      failurePolicy: Ignore
-    mutating:
-      failurePolicy: Ignore
 
 
 # ==== allocator ============================================================

@@ -52,21 +52,30 @@ def test_a_real_deployment_refuses_the_bundled_dev_idp() -> None:
     assert "dex.enabled=true — the bundled dev IdP" in refused.value.stderr
 
 
+#: The AGE-on-CNPG path, the one part of the render that needs the CloudNativePG API ([[XC-130]]).
+_CNPG_CLUSTER = ("--set", "age.enabled=false", "--set", "age.cnpgCluster.enabled=true", "--set-string", "age.cnpgCluster.extensionImage=reg.example/age:1")
+
+
 @pytest.mark.parametrize(
-    ("api", "message"),
+    ("api", "message", "enable"),
     [
-        ("external-secrets.io", "the External Secrets Operator is a prerequisite: this cluster does not serve external-secrets.io/v1"),
-        ("dapr.io", "Dapr is a prerequisite: dapr.enabled is on and this cluster does not serve dapr.io/v1alpha1"),
-        ("nats.url", "NATS JetStream is a prerequisite: set nats.url"),
+        ("external-secrets.io", "the External Secrets Operator is a prerequisite: this cluster does not serve external-secrets.io/v1", ()),
+        ("dapr.io", "Dapr is a prerequisite: dapr.enabled is on and this cluster does not serve dapr.io/v1alpha1", ()),
+        ("nats.url", "NATS JetStream is a prerequisite: set nats.url", ()),
+        (
+            "postgresql.cnpg.io",
+            "CloudNativePG is a prerequisite: age.cnpgCluster.enabled is on and this cluster does not serve postgresql.cnpg.io/v1",
+            _CNPG_CLUSTER,
+        ),
     ],
-    ids=["external-secrets", "dapr", "nats"],
+    ids=["external-secrets", "dapr", "nats", "cloudnative-pg"],
 )
-def test_a_render_for_a_cluster_without_a_prerequisite_fails_naming_it(api: str, message: str) -> None:
-    """ESO, Dapr and the NATS bus are prerequisites rask never installs (ADR 0153): a render for a cluster that does not
-    serve one, or that names no bus, stops and says which."""
+def test_a_render_for_a_cluster_without_a_prerequisite_fails_naming_it(api: str, message: str, enable: tuple[str, ...]) -> None:
+    """ESO, Dapr, the NATS bus and, for its Cluster, the CloudNativePG operator are prerequisites rask never installs
+    (ADR 0153): a render for a cluster that does not serve one, or that names no bus, stops and says which."""
     pairs = zip(OIDC_ARGS[::2], OIDC_ARGS[1::2], strict=True)
     without = tuple(arg for flag, value in pairs if api not in value for arg in (flag, value))
-    argv = ["helm", "template", "rask", str(REPO / "chart"), *without, *DEFAULT_ARGS]
+    argv = ["helm", "template", "rask", str(REPO / "chart"), *without, *DEFAULT_ARGS, *enable]
     refused = subprocess.run(argv, capture_output=True, text=True, check=False)  # noqa: S603, S607
 
     assert refused.returncode != 0

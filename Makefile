@@ -689,8 +689,7 @@ KUBECTL ?= KUBECONFIG=$(KUBECONFIG) kubectl
 K3S_IMAGES = $(COMPOSE_IMAGES) $(ZONES:%=web-%) ray-cluster lance-rest-catalog minio
 
 # Subchart repos (Chart.yaml dependencies). An OCI dependency would need no repo add.
-K3S_DEP_REPOS = openfga=https://openfga.github.io/helm-charts \
-                cnpg=https://cloudnative-pg.github.io/charts
+K3S_DEP_REPOS = openfga=https://openfga.github.io/helm-charts
 
 k3s-install: ## One-time host bootstrap: k3s + helm only (everything else is the chart; sudo)
 	./scripts/k3s-install.sh
@@ -774,15 +773,16 @@ DROP_CREDENTIAL_VALUES := --set dapr.appToken=null --set frontend.oidc.sessionSe
 
 # The prerequisites a dev estate gets from deploy/fixtures, each its own release, installed before rask's
 # (NOT FOR PRODUCTION; deploy/fixtures/README.md). Dapr's control plane comes first after ESO, so its injector is
-# Ready before any pod that wants a sidecar exists; the NATS bus every pub/sub component dials follows. The Ray engine
-# the cascade submits to is two of them, the operator first; observability is the store, dashboards and alerting rask's
-# Collector exports to. A GPU node with no device plugin yet adds nvidia-device-plugin.
-FIXTURES ?= external-secrets dapr nats kuberay-operator ray-cluster observability
+# Ready before any pod that wants a sidecar exists; the NATS bus every pub/sub component dials follows. The CloudNativePG
+# operator serves the AGE-on-CNPG Cluster; its CRDs come from k3s-crds, which runs first. The Ray engine the cascade
+# submits to is two of them, the operator first; observability is the store, dashboards and alerting rask's Collector
+# exports to. A GPU node with no device plugin yet adds nvidia-device-plugin.
+FIXTURES ?= external-secrets dapr nats cloudnative-pg kuberay-operator ray-cluster observability
 
 k3s-fixtures: ## Install the development fixtures (FIXTURES) as their own releases, before the rask chart
 	KUBECONFIG=$(KUBECONFIG) ./scripts/fixtures.sh $(FIXTURES)
 
-k3s-crds: ## Apply the vendored CRDs the chart deliberately does not package (see chart/.helmignore)
+k3s-crds: ## Apply the vendored CRDs no release owns (see chart/.helmignore), before the cloudnative-pg fixture
 	@# Server-side apply: the CNPG CRD set exceeds kubectl's client-side annotation limit.
 	kubectl apply --server-side -f chart/crds-bootstrap/
 
@@ -797,7 +797,7 @@ k3s-crds: ## Apply the vendored CRDs the chart deliberately does not package (se
 # (7c2171f0) until 2026-08-23, and the whole target failed with `/bin/sh: @#: not found` plus a
 # `helm get values requires 1 argument` from the orphaned `-o yaml`. A comment that breaks the recipe
 # it documents is worse than no comment; keep prose out of the continuation.
-k3s-up: k3s-fixtures k3s-deps k3s-crds k3s-stem-check ## Install fixtures, vendor deps, apply CRDs, then install/upgrade the release and wait for the gateway
+k3s-up: k3s-crds k3s-fixtures k3s-deps k3s-stem-check ## Apply CRDs, install fixtures, vendor deps, then install/upgrade the release and wait for the gateway
 	@set -a; [ -f .env ] && . ./.env; set +a; \
 	if [ -z "$$HF_TOKEN" ] && [ -r "$${HF_HOME:-$$HOME/.cache/huggingface}/token" ]; then \
 	  HF_TOKEN="$$(cat "$${HF_HOME:-$$HOME/.cache/huggingface}/token")"; \
@@ -972,7 +972,7 @@ kind-images: k3s-build ## Build the full :dev image set (same builds k3s uses �
 kind-load: ## Side-load the :dev image set into the kind cluster
 	$(KIND) load docker-image $(foreach i,$(KIND_IMAGES),$(i):dev) --name $(KIND_CLUSTER)
 
-# Third-party images the chart pulls (openfga, cnpg, dex, openbao, otel-collector, …). kind's containerd is a SEPARATE image store from the
+# Third-party images the chart pulls (openfga, dex, openbao, otel-collector, …). kind's containerd is a SEPARATE image store from the
 # host's docker, so a fresh cluster re-pulls every one of them from the internet — ~20 minutes of
 # pure network before a single app pod starts. The host docker cache, by contrast, persists across
 # clusters: pull once here, side-load, and every later cluster starts in seconds. Derived from the

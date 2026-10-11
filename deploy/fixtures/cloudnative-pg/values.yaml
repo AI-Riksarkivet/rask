@@ -1,0 +1,14 @@
+# NOT FOR PRODUCTION (deploy/fixtures/README.md). Values for the upstream cloudnative-pg 0.28.3 chart (operator 1.29.1).
+
+# The CRDs come from chart/crds-bootstrap/, applied server-side by `make k3s-crds`: the set is 1.19 MB, and a release
+# that owned it would delete every CNPG CRD, and with them every Cluster, on uninstall.
+crds:
+  create: false
+
+# The webhooks keep upstream's failurePolicy Fail: the operator is installed and Ready before any release that renders
+# a Cluster, so a CNPG object is never admitted unvalidated.
+
+# A controller loop, not the Postgres it manages, so it is sized as a controller.
+resources:
+  requests: { cpu: 50m, memory: 64Mi }
+  limits: { memory: 256Mi }

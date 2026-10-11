@@ -2,6 +2,9 @@
 {{- if .Values.age.enabled }}
 {{- fail "age.enabled and age.cnpgCluster.enabled are mutually exclusive — exactly ONE graph store may render (audit 2026-07-27 defect 3: this template rendered ungated, a second 3-instance CNPG Cluster with a placeholder extension image ALONGSIDE the AGE StatefulSet). Set age.enabled=false to cut over to AGE-on-CNPG, or age.cnpgCluster.enabled=false to keep the StatefulSet stack." }}
 {{- end }}
+{{- if not (.Capabilities.APIVersions.Has "postgresql.cnpg.io/v1/Cluster") }}
+{{- fail "CloudNativePG is a prerequisite: age.cnpgCluster.enabled is on and this cluster does not serve postgresql.cnpg.io/v1. Install the CloudNativePG operator on its own release and its CRDs before rask (docs/architecture/deployment.md, Prerequisites; development: deploy/fixtures/cloudnative-pg); rask never installs it. A cluster-less render names the API it targets: --api-versions postgresql.cnpg.io/v1/Cluster" }}
+{{- end }}
 # GATED (audit 2026-07-27 defect 3): this file rendered UNCONDITIONALLY — two graph stores in one
 # render, with the un-buildable ghcr.io/REPLACE-ME extension image shipping by default. Decision:
 # the OLD apache/age StatefulSet stack (age-postgres.yaml, age.enabled=true) stays the default until

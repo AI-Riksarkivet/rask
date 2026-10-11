@@ -53,11 +53,3 @@ dependencies:
     version: "0.3.12"
     repository: https://openfga.github.io/helm-charts
     condition: openfga.enabled
-  # CNPG operator. Its CRDs stay VENDORED at chart/crds/ (installed in Helm's CRD phase, before
-  # templates) with `cloudnative-pg.crds.create: false` in values.yaml — the subchart must not
-  # also create them. lance-ns must not re-install them either; the AGE Postgres rides this
-  # existing operator rather than adding one.
-  - name: cloudnative-pg
-    version: "0.28.3"
-    repository: https://cloudnative-pg.github.io/charts
-    condition: cnpg.enabled

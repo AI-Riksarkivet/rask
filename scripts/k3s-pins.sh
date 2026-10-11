@@ -86,7 +86,7 @@ for item in json.load(sys.stdin)["items"]:
       for c in pod_spec.get("containers", []):
         ref = c["image"]
         # FIRST-PARTY ONLY. `image.tags` feeds `rask.image`, which renders only the images this repo
-        # builds; dex, greptimedb, cloudnative-pg and friends come from their own values and pinning
+        # builds; dex, openfga, openbao and friends come from their own values and pinning
         # them here would be noise that looks authoritative. Ours is either bare (side-loaded) or under
         # the local registry (localhost / 172.*). ANY other path head is third-party, including Docker
         # Hub short forms with no dot: `minio/minio:RELEASE...` was recorded as component `minio`, and

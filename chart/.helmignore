@@ -28,7 +28,7 @@ ci/
 # applies them server-side, and `k3s-up` depends on it — which also fixes the upgrade case the
 # `crds/` dir silently did not cover.
 #
-# They stay vendored (not left to the subchart) for the reason values.yaml gives: CNPG ships its CRDs
-# as TEMPLATES, so on a cold install Helm cannot map our `Cluster` CR in the same release. That is why
-# `cloudnative-pg.crds.create` is false, and it still is.
+# They stay out of every release: the CloudNativePG operator is a prerequisite (deploy/fixtures/cloudnative-pg sets
+# `crds.create: false`), and upstream ships its CRDs as TEMPLATES, so a release that owned them would delete every CNPG
+# CRD, and every Cluster with them, on uninstall.
 crds-bootstrap/
