@@ -781,7 +781,7 @@ DROP_CREDENTIAL_VALUES := --set dapr.appToken=null --set frontend.oidc.sessionSe
 FIXTURES ?= external-secrets dapr nats cloudnative-pg dex kuberay-operator ray-cluster observability
 
 k3s-fixtures: ## Install the development fixtures (FIXTURES) as their own releases, before the rask chart
-	KUBECONFIG=$(KUBECONFIG) ./scripts/fixtures.sh $(filter-out dex,$(FIXTURES))
+	$(if $(filter-out dex,$(FIXTURES)),KUBECONFIG=$(KUBECONFIG) ./scripts/fixtures.sh $(filter-out dex,$(FIXTURES)))
 	$(if $(filter dex,$(FIXTURES)),KUBECONFIG=$(KUBECONFIG) ./scripts/fixtures.sh dex -- --set-string issuer=$(DEV_ISSUER) --set-string publicOrigin=$(DEV_ORIGIN))
 
 k3s-crds: ## Apply the vendored CRDs no release owns (see chart/.helmignore), before the cloudnative-pg fixture

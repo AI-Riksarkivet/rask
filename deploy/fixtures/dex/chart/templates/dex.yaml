@@ -88,6 +88,9 @@ spec:
             capabilities: { drop: ["ALL"] }
           volumeMounts:
             - { name: config, mountPath: /etc/dex }
+            # Dex's entrypoint renders its config to a temp file before it serves, measured on v2.42.0 under a
+            # read-only root: `cannot create temp file: open /tmp/dex.config.yaml-…`.
+            - { name: tmp, mountPath: /tmp }
           readinessProbe:
             httpGet: { path: /dex/.well-known/openid-configuration, port: {{ .Values.port }} }
             initialDelaySeconds: 5
@@ -96,3 +99,5 @@ spec:
       volumes:
         - name: config
           configMap: { name: {{ .Values.name }} }
+        - name: tmp
+          emptyDir: { medium: Memory, sizeLimit: 1Mi }

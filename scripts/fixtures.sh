@@ -159,19 +159,25 @@ for item in items(sys.stdin.read()):
   fi
 
   echo ">> fixture $name: ${SOURCE[*]} as release $RELEASE in $NAMESPACE"
+  # A failed install (a pod that never turns Ready) still created the re-created workloads, and the old release's next
+  # upgrade deletes any of them not yet marked keep (measured 2026-10-11: Dex's first install failed on its pod, the
+  # next `make k3s-up` found the workload owned by the fixture and re-created nothing, and rask's upgrade deleted it).
+  # So the marks below are written whatever the install's outcome, and its status is returned after them.
+  installed=0
   "$HELM" upgrade --install "$RELEASE" "${SOURCE[@]}" \
     --namespace "$NAMESPACE" --create-namespace --reset-then-reuse-values "${VALUES[@]}" "${OWN[@]}" "${EXTRA[@]}" \
-    --description "rask fixture: not for production" --wait --timeout 600s
+    --description "rask fixture: not for production" --wait --timeout 600s || installed=$?
   for entry in "${REPARENTED[@]}"; do
     IFS=/ read -r kind obj ns old <<<"$entry"
     NS=()
     [ "$ns" != "-" ] && NS=(--namespace "$ns")
-    kubectl annotate "$kind" "$obj" "${NS[@]}" helm.sh/resource-policy=keep --overwrite >/dev/null
+    kubectl annotate "$kind" "$obj" "${NS[@]}" helm.sh/resource-policy=keep --overwrite >/dev/null || true
     # The orphaned StatefulSet's revisions carry its old selector, which the new one never adopts.
     if [ "$kind" = "StatefulSet" ]; then
       kubectl delete controllerrevisions "${NS[@]}" -l "$old" --ignore-not-found >/dev/null
     fi
   done
+  [ "$installed" -eq 0 ] || exit "$installed"
   # A fixture in a namespace it shares with rask (SHARED_NAMESPACE=true) leaves the namespace unlabelled: the mark says
   # everything in it is throwaway, which rask's own namespace is not.
   if [ "$SHARED_NAMESPACE" != "true" ]; then
