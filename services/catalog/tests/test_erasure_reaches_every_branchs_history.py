@@ -402,8 +402,10 @@ def test_an_unreadable_fork_point_is_named_when_something_survives(tmp_path: Pat
 
 def test_a_branch_cut_while_the_erasure_runs_is_verified(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Branches are listed again for the verification: one cut from a pre-delete version after step 1
-    listed them holds the subject at its head, and the report must say so rather than miss it — as a
-    residual of its own, and as what keeps main v2, whose files its head stands on."""
+    listed them holds the subject at its head, and the report must say so rather than miss it. Its head is
+    a residual the delete never reached, so erasing again takes it and releases main v2 with it: the branch
+    is not named in ``pinned_by``, since that would send its owners a notice to lose a working ref for
+    nothing ([[LH-178]])."""
     uri = str(tmp_path / "late")
     lance.write_dataset(_rows("bob"), uri)
     lance.write_dataset(_rows(_SUBJECT), uri, mode="append")
@@ -422,7 +424,7 @@ def test_a_branch_cut_while_the_erasure_runs_is_verified(tmp_path: Path, monkeyp
     assert report.residual_versions == ["main@2", "late@2"]
     assert "['late'] appeared during the erasure" in verify
     assert "['late@2'] are heads the delete did not reach: erase again" in verify
-    assert [(pin.ref, pin.holds) for pin in report.pinned_by] == [("branch:late", "main@2")]
+    assert report.pinned_by == []
     assert report.complete is False
 
 

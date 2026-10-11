@@ -1,0 +1,15 @@
+{{- /* ADR 0138: releases an erasure's pinning tags and branches when due. Delivered to POST /<name> at the catalog's pod root; name, env and route are one string. */}}
+{{- if and .Values.dapr.enabled .Values.dapr.sidecars }}
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: {{ .Values.catalog.erasure.bindingName }}
+  labels: {{- include "rask.componentLabels" (list . "catalog") | nindent 4 }}
+spec:
+  type: bindings.cron
+  version: v1
+  metadata:
+    - { name: schedule, value: {{ .Values.catalog.erasure.schedule | quote }} }
+scopes:
+  - {{ .Values.services.catalog.daprAppId }}
+{{- end }}

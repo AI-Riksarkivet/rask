@@ -145,8 +145,6 @@ def test_staging_and_the_relay_are_ONE_switch() -> None:
 
     assert "LANCE_CONTROL_OUTBOX_URI" not in env, "catalog.controlOutbox.enabled=false must also stop the staging (its relay is off with it)"
     assert "LANCE_CONTROL_RELAY_BINDING_NAME" not in env, "the relay route is mounted with no prefix to drain"
-    assert not [
-        doc
-        for doc in off
-        if doc.get("kind") == "Component" and (doc.get("spec") or {}).get("type") == "bindings.cron" and "catalog" in (doc.get("scopes") or [])
-    ], "the cron Component still renders with the outbox off — it would tick against an unmounted route"
+    assert not [doc for doc in off if doc.get("kind") == "Component" and (doc.get("metadata") or {}).get("name") == "catalog-control-relay-cron"], (
+        "the relay's cron Component still renders with the outbox off — it would tick against an unmounted route"
+    )

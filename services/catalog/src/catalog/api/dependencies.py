@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Callable
+from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import Depends, Header, Request
@@ -356,6 +358,19 @@ def get_control_emitter(request: Request) -> ControlEmitter:
 
 
 ControlEmitterDep = Annotated[ControlEmitter, Depends(get_control_emitter)]
+
+
+def _utc_now() -> datetime:
+    return datetime.now(UTC)
+
+
+def get_clock() -> Callable[[], datetime]:
+    """The wall clock a door reads a deadline from: the erasure door sets a release's due time by it and the
+    release tick judges it by the same one, so a test moves both with one override."""
+    return _utc_now
+
+
+ClockDep = Annotated[Callable[[], datetime], Depends(get_clock)]
 
 
 def get_vendor(request: Request) -> CredentialVendor:

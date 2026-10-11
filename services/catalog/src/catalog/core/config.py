@@ -296,6 +296,16 @@ class CatalogMaintenanceSettings(BaseSettings):
     # Maintenance: when true, reject mutating /v1 requests with 503 + Retry-After — for
     # zero-downtime model/schema migration windows. Default off (no-op).
     maintenance_read_only: bool = Field(default=False, alias="LANCE_MAINTENANCE_READ_ONLY")
+    #: ADR 0138's grace period: how long after an erasure's notice its pinning tags and branches are released
+    #: (`catalog.services.erasure_release`). An owner-set chart value; nothing cancels or extends one release.
+    erasure_release_grace_days: int = Field(default=7, ge=0, alias="LANCE_ERASURE_RELEASE_GRACE_DAYS")
+    #: The cron binding that releases what is due (`catalog/api/erasure_release.py`). The Component's name,
+    #: this value and the served path are one string, as for the control relay. Empty = no release route, so a
+    #: deployment without the Component schedules releases that nothing performs: the chart renders both.
+    erasure_release_binding_name: str = Field(default="", alias="LANCE_ERASURE_RELEASE_BINDING_NAME")
+    #: The maintenance sweep's cleanup window (`maintenance.olderThanDays`), which an erasure report quotes as
+    #: the last condition before the subject's bytes leave storage. Read here only to say it; the sweep owns it.
+    erasure_cleanup_window_days: int = Field(default=7, ge=0, alias="LANCE_ERASURE_CLEANUP_WINDOW_DAYS")
     # The maintenance work queue, shared with ``services/maintenance``: the on-demand compaction door
     # publishes ONE ``DatasetWorkItem`` here instead of rewriting fragments inside the request handler.
     # Empty topic (the default) = NO QUEUE, and that is the honest default rather than a disabled feature:

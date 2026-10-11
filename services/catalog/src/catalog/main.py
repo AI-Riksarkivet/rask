@@ -21,6 +21,7 @@ from lance_namespace import LanceNamespaceError
 
 from catalog.api.control_relay import mount_control_relay
 from catalog.api.dapr import register_control_dapr
+from catalog.api.erasure_release import mount_erasure_release
 from catalog.api.load_shed import WriteConcurrencyLimitMiddleware
 from catalog.api.maintenance_mode import maintenance_middleware
 from catalog.api.v1.router import api_router
@@ -122,7 +123,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # The relay's cron route (api/control_relay.py) is a SECOND sidecar-delivered door on this app and
     # carries the same guard, so its mount counts as "dapr enabled" here: a named binding with a blank
     # token would make `require_dapr_token` no-op and leave a replay-every-staged-event door open.
-    assert_app_token_configured(dapr_enabled=settings.control_emit_enabled or bool(settings.control_relay_binding_name))
+    # The erasure release tick (api/erasure_release.py) is a third, guarded the same way.
+    assert_app_token_configured(
+        dapr_enabled=settings.control_emit_enabled or bool(settings.control_relay_binding_name) or bool(settings.erasure_release_binding_name)
+    )
     # Q17-6 / §F2-2: the CODE default is anonymous and the chart flips it on, so a catalog started
     # any other way serves every route to anyone who can reach the port. Refused on the AMBIGUITY —
     # an operator declares which they meant. See `assert_authentication_configured`.
@@ -393,6 +397,9 @@ register_control_dapr(app)
 # is the ONLY thing that wakes silver->gold, so a NATS blip ends the cascade with every pod green.
 # Mounted only when the chart names a binding, exactly like lineage's reconcile route.
 mount_control_relay(app, _settings.control_relay_binding_name)
+# ADR 0138: release an erasure's pinning tags and branches when the notice's grace period ends (POST /<binding
+# name> at the pod root). Mounted only when the chart names the binding, like the relay.
+mount_erasure_release(app, _settings.erasure_release_binding_name)
 # ADDED AFTER, therefore OUTSIDE the request-id layer — where they already were, and where they belong.
 # Reject oversized request bodies with 413 before they are buffered (Arrow-IPC OOM guard). See body_limit.py.
 app.add_middleware(BodySizeLimitMiddleware, max_bytes=_settings.max_body_bytes)

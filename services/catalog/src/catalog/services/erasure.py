@@ -153,7 +153,8 @@ class SurfaceResult(BaseModel):
     surface: str = Field(
         description=(
             "`branch:<name>`, `tag:<name>`, `main`, `compact:<ref>`, `index:<ref>`, `history:<ref>`, `dangling:<ref>@<version>`, `branches`, "
-            "`verify`, or a surface outside the table's own files: `data_base:<name>`, `external_base:<name>`, `mem_wal`, `bases:<ref>`."
+            "`verify`, a surface outside the table's own files: `data_base:<name>`, `external_base:<name>`, `mem_wal`, `bases:<ref>`, or the "
+            "scheduling of what pins a residual: `release` (its record) and `notice` (who is told)."
         )
     )
     outcome: str = Field(
@@ -179,6 +180,21 @@ class Pin(BaseModel):
             "keeps one that is through a branch version still on its files, or must go first because Lance refuses to delete a later entry."
         )
     )
+
+
+class PinRelease(BaseModel):
+    """The scheduled release of everything ``pinned_by`` names (ADR 0138)."""
+
+    release_id: str = Field(description="The release's record on the control root.")
+    due_at: datetime = Field(description="When the release runs: the notice's grace period after the erasure. Nothing cancels or extends it.")
+    refs: list[str] = Field(
+        description=(
+            "The refs it releases, as `pinned_by` names them: each tag is deleted, each branch is deleted and recreated at main's head, with "
+            "every branch cut from it since and every tag on those, so their own commits are lost."
+        )
+    )
+    notified: list[str] = Field(description="Who was told: the requester, then the table's owners.")
+    bound: str = Field(description="When the subject's bytes can leave storage: the release is the first of the conditions this names.")
 
 
 class ErasureReport(BaseModel):
@@ -216,6 +232,10 @@ class ErasureReport(BaseModel):
             "Residuals the retention window keeps, itself or through a newer branch version on their files: an erasure with "
             "`retain_days=0`, or one after the window has passed, reclaims them."
         ),
+    )
+    release: PinRelease | None = Field(
+        default=None,
+        description="Set when `pinned_by` is non-empty: the release scheduled for it and who was told. Null when nothing pins a residual.",
     )
     complete: bool = Field(
         default=False,
@@ -983,7 +1003,11 @@ def _account(
             account.unreclaimed_refs |= held.unreclaimed
         if held.unread or not (held.window or held.tags or held.branches or held.unreclaimed):
             account.unexplained.append(name)
-    doomed = _with_descendants(doomed, forks)
+    # A branch whose head the delete never reached is erased by running the erasure again, which also lets go
+    # of what its head stands on, so naming it would tell its owners to lose a working ref for nothing. It is
+    # still named as a descendant of a branch that must go, since Lance refuses to delete a parent before it.
+    unreached = {_parse(name)[0] for name in account.heads}
+    doomed = _with_descendants(doomed - unreached, forks)
     tag_pins = [Pin(ref=f"tag:{tag}", holds=_name(ref)) for tag, ref in sorted(tags.items()) if ref is not None and (tag in named or ref[0] in doomed)]
     deepest_first = sorted(doomed, key=lambda branch: (-_depth(branch, forks), branch))
     account.pins = [*tag_pins, *(Pin(ref=f"branch:{branch}", holds=_name(forks[branch])) for branch in deepest_first)]

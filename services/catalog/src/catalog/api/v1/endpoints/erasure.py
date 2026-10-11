@@ -21,21 +21,26 @@ erasure has to answer with what it could not reach.
 from __future__ import annotations
 
 import logging
-from datetime import timedelta
+from collections.abc import Awaitable, Callable
+from datetime import datetime, timedelta
 from functools import partial
 from typing import Annotated
 
 import lance
-from fastapi import APIRouter, Header, Query
+from fastapi import APIRouter, Depends, Header, Query
 from fastapi.concurrency import run_in_threadpool
 
-from catalog.api.dependencies import NamespaceDep, SettingsDep, StorageOptionsDep
+from catalog.api.dependencies import ClockDep, ControlEmitterDep, FgaClientDep, NamespaceDep, SettingsDep, StorageOptionsDep
+from catalog.api.security import CurrentToken
 from catalog.core.base_judge import BaseJudge
-from catalog.core.config import fresh_lance_session
+from catalog.core.config import Settings, fresh_lance_session
 from catalog.core.identifiers import parse_identifier
 from catalog.core.namespace import disarm_every_ref, open_dataset
 from catalog.schemas import ErasureRequest
-from catalog.services.erasure import ErasureReport, erase
+from catalog.services import erasure_release
+from catalog.services.erasure import ErasureReport, PinRelease, SurfaceResult, erase
+from service_kit.control_emit import ControlEmitter, emit_control
+from service_kit.governed import fga
 
 
 log = logging.getLogger(__name__)
@@ -46,6 +51,25 @@ log = logging.getLogger(__name__)
 router = APIRouter(prefix="/management/v1/table", tags=["erasure"])
 
 
+#: Every ``user:`` subject holding ``owner`` on a ``table:<id>`` object.
+type TableOwners = Callable[[str], Awaitable[list[str]]]
+
+
+def get_table_owners(client: FgaClientDep, settings: SettingsDep) -> TableOwners:
+    """The table's owners as the FGA model resolves them (a direct grant, a role's assignees, an owner of a
+    container above it), or nobody when authorization is off: there is then no owner to tell."""
+
+    async def _owners(object_id: str) -> list[str]:
+        if not settings.fga_enabled or client is None:
+            return []
+        return await fga.list_users(client, relation="owner", obj=object_id, qualified=True)
+
+    return _owners
+
+
+TableOwnersDep = Annotated[TableOwners, Depends(get_table_owners)]
+
+
 @router.post("/{id}/erasure")
 async def erase_subject(
     id: str,
@@ -53,6 +77,10 @@ async def erase_subject(
     ns: NamespaceDep,
     settings: SettingsDep,
     so: StorageOptionsDep,
+    control: ControlEmitterDep,
+    owners: TableOwnersDep,
+    clock: ClockDep,
+    token: CurrentToken = None,
     authorization: Annotated[str | None, Header()] = None,
     branch: Annotated[str | None, Query(description="IGNORED: an erasure acts on every ref by construction, so naming one would narrow it.")] = None,
 ) -> ErasureReport:
@@ -69,6 +97,12 @@ async def erase_subject(
     the `retain_days` window keeps. A caller reporting completion to a data subject reads `complete`; a
     caller reading the status code reports the wrong thing. The one status that does answer is the refusal
     before anything is touched: 400 for a predicate Lance refuses, 503 when the store cannot plan it.
+
+    When `pinned_by` names anything, the release of it is scheduled (ADR 0138, [[LH-178]]): `release` carries
+    its deadline, the refs it deletes and who was told, and the requester and each table owner receive a
+    targeted `erasure_release_scheduled` event. At the deadline every named tag is deleted and every named
+    branch is deleted and recreated at main's head; what they held is then reclaimed by the next erasure, or by
+    the maintenance sweep's cleanup once its window passes (`release.bound`).
 
     `complete` can be True beside `dangling:<ref>@<n>` surfaces. Each is a version that stays listed and
     fails to read, because a branch standing on some of its files kept its manifest when the rest were
@@ -100,7 +134,7 @@ async def erase_subject(
     protected = await run_in_threadpool(BaseJudge.from_settings(settings).sibling_base_refs, dataset.uri, so)
     if protected.unreadable:
         log.warning("erasure_base_refs_incomplete", extra={"location": dataset.uri, "unreadable": len(protected.unreadable)})
-    return await run_in_threadpool(
+    report = await run_in_threadpool(
         erase,
         dataset,
         reopen=partial(_open_cold, dataset.uri, so),
@@ -110,6 +144,68 @@ async def erase_subject(
         predicate=body.predicate,
         retention=timedelta(days=body.retain_days),
     )
+    if report.pinned_by:
+        object_id = f"table:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}"
+        requester = f"user:{token.sub}" if token is not None else None
+        await _schedule_release(report, settings, control, owners, location=str(dataset.uri), object_id=object_id, requester=requester, now=clock())
+    return report
+
+
+async def _schedule_release(
+    report: ErasureReport,
+    settings: Settings,
+    control: ControlEmitter,
+    owners: TableOwners,
+    *,
+    location: str,
+    object_id: str,
+    requester: str | None,
+    now: datetime,
+) -> None:
+    """ADR 0138: record the release of what ``pinned_by`` names, then tell the requester and the table's owners.
+
+    The record is written FIRST, so a person is never told of a release nothing will perform; a record the
+    store refuses is a failed `release` surface and nobody is told. Owners that cannot be read are a failed
+    `notice` surface, and the requester is still told. Both keep ``complete`` False, which it already is
+    while anything pins a residual.
+    """
+    try:
+        holders = [subject for subject in await owners(object_id) if subject.startswith("user:")]
+    except Exception as exc:  # noqa: BLE001 — the requester is told whether or not the owners can be read
+        log.warning("erasure_owners_unread", extra={"table": report.table, "error": str(exc)})
+        report.surfaces.append(
+            SurfaceResult(surface="notice", outcome="failed", detail=f"the table's owners could not be read, so only the requester is told: {exc}")
+        )
+        holders = []
+    notified = list(dict.fromkeys([*([requester] if requester else []), *sorted(holders)]))
+    due_at = now + timedelta(days=settings.erasure_release_grace_days)
+    record = erasure_release.new_release(
+        report.pinned_by, table=report.table, location=location, object_id=object_id, requested_by=requester, notified=notified, due_at=due_at
+    )
+    try:
+        await run_in_threadpool(erasure_release.schedule, settings.registry_root, settings.storage_options(), record)
+    except Exception as exc:  # noqa: BLE001 — the report still answers with what the erasure did
+        log.error("erasure_release_unscheduled", extra={"table": report.table, "error": str(exc)})
+        report.surfaces.append(
+            SurfaceResult(surface="release", outcome="failed", detail=f"the release of {record.refs} could not be recorded, so nobody was told: {exc}")
+        )
+        return
+    report.release = PinRelease(
+        release_id=record.release_id,
+        due_at=due_at,
+        refs=record.refs,
+        notified=notified,
+        bound=erasure_release.completion_bound(due_at, settings.erasure_cleanup_window_days),
+    )
+    for subject in notified:
+        await emit_control(
+            control,
+            action="erasure_release_scheduled",
+            object_type="table",
+            object_id=object_id,
+            actor=requester,
+            extra={"subject": subject, "release_id": record.release_id, "refs": record.refs, "due_at": due_at.isoformat()},
+        )
 
 
 def _open_cold(location: str, storage_options: dict[str, str]) -> lance.LanceDataset:

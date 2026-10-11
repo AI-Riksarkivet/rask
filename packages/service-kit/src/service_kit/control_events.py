@@ -153,6 +153,11 @@ ControlAction = Literal[
     # `extra` names the plan (its control-root URI) rather than carrying it: claim-check. Untargeted, like
     # `transform_set`: it names no party, so notifications files it IGNORED and the producer's head ignores it.
     "run_planned",
+    # An erasure's residual is pinned by a tag or a branch, and its release is scheduled (ADR 0138, [[LH-178]]).
+    # TARGETED: one event per person it costs, the requester and each table owner in `extra.subject`, because the
+    # release deletes the tags and recreates the branches at the deadline in `extra.due_at`, and a branch's own
+    # commits are lost with it. Being told is the only window to copy work out; there is no door that defers it.
+    "erasure_release_scheduled",
 ]
 
 #: The kind of governed object the action targets — drives which console view invalidates. `project` is the
@@ -257,6 +262,7 @@ def control_signer_role(action: ControlAction, object_id: str) -> ControlSignerR
             | "table_tag_created"
             | "table_tag_updated"
             | "table_tag_deleted"
+            | "erasure_release_scheduled"
         ):
             return "catalog"
         case "table_purged" | "namespace_purged":

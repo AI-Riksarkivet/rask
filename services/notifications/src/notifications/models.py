@@ -96,6 +96,10 @@ class NotificationReason(StrEnum):
     #: caused: it is fired by the annotator's own timer, which is exactly why the holder cannot be
     #: expected to notice it.
     TASK_LEASE_EXPIRED = "task_lease_expired"
+    #: v8 — an erasure's residual is pinned by a tag or a branch this person requested or owns, and the
+    #: release that deletes them is scheduled (ADR 0138). Named, like the grant pair: the row is the
+    #: person's only notice before a branch's own commits are lost.
+    ERASURE_RELEASE_SCHEDULED = "erasure_release_scheduled"
 
 
 class InboxFilter(StrEnum):

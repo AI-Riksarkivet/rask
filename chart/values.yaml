@@ -1142,6 +1142,16 @@ catalog:
     # because that one re-reads Lance manifests estate-wide while this one is a LIST over a prefix that
     # is empty in the healthy case.
     schedule: "@every 60s"
+  # ADR 0138 (LH-178): an erasure whose residual a tag or branch pins tells the requester and the table's
+  # owners, then releases the pins when this grace period ends (tags deleted, branches deleted and
+  # recreated at main's head). Owner-set; nothing cancels or extends one release.
+  erasure:
+    releaseGraceDays: 7
+    # ONE STRING, as for controlOutbox: the Component (catalog-erasure-release-cron.yaml), the app's
+    # LANCE_ERASURE_RELEASE_BINDING_NAME and the route at the catalog's pod root.
+    bindingName: catalog-erasure-release-cron
+    # How late a due release may run; late costs only time, so this is loose.
+    schedule: "@every 300s"
 
 # Dapr pub/sub: the publish-side component name + the lineage topic. Each SUBSCRIBER app additionally
 # gets its own derived component `<name>-<app-id>` carrying its queue group + deliver policy

@@ -49,6 +49,7 @@ NAMED_ACTIONS: frozenset[str] = frozenset(
         "task_dropped",
         "task_lease_expired",
         "promotion_review_requested",
+        "erasure_release_scheduled",
     }
 )
 

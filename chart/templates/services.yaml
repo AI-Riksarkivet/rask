@@ -235,6 +235,11 @@ spec:
             */}}
             - { name: LANCE_CONTROL_RELAY_BINDING_NAME, value: {{ .Values.catalog.controlOutbox.bindingName | quote }} }
             {{- end }}
+            - { name: LANCE_ERASURE_RELEASE_GRACE_DAYS, value: {{ required "catalog.erasure.releaseGraceDays is required" .Values.catalog.erasure.releaseGraceDays | quote }} }
+            - { name: LANCE_ERASURE_CLEANUP_WINDOW_DAYS, value: {{ required "maintenance.olderThanDays is required" .Values.maintenance.olderThanDays | quote }} }
+            {{- if and .Values.dapr.enabled .Values.dapr.sidecars }}
+            - { name: LANCE_ERASURE_RELEASE_BINDING_NAME, value: {{ .Values.catalog.erasure.bindingName | quote }} }
+            {{- end }}
             {{- if .Values.dapr.sidecars }}
             {{- /*
                Explicit APP_API_TOKEN so require_dapr_token can verify the `dapr-api-token` header the sidecar

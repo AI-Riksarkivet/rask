@@ -381,6 +381,16 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   `tags/update` or `branches/create` with a reclaim: measured with concurrent races, a tag created
   mid-reclaim named a deleted version (31 of 60), and `maintenance/run` loses the same race (59 of 60).
   Parked as LH-308, which covers every reclaim path, the sweep included.
+- **An erasure's pins are released on a schedule, not on request** ([[LH-178]], ADR 0138). When
+  `ErasureReport.pinned_by` is non-empty, the erasure door writes a release record
+  (`catalog.services.erasure_release`, `_erasure_releases/<id>.json` on the control root) BEFORE it tells
+  anyone, then emits one targeted `erasure_release_scheduled` per person (requester, table owners). The
+  `catalog-erasure-release-cron` tick claims a due record by an ETag-guarded lease, RECORDS each branch's
+  recreate reference before deleting any, deletes the tags and the branch subtree leaf-first (re-read live,
+  so a branch cut during the grace period goes too) and recreates it top-down from main's head. No door
+  cancels or extends one, and protection does not block it (ADR 0150). A branch whose head the delete
+  never reached is not named in `pinned_by`: erasing again takes it. Pinned by
+  `services/catalog/tests/test_erasure_releases_a_pinning_branch_after_its_notice.py`.
 - `deregister` keeps bytes ON PURPOSE (external data); `drop` removes them. Neither leaves Lance
   orphans — but partially-failed writes and unpurged buckets do, and nothing reclaims those yet.
   `services/maintenance`'s orphan pass REPORTS them (`MAINTENANCE_ORPHAN_SCAN_ENABLED` — it opens

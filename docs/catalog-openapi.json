@@ -2718,7 +2718,8 @@
               "task_dropped",
               "task_lease_expired",
               "promotion_review_requested",
-              "run_planned"
+              "run_planned",
+              "erasure_release_scheduled"
             ],
             "title": "Action",
             "type": "string"
@@ -6458,6 +6459,17 @@
             "title": "Predicate",
             "type": "string"
           },
+          "release": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PinRelease"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Set when `pinned_by` is non-empty: the release scheduled for it and who was told. Null when nothing pins a residual."
+          },
           "residual_versions": {
             "description": "Retained versions of any ref that still answer the predicate, still hold its rows behind a deletion vector, or could not be read, as `<ref>@<version>` with `main` for main. Non-empty means the erasure is incomplete however cleanly each step reported.",
             "items": {
@@ -8792,6 +8804,52 @@
         "title": "Pin",
         "type": "object"
       },
+      "PinRelease": {
+        "description": "The scheduled release of everything ``pinned_by`` names (ADR 0138).",
+        "properties": {
+          "bound": {
+            "description": "When the subject's bytes can leave storage: the release is the first of the conditions this names.",
+            "title": "Bound",
+            "type": "string"
+          },
+          "due_at": {
+            "description": "When the release runs: the notice's grace period after the erasure. Nothing cancels or extends it.",
+            "format": "date-time",
+            "title": "Due At",
+            "type": "string"
+          },
+          "notified": {
+            "description": "Who was told: the requester, then the table's owners.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Notified",
+            "type": "array"
+          },
+          "refs": {
+            "description": "The refs it releases, as `pinned_by` names them: each tag is deleted, each branch is deleted and recreated at main's head, with every branch cut from it since and every tag on those, so their own commits are lost.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Refs",
+            "type": "array"
+          },
+          "release_id": {
+            "description": "The release's record on the control root.",
+            "title": "Release Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "release_id",
+          "due_at",
+          "refs",
+          "notified",
+          "bound"
+        ],
+        "title": "PinRelease",
+        "type": "object"
+      },
       "PolicyDeleteResponse": {
         "properties": {
           "id": {
@@ -10995,7 +11053,7 @@
             "type": "string"
           },
           "surface": {
-            "description": "`branch:<name>`, `tag:<name>`, `main`, `compact:<ref>`, `index:<ref>`, `history:<ref>`, `dangling:<ref>@<version>`, `branches`, `verify`, or a surface outside the table's own files: `data_base:<name>`, `external_base:<name>`, `mem_wal`, `bases:<ref>`.",
+            "description": "`branch:<name>`, `tag:<name>`, `main`, `compact:<ref>`, `index:<ref>`, `history:<ref>`, `dangling:<ref>@<version>`, `branches`, `verify`, a surface outside the table's own files: `data_base:<name>`, `external_base:<name>`, `mem_wal`, `bases:<ref>`, or the scheduling of what pins a residual: `release` (its record) and `notice` (who is told).",
             "title": "Surface",
             "type": "string"
           }
@@ -15930,7 +15988,7 @@
     },
     "/management/v1/table/{id}/erasure": {
       "post": {
-        "description": "Remove every row matching the predicate from every ref, then reclaim what no longer pins it.\n\nOwner-gated (``can_drop``) \u2014 it destroys history, which is a stronger claim than the drop rung\nguards, and there is no rung above it.\n\n**THE RESPONSE IS THE POINT, and a 200 is not the answer.** `complete` is False whenever a retained\nversion of any ref still answers the predicate after every step ran \u2014 which happens when a retained\nbranch version still stands on the files of the version it was cut from ([[LH-178]]). The residual\nis named per ref (`main@2`, `work@3`) with what keeps it: `pinned_by` the tags, and a branch only\nwhen its head stands on the residual's files, in an order Lance accepts; `held_by_retention` what\nthe `retain_days` window keeps. A caller reporting completion to a data subject reads `complete`; a\ncaller reading the status code reports the wrong thing. The one status that does answer is the refusal\nbefore anything is touched: 400 for a predicate Lance refuses, 503 when the store cannot plan it.\n\n`complete` can be True beside `dangling:<ref>@<n>` surfaces. Each is a version that stays listed and\nfails to read, because a branch standing on some of its files kept its manifest when the rest were\nreclaimed; no fragment of it that still reads holds the subject. It stays listed, and time travel to\nit fails, until what its detail names lets go: that branch deleted or its head rewritten.\n\n`complete` is evidence about every retained version of every ref, and about nothing else: a data\nfile no version references that is younger than 7 days, an aborted write's residue, is neither\nreclaimed nor probed, because Lance keeps it as possibly an in-flight write's\n(`lance_docs/lance_sdk.md` cleanup_old_versions `delete_unverified`).\n\nA table a shallow clone resolves its files through is neither rewritten nor reclaimed, because the\nclone would break: its `compact:` and `history:` surfaces fail and `complete` is False. The subject's\nbytes outside the table's own files, an external payload, a data file under a data base or a MemWAL\nshard, are named by a `held` surface and never touched, and `complete` is False while they stay.\n\n``branch`` is accepted and IGNORED rather than refused, and the description says so on the wire.\nRefusing would suggest a per-ref erasure exists; honouring it would let a caller believe they had\nerased a subject when they had narrowed the operation to one ref.",
+        "description": "Remove every row matching the predicate from every ref, then reclaim what no longer pins it.\n\nOwner-gated (``can_drop``) \u2014 it destroys history, which is a stronger claim than the drop rung\nguards, and there is no rung above it.\n\n**THE RESPONSE IS THE POINT, and a 200 is not the answer.** `complete` is False whenever a retained\nversion of any ref still answers the predicate after every step ran \u2014 which happens when a retained\nbranch version still stands on the files of the version it was cut from ([[LH-178]]). The residual\nis named per ref (`main@2`, `work@3`) with what keeps it: `pinned_by` the tags, and a branch only\nwhen its head stands on the residual's files, in an order Lance accepts; `held_by_retention` what\nthe `retain_days` window keeps. A caller reporting completion to a data subject reads `complete`; a\ncaller reading the status code reports the wrong thing. The one status that does answer is the refusal\nbefore anything is touched: 400 for a predicate Lance refuses, 503 when the store cannot plan it.\n\nWhen `pinned_by` names anything, the release of it is scheduled (ADR 0138, [[LH-178]]): `release` carries\nits deadline, the refs it deletes and who was told, and the requester and each table owner receive a\ntargeted `erasure_release_scheduled` event. At the deadline every named tag is deleted and every named\nbranch is deleted and recreated at main's head; what they held is then reclaimed by the next erasure, or by\nthe maintenance sweep's cleanup once its window passes (`release.bound`).\n\n`complete` can be True beside `dangling:<ref>@<n>` surfaces. Each is a version that stays listed and\nfails to read, because a branch standing on some of its files kept its manifest when the rest were\nreclaimed; no fragment of it that still reads holds the subject. It stays listed, and time travel to\nit fails, until what its detail names lets go: that branch deleted or its head rewritten.\n\n`complete` is evidence about every retained version of every ref, and about nothing else: a data\nfile no version references that is younger than 7 days, an aborted write's residue, is neither\nreclaimed nor probed, because Lance keeps it as possibly an in-flight write's\n(`lance_docs/lance_sdk.md` cleanup_old_versions `delete_unverified`).\n\nA table a shallow clone resolves its files through is neither rewritten nor reclaimed, because the\nclone would break: its `compact:` and `history:` surfaces fail and `complete` is False. The subject's\nbytes outside the table's own files, an external payload, a data file under a data base or a MemWAL\nshard, are named by a `held` surface and never touched, and `complete` is False while they stay.\n\n``branch`` is accepted and IGNORED rather than refused, and the description says so on the wire.\nRefusing would suggest a per-ref erasure exists; honouring it would let a caller believe they had\nerased a subject when they had narrowed the operation to one ref.",
         "operationId": "erase_subject_management_v1_table__id__erasure_post",
         "parameters": [
           {

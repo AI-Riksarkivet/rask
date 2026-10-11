@@ -926,6 +926,12 @@ export interface paths {
          *     caller reading the status code reports the wrong thing. The one status that does answer is the refusal
          *     before anything is touched: 400 for a predicate Lance refuses, 503 when the store cannot plan it.
          *
+         *     When `pinned_by` names anything, the release of it is scheduled (ADR 0138, [[LH-178]]): `release` carries
+         *     its deadline, the refs it deletes and who was told, and the requester and each table owner receive a
+         *     targeted `erasure_release_scheduled` event. At the deadline every named tag is deleted and every named
+         *     branch is deleted and recreated at main's head; what they held is then reclaimed by the next erasure, or by
+         *     the maintenance sweep's cleanup once its window passes (`release.bound`).
+         *
          *     `complete` can be True beside `dangling:<ref>@<n>` surfaces. Each is a version that stays listed and
          *     fails to read, because a branch standing on some of its files kept its manifest when the rest were
          *     reclaimed; no fragment of it that still reads holds the subject. It stays listed, and time travel to
@@ -5176,7 +5182,7 @@ export interface components {
              * Action
              * @enum {string}
              */
-            action: "grant_added" | "grant_revoked" | "project_created" | "project_deleted" | "warehouse_created" | "warehouse_activated" | "warehouse_deactivated" | "warehouse_bound" | "warehouse_unbound" | "warehouse_deleted" | "policy_set" | "policy_deleted" | "transform_set" | "transform_deleted" | "gate_set" | "gate_deleted" | "namespace_created" | "namespace_dropped" | "table_created" | "table_dropped" | "table_renamed" | "table_registered" | "table_deregistered" | "table_declared" | "table_protected" | "table_unprotected" | "namespace_protected" | "namespace_unprotected" | "table_undropped" | "namespace_undropped" | "table_purged" | "namespace_purged" | "table_published" | "table_branch_created" | "table_branch_deleted" | "table_tag_created" | "table_tag_updated" | "table_tag_deleted" | "task_assigned" | "task_unassigned" | "task_changes_requested" | "task_dropped" | "task_lease_expired" | "promotion_review_requested" | "run_planned";
+            action: "grant_added" | "grant_revoked" | "project_created" | "project_deleted" | "warehouse_created" | "warehouse_activated" | "warehouse_deactivated" | "warehouse_bound" | "warehouse_unbound" | "warehouse_deleted" | "policy_set" | "policy_deleted" | "transform_set" | "transform_deleted" | "gate_set" | "gate_deleted" | "namespace_created" | "namespace_dropped" | "table_created" | "table_dropped" | "table_renamed" | "table_registered" | "table_deregistered" | "table_declared" | "table_protected" | "table_unprotected" | "namespace_protected" | "namespace_unprotected" | "table_undropped" | "namespace_undropped" | "table_purged" | "namespace_purged" | "table_published" | "table_branch_created" | "table_branch_deleted" | "table_tag_created" | "table_tag_updated" | "table_tag_deleted" | "task_assigned" | "task_unassigned" | "task_changes_requested" | "task_dropped" | "task_lease_expired" | "promotion_review_requested" | "run_planned" | "erasure_release_scheduled";
             /** Actor */
             actor?: string | null;
             /** Event Id */
@@ -6819,6 +6825,8 @@ export interface components {
              * @description The filter every matching row was deleted by.
              */
             predicate: string;
+            /** @description Set when `pinned_by` is non-empty: the release scheduled for it and who was told. Null when nothing pins a residual. */
+            release?: components["schemas"]["PinRelease"] | null;
             /**
              * Residual Versions
              * @description Retained versions of any ref that still answer the predicate, still hold its rows behind a deletion vector, or could not be read, as `<ref>@<version>` with `main` for main. Non-empty means the erasure is incomplete however cleanly each step reported.
@@ -7885,6 +7893,38 @@ export interface components {
              */
             ref: string;
         };
+        /**
+         * PinRelease
+         * @description The scheduled release of everything ``pinned_by`` names (ADR 0138).
+         */
+        PinRelease: {
+            /**
+             * Bound
+             * @description When the subject's bytes can leave storage: the release is the first of the conditions this names.
+             */
+            bound: string;
+            /**
+             * Due At
+             * Format: date-time
+             * @description When the release runs: the notice's grace period after the erasure. Nothing cancels or extends it.
+             */
+            due_at: string;
+            /**
+             * Notified
+             * @description Who was told: the requester, then the table's owners.
+             */
+            notified: string[];
+            /**
+             * Refs
+             * @description The refs it releases, as `pinned_by` names them: each tag is deleted, each branch is deleted and recreated at main's head, with every branch cut from it since and every tag on those, so their own commits are lost.
+             */
+            refs: string[];
+            /**
+             * Release Id
+             * @description The release's record on the control root.
+             */
+            release_id: string;
+        };
         /** PolicyDeleteResponse */
         PolicyDeleteResponse: {
             /** Id */
@@ -8886,7 +8926,7 @@ export interface components {
             outcome: string;
             /**
              * Surface
-             * @description `branch:<name>`, `tag:<name>`, `main`, `compact:<ref>`, `index:<ref>`, `history:<ref>`, `dangling:<ref>@<version>`, `branches`, `verify`, or a surface outside the table's own files: `data_base:<name>`, `external_base:<name>`, `mem_wal`, `bases:<ref>`.
+             * @description `branch:<name>`, `tag:<name>`, `main`, `compact:<ref>`, `index:<ref>`, `history:<ref>`, `dangling:<ref>@<version>`, `branches`, `verify`, a surface outside the table's own files: `data_base:<name>`, `external_base:<name>`, `mem_wal`, `bases:<ref>`, or the scheduling of what pins a residual: `release` (its record) and `notice` (who is told).
              */
             surface: string;
         };
