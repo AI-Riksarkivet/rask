@@ -26,7 +26,7 @@ Services (ClusterIP):
 {{- end }}
 {{- end }}
 {{- if .Values.minio.enabled }}
-  - minio:    {{ include "rask.fullname" $root }}-minio:{{ .Values.minio.port }} (in-cluster, console :{{ .Values.minio.consolePort }} via -minio console)
+  - minio:    {{ include "rask.fullname" $root }}-minio:{{ .Values.minio.port }} (the minio fixture's development store)
 {{- end }}
 {{- with include "rask.rayDashboardUrl" . }}
   - ray:       {{ . }} (the engine's; rask installs no Ray)

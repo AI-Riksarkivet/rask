@@ -1,8 +1,7 @@
 {{- if .Values.backups.volumeSnapshot.enabled }}
 # CSI VolumeSnapshot of the lakehouse PVCs on a schedule. Needs an in-cluster CSI snapshotter +
-# a VolumeSnapshotClass. The store is the StatefulSet in templates/minio.yaml (docs/adr/0124-chart-unification-one-control-plane-each-one-object-store.md: "keep-PVC posture
-# via Tenant spec"), so this snapshots the Tenant's StatefulSet-owned PVCs — selected by the labels the
-# Tenant stamps on them (templates/minio.yaml pools[0].persistence.labels), one VolumeSnapshot
+# a VolumeSnapshotClass. The store is the minio fixture's StatefulSet, so this snapshots its claims —
+# selected by the component label its volumeClaimTemplates stamp, one VolumeSnapshot
 # per volume (erasure-coded volumes only restore as a SET from the same run). With S3 external
 # (minio.enabled=false) there is nothing to snapshot — prefer object-store versioning there.
 apiVersion: v1
@@ -20,7 +19,7 @@ rules:
   - apiGroups: ["snapshot.storage.k8s.io"]
     resources: ["volumesnapshots"]
     verbs: ["create"]
-  # Enumerate the Tenant's PVCs by label — the operator names them, so the CronJob can't hardcode them.
+  # Enumerate the store's claims by label, so the CronJob names none of them.
   - apiGroups: [""]
     resources: ["persistentvolumeclaims"]
     verbs: ["get", "list"]
@@ -72,7 +71,7 @@ spec:
                 - |
                   set -e
                   stamp=$(date +%Y%m%d%H%M%S)
-                  pvcs=$(kubectl get pvc -l app.kubernetes.io/instance={{ .Release.Name }},app.kubernetes.io/component=minio -o name)
+                  pvcs=$(kubectl get pvc -l app.kubernetes.io/component=minio -o name)
                   [ -n "$pvcs" ] || { echo "no minio data PVCs found — nothing to snapshot"; exit 1; }
                   for pvc in $pvcs; do
                     name=${pvc#persistentvolumeclaim/}

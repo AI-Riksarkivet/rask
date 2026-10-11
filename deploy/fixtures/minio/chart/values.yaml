@@ -1,0 +1,36 @@
+# NOT FOR PRODUCTION (deploy/fixtures/README.md).
+
+# The server runs as the image's own uid. A pinned uid must be the image's `minio-user` (1000), which owns the data: a
+# mismatched one does not crash, it reads and fails every write with `Permission denied` (measured 2026-07-13).
+
+# -- The StatefulSet and Service name, what rask's `lance.minioHost` dials for release `rask`; the claims are named
+# after it, so it is also what keeps the bytes.
+name: rask-minio
+# rask's first-party image (`.docker/minio.dockerfile`); rask's hooks run its `mc` from the same image. On the dev estate
+# values-live-pins.yaml (scripts/k3s-pins.sh) names the tag the store runs.
+image:
+  repository: localhost:5000/minio
+  tag: dev
+  pullPolicy: IfNotPresent
+servers: 1
+volumesPerServer: 4
+port: 9000
+consolePort: 9001
+storage: 15Gi
+# "" uses the cluster's default StorageClass.
+storageClass: ""
+# The Secret holding the root user and password (`minio-access-key`, `minio-secret-key`): rask's, written by ESO from its
+# dev store. The scoped users rask provisions derive their secrets from this root.
+rootCredentials: rask-infra-credentials
+# Log in to the console through the dev Dex; rask's `minio.oidc.enabled` writes `dex-client-secret` into the same Secret.
+oidc:
+  enabled: false
+  issuer: http://rask-dex:5556/dex
+  clientId: lance-catalog
+  rolePolicy: readwrite
+# Every service's storage is this one pod, and an OOM mid-write is the partially-failed write the orphan scan exists to
+# report. At 2Gi, on an estate of 104 buckets and ~8,000 datasets, the server stopped being able to start (OOMKilled
+# seconds after its start line, measured 2026-09-06) while the host had 419 GB free; 512Mi had OOMKilled it 33 times.
+resources:
+  requests: { cpu: 100m, memory: 1Gi }
+  limits: { cpu: "2", memory: 6Gi }

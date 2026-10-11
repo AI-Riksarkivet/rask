@@ -278,21 +278,15 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | minio.bucket | string | `"lance-catalog"` | The lakehouse root bucket (catalog `LANCE_REST_ROOT`, warehouse registry, lineage outbox). |
 | minio.buckets | list | `[]` | Extra platform buckets the bucket-init Job creates and the reconcile exempts from orphan_buckets; governed tiers only, not the root or feature buckets. |
 | minio.catalogAccessKey | string | `"rask-catalog"` | Access key of the catalog's scoped store identity; the secret derives in-cluster (`lance.scopedSecretFn`). Wide on data, no admin rights. |
-| minio.consolePort | int | `9001` | Port of the MinIO web console. |
-| minio.enabled | bool | `true` | Run the in-cluster MinIO store, its bucket-init Job and the scoped-users hook. Off with `externalEndpoint` set uses a managed S3. |
+| minio.enabled | bool | `true` | This estate uses the development object store (deploy/fixtures/minio, Service `<release>-minio`): rask runs its bucket-init Job and scoped-users hook against it and its dev store issues the root credential. Off with `externalEndpoint` set uses a managed S3. The chart renders no MinIO server. |
 | minio.externalEndpoint | string | `""` | S3 endpoint the apps use instead of the in-cluster MinIO; pair with `minio.enabled=false`. Empty uses the in-cluster store. |
 | minio.lineageAccessKey | string | `"rask-lineage"` | Access key of the lineage service's scoped store identity (read-only plus deletes of its own outbox); secret derives in-cluster. |
 | minio.maintenanceAccessKey | string | `"rask-maintenance"` | Access key of maintenance's scoped store identity, the fallback when vending degrades; secret derives in-cluster. |
 | minio.medallionAccessKey | string | `"rask-medallion"` | Access key the medallion producer and stage runners share; secret derives in-cluster. Data in any warehouse, `_tasks/` writable. |
-| minio.oidc.enabled | bool | `false` | Make the store trust Dex id_tokens for STS AssumeRoleWithWebIdentity (`vending.mode: web_identity`); enabling it rolls the store. |
-| minio.oidc.rolePolicy | string | `"readwrite"` | Base MinIO policy for web-identity sessions; each request's session policy narrows it per table. |
-| minio.port | int | `9000` | S3 API port of the in-cluster store. |
+| minio.oidc.enabled | bool | `false` | The development store trusts Dex id_tokens for STS AssumeRoleWithWebIdentity (`vending.mode: web_identity`): ESO writes the Dex client secret it reads into `<release>-infra-credentials`. Turn on the fixture's `oidc.enabled` with it. |
+| minio.port | int | `9000` | S3 API port of the development store's Service. |
 | minio.rayComputeAccessKey | string | `"rask-ray-compute"` | Access key of the Ray compute plane's scoped store identity, kept off the tenant root; secret derives in-cluster. |
-| minio.servers | int | `1` | Number of MinIO server pods (StatefulSet replicas). |
-| minio.storage | string | `"15Gi"` | PVC size of each data volume (e.g. 4 volumes x 15Gi is ~60Gi). |
-| minio.storageClass | string | `""` | StorageClass of the data PVCs; empty uses the cluster's default class. |
 | minio.viewerAccessKey | string | `"rask-viewer"` | Access key of the object browser's scoped identity (list and get only); secret derives in-cluster. |
-| minio.volumesPerServer | int | `4` | Data volumes (PVCs) per MinIO server; the erasure set is derived from the drive list. |
 | nameOverride | string | `""` | Overrides the chart name used in `rask.name` labels when `fullnameOverride` is empty. Empty uses the chart name. |
 | nats.auth.flagged | object | `{"explorer.controlEmit":{"annotator":{"publish":["catalog.control.v1"],"subscribe":["_INBOX.>"]}},"maintenance.controlEmit":{"maintenance":{"publish":["catalog.control.v1"]}},"medallion.ray":{"bronze-to-silver":{"publish":["catalog.control.v1"]},"media-to-silver":{"publish":["catalog.control.v1"]},"silver-to-gold":{"publish":["catalog.control.v1"]}}}` | Extra user grants keyed by a values flag path, merged into `nats.auth.users` only while that flag is true (lance.natsTable). |
 | nats.auth.provisioned | bool | `false` | Attests the platform store holds every `nats-user-<user>`; required when the store is not the chart's dev OpenBao. |
@@ -349,7 +343,6 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | resources.default | object | `{"limits":{"cpu":"1","memory":"512Mi"},"requests":{"cpu":"50m","memory":"128Mi"}}` | CPU/memory requests and limits for every lakehouse app container that names no tier of its own (lance.resources). |
 | resources.fleet | object | `{"limits":{"cpu":"1","memory":"512Mi"},"requests":{"cpu":"50m","memory":"128Mi"}}` | CPU/memory requests and limits for fleet services (templates/fleet.yaml) that name no tier of their own. |
 | resources.lineage | object | `{"limits":{"cpu":"1","memory":"512Mi"},"requests":{"cpu":"250m","memory":"128Mi"}}` | CPU/memory requests and limits for lineage; requests sized so the HPA CPU target is meaningful. |
-| resources.minio | object | `{"limits":{"cpu":"2","memory":"6Gi"},"requests":{"cpu":"100m","memory":"1Gi"}}` | CPU/memory requests and limits for the in-cluster object store pod. |
 | resources.otel-collector | object | `{"limits":{"cpu":"1","memory":"512Mi"},"requests":{"cpu":"300m","memory":"512Mi"}}` | CPU/memory requests and limits for the OTel Collector; memory limit matches its hardcoded 400 MiB memory_limiter. |
 | resources.viewer | object | `{"limits":{"cpu":"2","memory":"1536Mi"},"requests":{"cpu":"200m","memory":"768Mi"}}` | CPU/memory requests and limits for the explorer viewer (in-process KG engine and atlas cache). |
 | runners.assist.image | object | `{"repository":"assist-runner","tag":"dev"}` | Assist runner image: `repository` and `tag`; the tag is required when runners are enabled. |
@@ -358,8 +351,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | runners.jobsUrl | string | `""` | RayJob submit endpoint for the annotator's batch-labeling seam (MEDIA_JOBS_URL). Empty = the annotator keeps its submit/poll mock. |
 | secrets.hfTokenInStore | bool | `false` | True once the Hugging Face token is in the secret store at `<kvMount>/hf-token`; renders the `<release>-hf-token` ExternalSecret. False starts Ray pods without HF_TOKEN. |
 | security.infraContexts.age | object | `{"fsGroup":999,"runAsUser":999}` | uid/fsGroup for the AGE Postgres pod (postgres image uid/gid 999). |
-| security.infraContexts.enabled | bool | `false` | Applies pinned runAsUser/fsGroup securityContexts to the infra pods (object store, AGE, OpenBao, Dex). Off by default. |
-| security.infraContexts.minio | object | `{"fsGroup":1000,"runAsUser":1000}` | uid/fsGroup for the object store pod; runAsUser must match the image's data owner (1000) or every write fails. |
+| security.infraContexts.enabled | bool | `false` | Applies pinned runAsUser/fsGroup securityContexts to the infra pods (AGE, OpenBao). Off by default. |
 | security.infraContexts.openbao | object | `{"fsGroup":1000,"runAsUser":100}` | uid/fsGroup for the OpenBao pod (image uid 100). |
 | security.readOnlyRootFilesystem | bool | `true` | Read-only root filesystem for every first-party app container; each gets a writable /tmp emptyDir. |
 | security.tmpSizeLimit | string | `"2Gi"` | sizeLimit of each app's /tmp emptyDir (upload spool, Lance spill, OTel queue); stops one pod filling the node's disk. |

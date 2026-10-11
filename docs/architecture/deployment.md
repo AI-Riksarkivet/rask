@@ -67,13 +67,17 @@ release `cloudnative-pg` in `cnpg-system`): chart 0.28.3, operator 1.29.1, CRDs 
 
 ## Development stand-ins
 
-A real deployment brings its own identity provider, and the chart takes it by reference (`frontend.oidc.publicIssuer`,
-`dex.issuer`, `dex.clientId`). Development runs a stand-in from `deploy/fixtures` (ADR 0153), and the chart renders
-none of it:
+A real deployment brings its own identity provider and object store, and the chart takes them by reference
+(`frontend.oidc.publicIssuer`, `dex.issuer`, `dex.clientId`; `minio.externalEndpoint` and the scoped credentials).
+Development runs stand-ins from `deploy/fixtures` (ADR 0153), and the chart renders none of them:
 
 - **Dex** (`deploy/fixtures/dex`, release `dex`, Service `rask-dex`): the OIDC issuer with the demo users and rask's
   static client. `dex.enabled` says the estate uses it: the ingress serves it at `/dex`, the publisher's password is
   seeded into the dev store, and a real deployment's render refuses it.
+- **MinIO** (`deploy/fixtures/minio`, release `minio`, StatefulSet and Service `rask-minio`): the S3 store, on the
+  claims `data-<n>-rask-minio-<i>`. `minio.enabled` says the estate uses it: rask's dev store issues its root
+  credential (`rask-infra-credentials`, through ESO), and rask's hooks provision its buckets and scoped users. Its
+  server starts once rask is installed, so the fixture install does not wait for it.
 
 ## Local deploy (k3s)
 

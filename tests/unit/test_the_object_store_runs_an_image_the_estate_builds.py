@@ -1,10 +1,10 @@
-"""The object store and its scoped-users hook run an image the estate builds, pinned by content.
+"""The object store's scoped-users hook runs an image the estate builds, pinned by content.
 
-`minio/minio` and `minio/mc` refuse anonymous pulls on Docker Hub and quay.io (401 on the manifest,
-measured 2026-09-24 and 2026-10-05), so a chart naming either starts the store and completes an
-upgrade only on a node that already holds the bytes ([[XC-075]]). The claim pinned here is the render
-half: both pods resolve to the estate's configured registry, and the per-component `minio` digest
-reaches both, so the server and the hook run one estate-built image and never different builds of it.
+`minio/mc` refuses anonymous pulls on Docker Hub and quay.io (401 on the manifest, measured 2026-09-24
+and 2026-10-05), so a chart naming it completes an upgrade only on a node that already holds the bytes
+([[XC-075]]). The claim pinned here is the render half: the hook resolves to the estate's configured
+registry, and the per-component `minio` digest reaches it. The development store's server is the minio
+fixture's ([[XC-131]]), pinned in its own values to the same build.
 """
 
 from __future__ import annotations
@@ -28,18 +28,18 @@ _REGISTRY_ARGS = (
 
 
 def _store_images(*extra: str) -> dict[str, str]:
-    """`workload/container` -> image for the store's StatefulSet and the scoped-users Job's main containers."""
+    """`workload/container` -> image for the scoped-users Job's main container."""
     found: dict[str, str] = {}
     for workload, name, container in containers(render(*_REGISTRY_ARGS, *extra)):
         workload = re.sub(r"-r\d+$", "", workload)
-        if (workload, name) in {("StatefulSet/rask-minio", "minio"), ("Job/rask-minio-scoped-users", "mc")}:
+        if (workload, name) == ("Job/rask-minio-scoped-users", "mc"):
             found[f"{workload}/{name}"] = container["image"]
     return found
 
 
-def test_the_store_and_its_hook_resolve_to_one_estate_built_image_pinned_by_digest() -> None:
+def test_the_scoped_users_hook_resolves_to_an_estate_built_image_pinned_by_digest() -> None:
     tagged = _store_images()
-    assert set(tagged) == {"StatefulSet/rask-minio/minio", "Job/rask-minio-scoped-users/mc"}, tagged
+    assert set(tagged) == {"Job/rask-minio-scoped-users/mc"}, tagged
     for where, image in tagged.items():
         assert image.startswith("reg.example/"), f"{where} names {image!r}, an image outside the estate's registry"
 

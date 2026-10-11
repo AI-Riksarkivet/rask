@@ -14,7 +14,7 @@ import pytest
 import yaml
 from chart_yaml import FAST_LOADER
 
-from tests.unit.chart_render import PREREQ_ARGS, RAY_ARGS
+from tests.unit.chart_render import PREREQ_ARGS, RAY_ARGS, render_fixture
 
 
 REPO = Path(__file__).resolve().parents[2]
@@ -41,22 +41,16 @@ def _render(*sets: str) -> subprocess.CompletedProcess[str]:
 
 
 def test_the_object_store_does_not_inherit_the_generic_APP_memory_ceiling() -> None:
-    """RustFS sits under the whole lakehouse and named no `resources` tier, so it inherited
+    """The development store's server is the minio fixture's ([[XC-131]]). RustFS sat under the whole lakehouse and named no `resources` tier, so it inherited
     `default` — 512Mi, sized for a stateless FastAPI shell. Measured 2026-08-05 on the dev estate:
     370Mi at IDLE and **33 OOMKills**, each one taking every Lance read and write in the cluster
     down with it. The failure is invisible in review (the values file simply lacks a key) and reads
     in the cluster as "the lakehouse is flaky".
     """
-    rendered = _render("image.localImages=true", "minio.enabled=true")
-    assert rendered.returncode == 0, rendered.stderr
-
     stores = [
         doc
-        for doc in yaml.load_all(rendered.stdout, Loader=FAST_LOADER)
-        if doc
-        and doc.get("kind") == "StatefulSet"
-        and doc["metadata"]["labels"].get("app.kubernetes.io/component") != "age"
-        and any(c["name"] == "minio" for c in doc["spec"]["template"]["spec"]["containers"])
+        for doc in render_fixture("minio")
+        if doc.get("kind") == "StatefulSet" and any(c["name"] == "minio" for c in doc["spec"]["template"]["spec"]["containers"])
     ]
     assert stores, "the object store did not render — this test would pass vacuously"
 

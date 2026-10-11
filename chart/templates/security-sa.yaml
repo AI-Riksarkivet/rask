@@ -1,5 +1,5 @@
 
-{{- $components := list "catalog" "lineage" "web" "maintenance" "medallion-producer" "minio" "age" "openbao" "jobs" "viewer" "search" "annotator" "assist" "issuer-mirror" "hooks" }}
+{{- $components := list "catalog" "lineage" "web" "maintenance" "medallion-producer" "age" "openbao" "jobs" "viewer" "search" "annotator" "assist" "issuer-mirror" "hooks" }}
 {{- range $name, $_ := .Values.services }}
 {{- if not (has $name $components) }}
 {{- $components = append $components $name }}

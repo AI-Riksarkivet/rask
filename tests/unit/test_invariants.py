@@ -422,10 +422,10 @@ def test_the_object_store_carries_NO_plaintext_credential() -> None:
     renders only on estates running STS credential vending — which is precisely where a leaked client
     secret is worth the most.
     """
-    rendered = _helm_template("minio.enabled=true", "minio.oidc.enabled=true")
-    docs = [d for d in yaml.load_all(rendered, Loader=FAST_LOADER) if d]
-
-    stores = [d for d in docs if d.get("kind") == "StatefulSet" and any(c["name"] == "minio" for c in d["spec"]["template"]["spec"]["containers"])]
+    # The store is the minio fixture's ([[XC-131]]); the Secret it reads is the one release `rask` writes.
+    docs = list(chart_render.render(*chart_render.DEFAULT_ARGS, "--set", "minio.oidc.enabled=true"))
+    fixture = chart_render.render_fixture("minio", "--set", "oidc.enabled=true")
+    stores = [d for d in fixture if d.get("kind") == "StatefulSet" and any(c["name"] == "minio" for c in d["spec"]["template"]["spec"]["containers"])]
     assert stores, "the object store did not render — this gate would pass vacuously"
 
     for store in stores:
@@ -442,7 +442,7 @@ def test_the_object_store_carries_NO_plaintext_credential() -> None:
                 # possible place to discover it.
                 written = _written_secrets(docs)
                 keys = written.get(ref["name"])
-                assert keys is not None, f"{env['name']} references Secret {ref['name']!r}, which nothing the chart renders writes"
+                assert keys is not None, f"{env['name']} references Secret {ref['name']!r}, which nothing rask's chart renders writes"
                 assert ref["key"] in keys, f"{env['name']} references key {ref['key']!r}, absent from Secret {ref['name']!r} (has {sorted(keys)})"
 
 
@@ -676,10 +676,10 @@ def test_every_bus_client_dials_the_bus_the_estate_names_and_the_render_runs_non
     assert not bus, f"the render runs part of a NATS bus, which is the platform's: {bus}"
 
 
-@pytest.mark.parametrize("stand_in", ["dex"])
+@pytest.mark.parametrize("stand_in", ["dex", "minio"])
 def test_the_render_runs_no_development_stand_in(stand_in: str) -> None:
     """[[XC-131]]: the development stand-ins are fixtures (ADR 0153), so a render with every gate that names one on
-    (`dex.enabled`) runs no pod of it and serves none; rask reaches each by its endpoint."""
+    (`dex.enabled`, `minio.enabled`) runs no pod of it and serves none; rask reaches each by its endpoint."""
     docs = chart_render.render(*chart_render.DEFAULT_ARGS, "--set", "auth.enabled=true")
     found = [
         f"{doc['kind']}/{doc['metadata']['name']}"

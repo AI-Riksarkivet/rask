@@ -327,7 +327,7 @@ In-cluster hostnames (subcharts derive their service name from the release).
 
 ## `{{- define "lance.minioHost" -}}{{ include "rask.fullname" . }}-minio{{- end -}}`
 
-The ONE object store's S3 host — the Service in front of the StatefulSet in templates/minio.yaml.
+The ONE object store's S3 host — the Service in front of the minio fixture's StatefulSet ([[XC-131]]).
 P4's store unification (docs/adr/0124-chart-unification-one-control-plane-each-one-object-store.md) still holds ("the ONE store"); what changed with LH-133 is the store and
 therefore its Service name, since a first-party StatefulSet names its own Service
 to name is deleted, so fleet + lakehouse + observability all resolve the same endpoint.

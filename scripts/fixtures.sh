@@ -42,7 +42,7 @@ set -- "${NAMES[@]}"
 for name in "$@"; do
   dir="$ROOT/deploy/fixtures/$name"
   [ -f "$dir/fixture.env" ] || { echo "no fixture '$name' (deploy/fixtures/$name/fixture.env)" >&2; exit 2; }
-  RELEASE='' NAMESPACE='' REPO='' CHART='' VERSION='' SHARED_NAMESPACE='' SET_FILES=''
+  RELEASE='' NAMESPACE='' REPO='' CHART='' VERSION='' SHARED_NAMESPACE='' SET_FILES='' WAIT=''
   # shellcheck source=/dev/null
   . "$dir/fixture.env"
   for key in RELEASE NAMESPACE CHART; do
@@ -163,10 +163,14 @@ for item in items(sys.stdin.read()):
   # upgrade deletes any of them not yet marked keep (measured 2026-10-11: Dex's first install failed on its pod, the
   # next `make k3s-up` found the workload owned by the fixture and re-created nothing, and rask's upgrade deleted it).
   # So the marks below are written whatever the install's outcome, and its status is returned after them.
+  # WAIT=false is for a stand-in whose pod needs something rask's own install creates (the object store's root credential,
+  # which ESO writes from rask's dev store): on an empty cluster it starts once rask is installed.
+  READY=(--wait --timeout 600s)
+  [ "$WAIT" = "false" ] && READY=()
   installed=0
   "$HELM" upgrade --install "$RELEASE" "${SOURCE[@]}" \
     --namespace "$NAMESPACE" --create-namespace --reset-then-reuse-values "${VALUES[@]}" "${OWN[@]}" "${EXTRA[@]}" \
-    --description "rask fixture: not for production" --wait --timeout 600s || installed=$?
+    --description "rask fixture: not for production" "${READY[@]}" || installed=$?
   for entry in "${REPARENTED[@]}"; do
     IFS=/ read -r kind obj ns old <<<"$entry"
     NS=()

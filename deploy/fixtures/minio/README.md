@@ -1,7 +1,8 @@
-# chart/templates/minio.yaml
+# The minio fixture
 
-Rationale for `chart/templates/minio.yaml`. It lives here because Helm stores the chart's templates in
-every release revision, under a 1 MiB ceiling. Each section is headed by the template line it explains.
+NOT FOR PRODUCTION. Rationale for `chart/templates/minio.yaml`, the development object store's server, which is a
+fixture ([[XC-131]], ADR 0153): rask's chart renders no MinIO server and reaches the store at `<release>-minio:9000`.
+Each section is headed by the template line it explains.
 
 ## `apiVersion: v1`
 

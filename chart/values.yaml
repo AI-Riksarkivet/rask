@@ -689,25 +689,6 @@ resources:
   otel-collector:
     requests: { cpu: 300m, memory: 512Mi }
     limits: { cpu: "1", memory: 512Mi }
-  # RUSTFS — the object store under the whole lakehouse, and the one component for which the app
-  # default was actively wrong. It named no tier, so it inherited `default`'s 512Mi and was
-  # OOMKilled 33 times on a dev estate while sitting at 370Mi IDLE (~72% of its ceiling doing
-  # nothing): any real listing, blob-tier scan or ingest burst tipped it. An OOM mid-write is
-  # exactly the partially-failed write the orphan scan exists to report, so this is a data-integrity
-  # setting, not a comfort one.
-  #
-  # RAISED TO 6Gi 2026-09-06, which is the "raise it with the estate" this note used to defer. The
-  # estate grew to 104 buckets and ~8 000 datasets, and at 2Gi the store stopped being able to START:
-  # `exitCode 137, reason OOMKilled`, dying seconds after the server's own start line with the liveness
-  # probe timing out on /health, then CrashLoopBackOff on a 5m backoff. The host had 419 GB free, so
-  # the ceiling was this limit and nothing else. What tipped it was running the live e2e suites in full
-  # for the first time — and those suites are ordinary listings and writes, which is the point: a store
-  # that cannot survive its own estate's test suite cannot survive its estate. Every service's storage
-  # is this one pod, so the blast radius is the whole lakehouse.
-  # -- CPU/memory requests and limits for the in-cluster object store pod.
-  minio:
-    requests: { cpu: 100m, memory: 1Gi }
-    limits: { cpu: "2", memory: 6Gi }
   # The assist model runner holds two warm torch models (~1.1 GB weights) and burns real CPU per
   # inference (multi-threaded GEMMs) — the request-pod default would OOM-kill it at load.
   # -- CPU/memory requests and limits for the assist model runner (two warm torch models).
@@ -829,16 +810,8 @@ security:
   # after these boot green — the label itself is a kubectl step, the namespace isn't chart-owned).
   # Per-image uid/fsGroup (data/secret holders need the RIGHT ids for their PVCs, not helper reuse):
   infraContexts:
-    # -- Applies pinned runAsUser/fsGroup securityContexts to the infra pods (object store, AGE, OpenBao, Dex). Off by default.
+    # -- Applies pinned runAsUser/fsGroup securityContexts to the infra pods (AGE, OpenBao). Off by default.
     enabled: false
-    # -- uid/fsGroup for the object store pod; runAsUser must match the image's data owner (1000) or every write fails.
-    minio: { runAsUser: 1000, fsGroup: 1000 } # MUST match the minio image's built-in `minio-user`
-    # (uid 1000) — it is what owns the on-disk data. THE FAILURE MODE IS THE REASON THIS IS PINNED
-    # RATHER THAN LEFT TO THE IMAGE: a mismatched uid does NOT CrashLoop. The server starts and READS
-    # fine (world-readable dirs) while EVERY WRITE fails `Permission denied` → S3 500/AccessDenied to
-    # every client. Live 2026-07-13, under the previous store and its own uid, the whole data plane was
-    # write-dead under infraContexts until this was corrected. fsGroup alone cannot rescue it: the dirs
-    # are mode 755 owned by the image's group, so a different group has no write bit.
     # -- uid/fsGroup for the AGE Postgres pod (postgres image uid/gid 999).
     age: { runAsUser: 999, fsGroup: 999 } # postgres official image uid/gid
     # -- uid/fsGroup for the OpenBao pod (image uid 100).
@@ -2574,53 +2547,25 @@ autoscaling:
 
 # === In-cluster S3 (MinIO) ========================================================================
 # ONE object store renders — P4's unification (docs/adr/0124-chart-unification-one-control-plane-each-one-object-store.md), which still holds; LH-133 changed WHICH store and
-# therefore its mechanism. `enabled` gates the StatefulSet + Services (templates/minio.yaml), the
+# therefore its mechanism. The server is the minio fixture's ([[XC-131]]); `enabled` gates the
 # bucket-init hook (templates/minio-buckets.yaml) and the scoped-user hook
 # (templates/minio-scoped-users.yaml) as ONE unit — on minio.enabled ALONE, not singleTenant, because
 # the lakehouse/medallion/observability consumers render without singleTenant and must resolve the
 # store. The ONE endpoint is `rask-minio:9000` (`lance.minioHost`/`lance.s3Endpoint`).
 #
-# P4's KEEP-PVC POSTURE IS PRESERVED, by a different mechanism: it was pinned to an operator Tenant
-# spec, and a StatefulSet's own `volumeClaimTemplates` has the identical property — PVCs survive pod
-# rolls AND `helm uninstall`, because helm never owned them.
-#
-# Erasure coding wants servers*volumesPerServer >= 4; the default is servers=1, volumesPerServer=4
-# (1 pod, 4 PVCs).
+# P4's KEEP-PVC POSTURE holds in the fixture: a StatefulSet's `volumeClaimTemplates` claims survive pod rolls and
+# `helm uninstall`, because helm never owned them.
 minio:
-  # -- Run the in-cluster MinIO store, its bucket-init Job and the scoped-users hook. Off with `externalEndpoint` set uses a managed S3.
+  # -- This estate uses the development object store (deploy/fixtures/minio, Service `<release>-minio`): rask runs its bucket-init Job and scoped-users hook against it and its dev store issues the root credential. Off with `externalEndpoint` set uses a managed S3. The chart renders no MinIO server.
   enabled: true
-  # THE IMAGE IS FIRST-PARTY, component `minio` under `image.*` (`rask.image`): the server and the
-  # `mc` the scoped-users hook drives, compiled by `.docker/minio.dockerfile` from upstream tags pinned
-  # to their commits (server RELEASE.2025-04-22T22-12-26Z, mc RELEASE.2025-08-13T08-35-41Z). Upstream's
-  # `minio/minio` and `minio/mc` refuse anonymous pulls on Docker Hub and quay.io (401 on the manifest,
-  # measured 2026-09-24 and 2026-10-05), so a node with an empty cache could neither start the store nor
-  # run the pre-upgrade hook ([[XC-075]]). Pin a running store by `image.digests.minio`: the server's
-  # version moves only when the dockerfile's pins do, and a moving tag on a data store changes the
-  # server under its own on-disk format with no diff anywhere.
-  # -- Number of MinIO server pods (StatefulSet replicas).
-  servers: 1
-  # -- Data volumes (PVCs) per MinIO server; the erasure set is derived from the drive list.
-  volumesPerServer: 4
-  # (No distinct-disk escape hatch here, and that is a property of the store rather than an omission:
-  # the previous one refused volumes sharing a physical disk and needed an UNSAFE bypass flag to run on
-  # single-node k3s at all. MinIO derives its erasure set from the drive list and does not.)
-  # -- S3 API port of the in-cluster store.
+  # THE IMAGE IS FIRST-PARTY, component `minio` under `image.*` (`rask.image`): the `mc` the scoped-users
+  # hook drives (the dev store's server runs the same build, pinned in its fixture), compiled by
+  # `.docker/minio.dockerfile` from upstream tags pinned to their commits (server RELEASE.2025-04-22T22-12-26Z,
+  # mc RELEASE.2025-08-13T08-35-41Z). Upstream's `minio/mc` refuses anonymous pulls on Docker Hub and quay.io
+  # (401 on the manifest, measured 2026-09-24 and 2026-10-05), so a node with an empty cache could not run
+  # the pre-upgrade hook ([[XC-075]]). Pin it by `image.digests.minio`.
+  # -- S3 API port of the development store's Service.
   port: 9000
-  # -- Port of the MinIO web console.
-  consolePort: 9001
-  # Per volume: 4 volumes × 15Gi => ~60Gi total (local-path is unmetered on dev k3s);
-  # values-prod raises it to 200Gi/volume for the real lakehouse + 14d of observability.
-  # -- PVC size of each data volume (e.g. 4 volumes x 15Gi is ~60Gi).
-  storage: "15Gi"
-  # The data PVCs. EMPTY = the CLUSTER'S DEFAULT StorageClass — the only portable default, and the
-  # reason this is not `"local-path"`: that is the name k3s's provisioner happens to use, it does NOT
-  # exist on stock kind (whose default class is `standard`) or on any managed cluster, and a
-  # non-existent class makes the four PVCs sit Pending FOREVER with no event on the pod and no
-  # chart-level complaint (live-proof 2026-07-28, defect 2 — the run had to alias a StorageClass into
-  # the cluster to proceed). Set an explicit class only to pin a specific one (prod: a CSI class that
-  # supports VolumeSnapshot + encryption, see values-prod.yaml).
-  # -- StorageClass of the data PVCs; empty uses the cluster's default class.
-  storageClass: ""                    # data PVCs; "" => the cluster's default StorageClass
   # THE STORE'S ROOT ACCOUNT. Every scoped identity below exists so that nothing in the fleet presents
   # THIS pair; it remains only because the store itself must boot with one. Only the access key ID is a
   # value: the secret half is the store's `minio-secret-key` (generated in-cluster for the dev OpenBao).
@@ -2758,13 +2703,10 @@ minio:
   # keep-PVC posture the P4 ruling pins to the Tenant spec. `storageClass` sizes/classes them.)
   # OIDC identity provider for STS AssumeRoleWithWebIdentity (Track B). When on, the store trusts Dex id_tokens
   # → a client can mint short-TTL creds it scopes per-table via the catalog's vending endpoint (vending.mode=
-  # web_identity). Off by default (plain dev needs no STS). Enabling it rolls the store (the env lands in the
-  # Tenant spec, templates/minio.yaml).
+  # web_identity). Off by default (plain dev needs no STS).
   oidc:
-    # -- Make the store trust Dex id_tokens for STS AssumeRoleWithWebIdentity (`vending.mode: web_identity`); enabling it rolls the store.
+    # -- The development store trusts Dex id_tokens for STS AssumeRoleWithWebIdentity (`vending.mode: web_identity`): ESO writes the Dex client secret it reads into `<release>-infra-credentials`. Turn on the fixture's `oidc.enabled` with it.
     enabled: false
-    # -- Base MinIO policy for web-identity sessions; each request's session policy narrows it per table.
-    rolePolicy: readwrite # built-in full-S3 base policy; the per-request session policy narrows it per-table
 
 ray:
   # THE ENGINE SEAM (ADR 0153). rask installs no Ray: no operator, no RayCluster, no RayService. It
