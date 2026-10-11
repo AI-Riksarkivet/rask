@@ -4,9 +4,8 @@
 
 - A store nothing seeds (`openbao.devMode=false`, or `openbao.externalAddr`) mints no key, so every signer would stay not Ready
   and lineage could verify nothing. The render refuses it, naming every secret and the script that creates them, until the
-  operator attests with `signing.provisioned`. Nor does it mint a NATS user ([[XC-078]], values.yaml `nats.auth`), and neither
-  does the dev store for a bus the platform runs (`nats.externalUrl`): each `nats-user-<user>`, and `nats-route` while the
-  chart runs the NATS cluster, waits for `nats.auth.provisioned`.
+  operator attests with `signing.provisioned`. Nor does it mint a NATS user ([[XC-078]], values.yaml `nats.auth`): each
+  `nats-user-<user>` waits for `nats.auth.provisioned`.
 - `signing.enforce` is lineage's switch, on by default. On, lineage carries the signer set and the delegator set the chart derives,
   and only when the store and auth are on; off, it carries neither. An enforced render with no signer at all is refused rather
   than rendered as a lineage that requires nothing.
@@ -103,45 +102,35 @@ def _identities_running(docs: tuple[dict, ...], app: str) -> list[str]:
     )
 
 
-#: A bus the platform runs: the dev store still mints the signing keys, and nothing in the chart can mint users for a NATS it does not run.
-_PLATFORM_BUS = ("--set", "nats.enabled=false", "--set", "nats.externalUrl=nats://bus.example:4222")
-
-
 @pytest.mark.parametrize(
-    ("mode", "seeds_signing", "runs_nats"),
+    "mode",
     [
-        pytest.param(_SEALED, False, True, id="a-sealed-store"),
-        pytest.param(_EXTERNAL, False, True, id="an-external-store"),
-        pytest.param(_PLATFORM_BUS, True, False, id="a-platform-bus"),
+        pytest.param(_SEALED, id="a-sealed-store"),
+        pytest.param(_EXTERNAL, id="an-external-store"),
     ],
 )
-def test_a_store_nothing_seeds_is_refused_until_the_operator_attests_its_signing_keys_and_bus_users(
-    mode: tuple[str, ...],
-    seeds_signing: bool,  # noqa: FBT001
-    runs_nats: bool,  # noqa: FBT001
-) -> None:
+def test_a_store_nothing_seeds_is_refused_until_the_operator_attests_its_signing_keys_and_bus_users(mode: tuple[str, ...]) -> None:
     default = chart_render.render(*DEFAULT_ARGS)
     identities, users = _signers(default), chart_render.nats_users(default)
     assert identities and users, "the default render has no signer or no bus user, so the refusals below would name nothing"
 
-    if not seeds_signing:
-        with pytest.raises(subprocess.CalledProcessError) as refused:
-            chart_render.render(*DEFAULT_ARGS, *mode)
-        message = refused.value.stderr
-        missing = [name for identity in identities for name in (f"signing-public-{identity}", f"signing-key-{identity}") if name not in message]
-        assert not missing, f"the refusal does not name {missing}, so the operator cannot tell which secrets to create"
+    with pytest.raises(subprocess.CalledProcessError) as refused:
+        chart_render.render(*DEFAULT_ARGS, *mode)
+    message = refused.value.stderr
+    missing = [name for identity in identities for name in (f"signing-public-{identity}", f"signing-key-{identity}") if name not in message]
+    assert not missing, f"the refusal does not name {missing}, so the operator cannot tell which secrets to create"
 
-    # The users a store nothing seeds must already hold, and the route credential while the chart runs the NATS cluster.
+    # The users a store nothing seeds must already hold; the bus's own config is the bus's, not rask's to attest.
     with pytest.raises(subprocess.CalledProcessError) as refused:
         chart_render.render(*DEFAULT_ARGS, *mode, "--set", "signing.provisioned=true")
     message = refused.value.stderr
-    names = {f"nats-user-{user}" for user in users} | ({"nats-route"} if runs_nats else set())
+    names = {f"nats-user-{user}" for user in users}
     assert not [name for name in names if name not in message], f"the refusal does not name {sorted(n for n in names if n not in message)}"
-    assert runs_nats or "nats-route" not in message, "a platform's bus has no route of this chart's to attest"
+    assert "nats-route" not in message and "nats-server" not in message, "the refusal asks the operator to attest the bus's own config"
 
     docs = chart_render.render(*DEFAULT_ARGS, *mode, "--set", "signing.provisioned=true", "--set", "nats.auth.provisioned=true")
     assert _signers(docs) == identities, "an attested store must still render every signer's identity"
-    assert bool([name for _, name, _ in chart_render.containers(docs) if name == "mint"]) is seeds_signing, "only the dev store has a mint step to run"
+    assert not [name for _, name, _ in chart_render.containers(docs) if name == "mint"], "only the dev store has a mint step to run"
     assert not chart_render.nats_users(docs), "the dev seed issues users for a bus or a store it does not provision"
 
 

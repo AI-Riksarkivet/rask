@@ -161,8 +161,6 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 
 {{- define "lance.ageHost" -}}{{ .Release.Name }}-age{{- end -}}
 
-{{- define "lance.natsHost" -}}{{ .Release.Name }}-nats{{- end -}}
-
 {{- define "lance.openfgaHost" -}}{{ .Release.Name }}-openfga{{- end -}}
 
 {{- define "lance.dexHost" -}}{{ .Release.Name }}-dex{{- end -}}
@@ -215,7 +213,7 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end -}}
 
 {{- define "lance.natsUrl" -}}
-{{- if .Values.nats.externalUrl -}}{{ .Values.nats.externalUrl }}{{- else -}}nats://{{ include "lance.natsHost" . }}:4222{{- end -}}
+{{- required "NATS JetStream is a prerequisite: set nats.url to the bus every pub/sub component, the stream Job and ingest connect to (docs/architecture/deployment.md, Prerequisites); rask never installs it" .Values.nats.url -}}
 {{- end -}}
 
 {{- define "lance.subPubsub" -}}
@@ -289,7 +287,7 @@ scopes:
 {{- end -}}
 
 {{- define "lance.natsMints" -}}
-{{- if and .Values.openbao.enabled .Values.openbao.devMode (not .Values.openbao.externalAddr) .Values.nats.enabled (not .Values.nats.externalUrl) -}}true{{- end -}}
+{{- include "lance.mintsDevCredentials" . -}}
 {{- end -}}
 
 {{- define "lance.natsCredsFiles" -}}
@@ -299,8 +297,8 @@ scopes:
 {{- define "lance.natsFiles" -}}
 {{- $files := dict -}}
 {{- if include "lance.natsCredsFiles" . -}}
-{{- if or .Values.nats.enabled .Values.nats.externalUrl }}{{- $_ := set $files "nats-admin-creds" (list "nats-user-admin") }}{{- end -}}
-{{- if and .Values.nats.enabled .Values.nats.auth.server }}
+{{- $_ := set $files "nats-admin-creds" (list "nats-user-admin") -}}
+{{- if include "lance.natsMints" . }}
 {{- $_ := set $files "nats-box-creds" (list "nats-user-monitor") }}
 {{- $_ := set $files "nats-auth" (list "nats-server" "nats-route") }}
 {{- end -}}

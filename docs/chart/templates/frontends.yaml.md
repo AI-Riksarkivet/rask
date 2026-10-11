@@ -161,10 +161,10 @@ since the export header is the backend's contract, not a name rask can derive.
 
 ## `- name: NATS_MONITOR_API`
 
-JetStream visibility (admin /streams): the NATS HTTP monitor port —
+JetStream visibility (admin /streams): the bus's HTTP monitor endpoint, `nats.monitorUrl` —
 unauthenticated by design and ClusterIP-only, consumed strictly server-side
-behind the zone BFF's admin gate, never by the browser. The HEADLESS Service
-is the one carrying :8222 (the plain Service exposes only 4222).
+behind the zone BFF's admin gate, never by the browser. On the dev fixture the HEADLESS
+Service is the one carrying :8222 (the plain Service exposes only 4222).
 
 ## `- name: PORT`
 

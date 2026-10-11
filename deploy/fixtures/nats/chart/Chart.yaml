@@ -1,0 +1,12 @@
+apiVersion: v2
+name: bus
+description: >-
+  NOT FOR PRODUCTION. A development NATS JetStream cluster for rask: three nodes with file-store JetStream, and in
+  operator mode the server config rask's dev OpenBao mints. A platform runs its own bus; rask names its address
+  through `nats.url`.
+type: application
+version: 0.1.0
+dependencies:
+  - name: nats
+    version: "2.14.2"
+    repository: https://nats-io.github.io/k8s/helm/charts/

@@ -330,8 +330,9 @@ spec:
 # (3e) nats:8222 — the NATS monitoring endpoint (varz/connz/jsz), surfaced in the ops view that now
 # lives at /lakehouse/admin. NATS is on the (3a) exclusion list, so the two nats rules here are its
 # ONLY ingress: this one admits the 8222 monitor port from the LAKEHOUSE zone pods alone; (3f) below
-# admits client traffic on 4222. Selector is the subchart-pod idiom (`app.kubernetes.io/name`);
-# component=nats (not just name) so nats-box is not a target.
+# admits client traffic on 4222. The bus is a prerequisite: these select the upstream nats chart's pods
+# when the bus runs in this namespace (the dev fixture), and a bus elsewhere is reached through
+# `networkPolicy.extraEgress`. component=nats (not just name) so nats-box is not a target.
 #
 # This said web-admin until 2026-07-25. The 7→4 zone merge deleted that component, so the rule
 # selected NOTHING and the ops view could not reach varz/jsz in prod — a default-deny netpol fails

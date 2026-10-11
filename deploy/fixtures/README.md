@@ -17,7 +17,7 @@ Each directory is one fixture, installed as **its own Helm release** before the 
 chart that declares upstream `dependencies:` has them vendored from its committed `Chart.lock` before the install.
 
 `scripts/fixtures.sh <name>... [-- <helm args>]` installs them in the order named. `make k3s-up` runs it with `FIXTURES`
-(default `external-secrets dapr kuberay-operator ray-cluster observability`) before the rask release. A GPU node on which nothing advertises `nvidia.com/gpu` yet adds `nvidia-device-plugin`:
+(default `external-secrets dapr nats kuberay-operator ray-cluster observability`) before the rask release. A GPU node on which nothing advertises `nvidia.com/gpu` yet adds `nvidia-device-plugin`:
 
 ```bash
 kubectl get nodes -o jsonpath='{.items[*].status.allocatable}' | tr ' ' '\n' | grep nvidia   # empty: no plugin runs
@@ -40,6 +40,7 @@ says everything in it is throwaway.
 | --- | --- |
 | `external-secrets` | the platform's External Secrets Operator, a prerequisite the rask chart refuses to render without |
 | `dapr` | the platform's Dapr control plane (upstream chart, namespace `dapr-system`, rask's `dapr.controlPlaneNamespace`): fail-closed injector scoped to `dapr.io/enabled`, no `secretReader`; a prerequisite the chart refuses to render `dapr.enabled` without |
+| `nats` | the platform's NATS JetStream bus (local chart over upstream nats 2.14.2, release `nats` in rask's namespace): three nodes at `rask-nats:4222`, the address `deploy/values-local.yaml` names in rask's `nats.url`. With `nats.auth.server` it runs in operator mode, its config written by its own ExternalSecrets from rask's dev OpenBao, so turn it on once rask is installed (`scripts/fixtures.sh nats -- --set nats.auth.server=true`; docs/OPERATORS.md § 7) |
 | `kuberay-operator` | the engine owner's KubeRay operator (upstream chart, namespace `kuberay-system`) |
 | `ray-cluster` | the engine owner's Ray cluster: one head named `<rask>-ray`, run as `<rask>-sa-ray`, reaching rask by the names a release called `rask` creates (`rask.release`); `HEAD.md` explains each setting |
 | `nvidia-device-plugin` | a GPU node's device plugin, only where nothing advertises `nvidia.com/gpu` yet |
@@ -55,5 +56,14 @@ When something leaves the rask chart and a fixture takes it over (a RayCluster, 
 Helm would delete it on the rask upgrade that stops rendering it, and a CRD takes every object of its kind with it.
 `scripts/fixtures.sh` hands such objects over instead: it renders the fixture, and every object that already exists
 under another release (or under none) is annotated `helm.sh/resource-policy=keep`, so no upgrade or uninstall of the
-old release deletes it, and the fixture installs with `--take-ownership`, so its release becomes the owner. Nothing is
-deleted and recreated. Run the fixture before the rask upgrade that stops rendering the object.
+old release deletes it, and the fixture installs with `--take-ownership`, so its release becomes the owner. Run the
+fixture before the rask upgrade that stops rendering the object.
+
+A workload whose selector names its release (most charts' do) cannot change owner in place, because a selector is
+immutable. A Deployment or DaemonSet is deleted and the install creates it again. A StatefulSet keeps its pods and its
+data: it is deleted with `--cascade=orphan`, its pods are relabelled to the new selector, and the new StatefulSet adopts
+them and replaces them one at a time onto the same claims (the NATS bus kept its quorum and its streams this way). Each
+re-created workload is annotated keep after the install.
+
+`scripts/fixtures.sh --vendor [<name>...]` only vendors the local fixture charts' dependencies, with no cluster;
+`make k3s-deps` runs it so a test can render a fixture.

@@ -7,8 +7,8 @@ every release revision, under a 1 MiB ceiling. Each section is headed by the tem
 
 Create the JetStream LINEAGE stream (subjects lineage.events.>) that the Dapr pubsub.jetstream
 component publishes to / consumes from. Dapr's jetstream component does NOT auto-create the stream,
-so this Job does it (idempotent: skip if it already exists). Also runs against an
-EXTERNAL NATS (nats.externalUrl + nats.enabled=false) — the component would otherwise point at a
+so this Job does it (idempotent: skip if it already exists), on the bus `nats.url` names. The bus is
+a prerequisite (ADR 0153), and the streams are rask's: without them every component would point at a
 server with no streams and every publish would fail.
 
 NOT a hook — see "BOOTSTRAP JOBS" in _helpers.tpl. A daprd sidecar subscribes at startup, so an

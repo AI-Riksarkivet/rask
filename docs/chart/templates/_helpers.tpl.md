@@ -243,7 +243,7 @@ VALUES THEY REQUIRE (the values.yaml merge must land these or the render breaks)
   age.externalHost · auth.enabled · catalog.controlEmit · dapr.{enabled,sidecars,sidecarRestricted,
   sidecarResources.*,resiliency.enabled} · dex.clientId · frontend.{apps,image.tag,serviceIdentity,
   idleTimeoutSeconds,oidc.*} · gateway.port · image.catalog.{repository,tag} · lifecycle.preStopSeconds ·
-  medallion.{enabled,port,buckets,producer.daprAppId,stageRunners} · nats.{enabled,externalUrl} ·
+  medallion.{enabled,port,buckets,producer.daprAppId,stageRunners} · nats.url ·
   observability.{enabled,environment} · openbao.{enabled,port,externalAddr} · pubsub.name ·
   resources.{default,<component>} · minio.{bucket,port,externalEndpoint} · security.readOnlyRootFilesystem ·
   services.{catalog,lineage}.{port,daprAppId,reconcile.bindingName}
@@ -422,7 +422,7 @@ Whether the chart generates the dev OpenBao's credentials (external-secrets.yaml
 
 ## `{{- define "lance.natsMints" -}}`
 
-Whether the chart's dev OpenBao issues the NATS credentials: a dev store this chart runs, for a NATS this chart runs.
+Whether the chart's dev OpenBao issues the NATS credentials: a dev store this chart runs is the issuer of the dev bus (deploy/fixtures/nats).
 
 ## `{{- define "lance.natsCredsFiles" -}}`
 
@@ -430,7 +430,7 @@ Whether a pod with no sidecar gets its NATS credential as a file ESO writes from
 
 ## `{{- define "lance.natsFiles" -}}`
 
-The Secrets ESO writes for the NATS pods that have no sidecar, as JSON {target: [store secrets]}: the ExternalSecrets and the ESO policy both read it.
+The Secrets ESO writes for the NATS pods that have no sidecar, as JSON {target: [store secrets]}. This chart's ExternalSecrets write `nats-admin-creds`; the ESO policy grants all of them, because the NATS fixture's ExternalSecrets read the other two (nats-box's `monitor` creds, the server's operator config and route credential) from the dev store.
 
 ## `{{- define "lance.daprSidecarResources" -}}`
 

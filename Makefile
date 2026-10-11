@@ -689,17 +689,17 @@ KUBECTL ?= KUBECONFIG=$(KUBECONFIG) kubectl
 K3S_IMAGES = $(COMPOSE_IMAGES) $(ZONES:%=web-%) ray-cluster lance-rest-catalog minio
 
 # Subchart repos (Chart.yaml dependencies). An OCI dependency would need no repo add.
-K3S_DEP_REPOS = nats=https://nats-io.github.io/k8s/helm/charts/ \
-                openfga=https://openfga.github.io/helm-charts \
+K3S_DEP_REPOS = openfga=https://openfga.github.io/helm-charts \
                 cnpg=https://cloudnative-pg.github.io/charts
 
 k3s-install: ## One-time host bootstrap: k3s + helm only (everything else is the chart; sudo)
 	./scripts/k3s-install.sh
 
-k3s-deps: ## Add subchart repos + vendor chart dependencies into chart/charts/
+k3s-deps: ## Add subchart repos + vendor chart dependencies into chart/charts/, and each local fixture chart's
 	@for r in $(K3S_DEP_REPOS); do n=$${r%%=*}; u=$${r#*=}; helm repo add $$n $$u >/dev/null 2>&1 || true; done
 	@helm repo update >/dev/null
 	helm dependency build ./chart
+	./scripts/fixtures.sh --vendor
 
 k3s-build: ## Build all fleet + frontend zone + ray-cluster images as :dev (via Dagger)
 	@for s in $(COMPOSE_IMAGES); do \
@@ -774,10 +774,10 @@ DROP_CREDENTIAL_VALUES := --set dapr.appToken=null --set frontend.oidc.sessionSe
 
 # The prerequisites a dev estate gets from deploy/fixtures, each its own release, installed before rask's
 # (NOT FOR PRODUCTION; deploy/fixtures/README.md). Dapr's control plane comes first after ESO, so its injector is
-# Ready before any pod that wants a sidecar exists. The Ray engine the cascade submits to is two of them, the operator
-# first; observability is the store, dashboards and alerting rask's Collector exports to. A GPU node with no device
-# plugin yet adds nvidia-device-plugin.
-FIXTURES ?= external-secrets dapr kuberay-operator ray-cluster observability
+# Ready before any pod that wants a sidecar exists; the NATS bus every pub/sub component dials follows. The Ray engine
+# the cascade submits to is two of them, the operator first; observability is the store, dashboards and alerting rask's
+# Collector exports to. A GPU node with no device plugin yet adds nvidia-device-plugin.
+FIXTURES ?= external-secrets dapr nats kuberay-operator ray-cluster observability
 
 k3s-fixtures: ## Install the development fixtures (FIXTURES) as their own releases, before the rask chart
 	KUBECONFIG=$(KUBECONFIG) ./scripts/fixtures.sh $(FIXTURES)
@@ -972,8 +972,7 @@ kind-images: k3s-build ## Build the full :dev image set (same builds k3s uses �
 kind-load: ## Side-load the :dev image set into the kind cluster
 	$(KIND) load docker-image $(foreach i,$(KIND_IMAGES),$(i):dev) --name $(KIND_CLUSTER)
 
-# Third-party images the chart pulls (dapr x5, nats, openfga, cnpg, greptimedb, perses,
-# dex, openbao, otel-collector, …). kind's containerd is a SEPARATE image store from the
+# Third-party images the chart pulls (openfga, cnpg, dex, openbao, otel-collector, …). kind's containerd is a SEPARATE image store from the
 # host's docker, so a fresh cluster re-pulls every one of them from the internet — ~20 minutes of
 # pure network before a single app pod starts. The host docker cache, by contrast, persists across
 # clusters: pull once here, side-load, and every later cluster starts in seconds. Derived from the

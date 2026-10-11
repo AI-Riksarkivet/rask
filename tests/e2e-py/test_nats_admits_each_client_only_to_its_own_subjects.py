@@ -2,8 +2,8 @@
 
 Closes-when clause 1 ("a publish from a pod without its app's credential is refused on every cascade, control and
 lineage subject") and the ingest clause ("ingest drains a run through its own NATS user, and a pod without that
-user cannot publish on `ingest.tasks.>`"), proved offline: the chart's nats-server in operator mode with a MEMORY
-resolver and JetStream, test-only keys minted with nsc, and one user per row of the permission table the chart's dev
+user cannot publish on `ingest.tasks.>`"), proved offline: the nats-server the NATS fixture deploys (deploy/fixtures/nats,
+a prerequisite rask never installs) in operator mode with a MEMORY resolver and JetStream, test-only keys minted with nsc, and one user per row of the permission table the chart's dev
 seed issues (read off the render, so a values.yaml `nats.auth.flagged` grant counts only while its flag is on).
 
 The table is held to two declarations below, written independently of it, because a table checked only against
@@ -58,7 +58,7 @@ from ingest.lander import create_empty
 from ingest.queue import UnitTask, WorkQueue
 from ingest.runtime import BRONZE_SCHEMA
 from ingest.worker import Worker
-from tests.unit.chart_render import DEFAULT_ARGS, containers, nats_users, render
+from tests.unit.chart_render import DEFAULT_ARGS, containers, nats_users, render, render_fixture
 
 
 pytestmark = pytest.mark.nats_auth
@@ -188,9 +188,16 @@ def _subscriber_component(components: list[dict[str, Any]], app: str, durable: s
 
 
 def _lane_runs_the_charts_images(tools: Tools, docs: tuple[dict, ...]) -> list[str]:
+    """Every binary the lane runs comes from an image the estate deploys: rask's render, or the prerequisites' fixtures (the
+    NATS server, and the daprd image Dapr's injector stamps as SIDECAR_IMAGE)."""
+    docs = (*docs, *render_fixture("nats"), *render_fixture("dapr"))
     deployed = {c["image"] for _, _, c in containers(docs)}
     deployed |= {e["value"] for _, _, c in containers(docs) for e in c.get("env") or [] if e.get("name") == "SIDECAR_IMAGE" and "value" in e}
-    return [f"the lane runs {tool} from {image}, which the chart does not deploy" for tool, image in sorted(tools.images.items()) if image not in deployed]
+    return [
+        f"the lane runs {tool} from {image}, which neither the chart nor a fixture deploys"
+        for tool, image in sorted(tools.images.items())
+        if image not in deployed
+    ]
 
 
 def _table_names_every_client(table: dict[str, Permissions], components: list[dict[str, Any]]) -> list[str]:

@@ -38,6 +38,21 @@ scoped to pods labelled `dapr.io/enabled: "true"`, which rask stamps; no `dapr_r
 In production also HA (`global.ha.enabled`) and an injector that drops every sidecar capability
 (`dapr_sidecar_injector.sidecarDropALLCapabilities`), the pair to rask's `dapr.sidecarRestricted`.
 
+## Prerequisite: NATS JetStream
+
+Every event rask moves (lineage, the medallion cascade, the catalog's control broadcast, the maintenance queues, the
+ingest work queue) rides Dapr pub/sub over **NATS JetStream, a prerequisite** (ADR 0153) the platform runs. The chart
+renders no server; it renders what is rask's: the address its clients dial, the stream definitions (the stream Job,
+which creates rask's streams on the bus as the `admin` user), and the bus users (`nats.auth.users`, one per app). Name
+the bus in `nats.url` (the render refuses without it) and its HTTP monitor in `nats.monitorUrl` for the lakehouse ops
+view. Each user's credential `nats-user-<user>` lives in the store; a store the chart does not seed needs them issued by
+the bus's operator and attested with `nats.auth.provisioned` (docs/OPERATORS.md § 7).
+
+What the bus must provide, and the version rask is tested against, are in `deploy/fixtures/nats` (the development
+install `make k3s-up` runs, release `nats`, Service `rask-nats` in rask's namespace): NATS 2.14.2; JetStream on a file
+store; a cluster of at least `nats.streamReplicas` nodes (three); operator mode with one APP account holding JetStream
+and every rask user, so Dapr's pubsub.jetstream can authenticate with a user JWT and NKEY seed.
+
 ## Local deploy (k3s)
 
 ```bash

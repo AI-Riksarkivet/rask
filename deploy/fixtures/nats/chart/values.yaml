@@ -1,0 +1,102 @@
+# NOT FOR PRODUCTION (deploy/fixtures/README.md). A three-node NATS JetStream cluster for rask, from the upstream nats
+# 2.14.2 chart, plus the ExternalSecrets that write its operator-mode config from rask's dev OpenBao.
+
+# The rask release this bus serves: its dev OpenBao's SecretStore (`<rask>-vault`) holds `nats-server` and
+# `nats-route`, which operator mode reads.
+rask:
+  release: rask
+  # Refresh interval of the ExternalSecrets that write the server's config and nats-box's credential.
+  refreshInterval: "1h"
+
+nats:
+  # rask's `nats.url` names this Service (`nats://rask-nats:4222`). The name also fixes the JetStream claims
+  # (`rask-nats-js-rask-nats-<n>`), so a bus that leaves rask's release keeps its streams on the same volumes.
+  fullnameOverride: rask-nats
+  # Operator mode: one operator, a SYS account and one APP account holding JetStream and every user rask's
+  # `nats.auth.users` lists, verified by the MEMORY resolver. The server config and the route credential are written by
+  # templates/external-secrets.yaml from what rask's dev OpenBao mints, so this needs rask installed first. Off, the
+  # server takes anyone and ignores a presented credential. A reload cannot switch modes, a pod restarted alone into
+  # operator mode cannot join the other two, and a new system account starts an empty JetStream (docs/OPERATORS.md § 7).
+  auth:
+    server: false
+  config:
+    # JetStream on a file store; the PVC size is each server's max_file_store bound.
+    jetstream:
+      enabled: true
+      fileStore:
+        pvc:
+          size: 1Gi
+    # Three nodes, the raft quorum minimum: rask's ingest work queue is a JetStream stream, so a single node loses
+    # in-flight work with it. The key is `config.cluster.*`; the nats chart has no `replicaCount`. rask's
+    # `nats.streamReplicas` must not exceed it.
+    cluster:
+      enabled: true
+      replicas: 3
+      # Operator mode moves the routes into an included file carrying the route credential, with the authorization
+      # they are checked against; off, both evaluate to nothing. `$tplYaml` runs against the nats chart's own values.
+      merge:
+        auth:
+          $tplYamlSpread: |
+            {{- if .Values.auth.server }}
+            $include: ../nats-auth/route.conf
+            {{- end }}
+      patch:
+        - $tplYamlSpread: |
+            {{- if .Values.auth.server }}
+            - { op: remove, path: /routes }
+            {{- end }}
+    # Operator mode: operator, system_account and the MEMORY resolver, from the included file.
+    merge:
+      auth:
+        $tplYamlSpread: |
+          {{- if .Values.auth.server }}
+          $include: ../nats-auth/server.conf
+          {{- end }}
+  # Memory-bounded: the broker's memory tracks in-flight messages and raft state, per node. The nats chart takes
+  # container overrides as a `merge` into the Container spec.
+  container:
+    merge:
+      resources:
+        requests: { cpu: 50m, memory: 128Mi }
+        limits: { memory: 512Mi }
+    # Operator mode: the two included files, mounted beside the config; the reloader watches them through it.
+    patch:
+      - $tplYamlSpread: |
+          {{- if .Values.auth.server }}
+          - { op: add, path: /volumeMounts/-, value: { name: nats-auth, mountPath: /etc/nats-auth, readOnly: true } }
+          {{- end }}
+  podTemplate:
+    patch:
+      - $tplYamlSpread: |
+          {{- if .Values.auth.server }}
+          - { op: add, path: /spec/volumes/-, value: { name: nats-auth, secret: { secretName: {{ include "nats.fullname" . }}-auth } } }
+          {{- end }}
+  # The config reloader is an inotify loop.
+  reloader:
+    merge:
+      resources:
+        requests: { cpu: 10m, memory: 16Mi }
+        limits: { memory: 64Mi }
+  # Its own identity, not `default`, with no API token: the server, its reloader and nats-box never call the
+  # Kubernetes API.
+  serviceAccount:
+    enabled: true
+    merge:
+      automountServiceAccountToken: false
+  natsBox:
+    # Operator mode: the read-only `monitor` user, as a creds file an ExternalSecret writes.
+    contexts:
+      default:
+        creds:
+          secretName:
+            $tplYaml: |
+              {{- if .Values.auth.server }}{{ include "nats.fullname" . }}-box-creds{{ end }}
+    serviceAccount:
+      enabled: true
+      merge:
+        automountServiceAccountToken: false
+    container:
+      merge:
+        resources:
+          requests: { cpu: 10m, memory: 16Mi }
+          limits: { memory: 64Mi }

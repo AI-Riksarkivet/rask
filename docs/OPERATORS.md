@@ -255,23 +255,25 @@ not a fault. Read a pod's Configuration from its `dapr.io/config`, not from the 
 
 ## 7 · Bus credentials: one NATS user per app (XC-078)
 
-With `nats.auth.server` on, NATS runs in operator mode: a client connects only with a user JWT signed under the
-operator's account, and each user may publish and subscribe only what its row of `nats.auth.users` (values.yaml)
+The NATS bus is a prerequisite rask never installs (ADR 0153, XC-129); development runs it from `deploy/fixtures/nats`
+(release `nats`, Service `rask-nats`). With the bus in operator mode (the fixture's `nats.auth.server`), a client connects
+only with a user JWT signed under the operator's account, and each user may publish and subscribe only what its row of `nats.auth.users` (values.yaml)
 grants. There is one user per Dapr app-id with a pub/sub component, plus `admin` (the stream Job), `monitor` (nats-box,
 read-only: stream and consumer state, no messages) and `ingest` (its raw work-queue client). A grant only a flag's
 component uses sits under `nats.auth.flagged` and is issued only while that flag is on. Each user's credential is
 `nats-user-<user>` in the store (fields `jwt`, `seed`); every pub/sub Component names its own app's user by
 `secretKeyRef` through `lance-secrets`, every app's Dapr Configuration denies every `nats-user-*` (ingest reads only its
-own, through its sidecar), and the stream Job and nats-box take theirs as files written by ExternalSecrets.
+own, through its sidecar), and the stream Job (rask's release) and nats-box (the fixture's) take theirs as files written
+by ExternalSecrets.
 
-**Production (owner ruling R1): the platform runs NATS and its store; rask owns no trust root.** Create
-`nats-user-<user>` for every user the chart's table issues and, while this chart runs the NATS cluster, `nats-route`
-(fields `user`, `password`) and `nats-server` (fields `operator`, `system_account`, `resolver_preload`); then
-`--set nats.auth.provisioned=true`. Until then a non-dev render (openbao.devMode=false, openbao.externalAddr or
-nats.externalUrl) fails and names every secret it needs.
+**Production (owner ruling R1): the platform runs NATS and its store; rask owns no trust root.** Name the bus in
+`nats.url`, create `nats-user-<user>` for every user the chart's table issues, signed by the bus's operator; then
+`--set nats.auth.provisioned=true`. Until then a non-dev render (openbao.devMode=false or openbao.externalAddr) fails and
+names every secret it needs. The server's own config and route credential are the platform's.
 
-**The dev OpenBao mints the trust root.** Its seed carries `nats-root` (operator and account keys) and `nats-route` from
-the outgoing pod over a surge rollout, re-issues every user under that root, and writes the users before its readiness
+**The dev OpenBao mints the fixture bus's trust root.** It writes `nats-server` and `nats-route`, which the fixture's
+ExternalSecrets read into the server's config through rask's SecretStore. Its seed carries `nats-root` (operator and
+account keys) and `nats-route` from the outgoing pod over a surge rollout, re-issues every user under that root, and writes the users before its readiness
 key. A replacement with no outgoing pod mints a new root: a server in operator mode then refuses every client until the
 NATS pods restart onto the new `nats-server`, and that restart starts an empty JetStream. Restart the NATS pods, rerun
 the stream Job and restart every credentialed client after any non-surge OpenBao replacement.
@@ -279,9 +281,10 @@ the stream Job and restart every credentialed client after any non-surge OpenBao
 **Switching it on (or after a trust-root change)** takes the bus down for a few minutes, because a reload cannot change
 the operator or the system account and a pod restarted alone into operator mode cannot join the others: quiesce (no
 Ray job, outboxes at depth 0, ingest idle); `kubectl scale statefulset/rask-nats --replicas=0` and wait until no NATS
-pod exists; run the upgrade with `--set nats.auth.server=true`, which restores the three replicas together (each waits
-for ESO's `rask-nats-auth`) and runs the stream Job as `admin`, recreating the nine streams empty; then
-`kubectl rollout restart` every Deployment with a credentialed pub/sub component and `rask-ingest`.
+pod exists; run `scripts/fixtures.sh nats -- --set nats.auth.server=true`, which restores the three replicas together
+(each waits for ESO's `rask-nats-auth`); then `make k3s-up`, whose stream Job runs as `admin` and recreates the nine
+streams empty; then `kubectl rollout restart` every Deployment with a credentialed pub/sub component and `rask-ingest`.
+The fixture release keeps the setting (`--reset-then-reuse-values`), so a later `make k3s-up` leaves operator mode on.
 
 **A consumer removal** (RESILIENCE.md gaps #7 and the lineage rebuild) needs `admin`, because nats-box runs as `monitor`.
 Write a creds file into the nats-box pod from the store, without printing it:

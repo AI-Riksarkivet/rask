@@ -6,8 +6,9 @@ description: >-
   controlplane + the SvelteKit microfrontend zones), the Lance lakehouse
   REST catalog with in-service lineage (OpenLineage → Apache AGE), the medallion + media planes,
   governance (Dex OIDC + OpenFGA), event-driven on Dapr pub/sub over NATS JetStream (Dapr's control
-  plane is a prerequisite; the chart carries rask's Components and Configurations), and the
-  OTel Collector that exports its telemetry to the OTLP endpoint the operator names.
+  plane and the NATS bus are prerequisites; the chart carries rask's Components, Configurations,
+  stream definitions and bus users), and the OTel Collector that exports its telemetry to the OTLP
+  endpoint the operator names.
 type: application
 # 0.2.0 (rask) + 0.1.0 (lance-ns) merged into one chart — a whole second system's templates and
 # values landed here, so this is a real minor bump, not a no-op.
@@ -25,23 +26,16 @@ maintainers:
 #
 # lance-ns merge (P4, "one control plane each", docs/adr/0124-chart-unification-one-control-plane-each-one-object-store.md): lance-ns declared
 # dapr, nats and openfga at the IDENTICAL version and repository rask ships, so the dedupe was lossless.
-# Dapr's control plane, GreptimeDB and Perses are not rask's (ADR 0153): they are prerequisites, and
-# development gets them from deploy/fixtures/dapr and deploy/fixtures/observability. Everything
+# Dapr's control plane, NATS, GreptimeDB and Perses are not rask's (ADR 0153): they are prerequisites, and
+# development gets them from deploy/fixtures/dapr, deploy/fixtures/nats and deploy/fixtures/observability. Everything
 # lance-ns brings beyond these five (Apache-AGE Postgres, Dex, OpenBao, external-secrets,
 # the OTel Collector, the openfga migrate Job, alerting, security-sa, ha) is a FIRST-PARTY
 # template, not a subchart — it needs no entry here. lance-ns's richer subchart *values*
-# (credentialed nats, openfga datastore.engine=postgres + the migrate hook) land in
+# (openfga datastore.engine=postgres + the migrate hook) land in
 # values.yaml, which is where subchart config belongs; nothing about them changes this list.
 dependencies:
   # Aliases must be lowercase RFC1123 (subcharts derive container/resource names
   # from .Chart.Name = the alias); camelCase breaks them.
-  # Shared with lance-ns at the same version — the single bus. lance-ns's values win
-  # (credentialed + netpol'd JetStream); its stream-provision Job + Dapr pubsub are the
-  # first real consumers of what rask ships streamless.
-  - name: nats
-    version: "2.14.2"
-    repository: https://nats-io.github.io/k8s/helm/charts/
-    condition: nats.enabled
   # Shared with lance-ns at the same version — one authz control plane. lance-ns's values win:
   # datastore.engine=postgres against the AGE Postgres, image tag pinned v1.18.3 (see the hazard
   # note in values.yaml under `openfga.image` before changing it), and the

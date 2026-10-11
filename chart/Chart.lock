@@ -1,12 +1,9 @@
 dependencies:
-- name: nats
-  repository: https://nats-io.github.io/k8s/helm/charts/
-  version: 2.14.2
 - name: openfga
   repository: https://openfga.github.io/helm-charts
   version: 0.3.12
 - name: cloudnative-pg
   repository: https://cloudnative-pg.github.io/charts
   version: 0.28.3
-digest: sha256:1ff57a734404d765ce687fa3c65f15024d4a1b07f9bd2c5ff6c562df5ac566b8
-generated: "2026-10-11T19:02:15.382179928+02:00"
+digest: sha256:942718dadbb69d3665fd2d3808fcfb11b2406c6159364a4bfc66b5d66155b36b
+generated: "2026-10-11T19:51:01.400015784+02:00"

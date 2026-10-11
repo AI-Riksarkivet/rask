@@ -7,7 +7,7 @@ import (
 	"dagger/rask/internal/dagger"
 )
 
-// natsBoxImage is the nats-box the chart deploys: the nats subchart's operator box, and `signing.mintImage`, whose
+// natsBoxImage is the nats-box the estate deploys: the NATS fixture's operator box, and `signing.mintImage`, whose
 // nsc the dev mint runs. The lane mints its test keys with this image's nsc, so they come from the same tool.
 const natsBoxImage = "natsio/nats-box:0.19.7"
 
@@ -15,10 +15,10 @@ const natsBoxImage = "natsio/nats-box:0.19.7"
 // Job's rendered script with this image's nats CLI, as the `admin` user.
 const natsStreamJobImage = "natsio/nats-box:0.14.5"
 
-// daprdImage is the sidecar the dapr 1.18.1 subchart's injector stamps into every pod (its SIDECAR_IMAGE).
+// daprdImage is the sidecar the Dapr fixture's 1.18.1 injector stamps into every pod (its SIDECAR_IMAGE).
 const daprdImage = "ghcr.io/dapr/daprd:1.18.1"
 
-// NatsAuth proves the chart's NATS permission table (`nats.auth.users`) on a real broker: the chart's
+// NatsAuth proves the chart's NATS permission table (`nats.auth.users`) on a real broker: the NATS fixture's
 // nats-server in operator mode with a MEMORY resolver and JetStream, test-only keys minted with nsc, one user
 // per table row, and real daprd 1.18.1 running the chart's own Components against it
 // (tests/e2e-py/test_nats_admits_each_client_only_to_its_own_subjects.py says what it asserts).

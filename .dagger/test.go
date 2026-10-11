@@ -7,7 +7,7 @@ import (
 	"dagger/rask/internal/dagger"
 )
 
-// natsImage matches the version the chart deploys (chart/Chart.yaml pins the nats subchart at 2.14.2,
+// natsImage matches the server the NATS fixture deploys (deploy/fixtures/nats pins the nats chart at 2.14.2,
 // whose appVersion is the same), so the broker CI tests against cannot drift from the broker the estate
 // runs. The AGE binding in e2e.go pins its image for the same reason.
 const natsImage = "nats:2.14.2-alpine"

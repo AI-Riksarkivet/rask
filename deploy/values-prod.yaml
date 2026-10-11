@@ -254,10 +254,9 @@ observability:
 #   externalAddr: https://vault.internal:8200        # role and every field the chart's header lists
 # externalSecrets:
 #   role: lance
-# nats (managed / NACK-provisioned JetStream):       # the in-cluster single node is a SPOF: bus down = no
-#   enabled: false                                   # lineage ingest, no cascade. NACK Stream CRs are optional
-#   externalUrl: nats://nats.internal:4222           # (the in-chart provision Job stays idempotent either way).
-#   streamReplicas: 3                                # raft-replicated streams (needs the 3+ node cluster)
+# nats (the platform's JetStream, REQUIRED):        # a prerequisite rask never installs (ADR 0153); bus down =
+#   url: nats://nats.internal:4222                   # no lineage ingest, no cascade. The stream Job provisions
+#   streamReplicas: 3                                # rask's streams on it (needs a 3+ node cluster)
 # ray (the one Ray plane, REQUIRED):                 # compute's prune, the cascade's submits and Serve discovery
 #   dashboardUrl: https://ray.internal:8265          # all read it; unset with no in-cluster head fails the render
 # GPU metrics (NVIDIA DCGM operator): the engine's, beside its KubeRay and Kueue (ADR 0153) — the dcgm-exporter

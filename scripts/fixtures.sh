@@ -2,6 +2,7 @@
 # Install development fixtures (deploy/fixtures/<name>), each as its own Helm release, before the rask chart.
 #
 #   scripts/fixtures.sh <name>... [-- <extra helm args for every fixture named>]
+#   scripts/fixtures.sh --vendor [<name>...]   vendor each local fixture chart's dependencies (all by default), no cluster
 #
 # NOT FOR PRODUCTION: a fixture stands in for what a platform team runs (deploy/fixtures/README.md, ADR 0153).
 # Every helm call goes through scripts/helm.sh, so RASK_EXPECT_CONTEXT and the kubeconfig guard hold here too.
@@ -11,15 +12,21 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 HELM="$ROOT/scripts/helm.sh"
 MARK="rask.dev/fixture=not-for-production"
 
+VENDOR_ONLY=false
+if [ "${1:-}" = "--vendor" ]; then
+  VENDOR_ONLY=true; shift
+  [ "$#" -gt 0 ] || set -- $(cd "$ROOT/deploy/fixtures" && ls -d -- */ | tr -d /)
+fi
+
 # The kubectl calls below pick the same cluster scripts/helm.sh picks: the k3s estate when nothing is named and no
 # other context is expected, and otherwise only the context the caller declared (~/.kube/config can name a dead one).
 K3S=/etc/rancher/k3s/k3s.yaml
-if [ -z "${KUBECONFIG:-}" ] && [ -r "$K3S" ]; then
+if ! "$VENDOR_ONLY" && [ -z "${KUBECONFIG:-}" ] && [ -r "$K3S" ]; then
   if [ -z "${RASK_EXPECT_CONTEXT:-}" ] || [ "$(KUBECONFIG="$K3S" kubectl config current-context 2>/dev/null || true)" = "$RASK_EXPECT_CONTEXT" ]; then
     export KUBECONFIG="$K3S"
   fi
 fi
-if [ -n "${RASK_EXPECT_CONTEXT:-}" ] && [ "$(kubectl config current-context)" != "$RASK_EXPECT_CONTEXT" ]; then
+if ! "$VENDOR_ONLY" && [ -n "${RASK_EXPECT_CONTEXT:-}" ] && [ "$(kubectl config current-context)" != "$RASK_EXPECT_CONTEXT" ]; then
   echo "kubectl's context is $(kubectl config current-context), not $RASK_EXPECT_CONTEXT" >&2; exit 2
 fi
 
@@ -59,6 +66,7 @@ for name in "$@"; do
       "$HELM" dependency build "$dir/$CHART" >/dev/null
     fi
   fi
+  "$VENDOR_ONLY" && continue
   # values.yaml is the fixture's settings; values-live-pins.yaml, when present, is what the cluster runs (an image tag
   # from a dev registry), written by scripts/k3s-pins.sh and layered last so a rerun never reverts a running image.
   VALUES=()
@@ -73,30 +81,74 @@ for name in "$@"; do
 
   # THE HANDOVER. Every object this fixture renders that already exists under another Helm release is annotated
   # helm.sh/resource-policy=keep first, so that release's next upgrade (the one that stops rendering it) leaves it
-  # standing, and the install takes ownership of it. An object no release owns is adopted the same way. Nothing is
-  # deleted and recreated: a RayCluster or a CRD changes owner in place. A kind the cluster does not serve yet (a CRD
-  # the fixture itself installs) has nothing to hand over, so its lookup error is not a failure.
+  # standing, and the install takes ownership of it. An object no release owns is adopted the same way: a RayCluster
+  # or a CRD changes owner in place. A kind the cluster does not serve yet (a CRD the fixture itself installs) has
+  # nothing to hand over, so its lookup error is not a failure.
+  #
+  # A WORKLOAD WHOSE SELECTOR CHANGES cannot change owner in place, because a selector is immutable and most charts put
+  # the release name in it. A Deployment or DaemonSet is deleted and the install creates it again. A StatefulSet keeps
+  # its pods: it is deleted with --cascade=orphan, its pods are relabelled to the new selector, and the install's
+  # StatefulSet adopts them and replaces them one at a time onto the same claims, so a clustered store (NATS JetStream)
+  # keeps its quorum and its data. Each re-created workload is annotated keep after the install, as an adopted one is.
   OWN=()
-  held="$("$HELM" template "$RELEASE" "${SOURCE[@]}" --namespace "$NAMESPACE" --include-crds "${VALUES[@]}" \
-    | { kubectl get --namespace "$NAMESPACE" --ignore-not-found -o json -f - 2>/dev/null || true; } \
+  REPARENTED=()
+  RENDER="$(mktemp)"
+  trap 'rm -f "$RENDER"' EXIT
+  "$HELM" template "$RELEASE" "${SOURCE[@]}" --namespace "$NAMESPACE" --include-crds "${VALUES[@]}" "${EXTRA[@]}" >"$RENDER"
+  held="$( { kubectl get --namespace "$NAMESPACE" --ignore-not-found -o json -f "$RENDER" 2>/dev/null || true; } \
     | python3 -c '
 import json, sys
-release = sys.argv[1]
-raw = sys.stdin.read().strip()
-found = json.loads(raw) if raw.startswith("{") else {}
-# One resource comes back as itself, several as a List.
-items = found.get("items", []) if found.get("kind") == "List" else [found] if found else []
-for item in items:
+release, render = sys.argv[1], sys.argv[2]
+
+def items(raw):
+    # kubectl get answers one resource as itself and several as a List; a client dry-run prints one document per
+    # object, back to back.
+    found, decoder, at = [], json.JSONDecoder(), 0
+    raw = raw.strip()
+    while raw.startswith("{", at):
+        doc, at = decoder.raw_decode(raw, at)
+        found += doc.get("items", []) if doc.get("kind") == "List" else [doc]
+        while at < len(raw) and raw[at].isspace():
+            at += 1
+    return found
+
+def selector(obj):
+    labels = ((obj.get("spec") or {}).get("selector") or {}).get("matchLabels") or {}
+    return ",".join(f"{k}={v}" for k, v in sorted(labels.items())) or "-"
+
+with open(render) as f:
+    rendered = {(o["kind"], o["metadata"]["name"]): o for o in items(f.read())}
+for item in items(sys.stdin.read()):
     meta = item["metadata"]
     owner = (meta.get("annotations") or {}).get("meta.helm.sh/release-name")
-    if owner != release:
-        # "-" for an absent field: `read` collapses runs of blanks, so an empty namespace would shift the owner left.
-        print(item["kind"], meta["name"], meta.get("namespace") or "-", owner or "-")
-' "$RELEASE")"
+    if owner == release:
+        continue
+    new = rendered.get((item["kind"], meta["name"]), {})
+    workload = item["kind"] in {"StatefulSet", "Deployment", "DaemonSet"}
+    # A selector with no matchLabels is never relabelled: it names no pods a label can move.
+    changed = "-" not in (selector(item), selector(new)) and selector(item) != selector(new)
+    action = "reparent" if workload and new and changed else "adopt"
+    # "-" for an absent field: `read` collapses runs of blanks, so an empty namespace would shift the owner left.
+    print(item["kind"], meta["name"], meta.get("namespace") or "-", owner or "-", action, selector(item), selector(new))
+' "$RELEASE" <(kubectl create --dry-run=client -o json -f "$RENDER" 2>/dev/null || echo '{}'))"
+  rm -f "$RENDER"
   if [ -n "$held" ]; then
-    while read -r kind obj ns owner; do
+    while read -r kind obj ns owner action old new; do
       NS=()
       [ "$ns" != "-" ] && NS=(--namespace "$ns")
+      if [ "$action" = "reparent" ]; then
+        if [ "$kind" = "StatefulSet" ]; then
+          kubectl delete "$kind" "$obj" "${NS[@]}" --cascade=orphan --wait=true >/dev/null
+          # shellcheck disable=SC2086 # the selector's labels are one argument each
+          kubectl label pods "${NS[@]}" -l "$old" ${new//,/ } --overwrite >/dev/null
+          echo ">> $name: $kind/$obj (release $owner) re-created by release $RELEASE; its pods are adopted and rolled in place"
+        else
+          kubectl delete "$kind" "$obj" "${NS[@]}" --wait=true >/dev/null
+          echo ">> $name: $kind/$obj (release $owner) re-created by release $RELEASE"
+        fi
+        REPARENTED+=("$kind/$obj/$ns/$old")
+        continue
+      fi
       kubectl annotate "$kind" "$obj" "${NS[@]}" helm.sh/resource-policy=keep --overwrite >/dev/null
       echo ">> $name: $kind/$obj (release $owner) kept and handed to release $RELEASE"
     done <<<"$held"
@@ -110,6 +162,16 @@ for item in items:
   "$HELM" upgrade --install "$RELEASE" "${SOURCE[@]}" \
     --namespace "$NAMESPACE" --create-namespace --reset-then-reuse-values "${VALUES[@]}" "${OWN[@]}" "${EXTRA[@]}" \
     --description "rask fixture: not for production" --wait --timeout 600s
+  for entry in "${REPARENTED[@]}"; do
+    IFS=/ read -r kind obj ns old <<<"$entry"
+    NS=()
+    [ "$ns" != "-" ] && NS=(--namespace "$ns")
+    kubectl annotate "$kind" "$obj" "${NS[@]}" helm.sh/resource-policy=keep --overwrite >/dev/null
+    # The orphaned StatefulSet's revisions carry its old selector, which the new one never adopts.
+    if [ "$kind" = "StatefulSet" ]; then
+      kubectl delete controllerrevisions "${NS[@]}" -l "$old" --ignore-not-found >/dev/null
+    fi
+  done
   # A fixture in a namespace it shares with rask (SHARED_NAMESPACE=true) leaves the namespace unlabelled: the mark says
   # everything in it is throwaway, which rask's own namespace is not.
   if [ "$SHARED_NAMESPACE" != "true" ]; then

@@ -1,8 +1,5 @@
-
-{{- if and (include "lance.secretsViaDapr" .) (or (not .Values.openbao.devMode) .Values.openbao.externalAddr .Values.nats.externalUrl) (not .Values.nats.auth.provisioned) }}
+{{- if and (include "lance.secretsViaDapr" .) (not (include "lance.natsMints" .)) (not .Values.nats.auth.provisioned) }}
 {{- $names := list }}
 {{- range (include "lance.natsUsers" . | splitList " " | compact) }}{{- $names = append $names (printf "nats-user-%s" .) }}{{- end }}
-{{- if .Values.nats.enabled }}{{- $names = append $names "nats-route" }}{{- end }}
-{{- if and .Values.nats.enabled .Values.nats.auth.server }}{{- $names = append $names "nats-server" }}{{- end }}
-{{- fail (printf "NATS CREDENTIALS NOT PROVISIONED: a store this chart does not seed (openbao.devMode=false or openbao.externalAddr) or a bus it does not run (nats.externalUrl) gets no NATS user from the chart, so every pub/sub client would connect with an empty credential. Create these secrets in the store (KV v2; nats-user-<user> holds the fields jwt and seed with the permissions nats.auth.users lists), then --set nats.auth.provisioned=true:\n  - %s" (join "\n  - " $names)) }}
+{{- fail (printf "NATS CREDENTIALS NOT PROVISIONED: a store this chart does not seed (openbao.devMode=false or openbao.externalAddr) gets no NATS user from the chart, so every pub/sub client would connect with an empty credential. Create these secrets in the store (KV v2; nats-user-<user> holds the fields jwt and seed, issued by the bus's operator with the permissions nats.auth.users lists), then --set nats.auth.provisioned=true:\n  - %s" (join "\n  - " $names)) }}
 {{- end }}

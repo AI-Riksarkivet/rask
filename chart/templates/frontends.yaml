@@ -97,9 +97,9 @@ spec:
             - name: GREPTIME_AUDIT_TABLE
               value: {{ $root.Values.observability.query.auditTable | quote }}
             {{- end }}
-            {{- if $root.Values.nats.enabled }}
+            {{- with $root.Values.nats.monitorUrl }}
             - name: NATS_MONITOR_API
-              value: {{ printf "http://%s-headless:8222" (include "lance.natsHost" $root) | quote }}
+              value: {{ . | quote }}
             {{- if $root.Values.dapr.enabled }}
             - name: JETSTREAM_EXPECTED_CONSUMERS
               value: {{ join "," $expected | quote }}

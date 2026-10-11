@@ -30,8 +30,9 @@ through to an unauthenticated connect, silently. So wherever the store is on, ev
 `nats-user-<app>` from that store, the store is scoped to that app (a store a sidecar has not loaded leaves the value empty
 too), and the user the dev seed issues may do what the render configures that app to do: consume through each of its
 components' durables, and publish or consume every topic its pods are given. Besides the deployed overlays this renders the two
-that split a shared component only under a flag. A pod that is not a sidecar (the stream Job, nats-box, the NATS servers) mounts
-its credential as a file, so that file must be one an ExternalSecret writes from the store.
+that split a shared component only under a flag. A pod that is not a sidecar (the stream Job; nats-box and the servers of the NATS
+fixture, a prerequisite rask never installs) mounts its credential as a file, so that file must be one an ExternalSecret writes
+from the store.
 """
 
 from __future__ import annotations
@@ -39,6 +40,7 @@ from __future__ import annotations
 import json
 import pathlib
 import posixpath
+import re
 import subprocess
 from collections import defaultdict
 
@@ -51,6 +53,7 @@ from tests.unit.test_no_chart_owned_manifest_renders_a_null import _overlays
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 STORE = "lance-secrets"
+_POLICY_PATH = re.compile(r'path "[^"/]+/data/([^"]+)"')
 #: Names ANOTHER stage's topic as DAG configuration: a stage runner reads it as a gate input and never publishes it, because
 #: only the catalog's publication advances a tier. Granting it would let a stage runner wake the next tier past that door.
 _NOT_A_TOPIC_THE_APP_USES = frozenset({"MEDALLION_PUB_TOPIC"})
@@ -180,18 +183,15 @@ def _fields(external_secret: dict) -> set[str]:
     return {item["secretKey"] for item in external_secret["spec"].get("data") or []}
 
 
-@pytest.mark.parametrize(
-    ("overlay", "server"),
-    [
-        pytest.param((), False, id="credential-files-while-the-server-takes-anyone"),
-        pytest.param(("--set", "nats.auth.server=true"), True, id="the-server-in-operator-mode"),
-    ],
-)
-def test_every_nats_credential_a_pod_mounts_is_a_file_an_external_secret_writes_from_the_store(overlay: tuple[str, ...], server: bool) -> None:  # noqa: FBT001
-    docs = render(*DEFAULT_ARGS, *overlay)
-    users = chart_render.nats_users(docs)
-    written = {doc["spec"]["target"]["name"]: doc for doc in docs if doc.get("kind") == "ExternalSecret"}
-    # A Secret the render creates holds only what values carry, and values never carry a credential; any other must be written.
+def _eso_reads(docs: tuple[dict, ...]) -> set[str]:
+    """The store keys the dev OpenBao's policy lets the External Secrets Operator read, off the script its seed runs."""
+    [script] = [(c.get("command") or [""])[-1] for _, name, c in chart_render.containers(docs) if name == "seed"]
+    policy = script.split("<<'POLICY'", 1)[1].split("POLICY", 1)[0]
+    return set(_POLICY_PATH.findall(policy))
+
+
+def _credential_mounts(docs: tuple[dict, ...]) -> dict[str, dict[str, str]]:
+    """Each container mounting a NATS credential Secret the render does not create -> {mount path: Secret}."""
     rendered = {doc["metadata"]["name"] for doc in docs if doc.get("kind") == "Secret"}
     mounts: dict[str, dict[str, str]] = defaultdict(dict)
     for doc in docs:
@@ -203,39 +203,58 @@ def test_every_nats_credential_a_pod_mounts_is_a_file_an_external_secret_writes_
             for mount in container.get("volumeMounts") or []:
                 if mount["name"] in secrets and "nats" in secrets[mount["name"]]:
                     mounts[f"{doc['kind']}/{doc['metadata']['name']}/{container['name']}"][mount["mountPath"]] = secrets[mount["name"]]
+    return mounts
 
-    expected = {"Job/rask-nats-stream-r1/nats"} | (
-        {"Deployment/rask-nats-box/nats-box", "StatefulSet/rask-nats/nats", "StatefulSet/rask-nats/reloader"} if server else set()
-    )
+
+@pytest.mark.parametrize(
+    ("release", "expected"),
+    [
+        pytest.param("rask", {"Job/rask-nats-stream-r1/nats"}, id="rask-the-stream-job"),
+        pytest.param(
+            "bus",
+            {"Deployment/rask-nats-box/nats-box", "StatefulSet/rask-nats/nats", "StatefulSet/rask-nats/reloader"},
+            id="the-fixture-bus-in-operator-mode",
+        ),
+    ],
+)
+def test_every_nats_credential_a_pod_mounts_is_a_file_an_external_secret_writes_from_the_store(release: str, expected: set[str]) -> None:
+    """rask's stream Job mounts the admin user's creds file; the NATS fixture (deploy/fixtures/nats) in operator mode mounts its
+    server config and nats-box's `monitor` creds, written by its own ExternalSecrets from rask's dev store ([[XC-129]]). Each file
+    is written from keys the dev seed provides and the store's policy lets ESO read, so a pod that mounts it starts."""
+    rask = render(*DEFAULT_ARGS)
+    users = chart_render.nats_users(rask)
+    seeded = {f"nats-user-{user}" for user in users} | {"nats-server", "nats-route"}
+    readable = _eso_reads(rask)
+    docs = rask if release == "rask" else chart_render.render_fixture("nats", "--set", "nats.auth.server=true")
+    written = {doc["spec"]["target"]["name"]: doc for doc in docs if doc.get("kind") == "ExternalSecret"}
+    mounts = _credential_mounts(docs)
+
     assert set(mounts) == expected, f"the pods mounting a NATS credential are {sorted(mounts)}, not {sorted(expected)}"
     for pod, paths in mounts.items():
         for secret in paths.values():
             assert secret in written, f"{pod} mounts {secret}, which no ExternalSecret writes, so the pod never starts"
             fetched = {(item["remoteRef"]["key"], item["remoteRef"]["property"]) for item in written[secret]["spec"]["data"]}
-            assert {key for key, _ in fetched} <= {f"nats-user-{user}" for user in users} | {"nats-server", "nats-route"}, (
+            assert {key for key, _ in fetched} <= seeded, (
                 f"{secret} is written from {sorted(fetched)}, a secret neither the seed nor an attesting operator provides"
             )
+            assert {key for key, _ in fetched} <= readable, f"{secret} is written from {sorted({k for k, _ in fetched} - readable)}, which ESO may not read"
             template = json.dumps(written[secret]["spec"]["target"]["template"]["data"])
             assert all(f"{{{{ .{field} }}}}" in template for field in _fields(written[secret])), f"{secret}'s template drops a field it fetches"
 
-    [job] = [c for workload, _, c in chart_render.containers(docs) if workload == "Job/rask-nats-stream-r1"]
-    [(path, secret)] = mounts["Job/rask-nats-stream-r1/nats"].items()
-    assert {(item["remoteRef"]["key"], item["remoteRef"]["property"]) for item in written[secret]["spec"]["data"]} == {
-        ("nats-user-admin", "jwt"),
-        ("nats-user-admin", "seed"),
-    }, "the stream Job's credential is not the admin user's"
-    assert chart_render.env_of(job).get("NATS_CREDS") in {f"{path}/{key}" for key in written[secret]["spec"]["target"]["template"]["data"]}, (
-        "the stream Job's nats CLI is not pointed at the credential file it mounts"
-    )
+    if release == "rask":
+        [job] = [c for workload, _, c in chart_render.containers(docs) if workload == "Job/rask-nats-stream-r1"]
+        [(path, secret)] = mounts["Job/rask-nats-stream-r1/nats"].items()
+        assert {(item["remoteRef"]["key"], item["remoteRef"]["property"]) for item in written[secret]["spec"]["data"]} == {
+            ("nats-user-admin", "jwt"),
+            ("nats-user-admin", "seed"),
+        }, "the stream Job's credential is not the admin user's"
+        assert chart_render.env_of(job).get("NATS_CREDS") in {f"{path}/{key}" for key in written[secret]["spec"]["target"]["template"]["data"]}, (
+            "the stream Job's nats CLI is not pointed at the credential file it mounts"
+        )
+        return
 
     [conf] = [doc["data"]["nats.conf"] for doc in docs if doc.get("kind") == "ConfigMap" and doc["metadata"]["name"] == "rask-nats-config"]
     includes = [line.strip().removeprefix("include ").removesuffix(";") for line in conf.splitlines() if line.strip().startswith("include ")]
-    if not server:
-        assert not includes and not any(word in conf for word in ('"operator"', '"system_account"', '"resolver', '"authorization"')), (
-            f"the server authenticates before its switch is on:\n{conf}"
-        )
-        assert '"routes"' in conf, "the cluster lost its routes with the server switch off"
-        return
     assert len(includes) == 2 and '"routes"' not in conf, f"operator mode is not two included files, with the routes moved into one:\n{conf}"
     [box] = [
         json.loads(doc["stringData"]["default.json"]) for doc in docs if doc.get("kind") == "Secret" and doc["metadata"]["name"] == "rask-nats-box-contexts"

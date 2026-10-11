@@ -876,7 +876,7 @@ networkPolicy:
     - podSelector:
         matchLabels: { app: ray-lance-worker }
   # Extra egress rules (verbatim NetworkPolicy egress entries) for externalized backends —
-  # off-cluster S3, a managed NATS (nats.externalUrl), an external OTLP endpoint.
+  # off-cluster S3, a NATS outside this namespace (nats.url), an external OTLP endpoint.
   # -- List of extra egress rules, verbatim NetworkPolicy entries, for external backends (off-cluster S3, managed NATS, external OTLP).
   extraEgress: []
 
@@ -2856,129 +2856,22 @@ ingress:
 # One `helm install` brings these up alongside the app. Turn off for a prod
 # install that uses externally-managed infra. Subchart value overrides live
 # under the same key as the toggle.
-# === NATS (subchart) — JetStream backs the Dapr pubsub.jetstream component =========================
-# rask shipped this OFF ("platform NATS was single-tenant; per-project renders its own"). The merge
-# turns it ON: the lance-ns event fabric (lineage publish, the medallion cascade, the catalog control
-# broadcast, the DLQ streams) is the chart's default-on data plane and every one of those hops is a
-# Dapr pubsub.jetstream publish. templates/nats-stream-job.yaml provisions the streams (Dapr does not
-# auto-create them) and renders on `nats.enabled OR nats.externalUrl`.
+# === NATS — JetStream backs the Dapr pubsub.jetstream components ===================================
+# The event fabric (lineage publish, the medallion cascade, the catalog control broadcast, the DLQ
+# streams) is the chart's default-on data plane and every one of those hops is a Dapr pubsub.jetstream
+# publish. templates/nats-stream-job.yaml provisions the streams on the bus `nats.url` names (Dapr does
+# not auto-create them).
 nats:
-  # -- Installs the in-cluster NATS JetStream subchart that backs every Dapr pubsub.jetstream component. Pair false with `nats.externalUrl`.
-  enabled: true
-  config:
-    # -- Subchart passthrough: turns JetStream on with a file store; `fileStore.pvc.size` (1Gi) is each server's PVC and its max_file_store bound.
-    jetstream:
-      enabled: true
-      fileStore:
-        pvc:
-          size: 1Gi
-    # Clustered by default since 2026-08-03 (open_ingest.md Phase 0). The single node was flagged in
-    # this file as "a prod SPOF" while `streamReplicas` was pinned to 1 because raft replication needs
-    # 3+ nodes — so the SPOF was documented and then structurally guaranteed. The ingest plane makes
-    # that untenable: its unit work queue IS a JetStream stream, so a lost node loses in-flight ingest
-    # work, not just eventing.
-    #
-    # The subchart key is `config.cluster.*` — NOT `replicaCount`, which the nats chart does not have.
-    # A `--set nats.replicaCount=3` is a silent no-op that leaves one node running while every stream
-    # asks for 3 replicas and JetStream refuses to create them.
-    #
-    # Cost, stated rather than discovered: 3 pods and 3 PVCs instead of 1. `replicas: 3` is the
-    # subchart's own default once cluster.enabled is true, and is the minimum for raft quorum — the
-    # subchart's comment reads "must be 2 or higher when jetstream is enabled", but 2 gives no
-    # majority, so 3 is the first honest value.
-    # -- Subchart passthrough: clusters NATS (3 replicas, the raft quorum minimum); with `nats.auth.server` routes come from the included route.conf.
-    cluster:
-      enabled: true
-      replicas: 3
-      # `nats.auth.server` (below) moves the routes into an included file that carries the route credential, and adds the
-      # authorization they are checked against; off, both evaluate to nothing. The subchart templates `$tplYaml` against its
-      # own values, where `nats.auth` is `.Values.auth`.
-      merge:
-        auth:
-          $tplYamlSpread: |
-            {{- if .Values.auth.server }}
-            $include: ../nats-auth/route.conf
-            {{- end }}
-      patch:
-        - $tplYamlSpread: |
-            {{- if .Values.auth.server }}
-            - { op: remove, path: /routes }
-            {{- end }}
-    # `nats.auth.server`: operator mode, from the file the ExternalSecret writes (operator, system_account, MEMORY resolver).
-    # -- Subchart passthrough: with `nats.auth.server` on, includes ../nats-auth/server.conf (operator mode); off, renders nothing.
-    merge:
-      auth:
-        $tplYamlSpread: |
-          {{- if .Values.auth.server }}
-          $include: ../nats-auth/server.conf
-          {{- end }}
-  # Memory bound (#139) — see the note under `openfga.resources`. The nats chart takes container
-  # overrides as a `merge` into the Container spec, not a top-level `resources` key. Sized as the
-  # BUS: JetStream file-store broker whose memory tracks in-flight messages + raft state, per node.
-  # -- Subchart passthrough for the NATS server container: memory-bounded resources, and with `nats.auth.server` the nats-auth volume mount.
-  container:
-    merge:
-      resources:
-        requests: { cpu: 50m, memory: 128Mi }
-        limits: { memory: 512Mi }
-    # `nats.auth.server`: the two included files, mounted beside the config; the reloader watches them through the same mount.
-    patch:
-      - $tplYamlSpread: |
-          {{- if .Values.auth.server }}
-          - { op: add, path: /volumeMounts/-, value: { name: nats-auth, mountPath: /etc/nats-auth, readOnly: true } }
-          {{- end }}
-  # -- Subchart passthrough: with `nats.auth.server` adds the `<release>-nats-auth` Secret volume to the NATS pods.
-  podTemplate:
-    patch:
-      - $tplYamlSpread: |
-          {{- if .Values.auth.server }}
-          - { op: add, path: /spec/volumes/-, value: { name: nats-auth, secret: { secretName: {{ .Release.Name }}-nats-auth } } }
-          {{- end }}
-  # Memory bound (#139): the config reloader is an inotify loop; the debug box is an idle shell.
-  # -- Subchart passthrough: resources for the NATS config-reloader sidecar (requests 10m/16Mi, limit 64Mi).
-  reloader:
-    merge:
-      resources:
-        requests: { cpu: 10m, memory: 16Mi }
-        limits: { memory: 64Mi }
-  # Its own identity, not `default`, with no API token: the server, its reloader and the box CLI
-  # never call the Kubernetes API.
-  # -- Subchart passthrough: gives NATS its own ServiceAccount with no API token mounted.
-  serviceAccount:
-    enabled: true
-    merge:
-      automountServiceAccountToken: false
-  # -- Subchart passthrough for the nats-box debug pod: own ServiceAccount without a token, bounded resources, `monitor` creds when `nats.auth.server`.
-  natsBox:
-    # `nats.auth.server`: the read-only `monitor` user, as a creds file ESO writes (never `contents`, which would carry it in values).
-    contexts:
-      default:
-        creds:
-          secretName:
-            $tplYaml: |
-              {{- if .Values.auth.server }}{{ .Release.Name }}-nats-box-creds{{ end }}
-    serviceAccount:
-      enabled: true
-      merge:
-        automountServiceAccountToken: false
-    container:
-      merge:
-        resources:
-          requests: { cpu: 10m, memory: 16Mi }
-          limits: { memory: 64Mi }
-  # the headless service is <release>-nats:4222
-  # First-party keys (the nats subchart ignores them):
-  # Externalize: when set, the pubsub components + the stream-provision Job connect HERE instead of the
-  # in-cluster NATS — pair with nats.enabled=false to use a managed/clustered NATS. values-prod.yaml
-  # still recommends this for production: an in-chart cluster removes the single-node SPOF but leaves
-  # NATS a workload this chart operates, and a managed bus is the stronger answer where one exists.
-  # The two are alternatives, not a sequence — pick one per environment.
-  # -- NATS URL the pubsub components and stream Job use instead of the in-cluster bus (e.g. nats://nats.internal:4222). Empty uses in-cluster.
-  externalUrl: "" # e.g. nats://nats.internal:4222
-  # Raft replication for every provisioned stream. REQUIRES a clustered NATS, which the block above
-  # now provides in-chart; keep the two in step, because a streamReplicas above the node count makes
-  # `nats stream add` fail outright rather than degrade.
-  # -- Raft replica count for every stream the stream Job provisions; must not exceed the NATS node count.
+  # NATS JetStream is a PREREQUISITE (ADR 0153): the platform runs the bus, and rask never installs a server. The chart
+  # carries what is rask's: the address it dials, the stream definitions (the stream Job), and the bus users below.
+  # Development gets a three-node bus from deploy/fixtures/nats, at `nats://rask-nats:4222` (deploy/values-local.yaml).
+  # -- NATS JetStream address every pub/sub component, the stream Job and ingest connect to (e.g. nats://nats.internal:4222). Required: empty fails the render.
+  url: ""
+  # -- HTTP monitoring endpoint of the bus (varz/jsz) the lakehouse zone's ops view reads (e.g. http://rask-nats-headless:8222). Empty hides the panel.
+  monitorUrl: ""
+  # Raft replication for every provisioned stream. A streamReplicas above the bus's node count makes `nats stream add`
+  # fail outright rather than degrade.
+  # -- Raft replica count for every stream the stream Job provisions; must not exceed the bus's node count.
   streamReplicas: 3
   # === Bus authentication ([[XC-078]] slice 2): every client connects as its own NATS user =========================
   # OPERATOR MODE IS THE ONLY SHAPE DAPR CAN USE. Dapr 1.18.1's pubsub.jetstream authenticates with a user JWT plus the NKEY
@@ -3018,8 +2911,9 @@ nats:
   # `<maintenance.indexPubsub>-<catalog>`, maintenance and the annotator announce on `<pubsub.controlName>-<app>`, and
   # maintenance publishes its lineage on `lineage-pubsub-maintenance` even with no queue lane.
   #
-  # THE DEV MINT (openbao.yaml; owner ruling R1: the bundled NATS and OpenBao are dev stand-ins, and their durability across a
-  # stand-in's loss is not a goal). The `mint` init container copies nsc and nk out of nats-box; the seed carries the trust root
+  # THE DEV MINT (openbao.yaml; owner ruling R1: the NATS fixture and the bundled OpenBao are dev stand-ins, and their
+  # durability across a stand-in's loss is not a goal). The dev store is the fixture bus's issuer, and grants ESO read on
+  # `nats-server`, `nats-route` and `nats-user-monitor`, which the fixture's ExternalSecrets write into its config. The `mint` init container copies nsc and nk out of nats-box; the seed carries the trust root
   # (`nats-root`: the operator and account keys nsc keeps, never a user's) and the route credential (`nats-route`: user,
   # password) from the store behind the Service, else mints them, then issues every user of the table afresh under that root
   # and writes `nats-user-<user>` (jwt, seed) and `nats-server` (operator, system_account, resolver_preload: public) before the
@@ -3033,18 +2927,12 @@ nats:
   # 1G limit), so a 1Gi limit would hold a third of what the disks do.
   #
   # PRODUCTION (R1): the platform runs NATS and its store; rask names the credentials and owns no trust root. A store this chart
-  # does not seed (openbao.devMode=false or openbao.externalAddr), or a bus it does not run (nats.externalUrl), fails the render
-  # until `provisioned` attests that every `nats-user-<user>` exists, and `nats-route` while this chart runs the NATS cluster.
+  # does not seed (openbao.devMode=false or openbao.externalAddr) fails the render until `provisioned` attests that every
+  # `nats-user-<user>` exists, issued by the bus's operator with this table's permissions.
   #
-  # THE SERVER SWITCH (`server`, phase N-B: replacing all three NATS pods together needs the owner's approval). Off, the server
-  # takes anyone and ignores a presented credential, so every client carries its credential before the switch: nats.conf is
-  # what it was before this block. On, nats.conf includes ../nats-auth/server.conf (operator, system_account, resolver MEMORY,
-  # resolver_preload) and the cluster block ../nats-auth/route.conf (routes carrying the route user, and the authorization they
-  # are checked against), both written by an ExternalSecret from `nats-server` and `nats-route`, so no JWT and no password lives
-  # in the release; nats-box takes `monitor` as a creds file. It needs the store. A reload cannot
-  # switch modes (nats-server refuses a change to the resolver or the system account), a pod restarted alone into operator mode
-  # cannot join the other two, and a new system account starts an empty JetStream, so the streams are recreated by the stream
-  # Job with `admin` and every subscriber restarts after them.
+  # THE SERVER'S MODE is the bus's setting, not rask's: off, a server takes anyone and ignores a presented credential, so every
+  # client carries its credential either way. The dev fixture's operator mode (deploy/fixtures/nats, `nats.auth.server`) reads
+  # the server config and the route credential from this chart's dev store.
   #
   # RESIDUALS, named: _INBOX.> is shared within the APP account (a client could read another's replies; Dapr exposes no inbox
   # prefix); the catalog's ack on CATALOG_CONTROL is stream-wide, because its broadcast consumer's name is the server's, so a
@@ -3052,9 +2940,7 @@ nats:
   # one it already holds: it signs every control event; ackPolicy none does not stop daprd 1.18.1 acking, measured);
   # 8222 monitoring is unauthenticated by design; and anything holding OpenBao's dev root token reads the store (XC-079).
   auth:
-    # -- Switches the NATS server to operator mode (JWT users from the ExternalSecret-written files). Off, the server accepts anyone.
-    server: false
-    # -- Attests the platform store holds every `nats-user-<user>` (and `nats-route`); required when the store or bus is not chart-seeded.
+    # -- Attests the platform store holds every `nats-user-<user>`; required when the store is not the chart's dev OpenBao.
     provisioned: false
     # -- Extra user grants keyed by a values flag path, merged into `nats.auth.users` only while that flag is true (lance.natsTable).
     flagged:

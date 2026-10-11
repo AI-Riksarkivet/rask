@@ -52,7 +52,8 @@ export CHECK_ONLY
 trap 'rm -f "$OUT.tmp"' EXIT
 
 # THE RASK RELEASE'S WORKLOADS ONLY. A RayCluster is the engine's (ADR 0153; in development the ray-cluster fixture,
-# whose image tag that fixture's own release carries), so its head is not pinned here.
+# whose image tag that fixture's own release carries), so its head is not pinned here, and a fixture's workload that
+# shares this namespace (the NATS bus, [[XC-129]]) belongs to its own release.
 KINDS="deploy,statefulset"
 "$KUBECTL" get "$KINDS" -o json | $PY_BIN -c '
 import json, os, sys
@@ -78,6 +79,9 @@ def _pod_specs(item):
 
 for item in json.load(sys.stdin)["items"]:
     owner = item["metadata"]["name"]
+    # A fixture workload in this namespace (the NATS bus) belongs to its own release, and so does its image tag.
+    if (item["metadata"].get("annotations") or {}).get("meta.helm.sh/release-name", "rask") != "rask":
+        continue
     for pod_spec in _pod_specs(item):
       for c in pod_spec.get("containers", []):
         ref = c["image"]

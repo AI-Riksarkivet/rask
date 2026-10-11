@@ -644,6 +644,38 @@ def test_every_ray_consumer_names_one_cluster_or_the_render_refuses(overlay: tup
     assert not engine, f"the render installs part of a Ray engine, which is the engine owner's: {engine}"
 
 
+def test_every_bus_client_dials_the_bus_the_estate_names_and_the_render_runs_none() -> None:
+    """[[XC-129]]: NATS JetStream is a prerequisite (ADR 0153). The platform runs the bus and rask names it in `nats.url`;
+    every pub/sub Component, the stream Job and ingest's raw client dial that one address, and no render holds a NATS
+    server or its JetStream volumes (nats-box's CLI, which the stream Job and the dev mint run, is a client). That the
+    render refuses with no bus named is the prerequisite gate in test_no_credential_is_carried_by_the_render.py."""
+    docs = chart_render.render(*chart_render.DEFAULT_ARGS, "--set", "explorer.enabled=true", "--set", "networkPolicy.enabled=true")
+    dialled: dict[str, set[str]] = {}
+    for doc in docs:
+        if doc.get("kind") == "Component" and (doc.get("spec") or {}).get("type") == "pubsub.jetstream":
+            for row in doc["spec"]["metadata"]:
+                if row["name"] == "natsURL":
+                    dialled.setdefault("pubsub.jetstream", set()).add(row["value"])
+    for workload, _, container in chart_render.containers(docs):
+        if workload.startswith("Job/") and "-nats-stream-" in workload:
+            dialled.setdefault("stream Job", set()).update(re.findall(r'^\s*S="([^"]+)"', container["command"][-1], re.MULTILINE))
+        if url := chart_render.env_of(container).get("RASK_NATS_URL"):
+            dialled.setdefault("RASK_NATS_URL", set()).add(url)
+    assert dialled == {client: {chart_render.NATS_URL} for client in ("pubsub.jetstream", "stream Job", "RASK_NATS_URL")}, dialled
+
+    bus = sorted(
+        f"{workload}/{name} ({container['image']})"
+        for workload, name, container in chart_render.containers(docs)
+        if container["image"].split("/")[-1].split(":")[0] in {"nats", "nats-server-config-reloader"}
+    )
+    bus += sorted(
+        f"{doc['kind']}/{doc['metadata']['name']}"
+        for doc in docs
+        if doc.get("kind") in {"PersistentVolumeClaim", "StatefulSet"} and "nats" in doc["metadata"]["name"]
+    )
+    assert not bus, f"the render runs part of a NATS bus, which is the platform's: {bus}"
+
+
 # `test_the_kubelet_probes_the_inbox_on_a_path_the_service_actually_serves` lived here and is GONE,
 # subsumed rather than deleted for tidiness: `tests/unit/test_probe_paths_are_served.py` asks the same
 # question — is every path the chart probes one the app actually mounts — of every first-party app in

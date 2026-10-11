@@ -96,14 +96,19 @@ second case. Kueue's upstream docs only ever install it as its own release in `k
   answer and … the intended end state". It was deferred, not rejected; ADR 0153 decides it.
 - **What leaves the chart lands in `deploy/fixtures/`** (ADR 0153, [[XC-124]]): one directory per prerequisite, an
   upstream chart pinned in `fixture.env`, installed as its own release by `scripts/fixtures.sh` before rask's
-  (`make k3s-fixtures`, a prerequisite of `make k3s-up`; `FIXTURES` names which, default `external-secrets dapr
-  kuberay-operator ray-cluster observability`: Dapr's control plane in dapr-system ([[XC-128]]), the dev Ray engine
+  (`make k3s-fixtures`, a prerequisite of `make k3s-up`; `FIXTURES` names which, default `external-secrets dapr nats
+  kuberay-operator ray-cluster observability`: Dapr's control plane in dapr-system ([[XC-128]]), the NATS JetStream bus
+  `rask-nats` in rask's namespace that `nats.url` names ([[XC-129]]), the dev Ray engine
   ([[XC-125]]) and the telemetry chain the Collector exports to ([[XC-127]]); a GPU node with no device plugin yet adds `nvidia-device-plugin`). A fixture's `SET_FILES` passes an
   artefact from outside its chart with `--set-file` (the alert rules), and a local fixture chart with upstream
-  `dependencies:` is vendored from its own `Chart.lock`. The e2e lanes install ESO through the same script.
-  The §3 handover is automatic: every object the fixture renders that another release (or none) already owns is
+  `dependencies:` is vendored from its own `Chart.lock` (`scripts/fixtures.sh --vendor`, run by `make k3s-deps`, so a
+  test can render it through `chart_render.render_fixture`). The e2e lanes install ESO, Dapr and NATS through the same
+  script. The §3 handover is automatic: every object the fixture renders that another release (or none) already owns is
   annotated keep and the install takes `--take-ownership`, so run the fixture BEFORE the rask upgrade that stops
-  rendering the object. Fixtures are not for production: namespace label
+  rendering the object. A workload whose selector names the old release (immutable) is re-created instead: a
+  StatefulSet is deleted with `--cascade=orphan` and its pods relabelled, so the new one adopts them and rolls them onto
+  the same claims (keep the fixture's `fullnameOverride` equal to the old names, as NATS's `rask-nats`, or the claims
+  do not match). Fixtures are not for production: namespace label
   `rask.dev/fixture=not-for-production`, release description the same.
 
 ## 3. Removing a subchart that owns CRDs deletes the CRDs AND every object of that kind
@@ -198,8 +203,8 @@ catalog, lineage, maintenance, the medallion, OpenBao and Dex ran as `default` w
 - **The Dapr control plane is a prerequisite ([[XC-128]]), and the dev fixture sets
   `dapr_rbac.secretReader.enabled: false`** (deploy/fixtures/dapr/values.yaml). No sidecar uses that store:
   every injected pod sets `dapr.io/disable-builtin-k8s-secret-store`.
-- **Every first-party pod names its own SA**, NATS and nats-box included through the subchart's
-  `serviceAccount` values. A shared SA is allowed only where the sharers are one identity (`sa-web`
+- **Every first-party pod names its own SA**, and the NATS fixture's server and nats-box run as their own
+  (`serviceAccount` values in deploy/fixtures/nats). A shared SA is allowed only where the sharers are one identity (`sa-web`
   for the zones, `sa-maintenance` for the sweep and its executor); one-shot Jobs share `sa-jobs`.
 - **A binding names its subject through the helper the pod uses** (`lance.openbaoServiceAccount` for
   the auth-delegator), never through a free value with a `default` fallback: an unset value then puts
@@ -241,8 +246,10 @@ catalog, lineage, maintenance, the medallion, OpenBao and Dex ran as `default` w
 - **The dev OpenBao also mints the NATS trust root** ([[XC-078]]): the seed carries `nats-root` and `nats-route` over a
   surge and re-issues every `nats-user-<user>` of the issued table (`lance.natsTable`: values.yaml `nats.auth.users` plus
   each `nats.auth.flagged` grant whose flag is on) before its readiness key; a non-dev store waits for
-  `nats.auth.provisioned`. With `nats.auth.server` on, a non-surge OpenBao replacement mints a new root that the operator-mode
-  server refuses until the NATS pods restart, which empties JetStream: docs/OPERATORS.md § 7 has the switch-over and recovery.
+  `nats.auth.provisioned`. The NATS fixture's ExternalSecrets read `nats-server`, `nats-route` and `nats-user-monitor` through
+  rask's SecretStore, so the dev store's ESO policy grants them (`lance.natsFiles`). With the fixture's `nats.auth.server` on, a
+  non-surge OpenBao replacement mints a new root that the operator-mode server refuses until the NATS pods restart, which
+  empties JetStream: docs/OPERATORS.md § 7 has the switch-over and recovery.
 - **A Dapr Configuration edit reaches a sidecar only when its pod restarts** (HotReload is off), and Helm
   applies a Deployment before the Configuration it names, so an edit under an unchanged name is loaded
   stale by a pod that boots first, for its life. A per-app Configuration is therefore NAMED by the hash of

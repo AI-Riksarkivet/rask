@@ -55,10 +55,10 @@ one the estate admits. It is consumed as a FILE rather than a `secretKeyRef` env
 `--credentials-file` is the only way `control_root_backup.py` accepts a credential without falling
 back to the environment chain, which is the delivery path the estate forbids.
 
-## `{{- $natsFiles := include "lance.natsFiles" . | fromJson }}`
+## `{{- if hasKey (include "lance.natsFiles" . | fromJson) "nats-admin-creds" }}`
 
-The NATS credentials of the pods with no sidecar, as files (values.yaml `nats.auth`): the stream Job's admin and nats-box's monitor
-creds, and the server's operator-mode and route includes.
+The stream Job's NATS credential, the admin user's creds file (values.yaml `nats.auth`). The bus is a prerequisite (ADR 0153): the
+NATS fixture writes nats-box's `monitor` creds and the server's operator-mode and route includes with its own ExternalSecrets.
 
 ## `apiVersion: external-secrets.io/v1`
 

@@ -87,11 +87,12 @@ kind get clusters 2>/dev/null | grep -qx "$CLUSTER" || kind create cluster --nam
 # anything later repoints it.
 kind export kubeconfig --name "$CLUSTER"
 export RASK_EXPECT_CONTEXT="kind-$CLUSTER"
-# THE EXTERNAL SECRETS OPERATOR AND DAPR, platform prerequisites the chart refuses to render without
-# ([[XC-004]], [[XC-128]]). This throwaway cluster stands in for the platform, so the lane installs them from
-# the same fixtures `make k3s-up` uses (deploy/fixtures/external-secrets, deploy/fixtures/dapr), each on its
-# own release, before rask. fixtures.sh waits for each, so Dapr's injector is Ready before any rask pod exists.
-"$(dirname "$0")/fixtures.sh" external-secrets dapr
+# THE EXTERNAL SECRETS OPERATOR, DAPR AND THE NATS BUS, platform prerequisites the chart refuses to render without
+# ([[XC-004]], [[XC-128]], [[XC-129]]). This throwaway cluster stands in for the platform, so the lane installs them
+# from the same fixtures `make k3s-up` uses (deploy/fixtures/external-secrets, dapr, nats), each on its own release,
+# before rask. fixtures.sh waits for each, so Dapr's injector is Ready before any rask pod exists. The bus runs with
+# operator mode off (the fixture's default), so it takes the credentials rask's clients present without checking them.
+"$(dirname "$0")/fixtures.sh" external-secrets dapr nats
 # EVERY https REPOSITORY `chart/Chart.yaml` DECLARES, derived rather than listed. `helm dependency
 # build` needs each one even when the component is disabled, and a hand-written list is a second copy
 # of the chart's own dependency set: measured 2026-09-24, it named five of the nine, so the lane died
@@ -113,6 +114,8 @@ kind load docker-image "$CATALOG_IMG" "$RAY_IMG" --name "$CLUSTER"
 ALREADY_BUILT="$CATALOG_IMG $RAY_IMG"
 HELM_SET=(
   --set image.localImages=true
+  # The bus the nats fixture runs ([[XC-129]]).
+  --set-string nats.url=nats://rask-nats:4222
   --set auth.enabled=true
   --set medallion.fgaEnabled=true
   --set medallion.compute=true

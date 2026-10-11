@@ -1,4 +1,3 @@
-{{- if or .Values.nats.enabled .Values.nats.externalUrl }}
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -53,8 +52,7 @@ spec:
               # (training.jobs — docs/RAY-TRAIN.md D1: its OWN stream, so the durable consumer names stay
               # per-stream and a slow train path never shares limits with the stage cascade). Each created
               # once (idempotent skip).
-              # streamReplicas > 1 (raft-replicated streams) needs a CLUSTERED NATS — the in-cluster
-              # single-node subchart supports 1 only; set 3 with an external/clustered NATS in prod.
+              # streamReplicas > 1 (raft-replicated streams) needs a clustered bus of at least that many nodes.
               add_if_missing() {
                 if nats --server "$S" stream info "$1" >/dev/null 2>&1; then
                   echo "stream $1 already exists"
@@ -320,4 +318,3 @@ spec:
                   fi
                 done
               done
-{{- end }}

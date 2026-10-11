@@ -28,7 +28,8 @@ PROD_VALUES="${PROD_VALUES:-deploy/values-prod.yaml}"
 # commit: the gate never reached the script that would have reported it. values-prod.yaml deliberately
 # does NOT pin a registry (the deployer supplies theirs), so the check must. signing.provisioned is the operator's attestation that the event-signing
 # keys exist in the sealed store (templates/signing-provisioned.yaml refuses a non-dev store without it), and
-# nats.auth.provisioned the same for the NATS users and route credential (templates/nats-provisioned.yaml).
+# nats.auth.provisioned the same for the NATS users (templates/nats-provisioned.yaml). nats.url is the platform's NATS
+# bus, a prerequisite values-prod leaves for the deployer to name.
 # observability.export.endpoint is the platform's OTLP backend, which values-prod leaves for the deployer to name.
 COMMON=(--api-versions external-secrets.io/v1/ExternalSecret --api-versions dapr.io/v1alpha1
         --set frontend.oidc.publicIssuer=https://auth.example.com/dex
@@ -37,6 +38,7 @@ COMMON=(--api-versions external-secrets.io/v1/ExternalSecret --api-versions dapr
         --set signing.provisioned=true
         --set nats.auth.provisioned=true
         --set-string ray.dashboardUrl=https://ray.example.com:8265
+        --set-string nats.url=nats://nats.example.com:4222
         --set-string observability.export.endpoint=http://otlp.example.com:4318/v1/otlp)
 OUT="$(mktemp)"
 trap 'rm -f "$OUT"' EXIT
@@ -79,6 +81,10 @@ grep -A15 "name: rask-openfga$" "$OUT" | grep -q "replicas: 3" \
 grep -qE "name: dapr-(sentry|operator|placement-server|scheduler-server|sidecar-injector)$" "$OUT" \
   && fail "prod must not render a Dapr control plane (it is a prerequisite)"
 grep -q "^kind: Component$" "$OUT" || fail "prod must render rask's own Dapr Components"
+# The NATS bus is the platform's too ([[XC-129]]): prod renders no server, only rask's stream Job against nats.url.
+awk '/^kind: StatefulSet$/{f=1} f&&/^  name: /{print $2; f=0}' "$OUT" | grep -qx 'rask-nats' \
+  && fail "prod must not render a NATS server (it is a prerequisite)"
+grep -q 'S="nats://nats.example.com:4222"' "$OUT" || fail "prod's stream Job must provision rask's streams on the bus nats.url names"
 
 # 4. PodDisruptionBudgets: the request-serving backends (catalog/lineage/gateway) + OpenFGA (the authz
 # chokepoint) + one per frontend zone (frontend.replicas=2 in prod; the zones are the Ingress-routed
@@ -204,13 +210,13 @@ grep -q -- "- minio-mkbucket" "$OUT" || fail "the minio ingress client list must
 
 # POD IDENTITY. Asserted on the RENDER: a template that stops naming its SA is invisible to any values
 # grep. Counted, not merely found: one dedicated ServiceAccount proves the SAs render, not that the
-# fleet uses them. Measured on this overlay 2026-10-02: 45 ServiceAccounts and 30
-# `automountServiceAccountToken: false`. The per-pod verdict (no first-party pod on `default`, no idle
+# fleet uses them. Measured on this overlay 2026-10-11, once the prerequisites' subcharts had left the release
+# (ADR 0153; NATS's two with [[XC-129]]): 29 ServiceAccounts and 24 `automountServiceAccountToken: false`. The per-pod verdict (no first-party pod on `default`, no idle
 # token, no secret grant to their SAs) is
 # tests/unit/test_a_first_party_pod_cannot_read_a_secret_through_the_kube_api.py.
 sa=$(grep -c "^kind: ServiceAccount" "$OUT" || true)
-[ "$sa" -ge 30 ] \
-  || fail "prod must give the fleet dedicated ServiceAccounts (templates/security-sa.yaml), rendered $sa (>=30 expected; 18 is the everything-runs-as-default baseline)"
+[ "$sa" -ge 29 ] \
+  || fail "prod must give the fleet dedicated ServiceAccounts (templates/security-sa.yaml), rendered $sa (>=29 expected; 18 is the everything-runs-as-default baseline)"
 automount=$(grep -c "automountServiceAccountToken: false" "$OUT" || true)
 [ "$automount" -ge 15 ] \
   || fail "prod must stop mounting the SA token into app pods, rendered $automount refusals (>=15 expected; 1 is the baseline)"

@@ -29,13 +29,18 @@ from tests.unit.chart_yaml import FAST_LOADER
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 
-#: The APIs of the prerequisites the chart checks through `.Capabilities`, the External Secrets Operator
-#: ([[XC-004]]) and Dapr ([[XC-128]]): a cluster-less render names the cluster it targets. Without them every
-#: render refuses.
+#: The bus a render names ([[XC-129]]): NATS JetStream is a prerequisite rask never installs, so every client dials
+#: this address.
+NATS_URL = "nats://bus.example.com:4222"
+
+#: The prerequisites a render names: the APIs the chart checks through `.Capabilities`, the External Secrets Operator
+#: ([[XC-004]]) and Dapr ([[XC-128]]), and the NATS bus's address ([[XC-129]]). A cluster-less render names the
+#: cluster it targets. Without them every render refuses.
 PREREQ_ARGS: tuple[str, ...] = (
     "--api-versions", "external-secrets.io/v1/ExternalSecret",
     "--api-versions", "generators.external-secrets.io/v1alpha1/Password",
     "--api-versions", "dapr.io/v1alpha1",
+    "--set-string", f"nats.url={NATS_URL}",
 )  # fmt: skip
 
 #: The Ray an estate names ([[CP-041]]): with the cascade's Ray lane on (the default) and no in-cluster
@@ -102,15 +107,20 @@ def render(*extra: str) -> tuple[dict, ...]:
 
 @functools.cache
 def render_fixture(name: str, *extra: str) -> tuple[dict, ...]:
-    """Every mapping document a development fixture's own chart (`deploy/fixtures/<name>/chart`) renders, as release `name`.
+    """Every mapping document a development fixture (`deploy/fixtures/<name>`) renders, as `scripts/fixtures.sh` installs it.
 
-    The rask chart installs no engine (ADR 0153); `make k3s-up` installs it from a fixture, so a gate about what the
-    deployed engine carries reads the fixture's render.
+    The rask chart installs no engine and no prerequisite (ADR 0153); `make k3s-up` installs them from fixtures, so a gate
+    about what the deployed engine or bus carries reads the fixture's render. A fixture's own chart renders offline (its
+    dependencies vendored by `make k3s-deps`); an upstream one (`REPO` in its fixture.env) is fetched from that repository.
     """
     helm = shutil.which("helm") or str(REPO / ".localbin/helm")
     if not pathlib.Path(helm).exists():
         pytest.skip("helm not available")
-    argv = [helm, "template", name, str(REPO / "deploy/fixtures" / name / "chart"), "--namespace", "default", *extra]
+    fixture = REPO / "deploy/fixtures" / name
+    env = dict(line.split("=", 1) for line in (fixture / "fixture.env").read_text().splitlines() if "=" in line and not line.startswith("#"))
+    source = [env["CHART"], "--repo", env["REPO"], "--version", env["VERSION"]] if env.get("REPO") else [str(fixture / env["CHART"])]
+    values = ["-f", str(fixture / "values.yaml")] if (fixture / "values.yaml").is_file() else []
+    argv = [helm, "template", env["RELEASE"], *source, "--namespace", env["NAMESPACE"], *values, *extra]
     text = subprocess.run(argv, capture_output=True, text=True, check=True).stdout  # noqa: S603
     return tuple(doc for doc in yaml.load_all(text, Loader=FAST_LOADER) if isinstance(doc, dict))
 

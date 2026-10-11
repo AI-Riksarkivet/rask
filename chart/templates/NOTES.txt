@@ -4,11 +4,7 @@ rask {{ .Chart.AppVersion }} deployed as release "{{ .Release.Name }}" (namespac
 {{- $root := . }}
 {{- $st := false }}
 {{- with .Values.singleTenant }}{{- $st = .enabled }}{{- end }}
-{{- with .Values.nats }}
-{{- if .enabled }}
 Event-driven path:  catalog --Dapr publish--> [pubsub.jetstream over NATS] --> lineage /lineage-events --> Apache AGE
-{{- end }}
-{{- end }}
 
 Services (ClusterIP):
 {{- range $name, $svc := .Values.services }}
@@ -35,11 +31,7 @@ Services (ClusterIP):
 {{- with include "rask.rayDashboardUrl" . }}
   - ray:       {{ . }} (the engine's; rask installs no Ray)
 {{- end }}
-{{- with .Values.nats }}
-{{- if .enabled }}
-  - nats:      {{ include "lance.natsHost" $root }}:4222 (JetStream; HTTP monitor on -headless:8222)
-{{- end }}
-{{- end }}
+  - nats:      {{ include "lance.natsUrl" . }} (the platform's JetStream; rask installs no NATS)
 {{- with .Values.openfga }}
 {{- if .enabled }}
   - openfga:   {{ include "lance.openfgaHost" $root }}:8080 (authorization model; :8081 gRPC)

@@ -249,7 +249,7 @@ mirrors services.yaml's for the same reason.
 
 ## `- { name: RASK_NATS_URL, value: {{ include "lance.natsUrl" $root | quote }} }`
 
-The work queue's broker: the one every NATS client in the release names, nats.externalUrl included.
+The work queue's broker: the bus `nats.url` names, the one every NATS client in the release dials.
 
 ## `{{- if $svc.channels }}`
 

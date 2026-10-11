@@ -72,11 +72,12 @@ kind get clusters 2>/dev/null | grep -qx "$CLUSTER" || kind create cluster --con
 # anything later repoints it.
 kind export kubeconfig --name "$CLUSTER"
 export RASK_EXPECT_CONTEXT="kind-$CLUSTER"
-# THE EXTERNAL SECRETS OPERATOR AND DAPR, platform prerequisites the chart refuses to render without
-# ([[XC-004]], [[XC-128]]). This throwaway cluster stands in for the platform, so the lane installs them from
-# the same fixtures `make k3s-up` uses (deploy/fixtures/external-secrets, deploy/fixtures/dapr), each on its
-# own release, before rask. fixtures.sh waits for each, so Dapr's injector is Ready before any rask pod exists.
-"$(dirname "$0")/fixtures.sh" external-secrets dapr
+# THE EXTERNAL SECRETS OPERATOR, DAPR AND THE NATS BUS, platform prerequisites the chart refuses to render without
+# ([[XC-004]], [[XC-128]], [[XC-129]]). This throwaway cluster stands in for the platform, so the lane installs them
+# from the same fixtures `make k3s-up` uses (deploy/fixtures/external-secrets, dapr, nats), each on its own release,
+# before rask. fixtures.sh waits for each, so Dapr's injector is Ready before any rask pod exists. The bus runs with
+# operator mode off (the fixture's default), so it takes the credentials rask's clients present without checking them.
+"$(dirname "$0")/fixtures.sh" external-secrets dapr nats
 # EVERY https REPOSITORY `chart/Chart.yaml` DECLARES, derived rather than listed. `helm dependency
 # build` needs each one even when the component is disabled, and a hand-written list is a second copy
 # of the chart's own dependency set: measured 2026-09-24, it named five of the nine, so the lane died
@@ -110,6 +111,8 @@ echo "   node holds catalog digest ${CATALOG_DIGEST}"
 ALREADY_BUILT="$CATALOG_IMG"
 HELM_SET=(
   --set image.localImages=true
+  # The bus the nats fixture runs ([[XC-129]]).
+  --set-string nats.url=nats://rask-nats:4222
   --set auth.enabled=true
   --set medallion.fgaEnabled=true
   # The ray-OFF core lane (the Ray path's home is ray_e2e_stack.sh): with the medallion's Ray lane on and

@@ -191,3 +191,9 @@ observability:
     endpoint: http://greptimedb.observability:4000/v1/otlp
   query:
     url: http://greptimedb.observability:4000
+
+# The bus is the platform's (ADR 0153); on a dev estate it is the nats fixture (deploy/fixtures/nats, release `nats`
+# in this namespace), which `make k3s-up` installs first. Its monitor endpoint feeds the lakehouse zone's ops view.
+nats:
+  url: nats://rask-nats:4222
+  monitorUrl: http://rask-nats-headless:8222
