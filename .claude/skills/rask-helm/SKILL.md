@@ -89,7 +89,14 @@ second case. Kueue's upstream docs only ever install it as its own release in `k
   transcribe at once" — one runner's GPU admission. No rask template sets `kueue.x-k8s.io/queue-name`,
   and rask's own queue has admitted zero workloads.
 - `docs/adr/0038-helm-release-storage-the-sql-driver-stands-the-chart-is-not.md` (2026-08-15) already calls infra-separated-from-app "the architecturally correct
-  answer and … the intended end state". It was deferred, not rejected.
+  answer and … the intended end state". It was deferred, not rejected; ADR 0153 decides it.
+- **What leaves the chart lands in `deploy/fixtures/`** (ADR 0153, [[XC-124]]): one directory per prerequisite, an
+  upstream chart pinned in `fixture.env`, installed as its own release by `scripts/fixtures.sh` before rask's
+  (`make k3s-fixtures`, a prerequisite of `make k3s-up`; `FIXTURES` names which, default `external-secrets`; a GPU
+  node with no device plugin yet adds `nvidia-device-plugin`). The e2e lanes install ESO through the same script. A fixture's `ADOPT_CRDS`
+  is the §3 handover: it annotates each named CRD keep and installs with `--take-ownership`, so run the fixture
+  BEFORE the rask upgrade that drops the subchart. Fixtures are not for production: namespace label
+  `rask.dev/fixture=not-for-production`, release description the same.
 
 ## 3. Removing a subchart that owns CRDs deletes the CRDs AND every object of that kind
 

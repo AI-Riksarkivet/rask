@@ -149,17 +149,15 @@ Reminders:
     policy blocks it silently. Check the policies before you debug the app.
 {{- end }}
 {{- end }}
-{{- if and (include "rask.gpuEnabled" .) (not .Values.nvdp.enabled) }}
-  * ray.gpuCount={{ .Values.ray.gpuCount }} but nvdp.enabled=false — this chart is NOT installing a device plugin, so
-    something else must already advertise nvidia.com/gpu (the NVIDIA GPU Operator, or your cloud
-    provider's plugin). If nothing does, the Ray head stays Pending on an unschedulable
-    nvidia.com/gpu request. Check: kubectl get nodes -o jsonpath='{.items[*].status.allocatable}' | tr ' ' '\n' | grep nvidia
-{{- end }}
-{{- if not (include "rask.gpuEnabled" .) }}
+{{- if include "rask.gpuEnabled" . }}
+  * ray.gpuCount={{ .Values.ray.gpuCount }}: this chart installs no device plugin, so something else must advertise
+    nvidia.com/gpu and serve the nvidia RuntimeClass (the platform's GPU Operator or plugin; in development the
+    nvidia-device-plugin fixture, deploy/fixtures). If nothing does, the Ray head stays Pending.
+    Check: kubectl get nodes -o jsonpath='{.items[*].status.allocatable}' | tr ' ' '\n' | grep nvidia
+{{- else }}
   * GPU-LESS estate (ray.gpuCount=0, the chart default): the htrflow Serve actor is derived to
-    RASK_SERVE_GPU_FRAC=0 and runs on CPU, no nvidia RuntimeClass is created, and the device-plugin +
-    GPU-Feature-Discovery DaemonSets are not installed. For a GPU node:
-      helm upgrade ... --set ray.gpuCount=<n> --set nvdp.enabled=true --set config.RASK_SERVE_GPU_FRAC=<frac>
+    RASK_SERVE_GPU_FRAC=0 and runs on CPU. For a GPU node, install a device plugin first, then:
+      helm upgrade ... --set ray.gpuCount=<n> --set config.RASK_SERVE_GPU_FRAC=<frac>
 {{- end }}
 
 {{- with .Values.services.lineage }}

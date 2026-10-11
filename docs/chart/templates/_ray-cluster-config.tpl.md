@@ -51,9 +51,9 @@ Its own tokenless SA: no autoscaler runs, so nothing in the head calls the API.
 
 ## `{{- if include "rask.gpuEnabled" . }}`
 
-The nvidia RuntimeClass exists only on a GPU estate (runtimeclass.yaml renders it under
-the same rask.gpuEnabled gate), and naming a RuntimeClass whose handler containerd does
-not register makes every head pod fail to create. GPU-less => no runtimeClassName at all,
+The nvidia RuntimeClass exists only on a GPU estate (the device plugin's install provides it;
+in development deploy/fixtures/nvidia-device-plugin), and naming a RuntimeClass whose handler
+containerd does not register makes every head pod fail to create. GPU-less => no runtimeClassName at all,
 so the head runs under the node's default runtime.
 
 ## `- name: RAY_SERVE_TRACING_EXPORTER_IMPORT_PATH`

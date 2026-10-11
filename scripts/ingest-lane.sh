@@ -90,7 +90,6 @@ lane_values() {
 		ray: {enabled: false}
 		kuberay: {enabled: false}
 		kueue: {enabled: false}
-		nvdp: {enabled: false}
 		observability: {enabled: false}
 		frontend: {enabled: false}
 		# The medallion IS the cascade — its producer owns /bronze-arrival (the head that turns a

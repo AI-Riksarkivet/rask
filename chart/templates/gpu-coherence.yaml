@@ -1,8 +1,4 @@
 
-{{- if and .Values.nvdp.enabled (not (include "rask.gpuEnabled" .)) }}
-{{- fail (printf "rask chart: nvdp.enabled=true but ray.gpuCount=%v — the nvidia device-plugin and its GPU-Feature-Discovery DaemonSet would sit ContainerCreating forever on a cluster with no GPU workload to serve. Fix: for a GPU node set `--set ray.gpuCount=<n>` alongside nvdp.enabled; for a GPU-less cluster (kind/CI/CPU dev) set `--set nvdp.enabled=false` (the chart default)." .Values.ray.gpuCount) }}
-{{- end }}
-
 {{- if and (include "rask.gpuEnabled" .) (hasKey .Values.config "RASK_SERVE_GPU_FRAC") (eq (float64 .Values.config.RASK_SERVE_GPU_FRAC) 0.0) }}
 
 {{- fail (printf "rask chart: ray.gpuCount=%v (a GPU estate) but config.RASK_SERVE_GPU_FRAC=%v — every Serve replica would reserve no GPU and run on CPU while %v GPU(s) sit idle. Set config.RASK_SERVE_GPU_FRAC to the per-replica fraction (e.g. 0.49 for 2 replicas/GPU), or set ray.gpuCount=0 for a deliberate CPU estate." .Values.ray.gpuCount .Values.config.RASK_SERVE_GPU_FRAC .Values.ray.gpuCount) }}

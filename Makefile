@@ -1,4 +1,4 @@
-.PHONY: fga-store-check fga-estate-migrate sbom zone-sbom registry-gc dagger-gc dev-gc help install build test test-slow lint lint-imports fmt clean storybook typecheck knip comment-gate check coverage fga-test ci dev-micro dev-frontends dev-frontends-k3s dev-zone home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge k9s bootstrap dev-registry e2e frontend-images prod-render-check chart-docs chart-docs-check alert-rules-check alert-rules-drill notifications-lanes notifications-rig audit smoke-rustfs rustfs-lifecycle auth-chain governance-chain nats-auth medallion-demo go-fmt scan-config scan-secrets scan-image scan-zone-image seed-corpus e2e-isolation e2e-container-deletes e2e-fga-model e2e-open-run
+.PHONY: fga-store-check fga-estate-migrate sbom zone-sbom registry-gc dagger-gc dev-gc help install build test test-slow lint lint-imports fmt clean storybook typecheck knip comment-gate check coverage fga-test ci dev-micro dev-frontends dev-frontends-k3s dev-zone home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-fixtures k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge k9s bootstrap dev-registry e2e frontend-images prod-render-check chart-docs chart-docs-check alert-rules-check alert-rules-drill notifications-lanes notifications-rig audit smoke-rustfs rustfs-lifecycle auth-chain governance-chain nats-auth medallion-demo go-fmt scan-config scan-secrets scan-image scan-zone-image seed-corpus e2e-isolation e2e-container-deletes e2e-fga-model e2e-open-run
 
 help:
 	@echo "Targets:"
@@ -689,8 +689,7 @@ KUBECTL ?= KUBECONFIG=$(KUBECONFIG) kubectl
 K3S_IMAGES = $(COMPOSE_IMAGES) $(ZONES:%=web-%) ray-cluster lance-rest-catalog minio
 
 # Subchart repos (Chart.yaml dependencies). OCI deps (kueue) need no repo add.
-K3S_DEP_REPOS = nvdp=https://nvidia.github.io/k8s-device-plugin \
-                kuberay=https://ray-project.github.io/kuberay-helm/ \
+K3S_DEP_REPOS = kuberay=https://ray-project.github.io/kuberay-helm/ \
                 nats=https://nats-io.github.io/k8s/helm/charts/ \
                 dapr=https://dapr.github.io/helm-charts/ \
                 openfga=https://openfga.github.io/helm-charts \
@@ -777,6 +776,13 @@ DROP_CREDENTIAL_VALUES := --set dapr.appToken=null --set frontend.oidc.sessionSe
 # (today the Hugging Face token), which nothing in the cluster can generate. The dev OpenBao seeds the
 # store from it (values.yaml `secrets.hfTokenInStore`); the token reaches kubectl on stdin, never argv.
 
+# The prerequisites a dev estate gets from deploy/fixtures, each its own release, installed before rask's
+# (NOT FOR PRODUCTION; deploy/fixtures/README.md). A GPU node with no device plugin yet adds nvidia-device-plugin.
+FIXTURES ?= external-secrets
+
+k3s-fixtures: ## Install the development fixtures (FIXTURES) as their own releases, before the rask chart
+	KUBECONFIG=$(KUBECONFIG) ./scripts/fixtures.sh $(FIXTURES)
+
 k3s-crds: ## Apply the vendored CRDs the chart deliberately does not package (see chart/.helmignore)
 	@# Server-side apply: the CNPG CRD set exceeds kubectl's client-side annotation limit.
 	kubectl apply --server-side -f chart/crds-bootstrap/
@@ -792,7 +798,7 @@ k3s-crds: ## Apply the vendored CRDs the chart deliberately does not package (se
 # (7c2171f0) until 2026-08-23, and the whole target failed with `/bin/sh: @#: not found` plus a
 # `helm get values requires 1 argument` from the orphaned `-o yaml`. A comment that breaks the recipe
 # it documents is worse than no comment; keep prose out of the continuation.
-k3s-up: k3s-deps k3s-crds k3s-stem-check ## Vendor deps, apply CRDs, then install/upgrade the release and wait for the gateway
+k3s-up: k3s-fixtures k3s-deps k3s-crds k3s-stem-check ## Install fixtures, vendor deps, apply CRDs, then install/upgrade the release and wait for the gateway
 	@set -a; [ -f .env ] && . ./.env; set +a; \
 	if [ -z "$$HF_TOKEN" ] && [ -r "$${HF_HOME:-$$HOME/.cache/huggingface}/token" ]; then \
 	  HF_TOKEN="$$(cat "$${HF_HOME:-$$HOME/.cache/huggingface}/token")"; \

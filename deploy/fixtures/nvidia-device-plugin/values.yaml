@@ -1,0 +1,8 @@
+# k3s registers the nvidia containerd runtime without making it the default, so the plugin runs under the
+# nvidia RuntimeClass, which k3s creates itself, to see the GPU.
+runtimeClassName: nvidia
+# The plugin's DaemonSet selects nodes by the GPU Feature Discovery labels (feature.node.kubernetes.io/pci-10de.present,
+# nvidia.com/gpu.present); the bundled NFD + GFD put them on GPU nodes and leave CPU-only nodes alone. Without them the
+# DaemonSet matches no node and nvidia.com/gpu is never advertised. Turn it off when the cluster already runs NFD.
+gfd:
+  enabled: true

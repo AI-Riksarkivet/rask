@@ -14,12 +14,8 @@ The chart takes **no credential as a value** ([[XC-004]]). Every secret lives in
 OpenBao, or the platform's OpenBao/Vault via `openbao.externalAddr`) and reaches a pod from it: through the
 Dapr secret store for a pod with a sidecar, and through an ExternalSecret for one without. So the
 **External Secrets Operator is a prerequisite**, platform-run like the store, and rask never installs it.
-Install it on its own release first:
-
-```bash
-helm upgrade --install external-secrets external-secrets --repo https://charts.external-secrets.io \
-  --version 2.10.0 --namespace external-secrets --create-namespace --wait
-```
+Install it on its own release first, at the version `deploy/fixtures/external-secrets/fixture.env` names (the one
+rask is tested against; that fixture is also the development install `make k3s-up` runs).
 
 Without it, `helm upgrade` and `make k3s-up` fail at render time with a message naming the operator. A
 cluster-less `helm template` states the API it targets: `--api-versions external-secrets.io/v1/ExternalSecret`
@@ -29,10 +25,10 @@ credentials ESO's Password generator creates in-cluster). A credential passed as
 ## Local deploy (k3s)
 
 ```bash
-make k3s-install      # one-time: k3s + helm + NVIDIA device-plugin + KubeRay (sudo)
+make k3s-install      # one-time: k3s + helm (sudo)
 make k3s-build        # build fleet + frontend + ray images as :dev
 make k3s-import       # side-load images into k3s
-make k3s-up           # helm upgrade --install rask ./chart --wait
+make k3s-up           # the fixtures (FIXTURES), each its own release, then helm upgrade --install rask ./chart --wait
 # UI: http://rask.local/   API: http://rask.local/api/health
 # (add "127.0.0.1 rask.local" to /etc/hosts)
 make e2e              # verify MFE hydration + API round-trip end-to-end (run after k3s-up)
@@ -138,17 +134,15 @@ The chart ships a **CPU-only** estate so a fresh kind/CI/laptop cluster installs
 |---|---|
 | `RASK_SERVE_GPU_FRAC` — the htrflow Serve actor's reservation, in the fleet ConfigMap **and** `serveConfigV2` | `0` (the CPU path; the raw `config.RASK_SERVE_GPU_FRAC` is never passed through) |
 | head `num-gpus` rayStartParam + `nvidia.com/gpu` limit | `0` / omitted |
-| `runtimeClassName: nvidia` on the head + the `RuntimeClass` object | not rendered |
+| `runtimeClassName: nvidia` on the head | not rendered |
 | Kueue ClusterQueue `nvidia.com/gpu` nominalQuota | `0` |
 
-A GPU node: `--set ray.gpuCount=<n> --set nvdp.enabled=true` (and a real
-`config.RASK_SERVE_GPU_FRAC`, e.g. `0.49` for two replicas per GPU).
-
-`nvdp.enabled` is the one thing that cannot be derived — Helm resolves a subchart `condition:` against a
-static values path — so the pair is enforced: **`nvdp.enabled=true` with `ray.gpuCount=0` fails the
-render** (`chart/templates/gpu-coherence.yaml`) rather than leaving the device-plugin and
-GPU-Feature-Discovery DaemonSets `ContainerCreating` forever. `ray.gpuCount>0` with `nvdp.enabled=false` is
-allowed (an externally-managed device plugin / the NVIDIA GPU Operator) and warns in NOTES.
+A GPU node: `--set ray.gpuCount=<n>` (and a real `config.RASK_SERVE_GPU_FRAC`, e.g. `0.49` for two replicas
+per GPU), on a cluster where something advertises `nvidia.com/gpu` and serves the `nvidia` RuntimeClass. The
+chart installs neither: in production that is the platform's NVIDIA GPU Operator or device plugin; in
+development, on a node where nothing advertises `nvidia.com/gpu` yet, it is the `nvidia-device-plugin` fixture
+(`deploy/fixtures/README.md`, not for production). k3s creates the `nvidia` RuntimeClass itself. With
+`ray.gpuCount>0` NOTES says so.
 
 ### StorageClasses: omit, don't guess
 

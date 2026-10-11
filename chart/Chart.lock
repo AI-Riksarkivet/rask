@@ -1,7 +1,4 @@
 dependencies:
-- name: nvidia-device-plugin
-  repository: https://nvidia.github.io/k8s-device-plugin
-  version: 0.19.3
 - name: kuberay-operator
   repository: https://ray-project.github.io/kuberay-helm/
   version: 1.6.2
@@ -26,5 +23,5 @@ dependencies:
 - name: perses
   repository: https://perses.github.io/helm-charts
   version: 0.22.0
-digest: sha256:089f0ffbf61506aa03c0580c8ae893cf145194bea7f95e6ca67dc95908433aa6
-generated: "2026-09-16T13:38:28.321152902+02:00"
+digest: sha256:645109bdce885642b28a440dd8b545a308070b528f73928544e8f0e1d8975751
+generated: "2026-10-11T15:05:22.280737116+02:00"

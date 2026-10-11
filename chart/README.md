@@ -29,7 +29,6 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | https://dapr.github.io/helm-charts/ | dapr | 1.18.1 |
 | https://greptimeteam.github.io/helm-charts/ | greptimedb-standalone | 0.4.5 |
 | https://nats-io.github.io/k8s/helm/charts/ | nats | 2.14.2 |
-| https://nvidia.github.io/k8s-device-plugin | nvdp(nvidia-device-plugin) | 0.19.3 |
 | https://openfga.github.io/helm-charts | openfga | 0.3.12 |
 | https://perses.github.io/helm-charts | perses | 0.22.0 |
 | https://ray-project.github.io/kuberay-helm/ | kuberay(kuberay-operator) | 1.6.2 |
@@ -355,10 +354,6 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | networkPolicy.extraEgress | list | `[]` | List of extra egress rules, verbatim NetworkPolicy entries, for external backends (off-cluster S3, managed NATS, external OTLP). |
 | networkPolicy.minioExtraFrom | list | `[{"podSelector":{"matchLabels":{"app":"ray-lance-head"}}},{"podSelector":{"matchLabels":{"app":"ray-lance-worker"}}}]` | List of extra NetworkPolicy `from` peers allowed to reach the object store; defaults admit the ray-lance demo pods. |
 | networkPolicy.openbaoExtraFrom | list | `[]` | List of extra NetworkPolicy `from` peers allowed to reach OpenBao (e.g. the external-secrets namespace). |
-| nvdp.allowDefaultNamespace | bool | `true` | Lets the device-plugin subchart install into the `default` namespace, which it otherwise refuses. |
-| nvdp.enabled | bool | `false` | Installs the NVIDIA device-plugin subchart; must be on together with `ray.gpuCount > 0` (templates/gpu-coherence.yaml fails the render on on + 0). Default off. |
-| nvdp.gfd.enabled | bool | `true` | Installs the bundled Node Feature Discovery + GPU Feature Discovery that label GPU nodes; without the labels the plugin matches no node. |
-| nvdp.runtimeClassName | string | `"nvidia"` | RuntimeClass the device-plugin pods run under; templates/runtimeclass.yaml also creates it when GPUs and nvdp are on. k3s needs `nvidia`. |
 | observability.alerting.alertmanagerImage | string | `"prom/alertmanager:v0.28.0"` | Container image for Alertmanager, which groups and routes firing alerts. |
 | observability.alerting.enabled | bool | `false` | Deploy vmalert and Alertmanager to evaluate chart/alerting/rules.yml against GreptimeDB; off by default. |
 | observability.alerting.evaluationInterval | string | `"1m"` | How often vmalert evaluates the alert rules (vmalert `-evaluationInterval`). |
@@ -416,7 +411,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | ray.dashboardPort | int | `8265` | Port of the in-cluster Ray head's dashboard, used to build the default Ray address when `dashboardUrl` is empty. |
 | ray.dashboardUrl | string | `""` | Address of the Ray dashboard every Ray consumer uses. Set for an external Ray; empty uses the in-cluster head Service. |
 | ray.enabled | bool | `true` | Allow the in-cluster Ray head (RayService under `singleTenant`, or RayCluster under `cluster.enabled`) and its HF cache PVC. |
-| ray.gpuCount | int | `0` | GPUs the Ray head advertises; every GPU setting derives from it. 0 is a CPU-only estate; a GPU node also needs `nvdp.enabled`. |
+| ray.gpuCount | int | `0` | GPUs the Ray head advertises; every GPU setting derives from it. 0 is a CPU-only estate; a GPU node also needs a device plugin and the nvidia RuntimeClass (deploy/fixtures/nvidia-device-plugin in development). |
 | ray.hfCacheStorage | string | `"10Gi"` | Size of the Ray head's Hugging Face weight-cache PVC. |
 | ray.hfCacheStorageClass | string | `""` | StorageClass of the HF weight-cache PVC; empty uses the cluster's default class. |
 | ray.image.pullPolicy | string | `"IfNotPresent"` | Pull policy of the Ray cluster image. |

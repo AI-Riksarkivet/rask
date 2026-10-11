@@ -2,10 +2,10 @@
 # Minimal bootstrap for the local rask k3s stack: install k3s + helm and make
 # kubectl/helm usable without sudo. Idempotent; needs sudo.
 #
-# EVERYTHING ELSE is in the Helm chart (chart/Chart.yaml dependencies +
-# templates) and comes up with `make k3s-up`: the NVIDIA device-plugin, KubeRay,
-# NATS, Dapr, Kueue, OpenFGA, Postgres, MinIO, and the rask fleet. k3s and helm
-# are the only things that can't live in a chart, so they're the only bootstrap.
+# EVERYTHING ELSE comes up with `make k3s-up`: the development fixtures (deploy/fixtures,
+# each its own release; the NVIDIA device plugin is one, for a GPU node), then the Helm
+# chart (chart/Chart.yaml dependencies + templates) with KubeRay, NATS, Dapr, Kueue,
+# OpenFGA, Postgres, MinIO and the rask fleet. k3s and helm are the only bootstrap.
 #
 # Host prerequisite for the GPU: nvidia-container-toolkit (nvidia-ctk) installed,
 # so k3s auto-detects the nvidia containerd runtime.

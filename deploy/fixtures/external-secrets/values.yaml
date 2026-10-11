@@ -1,0 +1,3 @@
+# The operator's CRDs come with its release: ExternalSecret and the Password generator are the APIs the rask chart
+# refuses to render without.
+installCRDs: true

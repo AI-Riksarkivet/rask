@@ -61,16 +61,16 @@ The ONE store's root identity is minio.accessKey (a value) and the store's `mini
 `ray.gpuCount` is the single fact every GPU-shaped decision in this chart derives from. It exists
 because a live kind run (2026-07-28, defects 3 + 6) needed FOUR
 manual overrides to make a GPU-less estate coherent — ray.gpuCount=0, config.RASK_SERVE_GPU_FRAC=0,
-ray.runtimeClassName="" and nvdp off — and getting any one of them wrong wedged the deploy with no
+ray.runtimeClassName="" and the device plugin off — and getting any one of them wrong wedged the deploy with no
 diagnostic (the RayService stayed `Initializing`, so no stable head Service ever appeared and the
 compute zone read "Ray offline" beside a perfectly healthy head).
 
-Derived from it: the head's `num-gpus` rayStartParam + `nvidia.com/gpu` limit, the nvidia
-RuntimeClass (runtimeclass.yaml), the htrflow Serve actor's GPU fraction (rask.serveGpuFrac, fed to
+Derived from it: the head's `num-gpus` rayStartParam + `nvidia.com/gpu` limit, its
+`runtimeClassName`, the htrflow Serve actor's GPU fraction (rask.serveGpuFrac, fed to
 BOTH the fleet ConfigMap and the RayService serveConfigV2), and the Kueue ClusterQueue's
-nvidia.com/gpu nominalQuota. The ONE thing it cannot gate is the nvidia-device-plugin SUBCHART:
-Helm resolves `condition:` against a static values path and cannot compute `gpuCount > 0`, so that
-stays `nvdp.enabled` — kept honest by the fail-closed coherence guard in gpu-coherence.yaml.
+nvidia.com/gpu nominalQuota. The device plugin and the nvidia RuntimeClass object are not the
+chart's: the platform provides them, and in development the nvidia-device-plugin fixture does
+(deploy/fixtures, ADR 0153).
 
 "true" when this estate has GPUs at all; "" (falsey) otherwise.
 
