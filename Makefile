@@ -774,13 +774,15 @@ DROP_CREDENTIAL_VALUES := --set dapr.appToken=null --set frontend.oidc.sessionSe
 # The prerequisites a dev estate gets from deploy/fixtures, each its own release, installed before rask's
 # (NOT FOR PRODUCTION; deploy/fixtures/README.md). Dapr's control plane comes first after ESO, so its injector is
 # Ready before any pod that wants a sidecar exists; the NATS bus every pub/sub component dials follows. The CloudNativePG
-# operator serves the AGE-on-CNPG Cluster; its CRDs come from k3s-crds, which runs first. The Ray engine the cascade
+# operator serves the AGE-on-CNPG Cluster; its CRDs come from k3s-crds, which runs first. Dex is the dev OIDC issuer,
+# given the issuer and origin rask is given. The Ray engine the cascade
 # submits to is two of them, the operator first; observability is the store, dashboards and alerting rask's Collector
 # exports to. A GPU node with no device plugin yet adds nvidia-device-plugin.
-FIXTURES ?= external-secrets dapr nats cloudnative-pg kuberay-operator ray-cluster observability
+FIXTURES ?= external-secrets dapr nats cloudnative-pg dex kuberay-operator ray-cluster observability
 
 k3s-fixtures: ## Install the development fixtures (FIXTURES) as their own releases, before the rask chart
-	KUBECONFIG=$(KUBECONFIG) ./scripts/fixtures.sh $(FIXTURES)
+	KUBECONFIG=$(KUBECONFIG) ./scripts/fixtures.sh $(filter-out dex,$(FIXTURES))
+	$(if $(filter dex,$(FIXTURES)),KUBECONFIG=$(KUBECONFIG) ./scripts/fixtures.sh dex -- --set-string issuer=$(DEV_ISSUER) --set-string publicOrigin=$(DEV_ORIGIN))
 
 k3s-crds: ## Apply the vendored CRDs no release owns (see chart/.helmignore), before the cloudnative-pg fixture
 	@# Server-side apply: the CNPG CRD set exceeds kubectl's client-side annotation limit.

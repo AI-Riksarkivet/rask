@@ -843,8 +843,6 @@ security:
     age: { runAsUser: 999, fsGroup: 999 } # postgres official image uid/gid
     # -- uid/fsGroup for the OpenBao pod (image uid 100).
     openbao: { runAsUser: 100, fsGroup: 1000 } # hashicorp vault-family image uid
-    # -- uid/fsGroup for the Dex pod.
-    dex: { runAsUser: 1001, fsGroup: 1001 }
 
 # === Network isolation (opt-in; requires a policy-enforcing CNI e.g. Calico/Cilium) ===============
 # k3s's default kindnet/flannel does NOT enforce NetworkPolicy, so this is a no-op there — it is prod
@@ -3484,39 +3482,27 @@ age:
     # -- The built AGE extension image for the CNPG cluster (e.g. ghcr.io/<org>/age-cnpg-ext:1.7.0-18); required when `cnpgCluster.enabled`, no default.
     extensionImage: ""
 
-# === Dex (first-party template) — OIDC issuer for the governed demo ================================
+# === Dex — the development OIDC issuer, a fixture (deploy/fixtures/dex) ===========================
 dex:
-  # -- Run the first-party Dex OIDC issuer (templates/dex.yaml) for the governed demo.
+  # -- This estate uses the development Dex (deploy/fixtures/dex, Service `<release>-dex`): the ingress serves it at /dex, its publisher password is seeded into the dev store, and a real deployment refuses it. The chart renders no Dex.
   enabled: true
-  # -- Dex container image.
-  image: ghcr.io/dexidp/dex:v2.42.0
-  # -- HTTP port Dex listens on and its Service exposes.
+  # -- Port of the development Dex's Service.
   port: 5556
   # -- OIDC issuer URL Dex serves and services trust (`RASK_OIDC_ISSUER`); a non-https issuer sets `RASK_OIDC_ALLOW_INSECURE=true`.
   issuer: http://rask-dex:5556/dex # in-cluster issuer (matches the OIDC config)
-  # A static client + a static password (demo only).
-  # -- Static Dex OIDC client id; also the audience services check (`RASK_OIDC_AUDIENCE`) and the client MinIO's OIDC provider uses.
+  # -- The development Dex's static client id; also the audience services check (`RASK_OIDC_AUDIENCE`) and the client MinIO's OIDC provider uses.
   clientId: lance-catalog
-  # -- Static Dex client secret (demo value); seeded into OpenBao as `publisher-oidc-client-secret`.
+  # -- The development Dex's static client secret (demo value); seeded into OpenBao as `publisher-oidc-client-secret`.
   clientSecret: lance-catalog-secret
-  # -- Email of the demo static Dex user; its password hash is fixed in templates/dex.yaml.
-  staticUser: alice@example.com
   # The publish saga's SERVICE ACCOUNT (dex has no client-credentials grant, so machine identity is
   # a dedicated password-grant user). The annotator mints a FRESH token per publish with it — the
   # password never rides pod env: it is seeded into OpenBao and fetched through the Dapr secret
-  # store, fail-closed. `passwordHash` is bcrypt of `password` (demo default: "password").
+  # store, fail-closed. The fixture holds its bcrypt hash.
   publisher:
     # -- Login email of the publish saga's service account; the annotator mints a fresh token with it per publish.
     username: publisher@rask.internal
-    # -- Stable Dex user id (the token subject) of the publish saga's service account.
-    userID: "7f2a9c41-5b8e-4d16-a3f7-9e0c1d2b3a45"
-    # -- Plain password of the publish saga's service account, seeded into OpenBao; must match `passwordHash` (demo default `password`).
+    # -- Plain password of the publish saga's service account, seeded into OpenBao; must match the hash the development Dex holds (demo default `password`).
     password: password
-    # -- bcrypt hash of `dex.publisher.password`, written into Dex's static passwords.
-    passwordHash: "$2b$10$TsVVN0.5g.XntmJAGNuXF.gyhwQZgmgjmkevKxTa48M7k06J./53G"
-  # NOTE: the demo password is NOT set here — Dex needs a bcrypt HASH, which Helm can't compute at render.
-  # It's hardcoded in templates/dex.yaml (staticPasswords[].hash = bcrypt of "password"). To change it,
-  # regenerate the hash (e.g. `htpasswd -bnBC 10 "" <pw> | tr -d ':\n'`) and edit that template.
 
 # === OpenBao (first-party template) — secret store, fronted by Dapr secretstores.* ==================
 openbao:

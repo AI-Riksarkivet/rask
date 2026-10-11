@@ -235,7 +235,7 @@ outnumbered `GET /api/health` three to one.
 lance-ns — grafted verbatim from lance-ns main@083b49a chart/templates/_helpers.tpl.
 
 Every one of these is referenced by a grafted lance template (services.yaml, medallion.yaml,
-compaction.yaml, media.yaml, gateway.yaml, minio-buckets.yaml, openbao.yaml, dex.yaml, age-postgres.yaml,
+compaction.yaml, media.yaml, gateway.yaml, minio-buckets.yaml, openbao.yaml, age-postgres.yaml,
 otel-collector.yaml, network-policy.yaml, ha.yaml, runners.yaml, …). None of them
 was renamed: no lance name collided with a rask name.
 

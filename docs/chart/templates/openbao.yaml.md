@@ -94,7 +94,7 @@ Service or minted, then every user of the table issued afresh under that root, t
 
 EVERY GENERATED VALUE REACHES THE STORE AS `@file`, never argv, output or the render ([[XC-004]]):
 the dev credentials from the ESO-generated Secret, and what is derived from them from files
-written here. The two Dex values are the bundled IdP's own (dex.yaml carries them, XC-025).
+written here. The two Dex values are the development IdP's own (deploy/fixtures/dex holds them, XC-025).
 
 ## `fingerprint() {`
 

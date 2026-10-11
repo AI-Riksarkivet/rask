@@ -215,12 +215,13 @@ grep -q -- "- minio-mkbucket" "$OUT" || fail "the minio ingress client list must
 # POD IDENTITY. Asserted on the RENDER: a template that stops naming its SA is invisible to any values
 # grep. Counted, not merely found: one dedicated ServiceAccount proves the SAs render, not that the
 # fleet uses them. Measured on this overlay 2026-10-11, with the prerequisites outside the release
-# (ADR 0153; NATS's two SAs are the bus's, [[XC-129]], and CloudNativePG's the operator's, [[XC-130]]): 28 ServiceAccounts and 24 `automountServiceAccountToken: false`. The per-pod verdict (no first-party pod on `default`, no idle
+# (ADR 0153; NATS's two SAs are the bus's, [[XC-129]], and CloudNativePG's the operator's, [[XC-130]], and the dev Dex's the fixture's, [[XC-131]]): 27 ServiceAccounts and 23
+# `automountServiceAccountToken: false`. The per-pod verdict (no first-party pod on `default`, no idle
 # token, no secret grant to their SAs) is
 # tests/unit/test_a_first_party_pod_cannot_read_a_secret_through_the_kube_api.py.
 sa=$(grep -c "^kind: ServiceAccount" "$OUT" || true)
-[ "$sa" -ge 28 ] \
-  || fail "prod must give the fleet dedicated ServiceAccounts (templates/security-sa.yaml), rendered $sa (>=28 expected; 18 is the everything-runs-as-default baseline)"
+[ "$sa" -ge 27 ] \
+  || fail "prod must give the fleet dedicated ServiceAccounts (templates/security-sa.yaml), rendered $sa (>=27 expected; 18 is the everything-runs-as-default baseline)"
 automount=$(grep -c "automountServiceAccountToken: false" "$OUT" || true)
 [ "$automount" -ge 15 ] \
   || fail "prod must stop mounting the SA token into app pods, rendered $automount refusals (>=15 expected; 1 is the baseline)"

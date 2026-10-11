@@ -99,9 +99,9 @@ second case. Kueue's upstream docs only ever install it as its own release in `k
 - **What leaves the chart lands in `deploy/fixtures/`** (ADR 0153, [[XC-124]]): one directory per prerequisite, an
   upstream chart pinned in `fixture.env`, installed as its own release by `scripts/fixtures.sh` before rask's
   (`make k3s-fixtures`, a prerequisite of `make k3s-up`; `FIXTURES` names which, default `external-secrets dapr nats
-  cloudnative-pg kuberay-operator ray-cluster observability`: Dapr's control plane in dapr-system ([[XC-128]]), the NATS
+  cloudnative-pg dex kuberay-operator ray-cluster observability`: Dapr's control plane in dapr-system ([[XC-128]]), the NATS
   JetStream bus `rask-nats` in rask's namespace that `nats.url` names ([[XC-129]]), the CloudNativePG operator in
-  cnpg-system that the AGE-on-CNPG `Cluster` needs, its CRDs still applied by `make k3s-crds` first ([[XC-130]]), the dev Ray engine
+  cnpg-system that the AGE-on-CNPG `Cluster` needs, its CRDs still applied by `make k3s-crds` first ([[XC-130]]), the dev OIDC issuer `rask-dex` ([[XC-131]]), the dev Ray engine
   ([[XC-125]]) and the telemetry chain the Collector exports to ([[XC-127]]); a GPU node with no device plugin yet adds `nvidia-device-plugin`). A fixture's `SET_FILES` passes an
   artefact from outside its chart with `--set-file` (the alert rules), and a local fixture chart with upstream
   `dependencies:` is vendored from its own `Chart.lock` (`scripts/fixtures.sh --vendor`, run by `make k3s-deps`, so a

@@ -44,7 +44,7 @@ Services (ClusterIP):
 {{- end }}
 {{- with .Values.dex }}
 {{- if .enabled }}
-  - dex:       {{ include "lance.dexHost" $root }}:5556 (OIDC issuer; served on the app origin at /dex)
+  - dex:       {{ include "lance.dexHost" $root }}:5556 (the dex fixture's OIDC issuer; served on the app origin at /dex)
 {{- end }}
 {{- end }}
 

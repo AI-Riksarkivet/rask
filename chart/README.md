@@ -106,17 +106,13 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | dapr.workflowRetention.enabled | bool | `true` | Render a Dapr workflow `stateRetentionPolicy`, the only thing that purges workflow history; false means history grows unbounded. |
 | dapr.workflowRetention.failed | string | `"720h"` | How long a failed workflow's history is kept for post-mortems, as a positive h or m duration of at least 1h; default 720h. |
 | dapr.workflowRetention.terminated | string | `"720h"` | How long a terminated workflow's history is kept, as a positive h or m duration of at least 1h; default 720h (30 days). |
-| dex.clientId | string | `"lance-catalog"` | Static Dex OIDC client id; also the audience services check (`RASK_OIDC_AUDIENCE`) and the client MinIO's OIDC provider uses. |
-| dex.clientSecret | string | `"lance-catalog-secret"` | Static Dex client secret (demo value); seeded into OpenBao as `publisher-oidc-client-secret`. |
-| dex.enabled | bool | `true` | Run the first-party Dex OIDC issuer (templates/dex.yaml) for the governed demo. |
-| dex.image | string | `"ghcr.io/dexidp/dex:v2.42.0"` | Dex container image. |
+| dex.clientId | string | `"lance-catalog"` | The development Dex's static client id; also the audience services check (`RASK_OIDC_AUDIENCE`) and the client MinIO's OIDC provider uses. |
+| dex.clientSecret | string | `"lance-catalog-secret"` | The development Dex's static client secret (demo value); seeded into OpenBao as `publisher-oidc-client-secret`. |
+| dex.enabled | bool | `true` | This estate uses the development Dex (deploy/fixtures/dex, Service `<release>-dex`): the ingress serves it at /dex, its publisher password is seeded into the dev store, and a real deployment refuses it. The chart renders no Dex. |
 | dex.issuer | string | `"http://rask-dex:5556/dex"` | OIDC issuer URL Dex serves and services trust (`RASK_OIDC_ISSUER`); a non-https issuer sets `RASK_OIDC_ALLOW_INSECURE=true`. |
-| dex.port | int | `5556` | HTTP port Dex listens on and its Service exposes. |
-| dex.publisher.password | string | `"password"` | Plain password of the publish saga's service account, seeded into OpenBao; must match `passwordHash` (demo default `password`). |
-| dex.publisher.passwordHash | string | `"$2b$10$TsVVN0.5g.XntmJAGNuXF.gyhwQZgmgjmkevKxTa48M7k06J./53G"` | bcrypt hash of `dex.publisher.password`, written into Dex's static passwords. |
-| dex.publisher.userID | string | `"7f2a9c41-5b8e-4d16-a3f7-9e0c1d2b3a45"` | Stable Dex user id (the token subject) of the publish saga's service account. |
+| dex.port | int | `5556` | Port of the development Dex's Service. |
+| dex.publisher.password | string | `"password"` | Plain password of the publish saga's service account, seeded into OpenBao; must match the hash the development Dex holds (demo default `password`). |
 | dex.publisher.username | string | `"publisher@rask.internal"` | Login email of the publish saga's service account; the annotator mints a fresh token with it per publish. |
-| dex.staticUser | string | `"alice@example.com"` | Email of the demo static Dex user; its password hash is fixed in templates/dex.yaml. |
 | docs.enabled | bool | `false` | Serves /docs, /redoc and /openapi.json on every app in the release, the gateway included. Off by default; turn on only for a dev cluster. |
 | encoders.embedUrl | string | `""` | Base URL of the OpenAI-shaped embedding server search calls and viewer probes (MEDIA_EMBED_URL). Empty = vector search modes report unavailable. |
 | encoders.rerankUrl | string | `""` | Base URL of the OpenAI-shaped reranker server (MEDIA_RERANK_URL). Empty = the rerank leg reports unavailable. |
@@ -362,7 +358,6 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | runners.jobsUrl | string | `""` | RayJob submit endpoint for the annotator's batch-labeling seam (MEDIA_JOBS_URL). Empty = the annotator keeps its submit/poll mock. |
 | secrets.hfTokenInStore | bool | `false` | True once the Hugging Face token is in the secret store at `<kvMount>/hf-token`; renders the `<release>-hf-token` ExternalSecret. False starts Ray pods without HF_TOKEN. |
 | security.infraContexts.age | object | `{"fsGroup":999,"runAsUser":999}` | uid/fsGroup for the AGE Postgres pod (postgres image uid/gid 999). |
-| security.infraContexts.dex | object | `{"fsGroup":1001,"runAsUser":1001}` | uid/fsGroup for the Dex pod. |
 | security.infraContexts.enabled | bool | `false` | Applies pinned runAsUser/fsGroup securityContexts to the infra pods (object store, AGE, OpenBao, Dex). Off by default. |
 | security.infraContexts.minio | object | `{"fsGroup":1000,"runAsUser":1000}` | uid/fsGroup for the object store pod; runAsUser must match the image's data owner (1000) or every write fails. |
 | security.infraContexts.openbao | object | `{"fsGroup":1000,"runAsUser":100}` | uid/fsGroup for the OpenBao pod (image uid 100). |

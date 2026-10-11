@@ -676,6 +676,20 @@ def test_every_bus_client_dials_the_bus_the_estate_names_and_the_render_runs_non
     assert not bus, f"the render runs part of a NATS bus, which is the platform's: {bus}"
 
 
+@pytest.mark.parametrize("stand_in", ["dex"])
+def test_the_render_runs_no_development_stand_in(stand_in: str) -> None:
+    """[[XC-131]]: the development stand-ins are fixtures (ADR 0153), so a render with every gate that names one on
+    (`dex.enabled`) runs no pod of it and serves none; rask reaches each by its endpoint."""
+    docs = chart_render.render(*chart_render.DEFAULT_ARGS, "--set", "auth.enabled=true")
+    found = [
+        f"{doc['kind']}/{doc['metadata']['name']}"
+        for doc in docs
+        if (doc.get("kind") in {"Deployment", "StatefulSet"} and doc["spec"]["template"]["metadata"]["labels"].get("app.kubernetes.io/component") == stand_in)
+        or (doc.get("kind") == "Service" and (doc["spec"].get("selector") or {}).get("app.kubernetes.io/component") == stand_in)
+    ]
+    assert not found, f"the render runs the development {stand_in}, which is a fixture: {found}"
+
+
 # `test_the_kubelet_probes_the_inbox_on_a_path_the_service_actually_serves` lived here and is GONE,
 # subsumed rather than deleted for tidiness: `tests/unit/test_probe_paths_are_served.py` asks the same
 # question — is every path the chart probes one the app actually mounts — of every first-party app in

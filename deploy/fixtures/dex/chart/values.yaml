@@ -1,0 +1,29 @@
+# NOT FOR PRODUCTION (deploy/fixtures/README.md).
+
+# -- The Service and Deployment name: what rask's `lance.dexHost` dials for release `rask`.
+name: rask-dex
+image: ghcr.io/dexidp/dex:v2.42.0
+port: 5556
+# The issuer Dex serves, rask's default `dex.issuer`; `make k3s-fixtures` passes DEV_ISSUER, as it does to rask.
+issuer: http://rask-dex:5556/dex
+# The origin of rask's zones, whose OIDC callback is `<publicOrigin>/auth/callback`; empty registers none, as rask's
+# default `frontend.oidc.publicOrigin` is. `make k3s-fixtures` passes DEV_ORIGIN.
+publicOrigin: ""
+# The static client; rask's `dex.clientId` is the audience its services check and `dex.clientSecret` the secret it seeds.
+clientId: lance-catalog
+clientSecret: lance-catalog-secret
+# Two demo identities with one password, so the governed demo shows an allow and a deny: alice creates a table and is
+# granted it, bob is refused reading it. The hash is bcrypt of "password".
+users:
+  - { email: alice@example.com, username: alice, userID: 08a8684b-db88-4b73-90a9-3cd1661f5466 }
+  - { email: bob@example.com, username: bob, userID: 1b6e2f5a-7c4d-4e9b-9f1a-2d3c4b5a6e7f }
+passwordHash: "$2b$10$TsVVN0.5g.XntmJAGNuXF.gyhwQZgmgjmkevKxTa48M7k06J./53G"
+# The publish saga's service account: Dex has no client-credentials grant, so the annotator mints a token per publish
+# with this password-grant user. rask seeds its plain password (`dex.publisher.password`) into its store.
+publisher:
+  username: publisher@rask.internal
+  userID: 7f2a9c41-5b8e-4d16-a3f7-9e0c1d2b3a45
+  passwordHash: "$2b$10$TsVVN0.5g.XntmJAGNuXF.gyhwQZgmgjmkevKxTa48M7k06J./53G"
+resources:
+  requests: { cpu: 50m, memory: 128Mi }
+  limits: { cpu: "1", memory: 512Mi }

@@ -1,0 +1,98 @@
+{{- $labels := dict "app.kubernetes.io/name" "dex" "app.kubernetes.io/instance" .Release.Name "app.kubernetes.io/component" "dex" }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Values.name }}
+  labels: {{- toYaml $labels | nindent 4 }}
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Values.name }}
+  labels: {{- toYaml $labels | nindent 4 }}
+data:
+  config.yaml: |
+    issuer: {{ .Values.issuer }}
+    storage:
+      type: memory
+    web:
+      http: 0.0.0.0:{{ .Values.port }}
+    oauth2:
+      skipApprovalScreen: true
+      passwordConnector: local
+    enablePasswordDB: true
+    staticPasswords:
+      {{- range .Values.users }}
+      - email: {{ .email | quote }}
+        hash: {{ $.Values.passwordHash | quote }}
+        username: {{ .username }}
+        userID: {{ .userID | quote }}
+      {{- end }}
+      - email: {{ .Values.publisher.username | quote }}
+        hash: {{ .Values.publisher.passwordHash | quote }}
+        username: publisher
+        userID: {{ .Values.publisher.userID | quote }}
+    staticClients:
+      - id: {{ .Values.clientId }}
+        name: Lance Catalog
+        secret: {{ .Values.clientSecret }}
+        public: true
+        redirectURIs:
+          - http://localhost:8080/callback
+          {{- with .Values.publicOrigin }}
+          - {{ . | trimSuffix "/" }}/auth/callback
+          {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.name }}
+  labels: {{- toYaml $labels | nindent 4 }}
+spec:
+  ports:
+    - { name: http, port: {{ .Values.port }}, targetPort: {{ .Values.port }} }
+  selector: {{- toYaml $labels | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Values.name }}
+  labels: {{- toYaml $labels | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {{- toYaml $labels | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- toYaml $labels | nindent 8 }}
+      annotations:
+        # Dex reads its config at boot only, so a config change must roll the pod.
+        checksum/config: {{ omit .Values "resources" | toYaml | sha256sum }}
+    spec:
+      serviceAccountName: {{ .Values.name }}
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: dex
+          image: {{ .Values.image }}
+          args: ["dex", "serve", "/etc/dex/config.yaml"]
+          ports:
+            - { name: http, containerPort: {{ .Values.port }} }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: config, mountPath: /etc/dex }
+          readinessProbe:
+            httpGet: { path: /dex/.well-known/openid-configuration, port: {{ .Values.port }} }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources: {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: config
+          configMap: { name: {{ .Values.name }} }

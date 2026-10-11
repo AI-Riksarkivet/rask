@@ -65,6 +65,16 @@ The version rask is tested against is in `deploy/fixtures/cloudnative-pg` (the d
 release `cloudnative-pg` in `cnpg-system`): chart 0.28.3, operator 1.29.1, CRDs applied server-side from
 `chart/crds-bootstrap/` by `make k3s-crds` before it. The path itself needs CNPG >= 1.27 and Kubernetes 1.33+.
 
+## Development stand-ins
+
+A real deployment brings its own identity provider, and the chart takes it by reference (`frontend.oidc.publicIssuer`,
+`dex.issuer`, `dex.clientId`). Development runs a stand-in from `deploy/fixtures` (ADR 0153), and the chart renders
+none of it:
+
+- **Dex** (`deploy/fixtures/dex`, release `dex`, Service `rask-dex`): the OIDC issuer with the demo users and rask's
+  static client. `dex.enabled` says the estate uses it: the ingress serves it at `/dex`, the publisher's password is
+  seeded into the dev store, and a real deployment's render refuses it.
+
 ## Local deploy (k3s)
 
 ```bash
