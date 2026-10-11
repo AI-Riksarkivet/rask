@@ -13,9 +13,9 @@ the ordinary prod control, and the reason anyone audits this — REJECTS a pod w
 no requests. The fleet would come up and the release would never converge, because the bootstrap Jobs
 that create the buckets, the streams and the OpenFGA schema would never be admitted.
 
-FOUR JOB TEMPLATES ALREADY DO THIS (bootstrap-admin, dapr-inject-sweep, greptimedb-ttl-job,
-kueue-queues), each with an inline block sized to its own work. This gate is what makes the fifth
-inherit the rule instead of relearning it.
+THE JOB TEMPLATES ALREADY DO THIS (bootstrap-admin, dapr-inject-sweep, greptimedb-ttl-job), each with an
+inline block sized to its own work. This gate is what makes the next one inherit the rule instead of
+relearning it.
 
 BOTH OVERLAYS ARE RENDERED because neither alone sees every Job: the prod overlay renders the two
 backup CronJobs and the default overlay renders the OpenBao seed. A container is covered if either

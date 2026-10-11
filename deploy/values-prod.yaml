@@ -279,6 +279,6 @@ observability:
 # observability (OpenTelemetry Collector):           # ship telemetry to an off-cluster / OTel-operator Collector
 #   enabled: false                                   # apps + Dapr still emit OTLP (otelEnabled tracks the endpoint,
 #   externalOtlpEndpoint: http://otel-collector.observability:4318/v1/otlp # not just observability.enabled)
-# GPU metrics (NVIDIA DCGM operator): net-new, rides in with KubeRay+Kueue for GPU training — the dcgm-exporter
+# GPU metrics (NVIDIA DCGM operator): the engine's, beside its KubeRay and Kueue (ADR 0153) — the dcgm-exporter
 # is node-level infra (a DaemonSet the DCGM operator owns), scraped by the OTel Collector's prometheus receiver
 # (the same one that takes the Dapr sidecars). Nothing to flip in this chart until GPU Ray workers land.

@@ -81,14 +81,13 @@ die() {
 	exit 1
 }
 
-# The slice A11 needs, and nothing else. The full chart renders 277 objects including a GPU device
-# plugin, Kueue, GreptimeDB and a Ray cluster — none of which the lane touches, all of which cost
+# The slice A11 needs, and nothing else. The full chart renders observability (GreptimeDB, Perses), the
+# frontend zones and more — none of which the lane touches, all of which cost
 # minutes of pull and schedule time. Disabling them is not a shortcut: it is the difference between
 # a verification anyone will run and one nobody will.
 lane_values() {
 	cat <<-'YAML'
 		ray: {enabled: false}
-		kueue: {enabled: false}
 		observability: {enabled: false}
 		frontend: {enabled: false}
 		# The medallion IS the cascade — its producer owns /bronze-arrival (the head that turns a

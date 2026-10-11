@@ -1,5 +1,5 @@
 
-{{- $components := list "catalog" "lineage" "web" "maintenance" "medallion-producer" "minio" "age" "openbao" "dex" "jobs" "viewer" "search" "annotator" "assist" "vmalert" "alertmanager" "issuer-mirror" }}
+{{- $components := list "catalog" "lineage" "web" "maintenance" "medallion-producer" "minio" "age" "openbao" "dex" "jobs" "viewer" "search" "annotator" "assist" "vmalert" "alertmanager" "issuer-mirror" "hooks" }}
 {{- range $name, $_ := .Values.services }}
 {{- if not (has $name $components) }}
 {{- $components = append $components $name }}
@@ -17,17 +17,6 @@ metadata:
   labels: {{- include "lance.labels" $ | nindent 4 }}
 automountServiceAccountToken: false
 {{- end }}
----
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: {{ include "lance.fullname" . }}-sa-hooks
-  labels: {{- include "lance.labels" . | nindent 4 }}
-  annotations:
-    "helm.sh/hook": post-install,pre-upgrade,post-upgrade
-    "helm.sh/hook-weight": "-10"
-    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
-automountServiceAccountToken: false
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

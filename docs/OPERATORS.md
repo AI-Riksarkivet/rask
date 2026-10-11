@@ -51,8 +51,9 @@ already has an owner.
 
 ## 2 · How rask helps (short version: with all of it)
 
-rask **already operates every operator above** — KubeRay, Kueue, CloudNativePG, rustfs-operator —
-plus NATS, Dapr, OpenFGA-server, Traefik, and the GreptimeDB observability stack
+KubeRay and Kueue are not rask's: they are the engine owner's (ADR 0153; in development the kuberay-operator
+fixture, and Kueue the cluster's own). rask's chart operates CloudNativePG, rustfs-operator,
+NATS, Dapr, OpenFGA-server, Traefik, and the GreptimeDB observability stack
 (`RASK-INTEGRATION.md` §Pre-flight). So the adoption plan is NOT "install operators here"; it is the
 merge itself: flip `age.enabled`/`rustfs.enabled` off, point the externalization values at
 `<release>-postgres-rw` / the rustfs `Tenant`, and retire the raw Ray head into rask's KubeRay

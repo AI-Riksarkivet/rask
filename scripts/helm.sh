@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # The ONE seam every helm call goes through — the same role scripts/dagger-image.sh plays for builds.
 #
-# WHY THIS EXISTS. Helm embeds the whole chart in every revision, and ~880 KB of chart/charts/*.tgz is
-# already-compressed archives gzip cannot shrink, so on 2026-08-15 the release SECRET crossed
-# Kubernetes' hard 1 MiB object limit (v28 964 KB -> v35 1,048.5 KB against a 1,024 KB ceiling) and no
-# upgrade could be stored at all. The release moved to POSTGRES.
+# WHY THIS EXISTS. Helm stores every revision in ONE Secret, which Kubernetes caps at 1 MiB, and on
+# 2026-08-15 the release crossed it (v28 964 KB -> v35 1,048.5 KB) so no upgrade could be stored at all;
+# the release moved to POSTGRES. What fills a revision is the manifest and the chart's own templates and
+# files; chart/charts/*.tgz is never stored (rask-helm skill, section 1).
 #
 # THE SECRET STORE IS AUTHORITATIVE AGAIN — owner ruling 2026-09-08, after both stores were found
 # holding `rask` and disagreeing (SQL rev 42, 2026-08-28; Secret rev 108, 2026-09-07). Everything since

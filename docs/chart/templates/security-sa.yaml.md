@@ -14,13 +14,16 @@ fleet service cannot name an SA this file did not render, and a pod names its SA
 prefix (lance.fullname), which follows the release name where rask.fullname does not. Pinned by
 tests/unit/test_a_first_party_pod_cannot_read_a_secret_through_the_kube_api.py.
 
-## `apiVersion: v1`
+## `"hooks"` in the component list
 
-The identity of the hooks that run BEFORE the release manifest (openfga-model, minio-scoped-users).
-Helm applies the manifest after its pre-upgrade hooks, so an ordinary SA does not exist yet on the
-upgrade that introduces it, and the hook's pod is refused at admission until the upgrade times out
-(measured 2026-10-02, rev 259: `serviceaccount "rask-sa-jobs" not found`). A hook of its own at a
-lower weight exists in every phase they run in; kueue-queues.yaml does the same.
+`<release>-sa-hooks`, the identity of the hooks that run before the release manifest (openfga-model at
+pre-upgrade, minio-scoped-users), is an ORDINARY ServiceAccount: an identity is never a hook ([[XC-126]]). A
+hook-shaped SA, Role or binding has a lifecycle of its own, deleted by `hook-succeeded` while a failed hook's pod
+still holds its token, so every later hook on it is refused, and it does not exist between upgrades. An ordinary SA
+exists from the revision that introduces it on, so a pre-upgrade hook on any later upgrade finds it. The one upgrade
+that introduces an ordinary SA runs its pre-upgrade hooks before the manifest creates it (measured 2026-10-02, rev
+259: `serviceaccount "rask-sa-jobs" not found`): create it once beforehand and let `make k3s-up`'s
+`--take-ownership` adopt it. Pinned by tests/unit/test_a_first_party_pod_cannot_read_a_secret_through_the_kube_api.py.
 
 ## `apiVersion: rbac.authorization.k8s.io/v1`
 

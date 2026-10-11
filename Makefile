@@ -688,7 +688,7 @@ KUBECTL ?= KUBECONFIG=$(KUBECONFIG) kubectl
 # source because the upstream images refuse anonymous pulls ([[XC-075]]).
 K3S_IMAGES = $(COMPOSE_IMAGES) $(ZONES:%=web-%) ray-cluster lance-rest-catalog minio
 
-# Subchart repos (Chart.yaml dependencies). OCI deps (kueue) need no repo add.
+# Subchart repos (Chart.yaml dependencies). An OCI dependency would need no repo add.
 K3S_DEP_REPOS = nats=https://nats-io.github.io/k8s/helm/charts/ \
                 dapr=https://dapr.github.io/helm-charts/ \
                 openfga=https://openfga.github.io/helm-charts \
@@ -975,8 +975,8 @@ kind-images: k3s-build ## Build the full :dev image set (same builds k3s uses �
 kind-load: ## Side-load the :dev image set into the kind cluster
 	$(KIND) load docker-image $(foreach i,$(KIND_IMAGES),$(i):dev) --name $(KIND_CLUSTER)
 
-# Third-party images the chart pulls (dapr x5, nats, openfga, cnpg, greptimedb, perses, kuberay,
-# kueue, dex, openbao, otel-collector, …). kind's containerd is a SEPARATE image store from the
+# Third-party images the chart pulls (dapr x5, nats, openfga, cnpg, greptimedb, perses,
+# dex, openbao, otel-collector, …). kind's containerd is a SEPARATE image store from the
 # host's docker, so a fresh cluster re-pulls every one of them from the internet — ~20 minutes of
 # pure network before a single app pod starts. The host docker cache, by contrast, persists across
 # clusters: pull once here, side-load, and every later cluster starts in seconds. Derived from the

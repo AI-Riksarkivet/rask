@@ -5,9 +5,6 @@ dependencies:
 - name: dapr
   repository: https://dapr.github.io/helm-charts/
   version: 1.18.1
-- name: kueue
-  repository: oci://registry.k8s.io/kueue/charts
-  version: 0.18.1
 - name: openfga
   repository: https://openfga.github.io/helm-charts
   version: 0.3.12
@@ -20,5 +17,5 @@ dependencies:
 - name: perses
   repository: https://perses.github.io/helm-charts
   version: 0.22.0
-digest: sha256:25e017a05ff4011c15d22dc2d34e7fa0e0f63c208988c1b10f8dce4d8f4651da
-generated: "2026-10-11T15:28:45.314453062+02:00"
+digest: sha256:1bc48bcdbae978613499d8c0cd8a16ee7ce8b1bbcda2a0fcafb983846d0f1bc7
+generated: "2026-10-11T17:06:02.166218087+02:00"

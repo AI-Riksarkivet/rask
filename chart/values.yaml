@@ -825,7 +825,7 @@ security:
   # POD IDENTITY is not a value. Every first-party workload runs as its own ServiceAccount
   # (templates/security-sa.yaml), tokenless on the SA object. A first-party pod holds a Kubernetes API
   # token only when its SA carries a grant it uses: OpenBao under ESO, and the RBAC-bound controlplane,
-  # Collector, Dapr dashboard, snapshot, injection-sweep and Kueue-setup pods (measured on the render
+  # Collector, Dapr dashboard, snapshot and injection-sweep pods (measured on the render
   # 2026-10-02). `default` is the identity every
   # unnamed pod in the namespace shares, and the Dapr subchart grants it `secrets: get` unless told
   # not to (dapr.dapr_rbac below). Pinned by
@@ -1541,18 +1541,6 @@ medallion:
   # this on and neither present the render fails, rather than submitting to a Service nothing creates.
   # -- Stage runners submit their transform as a Ray job (MEDALLION_RAY_ENABLED) to the estate's one Ray dashboard; the render fails if no Ray address is configured.
   ray: true
-  # The Kueue LocalQueue a submitted RayJob is admitted through (§7.4 step 4). Empty means no
-  # admission control and the CR is created unlabelled AND unsuspended — deliberately, and the two go
-  # together: Kueue admits by UNSUSPENDING, so a workload created running has already bypassed the
-  # admission its label asked for, while a label naming a queue that does not exist parks every job
-  # forever with nothing saying why.
-  #
-  # Inert while the medallion submits through the Ray Jobs API, which is every deployment today: the
-  # RayJob CR path this admitted was deleted 2026-09-15 (owner decision) because nothing called it.
-  # Kept because Kueue admission is what any future CR-shaped submitter would need, and the queue is a
-  # chart-level fact rather than a submitter-level one.
-  # -- Kueue LocalQueue a submitted RayJob would be admitted through. No template reads it: the medallion submits through the Ray Jobs API. Empty = no admission control.
-  kueueQueue: ""
   # WHAT THIS ESTATE'S RAY PLANE CAN RUN. The producer registers each of these into
   # `<control_root>/_tasks/` at boot, and the catalog's transform door refuses a declaration naming a
   # task nobody registered — so an unrunnable transform is a 422 at declaration instead of an
@@ -3433,41 +3421,6 @@ dapr:
     # And independently of both, do NOT disable either — daprd 1.18 connects to BOTH at startup
     # unconditionally and never becomes Ready without them (verified live — sidecars stuck 1/2 with
     # "no such host: dapr-placement-server / dapr-scheduler-server-a").
-
-kueue:
-  # -- Installs the Kueue subchart (Chart.yaml condition) that admits GPU workloads against the ClusterQueue quota.
-  enabled: true
-  # Default queue topology (ResourceFlavor + ClusterQueue + a LocalQueue in the
-  # release namespace). Kueue's admission webhooks are failurePolicy=Fail, so the
-  # queues can't be created until the controller's webhook endpoints exist — a
-  # post-install/post-upgrade hook Job therefore retries `kubectl apply` until it
-  # succeeds (templates/kueue-queues.yaml). Reference the queue from a workload
-  # with the label `kueue.x-k8s.io/queue-name: <localQueueName>`.
-  queues:
-    # -- Creates the default ResourceFlavor, ClusterQueue and LocalQueue through a post-install/upgrade hook Job (templates/kueue-queues.yaml).
-    enabled: true
-    # -- Image for the kueue-setup hook Job's containers, which wait for the Kueue webhook and `kubectl apply` the queues.
-    kubectlImage: "registry.k8s.io/kubectl:v1.31.3"
-    # -- Name of the ResourceFlavor the ClusterQueue quotas are declared under.
-    flavorName: "rask"
-    # -- Name of the cluster-wide ClusterQueue that holds the nominal quota.
-    clusterQueueName: "rask"
-    # -- Name of the LocalQueue in the release namespace; workloads reference it with the `kueue.x-k8s.io/queue-name` label.
-    localQueueName: "rask"
-    # Nominal quota for the single ClusterQueue cohort. cpu/memory: size to the
-    # cluster. nvidia.com/gpu MUST equal the total schedulable nvidia.com/gpu
-    # across all nodes — it is the single lever for how many projects transcribe
-    # at once: Kueue admits this many project RayServices (each claims a whole
-    # GPU) and suspends the rest. Dev = 1 GPU => 1 at a time; add GPU nodes and
-    # raise this to run more concurrently. Never set it above the real GPU count
-    # (Kueue would admit a pod that can't schedule).
-    nominalQuota:
-      # -- ClusterQueue nominal CPU quota; size it to the cluster.
-      cpu: "18"
-      # -- ClusterQueue nominal memory quota; size it to the cluster.
-      memory: "120Gi"
-      # -- ClusterQueue GPU quota; set to the total schedulable GPUs, never above. 0 on a GPU-less cluster.
-      "nvidia.com/gpu": "0"
 
 # === OpenFGA (subchart) — Zanzibar authz. lance-ns's values REPLACE rask's `engine: memory`: the
 # datastore is the AGE Postgres (it's just postgres), so grants survive a restart. -----------------

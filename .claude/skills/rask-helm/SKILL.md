@@ -81,6 +81,9 @@ second case. Kueue's upstream docs only ever install it as its own release in `k
 
 - **CNPG is the precedent** (`b56a49c9`, 2026-08-19): its 1.2 MB CRD file moved to
   `chart/crds-bootstrap/`, `.helmignore`d, applied out-of-band by `make k3s-crds`.
+- **Kueue left the chart ([[XC-126]])**, as BYO compute: its 11 CRDs, annotated keep and with their conversion
+  webhook repointed at `kueue-system/kueue-webhook-service`, are served by the cluster's own Kueue (not a rask
+  release, and no rask fixture). What follows is why it could not stay as a vendored copy.
 - **Kueue cannot follow it from inside the umbrella.** It templates its 11 CRDs under
   `templates/crd/` with no switch — 0.18.1 and 0.19.6 alike, and the upstream request to move them was
   closed as not-planned. The conversion webhook's service name and namespace are templated, so a
@@ -114,7 +117,8 @@ kubectl annotate crd <each crd> helm.sh/resource-policy=keep
 ```
 
 then hand them to the new owner (`helm install … --take-ownership`). CNPG's CRDs carry
-`resource-policy: keep` already; Kueue's do not.
+`resource-policy: keep` already, and Kueue's carried it before rask's release stopped rendering them
+([[XC-126]]).
 
 ## 4. Upgrade flags — `--reset-then-reuse-values`, never `--reuse-values`
 
@@ -198,14 +202,16 @@ catalog, lineage, maintenance, the medallion, OpenBao and Dex ran as `default` w
   renders it with, `lance.fullname` (the release name). `rask.fullname` is pinned to `rask` by
   `fullnameOverride`, so under any other release name the two diverge and the pod is refused at
   admission (measured 2026-10-02: 14 pods on a render as release `foo`).
-- **A hook that runs before the manifest runs as an SA that is itself a hook.** Helm applies the release
-  after its `pre-upgrade` hooks, so an ordinary SA does not exist yet on the upgrade that introduces it:
-  the hook's pod is refused at admission and the upgrade waits out its whole timeout. Measured
-  2026-10-02 on rev 259: `openfga-model` (`pre-upgrade`) on `rask-sa-jobs` held the release in
-  `pending-upgrade` with `serviceaccount "rask-sa-jobs" not found`. `rask-sa-hooks` is a hook at weight
-  -10 in every phase those hooks run in, as `kueue-queues.yaml`'s setup SA already was. A hook SA with
-  `hook-succeeded` exists only during its own phases, so a post-* hook needs that phase listed too, and
-  no ordinary release resource may name it.
+- **An identity is never a hook** ([[XC-126]]): no ServiceAccount, Role, ClusterRole or binding carries
+  `helm.sh/hook`. A hook-shaped identity is deleted by `hook-succeeded` while a failed hook's pod still holds
+  its token (every later hook on it 401s), and exists only during its own phases. `rask-sa-hooks`, the identity
+  of the pre-manifest hooks (`openfga-model`, `minio-scoped-users`), is an ordinary SA, so a `pre-upgrade` hook
+  finds it from the previous revision. The one upgrade that INTRODUCES an ordinary SA runs its `pre-upgrade`
+  hooks before the manifest creates it (measured 2026-10-02 on rev 259: `serviceaccount "rask-sa-jobs" not
+  found`, the release stuck `pending-upgrade`): create it by hand first and let `make k3s-up`'s
+  `--take-ownership` adopt it. The gate is that test file's identity test: the `identities rendered as hooks`
+  bucket, and a pre-upgrade hook may run only as an SA in its `_ESTABLISHED` set, so naming a new one is a
+  deliberate edit there, which is the reminder to pre-create it.
 - **A tokenless daprd needs `dapr.io/disable-builtin-k8s-secret-store`.** daprd initialises its built-in
   Kubernetes secret store at boot from the pod's token and treats a failure as fatal, so dropping the
   annotation from `lance.daprSidecarResources` crash-loops every injected pod (live 2026-07-13).

@@ -6,7 +6,7 @@ description: >-
   controlplane + the SvelteKit microfrontend zones), the Lance lakehouse
   REST catalog with in-service lineage (OpenLineage → Apache AGE), the medallion + media planes,
   governance (Dex OIDC + OpenFGA), event-driven on Dapr pub/sub over NATS JetStream, plus the
-  cluster infra foundation (Kueue, CloudNativePG, RustFS,
+  cluster infra foundation (CloudNativePG, RustFS,
   GreptimeDB/Perses observability).
 type: application
 # 0.2.0 (rask) + 0.1.0 (lance-ns) merged into one chart — a whole second system's templates and
@@ -48,10 +48,6 @@ dependencies:
     version: "1.18.1"
     repository: https://dapr.github.io/helm-charts/
     condition: dapr.enabled
-  - name: kueue
-    version: "0.18.1"
-    repository: oci://registry.k8s.io/kueue/charts
-    condition: kueue.enabled
   # Shared with lance-ns at the same version — one authz control plane. lance-ns's values win:
   # datastore.engine=postgres against the AGE Postgres, image tag pinned v1.18.3 (see the hazard
   # note in values.yaml under `openfga.image` before changing it), and the

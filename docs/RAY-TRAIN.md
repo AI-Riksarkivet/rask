@@ -205,7 +205,7 @@ authz shapes survive.
   `scripts/ray_train_job.py` (baked into the ray-lance image) and SKIPS the block-poll. The demo
   tier trains a small CPU model (real features → real weights blob) proving the loop; a real
   `TorchTrainer` needs GPU nodes.
-- rask merge: training becomes a KubeRay **`RayJob` CR** under Kueue (GPU quota, gang
+- rask merge: training becomes a KubeRay **`RayJob` CR** under the engine owner's Kueue (ADR 0153; GPU quota, gang
   scheduling, long-running lifecycle owned by the operator) while stage transforms stay Ray Jobs
   REST. The trigger contract, lineage contract, and authz contract in this note DO NOT CHANGE —
   only the submit transport swaps, which is why the submit core is extracted behind one seam.
@@ -253,4 +253,4 @@ targets and adds a logging call, never the record, lineage, or authz shapes.
 Hyperparameter sweeps / Ray Tune (each trial = one run under a parent — needs the `parent` run
 facet ingestion, parked in §9 "lineage at rask scale"); model SERVING (a consumption concern,
 parked with the query engine decision); auto-retraining triggers (a `downstream`-watch automation
-— future); GPU scheduling itself (Kueue's job at the rask merge).
+— future); GPU scheduling itself (the engine owner's Kueue, ADR 0153).

@@ -31,7 +31,6 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | https://nats-io.github.io/k8s/helm/charts/ | nats | 2.14.2 |
 | https://openfga.github.io/helm-charts | openfga | 0.3.12 |
 | https://perses.github.io/helm-charts | perses | 0.22.0 |
-| oci://registry.k8s.io/kueue/charts | kueue | 0.18.1 |
 
 ## Values
 
@@ -200,15 +199,6 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | ingress.enabled | bool | `true` | Renders the Ingress publishing `/` and `/api`. Only one release per cluster may hold a host-less Ingress. |
 | ingress.host | string | `""` | Hostname the Ingress routes. Empty is a cluster-wide catch-all on `/` and `/api`. |
 | ingress.tls | list | `[]` | List of Ingress TLS entries ({secretName, hosts}). Empty serves plain HTTP. |
-| kueue.enabled | bool | `true` | Installs the Kueue subchart (Chart.yaml condition) that admits GPU workloads against the ClusterQueue quota. |
-| kueue.queues.clusterQueueName | string | `"rask"` | Name of the cluster-wide ClusterQueue that holds the nominal quota. |
-| kueue.queues.enabled | bool | `true` | Creates the default ResourceFlavor, ClusterQueue and LocalQueue through a post-install/upgrade hook Job (templates/kueue-queues.yaml). |
-| kueue.queues.flavorName | string | `"rask"` | Name of the ResourceFlavor the ClusterQueue quotas are declared under. |
-| kueue.queues.kubectlImage | string | `"registry.k8s.io/kubectl:v1.31.3"` | Image for the kueue-setup hook Job's containers, which wait for the Kueue webhook and `kubectl apply` the queues. |
-| kueue.queues.localQueueName | string | `"rask"` | Name of the LocalQueue in the release namespace; workloads reference it with the `kueue.x-k8s.io/queue-name` label. |
-| kueue.queues.nominalQuota."nvidia.com/gpu" | string | `"0"` | ClusterQueue GPU quota; set to the total schedulable GPUs, never above. 0 on a GPU-less cluster. |
-| kueue.queues.nominalQuota.cpu | string | `"18"` | ClusterQueue nominal CPU quota; size it to the cluster. |
-| kueue.queues.nominalQuota.memory | string | `"120Gi"` | ClusterQueue nominal memory quota; size it to the cluster. |
 | lifecycle.maintenanceTerminationGracePeriodSeconds | int | `120` | Grace period in seconds for maintenance pods, long enough that an in-flight sweep or Lance write is not SIGKILLed. |
 | lifecycle.preStopSeconds | int | `5` | Seconds every pod sleeps in preStop before SIGTERM, so endpoint removal propagates first. |
 | lifecycle.sidecarBlockShutdownSeconds | int | `20` | Seconds the Dapr sidecar keeps running after SIGTERM to flush acks; must lie between preStopSeconds and the grace period. |
@@ -277,7 +267,6 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | medallion.fgaEnabled | bool | `false` | Each stage runner checks OpenFGA for its `requiredAction` on the target namespace before producing. Seed the stage-runner identity grants first. |
 | medallion.goldWarehouse | bool | `false` | Route the terminal stage runner's project writes to the project's gold serving warehouse when one exists (MEDALLION_GOLD_WAREHOUSE_ENABLED). Off = work warehouse. |
 | medallion.inprocessTasks | list | `[{"cardinalities":["1:1","1:N"],"command":"medallion.transform_stage","task":"stage-transform"}]` | Tasks the in-process plane can run, registered at boot (MEDALLION_INPROCESS_TASKS) whether or not Ray is on: `task`, `command`, optional `cardinalities`. |
-| medallion.kueueQueue | string | `""` | Kueue LocalQueue a submitted RayJob would be admitted through. No template reads it: the medallion submits through the Ray Jobs API. Empty = no admission control. |
 | medallion.mediaBronzeNamespace | string | `"bronze-media"` | Bronze namespace of the media lane, where /ingest-media lands blobs (MEDALLION_MEDIA_BRONZE_URI). Default `bronze-media`. |
 | medallion.mediaSeedSamples | bool | `true` | Have /ingest-media write two sample PNGs into the source prefix before ingesting (MEDALLION_MEDIA_SEED_SAMPLES); set false when the source is real media. |
 | medallion.planSweep.bindingName | string | `"medallion-plan-sweep-cron"` | Name of the plan-sweep cron Component (MEDALLION_PLAN_SWEEP_BINDING_NAME and route) that resolves open Ray stage and training plans. Rendered only with `ray`; empty disables it. |

@@ -1117,7 +1117,7 @@ def test_the_chart_TURNS_DOCS_OFF_by_default_and_ON_when_asked() -> None:
 #:
 #: Two different reasons, kept apart on purpose:
 #:
-#:  * SUBCHARTS — dapr, nats, openfga, dex, cloudnative-pg, openbao, rustfs, kueue, kuberay,
+#:  * SUBCHARTS — dapr, nats, openfga, dex, cloudnative-pg, openbao, rustfs,
 #:    greptimedb, perses, vmalert, alertmanager. Not ours to template, so not ours to harden.
 #:  * INFRA PODS WE DO TEMPLATE — the OTel collector. Its securityContext is gated behind
 #:    `security.infraContexts.enabled`, which values.yaml defaults OFF and stages explicitly:
@@ -1126,8 +1126,8 @@ def test_the_chart_TURNS_DOCS_OFF_by_default_and_ON_when_asked() -> None:
 #:    silently pre-empt it. It is listed HERE, visibly, rather than being missing from a
 #:    hand-written first-party tuple where nobody could tell the difference.
 _UNCOVERED_DEPLOYMENTS = (
-    "dapr", "nats", "openfga", "dex", "cloudnative-pg", "openbao", "minio", "kueue",
-    "kuberay", "greptimedb", "perses", "vmalert", "alertmanager",
+    "dapr", "nats", "openfga", "dex", "cloudnative-pg", "openbao", "minio",
+    "greptimedb", "perses", "vmalert", "alertmanager",
     "otel-collector",
 )  # fmt: skip
 
