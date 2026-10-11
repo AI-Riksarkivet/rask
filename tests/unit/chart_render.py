@@ -15,6 +15,7 @@ clock was attributed to the pure-Python parser, and the C loader returns equal d
 
 from __future__ import annotations
 
+import copy
 import functools
 import pathlib
 import re
@@ -158,16 +159,39 @@ _NATS_USER = re.compile(r"^\s*nats_user ([a-z0-9][a-z0-9-]*) '([^']*)' '([^']*)'
 _STREAM = re.compile(r'^[^\S\n]*add(?:_workqueue)?_if_missing ([A-Z_]+) "([^"]+)"', re.MULTILINE)
 
 
+def seed_scripts(docs: tuple[dict, ...]) -> dict[str, str]:
+    """The dev store's seed scripts rask renders (`<release>-openbao-seed`: `mint.sh`, `seed.sh`); empty when it renders none."""
+    found = [d for d in docs if d.get("kind") == "ConfigMap" and d["metadata"]["name"].endswith("-openbao-seed")]
+    return dict(found[0]["data"]) if found else {}
+
+
+def with_dev_store(docs: tuple[dict, ...]) -> tuple[dict, ...]:
+    """rask's render plus the dev store that runs its seed: the openbao fixture's objects, each container that runs one of
+    rask's scripts (`sh /seed/<script>`) given that script's text, as the pod runs it ([[XC-131]]). Unchanged when rask
+    renders no seed."""
+    scripts = seed_scripts(docs)
+    if not scripts:
+        return docs
+    store = copy.deepcopy(render_fixture("openbao"))
+    for workload in store:
+        if workload.get("kind") != "Deployment":
+            continue
+        pod = workload["spec"]["template"]["spec"]
+        for container in [*pod.get("initContainers", []), *pod["containers"]]:
+            command = container.get("command") or []
+            if len(command) == 2 and command[0] == "sh" and command[1].startswith("/seed/"):
+                container["command"] = ["sh", "-c", scripts[command[1].rsplit("/", 1)[1]]]
+    return (*docs, *store)
+
+
 def nats_users(docs: tuple[dict, ...]) -> dict[str, tuple[frozenset[str], frozenset[str]]]:
     """Each NATS user the dev OpenBao's seed issues, as (publish, subscribe) permissions; empty when the render issues none.
 
-    Read off the script the seed container runs, so it is the table as the chart passes it to nsc (values.yaml `nats.auth.users`).
+    Read off the seed script rask renders, so it is the table as the chart passes it to nsc (values.yaml `nats.auth.users`).
     """
     issued: dict[str, tuple[frozenset[str], frozenset[str]]] = {}
-    for _, name, container in containers(docs):
-        if name == "seed":
-            for user, publish, subscribe in _NATS_USER.findall((container.get("command") or [""])[-1]):
-                issued[user] = (frozenset(publish.split(",")), frozenset(subscribe.split(",")))
+    for user, publish, subscribe in _NATS_USER.findall(seed_scripts(docs).get("seed.sh", "")):
+        issued[user] = (frozenset(publish.split(",")), frozenset(subscribe.split(",")))
     return issued
 
 

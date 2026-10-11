@@ -32,7 +32,7 @@ import pytest
 import yaml
 from pydantic import BaseModel, ConfigDict
 
-from tests.unit.chart_render import DEFAULT_ARGS, REPO, render_text
+from tests.unit.chart_render import DEFAULT_ARGS, REPO, render_fixture, render_text
 from tests.unit.chart_yaml import FAST_LOADER
 
 
@@ -285,7 +285,7 @@ def test_no_first_party_service_account_can_read_a_secret_or_review_a_token(over
     """
     args = _OVERLAYS[overlay]
     pods, bindings = _pods(*args), _bindings(*args)
-    openbao = _pod(args, "Deployment/rask-openbao")
+    store = [pod for pod in pods if pod.workload == "Deployment/rask-openbao"]
     delegated = [b.service_accounts for b in bindings if b.role == ("ClusterRole", "system:auth-delegator")]
 
     # The walk sees the chart's pods and the subcharts', and the classifier reads rendered roles; without these every
@@ -295,11 +295,27 @@ def test_no_first_party_service_account_can_read_a_secret_or_review_a_token(over
     # No role the render holds grants `secrets` (the operators that needed one are prerequisites, ADR 0153), so the proof that
     # the classifier recognises one is the planted binding of the module's mutation check.
     assert any(b.role not in _BUILTIN_GRANTS for b in bindings), f"{overlay}: no binding to a rendered role was classified"
-    assert any("tokenreviews" in b.grants for b in bindings), f"{overlay}: no binding classified as reviewing tokens; OpenBao's auth-delegator does"
 
     assert _offending(args) == [], f"{overlay}: {_offending(args)}"
-    assert delegated == [(openbao.service_account,)], f"{overlay}: auth-delegator bound to {delegated}, OpenBao runs as {openbao.service_account}"
-    assert openbao.token_mounted, f"{overlay}: OpenBao mounts no token, so it cannot review ESO's login"
+    if store:
+        [openbao] = store
+        assert any("tokenreviews" in b.grants for b in bindings), f"{overlay}: no binding classified as reviewing tokens; OpenBao's auth-delegator does"
+        assert delegated == [(openbao.service_account,)], f"{overlay}: auth-delegator bound to {delegated}, OpenBao runs as {openbao.service_account}"
+        assert openbao.token_mounted, f"{overlay}: OpenBao mounts no token, so it cannot review ESO's login"
+        return
+    # The dev store is the openbao fixture's ([[XC-131]]): rask binds no reviewer, and the fixture binds the SA its own pod
+    # runs as, with that pod's token mounted.
+    assert delegated == [], f"{overlay}: rask runs no OpenBao and still binds the auth-delegator to {delegated}"
+    fixture = render_fixture("openbao")
+    [pod] = [doc["spec"]["template"]["spec"] for doc in fixture if doc.get("kind") == "Deployment"]
+    reviewers = [
+        subject["name"]
+        for doc in fixture
+        if doc.get("kind") == "ClusterRoleBinding" and doc["roleRef"]["name"] == "system:auth-delegator"
+        for subject in doc["subjects"]
+    ]
+    assert reviewers == [pod["serviceAccountName"]], f"the dev store's auth-delegator is bound to {reviewers}, its pod runs as {pod['serviceAccountName']}"
+    assert pod.get("automountServiceAccountToken") is True, "the dev store mounts no token, so it cannot review ESO's login"
 
 
 @pytest.mark.parametrize("overlay", sorted(_OVERLAYS))

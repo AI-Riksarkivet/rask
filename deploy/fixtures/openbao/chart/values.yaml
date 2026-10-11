@@ -1,0 +1,28 @@
+# NOT FOR PRODUCTION (deploy/fixtures/README.md).
+
+# -- The Deployment and Service name, what rask's `lance.openbaoHost` dials for release `rask`.
+name: rask-openbao
+# The pod selector, carried from the release this store first ran under (`rask`). A selector cannot change in place, so a
+# new one would mean deleting the Deployment, and the store is in memory: its replacement would start empty, with no pod
+# to carry the signing keys and the bus trust root from. Under the same selector the handover is a rolling update with
+# a surge, whose new pod carries them from the outgoing one.
+selector:
+  app.kubernetes.io/component: openbao
+  app.kubernetes.io/instance: rask
+# The ServiceAccount the server reviews ESO's login tokens with (`system:auth-delegator`).
+serviceAccount: rask-sa-openbao
+image: openbao/openbao:2.2.0
+port: 8200
+# The dev server's fixed root token, rask's `openbao.devToken`: anyone in the cluster can read the store with it.
+devToken: root
+# The image the mint runs: nk mints the signing pairs and the bus users, and nsc issues the users under the bus's root.
+# rask's `signing.mintImage`.
+mintImage: natsio/nats-box:0.19.7
+# What rask's chart renders, for release `rask`: the seed's scripts, the credentials ESO generates for the store, and
+# the operator's own (`make k3s-up` writes the hf-token there).
+seedScripts: rask-openbao-seed
+devCredentials: rask-dev-credentials
+suppliedCredentials: rask-supplied-credentials
+resources:
+  requests: { cpu: 50m, memory: 128Mi }
+  limits: { cpu: "1", memory: 512Mi }

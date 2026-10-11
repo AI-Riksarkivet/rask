@@ -308,9 +308,9 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | observability.query.auditTable | string | `"lance_audit"` | Table the audit viewer reads `lance.audit` records from; the same table `export.auditHeaders` routes them to. |
 | observability.query.url | string | `""` | Base URL of the store's SQL and PromQL API the zones read (GREPTIME_API); empty leaves those panels without data. |
 | observability.samplingRate | string | `"1"` | Dapr tracing sampling rate in the Dapr Configuration, as a string from 0 to 1; "1" traces every request. |
-| openbao.devMode | bool | `true` | Run OpenBao in-memory, auto-unsealed with a fixed root token (demo only). False runs a sealed file-backed server an operator must init and unseal. |
-| openbao.devToken | string | `"root"` | Root token of the dev-mode server (used only when `devMode` is true). |
-| openbao.enabled | bool | `true` | Run the first-party OpenBao secret store that the Dapr secret stores and ESO read. |
+| openbao.devMode | bool | `true` | The development store: in-memory, auto-unsealed with a fixed root token (demo only), run by the openbao fixture. False renders a sealed file-backed server an operator must init and unseal. |
+| openbao.devToken | string | `"root"` | Root token of the development store (the openbao fixture's `devToken`), which the Dapr secret store presents when `devMode` is true. |
+| openbao.enabled | bool | `true` | An in-cluster OpenBao at `<release>-openbao`: with `devMode` the development store (deploy/fixtures/openbao), whose seed runs the scripts this chart renders (`<release>-openbao-seed`); without it the sealed server this chart renders. |
 | openbao.externalAddr | string | `""` | Address of an external Vault/OpenBao the secret stores point at instead of the in-cluster server; pair with `openbao.enabled=false`. |
 | openbao.image | string | `"openbao/openbao:2.2.0"` | OpenBao container image; also used by the MinIO scoped-users hook. |
 | openbao.port | int | `8200` | Port of the OpenBao Service. |

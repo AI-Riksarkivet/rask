@@ -19,7 +19,7 @@ import json
 import re
 from fnmatch import fnmatchcase
 
-from tests.unit.chart_render import DEFAULT_ARGS, containers, env_of, render, render_text
+from tests.unit.chart_render import DEFAULT_ARGS, containers, env_of, render, render_text, seed_scripts
 
 
 REF = "fixture-ref"
@@ -57,7 +57,7 @@ def _allowed(policy: dict, action: str, resource: str, prefix: str | None = None
 
 def test_a_configured_ref_gets_a_scoped_user_and_its_openbao_entry_only_when_the_local_fixture_is_on() -> None:
     docs = render(*_args(dev_seed=True))
-    mc, seed = _script(docs, "mc"), _script(docs, "seed")
+    mc, seed = _script(docs, "mc"), seed_scripts(docs)["seed.sh"]
 
     match = _POLICY.search(mc)
     assert match, "the scoped-users Job renders no policy for the reference"

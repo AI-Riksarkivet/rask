@@ -1,0 +1,115 @@
+{{- $labels := merge (dict "app.kubernetes.io/name" "openbao") .Values.selector }}
+{{- $rootless := dict "runAsNonRoot" true "runAsUser" 65532 "allowPrivilegeEscalation" false "readOnlyRootFilesystem" true "capabilities" (dict "drop" (list "ALL")) "seccompProfile" (dict "type" "RuntimeDefault") }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Values.serviceAccount }}
+  labels: {{- toYaml $labels | nindent 4 }}
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ .Values.name }}-auth-delegator
+  labels: {{- toYaml $labels | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:auth-delegator
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.serviceAccount }}
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.name }}
+  labels: {{- toYaml $labels | nindent 4 }}
+spec:
+  ports:
+    - { name: http, port: {{ .Values.port }}, targetPort: 8200 }
+  selector: {{- toYaml .Values.selector | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Values.name }}
+  labels: {{- toYaml $labels | nindent 4 }}
+spec:
+  replicas: 1
+  # The store is in memory: the outgoing pod serves until its replacement is seeded, so the replacement can carry the
+  # signing keys and the bus trust root from it through the Service.
+  strategy: { type: RollingUpdate, rollingUpdate: { maxSurge: 1, maxUnavailable: 0 } }
+  selector:
+    matchLabels: {{- toYaml .Values.selector | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- toYaml $labels | nindent 8 }}
+    spec:
+      serviceAccountName: {{ .Values.serviceAccount }}
+      # The server reviews ESO's Kubernetes login with its own token.
+      automountServiceAccountToken: true
+      initContainers:
+        - name: mint
+          image: {{ .Values.mintImage }}
+          securityContext: {{- toYaml $rootless | nindent 12 }}
+          resources:
+            requests: { cpu: "10m", memory: "16Mi" }
+            limits: { cpu: "100m", memory: "64Mi" }
+          env:
+            - { name: SIGNING_DIR, value: /signing }
+            - { name: NATS_TOOLS, value: /nats-tools }
+          volumeMounts:
+            - { name: seed-scripts, mountPath: /seed, readOnly: true }
+            - { name: signing, mountPath: /signing }
+            - { name: nats-tools, mountPath: /nats-tools }
+          command: ["sh", "/seed/mint.sh"]
+      containers:
+        - name: openbao
+          image: {{ .Values.image }}
+          args: ["server", "-dev", "-dev-root-token-id={{ .Values.devToken }}", "-dev-listen-address=0.0.0.0:8200"]
+          env:
+            - { name: BAO_ADDR, value: "http://127.0.0.1:8200" }
+          ports:
+            - { name: http, containerPort: 8200 }
+          # Ready only once the seed beside it has written its last key.
+          readinessProbe:
+            httpGet:
+              path: /v1/secret/data/openbao-seeded
+              port: 8200
+              httpHeaders: [{ name: X-Vault-Token, value: {{ .Values.devToken | quote }} }]
+            periodSeconds: 3
+          resources: {{- toYaml .Values.resources | nindent 12 }}
+        # The seed writes only to the server beside it (127.0.0.1): through the Service it would reach whichever pod the
+        # Service picks, during a rollout the outgoing one, whose store goes with it.
+        - name: seed
+          image: {{ .Values.image }}
+          securityContext: {{- toYaml $rootless | nindent 12 }}
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+            - { name: seed-scripts, mountPath: /seed, readOnly: true }
+            - { name: dev-credentials, mountPath: /dev-credentials, readOnly: true }
+            - { name: supplied-credentials, mountPath: /supplied, readOnly: true }
+            - { name: signing, mountPath: /signing }
+            - { name: nats-tools, mountPath: /nats-tools, readOnly: true }
+          resources:
+            requests: { cpu: "10m", memory: "32Mi" }
+            limits: { cpu: "200m", memory: "128Mi" }
+          env:
+            - { name: BAO_ADDR, value: "http://127.0.0.1:8200" }
+            - { name: BAO_TOKEN, value: {{ .Values.devToken | quote }} }
+            - { name: HOME, value: /tmp }
+            - { name: DEV_CREDENTIALS, value: /dev-credentials }
+            - { name: SUPPLIED_CREDENTIALS, value: /supplied }
+            - { name: SIGNING_DIR, value: /signing }
+            - { name: NATS_TOOLS, value: /nats-tools }
+          command: ["sh", "/seed/seed.sh"]
+      volumes:
+        - { name: tmp, emptyDir: { sizeLimit: "2Gi" } }
+        - { name: seed-scripts, configMap: { name: {{ .Values.seedScripts }}, defaultMode: 0444 } }
+        - { name: dev-credentials, secret: { secretName: {{ .Values.devCredentials }}, defaultMode: 0444 } }
+        - { name: supplied-credentials, secret: { secretName: {{ .Values.suppliedCredentials }}, optional: true, defaultMode: 0444 } }
+        # Signing seeds never reach node disk.
+        - { name: signing, emptyDir: { medium: Memory, sizeLimit: 1Mi } }
+        - { name: nats-tools, emptyDir: { sizeLimit: 64Mi } }

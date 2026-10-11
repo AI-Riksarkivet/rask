@@ -775,11 +775,11 @@ DROP_CREDENTIAL_VALUES := --set dapr.appToken=null --set frontend.oidc.sessionSe
 # (NOT FOR PRODUCTION; deploy/fixtures/README.md). Dapr's control plane comes first after ESO, so its injector is
 # Ready before any pod that wants a sidecar exists; the NATS bus every pub/sub component dials follows. The CloudNativePG
 # operator serves the AGE-on-CNPG Cluster; its CRDs come from k3s-crds, which runs first. Dex is the dev OIDC issuer,
-# given the issuer and origin rask is given; minio is the dev object store, whose server starts once rask's dev store
-# has issued its root credential. The Ray engine the cascade
+# given the issuer and origin rask is given; minio and openbao are the dev object and secret stores, which start once
+# rask is installed: the object store's root credential and the secret store's seed scripts are rask's. The Ray engine the cascade
 # submits to is two of them, the operator first; observability is the store, dashboards and alerting rask's Collector
 # exports to. A GPU node with no device plugin yet adds nvidia-device-plugin.
-FIXTURES ?= external-secrets dapr nats cloudnative-pg dex minio kuberay-operator ray-cluster observability
+FIXTURES ?= external-secrets dapr nats cloudnative-pg dex minio openbao kuberay-operator ray-cluster observability
 
 k3s-fixtures: ## Install the development fixtures (FIXTURES) as their own releases, before the rask chart
 	$(if $(filter-out dex,$(FIXTURES)),KUBECONFIG=$(KUBECONFIG) ./scripts/fixtures.sh $(filter-out dex,$(FIXTURES)))

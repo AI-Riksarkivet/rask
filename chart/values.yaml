@@ -3446,9 +3446,9 @@ dex:
     # -- Plain password of the publish saga's service account, seeded into OpenBao; must match the hash the development Dex holds (demo default `password`).
     password: password
 
-# === OpenBao (first-party template) — secret store, fronted by Dapr secretstores.* ==================
+# === OpenBao — the secret store the Dapr secret stores and ESO read ================================
 openbao:
-  # -- Run the first-party OpenBao secret store that the Dapr secret stores and ESO read.
+  # -- An in-cluster OpenBao at `<release>-openbao`: with `devMode` the development store (deploy/fixtures/openbao), whose seed runs the scripts this chart renders (`<release>-openbao-seed`); without it the sealed server this chart renders.
   enabled: true
   # -- OpenBao container image; also used by the MinIO scoped-users hook.
   image: openbao/openbao:2.2.0
@@ -3457,9 +3457,9 @@ openbao:
   # devMode=true → in-memory, auto-unsealed, fixed root token (demo ONLY — anyone in-cluster can read
   # everything with `root`). Set devMode=false for the prod path: a sealed, file-backed server on a PVC
   # that an operator must `bao operator init` + unseal, with real auth — no fixed root token, no auto-seed.
-  # -- Run OpenBao in-memory, auto-unsealed with a fixed root token (demo only). False runs a sealed file-backed server an operator must init and unseal.
+  # -- The development store: in-memory, auto-unsealed with a fixed root token (demo only), run by the openbao fixture. False renders a sealed file-backed server an operator must init and unseal.
   devMode: true
-  # -- Root token of the dev-mode server (used only when `devMode` is true).
+  # -- Root token of the development store (the openbao fixture's `devToken`), which the Dapr secret store presents when `devMode` is true.
   devToken: root # dev-mode root token (devMode=true only)
   # -- PVC size of the file backend when `devMode` is false.
   storage: 1Gi # PVC size for the prod (devMode=false) file backend

@@ -184,8 +184,8 @@ def _fields(external_secret: dict) -> set[str]:
 
 
 def _eso_reads(docs: tuple[dict, ...]) -> set[str]:
-    """The store keys the dev OpenBao's policy lets the External Secrets Operator read, off the script its seed runs."""
-    [script] = [(c.get("command") or [""])[-1] for _, name, c in chart_render.containers(docs) if name == "seed"]
+    """The store keys the dev OpenBao's policy lets the External Secrets Operator read, off the seed script rask renders."""
+    script = chart_render.seed_scripts(docs)["seed.sh"]
     policy = script.split("<<'POLICY'", 1)[1].split("POLICY", 1)[0]
     return set(_POLICY_PATH.findall(policy))
 

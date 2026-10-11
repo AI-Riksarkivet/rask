@@ -38,6 +38,11 @@ generated credential is never Ready. A rotated key of the mounted Secret (and th
 store through the seed's loop, keeping the signing pairs and the bus root, because replacing the pod to re-seed
 would re-mint them.
 
+[[XC-131]] makes the dev store a fixture (deploy/fixtures/openbao) and keeps what to seed rask's: the chart renders the
+two scripts into `<release>-openbao-seed`, and the fixture's pod runs them, the mint as its init container and the seed
+beside the server. So the pod read here is the fixture's, running the scripts rask renders. A seed whose script rask
+changes mints a pair for any new identity and runs again, issuing the bus users afresh, since no rollout replaces the pod.
+
 The scripts run here against stand-ins for the bao, nk and nsc CLIs: the bao stand-in keeps two stores, the pod's
 own server and the one the Service routes to, the nk stand-in hands out generated pairs, and the nsc stand-in issues JWTs
 that carry the permissions it was given.
@@ -75,6 +80,7 @@ n=$(cat "$STORES/sleeps" 2>/dev/null || echo 0)
 echo $((n + 1)) > "$STORES/sleeps"
 if [ -e "$STORES/restart" ] && [ "$n" -eq 0 ]; then mv "$STORES/local" "$STORES/before-restart"; : > "$STORES/served.refused"; exit 0; fi
 if [ -e "$STORES/rotate" ] && [ "$n" -eq 0 ]; then cp "$STORES/rotate" "$DEV_CREDENTIALS/postgres-password"; cp "$STORES/rotate" "$SUPPLIED_CREDENTIALS/hf-token"; exit 0; fi
+if [ -e "$STORES/change" ] && [ "$n" -eq 0 ]; then cp "$STORES/local/secret/nats-server" "$STORES/first-nats-server"; echo "# a later rask render" >> "$SEED_SCRIPT"; exit 0; fi
 exit 1
 """
 
@@ -243,6 +249,7 @@ def _arrange_nats(case: str, stores: Path, tmp_path: Path, env: dict[str, str]) 
         pytest.param(
             (*DEFAULT_ARGS, "--set", "secrets.hfTokenInStore=true"), "lacks", "rotate", True, "minted", id="a-rotated-credential-reaches-the-store-in-place"
         ),
+        pytest.param(DEFAULT_ARGS, "lacks", "change", True, "minted", id="a-seed-rask-changes-runs-again-in-place-keeping-its-keys-and-bus-root"),
         pytest.param(DEFAULT_ARGS, "lacks", "", True, "carried", id="a-signing-pair-behind-the-service-is-carried"),
         pytest.param(DEFAULT_ARGS, "lacks", "", True, "rotated", id="a-list-without-its-key-is-a-rotation-that-keeps-one-previous"),
         pytest.param(DEFAULT_ARGS, "lacks", "", True, "kept", id="a-kept-pair-beats-a-new-mint-candidate"),
@@ -267,7 +274,7 @@ def test_the_dev_store_is_seeded_by_its_own_pod_and_keeps_its_signing_keys(  # n
     succeeds: bool,  # noqa: FBT001
     case: str,
 ) -> None:
-    docs = chart_render.render(*overlay, *OBSERVABILITY_ARGS)
+    docs = chart_render.with_dev_store(chart_render.render(*overlay, *OBSERVABILITY_ARGS))
     workload, container = _seed(docs)
     env = chart_render.env_of(container)
     [mint] = [c for _, name, c in chart_render.containers(docs) if name == "mint"]
@@ -283,6 +290,13 @@ def test_the_dev_store_is_seeded_by_its_own_pod_and_keeps_its_signing_keys(  # n
         (stores / "restart").touch()
     elif local == "rotate":
         (stores / "rotate").write_text("a-rotated-value-the-loop-must-store")
+    elif local == "change":
+        (stores / "change").touch()
+        # One store pod, and no rollout: the Service routes to this pod's own server.
+        (stores / "served" / "secret").rmdir()
+        (stores / "served").rmdir()
+        (stores / "local" / "secret").mkdir(parents=True)
+        (stores / "served").symlink_to(stores / "local")
     install(tmp_path, bao=BAO, sleep=_SLEEP, nk=NK, nsc=NSC)
     (tmp_path / "home" / "seed").mkdir(parents=True)
     pool = [event_signer(f"pair-{i}") for i in range(4 * len(ids))]
@@ -290,7 +304,13 @@ def test_the_dev_store_is_seeded_by_its_own_pod_and_keeps_its_signing_keys(  # n
     users = chart_render.nats_users(docs)
     # The seed issues the users in the table's order, after the mint's one nk call per signing identity.
     bus_pairs = {user: event_signer(f"bus-{user}") for user in sorted(users)}
-    (tmp_path / "pairs").write_text("".join(f"{pair.seed}\n{pair.public}\n" for pair in [*pool[: len(ids)], *bus_pairs.values()]))
+    # A changed seed mints a candidate per identity again, then issues every user again.
+    again = [event_signer(f"again-{i}") for i in range(len(ids) + len(users))] if local == "change" else []
+    (tmp_path / "pairs").write_text("".join(f"{pair.seed}\n{pair.public}\n" for pair in [*pool[: len(ids)], *bus_pairs.values(), *again]))
+    scripts = tmp_path / "seed-scripts"
+    scripts.mkdir()
+    for name, text in chart_render.seed_scripts(docs).items():
+        (scripts / name).write_text(text)
     signing_dir = tmp_path / "signing"
     signing_dir.mkdir()
     generated_dir = tmp_path / "dev-credentials"
@@ -324,6 +344,7 @@ def test_the_dev_store_is_seeded_by_its_own_pod_and_keeps_its_signing_keys(  # n
         "NK_GARBAGE": "",
         "NSC_CALLS": str(tmp_path / "nsc-calls"),
         "NSC_FAIL": "1" if case == "nats-mint-failed" else "",
+        "SEED_SCRIPT": str(scripts / "seed.sh"),
         **nk,
     }
     carried = _arrange_nats(case, stores, tmp_path, {**os.environ, **here, "NSC_FAIL": "", "NSC_CALLS": str(tmp_path / "earlier-calls")})
@@ -336,7 +357,18 @@ def test_the_dev_store_is_seeded_by_its_own_pod_and_keeps_its_signing_keys(  # n
 
     minted = run(mint)
     modes = {p.name: oct(stat.S_IMODE(p.stat().st_mode)) for p in signing_dir.iterdir() if stat.S_IMODE(p.stat().st_mode) != 0o400}
-    ran = run(container)
+    if local == "change":
+        # As the pod runs it: from the file the ConfigMap mounts, which is what the seed watches.
+        ran = subprocess.run(
+            ["sh", str(scripts / "seed.sh")],
+            env={**os.environ, **chart_render.env_of(container), **here},
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )  # noqa: S603, S607
+    else:
+        ran = run(container)
 
     assert minted.returncode == 0, f"a failed mint must not stop the pod: exit {minted.returncode}: {minted.stderr[-1000:]}"
     assert not modes, f"mint candidates must be mode 0400 for their owner alone: {modes}"
@@ -413,7 +445,7 @@ def test_the_dev_store_is_seeded_by_its_own_pod_and_keeps_its_signing_keys(  # n
         assert f'mc admin user add rfs {identity} "$(cat {mc_keys}/{identity})"' in mc["command"][-1], (
             f"the Job does not create {identity} with the secret it derived for it"
         )
-    assert len(seeded) == (2 if local in {"restart", "rotate"} else 1), f"seeds that completed: {len(seeded)}"
+    assert len(seeded) == (2 if local in {"restart", "rotate", "change"} else 1), f"seeds that completed: {len(seeded)}"
 
     root = _store(stores, "local", "secret/nats-server")
     route = _store(stores, "local", "secret/nats-route")
@@ -424,6 +456,9 @@ def test_the_dev_store_is_seeded_by_its_own_pod_and_keeps_its_signing_keys(  # n
     assert _store(stores, "local", "secret/nats-root").get("nsc"), (
         "the trust root's keys were not stored, so the next rollout mints a root the server does not trust"
     )
+    if local == "change":
+        first = dict(line.split("=", 1) for line in (stores / "first-nats-server").read_text().splitlines())
+        assert root["operator"] == first["operator"], "a seed rask changed minted a new bus trust root, which the running server refuses"
     if carried:
         assert root["operator"] == carried["operator"] and route["password"] == carried["password"], (
             "the trust root or the route credential behind the Service was replaced, so the running server refuses every new client"
@@ -439,7 +474,11 @@ def test_the_dev_store_is_seeded_by_its_own_pod_and_keeps_its_signing_keys(  # n
     for user, (publish, subscribe) in users.items():
         issued = _store(stores, "local", f"secret/nats-user-{user}")
         claim = _claim(issued.get("jwt", "eyJ.e30"))
-        assert issued.get("seed") == bus_pairs[user].seed and claim.get("sub") == bus_pairs[user].public, f"nats-user-{user} is not the pair issued for it"
+        if local == "change":
+            reissued = {pair.seed: pair.public for pair in again}
+            assert reissued.get(issued.get("seed", "")) == claim.get("sub"), f"nats-user-{user} was not issued again when rask changed the seed"
+        else:
+            assert issued.get("seed") == bus_pairs[user].seed and claim.get("sub") == bus_pairs[user].public, f"nats-user-{user} is not the pair issued for it"
         assert (set(claim["pub"].split(",")), set(claim["subscribe"].split(","))) == (publish, subscribe), (
             f"{user} was issued {claim}, not the table's permissions: a subject lost its $ or its wildcard on the way to nsc"
         )

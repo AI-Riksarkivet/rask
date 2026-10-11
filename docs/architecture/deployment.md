@@ -67,8 +67,9 @@ release `cloudnative-pg` in `cnpg-system`): chart 0.28.3, operator 1.29.1, CRDs 
 
 ## Development stand-ins
 
-A real deployment brings its own identity provider and object store, and the chart takes them by reference
-(`frontend.oidc.publicIssuer`, `dex.issuer`, `dex.clientId`; `minio.externalEndpoint` and the scoped credentials).
+A real deployment brings its own identity provider, object store and secret store, and the chart takes them by
+reference (`frontend.oidc.publicIssuer`, `dex.issuer`, `dex.clientId`; `minio.externalEndpoint` and the scoped
+credentials; `openbao.externalAddr`).
 Development runs stand-ins from `deploy/fixtures` (ADR 0153), and the chart renders none of them:
 
 - **Dex** (`deploy/fixtures/dex`, release `dex`, Service `rask-dex`): the OIDC issuer with the demo users and rask's
@@ -78,6 +79,11 @@ Development runs stand-ins from `deploy/fixtures` (ADR 0153), and the chart rend
   claims `data-<n>-rask-minio-<i>`. `minio.enabled` says the estate uses it: rask's dev store issues its root
   credential (`rask-infra-credentials`, through ESO), and rask's hooks provision its buckets and scoped users. Its
   server starts once rask is installed, so the fixture install does not wait for it.
+- **OpenBao in dev mode** (`deploy/fixtures/openbao`, release `openbao`, Deployment and Service `rask-openbao`): the
+  in-memory secret store. `openbao.enabled` with `devMode` says the estate uses it, and what goes into it stays rask's:
+  the chart renders the seed scripts into `<release>-openbao-seed` (the dev credentials, every signing identity's
+  Ed25519 pair, the bus trust root and users, ESO's policy), and the fixture's pod runs them beside the server. Without
+  `devMode` the chart renders the sealed, file-backed server itself.
 
 ## Local deploy (k3s)
 

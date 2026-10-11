@@ -1,0 +1,8 @@
+apiVersion: v2
+name: secret-store
+description: >-
+  NOT FOR PRODUCTION. A development secret store for rask: an in-memory OpenBao dev server with a fixed root token,
+  seeded by the scripts rask renders. A platform runs its own store; rask names it.
+type: application
+version: 0.1.0
+appVersion: 2.2.0

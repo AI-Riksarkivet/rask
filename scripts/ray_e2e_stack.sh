@@ -92,9 +92,10 @@ export RASK_EXPECT_CONTEXT="kind-$CLUSTER"
 # from the same fixtures `make k3s-up` uses (deploy/fixtures/external-secrets, dapr, nats), each on its own release,
 # before rask. fixtures.sh waits for each, so Dapr's injector is Ready before any rask pod exists. The bus runs with
 # operator mode off (the fixture's default), so it takes the credentials rask's clients present without checking them.
-# Dex, the dev OIDC issuer the lane mints its tokens from, and the dev object store are fixtures too ([[XC-131]]); the
-# store's server starts once rask's dev store issues its root credential, so fixtures.sh does not wait for it.
-"$(dirname "$0")/fixtures.sh" external-secrets dapr nats dex minio
+# Dex, the dev OIDC issuer the lane mints its tokens from, the dev object store and the dev secret store are fixtures too
+# ([[XC-131]]). The two stores start once rask is installed (the object store's root credential and the secret store's
+# seed scripts are rask's), so fixtures.sh does not wait for them.
+"$(dirname "$0")/fixtures.sh" external-secrets dapr nats dex minio openbao
 # EVERY https REPOSITORY `chart/Chart.yaml` DECLARES, derived rather than listed. `helm dependency
 # build` needs each one even when the component is disabled, and a hand-written list is a second copy
 # of the chart's own dependency set: measured 2026-09-24, it named five of the nine, so the lane died

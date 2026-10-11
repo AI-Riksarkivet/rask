@@ -99,9 +99,9 @@ second case. Kueue's upstream docs only ever install it as its own release in `k
 - **What leaves the chart lands in `deploy/fixtures/`** (ADR 0153, [[XC-124]]): one directory per prerequisite, an
   upstream chart pinned in `fixture.env`, installed as its own release by `scripts/fixtures.sh` before rask's
   (`make k3s-fixtures`, a prerequisite of `make k3s-up`; `FIXTURES` names which, default `external-secrets dapr nats
-  cloudnative-pg dex minio kuberay-operator ray-cluster observability`: Dapr's control plane in dapr-system ([[XC-128]]), the NATS
+  cloudnative-pg dex minio openbao kuberay-operator ray-cluster observability`: Dapr's control plane in dapr-system ([[XC-128]]), the NATS
   JetStream bus `rask-nats` in rask's namespace that `nats.url` names ([[XC-129]]), the CloudNativePG operator in
-  cnpg-system that the AGE-on-CNPG `Cluster` needs, its CRDs still applied by `make k3s-crds` first ([[XC-130]]), the dev OIDC issuer `rask-dex` and object store `rask-minio` ([[XC-131]]; the store's fixture is `WAIT=false`, its root credential being rask's), the dev Ray engine
+  cnpg-system that the AGE-on-CNPG `Cluster` needs, its CRDs still applied by `make k3s-crds` first ([[XC-130]]), the dev OIDC issuer `rask-dex`, object store `rask-minio` and secret store `rask-openbao` ([[XC-131]]; both stores' fixtures are `WAIT=false`: the object store's root credential and the secret store's seed scripts are rask's), the dev Ray engine
   ([[XC-125]]) and the telemetry chain the Collector exports to ([[XC-127]]); a GPU node with no device plugin yet adds `nvidia-device-plugin`). A fixture's `SET_FILES` passes an
   artefact from outside its chart with `--set-file` (the alert rules), and a local fixture chart with upstream
   `dependencies:` is vendored from its own `Chart.lock` (`scripts/fixtures.sh --vendor`, run by `make k3s-deps`, so a
@@ -236,6 +236,9 @@ catalog, lineage, maintenance, the medallion, OpenBao and Dex ran as `default` w
   ([[XC-125]]); this holds for the `ray-cluster` fixture (`deploy/fixtures/ray-cluster/chart`), which
   carries the field.
 - **Changing the dev OpenBao's pod spec empties its store**, because `server -dev` keeps it in memory.
+  The pod is the openbao fixture's ([[XC-131]]); its `mint` and `seed` run the scripts rask renders into
+  `<release>-openbao-seed`, and a change rask makes to them reaches the running seed in place (it mints a pair for any
+  new identity, issues the bus users again under the same root, and seeds again), so a rask upgrade replaces no store.
   The `seed` container in that pod writes only to its own server and gates the pod's readiness on a
   key it writes last, and a rollout surges first so the seed can carry each signing identity's Ed25519
   pair (`signing-public-<id>`, then `signing-key-<id>`) over from the outgoing pod

@@ -676,10 +676,11 @@ def test_every_bus_client_dials_the_bus_the_estate_names_and_the_render_runs_non
     assert not bus, f"the render runs part of a NATS bus, which is the platform's: {bus}"
 
 
-@pytest.mark.parametrize("stand_in", ["dex", "minio"])
+@pytest.mark.parametrize("stand_in", ["dex", "minio", "openbao"])
 def test_the_render_runs_no_development_stand_in(stand_in: str) -> None:
     """[[XC-131]]: the development stand-ins are fixtures (ADR 0153), so a render with every gate that names one on
-    (`dex.enabled`, `minio.enabled`) runs no pod of it and serves none; rask reaches each by its endpoint."""
+    (`dex.enabled`, `minio.enabled`, `openbao.enabled` with `devMode`) runs no pod of it and serves none; rask reaches each
+    by its endpoint."""
     docs = chart_render.render(*chart_render.DEFAULT_ARGS, "--set", "auth.enabled=true")
     found = [
         f"{doc['kind']}/{doc['metadata']['name']}"
