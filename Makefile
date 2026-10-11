@@ -1,4 +1,4 @@
-.PHONY: fga-store-check fga-estate-migrate sbom zone-sbom registry-gc dagger-gc dev-gc help install build test test-slow lint lint-imports fmt clean storybook typecheck knip comment-gate check coverage fga-test ci dev-micro dev-frontends dev-frontends-k3s dev-zone home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge k9s bootstrap dev-registry e2e frontend-images prod-render-check alert-rules-check alert-rules-drill notifications-lanes notifications-rig audit smoke-rustfs rustfs-lifecycle auth-chain governance-chain nats-auth medallion-demo go-fmt scan-config scan-secrets scan-image scan-zone-image seed-corpus e2e-isolation e2e-container-deletes e2e-fga-model e2e-open-run
+.PHONY: fga-store-check fga-estate-migrate sbom zone-sbom registry-gc dagger-gc dev-gc help install build test test-slow lint lint-imports fmt clean storybook typecheck knip comment-gate check coverage fga-test ci dev-micro dev-frontends dev-frontends-k3s dev-zone home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge k9s bootstrap dev-registry e2e frontend-images prod-render-check chart-docs chart-docs-check alert-rules-check alert-rules-drill notifications-lanes notifications-rig audit smoke-rustfs rustfs-lifecycle auth-chain governance-chain nats-auth medallion-demo go-fmt scan-config scan-secrets scan-image scan-zone-image seed-corpus e2e-isolation e2e-container-deletes e2e-fga-model e2e-open-run
 
 help:
 	@echo "Targets:"
@@ -267,7 +267,13 @@ coverage: ## The coverage report, computed on request against a correct denomina
 # `go-fmt` IS IN HERE because a gate that runs nowhere is not a gate. It gated the Go plane from no
 # caller at all: not this target, not the CI gate matrix, only a `make go-fmt` nobody types — and
 # `.dagger/storage.go` was sitting unformatted in a pushed commit when that was measured (2026-09-24).
-check: fmt lint lint-imports typecheck knip fga-test go-fmt
+check: fmt lint lint-imports typecheck knip fga-test go-fmt chart-docs-check
+
+chart-docs: ## Regenerate chart/README.md from values.yaml's `# --` comments (helm-docs)
+	@bash scripts/chart_docs.sh
+
+chart-docs-check: ## Fail when chart/README.md is stale or a chart value has no `# --` description
+	@bash scripts/chart_docs.sh --check
 
 # The authorization model's OWN suite, plus the drift check between its three copies. Both halves lived
 # ONLY in `.github/workflows/ci.yml`, so `make ci` could be fully green on a machine where the model's
@@ -811,14 +817,14 @@ k3s-up: k3s-deps k3s-crds k3s-stem-check ## Vendor deps, apply CRDs, then instal
 	  IMGARGS="-f $$LIVE"; \
 	  echo ">> reusing the LIVE release's image settings ($$(grep -c . "$$LIVE") values) — not imposing localImages"; \
 	fi; \
-	if [ -s chart/values-live-pins.yaml ]; then \
-	  IMGARGS="$$IMGARGS -f chart/values-live-pins.yaml"; \
-	  echo ">> image TAGS pinned from chart/values-live-pins.yaml (make k3s-pins to refresh)"; \
+	if [ -s deploy/values-live-pins.yaml ]; then \
+	  IMGARGS="$$IMGARGS -f deploy/values-live-pins.yaml"; \
+	  echo ">> image TAGS pinned from deploy/values-live-pins.yaml (make k3s-pins to refresh)"; \
 	fi; \
 	$(HELM) upgrade --install rask ./chart --wait --wait-for-jobs --timeout 20m \
 	  --take-ownership \
 	  $$IMGARGS \
-	  -f chart/values-local.yaml \
+	  -f deploy/values-local.yaml \
 	  --set explorer.enabled=$(EXPLORER) \
 	  --set-string frontend.oidc.publicIssuer=$(DEV_ISSUER) \
 	  --set-string frontend.oidc.publicOrigin=$(DEV_ORIGIN) \
@@ -854,7 +860,7 @@ k3s-stem-check: ## Refuse an upgrade while any image stem runs more than one tag
 	@# operation instead of beside it.
 	@KUBECONFIG=$(KUBECONFIG) ./scripts/k3s-pins.sh --check-only
 
-k3s-pins: ## Capture what the cluster is RUNNING into chart/values-live-pins.yaml (#135)
+k3s-pins: ## Capture what the cluster is RUNNING into deploy/values-live-pins.yaml (#135)
 	@# KUBECTL is deliberately NOT passed through. `KUBECTL ?= KUBECONFIG=$(KUBECONFIG) kubectl` is a
 	@# THREE-WORD string carrying its own env assignment, so `KUBECTL=$(KUBECTL) ./script` made the shell
 	@# read `KUBECTL=KUBECONFIG=...` as an assignment and then run `kubectl ./scripts/k3s-pins.sh` —
@@ -862,8 +868,8 @@ k3s-pins: ## Capture what the cluster is RUNNING into chart/values-live-pins.yam
 	@# so passing it correctly would fail too: it would exec a binary literally named
 	@# `KUBECONFIG=... kubectl`. KUBECONFIG is already in the environment; the script's own `kubectl`
 	@# default is the right one.
-	@KUBECONFIG=$(KUBECONFIG) ./scripts/k3s-pins.sh chart/values-live-pins.yaml
-	@echo ">> now: make k3s-up   (or ./scripts/helm.sh upgrade rask ./chart -f chart/values-live-pins.yaml)"
+	@KUBECONFIG=$(KUBECONFIG) ./scripts/k3s-pins.sh deploy/values-live-pins.yaml
+	@echo ">> now: make k3s-up   (or ./scripts/helm.sh upgrade rask ./chart -f deploy/values-live-pins.yaml)"
 	@echo ">> NOT bare 'helm upgrade' — every helm call goes through scripts/helm.sh"
 
 k3s-converge: ## Roll a WHOLE image stem to one tag and upgrade (the resolution k3s-stem-check names). STEM=lance-rest-catalog TAG=main-<sha>
@@ -887,7 +893,7 @@ k3s-converge: ## Roll a WHOLE image stem to one tag and upgrade (the resolution 
 	@# clean, which is the worst direction for this failure to go. So the recipe keeps the upgrade's
 	@# status in rc and exits with it after the cleanup.
 	@test -n "$(TAG)" || { echo "!! TAG is required, e.g. make k3s-converge TAG=main-$$(git rev-parse --short=8 HEAD)"; exit 2; }
-	@set -a; [ -f .env ] && . ./.env; set +a; 	STEM="$${STEM:-lance-rest-catalog}"; 	LIVE=$$(mktemp); 	$(HELM) get values rask -o yaml >"$$LIVE" 2>/dev/null || { echo "!! no live release to read image settings from"; exit 1; }; 	grep -q 'repository:' "$$LIVE" || { echo "!! the live release carries no image.repository; run make k3s-up first"; exit 1; }; 	echo ">> converging stem $$STEM -> $(TAG)"; 	$(HELM) upgrade --install rask ./chart --wait --wait-for-jobs --timeout 20m --take-ownership 	  -f "$$LIVE" 	  -f chart/values-local.yaml 	  --set image.tags.$$STEM=$(TAG) 	  --set explorer.enabled=$(EXPLORER) 	  --set-string frontend.oidc.publicIssuer=$(DEV_ISSUER) 	  --set-string frontend.oidc.publicOrigin=$(DEV_ORIGIN) 	  --set-string dex.issuer=$(DEV_ISSUER) 	  --set explorer.corpus.mode=$(CORPUS) 	  --set explorer.corpus.accessMode=$(CORPUS_ACCESS_MODE) 	  $(DROP_CREDENTIAL_VALUES); 	rc=$$?; 	rm -f "$$LIVE"; 	[ $$rc -eq 0 ] || { echo "!! helm upgrade FAILED (exit $$rc) — the release was NOT converged, and the cluster may now disagree with it"; exit $$rc; }
+	@set -a; [ -f .env ] && . ./.env; set +a; 	STEM="$${STEM:-lance-rest-catalog}"; 	LIVE=$$(mktemp); 	$(HELM) get values rask -o yaml >"$$LIVE" 2>/dev/null || { echo "!! no live release to read image settings from"; exit 1; }; 	grep -q 'repository:' "$$LIVE" || { echo "!! the live release carries no image.repository; run make k3s-up first"; exit 1; }; 	echo ">> converging stem $$STEM -> $(TAG)"; 	$(HELM) upgrade --install rask ./chart --wait --wait-for-jobs --timeout 20m --take-ownership 	  -f "$$LIVE" 	  -f deploy/values-local.yaml 	  --set image.tags.$$STEM=$(TAG) 	  --set explorer.enabled=$(EXPLORER) 	  --set-string frontend.oidc.publicIssuer=$(DEV_ISSUER) 	  --set-string frontend.oidc.publicOrigin=$(DEV_ORIGIN) 	  --set-string dex.issuer=$(DEV_ISSUER) 	  --set explorer.corpus.mode=$(CORPUS) 	  --set explorer.corpus.accessMode=$(CORPUS_ACCESS_MODE) 	  $(DROP_CREDENTIAL_VALUES); 	rc=$$?; 	rm -f "$$LIVE"; 	[ $$rc -eq 0 ] || { echo "!! helm upgrade FAILED (exit $$rc) — the release was NOT converged, and the cluster may now disagree with it"; exit $$rc; }
 	@# SINGLE QUOTES around the suggested command, never backticks: a backtick inside an echo is
 	@# COMMAND SUBSTITUTION, so `>> ... `make k3s-up` ...` RAN a full k3s-up as a side effect of
 	@# printing advice. Observed 2026-09-22 in this target's own output — "every stem converged —
@@ -936,16 +942,20 @@ KIND_V    := v0.25.0
 KUBECTL_V := v1.31.3
 FGA_V     := 0.6.4
 K9S_V     := v0.32.7
+HELM_DOCS_V := 1.14.2
+# helm-docs names its assets Linux/Darwin and x86_64/arm64.
+HELM_DOCS_ARCH := $(shell uname -m | sed -e 's/aarch64/arm64/')
 # k9s tags its assets Linux/Darwin (capitalised), unlike everything else above.
 K9S_OS    := $(shell uname -s)
 
-bootstrap: ## Download kind/kubectl/fga into .localbin (idempotent) — helm + docker must be on PATH
+bootstrap: ## Download kind/kubectl/fga/k9s/helm-docs into .localbin (idempotent) — helm + docker must be on PATH
 	@mkdir -p $(LOCALBIN)
 	@test -n "$(HOST_ARCH)" || { echo "!! unsupported CPU '$$(uname -m)' — need x86_64 or arm64"; exit 1; }
 	@test -x $(KIND)              || { echo "kind ->"; curl -fsSL -o $(KIND) "https://kind.sigs.k8s.io/dl/$(KIND_V)/kind-$(HOST_OS)-$(HOST_ARCH)" && chmod +x $(KIND); }
 	@test -x $(LOCALBIN)/kubectl  || { echo "kubectl ->"; curl -fsSL -o $(LOCALBIN)/kubectl "https://dl.k8s.io/release/$(KUBECTL_V)/bin/$(HOST_OS)/$(HOST_ARCH)/kubectl" && chmod +x $(LOCALBIN)/kubectl; }
 	@test -x $(LOCALBIN)/fga      || { echo "fga ->"; curl -fsSL "https://github.com/openfga/cli/releases/download/v$(FGA_V)/fga_$(FGA_V)_$(HOST_OS)_$(HOST_ARCH).tar.gz" | tar xz -C $(LOCALBIN) fga; }
 	@test -x $(LOCALBIN)/k9s      || { echo "k9s ->"; curl -fsSL "https://github.com/derailed/k9s/releases/download/$(K9S_V)/k9s_$(K9S_OS)_$(HOST_ARCH).tar.gz" | tar xz -C $(LOCALBIN) k9s; }
+	@test -x $(LOCALBIN)/helm-docs || { echo "helm-docs ->"; curl -fsSL "https://github.com/norwoodj/helm-docs/releases/download/v$(HELM_DOCS_V)/helm-docs_$(HELM_DOCS_V)_$(K9S_OS)_$(HELM_DOCS_ARCH).tar.gz" | tar xz -C $(LOCALBIN) helm-docs; }
 	@command -v docker >/dev/null || { echo "!! docker not on PATH — install https://docs.docker.com/get-docker/"; exit 1; }
 	@command -v helm   >/dev/null || { echo "!! helm not on PATH — install https://helm.sh/docs/intro/install/"; exit 1; }
 	@echo "toolchain ready in .localbin ($(HOST_OS)/$(HOST_ARCH))"

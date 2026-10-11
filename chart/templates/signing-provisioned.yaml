@@ -1,4 +1,4 @@
-{{- /* Renders no object, like `auth-consistency.yaml`: a store nothing seeds must be told the signing keys exist (values.yaml `signing:`). */ -}}
+
 {{- if and (include "lance.secretsViaDapr" .) (or (not .Values.openbao.devMode) .Values.openbao.externalAddr) (not (.Values.signing).provisioned) }}
 {{- $ids := include "lance.signingIdentities" . | splitList " " | compact }}
 {{- if $ids }}

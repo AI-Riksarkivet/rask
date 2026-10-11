@@ -44,7 +44,7 @@ export RASK_EXPECT_CONTEXT
 KUBECONFIG="${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
 CHECK_ONLY=""
 if [[ "${1:-}" == "--check-only" ]]; then CHECK_ONLY=1; shift; fi
-OUT="${1:-chart/values-live-pins.yaml}"
+OUT="${1:-deploy/values-live-pins.yaml}"
 KUBECTL="${KUBECTL:-kubectl}"
 export CHECK_ONLY
 # The staging file is removed on ANY exit, so a refused run leaves neither a truncated $OUT (see the

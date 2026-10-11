@@ -42,7 +42,7 @@ from tests.unit.chart_yaml import FAST_LOADER
 
 #: The fail-closed prod guards' dummy inputs, the set `scripts/prod_render_check.sh` supplies.
 _PROD_ARGS: tuple[str, ...] = (
-    "-f", str(REPO / "chart/values-prod.yaml"),
+    "-f", str(REPO / "deploy/values-prod.yaml"),
     "--set", "image.catalog.tag=v0",
     "--set", "frontend.image.tag=v0",
     "--set", "signing.provisioned=true",
@@ -54,7 +54,7 @@ _PROD_ARGS: tuple[str, ...] = (
 
 _OVERLAYS: dict[str, tuple[str, ...]] = {
     "default": DEFAULT_ARGS,
-    "deployed": ("--set", "image.localImages=true", "-f", str(REPO / "chart/values-local.yaml")),
+    "deployed": ("--set", "image.localImages=true", "-f", str(REPO / "deploy/values-local.yaml")),
     "prod": _PROD_ARGS,
 }
 

@@ -23,9 +23,7 @@ spec:
             app.kubernetes.io/component: backup-pg
         spec:
           restartPolicy: OnFailure
-          {{- /* A FIRST-PARTY IMAGE NEEDS THE ESTATE'S PULL SECRETS, which `minio/mc` never did:
-                 it came from a public registry, so this pod spec was one of the few that could skip
-                 them. Running the rask image makes it an ordinary first-party workload. */}}
+
           {{- with .Values.imagePullSecrets }}
           imagePullSecrets:
             {{- toYaml . | nindent 12 }}
@@ -77,15 +75,6 @@ spec:
           serviceAccountName: {{ include "lance.fullname" . }}-sa-jobs
           containers:
             - name: upload
-              {{- /* THE ESTATE'S OWN S3 SEAM, not a third-party CLI. `minio/mc` refuses ANONYMOUS
-                     pulls on every registry this estate can reach — measured 2026-09-24 with the
-                     bearer decoded, Docker Hub answers `access: []` and quay.io `actions: []`, both
-                     401 ([[XC-075]]). What this uploads is the lineage graph (AGE) and the
-                     authorization store (OpenFGA), so on a node that pulls fresh the estate's two
-                     most irreplaceable databases back up NOWHERE, and a CronJob that cannot start
-                     says so once in an event nobody reads. Every verb was plain S3: `cp` is
-                     `put_object`, `ls` + `rm` are the retention walk that
-                     `storage.prune_timestamped_prefixes` now owns for both backup lanes. */}}
               image: "{{ include "lance.catalogImage" . }}"
               imagePullPolicy: {{ .Values.image.pullPolicy }}
               {{- include "lance.rootlessSecurityContext" 10001 | nindent 14 }}
@@ -101,18 +90,12 @@ spec:
                     secretKeyRef: { name: {{ include "lance.fullname" . }}-infra-credentials, key: minio-secret-key }
                 - { name: AWS_ACCESS_KEY_ID, value: {{ .Values.minio.accessKey | quote }} }
                 - { name: RASK_S3_ENDPOINT_URL, value: {{ include "lance.s3Endpoint" . | quote }} }
-                {{- /* THE LITERAL, as `services.yaml`, both maintenance templates and
-                       `_ray-cluster-config.tpl` already spell it. A `minio.region` value would be a
-                       fifth spelling of one constant nothing in this estate varies. */}}
                 - { name: AWS_REGION, value: "us-east-1" }
               command:
                 - python
                 - /srv/pg_dump_upload.py
                 - /dump
                 - {{ printf "s3://%s/_backups/pg" .Values.minio.bucket | quote }}
-                {{- /* `--keep 0` means UNBOUNDED in the script, which is the same meaning this
-                       template's `gt 0` gate always had — so an operator who sets keep to 0 gets
-                       growth rather than a surprise deletion. */}}
                 - --keep
                 - {{ .Values.backups.pgDump.keep | quote }}
               volumeMounts: [{ name: dump, mountPath: /dump }]

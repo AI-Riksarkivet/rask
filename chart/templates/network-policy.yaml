@@ -132,9 +132,7 @@ spec:
             matchExpressions:
               - key: app.kubernetes.io/component
                 operator: In
-                {{- /* stateStore.scopes is APPENDED + uniq'd (app-id == component label for these
-                     pods — media.yaml keys them identically), so this list and the secret-store
-                     component's scope (dapr-component.yaml) cannot drift. */}}
+
                 {{- $openbaoClients := list "catalog" "lineage" "maintenance" "maintenance-worker" "medallion-producer" }}
                 {{- range .Values.medallion.stageRunners }}
                 {{- $openbaoClients = append $openbaoClients .name }}
@@ -142,7 +140,7 @@ spec:
                 {{- if and .Values.dapr.sidecars .Values.stateStore.enabled }}
                 {{- $openbaoClients = concat $openbaoClients .Values.stateStore.scopes }}
                 {{- end }}
-                {{- /* the dev seed reads the signing pairs from the outgoing OpenBao pod (openbao.yaml) */}}
+
                 {{- if .Values.openbao.devMode }}
                 {{- $openbaoClients = append $openbaoClients "openbao" }}
                 {{- end }}
@@ -177,18 +175,12 @@ spec:
             matchExpressions:
               - key: app.kubernetes.io/component
                 operator: In
-                {{- /* stateStore.scopes appended + uniq'd, same derivation as the openbao rule above. */}}
+
                 {{- $ageClients := list "lineage" "catalog" "openfga-migrate" "backup-pg" }}
                 {{- if and .Values.dapr.sidecars .Values.stateStore.enabled }}
                 {{- $ageClients = concat $ageClients .Values.stateStore.scopes }}
                 {{- end }}
-                {{- /* The in-cluster OTel Collector is a 5432 client too: its `sqlquery/daprstate`
-                       receiver reads the workflow-history volume and age that nothing else can
-                       measure (daprd exports no workflow or state-store metric at all). Blocked here
-                       and the receiver retries forever, DaprWorkflowStateMetricsMissing fires, and
-                       the retention alert it guards goes blind. Gated on the same three conditions
-                       that render the receiver, so a prod estate on an EXTERNAL Collector does not
-                       carry an allow-entry for a pod it never deploys. */}}
+
                 {{- $oc := .Values.observability.otelCollector | default dict }}
                 {{- if and .Values.observability.enabled $oc.enabled (not $oc.externalEndpoint) .Values.stateStore.enabled }}
                 {{- $ageClients = append $ageClients "otel-collector" }}

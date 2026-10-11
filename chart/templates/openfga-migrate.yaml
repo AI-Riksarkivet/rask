@@ -47,8 +47,6 @@ spec:
           # Same tag as the server (values.openfga.image.tag) so the migrated schema matches.
           image: "openfga/openfga:{{ .Values.openfga.image.tag | default "v1.18.3" }}"
           {{- include "lance.rootlessSecurityContext" 65532 | nindent 10 }}
-          {{- /* kept uniform with its siblings; the binary writes nothing itself, which a read-only rootfs turns into a failure. HOME on the tmp
-                 emptyDir is the pair every app container in this chart already uses. */}}
           volumeMounts:
             {{- include "lance.tmpMount" . | nindent 12 }}
           resources:
@@ -61,7 +59,6 @@ spec:
             - name: OPENFGA_DATASTORE_URI
               valueFrom:
                 secretKeyRef: { name: {{ include "lance.fullname" . }}-infra-credentials, key: openfga-datastore-uri }
-            {{- /* HOME on the tmp emptyDir: this container now runs with a read-only rootfs, and the CLI writes under $HOME. */}}
             - { name: HOME, value: /tmp }
           args:
             - migrate

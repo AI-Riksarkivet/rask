@@ -1,0 +1,50 @@
+# chart/templates/raycluster.yaml
+
+Rationale for `chart/templates/raycluster.yaml`. It lives here because Helm stores the chart's templates in
+every release revision, under a 1 MiB ceiling. Each section is headed by the template line it explains.
+
+## `{{- fail "ray.cluster.enabled and singleTenant.enabled both render a Ray head: the RayService wraps its own...`
+
+ONE RAY, NOT TWO. A RayService already wraps a cluster of its own, so rendering a RayCluster
+beside it gives the estate two heads, two GCSes and two dashboards — and whichever one
+`rask.rayDashboardUrl` does not name is the one nobody notices is idle, because every job still
+succeeds on the other. Refused at render rather than documented, since the symptom of getting
+it wrong is silence.
+
+## `apiVersion: ray.io/v1`
+
+The BATCH lane's cluster — the second consumer `_ray-cluster-config.tpl` was factored for and which
+was never written. Its header states the split: "A RayService wraps a cluster to run SERVE
+applications; a RayCluster is the cluster on its own, for the batch lane that submits Jobs and serves
+nothing."
+
+WHY IT EXISTS AT ALL, measured 2026-09-18: all four Ray CRDs are installed, `kubectl get
+rayservice,raycluster,rayjob -A` returns No resources found, `kuberay-operator` has run 52 days with
+nothing to reconcile, and the head every stage and train job lands on is `deploy/ray-lance-demo.yaml`
+— a hand-applied Deployment whose own header says "NOT for production: production is KubeRay
+(RayCluster CR)". Nothing reconciles it, and that file lists three silent reverts it has already
+caused.
+
+WHAT THE OPERATOR BUYS, beyond reconciliation: it labels its pods `ray.io/is-ray-node`, which three
+chart seams already select and which nothing currently carries — the Collector's `ray-pods` scrape
+job, the Ray NetworkPolicy peer, and by consequence four of the five Ray alert rules. They are not
+broken; they are watching an empty set, which looks identical to a healthy one.
+
+THE SUBMITTER DOES NOT CHANGE. The Ray Jobs API works the same against an operator-managed head, and
+the docs present a standing RayCluster fed by the Jobs API as one of three legitimate configurations
+— they pick no winner. This changes who OWNS the cluster, not how work reaches it.
+
+## `upgradeStrategy: { type: Recreate }`
+
+A CHART CHANGE TO THE POD SPEC REACHES THE RUNNING PODS. KubeRay 1.6.2 recreates a RayCluster's
+pods on a spec change only under `Recreate` (raycluster_controller.go shouldRecreatePodsForUpgrade);
+otherwise the head keeps the spec it started with, its ServiceAccount included. The hash leaves out
+replicas, so autoscaling recreates nothing. Here and not in rask.rayClusterConfig: KubeRay refuses the
+field on a cluster a RayService creates (validation.go ValidateRayClusterUpgradeOptions).
+
+## `apiVersion: v1`
+
+The GCS store's claim. ReadWriteOnce is not a default here — RocksDB is single-writer, and a
+claim that could attach twice is the one way this backend corrupts. The class comes from values
+and empty means the cluster's own default, for the reason the hf-cache claim records: naming
+`local-path` wedged a PVC Pending with no diagnostic on anything that is not k3s.

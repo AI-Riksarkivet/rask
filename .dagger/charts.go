@@ -26,6 +26,10 @@ const greptimeImage = "docker.io/greptime/greptimedb:v1.1.1"
 // minor, and the chart deps are vendored (chart/charts/*.tgz) so template/lint run fully offline.
 const helmVersion = "3.16.4"
 
+// helmDocsVersion is the helm-docs that generates chart/README.md; the Makefile's HELM_DOCS_V pins the same one,
+// because a different version renders a different README and the staleness check would then disagree with itself.
+const helmDocsVersion = "1.14.2"
+
 // promVersion matches the CI job's promtool exactly (PV=2.55.1) — the version that authored rules_test.yml.
 const promVersion = "2.55.1"
 
@@ -81,6 +85,12 @@ func (m *Rask) chartsBase(src *dagger.Directory) *dagger.Container {
 				"/prometheus-" + promVersion + ".linux-${a}.tar.gz" +
 				" | tar xz -C /tmp && install -m0755 /tmp/prometheus-" + promVersion +
 				".linux-${a}/promtool /usr/local/bin/promtool"}).
+		// Pin helm-docs, whose assets spell the arch x86_64/arm64 where dpkg says amd64/arm64.
+		WithExec([]string{"sh", "-c",
+			"set -eu; a=\"$(dpkg --print-architecture | sed s/amd64/x86_64/)\"; " +
+				"curl -fsSL https://github.com/norwoodj/helm-docs/releases/download/v" + helmDocsVersion +
+				"/helm-docs_" + helmDocsVersion + "_Linux_${a}.tar.gz" +
+				" | tar xz -C /usr/local/bin helm-docs"}).
 		WithDirectory("/src", src, dagger.ContainerWithDirectoryOpts{
 			Exclude: []string{"**/.env", "**/.env.*", ".venv", ".git", "node_modules", ".dagger", "frontend/node_modules", ".localbin"},
 		}).
@@ -146,6 +156,8 @@ func (m *Rask) Charts(
 		WithExec([]string{"make", "prod-render-check"}).
 		// 'Alert rules — validate + prove they fire (promtool)' == make alert-rules-check.
 		WithExec([]string{"make", "alert-rules-check"}).
+		// The generated chart README is current and every value carries a `# --` description.
+		WithExec([]string{"make", "chart-docs-check"}).
 		Stdout(ctx)
 }
 

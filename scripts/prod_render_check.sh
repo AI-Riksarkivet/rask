@@ -8,6 +8,7 @@
 set -euo pipefail
 
 CHART="${CHART:-chart}"
+PROD_VALUES="${PROD_VALUES:-deploy/values-prod.yaml}"
 
 # Every value the chart's `required` guards demand before it will render at all. values-prod sets
 # auth.enabled AND frontend.oidc.enabled — a governed backend with a UI that can sign in — so
@@ -38,7 +39,7 @@ COMMON=(--api-versions external-secrets.io/v1/ExternalSecret
 OUT="$(mktemp)"
 trap 'rm -f "$OUT"' EXIT
 
-helm template rask "$CHART" -f "$CHART/values-prod.yaml" \
+helm template rask "$CHART" -f "$PROD_VALUES" \
   --set image.catalog.tag=v0 --set frontend.image.tag=v0 \
   --set backups.volumeSnapshot.snapshotClassName=csi-snapclass \
   --set ingress.host=lance.example.com "${COMMON[@]}" > "$OUT"
@@ -173,7 +174,7 @@ peak=$((cap * body + headroom))
 # values-prod EXTERNALIZE block documents both as a pair; prove that when BOTH are set no in-cluster minio
 # DNS survives anywhere (app env OR the greptime config), and that setting ONLY the minio half leaks.
 EXT_S3=https://s3.ext.example.com
-atomic=$(helm template rask "$CHART" -f "$CHART/values-prod.yaml" \
+atomic=$(helm template rask "$CHART" -f "$PROD_VALUES" \
   --set image.catalog.tag=v0 --set frontend.image.tag=v0 \
   --set backups.volumeSnapshot.snapshotClassName=csi-snapclass --set ingress.host=lance.example.com \
   --set minio.enabled=false --set minio.externalEndpoint="$EXT_S3" \
@@ -182,7 +183,7 @@ grep -q "rask-minio:9000" <<<"$atomic" \
   && fail "externalizing the object store + the greptime endpoint companion still leaks in-cluster store DNS"
 # Negative: minio externalized but the greptime companion OMITTED must still show the leak (proves the pairing
 # is load-bearing, i.e. the guard above isn't vacuous).
-leak=$(helm template rask "$CHART" -f "$CHART/values-prod.yaml" \
+leak=$(helm template rask "$CHART" -f "$PROD_VALUES" \
   --set image.catalog.tag=v0 --set frontend.image.tag=v0 \
   --set backups.volumeSnapshot.snapshotClassName=csi-snapclass --set ingress.host=lance.example.com \
   --set minio.enabled=false --set minio.externalEndpoint="$EXT_S3" "${COMMON[@]}" 2>/dev/null)

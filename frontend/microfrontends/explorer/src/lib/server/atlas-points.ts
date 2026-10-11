@@ -40,7 +40,7 @@
  *
  * ## The store: in-process, per replica — and what that costs
  *
- * `chart/values-prod.yaml` sets `frontend.replicas: 2` with no session affinity, so two users can land on
+ * `deploy/values-prod.yaml` sets `frontend.replicas: 2` with no session affinity, so two users can land on
  * different zone pods. What an in-process cache means there, precisely: the projection is materialised at
  * most **once per replica per freshness window**, not once per user. With two replicas the estate pays 2
  * cold fills per 5 minutes instead of one per mount, every subsequent user on either pod is warm, and the

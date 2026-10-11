@@ -1,0 +1,57 @@
+# chart/templates/rayservice.yaml
+
+Rationale for `chart/templates/rayservice.yaml`. It lives here because Helm stores the chart's templates in
+every release revision, under a 1 MiB ceiling. Each section is headed by the template line it explains.
+
+## `serveConfigV2: |`
+
+THE APPLICATION LIST IS VALUES, NOT TEMPLATE. This was a single hardcoded `- name: htrflow`,
+so the platform chart could express exactly ONE Serve application and knew its name — the
+strongest form of what CLAUDE.md forbids, because a second workload could not be deployed at
+all without editing a platform template. A workload must reach the platform as CONFIG.
+
+`ray.serveApplications` defaults to the single entry that was hardcoded here, so an existing
+release renders byte-identically and this is not a redeploy. The env below is the PLATFORM's
+half of the contract — replica count, GPU fraction, HF token behaviour — applied to every
+application; a workload's own parameters ride `params`, rendered RASK_PARAM_<KEY> so one
+cannot reach a platform variable by choosing a colliding name (the rule ray_submit already
+applies to stage jobs).
+
+## `image_uri: {{ $app.image | quote }}`
+
+THE PER-WORKLOAD BAKED IMAGE. `image_uri` names a whole prebuilt image for THIS
+application's replicas (Ray 2.43+), so several workloads share one cluster without
+sharing one environment — which is what keeps the head image agnostic.
+
+This is NOT the mechanism the 2026-08-23 ruling rejected. That refuses shipping
+DEPENDENCIES through runtime_env (the `pip`/`uv` fields, resolving a stack at replica
+start). Handing a deployment an image built by .docker/ray-runner.dockerfile is the
+baked-image answer the ruling asks for.
+
+Unset => the replicas inherit the head's image, which is correct only when the head
+image already provides the import path. Nothing could tell those two cases apart
+before: the chart declared `runner.htrflow_service:htrflow_app` while deploying
+`ray-cluster`, an image emptied of every runner by fd7dd7e0, and the application simply
+never became healthy. tests/unit/test_invariants.py now refuses that pairing.
+
+## `RASK_SERVE_GPU_FRAC: "{{ include "rask.serveGpuFrac" $ }}"`
+
+DERIVED from ray.gpuCount (rask.serveGpuFrac), not passed through: an actor that asks
+for a GPU fraction on a cluster that advertises no nvidia.com/gpu never becomes
+healthy, so the RayService stays `Initializing` forever, the operator never creates
+the stable `<release>-ray-head-svc`, and the compute zone reports "Ray offline" beside
+a Running head (live-proof 2026-07-28, defect 3 — it took a manual
+--set config.RASK_SERVE_GPU_FRAC=0 to get past). The same helper feeds the fleet
+ConfigMap, so the two can never disagree.
+
+## `{{- range $key, $value := ($app.params | default dict) }}`
+
+THE OTEL_* BLOCK MOVED OUT OF HERE (2026-08-22). It was five hand-rolled literals in
+this runtime_env — release name, db name and trace pipeline hardcoded — and
+`runtime_env.env_vars` scopes to ONE Serve application's build task and replica actors.
+So it reached neither the ray-head container, GCS, the raylet, the dashboard agent, nor
+the Serve controller/proxy, and named a workload (`ray-htrflow`) as the identity of the
+shared Ray plane. It now renders on the head CONTAINER via `rask.rayOtelEnv`, derived
+from the same helpers every other pod uses. What stays here is the WORKLOAD's own half
+of the contract — replica count, GPU fraction, HF token behaviour — which is exactly
+what runtime_env is for.

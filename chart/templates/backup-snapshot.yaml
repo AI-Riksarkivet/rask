@@ -58,8 +58,6 @@ spec:
             {{- include "lance.labels" . | nindent 12 }}
             app.kubernetes.io/component: minio-backup
         spec:
-          {{- /* Its own RBAC-bound SA, not the tokenless shared jobs SA: its kubectl creates the
-               VolumeSnapshot CR through the Role above, so a zero-grant SA fails every backup. */}}
           serviceAccountName: {{ include "lance.fullname" . }}-snapshot
           restartPolicy: OnFailure
           containers:

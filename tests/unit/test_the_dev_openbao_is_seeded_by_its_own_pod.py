@@ -235,7 +235,7 @@ def _arrange_nats(case: str, stores: Path, tmp_path: Path, env: dict[str, str]) 
     ("overlay", "served", "local", "succeeds", "case"),
     [
         pytest.param(DEFAULT_ARGS, "lacks", "", True, "minted", id="minted-into-a-served-absence"),
-        pytest.param(("--set", "image.localImages=true", "-f", str(REPO / "chart/values-local.yaml")), "lacks", "", True, "minted", id="minted-with-eso"),
+        pytest.param(("--set", "image.localImages=true", "-f", str(REPO / "deploy/values-local.yaml")), "lacks", "", True, "minted", id="minted-with-eso"),
         pytest.param(DEFAULT_ARGS, "refused", "", True, "minted", id="minted-when-nothing-serves"),
         pytest.param(DEFAULT_ARGS, "forbidden", "", False, "minted", id="a-served-store-it-cannot-read-stops-the-seed"),
         pytest.param(DEFAULT_ARGS, "lacks", "readonly", False, "minted", id="a-failed-write-stops-the-seed"),

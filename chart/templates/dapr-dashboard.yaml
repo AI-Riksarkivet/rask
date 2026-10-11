@@ -54,16 +54,11 @@ spec:
         {{- include "lance.labels" . | nindent 8 }}
         app.kubernetes.io/component: dapr-dashboard
     spec:
-      {{- /* Its own RBAC-bound SA, not a tokenless one from security-sa.yaml: the dashboard reads the
-           API (the ClusterRole above), and a zero-grant SA would leave it Ready but broken. */}}
       serviceAccountName: {{ include "lance.fullname" . }}-dapr-dashboard
       containers:
         - name: dashboard
           image: {{ .Values.dapr.dashboard.image }}
-          {{- /* `daprio/dashboard` declares no USER, so it runs as root unless a uid is pinned here —
-                 read off the image config with `dagger core container from --address=... user`, which
-                 answers empty. 65532 is the uid Dapr's own chart gives this image. It writes nothing:
-                 it reads the k8s API through the SA above and serves 8080. */}}
+
           {{- include "lance.rootlessSecurityContext" 65532 | nindent 10 }}
           ports:
             - { name: http, containerPort: 8080 }

@@ -106,7 +106,7 @@ def _unbounded(docs: list[dict]) -> list[str]:
 
 _OVERLAYS = {
     "default": _DEFAULT_ARGS,
-    "prod": ["-f", str(REPO / "chart/values-prod.yaml"), *_PROD_ARGS],
+    "prod": ["-f", str(REPO / "deploy/values-prod.yaml"), *_PROD_ARGS],
 }
 
 

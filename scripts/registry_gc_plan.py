@@ -20,7 +20,7 @@ import re
 from collections.abc import Iterable, Mapping, Sequence
 
 
-#: A `<name>: "<tag>"` line in `chart/values-live-pins.yaml`.
+#: A `<name>: "<tag>"` line in `deploy/values-live-pins.yaml`.
 _PIN_RE = re.compile(r'\s*([A-Za-z0-9._-]+):\s*"([^"]+)"\s*$')
 
 

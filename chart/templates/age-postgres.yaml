@@ -83,11 +83,7 @@ spec:
     app.kubernetes.io/component: age
     app.kubernetes.io/instance: {{ .Release.Name }}
 ---
-{{- /* Guard: StatefulSet volumeClaimTemplates are immutable, so bumping age.storage on an upgrade
-either hard-fails deep in the apply or (worse) looks accepted without resizing anything. Catch it
-up-front with a clear path forward. `lookup` returns empty on `helm template`/client dry-run, so
-render/CI paths are unaffected; the comparison is textual (write the same unit as the live object,
-normally the one this chart installed). */}}
+
 {{- $existingSts := lookup "apps/v1" "StatefulSet" .Release.Namespace (include "lance.ageHost" .) }}
 {{- if $existingSts }}
 {{- range $existingSts.spec.volumeClaimTemplates }}

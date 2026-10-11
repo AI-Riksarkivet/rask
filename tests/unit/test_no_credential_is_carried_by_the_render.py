@@ -21,7 +21,7 @@ from tests.unit.chart_render import DEFAULT_ARGS, OIDC_ARGS, REPO, render_chart_
 #: each with every credential consumer on (the Ray token was the one the chart minted).
 _RENDERS = {
     "dev": (*DEFAULT_ARGS, "--set", "ray.auth.enabled=true", "--set", "singleTenant.enabled=true"),
-    "local": ("--set", "image.localImages=true", "-f", str(REPO / "chart/values-local.yaml"), "--set", "ray.auth.enabled=true"),
+    "local": ("--set", "image.localImages=true", "-f", str(REPO / "deploy/values-local.yaml"), "--set", "ray.auth.enabled=true"),
 }
 
 

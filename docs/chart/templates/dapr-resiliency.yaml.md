@@ -1,0 +1,196 @@
+# chart/templates/dapr-resiliency.yaml
+
+Rationale for `chart/templates/dapr-resiliency.yaml`. It lives here because Helm stores the chart's templates in
+every release revision, under a 1 MiB ceiling. Each section is headed by the template line it explains.
+
+## `apiVersion: dapr.io/v1alpha1`
+
+Dapr Resiliency (opt-in, ships TOGETHER with the deadLetterTopic subscriptions + the crash-recovery
+broker backOff — see values.yaml dapr.resiliency): the SIDECAR owns pub/sub delivery retries, so a
+delivery that exhausts this schedule is published to the subscription's dead-letter topic (visible,
+ERROR-logged parking) instead of silently ceasing to redeliver after the broker's maxDeliver.
+
+THE POLICY IS `constant` BECAUSE IT IS THE ONLY ONE THAT CAN HOLD A WINDOW. dapr/kit's NewBackOff
+reads `Duration` under PolicyConstant alone (`b = backoff.NewConstantBackOff(c.Duration)`); under
+PolicyExponential it is ignored outright and the schedule comes from InitialInterval / Multiplier /
+RandomizationFactor / MaxInterval. The Resiliency CRD declares only policy, duration, matching,
+maxInterval and maxRetries (read off the live CRD, 2026-09-14), so under `exponential` the first
+step is pinned at cenkalti/backoff's 500ms default and NO chart value can move it — 0.5 + 0.75 +
+1.125 + 1.6875 ≈ 4s, whatever duration is written beside it. `constant` is also the only
+DETERMINISTIC shape, for the same reason: `randomizationFactor` is equally unsettable and
+exponential carries a 0.5 default that swings the total ±50%.
+
+The arithmetic, so the next edit can check itself: 4 retries × 120s = 480s = 8 min, no jitter, over
+5 total attempts. The margin under the components' 720s crash-recovery ackWait is not slack — while
+the sidecar retries, the broker still holds the original un-acked, so a schedule outlasting ackWait
+has JetStream redeliver the same trigger underneath a retry still in flight and the stage runs
+twice. THE HANDLER'S OWN TIME COUNTS AGAINST THAT MARGIN, which is why the window is spent on FEW
+LONG steps rather than many short ones: 480s of backoff plus 5 attempts leaves 48s apiece, where the
+same 480s split into 30s steps would need 16 attempts and overrun ackWait on any handler slower than
+15s. Long steps cost little for the failure this exists to survive — a dependency pod is back inside
+~90s, so the FIRST retry already lands after recovery.
+
+Measured 2026-09-14 by driving a poison delivery to `bronze-to-silver` and timing the park; pinned
+by tests/unit/test_the_cascade_retry_window_is_the_one_the_chart_states.py, which computes the
+window from the rendered policy under dapr/kit's semantics and checks BOTH edges.
+
+## `policy: constant`
+
+ONLY the fields the Resiliency CRD actually declares: policy, duration, matching,
+maxInterval, maxRetries. `initialInterval`, `multiplier` and `randomizationFactor` are
+rejected — `strict decoding error: unknown field` — which `helm upgrade` swallows as a
+warning while a GitOps reconciler parks the whole Application OutOfSync on it. `maxInterval`
+is omitted deliberately: it is read only under `exponential`, so carrying it here would be a
+value that looks like a bound and bounds nothing.
+
+## `{{- $subscribers = append $subscribers (dict "appId" "notifications") }}`
+
+The inbox subscription, registered in the SAME act that mints its component. Both halves of the
+omission are silent and they point opposite ways: unregistered, an app-returned RETRY falls back to
+the broker's crash-recovery schedule with no dead-lettering at all; dead-lettering turned on WITHOUT
+this line, the FIRST transient failure parks the message — the publication head's defect, measured
+and fixed this session. `IngressSettings.dlq_topic` therefore ships empty, and enabling it is an act
+that presupposes this line.
+
+## `{{- if and .Values.maintenance.enabled .Values.maintenance.workTopic }}`
+
+MAINTENANCE's write-event subscription — the primary maintenance trigger. Added here under the
+SAME condition dapr-component.yaml uses to create it, so the two lists cannot disagree about
+whether the lane exists. It also puts the app-id into `scopes:` below, which is the half a
+component-only entry would silently miss.
+
+## `{{- if and .Values.catalog.controlEmit .Values.medallion.enabled }}`
+
+The CASCADE CONTROL component, which $subscribers does NOT reach. `lance.subPubsub` renders
+`lance-pubsub-<appId>` — the lineage-topic component — while the `/publication-arrival`
+subscription rides `catalog-control-pubsub-<producer>` (dapr-component.yaml, the "CASCADE's view
+of the same control stream" block). The producer app-id is in $subscribers, so `scopes:` below
+already covers it and the CRD applied; only the component target was missing, which is exactly
+the shape that makes this invisible — the policy exists, the app is in scope, and the one
+subscription it was supposed to protect is not named.
+
+What the omission COST, and why this is not cosmetic: `bronze_arrival.py` declares a
+`dead_letter_topic` on that subscription, and Dapr sends to the DLT after the FIRST failure when
+no retry policy targets the component. So the most expensive trigger in the estate — a
+publication, the thing the durable+queue-group component above exists to guarantee delivery of —
+got zero retries and parked on one transient blip.
+
+Rendered from the same expression dapr-component.yaml:71 uses, under the same two conditions, so
+a rename of `pubsub.controlName` cannot leave the policy pointing at a component that is gone.
+
+## `{{- if .Values.services.notifications }}`
+
+The NOTIFICATION plane's control-topic subscriber (v3 targeting), which `$subscribers` misses
+for exactly the same reason the producer's does: `lance.subPubsub` renders the LINEAGE-topic
+component name, and this subscription rides the control one. `notifications` is already in
+`$subscribers`, so `scopes:` below covers the app — it is only the second COMPONENT target that
+has to be named, which is the shape that makes this class of omission invisible.
+
+Rendered under the same condition as the Component itself (dapr-component.yaml), from the same
+expression, so a rename of `pubsub.controlName` cannot leave the policy pointing at a component
+that is gone. Gated by tests/unit/test_invariants.py's durable-component sweep, which is what
+caught this one before it shipped.
+
+## `{{- if and .Values.maintenance.enabled .Values.maintenance.workTopic }}`
+
+THE MAINTENANCE WORK QUEUE AND INDEX LANE, which `$subscribers` does not reach for the same
+reason the two control components above do not: `lance.subPubsub` renders the LINEAGE-topic name,
+and these are dedicated components with names of their own.
+
+What the omission would cost, and it is the most expensive unit in the estate to lose: a work
+unit is one dataset's compaction, and `api/work.py` returns RETRY on a transient S3 or commit
+failure. With no policy targeting the component, Dapr sends to the dead-letter topic after the
+FIRST failure — the component's own `maxDeliver` and `backOff` never engage, because the sidecar
+acks the original. The register's § Q17-35 records the measurement.
+
+The GATE was blind to this in a way worth naming: `test_every_DURABLE_pubsub_component_has_a_
+sidecar_retry_target` states the rule as a property over every rendered durable component, but it
+rendered without `maintenance.workTopic`/`indexTopic` — which ship empty — so these components did
+not exist in its render and it passed over them vacuously. A property test is only as wide as the
+values it is rendered with.
+
+## `apiVersion: dapr.io/v1alpha1`
+
+Service-invocation resiliency (the DAPRIFY mesh, 2026-07-27): with dapr.sidecars every /api/* request
+leaves the gateway through its own daprd (RASK_DAPR_ENABLED → localhost:3500/v1.0/invoke/<app-id>/method),
+and Dapr applies invocation resiliency on the CALLING sidecar — so this policy is scoped to the gateway
+and targets every app-id the gateway routes to (services/gateway _routes()). Deliberately modest, no
+invented aggression: 3 constant-backoff retries (connect-level blips), an end-to-end timeout of 300s
+matching the gateway's own httpx client (httpx.Timeout(30.0, read=300.0) in services/gateway — a shorter
+Dapr timeout would cut long reads the gateway itself still waits for), and a circuit breaker that sheds
+a persistently dead upstream for 30s (the gateway's connect timeout) after 5 consecutive failures
+instead of stacking doomed retries onto it.
+
+## `matching:`
+
+RETRY ONLY WHAT A RETRY CAN FIX. Without this, every 4xx is retried three times, so one
+rejected request becomes FOUR failures against `consecutiveFailures >= 5` — two denied
+logins open the breaker and the next 30 s of traffic to that app gets 500 for EVERY caller.
+Measured on the ingest door: a handful of anonymous 403s took the whole app-id offline,
+which turns an authorization check into a self-inflicted denial of service.
+Retrying a 403 is also pointless on its own terms: the answer will not change.
+
+## `writeRetry:`
+
+THE CASCADE HEADS GET A NARROWER MATCHER, and the difference is exactly 500.
+`medallion-producer` and `ingest` serve POST /produce, /ingest-media, /train and /ingests —
+each of which STARTS a bronze->gold run. Those doors now require an `Idempotency-Key`, so a
+replay converges rather than duplicating; this is the other half of the same rule
+("pair retry with an idempotency key OR mark the operation non-retryable" — do both, because
+each covers what the other misses).
+502/503/504 mean the request never reached a working app, and these doors answer 503 with an
+explicit `Retry-After: 5` — a retry is what they ASK for. A bare 500 means the app WAS reached
+and something failed inside it, possibly after the head had already published the trigger.
+Replaying that three times at 2s is how one operator click became four unrelated cascades.
+THE CATALOG IS ON THIS LIST TOO, since 2026-09-09, and the sentence that kept it off was the
+defect. It read "retrying a read after a 500 is harmless" — true, and the catalog is not a
+read plane: 77 POST plus 14 DELETE/PUT/PATCH routes across `api/v1/endpoints/`, none
+carrying an idempotency key. A 500 raised anywhere AFTER the Lance write in
+`create_governed_table` — the schema read-back, `emit_create`, `emit_control` — was replayed
+three times at 2s with nothing to converge them: with `mode=Create` the replays answer
+AlreadyExists, so a create that fully succeeded surfaces as a 409 indistinguishable from a
+name collision; with `mode=Overwrite` each replay RE-EXECUTES the destructive path, dropping
+and rewriting the dataset and re-seeding the ACL. The same amplifier sat on rename, drop,
+register and the warehouse/project mints.
+The rule this applies is the estate's own, quoted in
+`tests/unit/test_write_doors_require_idempotency.py`: "pair retry with an idempotency key OR
+mark the operation non-retryable". The catalog has no key, so it takes the other branch —
+and the key is § Q17-32's second half, which this does not replace.
+What it costs is a 500-retry on catalog READS. That is a resilience nicety a caller can
+repeat for itself; a replayed destructive write cannot be undone by anyone.
+
+## `targets:`
+
+NO CIRCUIT BREAKER ON INVOCATION TARGETS, deliberately.
+There was one — `consecutiveFailures >= 5`, 30 s open — and Dapr's circuit breaker, unlike its
+retry policy, has NO status matching: it counts every non-2xx, including the 4xx an authorization
+check returns as its normal, correct answer.
+Measured on the ingest door, after the retry `matching` above already removed the 4x
+amplification: `403 403 403 403 403 500 500 500 500 500`. Five refused requests took the whole
+app-id offline for every caller for 30 s. That is a denial of service ANY unauthenticated client
+can trigger on demand, against every app behind the gateway, by sending five requests it already
+knows will be refused. A protective control an attacker can aim is not a protective control.
+What is lost is fail-fast against a genuinely dead upstream. That is bounded by `invokeTimeout`
+and by the retry policy, and a slower failure on a real outage is a far smaller cost than a
+trivially remote-triggerable one on a healthy fleet.
+
+## `{{- $invoked := list .Values.services.catalog.daprAppId .Values.services.lineage.daprAppId }}`
+
+Target only app-ids whose pods can actually render — mirror the templates' own gates
+(fleet.yaml ranges .Values.services minus the lakehouse entries, gateway always + the rest
+under singleTenant; services.yaml renders catalog/lineage unconditionally; controlplane.yaml,
+medallion.yaml, media.yaml carry their own toggles). Derived, not restated, so a new fleet
+entry is picked up here automatically.
+
+## `{{- range $name, $svc := .Values.services }}`
+
+Mirrors fleet.yaml's gate EXACTLY — `frontDoor` or singleTenant — because this list claims to be
+DERIVED from it. It was restated as `if singleTenant.enabled` alone, so the moment compute became a
+front-door service the two drifted: compute rendered a pod the gateway invokes while this CR did not
+target it, leaving it with no timeout, no retry and no circuit breaker — the identical call to
+catalog had all three. gateway is excluded because it is the CALLER, not a target.
+
+## `{{- $writeDoors := list .Values.medallion.producer.daprAppId "ingest" .Values.services.catalog.daprAppId }}`
+
+The cascade heads take `writeRetry` (no 500); everything else keeps `invokeRetry`. Derived from
+the app-id rather than listed twice, so a rename cannot leave a head on the wide policy.

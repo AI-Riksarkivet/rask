@@ -1,6 +1,6 @@
 """A job that is ALREADY GONE is the outcome retention wanted, not a failure to report.
 
-`compute` runs at `replicas: 2` in production (`chart/values-prod.yaml`) and its prune cron is a
+`compute` runs at `replicas: 2` in production (`deploy/values-prod.yaml`) and its prune cron is a
 `bindings.cron` input binding, which fires on EVERY replica — Dapr's cron component is stateless and
 uncoordinated ("each replica runs the schedule independently, causing duplicate triggers"). So both
 pods list the same jobs, compute the same delete set from the same deterministic ordering, and both

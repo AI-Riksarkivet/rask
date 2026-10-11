@@ -1,6 +1,6 @@
 # The LOCAL k3s deployment's non-default choices — pass with `-f` on EVERY upgrade.
 #
-#     helm upgrade --install rask ./chart -f chart/values-local.yaml [...]
+#     helm upgrade --install rask ./chart -f deploy/values-local.yaml [...]
 #     make k3s-up          # does this for you
 #
 # WHY THIS FILE EXISTS. These settings used to live only as `--set` flags inside `make k3s-up`, and
@@ -113,7 +113,7 @@ maintenance:
 ray:
   cluster:
     enabled: true
-  # The registry only. The TAG comes from the live release or chart/values-live-pins.yaml: this file is
+  # The registry only. The TAG comes from the live release or deploy/values-live-pins.yaml: this file is
   # applied after both by `make k3s-up`, so a tag here reverts the running head on every converge.
   image:
     repository: localhost:5000/ray-cluster

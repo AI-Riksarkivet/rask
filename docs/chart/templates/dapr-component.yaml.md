@@ -1,0 +1,309 @@
+# chart/templates/dapr-component.yaml
+
+Rationale for `chart/templates/dapr-component.yaml`. It lives here because Helm stores the chart's templates in
+every release revision, under a 1 MiB ceiling. Each section is headed by the template line it explains.
+
+## `apiVersion: dapr.io/v1alpha1`
+
+Dapr pub/sub components — the catalog→lineage topic + the medallion triggers on NATS JetStream. The
+sidecar owns retry/backoff here (config, not app code); subscriptions are programmatic (each app
+serves GET /dapr/subscribe via dapr-ext-fastapi), so no declarative Subscription CRDs.
+
+PUBLISH-only component: the catalog publishes through it. Consumer
+metadata (queue group / deliver policy) lives on the per-SUBSCRIBER components below, never here.
+Every pub/sub component is one app's NATS connection, with that app's credential (values.yaml `nats.auth`).
+
+## `{{- if and .Values.maintenance.enabled .Values.maintenance.lineageEmit (not .Values.maintenance.workTopic) }}`
+
+Maintenance publishes its lineage through its own component; one is rendered for it below when no queue lane gives it one.
+
+## `apiVersion: dapr.io/v1alpha1`
+
+BROADCAST component for the catalog's OWN control-plane change-events (grants/warehouses/policies/tables).
+DEDICATED (not the shared lineage-pubsub) and with NO queueGroupName → jetstream sets no DeliverGroup, so
+EVERY catalog replica receives EVERY event and appends it to its per-replica ring buffer (GET /v1/events).
+The catalog is BOTH publisher (core/control_emit.py) and subscriber (api/dapr.py) on this one component.
+Ephemeral (no durableName) + deliverPolicy=new: a booting/redeployed replica must NOT replay 168h of past
+governance events into a fresh in-memory buffer — the buffer is a live-refresh hint window, not a log.
+
+## `{{- if and .Values.maintenance.enabled .Values.maintenance.controlEmit }}`
+
+The control topic's other publishers, each on its own component and so as its own NATS user: maintenance's #79 purge
+announcements and the annotator's assignments. A publisher a component does not scope is refused by its sidecar, silently.
+
+## `{{- if and .Values.medallion.enabled .Values.medallion.ray .Values.medallion.compute }}`
+
+Each stage runner announces the plans of its Ray stage runs (CP-029 D-2).
+
+## `apiVersion: dapr.io/v1alpha1`
+
+The CASCADE's view of the same control stream (§ D2 B8). A SEPARATE component, not another scope on
+the broadcast one above, because the two want opposite delivery semantics:
+
+the console buffer  — broadcast, ephemeral, deliverPolicy=new. Every replica must see every event
+to answer GET /v1/events, and a missed one costs a stale refresh hint.
+the cascade head    — queue group + DURABLE. Exactly one replica must act on a publication, and a
+trigger published while the producer is down must be DELIVERED on recovery,
+not skipped. That is the chaos-verified rule the comment block below states
+for every `new` subscriber, and a publication is the most expensive thing in
+the estate to silently drop.
+
+Sharing the broadcast component would give a scaled producer one cascade per replica, and lose any
+trigger published during a rollout — both silent.
+
+## `{{- if .Values.dapr.resiliency.enabled }}`
+
+Redelivery timing, on the SAME schedule the per-subscriber components below carry and for the same
+invariant: the broker's first backOff step must exceed the sidecar's total retry span, or the broker
+redelivers while the sidecar is still mid-retry and one publication is handled twice, concurrently.
+This component shipped with none of these and rode jetstream's defaults — so the subscriber whose
+message is the most expensive in the estate to duplicate was the only one without the guard.
+
+Duplicated rather than shared because the block below renders inside a `range` over $subscribers,
+which this component is deliberately not part of (it carries the CONTROL topic, not the lineage
+one). .dagger/charts.go asserts the rendered numbers, so drift between the two copies fails the
+build rather than going unnoticed.
+
+Changing these on an EXISTING cluster mutates a live durable's config — the §2.11 hazard, in its
+benign form: the durable NAME and its filter subject are unchanged, so the sidecar reconfigures
+rather than colliding with a consumer already holding the name, and this is exactly the drift the
+nats-stream-job reconcile compares (maxDeliver/backOff) and repairs.
+
+## `apiVersion: dapr.io/v1alpha1`
+
+The NOTIFICATION plane's control-topic subscriber (v3 targeting: a governance act that NAMED
+someone). Its OWN component, cloned from the producer's above rather than added as a scope to the
+broadcast component — `queueGroupName` lives on the COMPONENT, so a scope added to a broadcast
+splits it into a competing-consumer group instead of joining it, and the catalog's broadcast exists
+precisely to reach every replica.
+
+`deliverPolicy: new` for the same reason the lineage subscriber carries it: an inbox that replayed
+the retained backlog on every pod restart would re-notify a week of grants on every rollout.
+
+## `{{- if .Values.dapr.resiliency.enabled }}`
+
+Same redelivery schedule as its two siblings, and the same invariant: the broker's first backOff
+step must exceed the sidecar's total retry span, or the broker redelivers while the sidecar is
+still mid-retry and one event is handled twice, concurrently.
+
+## `{{- $subscribers := list (dict "appId" .Values.services.lineage.daprAppId "deliverPolicy" "all") }}`
+
+One component PER SUBSCRIBER app-id (see the lance.subPubsub helper): queueGroupName makes that
+app's replicas a competing-consumer group (single delivery per app — without it every replica gets
+EVERY message: jetstream only sets a DeliverGroup when queueGroupName is non-empty), and it CANNOT
+live on one shared component because lineage and medallion-producer both consume lineage.events.v1 — one
+shared queue group would split those messages across the two apps. deliverPolicy differs on
+purpose: `all` for lineage (a NEW durable starts at the stream's first message, so its first attach,
+or a rebuild after `nats consumer rm LINEAGE lineage-durable`, replays the retained stream into the
+idempotent ingest), `new` for the cascade head + stage runners (replayed triggers re-fire cascades).
+
+EVERY subscriber is DURABLE + queue group ([[LH-303]]). An ephemeral consumer dies with its last
+member and with a NATS restart, and the sidecar does not re-create it: measured 2026-09-26 on Dapr
+1.18.1, NATS scaled to 0 and back left lineage deaf to the bus until its pod restarted, while the
+durables resumed. Durable + queue group keeps its cursor across pod death, redeploys and NATS
+restarts, with none of the "consumer name already in use" orphans of a durable WITHOUT a queue group
+(chaos-verified 2026-07-06). Pinned by tests/unit/test_every_bus_subscriber_survives_a_bus_restart.py.
+
+A REFUSAL REPEATS ON A REPLAY. The two unrepairable classes (bytes that do not parse, a run carrying
+no author) are ACKED and counted rather than parked, because nothing can change their answer and a
+park would write a duplicate per replay. A named PERSON who lacks a grant still parks: a tuple can be
+written and the same event then succeeds.
+
+## `{{- $subscribers = append $subscribers (dict "appId" "notifications" "deliverPolicy" "new") }}`
+
+The INBOX (open_notifications.md §2). `new` is the strongest case in this list: lineage's `all`
+replays the retained stream on its first attach and on a rebuild, which for a graph IS the recovery
+story and for an inbox would re-notify a week of history — a badge that lies loudest when it matters. The durable half is the other side of the same coin: a run
+that terminated while this app was down must still reach its author, and `new` alone skips it on
+reconnect. Unconditional, like the Deployment (services.notifications is frontDoor).
+
+This mints a durable name no stream has seen, so §2.11's migration hazard does not apply here —
+that failure is an EXISTING durable name re-requested with a different filter subject ("consumer
+name already in use", a silently dead subscription the drift reconcile cannot see because
+maxDeliver/backOff still match). `notifications-durable` on LINEAGE is new; the reconcile loop
+(nats-stream-job.yaml) adopts it by its `-durable` suffix from the first tick.
+
+## `{{- if and .Values.maintenance.enabled .Values.maintenance.workTopic }}`
+
+MAINTENANCE's write-event subscription — the primary maintenance trigger, replacing the sweep's
+120s whole-estate walk. Gated on `workTopic` because the route is: the subscription plans a unit
+and publishes it to the work queue, so without a queue there is nowhere to put the result.
+
+`new`, for the notifications reason sharpened: replaying the retained stream on a pod restart
+would re-plan maintenance for every write in the window — hundreds of manifest opens to reach the
+same converged answer, since anything genuinely outstanding is still outstanding and the hourly
+backstop re-plans it anyway. A missed window costs at most one backstop tick; a replayed one costs
+the walk this lane exists to avoid.
+
+## `{{- range $subscribers }}`
+
+NO `protectedTopics` / `publishingScopes` / `subscriptionScopes` HERE, and the reason is a
+measurement rather than an omission ([[LH-064]]). Deny-by-default on `lineage.events.v1` was
+built, applied and rolled on 2026-09-16 and BROKE DELIVERY: `subscriptionScopes` is NOT additive.
+Naming an app in it makes that list the app's COMPLETE allowlist for the component — including
+topics that are not protected at all. The live refusal, on a topic `protectedTopics` never named:
+"Retry failed for subscription pubsub lineage-pubsub-notifications, topic dlq.notifications:
+subscription to topic 'dlq.notifications' ... is not allowed". 47 denials on medallion-producer,
+16 on notifications, 4 on lineage before the revert.
+So a future attempt must enumerate EVERY topic each app uses on its component, in BOTH
+directions, measured off `/v1.0/metadata` and the publish call sites — not just the one topic
+being protected. The scoping the estate already has is the document-level `scopes:` below, which
+closes each component to one app-id.
+
+## `- { name: protectedTopics, value: "{{ $.Values.pubsub.topic }}" }`
+
+THE ONE CONSUMER-ONLY IDENTITY on the provenance bus, denied publish to it ([[LH-064]]).
+Measured 2026-09-16: `notifications` has NO publish call sites of its own and its sidecar
+registers exactly two topics on this component — `lineage.events.v1` and `dlq.notifications`.
+Applied HERE ONLY, and that is the lesson from the first attempt: the same three keys rolled
+to all eight components broke delivery, because `subscriptionScopes` is not additive — naming
+an app in it makes that list its COMPLETE allowlist, so an unlisted-but-unprotected topic is
+refused too (the `dlq.notifications` refusal quoted above).
+So BOTH topics are listed on the subscribe side, and the publish side grants the dead-letter
+(the sidecar parks on it via `deadLetterTopic`, and whether that publish is scope-checked is
+not documented — granting it costs nothing and withholding it would be the same guess that
+caused the outage) while withholding the provenance topic, which is the whole point.
+
+## `- { name: durableName, value: "{{ .appId }}-durable" }`
+
+One durable per subscriber app-id, for the reasons in the block above.
+
+## `{{- if $.Values.dapr.resiliency.enabled }}`
+
+backOff supersedes ackWait for redelivery timing (NATS consumer semantics): its FIRST value is the
+effective ack window, so it must not undercut the slowest handler (a compute-on stage runner does real
+S3 reads+writes) — a 1s first step would concurrently redeliver mid-handling even at 1 replica.
+
+## `- { name: ackWait, value: "720s" }`
+
+Resiliency ON: the SIDECAR owns delivery retries (Resiliency CRD, 450s = 7.5 min total: 30+60+
+120+240, jitter pinned off) and parks exhausted messages on the DLQ — so broker redelivery
+becomes the CRASH-RECOVERY layer only. Its first step must exceed the sidecar's total retry
+span, else the broker would redeliver while the sidecar still holds the message mid-retry
+(concurrent duplicate handling). 720s > 450s holds with 270s of margin.
+(This comment said "~10.5 min" until 2026-07-28 and dapr-resiliency.yaml said "~7.5 min" — two
+different numbers for one schedule, neither of which the chart rendered. Both now state 7.5,
+and .dagger/charts.go asserts the rendered value so they cannot drift apart again.)
+
+## `apiVersion: dapr.io/v1alpha1`
+
+The lineage DLQ PARKING consumer — its own component, never the app's main one. The main
+lineage component starts at the stream's first message (`all`), which a parking subscription must
+not: riding it, a replay re-parks up to 168h of already-parked dead letters, spiking ERROR logs and
+DEAD_LETTERED counts with no new loss. deliverPolicy=new plus its own durable parks each dead letter
+exactly once. Consumer config matches the
+resiliency-mode values the nats-stream-job's durable-drift reconcile expects (EXP_MAXD/EXP_BOFF) —
+this component only renders when resiliency is on, which is also the only time LINEAGE_DLQ_TOPIC
+exists.
+
+Dapr secret store fronting OpenBao / an external Vault (Vault-API compatible). Apps read secrets via
+their sidecar (GET /v1.0/secrets/lance-secrets/<name>) instead of plaintext env — the secret-handling
+fix. Renders for the in-cluster OpenBao OR an external Vault (openbao.externalAddr), so externalizing
+the store does not force the apps back to plaintext.
+
+## `- name: vaultToken`
+
+Prod path: NOT the dev root token (it can't authenticate against an operator-initialized OpenBao).
+The operator supplies a real, scoped token via this Kubernetes secret; Dapr resolves it through its
+default k8s secret store. Create it out-of-band: kubectl create secret generic <release>-openbao-token
+--from-literal=token=<bao-token>.
+
+## `- { name: vaultKVUsePrefix, value: "false" }`
+
+Dapr defaults vaultKVPrefix to "dapr", so it reads secret/data/dapr/<key>; our seed writes
+secret/data/<key>. Drop the prefix so the path is the natural secret/data/<key> (the kv-v2 nuance).
+
+## `- { name: skipVerify, value: {{ ternary "false" "true" (hasPrefix "https://" (include "lance.vaultAddr" .))...`
+
+TLS verification tracks the Vault address scheme: an https Vault (the openbao.externalAddr prod
+path) is verified; skipVerify only for the plain-http in-cluster dev OpenBao (no TLS to verify).
+An unconditional "true" would leave the component fronting EVERY app secret unverified in prod.
+
+## `{{- $secretScopes := splitList "," (include "lance.secretScopes" .) }}`
+
+ONE derivation, in `lance.secretScopes`, because this list has a SECOND reader:
+`lance.appTokenEnv` decides whether a workload takes its app-API token from this store or
+through the environment, and it decides by membership HERE. Restating the computation would
+let the two agree at review and diverge later — a pod pointed at a store its app-id cannot
+reach gets ERR_SECRET_STORES_NOT_CONFIGURED and fails closed at boot.
+
+## `apiVersion: dapr.io/v1alpha1`
+
+THE MAINTENANCE WORK QUEUE. Its OWN component rather than a scope on a shared one, for the reason
+`queueGroupName` forces: that key lives on the COMPONENT, so adding maintenance as a scope to a
+broadcast component would split the broadcast into a competing-consumer group instead of joining one.
+
+NO `deliverPolicy` — a WORKQUEUE stream refuses anything but deliver-all, and JetStream says so:
+`nats: consumer must be deliver all on workqueue stream` (measured 2026-09-03, the subscription
+retried forever and bound to nothing). The rule follows from the retention: an acked unit is REMOVED,
+so whatever remains is by definition still outstanding and replaying it is the point, not a hazard.
+
+What that does expose is unit STALENESS — a unit can sit here up to the stream's max-age, and its
+protection verdict was computed at plan time. That is answered at the EXECUTOR (`work.py` re-checks
+`sibling_base_refs` before acting), not by skipping the backlog, because a skipped unit is work
+silently dropped while a stale verdict is work done against the wrong facts.
+
+## `{{- if .Values.dapr.resiliency.enabled }}`
+
+ackWait is sized by the WORK, not by convention, and it is the one number here that a growing
+estate can invalidate. It must exceed the longest single dataset's compact + index-optimize + GC,
+because an ack that expires mid-compaction redelivers the unit to a second worker and two
+concurrent passes then race `compact_files`/`cleanup_old_versions` on one dataset — one committing
+a rewrite while the other GCs the versions it is reading. That race is precisely what the
+in-process single-flight lock exists to prevent, so letting the broker reintroduce it would undo
+the guarantee rather than move it.
+
+The same first-backOff-step rule the sibling components carry applies: the broker's first step
+must exceed the sidecar's total resiliency retry window (7.5 min, asserted by .dagger/charts.go),
+or the broker redelivers while the sidecar is still mid-retry and one unit runs twice at once.
+
+## `- { name: maxAckPending, value: "{{ include "lance.maintenanceMaxAckPending" . }}" }`
+
+DELIVER NO MORE THAN THE FLEET CAN RUN, which is why this is DERIVED and not chosen. `ackWait`
+above runs from DELIVERY, so a unit queued behind others burns its whole 720s window while idle
+and is then redelivered — and two concurrent passes over one dataset is exactly the race the
+executor's single-flight lock exists to prevent. Setting nothing here means NATS's default of
+1,000 in flight against an execution ceiling of `maxConcurrentUnits x replicas`; measured live
+2026-09-22 as `Max Ack Pending: 1,000` versus 40 x 2, and a manual sweep drove `Ack Pending`
+181 -> 721 with a redelivery.
+
+It bounds DELIVERY, not memory: the same number of units still execute at once. Pinned by
+tests/unit/test_a_work_unit_is_not_delivered_before_it_can_run.py.
+
+## `{{- include "lance.publishPubsub" (list . (printf "%s-%s" .Values.maintenance.workPubsub .Values.services.c...`
+
+The catalog's `maintenance/compact` door enqueues here as itself, on its own publish-only component.
+
+## `apiVersion: dapr.io/v1alpha1`
+
+THE INDEX-BUILD LANE — its own component, not just its own topic.
+
+`ackWait`, `durableName` and `queueGroupName` are per-COMPONENT in Dapr's JetStream pubsub, so an
+index build sharing the work component would inherit the work queue's 720s window. That window is
+sized for one dataset's compact + index-optimize + GC; a vector index over a large table can exceed
+it, and an ack that expires mid-build redelivers the unit to a second worker which then builds the
+same index concurrently. The separation is what buys a window sized for the actual work.
+
+## `- { name: ackWait, value: {{ .Values.maintenance.indexAckWait | quote }} }`
+
+Sized for an INDEX, which is the whole reason this component exists. The same first-backOff-step
+rule the sibling components carry applies: the broker's first step must exceed the sidecar's
+total resiliency retry window, or the broker redelivers while the sidecar is still mid-retry and
+one build runs twice at once.
+
+## `- { name: maxAckPending, value: "{{ include "lance.maintenanceIndexMaxAckPending" . }}" }`
+
+THE INDEX LANE'S SHARE OF ONE POOL, not a second full allowance. `api/index_work.py` and
+`api/work.py` both reach `run_in_threadpool`, whose limiter is process-GLOBAL, so the two
+components' `maxAckPending` values sum to `maxConcurrentUnits x replicas` rather than each
+taking it — bounding both to the full capacity would admit twice what can run, which is the
+defect the bound exists to remove.
+
+The share is small ON PURPOSE. A build holds its token for up to `indexAckWait` (3600s) against
+the work queue's 720s, so index units taking the pool would starve a lane that runs every 120s.
+And the delivery bound matters MORE here than on the work lane: an hour-long window burning on
+a unit that cannot start redelivers a whole index build. [[LH-188]].
+
+## `{{- include "lance.publishPubsub" (list . (printf "%s-%s" .Values.maintenance.indexPubsub .Values.services....`
+
+The catalog's create_index doors enqueue here as itself, on its own publish-only component.

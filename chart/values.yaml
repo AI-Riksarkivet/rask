@@ -16,9 +16,12 @@
 # `| default <n>`, which swallows an explicit 0 (tests/unit/test_invariants.py enforces it).
 
 # Pinned so in-cluster service names are rask-<component> (release name is also rask).
+# -- Base name for every rendered object; pinned to `rask` so in-cluster Services resolve as `rask-<component>`.
 fullnameOverride: "rask"
+# -- Overrides the chart name used in `rask.name` labels when `fullnameOverride` is empty. Empty uses the chart name.
 nameOverride: ""
 
+# -- List of pull Secrets ({name: ...}) added to every first-party pod and hook Job. Empty pulls anonymously.
 imagePullSecrets: []
 
 # singleTenant gates the LEGACY single-tenant default workloads (the default
@@ -45,6 +48,7 @@ storage:
   # is what put the store's ROOT credential in the viewer's environment.
   # These two ARE the built-in defaults (`service_kit.schemas.storage.DEFAULT_STORES`) — same names,
   # buckets and roles — carrying the secret that makes the Dapr path the only path.
+  # -- Object-store registry rendered as RASK_STORES for the fleet and the explorer viewer; each entry is {name, bucket, role, secret, description, endpoint?, insecure?}, `secret` a Dapr secret-store key.
   stores:
     - name: lance-catalog
       bucket: lance-catalog
@@ -59,11 +63,13 @@ storage:
       description: Telemetry retained by GreptimeDB. Operational, not archival.
 
 singleTenant:
+  # -- Renders the single-tenant default workloads (every fleet service, the RayService, domain zones). False installs front-door services only; the object store is gated by `minio.enabled`.
   enabled: false
 
 # Optional override: if set, this Secret is used verbatim instead of the chart's `<release>-app`
 # (prod with external deps). It carries configuration (the object store's access key ID and endpoint),
 # never a credential.
+# -- Name of a pre-made Secret used instead of the chart's `<release>-app` (object store access key ID and endpoint, never a credential). Empty renders `<release>-app`.
 existingSecret: ""
 
 # NO CREDENTIAL IS A CHART VALUE ([[XC-004]]). Every secret the estate uses lives in the secret store and
@@ -76,6 +82,7 @@ secrets:
   # writes it to the store at `<kvMount>/hf-token`, field `token` (dev: `make k3s-up` with HF_TOKEN set
   # writes the bootstrap Secret `<release>-supplied-credentials` the dev OpenBao seeds it from), then sets
   # this so the `<release>-hf-token` ExternalSecret renders. Off, the Ray pods start without HF_TOKEN.
+  # -- True once the Hugging Face token is in the secret store at `<kvMount>/hf-token`; renders the `<release>-hf-token` ExternalSecret. False starts Ray pods without HF_TOKEN.
   hfTokenInStore: false
 
 # INTERACTIVE API DOCS — /docs, /redoc and /openapi.json — across every app in the release.
@@ -89,17 +96,24 @@ secrets:
 # `{prefix}/openapi.json` answers anonymously by fanning out to every backend it fronts — a merged
 # route table plus an amplification lever, in one unauthenticated GET.
 #
-# Turn it on for a dev cluster (chart/values-local.yaml does). Leave it off anywhere reachable.
+# Turn it on for a dev cluster (deploy/values-local.yaml does). Leave it off anywhere reachable.
 docs:
+  # -- Serves /docs, /redoc and /openapi.json on every app in the release, the gateway included. Off by default; turn on only for a dev cluster.
   enabled: false
 
 # Non-secret env shared by the fleet ConfigMap.
 config:
+  # -- Path prefix the fleet apps mount their API under, via the shared fleet ConfigMap.
   RASK_API_PREFIX: "/api"
+  # -- Ray Serve replica count per deployment, passed to the RayService and the fleet ConfigMap.
   RASK_SERVE_REPLICAS: "1"
+  # -- GPU fraction each Serve replica reserves. Rendered as 0 when the estate has no GPU; the render fails if 0 on a GPU estate.
   RASK_SERVE_GPU_FRAC: "1.0"
+  # -- AWS region written to the fleet ConfigMap for S3 clients; any value works against RustFS/MinIO.
   AWS_REGION: "us-east-1"
+  # -- Skips TLS verification for the S3 client (`storage.client` reads it as an alias of RASK_S3_INSECURE). String "true" or "false".
   HCP_INSECURE: "true"
+  # -- Written to the fleet ConfigMap; "0" stops Ray from re-resolving dependencies with `uv run` in a job's runtime_env.
   RAY_ENABLE_UV_RUN_RUNTIME_ENV: "0"
 
 # Per-service definitions. TWO planes share this map, by design of the merge:
@@ -124,10 +138,11 @@ config:
 # '*' IS REFUSED at render time — it trusts every peer, so any client could forge its own source IP.
 # The gateway strips and re-stamps the forwarded chain either way (see _CLIENT_SPOOFABLE), so a
 # backend never sees a client's own claim; this key decides only whose claim the gateway believes.
+# -- Peers whose x-forwarded-* headers uvicorn trusts in every fleet pod (--forwarded-allow-ips). Set to the ingress controller's pod CIDR; `*` is refused.
 forwardedAllowIps: 127.0.0.1
 
 services:
-  # ---- rask fleet (uvicorn modules, one Deployment each via templates/fleet.yaml) ----
+  # ==== rask fleet (uvicorn modules, one Deployment each via templates/fleet.yaml) ====
   # (core-api/search-api/volumes-api died in the R6/R20 media wave: the S3 object browser
   # rides the media-plane viewer at /api/explorer/object*; lines/EAD FTS re-land as
   # catalog-governed Lance tables behind /api/explorer/search. The Ray-plane service is
@@ -140,10 +155,15 @@ services:
   # the lander. frontDoor because the gateway routes /api/ingest to this app-id; a bare app-id,
   # NOT the legacy `medallion-producer` shape the medallion still carries (audit m1).
   ingest:
+    # -- uvicorn import path (module:factory) the ingest Deployment runs.
     module: "ingest:create_app"
+    # -- Container and Service port of the ingest app.
     port: 8830
+    # -- Replica count of the ingest Deployment; 0 scales it to zero.
     replicas: 1
+    # -- Renders ingest outside singleTenant, because the gateway routes /api/ingest to it.
     frontDoor: true
+    # -- List of dependencies the pod waits for in an init container before starting; only `minio` is honoured (when minio.enabled).
     waitFor: []
     # The incremental poll (TRIGGER-2). EMPTY = OFF, and that is the honest default: the anti-join
     # reads every existing bronze id per tick — O(existing rows), not O(new rows) — so putting it on
@@ -156,13 +176,19 @@ services:
     # ONE PROJECT, by construction. A tick carries no user, so the run authorizes on the
     # service-token branch, which is pinned to RASK_INGEST_SERVICE_PROJECT — a multi-tenant watch set
     # cannot work through that door as it stands.
+    # -- Name of the Dapr cron binding for the incremental poll (templates/ingest-cron.yaml). Empty renders no binding and the poll is off.
     cronBindingName: ""
+    # -- Schedule of the incremental-poll cron binding (Dapr cron syntax, e.g. `@every 1h`). Used only when cronBindingName is set.
     cronSchedule: "@every 1h"
+    # -- Source kind the incremental poll ingests. No template renders it; the app reads RASK_INGEST_CRON_KIND, which this value does not reach.
     cronKind: ""
+    # -- Dataset the incremental poll lands into. No template renders it; the app reads RASK_INGEST_CRON_DATASET, which this value does not reach.
     cronDataset: ""
+    # -- Source options for the incremental poll. No template renders it; the app reads RASK_INGEST_CRON_OPTIONS, which this value does not reach.
     cronOptions: ""
     # The anti-join's ceiling. 0 = unbounded, matching maxUnits/maxRunHours. It REFUSES rather than
     # sampling: a truncated anti-join inverts, making the run re-land rows bronze already holds.
+    # -- Ceiling on rows the poll's anti-join reads; 0 is unbounded, over it the run refuses. No template renders it; the app reads RASK_INGEST_INCREMENTAL_MAX_ROWS.
     incrementalMaxRows: 0
     # Where the plane lands bronze. WITHOUT this the code falls back to a temp dir, and the first
     # in-cluster run resolved a RELATIVE path ("tmp/rask-ingest/...") inside the container — data
@@ -175,7 +201,9 @@ services:
     # needs the OIDC/FGA env. Declared per-service rather than derived from `frontDoor`: being
     # routed by the gateway and having an auth door are different facts, and conflating them put
     # seven inert variables on the gateway and compute.
+    # -- Gives ingest the OIDC/FGA env and FGA token mount when auth.enabled, feeding its user door.
     governedAuth: true
+    # -- Injects the S3 endpoint, warehouse, lineage outbox and LANCE_REST_ROOT env so ingest can write Lance to the warehouse.
     lanceWriter: true
     # NOT a `daprIngest` service, and that distinction is the whole reason the flag exists. Here
     # APP_API_TOKEN is read per request by `require_dapr_token`, which REFUSES when it is unset, so it
@@ -183,7 +211,9 @@ services:
     # service instead refuses to START without it, which is the same answer given earlier and louder.
     # Written out rather than left absent: absence is exactly what let this token ride `lanceWriter`,
     # an unrelated storage flag, for a release.
+    # -- Renders APP_API_TOKEN for an app that refuses to start without it. False for ingest, which gets the token through lanceWriter instead.
     daprIngest: false
+    # -- Env-var map rendered verbatim into the ingest container: lineage/catalog URLs and identities, the pinned service project, local-dir and lance-append roots (empty refuses the kind), unit and run-hour ceilings.
     env:
       # Lineage is both WRITTEN and READ here, and the two need different halves of one service.
       # RASK_LINEAGE_ENDPOINT is lineage-kit's emitter target: unset, its transport degrades to a
@@ -264,13 +294,19 @@ services:
       # the ceiling, are what the 4 MiB limit actually binds.
       RASK_INGEST_MAX_UNITS: "250000"
   compute:
+    # -- uvicorn import path the compute Deployment runs.
     module: "compute:app"
+    # -- Container and Service port of the compute app (Ray introspection and the /api/serve proxy).
     port: 8804
+    # -- Replica count of the compute Deployment; 0 scales it to zero.
     replicas: 1
     # Part of the default install: the gateway routes /api/ray + /api/serve to this app-id
     # unconditionally, so an install without it 500s on those routes.
+    # -- Renders compute outside singleTenant, because the gateway routes /api/ray and /api/serve to it.
     frontDoor: true
+    # -- List of dependencies compute waits for in an init container; only `minio` is honoured (when minio.enabled).
     waitFor: []
+    # -- Gives compute the RAY_AUTH_* env when ray.auth.enabled, for dashboard introspection and the Serve proxy.
     rayClient: true # dashboard introspection + /api/serve proxy => gets the RAY_AUTH_* pair when ray.auth.enabled
     # THE USER DOOR. `fleet.yaml`'s own comment used to give this service as the reason `frontDoor`
     # is not the right key — "the gateway and compute read no auth settings at all, so keying on it
@@ -280,6 +316,7 @@ services:
     # simply absent, so `oidc_enabled` stays False and every route answers anonymously while the code
     # reports authorization as configured. That is the `explorer.yaml` failure verbatim (the viewer
     # streamed page images wide open because the auth env was emitted for the annotator alone).
+    # -- Gives compute the OIDC/FGA env and FGA token mount when auth.enabled; without it its routes answer anonymously.
     governedAuth: true
     # FAIL CLOSED ON THE APP TOKEN. This service hosts a sidecar-delivered route —
     # `POST /compute-prune-jobs-cron`, which deletes terminal Ray jobs — and its boot refuses to start
@@ -290,6 +327,7 @@ services:
     # SIDECAR held the token and stamped every delivery, the app container held none, and the route's
     # guard compared each delivery against an empty string — open to any pod in the namespace while
     # reading as sidecar-only.
+    # -- Renders APP_API_TOKEN for compute, whose boot refuses to start with Dapr on and no token (it hosts the prune cron route).
     daprIngest: true
   # The studio flow-builder's server half: the node catalog, graph validation, and runs on two lanes
   # (inline, or the Dapr Workflow orchestrator when a sidecar is injected). It needs NOTHING to boot —
@@ -300,13 +338,19 @@ services:
   # the studio zone. Serve is reached from the ZONE (bytes ride its own +server.ts), never from here, so
   # this service needs no Serve URL of its own.
   flows:
+    # -- uvicorn import path the flows (studio flow-builder server) Deployment runs.
     module: "flows:app"
+    # -- Container and Service port of the flows app.
     port: 8840
+    # -- Replica count of the flows Deployment; 0 scales it to zero.
     replicas: 1
+    # -- Renders flows outside singleTenant, because the gateway routes /api/flows to it.
     frontDoor: true
     # The run door spends GPU compute (model nodes invoke live Serve endpoints), so on a governed
     # stack it checks the estate writer tier — FlowsSettings extends GovernedAuthSettings (LANCE_*).
+    # -- Gives flows the OIDC/FGA env and FGA token mount when auth.enabled; its run door checks the writer tier.
     governedAuth: true
+    # -- List of dependencies flows waits for in an init container; only `minio` is honoured (when minio.enabled).
     waitFor: []
   # The notification plane: one InboxActor per subject, holding
   # claim-check pointers with durable read state, so the bell counts YOUR work instead of the whole
@@ -320,12 +364,17 @@ services:
   # across hosts, and the bus subscription's `queueGroupName` makes replicas a competing-consumer
   # group. What must NOT be scaled is uvicorn WORKERS inside one pod — see the dockerfile.
   notifications:
+    # -- uvicorn import path the notifications (inbox) Deployment runs.
     module: "notifications:app"
+    # -- Container and Service port of the notifications app.
     port: 8850
+    # -- Replica count of the notifications Deployment; replicas form a competing-consumer group. 0 scales it to zero.
     replicas: 1
+    # -- Renders notifications outside singleTenant, because the gateway routes /api/notifications to it.
     frontDoor: true
     # The inbox door verifies the bearer and re-derives visibility per recipient — NotificationsSettings
     # extends GovernedAuthSettings, so the prefix is LANCE_ like ingest's and flows'.
+    # -- Gives notifications the OIDC/FGA env and FGA token mount when auth.enabled.
     governedAuth: true
     # This service HOSTS a sidecar-delivered route (`POST /lineage-events`) and refuses to start
     # without the token: `register_subscriptions` calls `assert_app_token_configured`, which raises
@@ -337,6 +386,7 @@ services:
     # `assert_app_token_configured` is a lance-plane pod (catalog, lineage, the medallion producer and
     # stage runners, maintenance) templated elsewhere, each rendering APP_API_TOKEN explicitly. In fleet.yaml
     # the token had only ever been reachable through `lanceWriter`, which this service is not.
+    # -- Renders APP_API_TOKEN for notifications, which refuses to start with Dapr on and no token.
     daprIngest: true
     # The SECOND ingress (open_notifications.md §2). The bus carries run lifecycle; the ingest service,
     # Ray TRAIN and every external OpenLineage producer emit over HTTP only and never reach the topic,
@@ -355,18 +405,28 @@ services:
     # value. There is deliberately no plaintext fallback to fall back to.
     channels:
       email:
+        # -- Renders the `notifications-email` Dapr SMTP binding and adds `email` to RASK_NOTIFICATIONS_CHANNELS. Off by default.
         enabled: false
+        # -- SMTP server host for the email channel.
         host: ""
+        # -- SMTP server port for the email channel (default 587).
         port: 587
+        # -- Sender address the email channel sends from.
         from: ""
+        # -- Secret-store key holding the SMTP `user` and `password` fields.
         secretName: notifications-smtp
       slack:
+        # -- Renders the Slack Dapr binding and adds `slack` to RASK_NOTIFICATIONS_CHANNELS. Off by default.
         enabled: false
+        # -- Secret-store key holding the Slack `webhookUrl` field.
         secretName: notifications-slack
+    # -- Name of the reconcile cron binding; also rendered as RASK_NOTIFICATIONS_BINDING_NAME so the tick reaches the matching route.
     reconcileBindingName: notifications-reconcile-cron
     # Must stay ABOVE RASK_NOTIFICATIONS_RECONCILE_BUDGET_SECONDS (app default 25 s), or a slow lineage
     # lets ticks stack on each other instead of the next one finding the same work still to do.
+    # -- Schedule of the reconcile cron over lineage's /events feed; must stay above the app's 25 s reconcile budget.
     reconcileSchedule: "@every 30s"
+    # -- Env-var map rendered verbatim into the notifications container; RASK_LINEAGE_SERVICE_IDENTITY is the subject it maps to at lineage's door.
     env:
       # The subject notifications' ServiceAccount maps to at lineage's door (`lance.saSubjects`
       # reads it; its projected `rask-lineage` token is what authenticates). Remove it and the
@@ -376,11 +436,16 @@ services:
       # `can_read_event_feed` at the estate root, and `bootstrap-admin.yaml` grants this same subject
       # `event_reader` there ([[CTL-021]]). Without the grant every feed page answers 403.
       RASK_LINEAGE_SERVICE_IDENTITY: notifications
+    # -- List of dependencies notifications waits for in an init container; only `minio` is honoured (when minio.enabled).
     waitFor: []
   gateway:
+    # -- uvicorn import path the gateway Deployment runs.
     module: "gateway:app"
+    # -- Container and Service port of the gateway (the /api reverse proxy the Ingress routes to).
     port: 8888
+    # -- Replica count of the gateway Deployment; 0 scales it to zero.
     replicas: 1
+    # -- Renders the gateway outside singleTenant; it is the /api entry point.
     frontDoor: true
     # The gateway proxies /api/* to backends, so probing a proxied path would couple its readiness
     # to an upstream — it must stay Ready in a front-door-only install (no domain backends).
@@ -390,19 +455,29 @@ services:
     # ready_check, so /readyz reports `starting`/`shutting_down` and asks no upstream: the recorded
     # reason never required a private probe, only an unproxied one. /healthz remains as the gateway's
     # public badge, exactly as /api/health remains the fleet's.
+    # -- Liveness probe path of the gateway (default `/livez`).
     healthPath: /livez
+    # -- Readiness probe path of the gateway (default `/readyz`); it asks no upstream, so the gateway stays Ready without backends.
     readyPath: /readyz
+    # -- List of dependencies the gateway waits for in an init container; only `minio` is honoured (when minio.enabled).
     waitFor: []
 
-  # ---- lance-ns lakehouse apps (templates/services.yaml; share the catalog image, different entrypoint) ----
+  # ==== lance-ns lakehouse apps (templates/services.yaml; share the catalog image, different entrypoint) ====
   catalog:
+    # -- uvicorn import path the catalog Deployment runs (templates/services.yaml).
     module: catalog.main:app
+    # -- Container and Service port of the Lance catalog.
     port: 2333
+    # -- Dapr app-id of the catalog; also names its pubsub components and durable consumers.
     daprAppId: catalog
+    # -- Replica count of the catalog; above 1 requires catalog.controlEmit=true or the render fails.
     replicas: 1 # stateless — scale freely in prod (the prod overlay bumps these); HA via podDisruptionBudget
   lineage:
+    # -- uvicorn import path the lineage Deployment runs (templates/services.yaml).
     module: lineage.main:app
+    # -- Container and Service port of the lineage service.
     port: 8000
+    # -- Dapr app-id of lineage; also names its pubsub, DLQ and durable consumers and scopes its reconcile cron.
     daprAppId: lineage
     # Freshness budget in HOURS (data-contract gap #2): >0 makes the reconcile sweep + per-dataset
     # GET flag `stale: true` for any dataset whose newest version commit is older — arrival cadence
@@ -412,19 +487,23 @@ services:
     # has landed nothing in two days has stopped, while a quiet weekend day has not. It was 0 — the axis
     # OFF estate-wide — so no dataset had ever been reported stale and the clause the reconciler
     # advertises was asserted against nothing.
+    # -- Hours after which a dataset with no new version is flagged `stale` by reconcile and the dataset GET. 0 turns the check off.
     freshnessBudgetHours: 48
     # Safe to scale: the app's own pubsub component carries queueGroupName=lineage, so replicas form a
     # competing-consumer group (single delivery per event); ingest is idempotent anyway (MERGE on run_id).
+    # -- Replica count of lineage; replicas form a competing-consumer group, so it scales freely.
     replicas: 1
     # Demo data-peek router (/demo/*: live Lance schema/versions/rows for the UI) — DEMO ONLY: the
     # endpoints carry no OIDC/FGA guard, so they'd disclose dataset metadata past the governance layer
     # (reachable unauthenticated through the web BFF — bug hunt 2026-07-13). SECURE-BY-DEFAULT off; a demo
     # opts in with `--set services.lineage.demoData=true`. The router is only mounted when true.
+    # -- Mounts the unauthenticated /demo/* data-peek router. Demo only; off by default.
     demoData: false
     # Read-side audit trail: every allowed FGA-gated data read is recorded (the lineage_reads table),
     # feeding GET /datasets/{name}/readers + the ReadersPanel in the data/lineage zones. Rendered into
     # LINEAGE_READ_AUDIT_ENABLED only when auth.enabled (that is where a real subject exists to record) —
     # the read-side mirror of auth.audit; set false to keep the panel dark even with auth on.
+    # -- Records every allowed FGA-gated data read (feeds GET /datasets/{name}/readers). Rendered only when auth.enabled.
     readAudit: true
     # Periodic storage->graph reconciliation (B4) — a Dapr cron binding POSTs to /<bindingName> on
     # `schedule` to back-fill Lance writes whose lineage event was lost, and to DRAIN the #4 outbox.
@@ -448,8 +527,11 @@ services:
     # Set false only for a deliberately inert demo; the /datasets/{name}/reconcile READ endpoint is
     # available either way.
     reconcile:
+      # -- Renders the storage-to-graph reconcile cron, which back-fills lost lineage events, drains the outbox and prunes. Needs dapr.sidecars.
       enabled: true
+      # -- Name of the reconcile cron binding; the sidecar POSTs to /<bindingName>.
       bindingName: lineage-reconcile-cron
+      # -- Schedule of the reconcile sweep (Dapr cron syntax, e.g. `@every 300s` or a cron expression).
       schedule: "@every 300s" # demo cadence (prod: e.g. "0 */15 * * * *")
     # #4 transactional outbox: producers stage each lineage event to s3://<minio.bucket>/_lineage_outbox
     # BEFORE the fire-and-forget publish; the reconcile sweep DRAINS any survivor (a crash between the Lance
@@ -463,6 +545,7 @@ services:
     # nothing ever drains. Cost is one S3 PUT + DELETE per lineage event against the already-provisioned
     # `minio.bucket`; the whole thing is a no-op when the URI env isn't rendered.
     outbox:
+      # -- Stages each lineage event to `s3://<minio.bucket>/_lineage_outbox` before publishing, drained by reconcile. Requires reconcile.enabled.
       enabled: true
     # Run-node retention (§4): the reconcile cron prunes graph :Run nodes older than this many days
     # (batched DETACH DELETE under the sweep's single-flight lock), and then the Dataset nodes that
@@ -476,6 +559,7 @@ services:
     #
     # Thirty days is long enough to investigate an incident that surfaced late and short enough that
     # the graph actually converges; a quarter would have left the current residue in place for months.
+    # -- Days after which reconcile prunes graph :Run nodes and the Dataset nodes that leaves orphaned. 0 keeps everything.
     runRetentionDays: 30
     # Durable /events feed retention, in DAYS of ARRIVAL time (`received_at`, stamped by the database —
     # never the producer-supplied eventTime, which lineage stores as an unparsed string). Pruned batched
@@ -492,8 +576,10 @@ services:
     #
     # 7 is the horizon the deployed feed was measured holding, so the default states it rather than
     # changes it. Raise it if this estate's acceptable notifications outage is longer than a week.
+    # -- Days of arrival time the durable /events feed keeps, pruned on the reconcile tick; bounds how long a notifications outage it survives. 0 is unbounded.
     eventsRetentionDays: 7
     # Server-side per-statement timeout (seconds) on the AGE pool — bounds a runaway Cypher traversal.
+    # -- Server-side per-statement timeout in seconds on lineage's AGE pool; bounds a runaway Cypher traversal.
     ageStatementTimeoutSeconds: 30
 
 # Image registry/tag shared by every fleet + migration container, PLUS the per-image lance-ns block so
@@ -502,10 +588,13 @@ image:
   # _helpers.tpl for why an empty default was actively harmful: it rendered a BARE `gateway:dev`,
   # which is `docker.io/library/gateway:dev`, and only ever worked because `make k3s-import` had
   # side-loaded the tag into the node. A GitOps reconciler has no such side channel.
+  # -- Registry prefix for every first-party image (e.g. ghcr.io/<org>/<repo>). Required unless localImages is true.
   repository: ""
+  # -- Default tag for every first-party image when no per-component tag or digest is set.
   tag: "dev"
   # Set to pin the deployed artifact by content rather than by a mutable tag. WINS over `tag`.
   # This is what an image-automation controller (Argo Image Updater, Flux) writes back into git.
+  # -- Global digest pin (sha256:...) for every first-party image; wins over `tag`. Empty uses tags.
   digest: ""
   # PER-COMPONENT pins (#135) — the reason a `helm upgrade` stopped being destructive.
   #
@@ -520,19 +609,25 @@ image:
   #
   #   tags:    { lance-rest-catalog: be-256ca0da, web-lakehouse: zone-14d8882d }
   #   digests: { rask-ingest: "sha256:834d2e23…" }
+  # -- Per-component tag map keyed by component name (gateway, lance-rest-catalog, web-<zone>, ...); beats the global tag.
   tags: {}
+  # -- Per-component digest map keyed by component name; beats `tags` and the global tag.
   digests: {}
   # Opt-in for side-loaded images (`make k3s-build` + `k3s-import`, `kind load`): renders a bare
   # `<component>:<tag>` that the node must ALREADY hold. Never set this for a remote cluster.
+  # -- Renders bare `<component>:<tag>` references for images side-loaded into the node (k3s-import). Never for a remote cluster.
   localImages: false
+  # -- imagePullPolicy for first-party containers.
   pullPolicy: IfNotPresent
   # The lakehouse image: catalog (catalog.main:app) + lineage (lineage.main:app) + the medallion
   # stage runners + maintenance + the media services all run from this one image, different entrypoint.
   # `lance.catalogImage` uses required() on the tag, so an empty tag FAILS the render loudly.
+  # -- Lakehouse image (catalog, lineage, medallion, maintenance, media services): `repository` is the image name under image.repository, `tag` is required (empty fails the render).
   catalog: { repository: lance-rest-catalog, tag: dev }
 
 resources:
   # rask fleet tier (templates/fleet.yaml).
+  # -- CPU/memory requests and limits for fleet services (templates/fleet.yaml) that name no tier of their own.
   fleet:
     requests: {cpu: "50m", memory: "128Mi"}
     limits: {cpu: "1", memory: "512Mi"}
@@ -541,6 +636,7 @@ resources:
   # 512Mi fleet tier it served requests normally and was then OOMKilled (exit 137, measured 2026-07-29,
   # 4 restarts in 7 minutes), so the symptom was not a crash but a service that answered and vanished:
   # /api/ray/health succeeded while every heavier route hit a Dapr circuit breaker that kept re-opening.
+  # -- CPU/memory requests and limits for the compute service, sized for the Ray Job SDK it imports.
   compute:
     requests: { cpu: 100m, memory: 512Mi }
     limits: { cpu: "1", memory: 1536Mi }
@@ -566,10 +662,12 @@ resources:
   #
   # The request is raised as well as the limit: a database's working set is resident, not burstable, so
   # a 50m/128Mi request misdescribes it to the scheduler. Same shape as the `compute` tier above.
+  # -- CPU/memory requests and limits for the AGE Postgres StatefulSet (lineage and OpenFGA databases).
   age:
     requests: { cpu: 250m, memory: 512Mi }
     limits: { cpu: "1", memory: 2Gi }
   # lance-ns default tier — every app container that doesn't name its own key (lance.resources helper).
+  # -- CPU/memory requests and limits for every lakehouse app container that names no tier of its own (lance.resources).
   default:
     requests: { cpu: 50m, memory: 128Mi }
     limits: { cpu: "1", memory: 512Mi }
@@ -580,9 +678,11 @@ resources:
   # burst headroom is unchanged and only the denominator becomes meaningful (4:1).
   # Memory is deliberately left on the default tier: this is the autoscaling finding, and the
   # catalog's 256 MiB Arrow-IPC body cap against a 512Mi limit is a separate question.
+  # -- CPU/memory requests and limits for the catalog; requests sized so the HPA CPU target is meaningful.
   catalog:
     requests: { cpu: 250m, memory: 128Mi }
     limits: { cpu: "1", memory: 512Mi }
+  # -- CPU/memory requests and limits for lineage; requests sized so the HPA CPU target is meaningful.
   lineage:
     requests: { cpu: 250m, memory: 128Mi }
     limits: { cpu: "1", memory: 512Mi }
@@ -597,6 +697,7 @@ resources:
   # Collector refuses to use — it still sheds telemetry at 400 MiB. At 512Mi the limiter sits at ~78% of
   # the limit, which is upstream's guidance, and requests == limits gives the pod Guaranteed QoS for
   # memory, which is what you want under a fixed soft limiter.
+  # -- CPU/memory requests and limits for the OTel Collector; memory limit matches its hardcoded 400 MiB memory_limiter.
   otel-collector:
     requests: { cpu: 300m, memory: 512Mi }
     limits: { cpu: "1", memory: 512Mi }
@@ -615,11 +716,13 @@ resources:
   # for the first time — and those suites are ordinary listings and writes, which is the point: a store
   # that cannot survive its own estate's test suite cannot survive its estate. Every service's storage
   # is this one pod, so the blast radius is the whole lakehouse.
+  # -- CPU/memory requests and limits for the in-cluster object store pod.
   minio:
     requests: { cpu: 100m, memory: 1Gi }
     limits: { cpu: "2", memory: 6Gi }
   # The assist model runner holds two warm torch models (~1.1 GB weights) and burns real CPU per
   # inference (multi-threaded GEMMs) — the request-pod default would OOM-kill it at load.
+  # -- CPU/memory requests and limits for the assist model runner (two warm torch models).
   assist:
     requests: { cpu: "1", memory: 2Gi }
     limits: { cpu: "8", memory: 6Gi }
@@ -636,11 +739,12 @@ resources:
   # 1536Mi = 1.6x the measured 955Mi peak; requests 768Mi covers the 609-736Mi steady working set.
   # CPU 2 is for the thumbnail grid, measured at conc 8: 172 req/s p95 80ms at 1 core vs 310 req/s
   # p95 46ms at 2 — the annotator opens a whole page of tiles at once.
+  # -- CPU/memory requests and limits for the explorer viewer (in-process KG engine and atlas cache).
   viewer:
     requests: { cpu: 200m, memory: 768Mi }
     limits: { cpu: "2", memory: 1536Mi }
 
-# --- Graceful rollouts -----------------------------------------------------------------------------
+# === Graceful rollouts =============================================================================
 # preStop sleep: endpoint removal must propagate to kube-proxy/the Dapr sidecar BEFORE the app receives
 # SIGTERM, else every rollout connection-refuses in-flight requests (and the apps' /readyz shutting_down
 # branch is dead code). terminationGracePeriodSeconds bounds preStop + the app's own drain; compaction
@@ -684,15 +788,20 @@ resources:
 # refuses to render a bound that is not positive or a negative teardownSeconds, whose bound would end
 # after the SIGKILL. Pinned by tests/unit/test_uvicorn_drains_inside_its_pods_grace_period.py.
 lifecycle:
+  # -- Seconds every pod sleeps in preStop before SIGTERM, so endpoint removal propagates first.
   preStopSeconds: 5
   # 20s = 5 (preStop) + 10 (sidecar drain, the ~10s microservices.md budgets for Dapr flushing pending
   # acks) + 5 (buffer). It was 30, which was the no-sidecar formula applied to pods that all run one.
+  # -- Pod grace period in seconds; must be at least preStop + sidecar drain + 5 s buffer.
   terminationGracePeriodSeconds: 40
+  # -- Seconds the Dapr sidecar keeps running after SIGTERM to flush acks; must lie between preStopSeconds and the grace period.
   sidecarBlockShutdownSeconds: 20
+  # -- Grace period in seconds for maintenance pods, long enough that an in-flight sweep or Lance write is not SIGKILLed.
   maintenanceTerminationGracePeriodSeconds: 120
+  # -- Seconds reserved for the app's lifespan teardown; uvicorn's graceful-shutdown bound is grace - preStop - this.
   teardownSeconds: 10
 
-# --- Pod hardening (applied to every FIRST-PARTY app container via the lance.securityContext helper) --
+# === Pod hardening (applied to every FIRST-PARTY app container via the lance.securityContext helper) --
 # This line used to say "every app container", and for six Deployments it was false: fleet.yaml and
 # controlplane.yaml called the helper nowhere, so gateway/compute/controlplane/flows/ingest/notifications
 # rendered with no securityContext at all — including the pod the Ingress routes /api to. They call it
@@ -703,6 +812,7 @@ lifecycle:
 # baseline). readOnlyRootFilesystem is the one tunable: on by default (each app has a writable /tmp
 # emptyDir for pyarrow/Lance spill + OTel), flip off only if a workload genuinely needs a writable rootfs.
 security:
+  # -- Read-only root filesystem for every first-party app container; each gets a writable /tmp emptyDir.
   readOnlyRootFilesystem: true
   # THE BOUND ON THE SCRATCH VOLUME, and it is a blast-radius bound rather than a quota.
   #
@@ -716,6 +826,7 @@ security:
   # work — the job is to stop one pod taking the node down with it. Raise it for a deployment whose
   # compaction genuinely spills more; the media body cap (32 MiB/request, MEDIA_MAX_BODY_BYTES) is the
   # bound that stops uploads reaching this one.
+  # -- sizeLimit of each app's /tmp emptyDir (upload spool, Lance spill, OTel queue); stops one pod filling the node's disk.
   tmpSizeLimit: 2Gi
   # POD IDENTITY is not a value. Every first-party workload runs as its own ServiceAccount
   # (templates/security-sa.yaml), tokenless on the SA object. A first-party pod holds a Kubernetes API
@@ -731,7 +842,9 @@ security:
   # after these boot green — the label itself is a kubectl step, the namespace isn't chart-owned).
   # Per-image uid/fsGroup (data/secret holders need the RIGHT ids for their PVCs, not helper reuse):
   infraContexts:
+    # -- Applies pinned runAsUser/fsGroup securityContexts to the infra pods (object store, AGE, OpenBao, Dex). Off by default.
     enabled: false
+    # -- uid/fsGroup for the object store pod; runAsUser must match the image's data owner (1000) or every write fails.
     minio: { runAsUser: 1000, fsGroup: 1000 } # MUST match the minio image's built-in `minio-user`
     # (uid 1000) — it is what owns the on-disk data. THE FAILURE MODE IS THE REASON THIS IS PINNED
     # RATHER THAN LEFT TO THE IMAGE: a mismatched uid does NOT CrashLoop. The server starts and READS
@@ -739,11 +852,14 @@ security:
     # every client. Live 2026-07-13, under the previous store and its own uid, the whole data plane was
     # write-dead under infraContexts until this was corrected. fsGroup alone cannot rescue it: the dirs
     # are mode 755 owned by the image's group, so a different group has no write bit.
+    # -- uid/fsGroup for the AGE Postgres pod (postgres image uid/gid 999).
     age: { runAsUser: 999, fsGroup: 999 } # postgres official image uid/gid
+    # -- uid/fsGroup for the OpenBao pod (image uid 100).
     openbao: { runAsUser: 100, fsGroup: 1000 } # hashicorp vault-family image uid
+    # -- uid/fsGroup for the Dex pod.
     dex: { runAsUser: 1001, fsGroup: 1001 }
 
-# --- Network isolation (opt-in; requires a policy-enforcing CNI e.g. Calico/Cilium) ---------------
+# === Network isolation (opt-in; requires a policy-enforcing CNI e.g. Calico/Cilium) ===============
 # k3s's default kindnet/flannel does NOT enforce NetworkPolicy, so this is a no-op there — it is prod
 # hardening. When enabled: namespace default-deny Ingress+Egress, kube-dns egress allow (same change —
 # the audit's footgun), intra-namespace allows, api-server egress, and EXCLUSIVE client lists for the
@@ -757,12 +873,15 @@ networkPolicy:
   # sidecars live in nearly every app pod, so a label enumeration would be dishonest) and 8222 (monitor,
   # varz/jsz for the admin ops view) from the web-admin zone pods ONLY. 6222/7422 stay closed — see
   # network-policy.yaml (3e)/(3f).
+  # -- Renders default-deny NetworkPolicies with explicit allows and exclusive client lists for the guarded stores. Needs a policy-enforcing CNI.
   enabled: false
   # Extra `from` peers for the openbao policy — e.g. the external-secrets operator's namespace:
   # [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: external-secrets}}}]
+  # -- List of extra NetworkPolicy `from` peers allowed to reach OpenBao (e.g. the external-secrets namespace).
   openbaoExtraFrom: []
   # Extra `from` peers for the minio policy — the ray-lance demo pods live outside the release's
   # component labels (deploy/ray-lance-demo.yaml), so grant them here when running `make ray-demo`:
+  # -- List of extra NetworkPolicy `from` peers allowed to reach the object store; defaults admit the ray-lance demo pods.
   minioExtraFrom:
     - podSelector:
         matchLabels: { app: ray-lance-head }
@@ -770,32 +889,40 @@ networkPolicy:
         matchLabels: { app: ray-lance-worker }
   # Extra egress rules (verbatim NetworkPolicy egress entries) for externalized backends —
   # off-cluster S3, a managed NATS (nats.externalUrl), an external OTLP endpoint.
+  # -- List of extra egress rules, verbatim NetworkPolicy entries, for external backends (off-cluster S3, managed NATS, external OTLP).
   extraEgress: []
 
 # Platform control-plane: read-only listing of operator Project CRs for the
 # home picker. Its own ServiceAccount + ClusterRole (read projects only).
 controlplane:
+  # -- Deploy the controlplane service (the `/api/projects` surface) and its resiliency policy.
   enabled: true
+  # -- HTTP port the controlplane listens on.
   port: 8820
+  # -- Scheme of each project's entry link in the home gallery (RASK_PROJECT_URL_SCHEME): `http` or `https`.
   urlScheme: http
 
-# --- Micro-frontend zones: the SvelteKit SSR zones deployed from the ONE parametrized
+# === Micro-frontend zones: the SvelteKit SSR zones deployed from the ONE parametrized
 # frontend.dockerfile (image <name>:tag). The catch-all `home` owns "/"; each domain zone is pinned to
 # its base path /<name> in svelte.config.js (host carries the project; path carries the domain) and gets
 # an Ingress rule (templates/ingress.yaml). image == app dir name under frontend/microfrontends/.
 frontend:
+  # -- Deploy the SvelteKit zone servers, one Deployment and Service per entry in `frontend.apps`.
   enabled: true
+  # -- Replicas per zone Deployment; above 1 the chart also renders a PodDisruptionBudget per zone.
   replicas: 1
   # The Bun server's request-body ceiling for EVERY zone. `svelte-adapter-bun` defaults it to 512K,
   # which silently 413s any real upload (a page scan is megabytes) from the server itself — before the
   # route, so the answer is not our problem+json and the UI can only say "HTTP 413". Kept ABOVE the
   # BFF's own 25 MB inference guard so that guard is what a user actually reads.
+  # -- Request-body ceiling of each zone's Bun server (BODY_SIZE_LIMIT), kept above the BFF's 25 MB inference guard.
   bodySizeLimit: 32M
   # Ray Serve's HTTP ingress origin, for the zones that run inference (studio's flow builder, the
   # annotator's producer calls). Empty => derived from the one Ray plane (`rask.rayServeOrigin`): a
   # RayService's `<release>-ray-serve-svc:8000`, else the dashboard every Ray consumer names (an
   # external dashboard host serves the apps too), so the builder cannot list an app it is unable to call.
   # Set this ONLY when Serve lives somewhere the dashboard does not.
+  # -- Ray Serve HTTP origin for zones that run inference; empty derives it from the Ray plane (the Serve service or the dashboard URL).
   serveUrl: ''
   image:
     # The DEFAULT tag; shared across zones. A zone may override it with `tag:` on its apps entry below —
@@ -816,17 +943,24 @@ frontend:
     # UI that quietly rots back to last week.
     #
     # Bump this when new zone images are published (`dagger call zone-image --zone=<z> publish …`).
+    # -- Default image tag for every zone (an immutable commit tag); a zone overrides it with `tag` on its `apps` entry.
     tag: "7ea481c"
+    # -- Image pull policy for the zone containers; empty falls back to `image.pullPolicy`.
     pullPolicy: IfNotPresent
   service:
+    # -- Port each zone's Bun server listens on and its Service exposes.
     port: 3000
+  # -- Default CPU and memory requests/limits per zone container, used when `resources.web-<zone>` is not set.
   resources:
     requests: {cpu: "50m", memory: "64Mi"}
     limits: {cpu: "500m", memory: "256Mi"}
   podSecurityContext:
+    # -- Pod-level securityContext for zone pods: refuse to start a container running as root.
     runAsNonRoot: true
   securityContext:
+    # -- Container securityContext for zones: forbid privilege escalation.
     allowPrivilegeEscalation: false
+    # -- Container securityContext capabilities for zones; drops ALL Linux capabilities.
     capabilities: {drop: ["ALL"]}
   # How long a zone's Bun server tolerates an idle connection, in seconds — the FIRST cut on a live query,
   # not the edge. svelte-adapter-bun defaults it to 10, which turned `query.live` into a ~12s reconnect
@@ -843,13 +977,16 @@ frontend:
   # silent client; the transport could not.
   # ⚠ Templates must read this with `(hasKey $fe "idleTimeoutSeconds") | ternary …` — `| default 255`
   # swallows this explicit 0 (the bug tests/unit/test_invariants.py now forbids chart-wide).
+  # -- Bun server idle timeout per connection in seconds (0 to 255); 0 disables it so live query streams are not cut.
   idleTimeoutSeconds: 0
   # The bare FGA subject the zones' BFF names when reading lineage as a SERVICE (no user session) — must be
   # READER on the warehouse (seed_medallion_fga.sh) + the subject `-sa-web` maps to at lineage's door.
+  # -- FGA subject the zones' BFF uses for service reads; the `<release>-sa-web` ServiceAccount maps to it. Must be reader on the warehouse.
   serviceIdentity: service-web
   # The zones. home = the catch-all "/"; every other zone is pinned to /<name>.
   # The union of both estates — one entry per zone directory (the zone-contract deploy-path gate
   # pins this list to frontend/microfrontends/*).
+  # -- The zones to deploy: `name` (image `web-<name>`), `path` (/<name>) or `catchAll` for home at /, and an optional per-zone image `tag`.
   apps:
     - {name: home, catchAll: true}              # the platform home, "/"
     # rask domain zones surviving R8+R9: compute (the Ray plane rask owns) and studio.
@@ -878,20 +1015,23 @@ frontend:
   oidc:
     # ON BY DEFAULT, in lockstep with auth.enabled — the chart REFUSES the half-governed pair
     # (templates/auth-consistency.yaml), so these two must move together or the render fails.
+    # -- Per-user OIDC login shared across all zones; must move together with `auth.enabled` (templates/auth-consistency.yaml).
     enabled: true
+    # -- Browser-reachable IdP issuer URL, e.g. https://auth.example.com/dex; required when `oidc.enabled`.
     publicIssuer: "" # browser-reachable IdP issuer, e.g. https://auth.example.com/dex
+    # -- Browser-reachable app origin, e.g. https://app.example.com; forms the /auth/callback redirect URI. Required when `oidc.enabled`.
     publicOrigin: "" # browser-reachable origin, e.g. https://app.example.com (forms the redirect URI)
     # The session-cookie sealing key is not a value: it is the store's `frontend-session-secret`, written
     # by ESO into `<release>-frontend-session` beside the client secret.
 
-# --- lance-ns nginx gateway: RETIRED (docs/adr/0117-nginx-is-retired-and-the-fastapi-gateway-is-the-in-cluster.md) ---
+# === lance-ns nginx gateway: RETIRED (docs/adr/0117-nginx-is-retired-and-the-fastapi-gateway-is-the-in-cluster.md) ===
 # The rask fleet gateway at services.gateway (uvicorn `gateway:app` on :8888) is the ONE front door; it
 # carries the lance routes (/api/catalog, /api/lineage, the producer's
 # /api/{produce,train,trains,promotions,stage-runners,cascade}, /api/explorer/*) and the lineage
 # sidecar-only 403 guard as Python middleware. templates/gateway.yaml (nginx ConfigMap +
 # Deployment + Service) is deleted; the former top-level `gateway:` values block went with it.
 
-# --- Governance (Dex OIDC + OpenFGA). Off → open dev mode; on → the full governed demo. ------------
+# === Governance (Dex OIDC + OpenFGA). Off → open dev mode; on → the full governed demo. ============
 auth:
   # THE CLUSTER'S SERVICE-ACCOUNT ISSUER: a service authenticates to a door as the ServiceAccount its pod
   # runs as, never as a name it claims ([[LH-220]], D1; Lakekeeper's multi-provider path,
@@ -902,12 +1042,13 @@ auth:
   # `system:serviceaccount:<ns>:<sa>` to the subject its grants name (`RASK_SA_SUBJECTS`, rendered by
   # `lance.saSubjects` from the same identity values the FGA seeds use); an unmapped account is refused.
   # The issuer serves discovery and keys only to a bearer from a private CA (k3s runs
-  # --anonymous-auth=false), so each door also projects an API-audience token (3600 s) and
+  # `--anonymous-auth=false`), so each door also projects an API-audience token (3600 s) and
   # `kube-root-ca.crt` at /var/run/secrets/rask/sa-fetch. Never the automount token: it is a one-year
   # extended credential (P5.3 d3) and XC-076 keeps it off. The value is k3s's default issuer, read live
   # from /.well-known/openid-configuration on 2026-10-02.
   # The anchor is read again as OpenFGA's issuer alias (`openfga.extraEnvVars`), and
   # templates/openfga-authn.yaml refuses a render where the two differ.
+  # -- The Kubernetes ServiceAccount token issuer every door verifies service tokens against (RASK_SA_ISSUER); must equal OpenFGA's issuer alias or the render fails.
   serviceAccountIssuer: &serviceAccountIssuer https://kubernetes.default.svc.cluster.local
   # THE ISSUER MIRROR ([[XC-077]]): templates/openfga-authn.yaml republishes this issuer's discovery document
   # and key set, unauthenticated, at http://<release>-issuer-mirror:8080 for a verifier that fetches them with
@@ -918,6 +1059,7 @@ auth:
   # material, and caches nothing. Turn it off only on a platform whose issuer serves discovery to anyone (a
   # managed cluster's public OIDC issuer), and point `openfga.authn.oidc.issuer` at that issuer instead.
   issuerMirror:
+    # -- Render the issuer mirror (templates/openfga-authn.yaml) that republishes the SA issuer's discovery and JWKS unauthenticated for OpenFGA; off only for a publicly served issuer.
     enabled: true
   # ON BY DEFAULT (2026-08-06). It was `false`, and values-prod.yaml flipped it — which meant every
   # install that forgot to pass a values file came up UNGOVERNED, silently and green. That is exactly
@@ -929,11 +1071,13 @@ auth:
   # the chart already fails the render without a publicIssuer. That refusal is the point — an
   # ungoverned estate should require someone to ask for it (`--set auth.enabled=false`), never to
   # forget something.
+  # -- Govern the estate: authn on every door plus OpenFGA authz. On by default (fails closed); a bare install then needs frontend OIDC configured or it refuses to render.
   enabled: true
   # Permit auth.enabled=true WITHOUT a frontend sign-in flow. Off by default, and the chart REFUSES
   # that combination (templates/auth-consistency.yaml): it installs green and then shows every user
   # a governed UI with no way in, while the catalog 401s each read. Set this only for an estate that
   # is deliberately API-only — it must be a decision, never an omission.
+  # -- Permit `auth.enabled` without a frontend sign-in flow, for a deliberately API-only estate; otherwise templates/auth-consistency.yaml refuses that combination.
   allowHeadless: false
   # Lock root (top-level) namespace/table creation to warehouse-create-grant holders.
   #
@@ -947,12 +1091,15 @@ auth:
   # (allow+deny), and credential vending on the dedicated `lance.audit` logger → OTLP → GreptimeDB. Rendered
   # into LANCE_AUDIT_ENABLED only when auth is on (that is where a real subject exists); set false to silence
   # the stream even with auth on.
+  # -- Emit the structured authn/authz/credential-vending audit stream (LANCE_AUDIT_ENABLED and siblings); takes effect only with auth on. false silences it.
   audit: true
   # Pin the OpenFGA store id. When set, EVERY FGA consumer (the services, the openfga-model hook and the
   # bootstrap-admin Job) uses that store; empty (default) = the newest store named `lance-catalog`. A
   # MODEL pin makes every service check against that one model whatever its image carries; no deployment
   # sets it, and removing the knob is parked as LH-309.
+  # -- Pin the OpenFGA store id used by every service, the openfga-model hook and the bootstrap-admin Job. Empty = the newest store named `lance-catalog`.
   fgaStoreId: ""
+  # -- Pin the OpenFGA authorization model id every service checks against, whatever its image carries. Empty = the store's latest model.
   fgaModelId: ""
   # First estate admin, seeded BY THE CHART (goal cond 4): a Dex subject (the id_token's `sub`) granted
   # TWO tuples by the bootstrap-admin post-install/upgrade hook Job, because they are two authorities —
@@ -961,9 +1108,10 @@ auth:
   # (GET /v1/events, the object browser, the admin console) gates on. Empty (default) = the human grants
   # stay out-of-band (seed scripts / the UI) while the SERVICE grants below still render.
   # Requires auth.enabled.
+  # -- Dex subject (id_token `sub`) the bootstrap-admin hook grants `owner` on the default warehouse and `admin` on estate:rask. Empty = human grants are made out of band.
   bootstrapAdmin: ""
 
-# --- Data-plane credential vending (Track B). How a client gets storage_options for DIRECT object I/O. ----
+# === Data-plane credential vending (Track B). How a client gets storage_options for DIRECT object I/O. ====
 # POST /management/v1/table/<id>/credentials?tier=read|write returns scoped creds (or mode=server_mediated). Modes:
 #   mode_b        (default) — nothing vended; clients use the server-mediated Arrow-IPC data endpoints.
 #   web_identity  — the caller's Dex id_token is exchanged via AssumeRoleWithWebIdentity for creds bound
@@ -995,8 +1143,11 @@ vending:
   # Re-driven against MinIO on 2026-09-11 from a SCOPED (non-root) caller — in-scope GET allowed,
   # cross-tenant GET and read-tier PUT both AccessDenied. The store enforces the session policy from an
   # identity that is not root, which is the whole property the zero-trust posture rests on.
+  # -- How the catalog vends storage credentials for direct object I/O: `mode_b` (none, server-mediated), `web_identity`, `sts` (default, scoped AssumeRole) or `static`.
   mode: sts # mode_b | web_identity | sts | static
+  # -- Lifetime in seconds of a vended STS / web-identity credential (LANCE_VENDING_TTL_SECONDS).
   ttlSeconds: 900
+  # -- Role ARN passed on AssumeRole in `sts`/`web_identity` mode (LANCE_S3_ASSUME_ROLE_ARN); stores with inherited policies ignore it but boto3 requires it.
   assumeRoleArn: "arn:aws:iam::000000000000:role/lance-vend" # inherited-policy stores ignore it; boto3 requires the param
   # ENCRYPTION AT REST for every DIRECT write, carried in the vended storage options (§ J5). A vended
   # client writes to object storage with the catalog out of the path, so this is the only channel that
@@ -1009,12 +1160,14 @@ vending:
   # so a wrong value would write plaintext while the config claimed encryption.
   #
   # A store that ignores SSE headers simply writes unencrypted; this is for an AWS/S3 deployment.
+  # -- Server-side encryption for direct writes, carried in vended storage options: `algorithm` (AES256, aws:kms, aws:kms:dsse) and `kmsKeyId` (kms only). Empty = bucket default.
   encryption: {}
   # Allow blob-v2 columns to reference EXTERNAL objects outside the dataset root (Blob.from_uri) on create.
   # Off by default: (1) external bytes live outside the lakehouse (Lance's GC can't protect them, a source
   # delete dangles the pointer); (2) SSRF — a client-controlled pointer URI is fetched server-side by the
   # cascade's read_blobs, so an arbitrary URI (cloud metadata / internal host) becomes a read primitive.
   # Enable only for a trusted producer. Managed/inline blobs (bytes copied in) always work regardless.
+  # -- Allow blob-v2 columns to reference arbitrary external objects (Blob.from_uri) on create. Off by default: an SSRF and dangling-pointer risk; prefer `externalBlobBases`.
   allowExternalBlobs: false
   # The SAFER alternative to the blanket flag: a comma-separated allowlist of approved external base URIs
   # (e.g. "s3://media-bucket/approved,s3://other/base"). External Blob.from_uri pointers are accepted ONLY
@@ -1026,9 +1179,10 @@ vending:
   # One value, rendered as LANCE_EXTERNAL_BLOB_BASES into every reader of it: the catalog's create and read
   # doors, ingest, maintenance (planner and worker) and lineage. A base inside it needs no base-record
   # entry ([[LH-279]]), so a reader without it would treat each table's blob base as unrecorded.
+  # -- Comma-separated allowlist of base URIs external blob pointers may live under (LANCE_EXTERNAL_BLOB_BASES). Empty = `s3://<minio.bucket>/models/`; a value replaces that default.
   externalBlobBases: ""
 
-# --- Catalog request limits -----------------------------------------------------------------------
+# === Catalog request limits =======================================================================
 catalog:
   # THE CATALOG'S OWN NAME ON THE ESTATE, the identity it signs the lineage it emits as ([[LH-064]]): its
   # Ed25519 key pair is minted against this name (`signing:`), and it is the one delegator, because the
@@ -1039,17 +1193,20 @@ catalog:
   #
   # Empty makes the catalog no signer: it emits unsigned, which lineage admits only while
   # `signing.enforce` is false.
+  # -- The identity the catalog presents and signs its emitted lineage as (the one delegator). Empty = the catalog emits unsigned lineage.
   serviceIdentity: service-catalog
   # Max request-body bytes accepted on any catalog route. The Arrow-IPC write endpoints buffer the whole
   # body in memory, so an unbounded POST (e.g. a multi-GB media blob pushed through the catalog instead of
   # the direct storage/vending path) OOMs the worker. The body-limit middleware rejects oversized bodies
   # with 413 before buffering. 256 MiB — generous for tabular batches + small inline blobs, bounded well
   # under a worker's memory. Big media must use the direct-write/vending path (claim-check), not this API.
+  # -- Maximum request-body bytes on any catalog route (LANCE_MAX_BODY_BYTES); larger bodies get 413 before buffering. Default 256 MiB.
   maxBodyBytes: 268435456 # 256 * 1024 * 1024
   # Cap on concurrent in-flight Arrow-IPC writes (create/insert/merge_insert) — each buffers up to
   # maxBodyBytes, so peak buffer memory = maxConcurrentWrites × maxBodyBytes. Over the cap → 429 +
   # Retry-After, shed before a body byte is buffered. 16 matches the code default; prod lowers it to fit
   # the catalog memory tier — values-prod.yaml states the sizing formula. 0 disables shedding.
+  # -- Cap on concurrent in-flight Arrow-IPC writes; over it the catalog answers 429 + Retry-After. Peak buffer memory is this times `maxBodyBytes`. 0 disables shedding.
   maxConcurrentWrites: 16
   # #75/#96 RECOVERABLE DROPS — days a dropped table/namespace stays undroppable before the purge may
   # reclaim it. The CODE default is 0 (off: a grace period changes what `drop_table` means for every
@@ -1058,18 +1215,21 @@ catalog:
   # NOWHERE: ~500 lines of shipped, tested recovery code (undrop, /tasks, the recoverable cascade,
   # the purge's whole input) were inert in every chart deployment while two chart comments discussed
   # the knob as if it worked. 0 restores the old destroy-immediately behaviour.
+  # -- Days a dropped table or namespace stays undroppable before the trash purge may reclaim it (LANCE_TRASH_GRACE_DAYS). 0 destroys immediately.
   trashGraceDays: 7
   # #3-A per-warehouse physical multi-tenancy (admin control plane). On → POST /v1/warehouses provisions a
   # physically separate bucket per warehouse (Lakekeeper parity) and binds top-level namespaces to it, so a
   # table under a bound namespace lands in that warehouse's bucket. Additive + backward-compatible: an
   # unbound namespace always routes to the shared minio.bucket, so single-tenant flows are untouched.
   warehouses:
+    # -- Per-warehouse physical multi-tenancy: POST /v1/warehouses provisions a bucket per warehouse and binds top-level namespaces to it. Unbound namespaces use `minio.bucket`.
     enabled: true
   # #3-B Lance multi-base DATA distribution: the ALLOWLIST of bucket URIs a single table's fragments may be
   # spread across (?data_base=s3://... per create, round-robin write, fan-out read — the Uber pattern). A
   # per-request base MUST be on this list (a caller can never target an arbitrary bucket). Empty = feature
   # off (single-location creates, byte-identical to before). Populate with pre-provisioned data buckets.
   multibase:
+    # -- Allowlist of bucket URIs one table's fragments may be spread across (`?data_base=` on create). Empty = multi-base off, single-location creates.
     dataBases: []
     # [[LH-067]] WHICH SECRET each data base's credential comes from: `{base-uri: secret-ref}`. A NAME,
     # never material — the reference identifies a key in the Dapr secret store, which is what lets this
@@ -1082,6 +1242,7 @@ catalog:
     # path was reached, and the bucket provisioned for that proof sat unused (measured 2026-09-22).
     # The runtime symptom is indistinguishable from a caller naming a bucket they invented, which is
     # why it has to fail here instead.
+    # -- Map of data-base URI to a Dapr secret-store reference naming that base's credential. Every key must also be in `dataBases` or the render fails. Empty = estate options.
     baseCredentialRefs: {}
     # LOCAL FIXTURE for the references above, off by default and refused at render on a real deployment
     # (`rask.isRealDeployment`), with MinIO off, or without the bundled dev-mode OpenBao. In production
@@ -1099,6 +1260,7 @@ catalog:
     # key, a re-run is idempotent, and the seed's own re-seed loop restores the entry after an in-place
     # OpenBao restart or a replaced pod. It is a fixture identity, not a tenant's: it proves the per-base
     # credential path end to end.
+    # -- Local fixture: create each referenced base's bucket, scoped MinIO user and dev-OpenBao secret. Refused on a real deployment, without MinIO or without the dev OpenBao.
     devSeed: false
   # Control-plane change-events: every governance/metadata mutation (grants/warehouses/policies/tables)
   # publishes a CatalogControlEvent onto a DEDICATED broadcast Dapr topic (catalog.control.v1, no
@@ -1111,6 +1273,7 @@ catalog:
   # Correct at services.catalog.replicas=1 (the default). Scaling the catalog past one replica needs session
   # affinity (so a client's polls stick to one replica) or a shared buffer — else a load-balanced poll gets
   # inconsistent cursors and degrades to noisy `reset`s (safe, since events are hints, but wasteful).
+  # -- Publish catalog control events (catalog.control.v1) on a broadcast Dapr topic; renders the control pubsub component, CATALOG_CONTROL stream and subscription. Best-effort.
   controlEmit: true
   # #4 transactional outbox on the CONTROL lane, and the RELAY that drains it — one switch for both,
   # because half of this is worse than neither. Staging without a relay leaves a durable copy nothing
@@ -1132,25 +1295,31 @@ catalog:
   # Cost is one S3 PUT + DELETE per catalog MUTATION (not per row) against the already-provisioned
   # minio.bucket. Requires catalog.controlEmit (nothing stages when emission is off).
   controlOutbox:
+    # -- Stage control events in a durable S3 outbox and run the relay cron that drains it; carries the `table_published` wake-up for silver to gold. Requires `controlEmit`.
     enabled: true
     # ONE STRING: the Dapr Component's name (catalog-control-relay-cron.yaml), the app's
     # LANCE_CONTROL_RELAY_BINDING_NAME, and the route the catalog serves at its pod root. Dapr delivers
     # an input binding to the route matching the COMPONENT NAME, so a second literal anywhere is a cron
     # that ticks into a 404 while both halves look right in isolation.
+    # -- Name of the control relay's Dapr cron Component; also the catalog's LANCE_CONTROL_RELAY_BINDING_NAME and the route it serves. Must stay one string.
     bindingName: catalog-control-relay-cron
     # Bounds how long a cascade stays halted after a bus outage. Tighter than lineage's 300s sweep
     # because that one re-reads Lance manifests estate-wide while this one is a LIST over a prefix that
     # is empty in the healthy case.
+    # -- Dapr cron schedule of the control outbox relay; bounds how long a cascade stays halted after a bus outage.
     schedule: "@every 60s"
   # ADR 0138 (LH-178): an erasure whose residual a tag or branch pins tells the requester and the table's
   # owners, then releases the pins when this grace period ends (tags deleted, branches deleted and
   # recreated at main's head). Owner-set; nothing cancels or extends one release.
   erasure:
+    # -- Days after an erasure blocked by a tag or branch pin, during which owners are told, before the pins are released (LANCE_ERASURE_RELEASE_GRACE_DAYS). Required.
     releaseGraceDays: 7
     # ONE STRING, as for controlOutbox: the Component (catalog-erasure-release-cron.yaml), the app's
     # LANCE_ERASURE_RELEASE_BINDING_NAME and the route at the catalog's pod root.
+    # -- Name of the erasure-release Dapr cron Component; also the catalog's LANCE_ERASURE_RELEASE_BINDING_NAME and the route it serves.
     bindingName: catalog-erasure-release-cron
     # How late a due release may run; late costs only time, so this is loose.
+    # -- Dapr cron schedule on which due erasure pin releases run; lateness only costs time.
     schedule: "@every 300s"
 
 # Dapr pub/sub: the publish-side component name + the lineage topic. Each SUBSCRIBER app additionally
@@ -1158,15 +1327,18 @@ catalog:
 # (dapr-component.yaml); the subscription routes live in app code (/lineage-events, /bronze-arrival,
 # /medallion-event).
 pubsub:
+  # -- Name of the shared lineage publish Dapr pubsub component; each subscriber app gets a derived `<name>-<app-id>` component with its own queue group.
   name: lineage-pubsub
+  # -- Topic OpenLineage run events are published and subscribed on (LANCE_DAPR_TOPIC, MEDALLION_LINEAGE_TOPIC and siblings).
   topic: lineage.events.v1
   # The DEDICATED broadcast component for the catalog's own control-plane change-events (topic
   # catalog.control.v1). Separate from `name` (the shared lineage publish component) because it carries NO
   # queueGroupName — every catalog replica receives every event. Must equal the app's LANCE_CONTROL_PUBSUB
   # default (services/catalog/core/config.py). Rendered only when catalog.controlEmit is on.
+  # -- Name of the broadcast (no queue group) Dapr pubsub component for catalog.control.v1; must match the catalog's LANCE_CONTROL_PUBSUB default. Used when `controlEmit` is on.
   controlName: catalog-control-pubsub
 
-# --- Event-driven medallion pipeline (bronze → silver → gold; R23 — raw is the EXTERNAL world) -----
+# === Event-driven medallion pipeline (bronze → silver → gold; R23 — raw is the EXTERNAL world) =====
 # medallion-producer (dummy producer) is the HEAD: it ingests external raw straight into BRONZE (POST /produce
 # seeds bronze$events; /ingest-iiif harvests bronze$pages) and emits the bronze lineage; its OWN
 # /bronze-arrival subscription publishes the first trigger (medallion.bronze). Each stage runner subscribes to
@@ -1177,7 +1349,9 @@ pubsub:
 # propagated, which is exactly why this sentence read as true while the traces were not there.
 # All 4 share the catalog image (different entrypoint).
 medallion:
+  # -- Deploy the medallion cascade: the medallion-producer head and the stage runners in `stageRunners`, with their pubsub components and crons.
   enabled: true
+  # -- HTTP port the medallion producer and stage runners listen on.
   port: 8000
   # Storage ZONES (medallion → gold SINK). Maps a stage NAMESPACE to its S3 bucket; anything unset
   # falls back to the shared `minio.bucket`, so the DEFAULT here is the single-bucket layout
@@ -1193,6 +1367,7 @@ medallion:
   # Empty is CORRECT and is the normal case: the medallion namespaces are NESTED
   # (`<parent>$bronze`), so they inherit their parent namespace's location and warehouse rather than
   # resolving a bucket of their own. See `producer.bronzeNamespace` for why they are nested.
+  # -- Map of stage namespace to S3 bucket (e.g. `{gold: lance-sink}`); unset namespaces use `minio.bucket`. Listed buckets are auto-created and reserved from warehouses.
   buckets: {}
   # #84 per-tenant medallion routing (OPT-IN). When true, the producer + stage runners get
   # MEDALLION_CONTROL_ROOT (the catalog's warehouse-registry root — the same s3://<minio.bucket> the
@@ -1222,28 +1397,34 @@ medallion:
   # declared below becomes `acme-bronze` — top-level, and owned by that project's warehouse. That is the
   # shape seed_estate.py has always built. Pinned by
   # tests/unit/test_invariants.py::test_a_medallion_NAMESPACE_can_actually_belong_to_a_warehouse.
+  # -- Per-project routing: give producer and stage runners MEDALLION_CONTROL_ROOT so a `project` trigger resolves that project's warehouse. Off drops project triggers fail-closed.
   projectsEnabled: true
   # Gold SERVING warehouse (OPT-IN; composes with projectsEnabled). When true, the terminal silver→gold
   # stage runner gets MEDALLION_GOLD_WAREHOUSE_ENABLED: a `project`-carrying trigger's TARGET root becomes the
   # project's gold serving warehouse — the registry record created with `"serving": "gold"` on POST
   # /v1/warehouses — when one exists. The upstream read + bronze/silver stay in the tenant's WORK
   # warehouse. Absent gold warehouse, or this false (default), → byte-identical work-warehouse routing.
+  # -- Route the terminal stage runner's project writes to the project's gold serving warehouse when one exists (MEDALLION_GOLD_WAREHOUSE_ENABLED). Off = work warehouse.
   goldWarehouse: false
   # ReBAC enforcement: when true, each stage runner CHECKS it's authorized (OpenFGA) to produce its target stage
   # before emitting — the silver→gold stage runner needs `can_promote` (validator), the others `can_create_table`
   # (writer). Off by default (the open-mode demo runs without it); seed the stage runner-identity grants first
   # (scripts/seed_medallion_fga.sh) before flipping it on.
+  # -- Each stage runner checks OpenFGA for its `requiredAction` on the target namespace before producing. Seed the stage-runner identity grants first.
   fgaEnabled: false
+  # -- OpenFGA HTTP API URL the producer and stage runners check against (RASK_FGA_API_URL) when FGA is on.
   fgaApiUrl: http://rask-openfga:8080
   # #64 human trigger door: the project a signed-in user must hold `can_administer` on to fire /produce or
   # /train from the UI (the web BFF forwards ONLY the user's bearer — no service token leaves the web pod).
   # The service-to-service app-token path is unchanged; this is a SECOND, admin-only door, gated on
   # auth.enabled + fga. Matches the project the seed grants admin on (scripts/e2e_stack.sh → project:acme).
+  # -- Project a signed-in user needs `can_administer` on to fire /produce or /train from the UI, and the default project a projectless produce is checked against.
   produceAdminProject: acme
   # Replica counts — each stage runner's own pubsub component carries queueGroupName=<app-id>, so its replicas
   # form a competing-consumer group (single delivery per trigger; without the queue group every replica
   # would process EVERY trigger — up to 8× at gold with 2 replicas per stage). Stage runners are idempotent on
   # top (MERGE on run_id). medallion-producer is a subscriber too (/bronze-arrival). All stateless.
+  # -- Replica count of the medallion-producer Deployment (default 1); replicas share a queue group, so each trigger is delivered once.
   producerReplicas: 1
   # THE CASCADE LAG DETECTOR (docs/adr/0051-cascade-repair-detection-and-the-repair-verb-2026-09-04.md "Cascade repair" (C3)) — the LOSS half of cascade monitoring.
   #
@@ -1261,10 +1442,12 @@ medallion:
   # MEDALLION_CASCADE_LAG_BINDING_NAME, and the path it serves at its pod root. Empty disables the
   # detector entirely — opt-in, like every other cron here.
   cascadeLag:
+    # -- Name of the read-only cascade-lag cron Component, the producer's MEDALLION_CASCADE_LAG_BINDING_NAME and its route. Empty disables the lag detector.
     bindingName: medallion-cascade-lag-cron
     # Slower than a refusal alert on purpose: a lag is a LEVEL, so the question is "is it still behind
     # in five minutes", which `for:` answers. A tighter cadence buys resolution nobody reads and costs
     # a catalog + lineage read per edge per tick.
+    # -- Dapr cron schedule on which the producer measures per-edge cascade lag and sets the `medallion.cascade.lag` gauge.
     schedule: "@every 300s"
   # THE PLAN SWEEP (CP-029 D-6). One Component, scoped to every app that plans Ray runs: each stage runner resolves its
   # own open stage plans (a job whose report never arrived, one the head lost and resubmitted under the same key twice
@@ -1274,8 +1457,11 @@ medallion:
   # STRING, like cascadeLag: the Component's name, MEDALLION_PLAN_SWEEP_BINDING_NAME and the route. Empty disables the
   # sweep, which leaves an unreported run open.
   planSweep:
+    # -- Name of the plan-sweep cron Component (MEDALLION_PLAN_SWEEP_BINDING_NAME and route) that resolves open Ray stage and training plans. Rendered only with `ray`; empty disables it.
     bindingName: medallion-plan-sweep-cron
+    # -- Dapr cron schedule of the plan sweep; four ticks is the grace a lost submission gets before it counts as never registered.
     schedule: "@every 30s"
+  # -- Replica count of each stage-runner Deployment (default 1); replicas form a competing-consumer queue group.
   stageRunnerReplicas: 1
   # When true, every stage does a REAL in-process Lance read->transform->write (the fake-Ray compute) so the
   # event-driven cascade produces actual versioned data in the object store, not just provenance — the lineage graph
@@ -1289,6 +1475,7 @@ medallion:
   # core, not an add-on), and a cascade that cannot compute is a cascade that emits lineage for data it
   # never wrote. Off was the demo-safe default and it made the shipped configuration the one nobody
   # runs in anger.
+  # -- Stages do a real Lance read, transform and write (MEDALLION_COMPUTE_ENABLED) rather than emitting lineage only; stage URIs derive from `minio.bucket` and each namespace.
   compute: true
   # Media head demo seeding: /ingest-media writes two sample PNGs into the source prefix before
   # ingesting (the stand-in for an external media drop). Prod points the source at real media and
@@ -1296,7 +1483,9 @@ medallion:
   # The media lane's BRONZE namespace, nested like every other tier. It was hardcoded twice in
   # templates/medallion.yaml (`stageBucket "bronze-media"` and the path segment), so the media chain
   # kept writing to the flat location after the tiers moved and its stage runner DROPped every trigger.
+  # -- Bronze namespace of the media lane, where /ingest-media lands blobs (MEDALLION_MEDIA_BRONZE_URI). Default `bronze-media`.
   mediaBronzeNamespace: bronze-media
+  # -- Have /ingest-media write two sample PNGs into the source prefix before ingesting (MEDALLION_MEDIA_SEED_SAMPLES); set false when the source is real media.
   mediaSeedSamples: true
   # Event-driven REAL-Ray compute (requires compute + a running Ray cluster — deploy/ray-lance-demo.yaml).
   # When true, each stage runner submits its stage transform as a `ray job submit` to the ray-lance cluster IN
@@ -1326,9 +1515,7 @@ medallion:
   # FIRST, then enable the lane and point at it IN THE SAME `helm upgrade`:
   #
   #     kubectl apply -f deploy/ray-lance-demo.yaml     # after correcting image + S3 for your estate
-  #     ./scripts/helm.sh upgrade rask ./chart -f <live values> \
-  #       --set medallion.ray=true \
-  #       --set-string ray.dashboardUrl=http://ray-lance-head:8265
+  #     ./scripts/helm.sh upgrade rask ./chart -f <live values> --set medallion.ray=true --set-string ray.dashboardUrl=http://ray-lance-head:8265
   #
   # No stage runner restart is part of it: a Ray stage is planned and resolved without a workflow runtime (CP-029), so
   # the flag moves no stage runner into `lance-statestore`'s scopes and no sidecar caches a scope it would miss. The
@@ -1359,6 +1546,7 @@ medallion:
   # The cluster the lane submits to has NO key here ([[CP-041]]): it is `rask.rayDashboardUrl`, the one
   # address `compute` also prunes job history on, from `ray.dashboardUrl` or the in-cluster head. With
   # this on and neither present the render fails, rather than submitting to a Service nothing creates.
+  # -- Stage runners submit their transform as a Ray job (MEDALLION_RAY_ENABLED) to the estate's one Ray dashboard; the render fails if no Ray address is configured.
   ray: true
   # The Kueue LocalQueue a submitted RayJob is admitted through (§7.4 step 4). Empty means no
   # admission control and the CR is created unlabelled AND unsuspended — deliberately, and the two go
@@ -1370,6 +1558,7 @@ medallion:
   # RayJob CR path this admitted was deleted 2026-09-15 (owner decision) because nothing called it.
   # Kept because Kueue admission is what any future CR-shaped submitter would need, and the queue is a
   # chart-level fact rather than a submitter-level one.
+  # -- Kueue LocalQueue a submitted RayJob would be admitted through. No template reads it: the medallion submits through the Ray Jobs API. Empty = no admission control.
   kueueQueue: ""
   # WHAT THIS ESTATE'S RAY PLANE CAN RUN. The producer registers each of these into
   # `<control_root>/_tasks/` at boot, and the catalog's transform door refuses a declaration naming a
@@ -1386,6 +1575,7 @@ medallion:
   # stage job reads `STAGE_CARDINALITY` and enforces both shapes; the dummy lane merge-inserts and is
   # 1:1 only, so declaring it 1:N is refused at the door rather than passing a count check the job
   # was told the answer to.
+  # -- Tasks the Ray plane can run, registered by the producer at boot (MEDALLION_RAY_TASKS): `task`, baked `command`, optional `cardinalities` (empty = all). Rendered with `ray`.
   rayTasks:
     - { task: stage-transform, command: "python /home/ray/jobs/ray_stage_job.py", cardinalities: ["1:1", "1:N"] }
     - { task: dummy-lane, command: "python /home/ray/jobs/ray_dummy_job.py", cardinalities: ["1:1"] }
@@ -1396,6 +1586,7 @@ medallion:
   # `ray` guard, because this is the plane an estate that brings no Ray cluster runs on — and a plane
   # that registers nothing leaves `_tasks/` empty, which makes the catalog's declaration door answer
   # 422 for every transform. The engine is stamped by the registering plane, never by this list.
+  # -- Tasks the in-process plane can run, registered at boot (MEDALLION_INPROCESS_TASKS) whether or not Ray is on: `task`, `command`, optional `cardinalities`.
   inprocessTasks:
     - { task: stage-transform, command: "medallion.transform_stage", cardinalities: ["1:1", "1:N"] }
   # When true, after the compute writes a stage's Lance dataset the stage runner runs data-quality assertions on it
@@ -1403,7 +1594,9 @@ medallion:
   # dataQualityAssertions facet are still emitted (auditable in lineage), but the next stage is NOT
   # triggered, so a bad batch can't cascade. The automated *validator* half of governance (FGA decides who
   # MAY promote; quality decides if the DATA is good enough). Requires medallion.compute. Off by default.
+  # -- Run data-quality assertions (row count, key column non-null, declared columns) after each stage write and block promotion on failure. Requires `compute`.
   quality: false
+  # -- Column the quality gate asserts is non-null (MEDALLION_QUALITY_KEY_COLUMN). Used when `quality` is on.
   qualityKeyColumn: id
   # The quality gate's THIRD answer (S3/S4). With `quality` alone a failed assertion is a permanent
   # BLOCK — right for a corrupt blob pointer, wrong for a promotion that is UNUSUAL rather than broken
@@ -1419,12 +1612,15 @@ medallion:
   # must share a process, and a stage runner has no gateway row and no Ingress path. Turning this on
   # therefore also scopes `medallion-producer` on the actor state store (dapr-statestore.yaml); without
   # that scope the sidecar logs "Workflow engine started" and dispatch fails on every delivery.
+  # -- Route unusual (not broken) promotions to a person through the producer's promotion_review workflow instead of blocking; also scopes the producer on the state store.
   qualityReview: false
   # WHO is asked — an OIDC subject. Empty means nobody can be asked, and the review then answers
   # BLOCKED with "no reachable approver" in the outcome and in lineage, rather than failing open.
+  # -- OIDC subject asked to approve a held promotion. Empty = nobody can be asked and the review answers BLOCKED.
   qualityReviewApprover: ""
   # How long an ask stays open. An unbounded wait is a workflow that never completes and an operator
   # who never learns why; on expiry the promotion is EXPIRED, emitted, and not promoted.
+  # -- Hours a promotion review stays open before the promotion is EXPIRED and not promoted.
   qualityReviewHours: 72
   # How far a promotion's row count may move from the previous version before a person is asked.
   # 0.25 = ±25%, plus every FIRST promotion of a dataset (which fires regardless of this number).
@@ -1440,7 +1636,9 @@ medallion:
   #
   # 0 asks about every change — noisy, but the safe direction. There is no value that silently
   # promotes everything, because that is the failure this setting exists to end.
+  # -- Fractional row-count change from the previous version that triggers a review (0.25 = 25%); a first promotion always asks. 0 asks about every change.
   promotionReviewBand: 0.25
+  # -- Topic a stage runner holding a promotion publishes it on for the producer's review workflow (MEDALLION_PROMOTION_TOPIC).
   promotionTopic: medallion.promotion
   # ONE trigger, ONE gate: the stage runner registers, publishes, and stops. Advancing the `published` tag
   # emits `table_published`, the publication head routes it to the lane that owns the source
@@ -1457,21 +1655,29 @@ medallion:
   # training job's self-emitted RunEvents elsewhere ("" in the CODE default disables emission; the chart
   # always renders a URL).
   train:
+    # -- Topic the /train head publishes training requests on and the trainer consumer subscribes to (MEDALLION_TRAIN_TOPIC).
     topic: training.jobs
+    # -- Ray job entrypoint the trainer submits (MEDALLION_TRAIN_ENTRYPOINT); the script must be baked into the Ray cluster image.
     entrypoint: "python /home/ray/jobs/ray_train_job.py"
+    # -- Service identity training runs act and emit as (MEDALLION_TRAINER_IDENTITY).
     trainerIdentity: service-trainer
+    # -- Catalog namespace the model registry writes trained models into (MEDALLION_MODELS_NAMESPACE).
     modelsNamespace: models
+    # -- Lineage URL the training job emits its RunEvents to (MEDALLION_TRAIN_LINEAGE_URL). Empty = the release's own lineage Service.
     lineageUrl: ""
   producer:
+    # -- Dapr app-id of the medallion-producer; also names its derived pubsub components, durable consumers and state-store scope.
     daprAppId: medallion-producer
     # The subject the producer claims at the catalog's service door — the same one
     # `scripts/seed_medallion_fga.sh` grants. Needed for the PROMOTION RESUME, which publishes the
     # version a held promotion was taken on.
+    # -- Subject the producer presents at the catalog's service door and signs lineage as; the identity the FGA seed grants. Must not be blank.
     serviceIdentity: service-medallion-producer
     # Expose POST /produce through the gateway (the DEMO entry point for the cascade). It carries no
     # auth — a caller could trigger cascades / forge medallion provenance — so values-prod sets it false;
     # the EDGE head then fires only from real bronze ingests via /bronze-arrival. NB this gates only the
     # gateway route — the in-cluster ClusterIP route stays reachable + unauthenticated.
+    # -- Intended to gate the gateway route to POST /produce (values-prod sets false). No chart template reads it.
     expose: true
     # NESTED to match `bronzeNamespace` below. These two are a PAIR: the producer stamps this dataset
     # name on the trigger it publishes, and each stage runner compares it against its own
@@ -1479,6 +1685,7 @@ medallion:
     # "DROP status returned from app", and the stage runner itself logs NOTHING. Measured 2026-08-25: this
     # still read `bronze$events` while the stage runners had moved to `lakehouse$…`, so every cascade died at
     # the first hop with a 200 OK on the wire.
+    # -- Dataset name the producer stamps on the bronze trigger (MEDALLION_BRONZE_DATASET); must equal the first stage runner's `fromDataset` or every trigger is dropped.
     bronzeDataset: bronze$events
     # DECLARED UNQUALIFIED. On a projects-enabled estate the tier name is qualified at RUNTIME —
     # `project_namespace` prefixes `<project>-` to every declared name — so
@@ -1492,9 +1699,13 @@ medallion:
     #
     # A single-bucket estate (projects off, warehouses off) reads these verbatim and lands them in the
     # shared root, which is the mode `require_warehouse_scoped` documents as correct.
+    # -- Bronze namespace the producer writes (MEDALLION_BRONZE_NAMESPACE), declared unqualified; on a projects estate it becomes `<project>-bronze` at runtime.
     bronzeNamespace: bronze
+    # -- Operation name the producer stamps on its bronze-write lineage (MEDALLION_PRODUCER_OPERATION).
     operation: lance_ray_ingest
+    # -- Author the producer stamps on its bronze-write lineage (MEDALLION_PRODUCER_AUTHOR).
     author: ray
+    # -- Topic the producer's /bronze-arrival publishes the first cascade trigger on (MEDALLION_BRONZE_TOPIC); the first stage runner's `subTopic`.
     bronzeTopic: medallion.bronze
   # The 3 stage runners run medallion.stage_runner:app, differing only by env. order = the DAG. (R23: there is
   # no raw→bronze stage runner — its stage stamp/provenance logic merged into the producer's bronze ingest.)
@@ -1504,6 +1715,7 @@ medallion:
   # packages/service-kit/src/service_kit/governed/auth/model.json — the stage runner checks it on namespace:<toNamespace>, and a
   # typo 503s the whole cascade at the FGA gate instead of denying it. Pinned by
   # tests/unit/test_fga_model_contract.py::test_chart_medallion_required_actions_exist_on_namespace.
+  # -- The stage runners, one Deployment each in DAG order: name, daprAppId, from/to namespace and dataset, operation, author, sub/pub topics, requiredAction, serviceIdentity, requiredColumns.
   stageRunners:
     # Optional per-stage runner `stageJob: "python /home/ray/jobs/<job>.py"` — the Ray stage-job entrypoint
     # this stage runner submits when medallion.ray is on (MEDALLION_RAY_ENTRYPOINT). This is the P7b seam:
@@ -1538,13 +1750,17 @@ medallion:
     # The lane was already non-functional: `htrflowUrl` shipped empty and the stage runner dead-lettered
     # every trigger it received.
 
-# --- Compaction/GC microservice (Dapr cron binding) -----------------------------------------------
+# === Compaction/GC microservice (Dapr cron binding) ===============================================
 # A bindings.cron component POSTs /<bindingName> on `schedule`; the service compacts small Lance
 # fragments + GCs old versions across the lakehouse bucket. Schedule/retention are component config.
 maintenance:
+  # -- Deploy the maintenance service (planner, sweep and reconcile crons) and, with its other switches, the dedicated workers.
   enabled: true
+  # -- Dapr app-id of the maintenance planner and workers; also prefixes their durable consumer names.
   daprAppId: maintenance
+  # -- HTTP port of the maintenance planner and worker containers.
   port: 8000
+  # -- Name of the Dapr cron binding that fires the sweep tick (`MAINTENANCE_BINDING_NAME`).
   bindingName: maintenance-cron
   # THE SWEEP'S CADENCE, AND ITS ROLE DEPENDS ON `workTopic` ABOVE.
   #
@@ -1560,6 +1776,7 @@ maintenance:
   # it stops being is the thing that finds work first. Measured before the lane landed: every tick paid
   # a whole-estate walk plus one manifest open per dataset (87 of them) and reported
   # `fragments_removed: 0, versions_removed: 0` on every pass since 2026-08-16.
+  # -- Sweep cron cadence. With `workTopic` set it is a backstop: relax to hourly but no slower than 75 minutes.
   schedule: "@every 120s"
   # THE ESTATE THIS LANE IS SIZED FOR, and the per-unit cost that turns it into a required drain rate.
   # Declared so the sweep's cadence and the queue's capacity can be compared — they are set in
@@ -1587,12 +1804,16 @@ maintenance:
   # outage drains at roughly 1,600 units an hour. The 7,200 accumulated by [[LH-190]]'s stalls needs
   # about four and a half hours to clear — safely inside the stream's 7-day retention, but it is why
   # a restart is felt long after delivery resumes.
+  # -- Estate size the work lane is sized for; with `schedule` and `secondsPerUnit` it declares the required drain rate.
   expectedDatasets: 600
+  # -- Measured end-to-end seconds per work unit (dispatch, ack and queueing included), used with `expectedDatasets` to size the lane.
   secondsPerUnit: 14
   # The drift reconciler's OWN cron. It only READS three stores (OpenFGA, the control-root registries,
   # the bucket listing) and reports where they disagree — cheap next to the sweep, which rewrites data
   # files, which is why it gets its own schedule instead of inheriting that one.
+  # -- Name of the Dapr cron binding that fires the drift reconciler (`MAINTENANCE_RECONCILE_BINDING_NAME`).
   reconcileBindingName: maintenance-reconcile-cron
+  # -- Cadence of the drift reconciler, which only reads OpenFGA, the control-root registries and the bucket listing.
   reconcileSchedule: "@every 300s"
   # THE WORK QUEUE. Empty => the cron tick maintains the estate inside its own request (the serial
   # lane). Set => it PLANS and publishes one message per dataset, and the `/maintenance-work`
@@ -1608,6 +1829,7 @@ maintenance:
   # The `replicas: 1` pin and the in-process sweep lock still stand, and they bound the QUEUE'S SCALING
   # PAYOFF rather than this fix: one planner enqueueing is all the split needs, because what moves off
   # the pod is the EXECUTION, not the planning.
+  # -- Topic the sweep publishes one unit per dataset to. Empty runs the whole sweep inside the cron request (the serial lane).
   workTopic: "maintenance.work.v1"
   # DEDICATED MAINTENANCE WORKERS (docs/adr/0049-maintenance-leaves-the-planner-pod-2026-09-04.md "Maintenance leaves the planner pod").
   #
@@ -1627,7 +1849,9 @@ maintenance:
   # extra hop. This switch is what sets `MAINTENANCE_EXECUTE_WORK=false` on the planner, so it
   # publishes and does not consume.
   dedicatedWorkers:
+    # -- Run compaction and index units on a separate worker Deployment and stop the planner consuming its own work queue. Needs `workTopic`.
     enabled: true
+    # -- Number of worker pods; they are competing consumers of the work and index queues. More than 1 also renders a PDB.
     replicas: 2
     # How many units ONE worker may execute at once, ACROSS BOTH LANES. It exists so the ceiling is a
     # DECISION: without it the real limit is anyio's default thread limiter — 40 — which nobody chose
@@ -1652,6 +1876,7 @@ maintenance:
     # ~0.67 units/sec, `Unprocessed Messages` climbed past 2,000 and nothing drained. One knob cannot
     # serve both questions — the MEMORY bound is `maxConcurrentCompactions` below, which is held
     # around the rewrite itself, the only step that holds bytes.
+    # -- Throughput bound: units one worker executes at once across both lanes; the lanes' maxAckPending split this number.
     maxConcurrentUnits: 40
     # The MEMORY bound: how many REWRITES may be resident at once. A no-op unit never acquires one.
     #
@@ -1665,6 +1890,7 @@ maintenance:
     #
     # The sample interval was 2s, so 434 MiB is a LOWER bound; the gate's 0.75 usable fraction carries
     # that uncertainty rather than pretending to precision.
+    # -- Memory bound: how many compaction rewrites one worker holds resident at once. No-op units never take one.
     maxConcurrentCompactions: 4
     # RETIRE THE WORKER AFTER N COMMITTED REWRITES ([[LH-183]]). The two bounds above cap what is
     # resident AT ONCE; this one caps what is never given back.
@@ -1686,6 +1912,7 @@ maintenance:
     #
     # 0 disables it, and an estate that has not measured its own retention should say 0 rather than
     # inherit this number: it is a property of the tables, not of the code.
+    # -- Retire a worker after this many committed rewrites to shed retained memory; 0 disables.
     recycleAfterPasses: 150
 
     # THE SECOND BUDGET, and the one this estate's workers actually reach. `recycleAfterPasses` counts
@@ -1698,6 +1925,7 @@ maintenance:
     # WELL UNDER 1 BECAUSE OF THE PEAK: a rewrite's transient peak is 400-700 MiB above the floor and
     # returns every time, so retiring at the floor alone is still killed by the next one. At 0.70 a
     # 4Gi worker leaves at ~2.87 GiB, which affords the largest measured peak twice over. 0 disables.
+    # -- Retire a worker when resident memory reaches this fraction of its cgroup limit (0.70 = ~2.87 GiB of 4Gi); 0 disables.
     recycleAtMemoryFraction: 0.70
 
     # The slice of `maxConcurrentUnits` RESERVED for index builds; compaction gets the remainder.
@@ -1705,7 +1933,9 @@ maintenance:
     # (`indexAckWait` 3600s against the work queue's 720s), so letting index units take the whole pool
     # would starve the lane that runs every 120s, and letting compaction take it would leave a build
     # delivered with nothing to run it while its hour-long window burns.
+    # -- Slice of `maxConcurrentUnits` reserved for index builds per worker; compaction gets the remainder.
     indexConcurrentUnits: 4
+    # -- CPU/memory requests and limits of each worker pod, sized for the compaction work rather than the planner's 512Mi.
     resources:
       requests: { cpu: 250m, memory: 1Gi }
       # Sized for the WORK, unlike the planner's 512Mi. Compaction reads whole fragments: on bronze,
@@ -1738,6 +1968,7 @@ maintenance:
   # (`maintenance/services/credentials.py::_announce_vending_is_off`), which is what made the estate-wide
   # case invisible. So this is a bounded improvement that reports its own bounds, not a switch that
   # either works or fails. See `docs/adr/0045-the-lakehouse-cloud-native-cutover-2026-09-03-04.md`, "The lakehouse cloud-native cutover".
+  # -- Sign each compaction write with a per-table credential vended by the catalog instead of the deployment's S3 key; falls back per dataset.
   vendWriteCredentials: true
   # WHERE THE REWRITE'S BYTES ARE MOVED. Off = one in-pod `compact_files()`, which plans, executes and
   # commits in a single call — so this pod's memory ceiling is a function of the largest table anyone
@@ -1752,11 +1983,15 @@ maintenance:
   # because nothing has been planned at that point and a hardening that could stop a maintenance run
   # would be a new way to stop reclaiming disk. Which path ran is recorded per dataset
   # (`DatasetResult.compaction_mode`), so a permanent degradation is a count rather than a guess.
+  # -- Let the catalog plan and commit compaction while this pod only rewrites, signed by a vended credential; falls back to in-pod compaction. Off by default.
   distributedCompaction: false
   # The subject this service claims at the catalog's identity door. It is what the bootstrap-admin hook
   # grants `writer` on each warehouse, and what the catalog audits on every vend.
+  # -- Subject maintenance claims at the catalog's identity door; bootstrap grants it on each warehouse and the catalog audits it on every vend.
   catalogServiceIdentity: service-maintenance
+  # -- Dead-letter topic for compaction work units that exhaust their retries.
   workDlqTopic: dlq.maintenance.work
+  # -- Dapr pub/sub component name of the compaction work lane.
   workPubsub: maintenance-work-pubsub
   # THE INDEX-BUILD LANE, on its own topic beside the work queue, and ON because the spec asks for it:
   # `lance_docs/ns_catalog/spec.yaml:1705` states "Index creation is handled asynchronously" and
@@ -1777,18 +2012,23 @@ maintenance:
   # vector index over a large table is not, and one ackWait cannot serve both — sized for the index a
   # stuck compaction stays invisible that long, sized for compaction every large build redelivers
   # mid-flight. Separate topics also let the two scale as independent consumer groups.
+  # -- Topic the catalog's create-index doors publish build units to for the workers. Empty builds the index inside the catalog request.
   indexTopic: "maintenance.index.v1"
+  # -- Dead-letter topic for index build units that exhaust their retries.
   indexDlqTopic: dlq.maintenance.index
+  # -- Dapr pub/sub component name of the index build lane.
   indexPubsub: maintenance-index-pubsub
   # The ack window for ONE index build, and the number this lane exists to be able to set. The work
   # queue's 720s is sized for a dataset's compact + index-optimize + GC; a vector index over a large
   # table can exceed it, and an ack that expires mid-build redelivers the unit to a second worker
   # which then builds the same index concurrently. Raise it for a large estate — an over-long window
   # only delays the redelivery of a genuinely lost unit, while an under-long one duplicates work.
+  # -- Ack window for one index build unit (a duration, default 3600s); too short redelivers a build mid-flight to a second worker.
   indexAckWait: 3600s
   # The catalog's control root (project/warehouse/trash registries and the `_bases/` base records).
   # Empty => the primary bucket, which is what the catalog itself defaults to; set both together if the
   # catalog's root is moved. Lineage reads the base records from here too (LINEAGE_CONTROL_ROOT).
+  # -- S3 root of the catalog's control registries (projects, warehouses, trash, `_bases/`). Empty uses the primary bucket; set together with the catalog's.
   controlRoot: ""
   # …and "both" needs a second key to exist. `MAINTENANCE_POLICY_ROOT` was rendered NOWHERE until
   # 2026-08-16, so an operator following the line above moved the trash/warehouse/project reads and
@@ -1796,7 +2036,9 @@ maintenance:
   # policy registry at the wrong root lists cleanly as EMPTY, so every retention override and
   # legal-hold opt-out simply stops applying while the sweep reports a healthy run.
   # Empty => falls back to controlRoot, then to the primary bucket (config.py::resolved_policy_root).
+  # -- S3 root of maintenance policy records. Empty falls back to `controlRoot`, then the primary bucket.
   policyRoot: ""
+  # -- Days of version history kept by old-version GC.
   olderThanDays: 7 # version GC keeps this much history
   # How much the compaction READ may pull at once. The two multiply — the ceiling is
   # scanBatchSize x row size x compactThreads — so they are set together or not at all.
@@ -1810,7 +2052,9 @@ maintenance:
   # 64 x ~1.8 MB x 2 is ~230 MB, which fits. Raise them together if you also raise the pod's tier;
   # for a tier whose rows are small, prefer a per-tier maintenance policy (`scan_batch_size`) over
   # raising this global, so the blob tiers stay bounded.
+  # -- Rows per compaction read batch (Lance defaults to 8192); with large blob rows this bounds memory, set together with `compactThreads`.
   scanBatchSize: 64
+  # -- Compaction read threads. Memory ceiling is scanBatchSize x row size x compactThreads; set the two together.
   compactThreads: 2
   # THE BOUND THE TWO ABOVE REACH FOR, in BYTES rather than rows, and the one the pod's memory is
   # actually sized against. Declared here — it was a code default only — because the worker's memory
@@ -1821,6 +2065,7 @@ maintenance:
   # baseline, so ~1.7x the byte bound is resident per unit. That ratio is what
   # `test_the_worker_can_hold_every_unit_it_admits.py` multiplies out against the pod limit, so raising
   # this without lowering the concurrency (or raising the limit) fails the render rather than the pod.
+  # -- Byte bound on what one compaction rewrite reads (default 256 MiB); fits together with the worker memory limit and concurrency.
   maxSourceBytes: 268435456
   # Emit a maintenance lineage event per materially-compacted dataset (shows GC in producers() next to
   # writes) AND a FAIL event per maintain:-errored dataset (deterministic per-dataset run id — the flood
@@ -1858,6 +2103,7 @@ maintenance:
   # The `runRetentionDays` note below still applies and is deliberately NOT changed here: with the
   # sweep at 0 errors there are no FAIL Run nodes to accumulate, so pruning run history is a separate
   # decision to make on its own evidence rather than as a side effect of turning provenance on.
+  # -- Emit a lineage event per materially compacted dataset and a FAIL event per errored one; covers catalog-laid-out tables only.
   lineageEmit: true
   # #79 RECLAMATION. When on, the reconcile tick DELETES the bytes of every trash record past its grace
   # deadline and revokes that object's grants — gated on that same tick's drift report running clean
@@ -1868,6 +2114,7 @@ maintenance:
   # (`undrop` does not check expiry today — a record that survives is a recovery that still works). It
   # is also the only irreversible thing this service does; compaction and version GC are bounded by
   # policy, this destroys a whole dataset.
+  # -- Delete the bytes of trash records past their grace deadline and revoke their grants, only when that tick's drift report is clean. Irreversible; off by default.
   trashPurge: false
   # SEE WHAT RECLAMATION WOULD COST, before spending the permission above. The pass runs for real —
   # same due-record selection, same liveness and shallow-clone pre-passes, same refusal check — and
@@ -1887,9 +2134,11 @@ maintenance:
   #
   # `would_purge` is an UPPER BOUND: the FGA revoke, a non-dataset location and a failing delete each
   # refuse records a preview cannot test without performing the act they guard.
+  # -- Run the purge pass for real but perform no mutation, reporting `would_purge`; adds full read cost.
   trashPurgeDryRun: false
   # Per-tick ceiling on purged records. The remainder is reported (`trash_purge.capped`) and drained on
   # the next tick, so a backlog never becomes one unbounded delete storm against object storage.
+  # -- Maximum trash records purged per tick; the remainder is reported as capped and drained next tick.
   trashPurgeMaxPerTick: 25
   # [[LH-094]] — raise a stranded dataset's Lance LISTING FLOOR so its residue becomes reclaimable.
   #
@@ -1903,16 +2152,19 @@ maintenance:
   # effect (owner ruling 2026-09-19, docs/adr/0066-four-rulings-on-the-lakehouse-s-unblocked-rows-owner-2026.md). The rejected alternative had this service
   # delete the named bytes itself, on live tables, against a floor rule it derived rather than one
   # upstream enforces.
+  # -- Write one metadata-only commit per stranded dataset to raise its Lance listing floor so residue becomes reclaimable. Off by default.
   floorRaise: false
   # The preview, and note the default is the OPPOSITE of trashPurgeDryRun above. The purge earns its
   # permission from a report that must first run clean; this pass is what MAKES that report clean, so
   # nothing gates it but these two flags — and the safe default for an ungated writer is to plan only.
   # Turning `floorRaise` on therefore reports `floor_raise.raised` and commits nothing until this is
   # set false.
+  # -- Plan and report floor raises without committing. Defaults true; set false to commit once `floorRaise` is on.
   floorRaiseDryRun: true
   # Per-tick ceiling on datasets committed to. A store rebuild strands every dataset at once, so an
   # uncapped pass would turn one cron fire into a commit against every governed table in the estate.
   # The remainder is reported (`floor_raise.capped`) and taken on the next tick.
+  # -- Maximum datasets the floor raise commits to per tick; the remainder is reported as capped.
   floorRaiseMaxPerTick: 10
   # [[LH-061]] — rebuild authorization tuples the control-plane registries still justify.
   #
@@ -1926,13 +2178,16 @@ maintenance:
   # warehouses' tenancy pointers come back; every grant made after creation — other admins, roles, team
   # edges, per-table owners, the cascade identities — is in no registry and comes back from none of
   # them. A rebuilt estate is one an admin can start repairing, not one that is repaired.
+  # -- Recreate OpenFGA tuples the control-plane registries still justify (project admin seed, warehouse tenancy); additive only. Off by default.
   tupleRebuild: false
   # Plan and report, write nothing. Defaults TRUE: turning the pass on to SEE what it would grant must
   # not grant it.
+  # -- Plan and report the tuple rebuild without writing. Defaults true.
   tupleRebuildDryRun: true
   # Per-tick ceiling on tuples written. A wholesale tuple loss makes every tenant eligible at once, so
   # an uncapped pass would turn one cron fire into an estate-wide authorization write. The remainder is
   # reported (`tuple_rebuild.capped`).
+  # -- Maximum tuples the rebuild writes per tick; the remainder is reported as capped.
   tupleRebuildMaxPerTick: 50
   # [[LH-061]] — revoke authorization tuples whose OBJECT no longer exists.
   #
@@ -1951,16 +2206,19 @@ maintenance:
   #
   # Measured on this estate 2026-09-20: 1,041 ghost tables, residue of the warehouse-delete cascade
   # [[LH-148]] fixed at source — a producer already closed, leaving a backlog nothing else can clear.
+  # -- Revoke OpenFGA tuples whose object no registry names (ghost projects/warehouses/tables); deletes tuples only. Off by default.
   driftRepair: false
   # Plan and report, delete nothing. Defaults TRUE — stricter than `trashPurgeDryRun` above, and
   # deliberately: the purge's targets are already-expired records on a maintained root, while this
   # writes to the AUTHORIZATION store, where a wrong revoke is felt by a person holding a grant rather
   # than by a reclaimer.
+  # -- Plan and report drift repair without deleting any tuple. Defaults true.
   driftRepairDryRun: true
   # Per-tick ceiling on objects revoked. The remainder is reported (`drift_repair.capped`) and taken on
   # the next tick, so a large backlog drains over ticks instead of becoming one unreviewable batch of
   # authorization deletes. Edge cuts are NOT counted against it: one cut removes a single tuple from a
   # live object, and counting them here would let a backlog of ghosts starve the smaller, safer repair.
+  # -- Maximum objects drift repair revokes per reconcile tick; the remainder is reported as capped and taken next tick.
   driftRepairMaxPerTick: 50
   # [[LH-061]]'s STORAGE tier — clear a trash record whose bytes are PROVEN gone.
   #
@@ -1972,13 +2230,16 @@ maintenance:
   #
   # That probe is also why this pass needs no incompleteness guard of its own: its decision rests on a
   # direct observation of the store rather than on an absence from a listing.
+  # -- Clear trash records whose bytes a probe proves are gone; deletes bookkeeping rows, never bytes. Off by default.
   tombstoneSweep: false
   # Plan and report. Defaults TRUE for its sibling's reason — turning the pass on to SEE what it would
   # clear must not clear it.
+  # -- Plan and report the tombstone sweep without clearing anything. Defaults true.
   tombstoneSweepDryRun: true
   # Per-tick ceiling on records swept, applied BEFORE the probing so a large backlog cannot turn one
   # tick into an unbounded listing storm against object storage. The remainder is reported
   # (`tombstone_sweep.capped`).
+  # -- Maximum trash records the tombstone sweep probes and clears per tick; the remainder is reported as capped.
   tombstoneSweepMaxPerTick: 50
   # The reconciler's per-dataset FILE scan — the unreferenced-file category (#128a).
   #
@@ -2004,6 +2265,7 @@ maintenance:
   # findings and categories reporting UNAVAILABLE are estate state, not switches. (The unavailable four
   # cleared the same day for a different reason: the reconciler was refusing to LOOK UP its OpenFGA
   # store when the ids were unpinned, which is the chart's default posture.)
+  # -- Run the reconciler's per-dataset unreferenced-file scan; read-only, and required for `trashPurge` to certify a clean report.
   orphanScan: true
   # How deep the bucket walk descends looking for a dataset's `_versions/` marker. A subtree the walk
   # stops inside is filed as an `IncompleteScan` and blocks the purge — and the walk cannot tell "no
@@ -2015,6 +2277,7 @@ maintenance:
   # and raising it costs a walk that is already the sweep's dominant cost (`_protected_roots` opens
   # every discovered dataset in every bucket before one is compacted). MEASURE before moving it — the
   # report names the prefixes it stopped at, which is where that measurement starts.
+  # -- How deep the bucket walk descends looking for a dataset's `_versions/`; a subtree it stops inside is an IncompleteScan that blocks the purge.
   discoveryMaxDepth: 3
 
   # Stores the PLATFORM owns and the catalog deliberately cannot resolve ([[LH-164]]). The medallion
@@ -2030,6 +2293,7 @@ maintenance:
   # `unreadable_locations` every tick — the fail-loud direction, but it buries the locations nobody has
   # accounted for. Measured 2026-09-23: 163 of 564 discovered locations carry no recoverable table id,
   # and 16 of them are this registry.
+  # -- Platform-owned store roots the catalog cannot resolve (e.g. medallion models) that the reconciler accounts for instead of reporting as unreadable.
   declaredPlatformRoots: "s3://lance-catalog/medallion/models"
 
   # LH-101: wall-clock ceiling for ONE sweep tick, checked BETWEEN datasets — never inside a compaction.
@@ -2037,23 +2301,28 @@ maintenance:
   # estate's dataset count and the tick interval, and inferring one would be guessing. Set it and the
   # tick logs `sweep_budget_exhausted` with what it executed and what it did not reach, which is the
   # starvation this exists to make visible.
+  # -- Wall-clock ceiling for one sweep tick, checked between datasets; 0 means unlimited.
   sweepBudgetSeconds: 0
   # Announce each reclamation on the catalog's control topic (catalog.control.v1). Requires
   # dapr.sidecars — and the component's `scopes` must list this app-id, which the chart does below;
   # without it the sidecar rejects every publish SILENTLY (emission is best-effort by design).
+  # -- Announce each reclamation on the catalog control topic (catalog.control.v1); needs Dapr sidecars. Off by default.
   controlEmit: false
 
-# --- lance-media plane ----------------------------------------------------------------------------
+# === lance-media plane ============================================================================
 # The viewer/search/annotator services from the lance-audio checkout. All three share the catalog image
 # and read the corpus from a node-local hostPath (NO data move — only the annotations table lives in the
 # catalog; MEDIA_READ/WRITE_BACKEND=catalog is the merge's env flip, "direct" restores standalone dev).
 explorer:
+  # -- Deploy the explorer trio (viewer, search, annotator services) and their gateway URLs.
   enabled: false
   # Where the pods mount the corpus (read-only, all three services).
   # #142: set to a warehouse bucket (e.g. "s3://bind86-wh") to serve the media corpus from the
   # GOVERNED object store instead of the mounted volume. VIEWER ONLY so far — search/annotator
   # still need creds + a minio NetworkPolicy row before they can follow. "" = the disk, unchanged.
+  # -- S3 root (e.g. a warehouse bucket) the viewer serves the media corpus from (MEDIA_S3_DB_ROOT). Empty = the mounted corpus volume.
   corpusS3Root: ""
+  # -- Path the corpus volume is mounted at, read-only, in all three explorer services.
   corpusMountPath: /media-corpus
   # HOW the corpus volume is provided. This used to be an unconditional `hostPath` with
   # `type: Directory` pointed at /var/media-corpus — which means explorer.enabled=true on a cluster where
@@ -2070,15 +2339,24 @@ explorer:
   #   * hostPath — a node-staged corpus (the lance-audio runbook's posture). Now OPT-IN, and rendered
   #     with `type: DirectoryOrCreate` so a missing directory can no longer wedge the pods.
   corpus:
+    # -- How the corpus volume is provided: `emptyDir` (default), `pvc` (existing `claimName` or a chart-created claim) or `hostPath` (DirectoryOrCreate).
     mode: emptyDir            # emptyDir | pvc | hostPath
+    # -- Existing PVC to mount when mode is `pvc`. Empty = the chart creates `<release>-media-corpus` (kept on uninstall).
     claimName: ""             # mode=pvc: an existing PVC; empty => the chart creates one
+    # -- Requested size of the chart-created corpus PVC.
     size: 50Gi                # chart-created PVC only
+    # -- Access mode of the chart-created corpus PVC; ReadWriteMany because three services read it concurrently.
     accessMode: ReadWriteMany # chart-created PVC only — three services read it concurrently
+    # -- StorageClass of the chart-created corpus PVC. Empty = the cluster's default StorageClass.
     storageClass: ""          # chart-created PVC only; "" => the cluster's DEFAULT StorageClass
+    # -- Node directory mounted as the corpus when mode is `hostPath`.
     hostPath: /var/media-corpus # mode=hostPath only
+  # -- Where the explorer services read annotations from (MEDIA_READ_BACKEND): `catalog` (governed) or `direct` (standalone dev).
   readBackend: catalog
+  # -- Where the explorer services write annotations to (MEDIA_WRITE_BACKEND): `catalog` (governed) or `direct` (standalone dev).
   writeBackend: catalog
   # Default: the in-release catalog Service (rendered in media.yaml); set to override.
+  # -- Catalog URL the explorer services use (MEDIA_CATALOG_URI). Empty = the in-release catalog Service.
   catalogUri: ""
   # REMOVED 2026-08-26 — `catalogToken` was the media services' catalog bearer, and nothing read it
   # except a fallback that should not have existed: `open_reader`/`open_writer` did
@@ -2096,13 +2374,17 @@ explorer:
   # pretend to publish. Turning it on ALSO scopes the annotator's app-id on the control pubsub
   # component (dapr-component.yaml); without that the sidecar rejects every publish, silently,
   # because the emit is best-effort by design.
+  # -- Annotator publishes `task_assigned`/`task_unassigned` control events for the notifications inbox, and is scoped on the control pubsub component.
   controlEmit: false
   services:
+    # -- Explorer viewer service: `port` (its HTTP port) and `daprAppId` (its Dapr app-id).
     viewer: { port: 8101, daprAppId: viewer }
+    # -- Explorer search service: `port` (its HTTP port) and `daprAppId` (its Dapr app-id).
     search: { port: 8102, daprAppId: search }
+    # -- Explorer annotator service: `port` and `daprAppId`; the app-id is scoped on the control pubsub when `explorer.controlEmit` is on.
     annotator: { port: 8103, daprAppId: annotator }
 
-# --- Query encoders — the vector/rerank half of media search -------------------------------------
+# === Query encoders — the vector/rerank half of media search =====================================
 # The search + viewer services are CLIENTS of two OpenAI-shaped HTTP endpoints
 # (services/search/services/encoders/{embedding,reranker}.py): Qwen3-VL-Embedding-2B on
 # `POST {embedUrl}/v1/embeddings` and Qwen3-VL-Reranker-2B on `POST {rerankUrl}/v1/rerank`. Neither
@@ -2119,40 +2401,53 @@ explorer:
 # through the node gateway. Under `networkPolicy.enabled` an off-cluster endpoint also needs a
 # `networkPolicy.extraEgress` entry, the same as the externalized S3/NATS/OTLP endpoints.
 encoders:
+  # -- Base URL of the OpenAI-shaped embedding server search calls and viewer probes (MEDIA_EMBED_URL). Empty = vector search modes report unavailable.
   embedUrl: "" # e.g. http://encoders.internal:8001 — enables semantic / visual / scene / hybrid / all
+  # -- Base URL of the OpenAI-shaped reranker server (MEDIA_RERANK_URL). Empty = the rerank leg reports unavailable.
   rerankUrl: "" # e.g. http://encoders.internal:8002 — enables the rerank leg on any mode
 
-# --- Model runners (runners/ — the lance-audio fold) ----------------------------------------------
+# === Model runners (runners/ — the lance-audio fold) ==============================================
 # Only the CPU-viable subset ships: `assist` (GroundingDINO-tiny + SAM-ViT-base, CPU wheels, weights
 # baked into the image). The CUDA-pinned runners (asr/diarize/voiceprint) and the LLM-dependent batch
 # runners (topics/kg) have no honest deployment on a GPU-less estate. When enabled (and explorer.enabled),
 # the annotator's MEDIA_ASSIST_URL points at the assist Service, flipping its in-repo mock to real
 # predictions. NOTE: runners/htr is the rask HTR runner — a sealed project, not deployed from here.
 runners:
+  # -- Deploy the `assist` model runner and point the annotator's MEDIA_ASSIST_URL at it instead of its in-repo mock.
   enabled: false
   assist:
+    # -- Assist runner image: `repository` and `tag`; the tag is required when runners are enabled.
     image: { repository: assist-runner, tag: dev }
+    # -- HTTP port of the assist runner Service.
     port: 8110
   # A RayJob submit endpoint for the annotator's batch-labeling seam (MEDIA_JOBS_URL).
   # No such deriver exists yet — leave empty and the annotator keeps its honest submit/poll mock.
+  # -- RayJob submit endpoint for the annotator's batch-labeling seam (MEDIA_JOBS_URL). Empty = the annotator keeps its submit/poll mock.
   jobsUrl: ""
 
-# --- Dapr state store — operational state (NOT analytical data) -----------------------------------
+# === Dapr state store — operational state (NOT analytical data) ===================================
 # Backed by the already-deployed AGE Postgres, in its own database. This is what annotation task state
 # (#122), the notification inbox (#125) and Dapr workflow instances persist to; Lance keeps the
 # published, versioned, analytical data and nothing operational. See chart/templates/dapr-statestore.yaml
 # for why Postgres rather than Redis.
 stateStore:
+  # -- Render the Dapr Postgres state store component (actor and workflow state) on the AGE `stateDb`.
   enabled: true
+  # -- Name of the Dapr state store component.
   name: lance-statestore
+  # -- Version of the Dapr Postgres state store component.
   componentVersion: v1
   # The Dapr secret store that resolves the connection string — OpenBao, not a k8s Secret. See
   # service_kit.governed.secrets for why the store must be the sole source.
+  # -- Dapr secret store that resolves the state store's connection string (OpenBao, never a k8s Secret).
   secretStore: lance-secrets
+  # -- Postgres table holding Dapr state rows.
   tableName: state
+  # -- Table the Dapr state store keeps its own metadata in.
   metadataTableName: dapr_metadata
   # Only the services that own operational state may load it. An unscoped component is loadable by
   # every app-id in the namespace, which would let any service write another's state.
+  # -- App-ids allowed to load the state store; the secret-store scope is derived from this list too. Adding one needs a restart of scoped pods.
   scopes:
     - annotator # #122 task/project state, plus the per-task and per-project actors and their reminders
     # The catalog is scoped for the publish saga's own state. NOTE: the saga does NOT run on a
@@ -2226,42 +2521,55 @@ stateStore:
     #   "Workflow engine started"
     # in that order (measured live 2026-08-15), and every workflow it starts fails.
 
-# --- Backups — a FALLBACK for the SELF-CONTAINED in-cluster path only. OFF by default. When you run the
+# === Backups — a FALLBACK for the SELF-CONTAINED in-cluster path only. OFF by default. When you run the
 # managed/operator path (CloudNativePG for AGE — the rask deployment), DISABLE these
 # and let the operators do backups (PITR + scheduled, better than this). These exist so a self-contained
 # in-cluster-prod deploy (in-cluster object-store PVC + AGE) isn't backup-less. ---------------------------------
 backups:
   # pg_dump the lineage + OpenFGA DBs (gzip) → the lakehouse S3 under _backups/pg/<date>/.
   pgDump:
+    # -- Schedule a CronJob that pg_dumps the lineage, OpenFGA and Dapr state databases (gzip) to `_backups/pg/<date>/` in the lakehouse bucket. Off by default.
     enabled: false
+    # -- Cron schedule of the pg dump (default daily 02:00).
     schedule: "0 2 * * *" # daily 02:00
+    # -- Number of newest daily pg dumps kept; older ones are pruned on each run.
     keep: 7 # retention: prune all but the newest N daily dumps each run, so the backups don't grow unbounded
   # THE CONTROL ROOT — the registry that holds every project, warehouse, binding and bucket claim. Lose
   # it and the Lance data survives while nothing can route to it. `scripts/control_root_backup.py`
   # ships backup/verify/restore/prune and `docs/runbooks/RUNBOOK-restore.md` documents the drill; this
   # is the scheduled lane, which is what was missing.
   controlRoot:
+    # -- Schedule a CronJob that backs up the control root (project, warehouse, binding and bucket-claim registries). Off by default.
     enabled: false
+    # -- Cron schedule of the control-root backup (default daily 01:00, ahead of the pg dump).
     schedule: "0 1 * * *" # daily 01:00, ahead of the pg dump so the two do not contend for the store
+    # -- Number of newest control-root backups kept after each successful copy; 0 keeps every run.
     keep: 14 # prune to the newest N after each successful copy; 0 keeps every run, unbounded
     # ANOTHER BUCKET is the point of a backup. Empty writes `_backups/control/` inside the control root
     # itself, which survives a bad write and does NOT survive losing the bucket — the failure a backup
     # exists for. Set it in any deployment that matters.
+    # -- S3 URI the control-root backup is copied to. Empty writes `_backups/control/` inside the control root itself, which does not survive losing the bucket.
     dest: ""
   # CSI VolumeSnapshot of the lakehouse PVC. Needs a CSI snapshotter + a VolumeSnapshotClass.
   volumeSnapshot:
+    # -- Schedule a CronJob that creates a CSI VolumeSnapshot of the lakehouse PVC; needs a CSI snapshotter and a VolumeSnapshotClass. Off by default.
     enabled: false
+    # -- Cron schedule of the volume snapshot (default daily 03:00).
     schedule: "0 3 * * *" # daily 03:00
+    # -- VolumeSnapshotClass the snapshot names; empty uses the cluster default.
     snapshotClassName: "" # the cluster's VolumeSnapshotClass; "" = the cluster default
     # creates the VolumeSnapshot CR via `sh -c`, so this image needs a shell AND kubectl.
     # (was bitnami/kubectl:1.31 — Bitnami retired the public catalog; that tag now 404s.)
+    # -- Image the snapshot job runs; it needs both a shell and kubectl.
     kubectlImage: alpine/k8s:1.31.3
 
-# --- HA: PodDisruptionBudget + (optional) HPA for the stateless request-serving services. Off by default
+# === HA: PodDisruptionBudget + (optional) HPA for the stateless request-serving services. Off by default
 # (single-node dev); the prod overlay turns the PDB on. Stateful stores (AGE/MinIO) get HA from their
 # operators (CNPG), NOT from here. ------------------------------------------------
 podDisruptionBudget:
+  # -- Renders a PodDisruptionBudget for each service, controlplane and zone running more than one replica.
   enabled: false
+  # -- minAvailable of every rendered PodDisruptionBudget.
   minAvailable: 1
 autoscaling:
   # CPU IS THE FALLBACK SIGNAL HERE, NOT THE INTENDED ONE — and that sentence is the decision this
@@ -2277,17 +2585,22 @@ autoscaling:
   # uses, so the query path is proven, not speculative. Declined 2026-08-28 (owner): it is a twelfth
   # subchart, its CRDs, and a new silent failure mode (scaler cannot reach GreptimeDB → no scaling,
   # no error) for an object no profile enables. Revisit when something actually turns this on.
+  # -- Renders CPU-based HPAs for catalog and lineage. Needs metrics-server; off by default.
   enabled: false # opt-in; needs metrics-server. Targets catalog + lineage.
+  # -- HPA minimum replicas for catalog and lineage.
   minReplicas: 2
+  # -- HPA maximum replicas for catalog and lineage.
   maxReplicas: 5
   # Meaningful only against the pod's CPU REQUEST, never its limit — see resources.catalog/lineage,
   # which exist because the shared `default` tier made this percentage measure 35 millicores.
+  # -- HPA target CPU as a percentage of the pod's CPU request (not its limit).
   targetCPUUtilizationPercentage: 70
   # k8s stabilises scale-up by default and scale-down not at all. Five minutes is the reference's
   # worked value; below it a spiky I/O-bound service oscillates between min and max.
+  # -- HPA scale-down stabilization window in seconds; stops a spiky service oscillating.
   scaleDownStabilizationSeconds: 300
 
-# --- In-cluster S3 (MinIO) ------------------------------------------------------------------------
+# === In-cluster S3 (MinIO) ========================================================================
 # ONE object store renders — P4's unification (docs/adr/0124-chart-unification-one-control-plane-each-one-object-store.md), which still holds; LH-133 changed WHICH store and
 # therefore its mechanism. `enabled` gates the StatefulSet + Services (templates/minio.yaml), the
 # bucket-init hook (templates/minio-buckets.yaml) and the scoped-user hook
@@ -2302,6 +2615,7 @@ autoscaling:
 # Erasure coding wants servers*volumesPerServer >= 4; the default is servers=1, volumesPerServer=4
 # (1 pod, 4 PVCs).
 minio:
+  # -- Run the in-cluster MinIO store, its bucket-init Job and the scoped-users hook. Off with `externalEndpoint` set uses a managed S3.
   enabled: true
   # THE IMAGE IS FIRST-PARTY, component `minio` under `image.*` (`rask.image`): the server and the
   # `mc` the scoped-users hook drives, compiled by `.docker/minio.dockerfile` from upstream tags pinned
@@ -2311,15 +2625,20 @@ minio:
   # run the pre-upgrade hook ([[XC-075]]). Pin a running store by `image.digests.minio`: the server's
   # version moves only when the dockerfile's pins do, and a moving tag on a data store changes the
   # server under its own on-disk format with no diff anywhere.
+  # -- Number of MinIO server pods (StatefulSet replicas).
   servers: 1
+  # -- Data volumes (PVCs) per MinIO server; the erasure set is derived from the drive list.
   volumesPerServer: 4
   # (No distinct-disk escape hatch here, and that is a property of the store rather than an omission:
   # the previous one refused volumes sharing a physical disk and needed an UNSAFE bypass flag to run on
   # single-node k3s at all. MinIO derives its erasure set from the drive list and does not.)
+  # -- S3 API port of the in-cluster store.
   port: 9000
+  # -- Port of the MinIO web console.
   consolePort: 9001
   # Per volume: 4 volumes × 15Gi => ~60Gi total (local-path is unmetered on dev k3s);
   # values-prod raises it to 200Gi/volume for the real lakehouse + 14d of observability.
+  # -- PVC size of each data volume (e.g. 4 volumes x 15Gi is ~60Gi).
   storage: "15Gi"
   # The data PVCs. EMPTY = the CLUSTER'S DEFAULT StorageClass — the only portable default, and the
   # reason this is not `"local-path"`: that is the name k3s's provisioner happens to use, it does NOT
@@ -2328,10 +2647,12 @@ minio:
   # chart-level complaint (live-proof 2026-07-28, defect 2 — the run had to alias a StorageClass into
   # the cluster to proceed). Set an explicit class only to pin a specific one (prod: a CSI class that
   # supports VolumeSnapshot + encryption, see values-prod.yaml).
+  # -- StorageClass of the data PVCs; empty uses the cluster's default class.
   storageClass: ""                    # data PVCs; "" => the cluster's default StorageClass
   # THE STORE'S ROOT ACCOUNT. Every scoped identity below exists so that nothing in the fleet presents
   # THIS pair; it remains only because the store itself must boot with one. Only the access key ID is a
   # value: the secret half is the store's `minio-secret-key` (generated in-cluster for the dev OpenBao).
+  # -- Access key id of the store's root account; its secret is the store's `minio-secret-key`. No service should present it.
   accessKey: minioadmin
   # THE COMPUTE PLANE'S OWN CREDENTIAL, scoped away from the tenant root above.
   #
@@ -2359,6 +2680,7 @@ minio:
   # delivery path was handing out root while a hand-applied Secret carried the scoped credential the
   # head actually used: pointing the head at ESO to "fix the path" would have silently downgraded the
   # Ray lane from scoped to root, which is the opposite of what that change looks like.
+  # -- Access key of the Ray compute plane's scoped store identity, kept off the tenant root; secret derives in-cluster.
   rayComputeAccessKey: rask-ray-compute
   # THE MAINTENANCE PLANE'S OWN CREDENTIAL, scoped away from the tenant root above.
   #
@@ -2386,6 +2708,7 @@ minio:
   # nothing left defending it. `rask.isRealDeployment`'s own rule applies: a guard reachable only by
   # remembering an opt-in protects the installs that did not need protecting. Set a value here to name
   # a different user; the secret is still derived (`lance.scopedSecretFn`).
+  # -- Access key of maintenance's scoped store identity, the fallback when vending degrades; secret derives in-cluster.
   maintenanceAccessKey: rask-maintenance
   # THE CATALOG'S OWN IDENTITY — the last service that presented the store's ROOT account (LH-051).
   #
@@ -2402,6 +2725,7 @@ minio:
   # policies that govern every other plane.
   #
   # The access key is the whole setting; the secret derives in-cluster (`lance.scopedSecretFn`).
+  # -- Access key of the catalog's scoped store identity; the secret derives in-cluster (`lance.scopedSecretFn`). Wide on data, no admin rights.
   catalogAccessKey: rask-catalog
   # THE MEDALLION PLANE'S SCOPED IDENTITY — the producer and all three stage runners share one, because
   # `medallion.yaml` renders their S3 env from one pair and they do one class of work. The access key
@@ -2409,6 +2733,7 @@ minio:
   # Provisioned by `minio-scoped-users.yaml` as `rask-medallion`: data in any warehouse, `_tasks/`
   # writable because this plane REGISTERS them, every other control prefix read-only. Named here rather
   # than left empty for the reason above — an install must not come up on the tenant root.
+  # -- Access key the medallion producer and stage runners share; secret derives in-cluster. Data in any warehouse, `_tasks/` writable.
   medallionAccessKey: rask-medallion
   # THE LINEAGE SERVICE'S SCOPED IDENTITY, and its policy is the TIGHTEST of the three because its S3
   # surface is the smallest — measured 2026-09-07 rather than assumed. Lineage opens datasets READ-ONLY
@@ -2420,6 +2745,7 @@ minio:
   # measured on the running estate 2026-09-08, lineage was the one plane of the three whose identity
   # was built, provisioned and never selected, so it presented `rustfsadmin` while holding the tightest
   # policy in the estate.
+  # -- Access key of the lineage service's scoped store identity (read-only plus deletes of its own outbox); secret derives in-cluster.
   lineageAccessKey: rask-lineage
   # THE OBJECT BROWSER, and the LOOSEST-privileged plane holding the TIGHTEST policy: the viewer only
   # LISTS and GETS. It has no write path at all — `objects.py` calls `list_objects_v2`, `head_object`
@@ -2429,9 +2755,11 @@ minio:
   # estate 2026-09-09: `AWS_ACCESS_KEY_ID=rustfsadmin` in the viewer's own env — the store's ROOT
   # credential, on a pod that HAS a Dapr sidecar and could have asked the secret store for a scoped
   # one. The widest credential in the estate, reached by the one path the goal forbids.
+  # -- Access key of the object browser's scoped identity (list and get only); secret derives in-cluster.
   viewerAccessKey: rask-viewer
   # The Lance lakehouse ROOT bucket (catalog LANCE_REST_ROOT + the warehouse registry). Referenced by
   # name in scripts/demo_reset.sh + the vending/lineage tests — do not rename casually.
+  # -- The lakehouse root bucket (catalog `LANCE_REST_ROOT`, warehouse registry, lineage outbox).
   bucket: lance-catalog
   # The PLATFORM buckets no feature owns: buckets the estate makes for itself, which no warehouse record
   # claims. Neither the root nor a feature's own bucket is listed, because each has its own key: the Job
@@ -2449,10 +2777,12 @@ minio:
   # GOVERNED tiers only. The raw buckets (images-batch*) are NOT here: raw is external (R23) and lives
   # on HCP. A local bucket sharing a name with an external one makes the browser report the empty
   # local one instead of 404ing.
+  # -- Extra platform buckets the bucket-init Job creates and the reconcile exempts from orphan_buckets; governed tiers only, not the root or feature buckets.
   buckets: []
   # Externalize: when set, the apps (catalog/lineage/compaction + vending STS) connect HERE instead of the
   # in-cluster MinIO — pair with minio.enabled=false to use a managed S3. NOTE: the greptimedb-standalone
   # subchart's S3 endpoint (under `greptimedb-standalone.objectStorage.s3.endpoint`) must be overridden too.
+  # -- S3 endpoint the apps use instead of the in-cluster MinIO; pair with `minio.enabled=false`. Empty uses the in-cluster store.
   externalEndpoint: "" # e.g. https://s3.us-east-1.amazonaws.com
   # (minio.persistence is GONE with the first-party Deployment — durability is the Tenant's
   # volumeClaimTemplate above: StatefulSet-owned PVCs survive pod rolls AND `helm uninstall`, the
@@ -2462,10 +2792,13 @@ minio:
   # web_identity). Off by default (plain dev needs no STS). Enabling it rolls the store (the env lands in the
   # Tenant spec, templates/minio.yaml).
   oidc:
+    # -- Make the store trust Dex id_tokens for STS AssumeRoleWithWebIdentity (`vending.mode: web_identity`); enabling it rolls the store.
     enabled: false
+    # -- Base MinIO policy for web-identity sessions; each request's session policy narrows it per table.
     rolePolicy: readwrite # built-in full-S3 base policy; the per-request session policy narrows it per-table
 
 ray:
+  # -- Allow the in-cluster Ray head (RayService under `singleTenant`, or RayCluster under `cluster.enabled`) and its HF cache PVC.
   enabled: true
   # THE ONE RAY PLANE ([[CP-041]]): every Ray consumer renders its address from `rask.rayDashboardUrl`
   # — compute's RAY_DASHBOARD_URL (job-history prune, jobs board, /api/serve), the cascade's
@@ -2473,6 +2806,7 @@ ray:
   # external Ray, used verbatim; empty => the in-cluster head Service a RayService (singleTenant) or
   # RayCluster (`cluster.enabled`) creates; neither, with `medallion.ray` on, fails the render. No
   # default host: an estate names its Ray, as it names its OIDC issuer.
+  # -- Address of the Ray dashboard every Ray consumer uses. Set for an external Ray; empty uses the in-cluster head Service.
   dashboardUrl: ""
   # THE BATCH LANE'S OWN CLUSTER — a RayCluster the KubeRay operator owns, as opposed to the
   # RayService `singleTenant` renders (which wraps a cluster of its own to run Serve applications).
@@ -2484,6 +2818,7 @@ ray:
   # — which nothing reconciles, and whose own header says "NOT for production: production is KubeRay
   # (RayCluster CR)".
   cluster:
+    # -- Render a KubeRay RayCluster for the batch lane; mutually exclusive with the `singleTenant` RayService. Off by default.
     enabled: false
     # GCS FAULT TOLERANCE via Ray's EMBEDDED RocksDB backend — the path that needs no Redis, and so
     # no exception to the estate's rule against one.
@@ -2502,11 +2837,14 @@ ray:
     # plain Deployment does NOT give single-writer, because the default RollingUpdate strategy starts
     # the replacement before the original goes.
     gcsFaultTolerance:
+      # -- Persist the Ray GCS metadata on embedded RocksDB so a head restart keeps job records (alpha, single writer, no Redis).
       enabled: false
+      # -- Size of the ReadWriteOnce claim holding the GCS RocksDB state.
       size: 2Gi
       # Empty => the cluster's default provisioner, which is the only portable answer.
+      # -- StorageClass of the GCS claim; empty uses the cluster's default provisioner.
       storageClass: ""
-  # --- Ray token auth (gate 7 / R3) — RAY_AUTH_MODE=token on the head + every Ray-talking client.
+  # === Ray token auth (gate 7 / R3) — RAY_AUTH_MODE=token on the head + every Ray-talking client.
   # DEFAULT OFF for dev; values-prod flips it ON (the ray-auth-token.yaml prod guard demands it).
   # The kuberay >= 1.6.0 prerequisite is SATISFIED (Chart.yaml pins kuberay-operator 1.6.2):
   # rask deploys a RayService, and the RayService controller is itself a dashboard-REST client
@@ -2518,6 +2856,7 @@ ray:
   # injects RAY_AUTH_MODE/RAY_AUTH_TOKEN into every Ray container). rask.rayAuthEnv covers the
   # fleet-consumer half (compute). Requires ray.rayVersion >= 2.52.0 (operator validation).
   auth:
+    # -- Ray token auth (`RAY_AUTH_MODE=token`) on the head and every Ray client, via KubeRay authOptions; needs `rayVersion` >= 2.52.0. Off for dev.
     enabled: false
     # The token is the store's `ray-auth-token`, written by ESO into `<release>-ray-auth-token`; the dev
     # OpenBao's is generated in-cluster. Never a value.
@@ -2527,13 +2866,17 @@ ray:
   # so the KubeRay operator, which uses rayVersion for its own compatibility gating (see authOptions
   # below, which needs >= 2.52.0), was reasoning about a cluster that did not exist. Nothing compares
   # the two automatically, so bump this WITH the lock, never on its own.
+  # -- Ray version KubeRay reasons about; must match the version the image's lock installs and be bumped with it.
   rayVersion: "2.58.0"
   image:
     # `ray-cluster`: names the KubeRay cluster image, distinct from the fleet's
     # Ray-plane SERVICE image (`ray` under R20, `compute` since R22)
     # name when the -api suffix died (R20), so the cluster image renamed with it.
+    # -- Repository of the agnostic Ray head image (built from .docker/ray-cluster.dockerfile).
     repository: ray-cluster
+    # -- Tag of the Ray cluster image.
     tag: "dev"
+    # -- Pull policy of the Ray cluster image.
     pullPolicy: IfNotPresent
   # THE SERVE APPLICATIONS THIS DEPLOYMENT RUNS. A list, because the platform must be able to express
   # more than one — the template used to hardcode a single `- name: htrflow`, so a second workload
@@ -2542,6 +2885,7 @@ ray:
   #
   # `params` is the workload's own half of the contract; each key is rendered as RASK_PARAM_<KEY> so a
   # workload cannot reach a platform variable by choosing a colliding name.
+  # -- Serve applications the RayService runs, each with name, importPath, routePrefix, its own image (runtime_env.image_uri) and optional params (RASK_PARAM_<KEY>).
   serveApplications:
     - name: htrflow
       importPath: "runner.htrflow_service:htrflow_app"
@@ -2560,11 +2904,17 @@ ray:
       image: "ray-htr:dev"
   # Kept for the compute zone's route hint and the NOTES output — the FIRST application's prefix.
   # Not read by the RayService any more; serveApplications above is the source of truth.
+  # -- Route prefix of the first Serve application, shown in NOTES; the RayService reads `serveApplications` instead.
   serveRoutePrefix: "/htrflow"
+  # -- Import path of the first Serve application. Not read by any chart template; `serveApplications` is the source of truth.
   importPath: "runner.htrflow_service:htrflow_app"
+  # -- Port of the in-cluster Ray head's dashboard, used to build the default Ray address when `dashboardUrl` is empty.
   dashboardPort: 8265
+  # -- Ray Serve HTTP port (8000). Not read by any chart template.
   servePort: 8000
+  # -- Ray client port (10001). Not read by any chart template.
   clientPort: 10001
+  # -- Ray GCS port (6379). Not read by any chart template.
   redisPort: 6379
   # ── THE ONE GPU SIGNAL ──────────────────────────────────────────────────────────────────────────
   # GPUs the Ray head advertises. Everything GPU-shaped in this chart DERIVES from this number
@@ -2581,24 +2931,33 @@ ray:
   # A GPU node sets `--set ray.gpuCount=<n> --set nvdp.enabled=true` (see nvdp below — the device
   # plugin is the one thing Helm cannot gate on this number, so the pair is guarded at render time by
   # templates/gpu-coherence.yaml).
+  # -- GPUs the Ray head advertises; every GPU setting derives from it. 0 is a CPU-only estate; a GPU node also needs `nvdp.enabled`.
   gpuCount: 0
+  # -- RuntimeClass of the Ray head; rendered only when `gpuCount` > 0.
   runtimeClassName: "nvidia" # only rendered when gpuCount > 0
+  # -- Size of the Ray head's Hugging Face weight-cache PVC.
   hfCacheStorage: "10Gi"
   # The HF weight-cache PVC's class. "" => the cluster's DEFAULT StorageClass (this was hardcoded
   # `local-path`, the same non-portable name as minio.storageClass — it wedged the PVC, and with it
   # the Ray head, on any cluster whose provisioner is named anything else).
+  # -- StorageClass of the HF weight-cache PVC; empty uses the cluster's default class.
   hfCacheStorageClass: ""
+  # -- Size limit of the Ray head's /dev/shm memory volume.
   shmSize: "8Gi"
   # Ray SERVE trace sampling. Upstream defaults to 0.01 — one request in a hundred — which makes a
   # small smoke test produce zero spans and read as broken. 1.0 while the estate's Serve traffic is
   # low; lower it deliberately if Serve ever carries real volume.
+  # -- Fraction of Ray Serve requests traced (string, 0 to 1); 1.0 traces every request.
   serveTracingSamplingRatio: "1.0"
+  # -- CPU/memory requests and limits of the Ray head container.
   resources:
     requests: {cpu: "2", memory: "8Gi"}
     limits: {cpu: "4", memory: "16Gi"}
 
 ingress:
+  # -- Renders the Ingress publishing `/` and `/api`. Only one release per cluster may hold a host-less Ingress.
   enabled: true
+  # -- IngressClass name. Empty uses the cluster default (Traefik on k3s).
   className: ""    # k3s default Traefik
   # Empty host => catch-all: reachable on the node IP or a VS Code / ssh -L
   # forwarded localhost with no Host header or /etc/hosts entry. Set a hostname
@@ -2615,6 +2974,7 @@ ingress:
   # So: exactly ONE release per cluster may carry a host-less ingress. Any additional install —
   # a slice, a lane, a preview — must either set a distinct `ingress.host` or, if it is reached
   # in-cluster and needs no edge at all, `--set ingress.enabled=false`.
+  # -- Hostname the Ingress routes. Empty is a cluster-wide catch-all on `/` and `/api`.
   host: ""
   # Keyed defaults, so an operator's own annotations still merge (and can override these).
   #
@@ -2634,6 +2994,7 @@ ingress:
   # still reaped, just on a timescale that matches a human session. proxy-send-timeout moves with it —
   # the two are one setting in practice, and leaving the send side at 60s reaps the same connection
   # from the other end.
+  # -- Annotations merged onto the Ingress; defaults raise nginx proxy buffers to 16k, read/send timeouts to 3600 s and the body cap to 64m.
   annotations:
     nginx.ingress.kubernetes.io/proxy-buffer-size: 16k
     nginx.ingress.kubernetes.io/proxy-buffers-number: "4"
@@ -2646,9 +3007,10 @@ ingress:
     # read as "inference is broken" rather than "the edge has a 1 MB cap". Also covers the
     # annotator's Arrow import and the medallion's multi-image batch posts.
     nginx.ingress.kubernetes.io/proxy-body-size: 64m
+  # -- List of Ingress TLS entries ({secretName, hosts}). Empty serves plain HTTP.
   tls: []          # e.g. [{ secretName: rask-tls, hosts: ["rask.example.com"] }]
 
-# ---- cluster infra foundation (subchart dependencies, Chart.yaml) ----------
+# ==== cluster infra foundation (subchart dependencies, Chart.yaml) ==========
 # One `helm install` brings these up alongside the app. Turn off for a prod
 # install that uses externally-managed infra. Subchart value overrides live
 # under the same key as the toggle.
@@ -2665,11 +3027,14 @@ nvdp:
   # The reverse (gpuCount > 0, this false) is legitimate and only warns in NOTES: that is a cluster
   # whose GPUs are advertised by an externally-managed plugin (the NVIDIA GPU Operator, or a cloud
   # provider's).
+  # -- Installs the NVIDIA device-plugin subchart; must be on together with `ray.gpuCount > 0` (templates/gpu-coherence.yaml fails the render on on + 0). Default off.
   enabled: false
   # k3s registers the nvidia container runtime but doesn't make it the default,
   # so the plugin pod must run under the nvidia RuntimeClass to see the GPU.
+  # -- RuntimeClass the device-plugin pods run under; templates/runtimeclass.yaml also creates it when GPUs and nvdp are on. k3s needs `nvidia`.
   runtimeClassName: nvidia
   # rask installs into the default namespace; the chart objects to that by default.
+  # -- Lets the device-plugin subchart install into the `default` namespace, which it otherwise refuses.
   allowDefaultNamespace: true
   # The device-plugin DaemonSet gates (nodeAffinity) on GPU-feature-discovery labels
   # — feature.node.kubernetes.io/pci-10de.present (PCI vendor 0x10de = NVIDIA),
@@ -2684,21 +3049,25 @@ nvdp:
   # single-node dev and multi-node clusters. Set nvdp.enabled=false instead if the
   # cluster already runs NFD or the NVIDIA GPU Operator.
   gfd:
+    # -- Installs the bundled Node Feature Discovery + GPU Feature Discovery that label GPU nodes; without the labels the plugin matches no node.
     enabled: true
 
 # kuberay-operator subchart (aliased 'kuberay' in Chart.yaml)
 kuberay:
+  # -- Installs the KubeRay operator subchart (Chart.yaml condition) that reconciles the Ray cluster CRs.
   enabled: true
 
-# --- NATS (subchart) — JetStream backs the Dapr pubsub.jetstream component -------------------------
+# === NATS (subchart) — JetStream backs the Dapr pubsub.jetstream component =========================
 # rask shipped this OFF ("platform NATS was single-tenant; per-project renders its own"). The merge
 # turns it ON: the lance-ns event fabric (lineage publish, the medallion cascade, the catalog control
 # broadcast, the DLQ streams) is the chart's default-on data plane and every one of those hops is a
 # Dapr pubsub.jetstream publish. templates/nats-stream-job.yaml provisions the streams (Dapr does not
 # auto-create them) and renders on `nats.enabled OR nats.externalUrl`.
 nats:
+  # -- Installs the in-cluster NATS JetStream subchart that backs every Dapr pubsub.jetstream component. Pair false with `nats.externalUrl`.
   enabled: true
   config:
+    # -- Subchart passthrough: turns JetStream on with a file store; `fileStore.pvc.size` (1Gi) is each server's PVC and its max_file_store bound.
     jetstream:
       enabled: true
       fileStore:
@@ -2718,6 +3087,7 @@ nats:
     # subchart's own default once cluster.enabled is true, and is the minimum for raft quorum — the
     # subchart's comment reads "must be 2 or higher when jetstream is enabled", but 2 gives no
     # majority, so 3 is the first honest value.
+    # -- Subchart passthrough: clusters NATS (3 replicas, the raft quorum minimum); with `nats.auth.server` routes come from the included route.conf.
     cluster:
       enabled: true
       replicas: 3
@@ -2736,6 +3106,7 @@ nats:
             - { op: remove, path: /routes }
             {{- end }}
     # `nats.auth.server`: operator mode, from the file the ExternalSecret writes (operator, system_account, MEMORY resolver).
+    # -- Subchart passthrough: with `nats.auth.server` on, includes ../nats-auth/server.conf (operator mode); off, renders nothing.
     merge:
       auth:
         $tplYamlSpread: |
@@ -2745,6 +3116,7 @@ nats:
   # Memory bound (#139) — see the note under `openfga.resources`. The nats chart takes container
   # overrides as a `merge` into the Container spec, not a top-level `resources` key. Sized as the
   # BUS: JetStream file-store broker whose memory tracks in-flight messages + raft state, per node.
+  # -- Subchart passthrough for the NATS server container: memory-bounded resources, and with `nats.auth.server` the nats-auth volume mount.
   container:
     merge:
       resources:
@@ -2756,6 +3128,7 @@ nats:
           {{- if .Values.auth.server }}
           - { op: add, path: /volumeMounts/-, value: { name: nats-auth, mountPath: /etc/nats-auth, readOnly: true } }
           {{- end }}
+  # -- Subchart passthrough: with `nats.auth.server` adds the `<release>-nats-auth` Secret volume to the NATS pods.
   podTemplate:
     patch:
       - $tplYamlSpread: |
@@ -2763,6 +3136,7 @@ nats:
           - { op: add, path: /spec/volumes/-, value: { name: nats-auth, secret: { secretName: {{ .Release.Name }}-nats-auth } } }
           {{- end }}
   # Memory bound (#139): the config reloader is an inotify loop; the debug box is an idle shell.
+  # -- Subchart passthrough: resources for the NATS config-reloader sidecar (requests 10m/16Mi, limit 64Mi).
   reloader:
     merge:
       resources:
@@ -2770,10 +3144,12 @@ nats:
         limits: { memory: 64Mi }
   # Its own identity, not `default`, with no API token: the server, its reloader and the box CLI
   # never call the Kubernetes API.
+  # -- Subchart passthrough: gives NATS its own ServiceAccount with no API token mounted.
   serviceAccount:
     enabled: true
     merge:
       automountServiceAccountToken: false
+  # -- Subchart passthrough for the nats-box debug pod: own ServiceAccount without a token, bounded resources, `monitor` creds when `nats.auth.server`.
   natsBox:
     # `nats.auth.server`: the read-only `monitor` user, as a creds file ESO writes (never `contents`, which would carry it in values).
     contexts:
@@ -2798,12 +3174,14 @@ nats:
   # still recommends this for production: an in-chart cluster removes the single-node SPOF but leaves
   # NATS a workload this chart operates, and a managed bus is the stronger answer where one exists.
   # The two are alternatives, not a sequence — pick one per environment.
+  # -- NATS URL the pubsub components and stream Job use instead of the in-cluster bus (e.g. nats://nats.internal:4222). Empty uses in-cluster.
   externalUrl: "" # e.g. nats://nats.internal:4222
   # Raft replication for every provisioned stream. REQUIRES a clustered NATS, which the block above
   # now provides in-chart; keep the two in step, because a streamReplicas above the node count makes
   # `nats stream add` fail outright rather than degrade.
+  # -- Raft replica count for every stream the stream Job provisions; must not exceed the NATS node count.
   streamReplicas: 3
-  # --- Bus authentication ([[XC-078]] slice 2): every client connects as its own NATS user -------------------------
+  # === Bus authentication ([[XC-078]] slice 2): every client connects as its own NATS user =========================
   # OPERATOR MODE IS THE ONLY SHAPE DAPR CAN USE. Dapr 1.18.1's pubsub.jetstream authenticates with a user JWT plus the NKEY
   # seed that signs the server's nonce, a TLS client pair, or one shared token that names nobody, and with jwt or seedKey empty
   # its Init falls through to an unauthenticated connect without a word. So the server runs in operator mode: one operator,
@@ -2875,8 +3253,11 @@ nats:
   # one it already holds: it signs every control event; ackPolicy none does not stop daprd 1.18.1 acking, measured);
   # 8222 monitoring is unauthenticated by design; and anything holding OpenBao's dev root token reads the store (XC-079).
   auth:
+    # -- Switches the NATS server to operator mode (JWT users from the ExternalSecret-written files). Off, the server accepts anyone.
     server: false
+    # -- Attests the platform store holds every `nats-user-<user>` (and `nats-route`); required when the store or bus is not chart-seeded.
     provisioned: false
+    # -- Extra user grants keyed by a values flag path, merged into `nats.auth.users` only while that flag is true (lance.natsTable).
     flagged:
       maintenance.controlEmit:
         maintenance:
@@ -2892,6 +3273,7 @@ nats:
           publish: [catalog.control.v1]
         media-to-silver:
           publish: [catalog.control.v1]
+    # -- The bus user table, one user per Dapr app-id plus admin, monitor and ingest, each with publish and subscribe subject lists (never empty).
     users:
       admin:
         publish: [$JS.API.INFO, $JS.API.STREAM.LIST, $JS.API.STREAM.NAMES, $JS.API.STREAM.INFO.*, $JS.API.STREAM.CREATE.*, $JS.API.CONSUMER.NAMES.*, $JS.API.CONSUMER.INFO.*.*, $JS.API.CONSUMER.CREATE.*.>, $JS.API.CONSUMER.DELETE.*.*]
@@ -3041,8 +3423,9 @@ nats:
           - $JS.ACK.DLQ.silver-to-gold-durable.>
         subscribe: [_INBOX.>]
 
-# --- Dapr control plane (subchart) — injects the daprd sidecar into annotated pods ----------------
+# === Dapr control plane (subchart) — injects the daprd sidecar into annotated pods ================
 dapr:
+  # -- Install the Dapr control-plane subchart (operator, sentry, placement, scheduler, injector); also gates rask's Dapr Components and Configurations.
   enabled: true
   # WORKFLOW STATE RETENTION — the only thing that collects workflow history.
   #
@@ -3066,31 +3449,39 @@ dapr:
   # Turning this off returns the estate to unbounded growth — it is a flag so a deployment that wants
   # forensic retention can opt out knowingly, not so it can be forgotten.
   workflowRetention:
+    # -- Render a Dapr workflow `stateRetentionPolicy`, the only thing that purges workflow history; false means history grows unbounded.
     enabled: true
+    # -- How long a completed workflow's history is kept, as a positive h or m duration of at least 1h; default 168h (7 days).
     completed: "168h"
+    # -- How long a failed workflow's history is kept for post-mortems, as a positive h or m duration of at least 1h; default 720h.
     failed: "720h"
+    # -- How long a terminated workflow's history is kept, as a positive h or m duration of at least 1h; default 720h (30 days).
     terminated: "720h"
   # Memory bound (#139) — see the note under `openfga.resources`. Five control-plane components, all
   # controller loops rather than data paths, so all sized as controllers. The sidecar injector's
   # `resources` here bound the INJECTOR itself; per-app daprd sidecar sizing is a separate concern
   # (the `dapr.io/sidecar-memory-*` annotations), deliberately not changed here.
+  # -- Subchart passthrough: CPU and memory requests/limits for the Dapr operator controller.
   dapr_operator:
     resources:
       requests: { cpu: 50m, memory: 64Mi }
       limits: { memory: 256Mi }
+  # -- Subchart passthrough: CPU and memory requests/limits for Dapr Sentry (the mTLS certificate authority).
   dapr_sentry:
     resources:
       requests: { cpu: 25m, memory: 32Mi }
       limits: { memory: 128Mi }
+  # -- Subchart passthrough: CPU and memory requests/limits for Dapr placement, which the actor single-activation guarantee depends on.
   dapr_placement:
     resources:
       requests: { cpu: 25m, memory: 32Mi }
       limits: { memory: 128Mi }
+  # -- Subchart passthrough: CPU and memory requests/limits for the Dapr scheduler, which backs actor reminders.
   dapr_scheduler:
     resources:
       requests: { cpu: 25m, memory: 64Mi }
       limits: { memory: 256Mi }
-  # --- SUBCHART values (dapr 1.18.1) --------------------------------------------------------------
+  # === SUBCHART values (dapr 1.18.1) ==============================================================
   # OFF. The subchart ships a `secret-reader` Role (`secrets: get`) bound to the namespace's `default`
   # SA, for daprd's built-in Kubernetes secret store. No sidecar here has that store: every injected
   # pod sets `dapr.io/disable-builtin-k8s-secret-store` (lance.daprSidecarResources), and a pod's own
@@ -3098,9 +3489,11 @@ dapr:
   # reads every Secret in the namespace. A Component `secretKeyRef` (lance-secrets' vaultToken when
   # openbao.devMode is off) is inlined by the Dapr operator under dapr-operator-admin, which carries
   # `secrets` itself; that path is not measured on a live devMode-off estate.
+  # -- Subchart passthrough: `secretReader.enabled: false` drops the Role letting the namespace `default` SA read every Secret; no sidecar uses it.
   dapr_rbac:
     secretReader:
       enabled: false
+  # -- Subchart passthrough for the injector: its resources, and fail-closed injection (`webhookFailurePolicy: Fail`) scoped to pods labelled `dapr.io/enabled`.
   dapr_sidecar_injector:
     resources:
       requests: { cpu: 25m, memory: 32Mi }
@@ -3121,9 +3514,10 @@ dapr:
     objectSelector:
       matchLabels:
         dapr.io/enabled: "true"
-  # --- FIRST-PARTY values -------------------------------------------------------------------------
+  # === FIRST-PARTY values =========================================================================
   # Inject Dapr sidecar into every fleet + lakehouse pod. Off => plain pods; the gateway
   # falls back to httpx env-URLs. (The control-plane subchart is dapr.enabled above.)
+  # -- Inject a daprd sidecar into every fleet and lakehouse pod; false runs plain pods and the gateway falls back to env-URL httpx calls.
   sidecars: true
   # The injection-sweep Job (templates/dapr-inject-sweep.yaml) closes the window `failurePolicy: Fail`
   # cannot: helm applies MutatingWebhookConfiguration AFTER every Deployment (it is not in helm's kind
@@ -3132,25 +3526,31 @@ dapr:
   # image, pinned; passes × 5s bounds how long it keeps trying before failing with the diagnosis.
   # MUST carry a shell: the sweep script is `sh -c`. registry.k8s.io/kubectl is DISTROLESS —
   # it has no /bin/sh, so the container never starts ("exec: sh: executable file not found").
+  # -- Image for the injection-sweep Job (templates/dapr-inject-sweep.yaml) that recreates pods admitted before the webhook existed; must carry `sh`.
   sweepImage: alpine/k8s:1.31.3
+  # -- How many 5-second passes the injection-sweep Job makes before failing with a diagnosis.
   sweepPasses: 40
+  # -- daprd sidecar log level, stamped as the `dapr.io/log-level` annotation (debug, info, warn, error).
   logLevel: "info"
   # Max request body size for Dapr service invocation. Dapr defaults to 4Mi,
   # which rejects multi-image uploads proxied over the gateway's sidecar. Raise it
   # to fit real batches.
+  # -- Max request body for Dapr service invocation (`dapr.io/max-body-size`); Dapr's own default is 4Mi.
   maxBodySize: "32Mi"
   # PodSecurity `restricted` compliance for the injected daprd sidecar. OFF by default (prod posture, like
   # networkPolicy.enabled). Our app containers are already `restricted`-clean (lance.securityContext:
   # runAsNonRoot + drop:[ALL] + RuntimeDefault); the sidecar is the remaining gap. Turning this on adds the
   # RuntimeDefault seccomp annotation; you MUST ALSO set the injector-wide drop-caps value it can't reach:
-  #   --set dapr.sidecarRestricted=true --set dapr.dapr_sidecar_injector.sidecarDropALLCapabilities=true
+  #   e.g. --set dapr.sidecarRestricted=true --set dapr.dapr_sidecar_injector.sidecarDropALLCapabilities=true
   # NOTE full-namespace `restricted` ENFORCE is still blocked by the OTel Collector (a single Deployment
   # whose filelog receiver needs hostPath /var/log/pods — `restricted` forbids it, no value fixes it):
   # give the Collector its own namespace at `baseline`, or a ServiceAccount PSA exemption.
+  # -- Add the RuntimeDefault seccomp annotation to daprd for PodSecurity `restricted`; also set the injector's `sidecarDropALLCapabilities`.
   sidecarRestricted: false
   # Bound every DaprClient gRPC call (publish_event has no per-call timeout arg, and the SDK's default
   # deadline is unset) so a wedged sidecar can't hang a publisher indefinitely — a timeout surfaces as a
   # publish failure the caller handles (the producer → 503, the stage runners → RETRY) instead of a stuck request.
+  # -- Deadline in seconds for every DaprClient gRPC call (DAPR_API_TIMEOUT_SECONDS), so a wedged sidecar fails a publish instead of hanging it.
   apiTimeoutSeconds: 30
   # The Dapr app-API token is not a value: it is the store's `dapr-app-token`, written by ESO into
   # `<release>-dapr-app-token` for the injector (templates/external-secrets.yaml). Dapr stamps it as
@@ -3172,19 +3572,27 @@ dapr:
   # is applied as-is per subscription, and NATS scopes consumer names PER STREAM — the dlq.* topics live
   # on their own DLQ stream). Set false to restore broker-only behavior (30-300s backOff, no DLQ).
   resiliency:
+    # -- Render the Dapr Resiliency policy (sidecar retries, constant 120s x 4), per-app dead-letter topics, and the long broker backOff; false = broker-only.
     enabled: true
   # The Dapr dashboard — a web UI for the Dapr stuff (components, subscriptions, configurations,
   # control plane). These are first-party keys (the dapr subchart ignores them).
   dashboard:
+    # -- Deploy the Dapr dashboard web UI (templates/dapr-dashboard.yaml), reached by port-forward; requires `dapr.enabled`.
     enabled: true
+    # -- Container image for the Dapr dashboard Deployment.
     image: daprio/dashboard:0.15.0
   # daprd sidecar resources (first-party keys → the lance.daprSidecarResources annotations). The app
   # containers are bounded (resources.default); an unbounded daprd on every sidecar'd pod is not.
   sidecarResources:
+    # -- CPU request for every injected daprd sidecar (`dapr.io/sidecar-cpu-request`).
     cpuRequest: 50m
+    # -- CPU limit for every injected daprd sidecar (`dapr.io/sidecar-cpu-limit`).
     cpuLimit: 300m
+    # -- Memory request for every injected daprd sidecar (`dapr.io/sidecar-memory-request`).
     memoryRequest: 64Mi
+    # -- Memory limit for every injected daprd sidecar (`dapr.io/sidecar-memory-limit`).
     memoryLimit: 256Mi
+  # -- Subchart passthrough: Dapr control-plane HA (off, single node) and Sentry mTLS between sidecars (pinned on).
   global:
     ha:
       enabled: false # single-node dev
@@ -3207,6 +3615,7 @@ dapr:
     # "no such host: dapr-placement-server / dapr-scheduler-server-a").
 
 kueue:
+  # -- Installs the Kueue subchart (Chart.yaml condition) that admits GPU workloads against the ClusterQueue quota.
   enabled: true
   # Default queue topology (ResourceFlavor + ClusterQueue + a LocalQueue in the
   # release namespace). Kueue's admission webhooks are failurePolicy=Fail, so the
@@ -3215,10 +3624,15 @@ kueue:
   # succeeds (templates/kueue-queues.yaml). Reference the queue from a workload
   # with the label `kueue.x-k8s.io/queue-name: <localQueueName>`.
   queues:
+    # -- Creates the default ResourceFlavor, ClusterQueue and LocalQueue through a post-install/upgrade hook Job (templates/kueue-queues.yaml).
     enabled: true
+    # -- Image for the kueue-setup hook Job's containers, which wait for the Kueue webhook and `kubectl apply` the queues.
     kubectlImage: "registry.k8s.io/kubectl:v1.31.3"
+    # -- Name of the ResourceFlavor the ClusterQueue quotas are declared under.
     flavorName: "rask"
+    # -- Name of the cluster-wide ClusterQueue that holds the nominal quota.
     clusterQueueName: "rask"
+    # -- Name of the LocalQueue in the release namespace; workloads reference it with the `kueue.x-k8s.io/queue-name` label.
     localQueueName: "rask"
     # Nominal quota for the single ClusterQueue cohort. cpu/memory: size to the
     # cluster. nvidia.com/gpu MUST equal the total schedulable nvidia.com/gpu
@@ -3228,14 +3642,19 @@ kueue:
     # raise this to run more concurrently. Never set it above the real GPU count
     # (Kueue would admit a pod that can't schedule).
     nominalQuota:
+      # -- ClusterQueue nominal CPU quota; size it to the cluster.
       cpu: "18"
+      # -- ClusterQueue nominal memory quota; size it to the cluster.
       memory: "120Gi"
+      # -- ClusterQueue GPU quota; set to the total schedulable GPUs, never above. Rendered as 0 when `ray.gpuCount` is 0.
       "nvidia.com/gpu": "1"
 
-# --- OpenFGA (subchart) — Zanzibar authz. lance-ns's values REPLACE rask's `engine: memory`: the
+# === OpenFGA (subchart) — Zanzibar authz. lance-ns's values REPLACE rask's `engine: memory`: the
 # datastore is the AGE Postgres (it's just postgres), so grants survive a restart. -----------------
 openfga:
+  # -- Install the OpenFGA authorization server subchart, plus rask's migrate Job, authn subject ConfigMap and PodDisruptionBudget for it.
   enabled: true
+  # -- Subchart passthrough: number of OpenFGA server replicas.
   replicaCount: 1
 
   # TELEMETRY ([[XC-047]]). Metrics come from the Collector's `openfga` scrape job and are the
@@ -3258,6 +3677,7 @@ openfga:
   # `x-greptime-pipeline-name` (otel-collector.yaml:486) because that is a GreptimeDB INGESTION
   # requirement rather than an OTLP one, so OpenFGA speaks plain OTLP and the header is added
   # downstream — which is the point of the Collector being the single seam.
+  # -- Subchart passthrough: OpenFGA OTLP tracing to the OTel Collector; off by default, ratio 0.001 because each Check emits ~1,900 spans.
   telemetry:
     trace:
       enabled: false
@@ -3288,6 +3708,7 @@ openfga:
   # knows, and this estate holds ~90. That is a normal governed read pattern, not an abuse — the store
   # simply outgrew the ceiling. Requests go 128Mi -> 512Mi so the scheduler reserves something near the
   # real working set rather than a floor the process leaves on its first Check storm.
+  # -- Subchart passthrough: CPU and memory requests/limits for the OpenFGA server.
   resources:
     requests: { cpu: 50m, memory: 512Mi }
     limits: { memory: 2Gi }
@@ -3319,6 +3740,7 @@ openfga:
   # `pending-upgrade` (refusing later upgrades until `helm rollback rask <rev>` — CLAUDE.md). The
   # answer then is to drop and recreate the openfga database rather than to revert the tag.
   image:
+    # -- OpenFGA image tag for the subchart server and for rask's own migrate Job (templates/openfga-migrate.yaml), so schema and binary match.
     tag: v1.18.3
   # THE FEATURE this upgrade is for. `weighted_graph_check` puts Check on the weighted-graph
   # algorithm now instead of waiting for it to become the default — OpenFGA is moving every query
@@ -3359,6 +3781,7 @@ openfga:
   # accounts and refused the unlisted ones, while a space-joined one refused all of them.
   # A change to the client set reaches OpenFGA when its pods restart (env from a ConfigMap is read at
   # start); until then a new client is refused, never an old one admitted.
+  # -- Subchart passthrough env: OPENFGA_EXPERIMENTALS=weighted_graph_check, the OIDC issuer alias, and the subject allow-list from `rask-openfga-authn`.
   extraEnvVars:
     - name: OPENFGA_EXPERIMENTALS
       value: weighted_graph_check
@@ -3382,20 +3805,26 @@ openfga:
   #
   # `issuer` is rendered by the subchart's tpl, so the release name follows the install.
   authn:
+    # -- Subchart passthrough: OpenFGA API authentication method; `oidc` admits only projected ServiceAccount tokens.
     method: oidc
     oidc:
+      # -- Subchart passthrough (tpl-rendered): the OIDC issuer OpenFGA fetches keys from, the release's ServiceAccount issuer mirror.
       issuer: "http://{{ .Release.Name }}-issuer-mirror:8080"
+      # -- Token audience OpenFGA requires; templates/openfga-authn.yaml refuses a render unless it equals `lance.openfgaAudience` (rask-openfga).
       audience: rask-openfga
   # OFF: the playground is a browser UI that only runs with authn `none` (cmd/run/run.go
   # `runPlaygroundServer` refuses any other method), and OpenFGA has deprecated it.
   playground:
+    # -- Subchart passthrough: the OpenFGA browser playground; off, since it only runs with authn `none`.
     enabled: false
   # NO BROWSER CALLS OpenFGA: the zones reach it only through the services. CORS stays closed by naming
   # one origin under the reserved `.invalid` TLD (RFC 2606), which no page can have; an empty list is not
   # closed, because rs/cors reads an empty AllowedOrigins as `*`, and the subchart default is `*`.
+  # -- Subchart passthrough: CORS for the OpenFGA HTTP API, closed by allowing only the unreachable origin `https://openfga.invalid`.
   http:
     corsAllowedOrigins: ["https://openfga.invalid"]
     corsAllowedHeaders: ["Authorization"]
+  # -- Subchart passthrough: Postgres datastore on the AGE server, DSN from `rask-infra-credentials`, bundled migrations off (rask's Job migrates), pool 30 open/10 idle.
   datastore:
     engine: postgres
     # DSN comes from the infra-credentials Secret (key openfga-datastore-uri) — the SAME secret the AGE
@@ -3440,36 +3869,45 @@ openfga:
     maxOpenConns: 30
     maxIdleConns: 10
 
-# --- Apache AGE Postgres (first-party template) — the lineage graph store AND openfga's datastore --
+# === Apache AGE Postgres (first-party template) — the lineage graph store AND openfga's datastore --
 # The ONLY relational store post-P7a (the rask batches/chunks CNPG Cluster is gone): CNPG's stock image
 # has no AGE extension, so this is a plain StatefulSet on apache/age. See docs/CNPG-AGE.md for the
 # ImageVolume path that eventually folds it into CloudNativePG.
 age:
+  # -- Run the in-cluster apache/age Postgres StatefulSet that serves the lineage graph, OpenFGA and the Dapr state store databases.
   enabled: true
   # PG16 THROUGHOUT, and the patch is chosen for the PLATFORM rather than for features: 1.5.0 ships
   # `linux/amd64` ONLY — read from the image's config blob, since a v2 manifest carries no top-level
   # architecture — while 1.6.0 is a manifest list carrying amd64 AND arm64 ([[XC-070]], measured
   # against the registry 2026-09-23). This StatefulSet serves BOTH the lineage graph and OpenFGA, so
   # on the older pin nothing governed comes up on an arm64 host at all.
+  # -- Postgres+AGE image for the StatefulSet and the pg_dump backup job (PG16; 1.6.0 is multi-arch amd64+arm64).
   image: apache/age:release_PG16_1.6.0
+  # -- Postgres user every AGE client connects as; its password is the store's `postgres-password` secret, never a value.
   user: lance
   # No password value: the AGE password is the store's `postgres-password` ([[XC-004]]).
+  # -- Name of the AGE graph and database holding the OpenLineage graph.
   lineageDb: lineage
+  # -- Name of the database OpenFGA uses as its datastore.
   openfgaDb: openfga
   # The Dapr state store's database (see stateStore above). Dapr owns this schema outright — it creates
   # and migrates its own tables — so it gets its own database rather than a table beside AGE's graph.
+  # -- Name of the database the Dapr Postgres state store owns and migrates itself.
   stateDb: daprstate
+  # -- Postgres port of the AGE store, used by every client DSN, the backup job and the network policy.
   port: 5432
   # Externalize: when set, lineage + the OpenFGA datastore connect to THIS host instead of the in-cluster
   # AGE — pair with age.enabled=false + a managed Postgres (set user/password/dbs to match). NOTE: the
   # openfga subchart's `openfga.datastore.uri` must also be overridden to the external DSN.
+  # -- Postgres host lineage, OpenFGA and the Dapr state store use instead of the in-cluster AGE; pair with age.enabled=false. Empty = in-cluster.
   externalHost: "" # e.g. rask-postgres-rw (the CNPG Cluster's -rw service)
   # Effectively immutable after first install: StatefulSet volumeClaimTemplates can't be updated in
   # place, so the chart fails the upgrade if this differs from the deployed StatefulSet instead of
   # silently not resizing. To resize: patch the PVC, recreate the StatefulSet with --cascade=orphan,
   # then upgrade — see docs/runbooks/RUNBOOK-restore.md.
+  # -- PVC size of the AGE StatefulSet. Immutable after install: the chart fails an upgrade that changes it (see docs/runbooks/RUNBOOK-restore.md).
   storage: 1Gi
-  # --- AGE-on-CNPG cutover gate (audit 2026-07-27 defect 3; docs/adr/0125-age-on-cnpg-via-imagevolume-behind-its-own-gate-merge.md) ---
+  # === AGE-on-CNPG cutover gate (audit 2026-07-27 defect 3; docs/adr/0125-age-on-cnpg-via-imagevolume-behind-its-own-gate-merge.md) ===
   # templates/age-cluster.yaml (CNPG Cluster + ImageVolume AGE extension, docs/CNPG-AGE.md) used to
   # render UNGATED — a second 3-instance graph store with a placeholder extension image, alongside
   # this StatefulSet stack, on every render. It is now gated here and MUTUALLY EXCLUSIVE with
@@ -3477,51 +3915,71 @@ age:
   # apache/age StatefulSet today, and the cutover needs a real extension image built + pushed first
   # (.docker/cnpg-age-ext.dockerfile) plus K8s 1.33+ (ImageVolume) and CNPG >= 1.27.
   cnpgCluster:
+    # -- Render the AGE-on-CNPG `Cluster` (templates/age-cluster.yaml); mutually exclusive with `age.enabled`. Needs an extension image, K8s 1.33+ and CNPG >= 1.27.
     enabled: false
     # The built AGE extension image (e.g. ghcr.io/<org>/age-cnpg-ext:1.7.0-18). Deliberately NO
     # default — required() when enabled, so a REPLACE-ME placeholder can never render.
+    # -- The built AGE extension image for the CNPG cluster (e.g. ghcr.io/<org>/age-cnpg-ext:1.7.0-18); required when `cnpgCluster.enabled`, no default.
     extensionImage: ""
 
-# --- Dex (first-party template) — OIDC issuer for the governed demo --------------------------------
+# === Dex (first-party template) — OIDC issuer for the governed demo ================================
 dex:
+  # -- Run the first-party Dex OIDC issuer (templates/dex.yaml) for the governed demo.
   enabled: true
+  # -- Dex container image.
   image: ghcr.io/dexidp/dex:v2.42.0
+  # -- HTTP port Dex listens on and its Service exposes.
   port: 5556
+  # -- OIDC issuer URL Dex serves and services trust (`RASK_OIDC_ISSUER`); a non-https issuer sets `RASK_OIDC_ALLOW_INSECURE=true`.
   issuer: http://rask-dex:5556/dex # in-cluster issuer (matches the OIDC config)
   # A static client + a static password (demo only).
+  # -- Static Dex OIDC client id; also the audience services check (`RASK_OIDC_AUDIENCE`) and the client MinIO's OIDC provider uses.
   clientId: lance-catalog
+  # -- Static Dex client secret (demo value); seeded into OpenBao as `publisher-oidc-client-secret`.
   clientSecret: lance-catalog-secret
+  # -- Email of the demo static Dex user; its password hash is fixed in templates/dex.yaml.
   staticUser: alice@example.com
   # The publish saga's SERVICE ACCOUNT (dex has no client-credentials grant, so machine identity is
   # a dedicated password-grant user). The annotator mints a FRESH token per publish with it — the
   # password never rides pod env: it is seeded into OpenBao and fetched through the Dapr secret
   # store, fail-closed. `passwordHash` is bcrypt of `password` (demo default: "password").
   publisher:
+    # -- Login email of the publish saga's service account; the annotator mints a fresh token with it per publish.
     username: publisher@rask.internal
+    # -- Stable Dex user id (the token subject) of the publish saga's service account.
     userID: "7f2a9c41-5b8e-4d16-a3f7-9e0c1d2b3a45"
+    # -- Plain password of the publish saga's service account, seeded into OpenBao; must match `passwordHash` (demo default `password`).
     password: password
+    # -- bcrypt hash of `dex.publisher.password`, written into Dex's static passwords.
     passwordHash: "$2b$10$TsVVN0.5g.XntmJAGNuXF.gyhwQZgmgjmkevKxTa48M7k06J./53G"
   # NOTE: the demo password is NOT set here — Dex needs a bcrypt HASH, which Helm can't compute at render.
   # It's hardcoded in templates/dex.yaml (staticPasswords[].hash = bcrypt of "password"). To change it,
   # regenerate the hash (e.g. `htpasswd -bnBC 10 "" <pw> | tr -d ':\n'`) and edit that template.
 
-# --- OpenBao (first-party template) — secret store, fronted by Dapr secretstores.* ------------------
+# === OpenBao (first-party template) — secret store, fronted by Dapr secretstores.* ==================
 openbao:
+  # -- Run the first-party OpenBao secret store that the Dapr secret stores and ESO read.
   enabled: true
+  # -- OpenBao container image; also used by the MinIO scoped-users hook.
   image: openbao/openbao:2.2.0
+  # -- Port of the OpenBao Service.
   port: 8200
   # devMode=true → in-memory, auto-unsealed, fixed root token (demo ONLY — anyone in-cluster can read
   # everything with `root`). Set devMode=false for the prod path: a sealed, file-backed server on a PVC
   # that an operator must `bao operator init` + unseal, with real auth — no fixed root token, no auto-seed.
+  # -- Run OpenBao in-memory, auto-unsealed with a fixed root token (demo only). False runs a sealed file-backed server an operator must init and unseal.
   devMode: true
+  # -- Root token of the dev-mode server (used only when `devMode` is true).
   devToken: root # dev-mode root token (devMode=true only)
+  # -- PVC size of the file backend when `devMode` is false.
   storage: 1Gi # PVC size for the prod (devMode=false) file backend
   # Externalize: when set, the Dapr secret store points at THIS Vault/OpenBao address instead of the
   # in-cluster server — pair with openbao.enabled=false to use an external Vault. The apps still consume
   # via Dapr (no plaintext fallback) because secretsViaDapr keys off this too.
+  # -- Address of an external Vault/OpenBao the secret stores point at instead of the in-cluster server; pair with `openbao.enabled=false`.
   externalAddr: "" # e.g. https://vault.internal:8200
 
-# --- Event signing keys ([[LH-064]]) ----------------------------------------------------------------------
+# === Event signing keys ([[LH-064]]) ======================================================================
 # Every identity in `lance.signingIdentities` (the catalog, maintenance, the medallion producer, each stage runner
 # and ingest) signs the lineage it emits with its own Ed25519 key, so lineage holds public keys only and cannot
 # forge what it verifies. The store holds two secrets per identity, never two fields of one, because Dapr scopes a
@@ -3575,6 +4033,7 @@ signing:
   # and only when the secret store and auth.enabled are on as well: lineage then refuses an unsigned or non-verifying event
   # before it records it. False renders neither, so lineage verifies nothing, ignores a present `rask_signature` and keeps
   # its catalog-DROP shortcut off. The bus doors have their own switch, `doors` below.
+  # -- Lineage refuses unsigned or non-verifying events when the secret store and auth are also on. False renders no signer sets and lineage verifies nothing.
   enforce: true
   # THE BUS DOORS' MODE ([[XC-078]]): "off", "observe" or "enforce", always quoted, because YAML reads a bare off as false and
   # the render refuses anything but the three strings (as it refuses an unset value under `--reuse-values`).
@@ -3620,17 +4079,20 @@ signing:
   # role would hold nobody, and the doors would refuse every event it signs.
   # enforce is the default: the observe soak at helm rev 267 (2026-10-04) counted no would-refuse on genuine traffic at any
   # door. observe is the mode to soak a change to who signs before enforcing it.
+  # -- Mode of the bus doors' signature check: "off", "observe" (count would-refuse) or "enforce" (ack and refuse). Always quoted.
   doors: "enforce"
   # NON-DEV STORES (openbao.devMode=false, or openbao.externalAddr) MINT NOTHING, so every signer would stay not
   # Ready. The render fails until the operator attests here that signing-public-<identity> and then
   # signing-key-<identity> exist for every identity the failure names. Tooling for that, and rotation on such a
   # store, is the production runbook, which waits for a production estate (owner, no-prod parking 2026-09-21).
+  # -- Attest that signing keys exist for every identity in a non-dev store; the render fails until it is true there.
   provisioned: false
   # The `mint` init container's image, the one place it is pinned. `nk` is measured working as uid 65532 with a
   # read-only root.
+  # -- Image of the dev OpenBao's `mint` init container that generates each identity's NKEY pair.
   mintImage: natsio/nats-box:0.19.7
 
-# --- external-secrets.io — the PREREQUISITE every pod without a sidecar takes its credentials through.
+# === external-secrets.io — the PREREQUISITE every pod without a sidecar takes its credentials through.
 # The External Secrets Operator is platform-run and rask never installs it (owner, 2026-10-05): install it
 # on its own before the chart (docs/architecture/deployment.md § Prerequisites). A render for a cluster
 # that does not serve external-secrets.io/v1 fails naming it; a cluster-less render declares the APIs
@@ -3642,15 +4104,23 @@ signing:
 # role below bound to the operator's ServiceAccount (measured 2026-09-08: without it every ExternalSecret
 # sat in SecretSyncedError). A platform store is provisioned by its operator.
 externalSecrets:
+  # -- How often each ExternalSecret re-syncs from the store (a duration, e.g. `1h`).
   refreshInterval: "1h"
+  # -- Vault/OpenBao KV mount path the SecretStore reads from.
   kvMount: secret # the Vault KV mount path
+  # -- KV engine version of `kvMount` (`v1` or `v2`).
   kvVersion: "v2"
+  # -- KV key holding the infra bundle (postgres-password, minio-secret-key), e.g. `lance` for secret/data/lance.
   secretPath: lance # the KV key holding postgres-password + minio-secret-key (e.g. secret/data/lance)
+  # -- Mount path of the Vault/OpenBao Kubernetes auth backend the SecretStore authenticates through.
   kubernetesAuthPath: kubernetes # the Vault Kubernetes auth backend mount
+  # -- Vault role the operator's ServiceAccount assumes; also names its read policy.
   role: lance-infra # the Vault role the operator's ServiceAccount assumes (also names its policy)
   # WHOSE ServiceAccount the role is bound to. Defaults match a stock external-secrets install; the
   # binding is what stops any other pod in the cluster assuming the role and reading the bundle.
+  # -- Name of the External Secrets Operator ServiceAccount the Vault role is bound to, so no other pod can assume it.
   serviceAccount: external-secrets
+  # -- Namespace of the External Secrets Operator ServiceAccount the Vault role is bound to.
   namespace: external-secrets
 
 # CloudNativePG OPERATOR toggle (Chart.yaml condition cnpg.enabled). The rask app-DB
@@ -3658,6 +4128,7 @@ externalSecrets:
 # the AGE Postgres are the only state); the operator stays for the AGE-on-CNPG path
 # (age.cnpgCluster) and per-project stacks.
 cnpg:
+  # -- Installs the CloudNativePG operator subchart (Chart.yaml condition); a Cluster exists only when `age.cnpgCluster.enabled`.
   enabled: true
 
 # cloudnative-pg operator subchart (Chart.yaml dep, gated by cnpg.enabled).
@@ -3667,6 +4138,7 @@ cnpg:
 cloudnative-pg:
   # Memory bound (#139) — see the note under `openfga.resources`. This is the OPERATOR (a controller
   # loop), not the Postgres it manages, so it is sized as a controller.
+  # -- Subchart passthrough: the CNPG operator pod's requests and limits (requests 50m/64Mi, limit 256Mi).
   resources:
     requests: { cpu: 50m, memory: 64Mi }
     limits: { memory: 256Mi }
@@ -3675,7 +4147,9 @@ cloudnative-pg:
   # vendor the CNPG CRDs into the umbrella chart's crds/ dir (installed in Helm's
   # CRD phase, before templates), so the subchart must NOT also create them.
   crds:
+    # -- Subchart passthrough: false because the umbrella chart vendors the CNPG CRDs into its own crds/ directory.
     create: false
+  # -- Subchart passthrough: CNPG validating and mutating webhook failurePolicy `Ignore`, so a Cluster created before the operator is Ready is admitted.
   webhook:
     validating:
       failurePolicy: Ignore
@@ -3683,12 +4157,13 @@ cloudnative-pg:
       failurePolicy: Ignore
 
 
-# ---- allocator ------------------------------------------------------------
+# ==== allocator ============================================================
 # The glibc allocator bound applied to every lakehouse container. See `lance.allocatorEnv` in
 # `_helpers.tpl` for the measurement: glibc sizes its arena cap from the HOST's cores (64 here) while the
 # cgroup grants one CPU, and the four lakehouse pods held 34-59 secondary arenas of 64MB each. Measured
 # in-image (Debian glibc 2.41): unset reserves 65 arenas, `2` reserves 1.
 allocator:
+  # -- MALLOC_ARENA_MAX set on every lakehouse container (lance.allocatorEnv) to cap glibc malloc arenas. Default 2.
   arenaMax: 2
   # WHICH ALLOCATOR ARROW USES, and the reason `arenaMax` above needs it ([[LH-183]]). `MALLOC_ARENA_MAX`
   # is a glibc tunable, and pyarrow 25.0.0 allocates through **mimalloc** by default
@@ -3697,9 +4172,10 @@ allocator:
   # `system` routes Arrow through plain malloc, so the bound already above governs it — this makes the
   # existing lever reach the allocator doing the work rather than adding a second one.
   # The variable name is read by the shipped `libarrow.so.2500` (verified with `strings`).
+  # -- ARROW_DEFAULT_MEMORY_POOL on every lakehouse container; `system` routes Arrow through malloc so `arenaMax` bounds it.
   arrowMemoryPool: system
 
-# ---- observability stack ---------------------------------------------------
+# ==== observability stack ===================================================
 # OTel-first: a single OpenTelemetry Collector is the telemetry hub, GreptimeDB the store, Perses the
 # dashboards. GreptimeDB is ONE unified store for metrics+logs+traces, backed by the in-cluster S3. The
 # Collector RECEIVES app OTLP, TAILS infra-pod logs (filelog), and SCRAPES the Dapr sidecars
@@ -3719,28 +4195,36 @@ allocator:
 # GreptimeDB has no user provider, so it ignores the credential and any pod in the namespace can still delete from
 # `lance_audit` until the store that replaces it (XC-118) enforces this contract.
 observability:
+  # -- Deploy the in-cluster telemetry stack (GreptimeDB and Perses subcharts, the OTel Collector, retention Job) and turn on OTLP export from the fleet.
   enabled: true
+  # -- Value of the `deployment.environment.name` OTel resource attribute; empty falls back to the release namespace.
   environment: rask # deployment.environment.name resource attr — override per deploy (dev / staging / prod)
   # OTel Collector — the single telemetry hub (receives app OTLP + tails infra logs + scrapes Dapr metrics).
   # enabled: deploy the in-cluster Collector (dev). externalEndpoint: point at an operator-managed
   # external Collector instead (prod) — when set, NO in-cluster Collector is deployed and the apps + the
   # scrape config are that platform's concern; the chart just aims its OTLP export there.
   otelCollector:
+    # -- Deploy the in-cluster OTel Collector (app OTLP, infra log tailing, Dapr scrape); ignored when `externalEndpoint` is set.
     enabled: true
+    # -- Container image for the in-cluster OTel Collector (contrib distribution).
     image: otel/opentelemetry-collector-contrib:0.157.0
+    # -- OTLP endpoint of an operator-managed external Collector; when set no in-cluster Collector is deployed and apps export there.
     externalEndpoint: "" # e.g. http://otel-collector.observability.svc:4318 — set in prod, deploys nothing
   # Legacy escape hatch: ship OTLP to an off-cluster endpoint AND run no in-cluster store. Prefer
   # otelCollector.externalEndpoint (the OTel-first prod path); this stays for a raw non-Collector target.
+  # -- Raw off-cluster OTLP endpoint used when no Collector is in play; prefer `otelCollector.externalEndpoint`. Empty = unused.
   externalOtlpEndpoint: "" # e.g. http://otel-collector.observability:4318/v1/otlp
   # GreptimeDB's bucket. Two static values must name it too, because neither can read this key:
   # `greptimedb-standalone.objectStorage.s3.bucket` and the `storage.stores` row whose role is
   # `observability`. templates/observability.yaml refuses a render in which either names another.
+  # -- S3 bucket GreptimeDB stores data in; must equal `greptimedb-standalone.objectStorage.s3.bucket` and the observability `storage.stores` row.
   bucket: "rask-observability"
   # Retention for logs/traces/metrics. Applied as a database-level TTL on the
   # GreptimeDB `public` database via a post-install/post-upgrade hook Job
   # (templates/greptimedb-ttl-job.yaml), so every table (opentelemetry_logs,
   # opentelemetry_traces, the metrics physical table) inherits it. Empty string
   # = no TTL (unbounded growth). GreptimeDB accepts e.g. "14d", "30d", "90d".
+  # -- Database-level TTL on GreptimeDB's database for logs, traces and metrics, set by a hook Job (e.g. 14d); empty = no TTL.
   retention: "14d"
   # THE GOVERNANCE TRAIL IS NOT TELEMETRY, and until 2026-09-18 it aged out as if it were: measured on
   # the live store, 8,590,872 `lance.audit` rows sat inside `opentelemetry_logs` beside 114,938,016
@@ -3752,21 +4236,32 @@ observability:
   # choice rather than a default. This does NOT put a credential in front of `:4000`; an
   # unauthenticated in-cluster DELETE is still accepted (XC-003's remaining clause), so this decides
   # what ages out, never who may erase it.
+  # -- Separate TTL for the audit table (`auditTable`), overriding the database TTL; empty leaves audit records on `retention`.
   auditRetention: "400d"
+  # -- GreptimeDB table the Collector routes `lance.audit` records to; also read by the lakehouse admin viewer.
   auditTable: lance_audit # the table `lance.audit` records are routed to, read by the admin viewer
+  # -- GreptimeDB HTTP port serving OTLP ingest (/v1/otlp), PromQL (/v1/prometheus), SQL and health.
   greptimePort: 4000 # GreptimeDB HTTP: /v1/otlp (ingest), /v1/prometheus (query), /v1/sql, /health
+  # -- GreptimeDB database every signal lands in (the `x-greptime-db-name` header) and the retention Job alters.
   dbName: public # the GreptimeDB database all signals land in (x-greptime-db-name header)
+  # -- GreptimeDB pipeline name sent as `x-greptime-pipeline-name` on trace export; GreptimeDB requires it to ingest OTLP traces.
   tracePipeline: greptime_trace_v1 # required pipeline header for OTLP trace ingestion → opentelemetry_traces
+  # -- Dapr tracing sampling rate in the Dapr Configuration, as a string from 0 to 1; "1" traces every request.
   samplingRate: "1" # Dapr trace sampling — full, so the catalog→lineage context always propagates
   # Alerting engine (P3b): vmalert evaluates chart/alerting/rules.yml against GreptimeDB's PromQL endpoint
   # (:4000/v1/prometheus) and routes firing alerts through Alertmanager. Default OFF (dev has no on-call);
   # values-prod flips it on. The rules are PROVEN to fire by `make alert-rules-check` (promtool); the live
   # query round-trip + a real receiver route are a prod drill. Set webhookUrl to your Slack/PagerDuty webhook.
   alerting:
+    # -- Deploy vmalert and Alertmanager to evaluate chart/alerting/rules.yml against GreptimeDB; off by default.
     enabled: false
+    # -- Container image for vmalert, the rule evaluator.
     vmalertImage: victoriametrics/vmalert:v1.106.1
+    # -- Container image for Alertmanager, which groups and routes firing alerts.
     alertmanagerImage: prom/alertmanager:v0.28.0
+    # -- How often vmalert evaluates the alert rules (vmalert `-evaluationInterval`).
     evaluationInterval: "1m"
+    # -- Slack or PagerDuty webhook Alertmanager pages; empty means alerts are received and grouped but sent nowhere.
     webhookUrl: "" # empty → Alertmanager still receives + groups alerts, but pages nowhere (black-hole)
   # RETIRED (gateway fold): edgeAuth (§5e) backed the nginx gateway's public /perses/ + /greptime/
   # basic-auth. The nginx gateway is deleted and no Ingress path routes the telemetry UIs, so they
@@ -3816,6 +4311,7 @@ greptimedb-standalone:
   # heap profiling is already enabled (`/debug/prof/mem`, POST) and nobody has pulled it. Revisit
   # with a profile, not by raising a number: 2Gi -> 8Gi is what was tried before, and it bought six
   # quiet days rather than a fix.
+  # -- Subchart passthrough: GreptimeDB engine config.toml, bounding query, scan, compaction and cache memory and worker counts to fit the 8Gi limit.
   configToml: |
     mode = 'standalone'
 
@@ -3879,9 +4375,11 @@ greptimedb-standalone:
   # measured WHICH subsystem allocates (mito compaction vs OTLP ingest burst vs parquet preload), and
   # a limit raised without that is a guess with a bigger number. Bounding query memory
   # is the other lever nobody has pulled.
+  # -- Subchart passthrough: CPU and memory requests/limits for GreptimeDB (8Gi memory limit).
   resources:
     requests: { cpu: 100m, memory: 256Mi }
     limits: { memory: 8Gi }
+  # -- Subchart passthrough: GreptimeDB's S3 store; `bucket` must equal `observability.bucket`, credentials from `<release>-observability-s3`.
   objectStorage:
     s3:
       bucket: "rask-observability"
@@ -3894,6 +4392,7 @@ greptimedb-standalone:
 # Perses subchart — dashboards-as-code over GreptimeDB's Prometheus-compatible API.
 perses:
   # Memory bound (#139) — see the note under `openfga.resources`.
+  # -- Subchart passthrough: CPU and memory requests/limits for Perses.
   resources:
     requests: { cpu: 25m, memory: 64Mi }
     limits: { memory: 256Mi }
@@ -3902,6 +4401,7 @@ perses:
   # so that path isn't writable → "datasource schemas are not loaded" and the
   # GreptimeDB datasource fails to provision. Give it a writable emptyDir there
   # (keeps readOnlyRootFilesystem: true).
+  # -- Subchart passthrough: a writable emptyDir for Perses plugins and the `rask-perses-dashboards` ConfigMap of dashboards-as-code.
   volumes:
     - name: perses-plugins
       emptyDir: {}
@@ -3910,6 +4410,7 @@ perses:
     - name: perses-dashboards
       configMap:
         name: rask-perses-dashboards
+  # -- Subchart passthrough: mounts the plugins emptyDir at /etc/perses/plugins and the dashboards ConfigMap at /etc/perses/dashboards.
   volumeMounts:
     - name: perses-plugins
       mountPath: /etc/perses/plugins
@@ -3924,6 +4425,7 @@ perses:
   # laptop hitting Perses over `kubectl port-forward` → "failed to fetch". Proxy
   # mode routes queries through the Perses server (which can resolve it), so the
   # browser only ever talks to Perses.
+  # -- Subchart passthrough: the default GreptimeDB Prometheus datasource, queried through the Perses server in proxy mode.
   datasources:
     - kind: GlobalDatasource
       metadata:
@@ -3940,6 +4442,7 @@ perses:
   # Add /etc/perses/datasources to provisioning.folders so Perses scans the
   # datasource ConfigMap mounted there (the chart mounts datasources: at that
   # path but the default server config only lists /etc/perses/provisioning).
+  # -- Subchart passthrough: Perses provisioning folders (provisioning, datasources, dashboards) and how often they are rescanned.
   config:
     provisioning:
       folders:

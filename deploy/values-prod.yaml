@@ -1,5 +1,5 @@
 # Production overlay — apply ON TOP of values.yaml:
-#   helm upgrade lance-ns ./chart -f chart/values.yaml -f chart/values-prod.yaml
+#   helm upgrade lance-ns ./chart -f chart/values.yaml -f deploy/values-prod.yaml
 #
 # It flips the safe-by-default-OFF prod switches and is the place to externalize the durable/stateful
 # tier. See docs/DURABILITY.md for the tier model (ephemeral compute / durable data / external-in-prod).
@@ -144,7 +144,7 @@ backups:
 
 # --- Secrets: the SEALED, file-backed OpenBao (no fixed root token; an operator must init + unseal).
 # devMode=false is the prod signal. No credential is a chart value: the operator provisions every field
-# `<kvMount>/<secretPath>` must hold (templates/openbao.yaml's header lists them) and the External Secrets
+# `<kvMount>/<secretPath>` must hold (docs/chart/templates/openbao.yaml.md lists them) and the External Secrets
 # Operator, a prerequisite installed on its own, delivers them (templates/external-secrets.yaml). -----
 openbao:
   devMode: false

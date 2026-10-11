@@ -112,7 +112,7 @@ So: long-lived lakehouse + provenance, with a compaction/GC lifecycle aging out 
   snapshot leg.
 
 ## Prod profile
-`chart/values-prod.yaml` is a starting overlay — it flips the safe-by-default-off prod switches (sealed
+`deploy/values-prod.yaml` is a starting overlay — it flips the safe-by-default-off prod switches (sealed
 OpenBao, governance on, Dapr dashboard off, ingress) and sizes the already-on durable RustFS volume, and is
 where you'd disable the in-cluster stateful services + point at external endpoints once those endpoint
-overrides are wired. Apply with `helm upgrade … -f chart/values.yaml -f chart/values-prod.yaml`.
+overrides are wired. Apply with `helm upgrade … -f chart/values.yaml -f deploy/values-prod.yaml`.

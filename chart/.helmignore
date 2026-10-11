@@ -8,6 +8,8 @@
 .git/
 .git
 *.md
+# helm-docs' README template; the README it generates is excluded by `*.md` above.
+*.gotmpl
 .DS_Store
 *.tmp
 ci/

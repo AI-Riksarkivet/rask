@@ -33,8 +33,17 @@ Measured 2026-09-25 on revision 240 (96.3% of the ceiling):
 | the other seven subcharts together | ~5.5% |
 
 **`values.yaml` prose is free** — it is stored as a parsed map, comments dropped. **Template prose is
-not.** A rationale comment belongs in `values.yaml` or a doc where it can; in a template it is paid for
-on every revision forever.
+not**, so templates carry no `{{/* */}}` comments ([[XC-123]], ADR 0153): a template's rationale lives in
+`docs/chart/templates/<template>.md`, one section per template line it explains, and each setting carries a
+one-line `# --` comment directly above its key in `values.yaml`, from which helm-docs generates
+`chart/README.md` (`make chart-docs`; `make chart-docs-check`, in `make check` and `dagger call charts`,
+fails on a stale README or a value with no description). A section banner in `values.yaml` is `# ===`, never
+`# ---`: helm-docs reads any `# --` line as the start of a description. The environment overlays live in
+`deploy/` (`values-local.yaml`, `values-prod.yaml`, `values-live-pins.yaml`), outside `chart.files`. Moving
+the 647 comment blocks out took the packed release from 98.1% to about 70% of the ceiling, with a
+byte-identical render. A YAML `#` comment inside a template is different: it is part of the rendered
+manifest (1,024 such lines, mostly in embedded scripts), so moving one changes what is deployed. An empty `{{/**/}}` left in a template is load-bearing whitespace control: deleting it
+lets a neighbouring `-}}` trim text the comment used to shield.
 
 **Measure before applying, the way Helm's Go code encodes it:**
 

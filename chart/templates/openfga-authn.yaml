@@ -1,6 +1,5 @@
 {{- if .Values.openfga.enabled }}
-{{- /* [[XC-077]]: OpenFGA's subject allow-list, and the issuer mirror; rationale in values.yaml `openfga.authn`
-       and `auth.issuerMirror`. */}}
+
 {{- $fga := .Values.openfga -}}
 {{- if ne (($fga.authn).oidc).audience (include "lance.openfgaAudience" .) }}
 {{- fail (printf "openfga.authn.oidc.audience is %q, but the FGA clients project %q (lance.openfgaAudience): every client would be refused" (($fga.authn).oidc).audience (include "lance.openfgaAudience" .)) }}
@@ -11,8 +10,7 @@
 {{- end }}
 {{- $cm := $ref.name }}
 {{- $subjects := include "lance.openfgaSubjects" . }}
-{{- /* No FGA client renders (auth off): an empty list would admit every subject, so name one no ServiceAccount
-       can have (a namespace cannot be `-`). */}}
+
 {{- if not $subjects }}{{- $subjects = "system:serviceaccount:-:no-fga-client" }}{{- end }}
 apiVersion: v1
 kind: ConfigMap

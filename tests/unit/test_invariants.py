@@ -653,12 +653,12 @@ def test_the_inbox_subscribes_on_a_component_the_chart_actually_renders() -> Non
 
 #: The operator inputs a prod render needs besides the Ray, as `scripts/prod_render_check.sh` passes them.
 _PROD_INPUTS = (
-    "-f", str(CHART / "values-prod.yaml"),
+    "-f", str(REPO / "deploy/values-prod.yaml"),
     "--set", "image.catalog.tag=v0", "--set", "frontend.image.tag=v0", "--set", "image.repository=ghcr.io/example/rask",
     "--set", "signing.provisioned=true", "--set", "nats.auth.provisioned=true",
     "--set", "backups.volumeSnapshot.snapshotClassName=csi-snapclass", "--set", "ingress.host=lance.example.com",
 )  # fmt: skip
-_LOCAL_INPUTS = ("--set", "image.localImages=true", "-f", str(CHART / "values-local.yaml"))
+_LOCAL_INPUTS = ("--set", "image.localImages=true", "-f", str(REPO / "deploy/values-local.yaml"))
 _EXTERNAL_RAY = "https://ray.example.com:8265"
 
 

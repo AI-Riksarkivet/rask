@@ -8,7 +8,7 @@
 # TWO RULES DECIDE WHAT SURVIVES, AND THE FIRST IS THE LOAD-BEARING ONE.
 #
 # 1. A TAG ANY RUNNING WORKLOAD REFERENCES IS NEVER DELETED. Read off the live cluster, plus every tag
-#    named in `chart/values-live-pins.yaml`. This is not belt-and-braces: it is the whole safety
+#    named in `deploy/values-live-pins.yaml`. This is not belt-and-braces: it is the whole safety
 #    argument, and it replaces one that was FALSE. This script used to keep the lexically-last N tags
 #    on the reasoning that "epoch-suffixed tags are same-width, so lexical == chronological" — true of
 #    a tag scheme the estate no longer uses. Its tags are `main-<git-sha>` / `zone-<sha>` / `fix-<sha>`,
@@ -29,7 +29,7 @@ set -euo pipefail
 REG="${RASK_REGISTRY:-localhost:5000}"
 KEEP="${RASK_REGISTRY_KEEP:-2}"
 NAME="${RASK_REGISTRY_NAME:-rask-registry}"
-PINS="${RASK_REGISTRY_PINS:-chart/values-live-pins.yaml}"
+PINS="${RASK_REGISTRY_PINS:-deploy/values-live-pins.yaml}"
 KUBECONFIG_PATH="${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
 
 curl -sf "http://$REG/v2/" >/dev/null || { echo "!! no registry at $REG (make dev-registry)" >&2; exit 1; }

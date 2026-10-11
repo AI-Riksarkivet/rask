@@ -82,10 +82,6 @@ spec:
         - name: sweep
           image: {{ .Values.dapr.sweepImage }}
           {{- include "lance.rootlessSecurityContext" 65532 | nindent 10 }}
-          {{- /* kubectl WRITES, which is what a read-only rootfs turns into a failure: it caches
-                 discovery under $HOME, and the image's HOME is a path this container may no longer
-                 write. Pointing HOME at the tmp emptyDir is what makes the hardening survivable, and
-                 it is the same pair every app container in this chart already uses. */}}
           env:
             - { name: HOME, value: /tmp }
           volumeMounts:

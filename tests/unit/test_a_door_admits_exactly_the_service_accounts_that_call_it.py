@@ -21,7 +21,7 @@ from tests.unit.chart_render import REPO, env_of, render, render_text
 
 
 #: The overlay `make k3s-up` deploys, which also renders the Ray head the default leaves out.
-DEPLOYED = ("--set", "image.localImages=true", "-f", str(REPO / "chart/values-local.yaml"))
+DEPLOYED = ("--set", "image.localImages=true", "-f", str(REPO / "deploy/values-local.yaml"))
 
 #: The producer's door also admits ingest's account, which no pod presents: clause 5's live proof mints a
 #: 10-minute `rask-medallion` token for it to show a service caller is held to its own tenant's runs.

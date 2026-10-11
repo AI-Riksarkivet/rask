@@ -137,7 +137,7 @@ def _catalog_pairs(monkeypatch: pytest.MonkeyPatch) -> set[tuple[str, str]]:
         # relation there. Asserting only `is not None` and that the pair RESOLVES (which is all this
         # test did until 2026-08-22) cannot tell the tiers apart: `can_get_metadata` resolves on the
         # root type perfectly well. Measured — swapping this branch to the reader-tier
-        # `can_get_metadata` left 3,125 tests passing, and `chart/values-prod.yaml:22` ships
+        # `can_get_metadata` left 3,125 tests passing, and `deploy/values-prod.yaml:22` ships
         # `lockRootCreate: true` as the ONLY thing stopping any authenticated token from minting
         # top-level namespaces and tables in production.
         assert top[1] == nested[1], (
@@ -218,8 +218,8 @@ def test_chart_medallion_required_actions_exist_on_namespace() -> None:
     namespace_relations = _model_relations()["namespace"]
     actions = {
         m
-        for values in ("values.yaml", "values-prod.yaml")
-        for m in re.findall(r"requiredAction:\s*['\"]?([A-Za-z_]+)", (REPO_ROOT / "chart" / values).read_text())
+        for values in ("chart/values.yaml", "deploy/values-prod.yaml")
+        for m in re.findall(r"requiredAction:\s*['\"]?([A-Za-z_]+)", (REPO_ROOT / values).read_text())
     }
     assert actions, "no requiredAction found in the chart — the regex drifted"
     phantom = sorted(actions - namespace_relations)

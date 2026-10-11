@@ -1,4 +1,4 @@
-{{- /* ADR 0138: releases an erasure's pinning tags and branches when due. Delivered to POST /<name> at the catalog's pod root; name, env and route are one string. */}}
+
 {{- if and .Values.dapr.enabled .Values.dapr.sidecars }}
 apiVersion: dapr.io/v1alpha1
 kind: Component

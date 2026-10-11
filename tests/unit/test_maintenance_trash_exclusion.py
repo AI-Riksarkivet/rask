@@ -10,7 +10,7 @@ The consequence is not a wasted cycle, it is silent irreversible mutation of dat
 is frozen:
 
     Karin drops `silver$htr_lines_2019` on a Friday. Grace is 7 days, so the UI tells her she can
-    undrop until next Friday. The cron fires every 30 minutes (chart/values-prod.yaml). Over the
+    undrop until next Friday. The cron fires every 30 minutes (deploy/values-prod.yaml). Over the
     weekend the sweep compacts that dataset, remaps its indices and runs `cleanup_old_versions` on
     it, repeatedly. Monday she undrops and gets a table back — but not the one she dropped: the
     version history she was trying to recover to has been pruned, and the sweep's summary counted it

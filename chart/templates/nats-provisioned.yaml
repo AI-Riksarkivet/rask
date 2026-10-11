@@ -1,4 +1,4 @@
-{{- /* Renders no object, like `signing-provisioned.yaml`: credentials nothing in this chart mints must be attested (values.yaml `nats.auth`). */ -}}
+
 {{- if and (include "lance.secretsViaDapr" .) (or (not .Values.openbao.devMode) .Values.openbao.externalAddr .Values.nats.externalUrl) (not .Values.nats.auth.provisioned) }}
 {{- $names := list }}
 {{- range (include "lance.natsUsers" . | splitList " " | compact) }}{{- $names = append $names (printf "nats-user-%s" .) }}{{- end }}
