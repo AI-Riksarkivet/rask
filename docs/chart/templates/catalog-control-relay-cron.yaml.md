@@ -3,7 +3,7 @@
 Rationale for `chart/templates/catalog-control-relay-cron.yaml`. It lives here because Helm stores the chart's templates in
 every release revision, under a 1 MiB ceiling. Each section is headed by the template line it explains.
 
-## `{{- if and .Values.dapr.enabled .Values.dapr.sidecars .Values.catalog.controlEmit .Values.catalog.controlOu...`
+## `{{- if and .Values.dapr.enabled .Values.catalog.controlEmit .Values.catalog.controlOu...`
 
 THE CONTROL LANE'S RELAY (the other half of the #4 outbox, for `catalog.control.v1`).
 The catalog STAGES every control event to `LANCE_CONTROL_OUTBOX_URI` before publishing and drops

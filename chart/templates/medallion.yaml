@@ -14,7 +14,7 @@ spec:
   template:
     metadata:
       annotations:
-        {{- if .Values.dapr.sidecars }}
+        {{- if .Values.dapr.enabled }}
         {{- include "rask.daprAnnotations" (list $root .Values.medallion.producer.daprAppId $port) | nindent 8 }}
         {{- end }}
       labels:
@@ -55,8 +55,8 @@ spec:
             - { name: MEDALLION_DOCS, value: {{ $root.Values.docs.enabled | quote }} }
             {{- include "lance.lineageEmitEnv" (list $root) | nindent 12 }}
             - { name: DAPR_API_TIMEOUT_SECONDS, value: {{ .Values.dapr.apiTimeoutSeconds | quote }} }
-            - { name: MEDALLION_DAPR_ENABLED, value: {{ .Values.dapr.sidecars | quote }} }
-            {{- if .Values.dapr.sidecars }}
+            - { name: MEDALLION_DAPR_ENABLED, value: {{ .Values.dapr.enabled | quote }} }
+            {{- if .Values.dapr.enabled }}
 
 {{- include "lance.appTokenEnv" (list $root $root.Values.medallion.producer.daprAppId) | nindent 12 }}
             {{- end }}
@@ -90,7 +90,7 @@ spec:
             - { name: MEDALLION_RAY_TASKS, value: {{ .Values.medallion.rayTasks | toJson | quote }} }
             {{- end }}
             - { name: MEDALLION_OUTCOME_URL_BASE, value: "http://{{ include "lance.fullname" . }}-medallion-producer:{{ $port }}" }
-            {{- if and .Values.dapr.enabled .Values.dapr.sidecars .Values.medallion.planSweep.bindingName }}
+            {{- if and .Values.dapr.enabled .Values.medallion.planSweep.bindingName }}
             - { name: MEDALLION_PLAN_SWEEP_BINDING_NAME, value: {{ .Values.medallion.planSweep.bindingName | quote }} }
             {{- end }}
             {{- end }}
@@ -224,7 +224,7 @@ spec:
   template:
     metadata:
       annotations:
-        {{- if $root.Values.dapr.sidecars }}
+        {{- if $root.Values.dapr.enabled }}
         {{- include "rask.daprAnnotations" (list $root .daprAppId $port) | nindent 8 }}
         {{- end }}
       labels:
@@ -265,13 +265,13 @@ spec:
             - { name: MEDALLION_DOCS, value: {{ $root.Values.docs.enabled | quote }} }
             {{- include "lance.lineageEmitEnv" (list $root) | nindent 12 }}
             - { name: DAPR_API_TIMEOUT_SECONDS, value: {{ $root.Values.dapr.apiTimeoutSeconds | quote }} }
-            - { name: MEDALLION_DAPR_ENABLED, value: {{ $root.Values.dapr.sidecars | quote }} }
+            - { name: MEDALLION_DAPR_ENABLED, value: {{ $root.Values.dapr.enabled | quote }} }
             - { name: MEDALLION_PUBSUB, value: {{ include "lance.subPubsub" (list $root .daprAppId) | quote }} }
             - { name: MEDALLION_LINEAGE_TOPIC, value: {{ $root.Values.pubsub.topic | quote }} }
             {{- if $root.Values.services.lineage.outbox.enabled }}
             - { name: MEDALLION_LINEAGE_OUTBOX_URI, value: "s3://{{ $root.Values.minio.bucket }}/_lineage_outbox" }
             {{- end }}
-            {{- if $root.Values.dapr.sidecars }}
+            {{- if $root.Values.dapr.enabled }}
 
 {{- include "lance.appTokenEnv" (list $root .daprAppId) | nindent 12 }}
             {{- end }}
@@ -324,7 +324,7 @@ spec:
             {{- if $root.Values.catalog.controlEmit }}
             - { name: MEDALLION_CONTROL_PUBSUB, value: "{{ $root.Values.pubsub.controlName | default "catalog-control-pubsub" }}-{{ .daprAppId }}" }
             {{- end }}
-            {{- if and $root.Values.dapr.enabled $root.Values.dapr.sidecars $root.Values.medallion.planSweep.bindingName }}
+            {{- if and $root.Values.dapr.enabled $root.Values.medallion.planSweep.bindingName }}
             - { name: MEDALLION_PLAN_SWEEP_BINDING_NAME, value: {{ $root.Values.medallion.planSweep.bindingName | quote }} }
             {{- end }}
             {{- end }}

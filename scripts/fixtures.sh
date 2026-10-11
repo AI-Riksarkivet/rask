@@ -100,7 +100,10 @@ for item in items:
       kubectl annotate "$kind" "$obj" "${NS[@]}" helm.sh/resource-policy=keep --overwrite >/dev/null
       echo ">> $name: $kind/$obj (release $owner) kept and handed to release $RELEASE"
     done <<<"$held"
-    OWN=(--take-ownership)
+    # --force-conflicts too: an adopted object can carry fields its controller manages at runtime (Dapr's operator
+    # owns its CRDs' conversion-webhook namespace), and Helm 4's server-side apply refuses those as conflicts. The
+    # new owner's controller sets them again once it runs.
+    OWN=(--take-ownership --force-conflicts)
   fi
 
   echo ">> fixture $name: ${SOURCE[*]} as release $RELEASE in $NAMESPACE"

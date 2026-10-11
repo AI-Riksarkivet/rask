@@ -22,6 +22,22 @@ cluster-less `helm template` states the API it targets: `--api-versions external
 (plus `--api-versions generators.external-secrets.io/v1alpha1/Password` for the dev OpenBao, whose
 credentials ESO's Password generator creates in-cluster). A credential passed as a value is refused.
 
+## Prerequisite: the Dapr control plane
+
+rask's services talk to each other, publish and subscribe, hold actors and read secrets through Dapr sidecars, so a
+**Dapr control plane is a prerequisite** (ADR 0153), installed once per cluster by the platform, as Dapr documents,
+in `dapr-system`. The chart renders only rask's own Dapr objects (Components, Configurations, Resiliency,
+Subscriptions) and the sidecar annotations; with `dapr.enabled` on it refuses to render for a cluster that does not
+serve `dapr.io/v1alpha1` (a cluster-less `helm template` names it: `--api-versions dapr.io/v1alpha1`). Name the
+control plane's namespace in `dapr.controlPlaneNamespace` (default `dapr-system`): the Collector scrapes it there,
+and under NetworkPolicy every rask pod may reach it.
+
+What the control plane must provide, and the version rask is tested against, are in `deploy/fixtures/dapr` (the
+development install `make k3s-up` runs): Dapr 1.18.1; an injector that fails closed (`webhookFailurePolicy: Fail`)
+scoped to pods labelled `dapr.io/enabled: "true"`, which rask stamps; no `dapr_rbac.secretReader`; Sentry mTLS on.
+In production also HA (`global.ha.enabled`) and an injector that drops every sidecar capability
+(`dapr_sidecar_injector.sidecarDropALLCapabilities`), the pair to rask's `dapr.sidecarRestricted`.
+
 ## Local deploy (k3s)
 
 ```bash

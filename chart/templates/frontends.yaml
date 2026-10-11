@@ -100,7 +100,7 @@ spec:
             {{- if $root.Values.nats.enabled }}
             - name: NATS_MONITOR_API
               value: {{ printf "http://%s-headless:8222" (include "lance.natsHost" $root) | quote }}
-            {{- if and $root.Values.dapr.enabled $root.Values.dapr.sidecars }}
+            {{- if $root.Values.dapr.enabled }}
             - name: JETSTREAM_EXPECTED_CONSUMERS
               value: {{ join "," $expected | quote }}
             {{- end }}

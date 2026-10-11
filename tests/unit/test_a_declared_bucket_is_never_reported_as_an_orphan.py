@@ -24,14 +24,14 @@ from pathlib import Path
 import pytest
 import yaml
 
-from tests.unit.chart_render import ESO_ARGS, RAY_ARGS
+from tests.unit.chart_render import PREREQ_ARGS, RAY_ARGS
 
 
 _ROOT = Path(__file__).resolve().parents[2]
 _BASE = [
     "--set",
     "image.localImages=true",
-    *ESO_ARGS,
+    *PREREQ_ARGS,
     *RAY_ARGS,
     "--set-string",
     "frontend.oidc.publicIssuer=http://dex.local:5556",

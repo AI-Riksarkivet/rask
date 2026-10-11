@@ -117,7 +117,7 @@ spec:
             {{- $needsAppToken := false }}
             {{- if $svc.daprIngest }}{{- $needsAppToken = true }}{{- end }}
             {{- if and $svc.lanceWriter (or (not $svc.governedAuth) $root.Values.auth.enabled) }}{{- $needsAppToken = true }}{{- end }}
-            {{- if and $root.Values.dapr.sidecars $needsAppToken }}
+            {{- if and $root.Values.dapr.enabled $needsAppToken }}
 
 {{- include "lance.appTokenEnv" (list $root $name) | nindent 12 }}
             {{- end }}

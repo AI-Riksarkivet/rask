@@ -45,7 +45,7 @@ app.kubernetes.io/component: {{ $component }}
 {{- end -}}
 
 {{- define "rask.daprPodLabels" -}}
-{{- if .Values.dapr.sidecars -}}
+{{- if .Values.dapr.enabled -}}
 dapr.io/enabled: "true"
 {{- end }}
 {{- end -}}
@@ -54,7 +54,7 @@ dapr.io/enabled: "true"
 {{- $root := index . 0 -}}
 {{- $appId := index . 1 -}}
 {{- $appPort := index . 2 -}}
-{{- if $root.Values.dapr.sidecars -}}
+{{- if $root.Values.dapr.enabled -}}
 dapr.io/enabled: "true"
 dapr.io/app-id: {{ $appId | quote }}
 dapr.io/app-port: {{ $appPort | quote }}

@@ -19,7 +19,7 @@ export RASK_EXPECT_CONTEXT
 # Prereq: kind `lance` up with the stack deployed control-on + auth-on + fga-on, e.g.
 #   make frontend-load
 #   helm upgrade --install lance-ns ./chart --set auth.enabled=true --set medallion.enabled=true \
-#     --set catalog.warehouses.enabled=true --set dapr.enabled=true --set dapr.sidecars=true
+#     --set catalog.warehouses.enabled=true --set dapr.enabled=true
 #   kubectl rollout restart deploy/lance-ns-dex deploy/lance-ns-medallion-producer
 # catalog.controlEmit defaults ON, so the broadcast component + NATS stream + subscription render. This
 # script port-forwards read-only; run it OUTSIDE auto mode (or `!`-prefix the invocation).

@@ -55,14 +55,14 @@ under the same gate in external-secrets.yaml, data key `auth_token`, the KubeRay
 The ONE store's root identity is minio.accessKey (a value) and the store's `minio-secret-key`
 (never a value): the server, `<release>-infra-credentials` and the hooks all read that pair.
 
-Dapr sidecar pod annotations (no-op unless dapr.sidecars) — the ONE annotation surface for the whole
+Dapr sidecar pod annotations (no-op unless dapr.enabled) — the ONE annotation surface for the whole
 estate: the rask fleet + controlplane AND the lance planes (services.yaml catalog/lineage,
 medallion.yaml producer/stage runners, compaction.yaml, media.yaml viewer/search/annotator) all render
 THIS helper, so the sidecar contract can never drift between planes (DAPRIFY 2026-07-27). Carries the full union of what the two planes shipped:
   - enabled / app-id / app-port / log-level (the original rask surface)
   - max-body-size (when dapr.maxBodySize is set — Dapr's 4Mi default rejects multi-image batch uploads)
   - app-token-secret → the shared <release>-dapr-app-token Secret (ESO-written, external-secrets.yaml,
-    same dapr.sidecars gate, so the reference can never dangle): Dapr injects APP_API_TOKEN and stamps
+    same dapr.enabled gate, so the reference can never dangle): Dapr injects APP_API_TOKEN and stamps
     `dapr-api-token` on delivered requests → sidecar-only routes reject forged direct POSTs
   - the daprd resource bounds + disable-builtin-k8s-secret-store (+ optional seccomp) via
     lance.daprSidecarResources
@@ -75,18 +75,16 @@ THIS helper, so the sidecar contract can never drift between planes (DAPRIFY 202
 Usage: {{- include "rask.daprAnnotations" (list $root $appId $appPort) | nindent 8 }}
 
 ---------------------------------------------------------------------------------------------
-DAPR SIDECAR INJECTION — the second `helm install --wait` ordering defect (2026-07-28).
+DAPR SIDECAR INJECTION.
 
 Dapr's sidecar injector is a MUTATING WEBHOOK, and its MutatingWebhookConfiguration ships
-`failurePolicy: Ignore` by default. The Dapr control plane is a SUBCHART of this release, so on a
-fresh cluster the app pods are created in the same breath as the injector: the API server calls a
-webhook with no endpoints, SILENTLY admits the pod unmutated, and the app comes up with NO daprd
-container at all. Nothing recreates that pod — a CrashLoopBackOff restarts the container inside
-the SAME pod, which will never gain a sidecar — so the app crash-loops forever on
-"secret unavailable from Dapr store … failing closed" and `helm install --wait` times out. It only
-ever "worked" on a long-lived cluster where Dapr was already running.
+`failurePolicy: Ignore` by default: a pod created while the injector is unreachable (a restart, an
+outage) is SILENTLY admitted unmutated and comes up with NO daprd container at all. Nothing recreates
+that pod — a CrashLoopBackOff restarts the container inside the SAME pod, which will never gain a
+sidecar — so the app crash-loops forever on "secret unavailable from Dapr store … failing closed".
 
-Fix: `failurePolicy: Fail`, scoped by an `objectSelector` to pods carrying this LABEL. Fail-closed
+Fix, in the control plane rask runs against (a prerequisite; deploy/fixtures/dapr/values.yaml in
+development): `failurePolicy: Fail`, scoped by an `objectSelector` to pods carrying this LABEL. Fail-closed
 admission makes the API server REJECT the create instead of silently dropping the sidecar; the
 ReplicaSet controller retries, and the first retry after the injector is Ready produces a properly
 injected pod. The objectSelector is what makes `Fail` safe: an unscoped fail-closed pod webhook
@@ -119,7 +117,7 @@ numbers cannot drift — see the arithmetic in values.yaml.
 
 DANGLING-REFERENCE GUARD. The `lance-tracing` Configuration renders inside
 `{{- if .Values.dapr.enabled }}` (observability.yaml:18), while this annotation used to be
-emitted on `dapr.sidecars` alone. Measured with `dapr.enabled=false --set dapr.sidecars=true`:
+emitted on `dapr.enabled` alone. Measured with `dapr.enabled=false`:
 14 pods annotated, 0 Configurations rendered — every sidecar referencing an object that does
 not exist. observability.yaml's own comment says the guard it removed was "against a DANGLING
 dapr.io/config reference"; this is that guard, put back on the side that can see both.
@@ -456,8 +454,8 @@ flag off too, so this also drops an unnecessary k8s-API surface from the default
 
 PodSecurity `restricted` compliance for the INJECTED daprd sidecar (our app containers are already
 compliant via lance.securityContext; the sidecar is not by default). RuntimeDefault seccomp is the per-pod
-annotation; drop-ALL-caps is the injector-wide `dapr.dapr_sidecar_injector.sidecarDropALLCapabilities` value
-(set it true TOGETHER with this flag — a subchart value can't read this one). OFF by default like
+annotation; drop-ALL-caps is the injector-wide `dapr_sidecar_injector.sidecarDropALLCapabilities` setting of
+the control plane, a prerequisite this chart cannot reach (set it TOGETHER with this flag). OFF by default like
 networkPolicy.enabled: full `restricted` ENFORCE is a prod posture, and on this stack it is additionally
 BLOCKED by the OTel Collector — a single Deployment whose filelog receiver inherently needs hostPath
 (/var/log/pods), which `restricted` forbids and no value fixes. The Collector needs its own namespace at

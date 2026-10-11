@@ -52,11 +52,21 @@ def test_a_real_deployment_refuses_the_bundled_dev_idp() -> None:
     assert "dex.enabled=true — the bundled dev IdP" in refused.value.stderr
 
 
-def test_a_render_for_a_cluster_without_the_external_secrets_operator_fails_naming_it() -> None:
-    """ESO is a prerequisite rask never installs: a render for a cluster that does not serve it stops and says so."""
-    without = tuple(arg for arg in OIDC_ARGS if "external-secrets.io" not in arg and arg != "--api-versions")
+@pytest.mark.parametrize(
+    ("api", "message"),
+    [
+        ("external-secrets.io", "the External Secrets Operator is a prerequisite: this cluster does not serve external-secrets.io/v1"),
+        ("dapr.io", "Dapr is a prerequisite: dapr.enabled is on and this cluster does not serve dapr.io/v1alpha1"),
+    ],
+    ids=["external-secrets", "dapr"],
+)
+def test_a_render_for_a_cluster_without_a_prerequisite_fails_naming_it(api: str, message: str) -> None:
+    """ESO and Dapr are prerequisites rask never installs (ADR 0153): a render for a cluster that does not serve one
+    stops and says which."""
+    pairs = zip(OIDC_ARGS[::2], OIDC_ARGS[1::2], strict=True)
+    without = tuple(arg for flag, value in pairs if not (flag == "--api-versions" and api in value) for arg in (flag, value))
     argv = ["helm", "template", "rask", str(REPO / "chart"), *without, *DEFAULT_ARGS]
     refused = subprocess.run(argv, capture_output=True, text=True, check=False)  # noqa: S603, S607
 
     assert refused.returncode != 0
-    assert "the External Secrets Operator is a prerequisite: this cluster does not serve external-secrets.io/v1" in refused.stderr
+    assert message in refused.stderr

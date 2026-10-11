@@ -43,7 +43,7 @@ spec:
   template:
     metadata:
       annotations:
-        {{- if .Values.dapr.sidecars }}
+        {{- if .Values.dapr.enabled }}
         {{- include "rask.daprAnnotations" (list $root .Values.maintenance.daprAppId $port) | nindent 8 }}
         {{- end }}
       labels:
@@ -83,9 +83,9 @@ spec:
             - { name: MAINTENANCE_DOCS, value: {{ $root.Values.docs.enabled | quote }} }
             {{- include "lance.lineageEmitEnv" (list $root) | nindent 12 }}
             - { name: DAPR_API_TIMEOUT_SECONDS, value: {{ .Values.dapr.apiTimeoutSeconds | quote }} }
-            - { name: MAINTENANCE_DAPR_ENABLED, value: {{ .Values.dapr.sidecars | quote }} }
+            - { name: MAINTENANCE_DAPR_ENABLED, value: {{ .Values.dapr.enabled | quote }} }
             {{- with include "lance.signingEnv" (list $root .Values.maintenance.daprAppId) }}{{ . | nindent 12 }}{{- end }}
-            {{- if .Values.dapr.sidecars }}
+            {{- if .Values.dapr.enabled }}
 
 {{- include "lance.appTokenEnv" (list $root $root.Values.maintenance.daprAppId) | nindent 12 }}
             {{- end }}

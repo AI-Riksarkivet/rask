@@ -23,7 +23,7 @@ import pytest
 import yaml
 from chart_yaml import FAST_LOADER
 
-from tests.unit.chart_render import ESO_ARGS, RAY_ARGS
+from tests.unit.chart_render import PREREQ_ARGS, RAY_ARGS
 
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
@@ -46,7 +46,7 @@ def _rendered_eso() -> list[dict]:
             str(REPO / "chart"),
             "--set",
             "image.localImages=true",
-            *ESO_ARGS,
+            *PREREQ_ARGS,
             *RAY_ARGS,
             "--set-string",
             "frontend.oidc.publicIssuer=http://localhost:8080/dex",

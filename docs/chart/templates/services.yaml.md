@@ -130,7 +130,7 @@ destroys these events rather than relaying them (the catalog refuses to boot on 
 
 The binding name IS the route this app serves it on — one string with the Component above.
 
-## `{{- if .Values.dapr.sidecars }}`
+## `{{- if .Values.dapr.enabled }}`
 
 Explicit APP_API_TOKEN so require_dapr_token can verify the `dapr-api-token` header the sidecar
 stamps on /control-events delivery → a forged direct in-cluster POST is 403'd. Without it the

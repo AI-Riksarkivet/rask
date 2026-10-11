@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Render the PRODUCTION overlay (values-prod.yaml) and assert its HA + security switches are actually ON.
 # Nothing else in CI renders the prod overlay — the e2e jobs deploy the DEFAULT (kind) values — so without
-# this a regression that silently ships the dev posture in prod (NetworkPolicy off, OpenFGA/Dapr single-
+# this a regression that silently ships the dev posture in prod (NetworkPolicy off, OpenFGA single-
 # replica) sails through green. No credential is passed: the chart takes none as a value ([[XC-004]]), and
 # a prod render that needed one would fail here. Run: `make prod-render-check` (or in CI). Requires helm +
 # the vendored chart/charts/*.tgz.
@@ -30,7 +30,7 @@ PROD_VALUES="${PROD_VALUES:-deploy/values-prod.yaml}"
 # keys exist in the sealed store (templates/signing-provisioned.yaml refuses a non-dev store without it), and
 # nats.auth.provisioned the same for the NATS users and route credential (templates/nats-provisioned.yaml).
 # observability.export.endpoint is the platform's OTLP backend, which values-prod leaves for the deployer to name.
-COMMON=(--api-versions external-secrets.io/v1/ExternalSecret
+COMMON=(--api-versions external-secrets.io/v1/ExternalSecret --api-versions dapr.io/v1alpha1
         --set frontend.oidc.publicIssuer=https://auth.example.com/dex
         --set frontend.oidc.publicOrigin=https://lance.example.com
         --set image.repository=ghcr.io/example/rask
@@ -75,13 +75,10 @@ grep -A20 "name: rask-nats-monitor" "$OUT" | grep -q "port: 8222" \
 grep -A15 "name: rask-openfga$" "$OUT" | grep -q "replicas: 3" \
   || fail "prod OpenFGA must run 3 replicas (authz SPOF)"
 
-# 3. Dapr control-plane HA — Sentry is the mTLS CA in the sidecar cert-renewal path. (Anchor on the
-# Deployment doc via its # Source + kind — helm sorts output by kind, so the first `name: dapr-sentry`
-# is the RBAC ServiceAccount, and a bare /replicas:/ substring-matches cnpg's `streaming_replicas`
-# monitoring query that the merged chart renders in between.)
-awk '/^# Source:/{src=$0; d=0} /^kind: Deployment$/{if (src ~ /dapr_sentry_deployment/) d=1} d&&/^ *replicas:/{print; exit}' "$OUT" \
-  | grep -q "replicas: 3" \
-  || fail "prod Dapr control-plane must be HA (dapr-sentry replicas: 3)"
+# 3. The Dapr control plane is the platform's (ADR 0153): prod renders none of it, only rask's own Dapr objects.
+grep -qE "name: dapr-(sentry|operator|placement-server|scheduler-server|sidecar-injector)$" "$OUT" \
+  && fail "prod must not render a Dapr control plane (it is a prerequisite)"
+grep -q "^kind: Component$" "$OUT" || fail "prod must render rask's own Dapr Components"
 
 # 4. PodDisruptionBudgets: the request-serving backends (catalog/lineage/gateway) + OpenFGA (the authz
 # chokepoint) + one per frontend zone (frontend.replicas=2 in prod; the zones are the Ingress-routed
@@ -217,9 +214,8 @@ sa=$(grep -c "^kind: ServiceAccount" "$OUT" || true)
 automount=$(grep -c "automountServiceAccountToken: false" "$OUT" || true)
 [ "$automount" -ge 15 ] \
   || fail "prod must stop mounting the SA token into app pods, rendered $automount refusals (>=15 expected; 1 is the baseline)"
-grep -q "sidecarDropALLCapabilities" "$OUT" \
-  || grep -q "drop:" "$OUT" \
-  || fail "prod must drop the daprd sidecar's capabilities (dapr.sidecarRestricted + sidecarDropALLCapabilities) — a pod is only as restricted as its loosest container"
+grep -q 'dapr.io/sidecar-seccomp-profile-type: RuntimeDefault' "$OUT" \
+  || fail "prod must restrict the daprd sidecar (dapr.sidecarRestricted) — a pod is only as restricted as its loosest container"
 
 # TELEMETRY PROVENANCE. `observability.environment` is the `deployment.environment.name` resource
 # attribute on every trace and metric; values.yaml defaults it to `rask` and says "override per deploy",
@@ -229,4 +225,4 @@ grep -q "sidecarDropALLCapabilities" "$OUT" \
 grep -q "deployment.environment.name=prod" "$OUT" \
   || fail "prod telemetry must carry deployment.environment.name=prod (observability.environment) — it renders $(grep -oE 'deployment\.environment\.name=[^,\"]*' "$OUT" | sort -u | head -1)"
 
-echo "✓ prod-render-check: NetworkPolicy=$np, OpenFGA=3, Dapr-HA on, PDBs=$pdb (backends+OpenFGA+zones named), spread=$spread, tiers=$tiers, export named, no-bespoke-scraper, write-cap=$cap fits $cat_mem, minio-externalize atomic, ESO path renders, hook pods labeled, ServiceAccounts=$sa, token-automount-refusals=$automount"
+echo "✓ prod-render-check: NetworkPolicy=$np, OpenFGA=3, Dapr control plane external, PDBs=$pdb (backends+OpenFGA+zones named), spread=$spread, tiers=$tiers, export named, no-bespoke-scraper, write-cap=$cap fits $cat_mem, minio-externalize atomic, ESO path renders, hook pods labeled, ServiceAccounts=$sa, token-automount-refusals=$automount"

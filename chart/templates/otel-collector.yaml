@@ -137,7 +137,7 @@ data:
               scrape_interval: 30s
               kubernetes_sd_configs:
                 - role: pod
-                  namespaces: { names: [{{ .Release.Namespace }}] }
+                  namespaces: { names: [{{ .Values.dapr.controlPlaneNamespace }}] }
               relabel_configs:
                 - source_labels: [__meta_kubernetes_pod_annotation_dapr_io_control_plane]
                   action: keep

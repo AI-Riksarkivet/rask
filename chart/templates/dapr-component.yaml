@@ -1,3 +1,6 @@
+{{- if and .Values.dapr.enabled (not (.Capabilities.APIVersions.Has "dapr.io/v1alpha1")) }}
+{{- fail "Dapr is a prerequisite: dapr.enabled is on and this cluster does not serve dapr.io/v1alpha1. Install the Dapr control plane on its own release before rask (docs/architecture/deployment.md, Prerequisites; development: deploy/fixtures/dapr); rask never installs it. A cluster-less render names the API it targets: --api-versions dapr.io/v1alpha1" }}
+{{- end }}
 {{- if .Values.dapr.enabled }}
 apiVersion: dapr.io/v1alpha1
 kind: Component

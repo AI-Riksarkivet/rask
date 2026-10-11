@@ -31,7 +31,7 @@ import yaml
 from chart_yaml import FAST_LOADER
 
 from tests.unit import chart_render
-from tests.unit.chart_render import ESO_ARGS, RAY_ARGS
+from tests.unit.chart_render import PREREQ_ARGS, RAY_ARGS
 
 
 REPO = Path(__file__).resolve().parents[2]
@@ -56,7 +56,7 @@ def _helm_template(*set_values: str) -> str:
     # chart requires ([[XC-004]]). The chart refuses OIDC without a public issuer ON PURPOSE — that refusal
     # is what stops a forgotten values file installing an ungoverned estate. Supplying dev values HERE keeps
     # every other render test testing its own subject rather than re-testing the guard.
-    argv += [*ESO_ARGS, *RAY_ARGS]
+    argv += [*PREREQ_ARGS, *RAY_ARGS]
     argv += ["--set-string", "frontend.oidc.publicIssuer=http://localhost:8080/dex"]
     argv += ["--set-string", "frontend.oidc.publicOrigin=http://localhost:8080"]
     for value in set_values:
@@ -258,39 +258,18 @@ def test_a_renamed_bucket_leaves_nothing_behind_under_its_old_name(monkeypatch: 
 def test_every_dapr_annotated_pod_carries_the_injector_webhook_label() -> None:
     """Fail-closed sidecar injection is only safe if the two markers stay in lockstep.
 
-    The second install-time ordering defect of 2026-07-28: Dapr's injector is a mutating webhook
-    shipping `failurePolicy: Ignore`, and the Dapr control plane is a SUBCHART of this release — so on
-    a fresh cluster the app pods are created alongside the injector, the API server calls a webhook
-    with no endpoints, and it SILENTLY admits them with no daprd container. Nothing recreates such a
-    pod (a CrashLoopBackOff restarts the container inside the same pod), so every governed app dies
-    forever on "secret unavailable from Dapr store … failing closed" and `helm install --wait` times
-    out. `scripts/e2e_stack.sh` works around it by deleting and recreating the app pods by hand.
-
-    The chart now sets `failurePolicy: Fail` with an `objectSelector` on the `dapr.io/enabled` LABEL.
-    That makes the correspondence load-bearing in BOTH directions of failure:
-      * annotation without label -> the webhook is never called -> silently un-injected again;
-      * an unscoped `Fail` -> the injector's own pod cannot be admitted -> the cluster wedges.
-    So: every pod template carrying the annotation must carry the label, and the webhook's selector
-    must be exactly that label.
+    Dapr's injector is a mutating webhook shipping `failurePolicy: Ignore`: a pod created while the injector is
+    unreachable is SILENTLY admitted with no daprd container, and nothing recreates it (a CrashLoopBackOff restarts
+    the container inside the same pod), so every governed app dies on "secret unavailable from Dapr store … failing
+    closed". The Dapr control plane is a prerequisite ([[XC-128]]) whose injector fails closed, scoped by an
+    `objectSelector` to the `dapr.io/enabled` LABEL (deploy/fixtures/dapr; read back on the live webhook), and rask's
+    chart stamps that label. An annotation without the label is never sent to the webhook, so the pod is silently
+    un-injected again: every pod template carrying the annotation must carry the label.
     """
     import yaml
 
     rendered = _helm_template("singleTenant.enabled=true", "explorer.enabled=true")
     docs = [d for d in yaml.load_all(rendered, Loader=FAST_LOADER) if d]
-
-    webhook = next(
-        (w for d in docs if d.get("kind") == "MutatingWebhookConfiguration" for w in (d.get("webhooks") or []) if w.get("name") == "sidecar-injector.dapr.io"),
-        None,
-    )
-    assert webhook is not None, "the Dapr sidecar-injector webhook does not render — this guard would pass vacuously"
-    assert webhook["failurePolicy"] == "Fail", (
-        "the Dapr injector webhook must fail CLOSED: with `Ignore` a pod created before the injector is "
-        "ready is admitted with no sidecar, and nothing ever fixes it"
-    )
-    selector = (webhook.get("objectSelector") or {}).get("matchLabels") or {}
-    assert selector == {"dapr.io/enabled": "true"}, (
-        f"a fail-closed POD webhook MUST be scoped by objectSelector or it blocks its own injector pod and wedges the cluster; got {selector!r}"
-    )
 
     annotated = 0
     missing: list[str] = []
@@ -1179,15 +1158,15 @@ def _env_by_component(docs: list[dict], component: str) -> dict[str, str]:
 def test_no_workload_references_a_secret_the_render_does_not_create() -> None:
     """A `secretKeyRef` to a Secret nothing creates is a pod that never starts, and a GREEN render.
 
-    THE FAILURE THIS PINS. `dapr.sidecars=false` is a documented, supported toggle, and
+    THE FAILURE THIS PINS. `dapr.enabled=false` is a documented, supported toggle, and
     `services.yaml`'s own fail message tells an operator to pair it with `catalog.controlEmit=false`.
     That pair rendered cleanly — and left THIRTEEN Deployments (all seven zones, maintenance, the
     producer, three stage runners and lineage) carrying a reference to `-dapr-app-token`, which is gated on
-    `dapr.sidecars` and therefore absent. Each fails with CreateContainerConfigError; nothing in the
+    `dapr.enabled` and therefore absent. Each fails with CreateContainerConfigError; nothing in the
     render says why.
 
     The cause was one Secret doing double duty under two different gates: the Dapr app token
-    (`dapr.sidecars`) and `LINEAGE_SERVICE_TOKEN`, the service credential for reading lineage
+    (`dapr.enabled`) and `LINEAGE_SERVICE_TOKEN`, the service credential for reading lineage
     (`auth.enabled`).
 
     Checked across the TOGGLE COMBINATIONS, not just the default render, because the default is the one
@@ -1195,9 +1174,9 @@ def test_no_workload_references_a_secret_the_render_does_not_create() -> None:
     """
     combinations = [
         ("default", []),
-        ("sidecars off", ["dapr.sidecars=false", "catalog.controlEmit=false"]),
+        ("sidecars off", ["dapr.enabled=false", "catalog.controlEmit=false"]),
         ("auth off", ["auth.enabled=false"]),
-        ("both off", ["dapr.sidecars=false", "catalog.controlEmit=false", "auth.enabled=false"]),
+        ("both off", ["dapr.enabled=false", "catalog.controlEmit=false", "auth.enabled=false"]),
     ]
     problems: list[str] = []
     for label, extra in combinations:

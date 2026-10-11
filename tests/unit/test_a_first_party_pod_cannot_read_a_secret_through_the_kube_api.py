@@ -1,11 +1,11 @@
 """No pod the release runs can read a Secret, or review a token, through the Kubernetes API, and every
 first-party service runs as its own ServiceAccount.
 
-[[XC-076]]. The Dapr subchart's `dapr_rbac.secretReader` binds `secrets: get` to the namespace's
-`default` ServiceAccount, and any pod the chart gives no SA of its own runs as `default` with its token
-mounted. Code execution in such a container then reads every Secret in the namespace, around the Dapr
-store's scopes. No sidecar needs the grant: every injected pod disables daprd's built-in Kubernetes
-secret store (`lance.daprSidecarResources`).
+[[XC-076]]. A binding of `secrets: get` to the namespace's `default` ServiceAccount (Dapr's `secretReader` is
+the known case: the dev fixture turns it off, deploy/fixtures/dapr/values.yaml) reaches any pod the chart gives no
+SA of its own, which runs as `default` with its token mounted. Code execution in such a container then reads every
+Secret in the namespace, around the Dapr store's scopes. No sidecar needs the grant: every injected pod disables
+daprd's built-in Kubernetes secret store (`lance.daprSidecarResources`).
 
 READ FROM THE RENDER, in the three overlays that ship: the default values, the deployed estate
 (`make k3s-up` layers `values-local.yaml`), and production. A binding is judged by what its role
@@ -16,9 +16,9 @@ ONE TEST PER CLOSES-WHEN CLAUSE a render can see: the grants, and one SA per ser
 every sidecar still loading lance-secrets, is read back on the deployed estate; that the dev store a
 sidecar reads is seeded before it serves is `test_the_dev_openbao_is_seeded_by_its_own_pod.py`.
 
-MUTATION-CHECKED 2026-10-11 ([[XC-126]]). With `dapr.dapr_rbac.secretReader.enabled: true` (the subchart's own
-default) in chart/values.yaml, the grants test fails in all three overlays on `RoleBinding/dapr-secret-reader grants
-['secrets'] to SA default` and the identity test passes. With `openfga-model` on `rask-sa-jobs`, an ordinary SA no
+MUTATION-CHECKED 2026-10-11 ([[XC-128]]). With a template binding a `secrets: get` Role to SA `default` added to the
+chart, the grants test fails in every overlay on `RoleBinding/<name> grants ['secrets'] to SA default` and the
+identity test passes. With `openfga-model` on `rask-sa-jobs`, an ordinary SA no
 earlier revision guarantees, only the identity test fails, on that pre-upgrade hook. With `rask-sa-hooks` rendered as
 a hook again, only the identity test fails, on `identities rendered as hooks`.
 """

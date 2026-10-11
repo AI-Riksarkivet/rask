@@ -26,7 +26,6 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | Repository | Name | Version |
 |------------|------|---------|
 | https://cloudnative-pg.github.io/charts | cloudnative-pg | 0.28.3 |
-| https://dapr.github.io/helm-charts/ | dapr | 1.18.1 |
 | https://nats-io.github.io/k8s/helm/charts/ | nats | 2.14.2 |
 | https://openfga.github.io/helm-charts | openfga | 0.3.12 |
 
@@ -97,16 +96,10 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | controlplane.port | int | `8820` | HTTP port the controlplane listens on. |
 | controlplane.urlScheme | string | `"http"` | Scheme of each project's entry link in the home gallery (RASK_PROJECT_URL_SCHEME): `http` or `https`. |
 | dapr.apiTimeoutSeconds | int | `30` | Deadline in seconds for every DaprClient gRPC call (DAPR_API_TIMEOUT_SECONDS), so a wedged sidecar fails a publish instead of hanging it. |
-| dapr.dapr_operator | object | `{"resources":{"limits":{"memory":"256Mi"},"requests":{"cpu":"50m","memory":"64Mi"}}}` | Subchart passthrough: CPU and memory requests/limits for the Dapr operator controller. |
-| dapr.dapr_placement | object | `{"resources":{"limits":{"memory":"128Mi"},"requests":{"cpu":"25m","memory":"32Mi"}}}` | Subchart passthrough: CPU and memory requests/limits for Dapr placement, which the actor single-activation guarantee depends on. |
-| dapr.dapr_rbac | object | `{"secretReader":{"enabled":false}}` | Subchart passthrough: `secretReader.enabled: false` drops the Role letting the namespace `default` SA read every Secret; no sidecar uses it. |
-| dapr.dapr_scheduler | object | `{"resources":{"limits":{"memory":"256Mi"},"requests":{"cpu":"25m","memory":"64Mi"}}}` | Subchart passthrough: CPU and memory requests/limits for the Dapr scheduler, which backs actor reminders. |
-| dapr.dapr_sentry | object | `{"resources":{"limits":{"memory":"128Mi"},"requests":{"cpu":"25m","memory":"32Mi"}}}` | Subchart passthrough: CPU and memory requests/limits for Dapr Sentry (the mTLS certificate authority). |
-| dapr.dapr_sidecar_injector | object | `{"objectSelector":{"matchLabels":{"dapr.io/enabled":"true"}},"resources":{"limits":{"memory":"128Mi"},"requests":{"cpu":"25m","memory":"32Mi"}},"webhookFailurePolicy":"Fail"}` | Subchart passthrough for the injector: its resources, and fail-closed injection (`webhookFailurePolicy: Fail`) scoped to pods labelled `dapr.io/enabled`. |
+| dapr.controlPlaneNamespace | string | `"dapr-system"` | Namespace the Dapr control plane runs in; the Collector scrapes it and, under NetworkPolicy, every pod may reach it. |
 | dapr.dashboard.enabled | bool | `true` | Deploy the Dapr dashboard web UI (templates/dapr-dashboard.yaml), reached by port-forward; requires `dapr.enabled`. |
 | dapr.dashboard.image | string | `"daprio/dashboard:0.15.0"` | Container image for the Dapr dashboard Deployment. |
-| dapr.enabled | bool | `true` | Install the Dapr control-plane subchart (operator, sentry, placement, scheduler, injector); also gates rask's Dapr Components and Configurations. |
-| dapr.global | object | `{"ha":{"enabled":false},"mtls":{"enabled":true}}` | Subchart passthrough: Dapr control-plane HA (off, single node) and Sentry mTLS between sidecars (pinned on). |
+| dapr.enabled | bool | `true` | Use Dapr: inject a daprd sidecar into every fleet and lakehouse pod and render rask's Components, Configurations and Resiliency. Needs a Dapr control plane (dapr.io/v1alpha1); the render refuses without it. |
 | dapr.logLevel | string | `"info"` | daprd sidecar log level, stamped as the `dapr.io/log-level` annotation (debug, info, warn, error). |
 | dapr.maxBodySize | string | `"32Mi"` | Max request body for Dapr service invocation (`dapr.io/max-body-size`); Dapr's own default is 4Mi. |
 | dapr.resiliency.enabled | bool | `true` | Render the Dapr Resiliency policy (sidecar retries, constant 120s x 4), per-app dead-letter topics, and the long broker backOff; false = broker-only. |
@@ -115,9 +108,6 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | dapr.sidecarResources.memoryLimit | string | `"256Mi"` | Memory limit for every injected daprd sidecar (`dapr.io/sidecar-memory-limit`). |
 | dapr.sidecarResources.memoryRequest | string | `"64Mi"` | Memory request for every injected daprd sidecar (`dapr.io/sidecar-memory-request`). |
 | dapr.sidecarRestricted | bool | `false` | Add the RuntimeDefault seccomp annotation to daprd for PodSecurity `restricted`; also set the injector's `sidecarDropALLCapabilities`. |
-| dapr.sidecars | bool | `true` | Inject a daprd sidecar into every fleet and lakehouse pod; false runs plain pods and the gateway falls back to env-URL httpx calls. |
-| dapr.sweepImage | string | `"alpine/k8s:1.31.3"` | Image for the injection-sweep Job (templates/dapr-inject-sweep.yaml) that recreates pods admitted before the webhook existed; must carry `sh`. |
-| dapr.sweepPasses | int | `40` | How many 5-second passes the injection-sweep Job makes before failing with a diagnosis. |
 | dapr.workflowRetention.completed | string | `"168h"` | How long a completed workflow's history is kept, as a positive h or m duration of at least 1h; default 168h (7 days). |
 | dapr.workflowRetention.enabled | bool | `true` | Render a Dapr workflow `stateRetentionPolicy`, the only thing that purges workflow history; false means history grows unbounded. |
 | dapr.workflowRetention.failed | string | `"720h"` | How long a failed workflow's history is kept for post-mortems, as a positive h or m duration of at least 1h; default 720h. |
@@ -443,7 +433,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | services.lineage.port | int | `8000` | Container and Service port of the lineage service. |
 | services.lineage.readAudit | bool | `true` | Records every allowed FGA-gated data read (feeds GET /datasets/{name}/readers). Rendered only when auth.enabled. |
 | services.lineage.reconcile.bindingName | string | `"lineage-reconcile-cron"` | Name of the reconcile cron binding; the sidecar POSTs to /<bindingName>. |
-| services.lineage.reconcile.enabled | bool | `true` | Renders the storage-to-graph reconcile cron, which back-fills lost lineage events, drains the outbox and prunes. Needs dapr.sidecars. |
+| services.lineage.reconcile.enabled | bool | `true` | Renders the storage-to-graph reconcile cron, which back-fills lost lineage events, drains the outbox and prunes. Needs dapr.enabled. |
 | services.lineage.reconcile.schedule | string | `"@every 300s"` | Schedule of the reconcile sweep (Dapr cron syntax, e.g. `@every 300s` or a cron expression). |
 | services.lineage.replicas | int | `1` | Replica count of lineage; replicas form a competing-consumer group, so it scales freely. |
 | services.lineage.runRetentionDays | int | `30` | Days after which reconcile prunes graph :Run nodes and the Dataset nodes that leaves orphaned. 0 keeps everything. |

@@ -87,10 +87,11 @@ kind get clusters 2>/dev/null | grep -qx "$CLUSTER" || kind create cluster --nam
 # anything later repoints it.
 kind export kubeconfig --name "$CLUSTER"
 export RASK_EXPECT_CONTEXT="kind-$CLUSTER"
-# THE EXTERNAL SECRETS OPERATOR, a platform prerequisite the chart refuses to render without ([[XC-004]]).
-# This throwaway cluster stands in for the platform, so the lane installs it from the same fixture
-# `make k3s-up` uses (deploy/fixtures/external-secrets), on its own release, before rask.
-"$(dirname "$0")/fixtures.sh" external-secrets
+# THE EXTERNAL SECRETS OPERATOR AND DAPR, platform prerequisites the chart refuses to render without
+# ([[XC-004]], [[XC-128]]). This throwaway cluster stands in for the platform, so the lane installs them from
+# the same fixtures `make k3s-up` uses (deploy/fixtures/external-secrets, deploy/fixtures/dapr), each on its
+# own release, before rask. fixtures.sh waits for each, so Dapr's injector is Ready before any rask pod exists.
+"$(dirname "$0")/fixtures.sh" external-secrets dapr
 # EVERY https REPOSITORY `chart/Chart.yaml` DECLARES, derived rather than listed. `helm dependency
 # build` needs each one even when the component is disabled, and a hand-written list is a second copy
 # of the chart's own dependency set: measured 2026-09-24, it named five of the nine, so the lane died
@@ -142,6 +143,7 @@ HELM_SET=(
 # tag this script builds and the tag it looks for.
 SIDE_LOADED="$("$(dirname "$0")/helm.sh" template "$RELEASE" ./chart "${HELM_SET[@]}" \
   --api-versions external-secrets.io/v1/ExternalSecret --api-versions generators.external-secrets.io/v1alpha1/Password \
+  --api-versions dapr.io/v1alpha1 \
   | uv run python "$(dirname "$0")/side_loaded_images.py" --tag "$TAG")"
 # AN EXPLICIT CHECK, because an empty set is not an empty amount of work — it means this script is
 # about to deploy images it never built, and every pod that needs one sits in ImagePullBackOff.
@@ -175,8 +177,7 @@ step "2/6 deploy the governed Ray-ON stack (auth+fga+compute+ray+quality ON, ope
 # A COMMENT CANNOT GO INSIDE THE INVOCATION: a `#` line inside a backslash continuation ends
 # the command and turns every following line into its own, which `bash -n` accepts.
 "$(dirname "$0")/helm.sh" upgrade --install "$RELEASE" ./chart --timeout 600s "${HELM_SET[@]}"
-# Dapr sidecar-injector race + fresh-cluster recreate (see e2e_stack.sh for the full rationale).
-kubectl rollout status deploy/dapr-sidecar-injector --timeout=300s
+# Same-tag image recreate (see e2e_stack.sh for the rationale).
 for d in catalog lineage medallion-producer bronze-to-silver silver-to-gold media-to-silver gateway; do
   kubectl delete pods -l "app.kubernetes.io/instance=$RELEASE,app.kubernetes.io/component=$d" \
     --ignore-not-found >/dev/null 2>&1 || true

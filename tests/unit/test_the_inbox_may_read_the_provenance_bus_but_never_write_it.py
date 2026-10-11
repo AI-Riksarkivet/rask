@@ -30,7 +30,7 @@ import pytest
 import yaml
 from chart_yaml import FAST_LOADER
 
-from tests.unit.chart_render import ESO_ARGS, RAY_ARGS
+from tests.unit.chart_render import PREREQ_ARGS, RAY_ARGS
 
 
 REPO = Path(__file__).resolve().parents[2]
@@ -48,7 +48,7 @@ def _component() -> dict[str, str]:
         pytest.skip("helm not available")
     argv = [
         helm, "template", "rask", str(REPO / "chart"),
-        *ESO_ARGS,
+        *PREREQ_ARGS,
         *RAY_ARGS,
         "--set-string", "frontend.oidc.publicIssuer=http://auth/dex",
         "--set-string", "frontend.oidc.publicOrigin=http://auth",
@@ -105,7 +105,7 @@ def test_no_sibling_component_carries_these_keys() -> None:
         pytest.skip("helm not available")
     argv = [
         helm, "template", "rask", str(REPO / "chart"),
-        *ESO_ARGS,
+        *PREREQ_ARGS,
         *RAY_ARGS,
         "--set-string", "frontend.oidc.publicIssuer=http://auth/dex",
         "--set-string", "frontend.oidc.publicOrigin=http://auth",

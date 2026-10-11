@@ -49,7 +49,7 @@ list of "STREAM:service" consumer groups the estate EXPECTS on JetStream, render
 from the SAME values (and the same medallion.enabled / catalog.controlEmit /
 dapr.resiliency.enabled gates) that dapr-component.yaml renders the real
 subscriptions from — so the expectation cannot drift from the topology. Gated on
-dapr.sidecars too: components may render, but with no injected sidecar nothing
+dapr.enabled too: components may render, but with no injected sidecar nothing
 subscribes and every group would read as a false dead subscription.
 
 ## `{{- $tag := .tag | default $fe.image.tag -}}`

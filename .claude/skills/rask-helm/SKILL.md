@@ -96,9 +96,9 @@ second case. Kueue's upstream docs only ever install it as its own release in `k
   answer and … the intended end state". It was deferred, not rejected; ADR 0153 decides it.
 - **What leaves the chart lands in `deploy/fixtures/`** (ADR 0153, [[XC-124]]): one directory per prerequisite, an
   upstream chart pinned in `fixture.env`, installed as its own release by `scripts/fixtures.sh` before rask's
-  (`make k3s-fixtures`, a prerequisite of `make k3s-up`; `FIXTURES` names which, default `external-secrets kuberay-operator
-  ray-cluster observability`: the dev Ray engine ([[XC-125]]) and the telemetry chain the Collector exports to
-  ([[XC-127]]); a GPU node with no device plugin yet adds `nvidia-device-plugin`). A fixture's `SET_FILES` passes an
+  (`make k3s-fixtures`, a prerequisite of `make k3s-up`; `FIXTURES` names which, default `external-secrets dapr
+  kuberay-operator ray-cluster observability`: Dapr's control plane in dapr-system ([[XC-128]]), the dev Ray engine
+  ([[XC-125]]) and the telemetry chain the Collector exports to ([[XC-127]]); a GPU node with no device plugin yet adds `nvidia-device-plugin`). A fixture's `SET_FILES` passes an
   artefact from outside its chart with `--set-file` (the alert rules), and a local fixture chart with upstream
   `dependencies:` is vendored from its own `Chart.lock`. The e2e lanes install ESO through the same script.
   The §3 handover is automatic: every object the fixture renders that another release (or none) already owns is
@@ -188,14 +188,16 @@ for zero trust."*
 ## 8. `default` is a shared identity, and a subchart can hand it every Secret
 
 Any pod with no `serviceAccountName` runs as the namespace's `default` SA, and so does every such pod
-of every subchart. A grant to `default` is a grant to all of them. The Dapr subchart ships exactly
+of every subchart. A grant to `default` is a grant to all of them. Dapr's chart ships exactly
 that: `dapr_rbac.secretReader` (`enabled: true, namespace: default`) binds `secrets: get` to
-`default`, for daprd's built-in Kubernetes secret store. Measured live 2026-09-25 (audit, read-only):
+`default`, for daprd's built-in Kubernetes secret store. Measured live 2026-09-25 (audit, read-only),
+while Dapr was still a subchart of rask's release:
 `kubectl auth can-i get secrets --as=system:serviceaccount:default:default` answered yes, and the
 catalog, lineage, maintenance, the medallion, OpenBao and Dex ran as `default` with a mounted token.
 
-- **rask sets `dapr.dapr_rbac.secretReader.enabled: false`.** No sidecar uses that store: every
-  injected pod sets `dapr.io/disable-builtin-k8s-secret-store`.
+- **The Dapr control plane is a prerequisite ([[XC-128]]), and the dev fixture sets
+  `dapr_rbac.secretReader.enabled: false`** (deploy/fixtures/dapr/values.yaml). No sidecar uses that store:
+  every injected pod sets `dapr.io/disable-builtin-k8s-secret-store`.
 - **Every first-party pod names its own SA**, NATS and nats-box included through the subchart's
   `serviceAccount` values. A shared SA is allowed only where the sharers are one identity (`sa-web`
   for the zones, `sa-maintenance` for the sweep and its executor); one-shot Jobs share `sa-jobs`.
@@ -265,4 +267,4 @@ catalog, lineage, maintenance, the medallion, OpenBao and Dex ran as `default` w
   secret-reading or token-reviewing role to `default` fails without anyone listing it:
   `tests/unit/test_a_first_party_pod_cannot_read_a_secret_through_the_kube_api.py`. A `User` subject
   named `system:serviceaccount:<ns>:<sa>` counts as that SA. The gate carries its own mutation check:
-  re-enabling `secretReader` must fail it.
+  a template binding a `secrets: get` Role to `default` must fail it.

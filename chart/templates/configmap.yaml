@@ -9,7 +9,7 @@ data:
   {{ $k }}: {{ $v | quote }}
   {{- end }}
   RASK_DOCS: {{ .Values.docs.enabled | quote }}
-  RASK_DAPR_ENABLED: {{ .Values.dapr.sidecars | quote }}
+  RASK_DAPR_ENABLED: {{ .Values.dapr.enabled | quote }}
   RASK_COMPUTE_URL: {{ printf "http://%s-compute:8804" (include "rask.fullname" .) | quote }}
   RASK_CONTROLPLANE_URL: {{ printf "http://%s-controlplane:8820" (include "rask.fullname" .) | quote }}
   RASK_INGEST_URL: {{ printf "http://%s-ingest:%v" (include "rask.fullname" .) .Values.services.ingest.port | quote }}

@@ -690,7 +690,6 @@ K3S_IMAGES = $(COMPOSE_IMAGES) $(ZONES:%=web-%) ray-cluster lance-rest-catalog m
 
 # Subchart repos (Chart.yaml dependencies). An OCI dependency would need no repo add.
 K3S_DEP_REPOS = nats=https://nats-io.github.io/k8s/helm/charts/ \
-                dapr=https://dapr.github.io/helm-charts/ \
                 openfga=https://openfga.github.io/helm-charts \
                 cnpg=https://cloudnative-pg.github.io/charts
 
@@ -774,10 +773,11 @@ DROP_CREDENTIAL_VALUES := --set dapr.appToken=null --set frontend.oidc.sessionSe
 # store from it (values.yaml `secrets.hfTokenInStore`); the token reaches kubectl on stdin, never argv.
 
 # The prerequisites a dev estate gets from deploy/fixtures, each its own release, installed before rask's
-# (NOT FOR PRODUCTION; deploy/fixtures/README.md). The Ray engine the cascade submits to is two of them, the operator
+# (NOT FOR PRODUCTION; deploy/fixtures/README.md). Dapr's control plane comes first after ESO, so its injector is
+# Ready before any pod that wants a sidecar exists. The Ray engine the cascade submits to is two of them, the operator
 # first; observability is the store, dashboards and alerting rask's Collector exports to. A GPU node with no device
 # plugin yet adds nvidia-device-plugin.
-FIXTURES ?= external-secrets kuberay-operator ray-cluster observability
+FIXTURES ?= external-secrets dapr kuberay-operator ray-cluster observability
 
 k3s-fixtures: ## Install the development fixtures (FIXTURES) as their own releases, before the rask chart
 	KUBECONFIG=$(KUBECONFIG) ./scripts/fixtures.sh $(FIXTURES)
@@ -923,10 +923,8 @@ k3s-down: ## Uninstall the rask release (keep PVCs)
 
 k3s-purge: k3s-down ## Uninstall + delete PVCs (clean slate)
 	$(KUBECTL) delete pvc -A -l app.kubernetes.io/instance=rask --ignore-not-found || true
-	# Stale PVCs left in old per-component namespaces (dapr/nats now run in the
-	# release namespace) that the label-scoped delete above misses — reclaim the
-	# storage without removing the namespaces themselves. Idempotent.
-	-$(KUBECTL) delete pvc -n dapr-system --all --ignore-not-found
+	# Stale PVCs left in an old per-component `nats` namespace (NATS runs in the release namespace) that the
+	# label-scoped delete above misses. dapr-system is the dapr FIXTURE's, which k3s-down leaves installed.
 	-$(KUBECTL) delete pvc -n nats --all --ignore-not-found
 
 # ---- kind (throwaway CI-shaped cluster; k3s above is the long-lived local deploy) ----

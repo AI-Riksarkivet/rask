@@ -21,7 +21,7 @@ ran on its field default (§ Q17-27). hasKey+ternary for the reason recorded at 
 catalog's copy: `| default` makes an explicit false un-settable, and a bare reference
 renders "" on a `--reuse-values` upgrade, which is a bool_parsing crash at boot.
 
-## `- { name: MEDALLION_DAPR_ENABLED, value: {{ .Values.dapr.sidecars | quote }} }`
+## `- { name: MEDALLION_DAPR_ENABLED, value: {{ .Values.dapr.enabled | quote }} }`
 
 Fail-closed at boot if behind a sidecar but the app-token is unset — /bronze-arrival would
 otherwise be an open forged-trigger path (symmetric with the stage runners).
@@ -298,7 +298,7 @@ ran on its field default (§ Q17-27). hasKey+ternary for the reason recorded at 
 catalog's copy: `| default` makes an explicit false un-settable, and a bare reference
 renders "" on a `--reuse-values` upgrade, which is a bool_parsing crash at boot.
 
-## `- { name: MEDALLION_DAPR_ENABLED, value: {{ $root.Values.dapr.sidecars | quote }} }`
+## `- { name: MEDALLION_DAPR_ENABLED, value: {{ $root.Values.dapr.enabled | quote }} }`
 
 Fail-closed at boot if behind a sidecar but the app-token is unset (open forged-trigger path).
 

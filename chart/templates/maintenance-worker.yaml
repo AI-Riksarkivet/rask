@@ -18,7 +18,7 @@ spec:
         app.kubernetes.io/component: maintenance-worker
         {{- include "rask.daprPodLabels" $root | nindent 8 }}
         lance.dev/logs: otlp # ships logs via the OTel SDK (OTLP) → the collector filter drops the file-tailed dup
-      {{- if .Values.dapr.sidecars }}
+      {{- if .Values.dapr.enabled }}
       annotations:
         {{- include "rask.daprAnnotations" (list $root .Values.maintenance.daprAppId $port) | nindent 8 }}
       {{- end }}
@@ -57,10 +57,10 @@ spec:
             - { name: DAPR_API_TIMEOUT_SECONDS, value: {{ .Values.dapr.apiTimeoutSeconds | quote }} }
             # Fail-closed at boot if behind a Dapr sidecar but the app-token is unset (open forgery path) —
             # symmetric with the lineage service (the audit's consistency fix).
-            - { name: MAINTENANCE_DAPR_ENABLED, value: {{ .Values.dapr.sidecars | quote }} }
+            - { name: MAINTENANCE_DAPR_ENABLED, value: {{ .Values.dapr.enabled | quote }} }
             {{- with include "lance.signingEnv" (list $root .Values.maintenance.daprAppId) }}{{ . | nindent 12 }}{{- end }}
             {{- with include "lance.doorEnv" (list $root false) }}{{ . | nindent 12 }}{{- end }}
-            {{- if .Values.dapr.sidecars }}
+            {{- if .Values.dapr.enabled }}
             # Gated on the sidecar because that is what it VERIFIES — the token exists to check the
             # `dapr-api-token` header Dapr stamps on delivery, so without a sidecar there is no header
             # to check and the reference dangles: the Secret is not rendered and the pod never starts.

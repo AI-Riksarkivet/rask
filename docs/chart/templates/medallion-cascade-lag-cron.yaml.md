@@ -3,7 +3,7 @@
 Rationale for `chart/templates/medallion-cascade-lag-cron.yaml`. It lives here because Helm stores the chart's templates in
 every release revision, under a 1 MiB ceiling. Each section is headed by the template line it explains.
 
-## `{{- if and .Values.dapr.enabled .Values.dapr.sidecars .Values.medallion.enabled .Values.medallion.cascadeLa...`
+## `{{- if and .Values.dapr.enabled .Values.medallion.enabled .Values.medallion.cascadeLa...`
 
 THE CASCADE LAG DETECTOR — the LOSS half of cascade monitoring (docs/adr/0051-cascade-repair-detection-and-the-repair-verb-2026-09-04.md "Cascade repair" (C3)).
 C4's alerts fire on `medallion_stage_refused_total`: triggers that ARRIVED and were dropped by

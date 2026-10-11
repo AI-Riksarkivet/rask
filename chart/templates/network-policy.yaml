@@ -78,6 +78,21 @@ spec:
     - ports:
         - { protocol: TCP, port: 443 }
         - { protocol: TCP, port: 6443 }
+{{- if .Values.dapr.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "lance.fullname" . }}-allow-dapr-control-plane-egress
+  labels: {{- include "lance.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: {{ .Values.dapr.controlPlaneNamespace }} }
+{{- end }}
 {{- $o := .Values.observability }}
 {{- if $o.enabled }}
 ---
@@ -176,7 +191,7 @@ spec:
                 {{- range .Values.medallion.stageRunners }}
                 {{- $openbaoClients = append $openbaoClients .name }}
                 {{- end }}
-                {{- if and .Values.dapr.sidecars .Values.stateStore.enabled }}
+                {{- if and .Values.dapr.enabled .Values.stateStore.enabled }}
                 {{- $openbaoClients = concat $openbaoClients .Values.stateStore.scopes }}
                 {{- end }}
 
@@ -216,7 +231,7 @@ spec:
                 operator: In
 
                 {{- $ageClients := list "lineage" "catalog" "openfga-migrate" "backup-pg" }}
-                {{- if and .Values.dapr.sidecars .Values.stateStore.enabled }}
+                {{- if and .Values.dapr.enabled .Values.stateStore.enabled }}
                 {{- $ageClients = concat $ageClients .Values.stateStore.scopes }}
                 {{- end }}
 

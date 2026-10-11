@@ -26,7 +26,7 @@ import subprocess
 import pytest
 import yaml
 
-from tests.unit.chart_render import ESO_ARGS, RAY_ARGS
+from tests.unit.chart_render import PREREQ_ARGS, RAY_ARGS
 
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
@@ -46,7 +46,7 @@ def _render(*sets: str) -> str:
         str(CHART),
         "--set",
         "image.localImages=true",
-        *ESO_ARGS,
+        *PREREQ_ARGS,
         *RAY_ARGS,
         "--set-string",
         "frontend.oidc.publicIssuer=http://localhost:8080/dex",

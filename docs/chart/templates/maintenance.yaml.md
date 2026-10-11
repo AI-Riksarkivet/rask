@@ -35,7 +35,7 @@ ready, on a service whose work is an hourly cron with no request path to interru
 
 Longer grace than the other apps: an in-flight sweep/Lance write must finish, not be SIGKILLed.
 
-## `- { name: MAINTENANCE_DAPR_ENABLED, value: {{ .Values.dapr.sidecars | quote }} }`
+## `- { name: MAINTENANCE_DAPR_ENABLED, value: {{ .Values.dapr.enabled | quote }} }`
 
 Fail-closed at boot if behind a Dapr sidecar but the app-token is unset (open forgery path) —
 symmetric with the lineage service (the audit's consistency fix).

@@ -369,7 +369,7 @@ services:
     # without the token: `register_subscriptions` calls `assert_app_token_configured`, which raises
     # whenever RASK_DAPR_ENABLED is true and APP_API_TOKEN is unset — the estate's fail-closed rule for
     # a live delivery route. So this flag is not a preference, it is the difference between a running
-    # pod and a CrashLoopBackOff on the DEFAULT install (dapr.sidecars is on).
+    # pod and a CrashLoopBackOff on the DEFAULT install (dapr.enabled is on).
     #
     # It is the first fleet.yaml service to need the token: every other caller of
     # `assert_app_token_configured` is a lance-plane pod (catalog, lineage, the medallion producer and
@@ -509,14 +509,14 @@ services:
     #     in the competing-consumer group) cannot run it concurrently.
     #   * NON-DESTRUCTIVE by default — the only deleting behaviour is :Run pruning, gated separately by
     #     runRetentionDays (0 = off, below), and staleness only WARNs (freshnessBudgetHours, 0 = off).
-    #   * RENDER-GATED — the cron binding renders only with dapr.enabled + dapr.sidecars, so a
+    #   * RENDER-GATED — the cron binding renders only with dapr.enabled, so a
     #     sidecar-less install silently gets nothing new rather than a dangling component.
     #   * BOUNDED — one sweep per `schedule` (300s here; prod wants a cron expression), reading Lance
     #     versions the graph already tracks.
     # Set false only for a deliberately inert demo; the /datasets/{name}/reconcile READ endpoint is
     # available either way.
     reconcile:
-      # -- Renders the storage-to-graph reconcile cron, which back-fills lost lineage events, drains the outbox and prunes. Needs dapr.sidecars.
+      # -- Renders the storage-to-graph reconcile cron, which back-fills lost lineage events, drains the outbox and prunes. Needs dapr.enabled.
       enabled: true
       # -- Name of the reconcile cron binding; the sidecar POSTs to /<bindingName>.
       bindingName: lineage-reconcile-cron
@@ -820,10 +820,9 @@ security:
   # POD IDENTITY is not a value. Every first-party workload runs as its own ServiceAccount
   # (templates/security-sa.yaml), tokenless on the SA object. A first-party pod holds a Kubernetes API
   # token only when its SA carries a grant it uses: OpenBao under ESO, and the RBAC-bound controlplane,
-  # Collector, Dapr dashboard, snapshot and injection-sweep pods (measured on the render
-  # 2026-10-02). `default` is the identity every
-  # unnamed pod in the namespace shares, and the Dapr subchart grants it `secrets: get` unless told
-  # not to (dapr.dapr_rbac below). Pinned by
+  # Collector, Dapr dashboard and snapshot pods. `default` is the identity every unnamed pod in the
+  # namespace shares, and a Dapr control plane grants it `secrets: get` unless its `dapr_rbac.secretReader`
+  # is off (deploy/fixtures/dapr/values.yaml). Pinned by
   # tests/unit/test_a_first_party_pod_cannot_read_a_secret_through_the_kube_api.py.
   # securityContexts for the INFRA pods (app tier is already hardened via lance.securityContext)
   # + PSA-restricted compliance for the root busybox wait-age init containers (the audit's
@@ -2280,7 +2279,7 @@ maintenance:
   # -- Wall-clock ceiling for one sweep tick, checked between datasets; 0 means unlimited.
   sweepBudgetSeconds: 0
   # Announce each reclamation on the catalog's control topic (catalog.control.v1). Requires
-  # dapr.sidecars — and the component's `scopes` must list this app-id, which the chart does below;
+  # dapr.enabled — and the component's `scopes` must list this app-id, which the chart does below;
   # without it the sidecar rejects every publish SILENTLY (emission is best-effort by design).
   # -- Announce each reclamation on the catalog control topic (catalog.control.v1); needs Dapr sidecars. Off by default.
   controlEmit: false
@@ -3223,10 +3222,17 @@ nats:
           - $JS.ACK.DLQ.silver-to-gold-durable.>
         subscribe: [_INBOX.>]
 
-# === Dapr control plane (subchart) — injects the daprd sidecar into annotated pods ================
+# === Dapr — rask's Components, Configurations, Resiliency and sidecars ===========================
+# The control plane (operator, sentry, placement, scheduler, sidecar injector) is a PREREQUISITE the platform runs
+# once per cluster (ADR 0153), in development the deploy/fixtures/dapr release. The chart renders only rask's own
+# Dapr objects and the sidecar annotations, and refuses to render with `enabled` on when the cluster does not serve
+# dapr.io/v1alpha1.
 dapr:
-  # -- Install the Dapr control-plane subchart (operator, sentry, placement, scheduler, injector); also gates rask's Dapr Components and Configurations.
+  # One switch for "rask uses Dapr". Off runs plain pods with no Components; the gateway falls back to env-URL httpx.
+  # -- Use Dapr: inject a daprd sidecar into every fleet and lakehouse pod and render rask's Components, Configurations and Resiliency. Needs a Dapr control plane (dapr.io/v1alpha1); the render refuses without it.
   enabled: true
+  # -- Namespace the Dapr control plane runs in; the Collector scrapes it and, under NetworkPolicy, every pod may reach it.
+  controlPlaneNamespace: dapr-system
   # WORKFLOW STATE RETENTION — the only thing that collects workflow history.
   #
   # Dapr's own CRD: "If not set, workflow instances will not be automatically purged." Nothing else
@@ -3257,79 +3263,6 @@ dapr:
     failed: "720h"
     # -- How long a terminated workflow's history is kept, as a positive h or m duration of at least 1h; default 720h (30 days).
     terminated: "720h"
-  # Memory bound (#139) — see the note under `openfga.resources`. Five control-plane components, all
-  # controller loops rather than data paths, so all sized as controllers. The sidecar injector's
-  # `resources` here bound the INJECTOR itself; per-app daprd sidecar sizing is a separate concern
-  # (the `dapr.io/sidecar-memory-*` annotations), deliberately not changed here.
-  # -- Subchart passthrough: CPU and memory requests/limits for the Dapr operator controller.
-  dapr_operator:
-    resources:
-      requests: { cpu: 50m, memory: 64Mi }
-      limits: { memory: 256Mi }
-  # -- Subchart passthrough: CPU and memory requests/limits for Dapr Sentry (the mTLS certificate authority).
-  dapr_sentry:
-    resources:
-      requests: { cpu: 25m, memory: 32Mi }
-      limits: { memory: 128Mi }
-  # -- Subchart passthrough: CPU and memory requests/limits for Dapr placement, which the actor single-activation guarantee depends on.
-  dapr_placement:
-    resources:
-      requests: { cpu: 25m, memory: 32Mi }
-      limits: { memory: 128Mi }
-  # -- Subchart passthrough: CPU and memory requests/limits for the Dapr scheduler, which backs actor reminders.
-  dapr_scheduler:
-    resources:
-      requests: { cpu: 25m, memory: 64Mi }
-      limits: { memory: 256Mi }
-  # === SUBCHART values (dapr 1.18.1) ==============================================================
-  # OFF. The subchart ships a `secret-reader` Role (`secrets: get`) bound to the namespace's `default`
-  # SA, for daprd's built-in Kubernetes secret store. No sidecar here has that store: every injected
-  # pod sets `dapr.io/disable-builtin-k8s-secret-store` (lance.daprSidecarResources), and a pod's own
-  # SA holds no API token to use it with. Left on, code execution in any pod running as `default`
-  # reads every Secret in the namespace. A Component `secretKeyRef` (lance-secrets' vaultToken when
-  # openbao.devMode is off) is inlined by the Dapr operator under dapr-operator-admin, which carries
-  # `secrets` itself; that path is not measured on a live devMode-off estate.
-  # -- Subchart passthrough: `secretReader.enabled: false` drops the Role letting the namespace `default` SA read every Secret; no sidecar uses it.
-  dapr_rbac:
-    secretReader:
-      enabled: false
-  # -- Subchart passthrough for the injector: its resources, and fail-closed injection (`webhookFailurePolicy: Fail`) scoped to pods labelled `dapr.io/enabled`.
-  dapr_sidecar_injector:
-    resources:
-      requests: { cpu: 25m, memory: 32Mi }
-      limits: { memory: 128Mi }
-    # FAIL-CLOSED sidecar injection. Dapr ships `Ignore`, which means the API server SILENTLY admits a
-    # pod unmutated when the injector webhook is unreachable. The Dapr control plane is a subchart of
-    # THIS release, so on a fresh cluster the app pods are created in the same breath as the injector,
-    # win the race, and come up with NO daprd container — and nothing ever recreates them (a
-    # CrashLoopBackOff restarts the container inside the same sidecar-less pod). Every governed app
-    # then dies on "secret unavailable from Dapr store … failing closed" and `helm install --wait`
-    # times out. `Fail` turns that silent drop into a REJECTED create, which the ReplicaSet controller
-    # simply retries until the injector is Ready.
-    webhookFailurePolicy: Fail
-    # …and this is what makes `Fail` safe. An unscoped fail-closed POD webhook would also block the
-    # injector's OWN pod (chicken-and-egg: the webhook it must satisfy is served by the pod being
-    # created) and every infra pod in the namespace, wedging the cluster permanently. Scoped to the
-    # label `rask.daprPodLabels` stamps on exactly the sidecar-wanting pods, only they fail closed.
-    objectSelector:
-      matchLabels:
-        dapr.io/enabled: "true"
-  # === FIRST-PARTY values =========================================================================
-  # Inject Dapr sidecar into every fleet + lakehouse pod. Off => plain pods; the gateway
-  # falls back to httpx env-URLs. (The control-plane subchart is dapr.enabled above.)
-  # -- Inject a daprd sidecar into every fleet and lakehouse pod; false runs plain pods and the gateway falls back to env-URL httpx calls.
-  sidecars: true
-  # The injection-sweep Job (templates/dapr-inject-sweep.yaml) closes the window `failurePolicy: Fail`
-  # cannot: helm applies MutatingWebhookConfiguration AFTER every Deployment (it is not in helm's kind
-  # order), so a first install always creates a few app pods while no webhook exists yet. Those pods
-  # are admitted un-injected and nothing replaces them — the Job recreates exactly those. kubectl
-  # image, pinned; passes × 5s bounds how long it keeps trying before failing with the diagnosis.
-  # MUST carry a shell: the sweep script is `sh -c`. registry.k8s.io/kubectl is DISTROLESS —
-  # it has no /bin/sh, so the container never starts ("exec: sh: executable file not found").
-  # -- Image for the injection-sweep Job (templates/dapr-inject-sweep.yaml) that recreates pods admitted before the webhook existed; must carry `sh`.
-  sweepImage: alpine/k8s:1.31.3
-  # -- How many 5-second passes the injection-sweep Job makes before failing with a diagnosis.
-  sweepPasses: 40
   # -- daprd sidecar log level, stamped as the `dapr.io/log-level` annotation (debug, info, warn, error).
   logLevel: "info"
   # Max request body size for Dapr service invocation. Dapr defaults to 4Mi,
@@ -3340,8 +3273,8 @@ dapr:
   # PodSecurity `restricted` compliance for the injected daprd sidecar. OFF by default (prod posture, like
   # networkPolicy.enabled). Our app containers are already `restricted`-clean (lance.securityContext:
   # runAsNonRoot + drop:[ALL] + RuntimeDefault); the sidecar is the remaining gap. Turning this on adds the
-  # RuntimeDefault seccomp annotation; you MUST ALSO set the injector-wide drop-caps value it can't reach:
-  #   e.g. --set dapr.sidecarRestricted=true --set dapr.dapr_sidecar_injector.sidecarDropALLCapabilities=true
+  # RuntimeDefault seccomp annotation; the control plane's injector MUST ALSO drop all capabilities
+  # (`dapr_sidecar_injector.sidecarDropALLCapabilities`, a prerequisite setting this chart cannot reach).
   # NOTE full-namespace `restricted` ENFORCE is still blocked by the OTel Collector (a single Deployment
   # whose filelog receiver needs hostPath /var/log/pods — `restricted` forbids it, no value fixes it):
   # give the Collector its own namespace at `baseline`, or a ServiceAccount PSA exemption.
@@ -3375,7 +3308,7 @@ dapr:
     # -- Render the Dapr Resiliency policy (sidecar retries, constant 120s x 4), per-app dead-letter topics, and the long broker backOff; false = broker-only.
     enabled: true
   # The Dapr dashboard — a web UI for the Dapr stuff (components, subscriptions, configurations,
-  # control plane). These are first-party keys (the dapr subchart ignores them).
+  # control plane).
   dashboard:
     # -- Deploy the Dapr dashboard web UI (templates/dapr-dashboard.yaml), reached by port-forward; requires `dapr.enabled`.
     enabled: true
@@ -3392,27 +3325,6 @@ dapr:
     memoryRequest: 64Mi
     # -- Memory limit for every injected daprd sidecar (`dapr.io/sidecar-memory-limit`).
     memoryLimit: 256Mi
-  # -- Subchart passthrough: Dapr control-plane HA (off, single node) and Sentry mTLS between sidecars (pinned on).
-  global:
-    ha:
-      enabled: false # single-node dev
-    mtls:
-      # Pin Dapr Sentry service-to-service mTLS ON explicitly. It IS the subchart default, but pinning it
-      # makes the relied-upon guarantee self-documenting and guards against an accidental `--set …=false`
-      # or a subchart-default flip silently dropping inter-service encryption. Confirm live with
-      # `dapr mtls -k` (sidecars 2/2 with SPIFFE identities).
-      enabled: true
-    # NOTE: we use pub/sub + bindings + secret stores + service invocation + ACTORS. Workflows and jobs
-    # stay un-adopted (docs/OPERATORS.md §4). Placement is therefore LOAD-BEARING, not spare: the
-    # annotator registers AnnotationTaskActor and AnnotationProjectActor, and Dapr's single-activation
-    # guarantee for those is what serialises two annotators claiming one task — placement is the
-    # component that provides it. (This comment claimed "no actors" until 2026-07-28, which was true
-    # when written and false the moment the task plane landed; a stale claim here is how someone
-    # concludes placement is spare and disables it.)
-    # Scheduler is likewise not optional: it backs actor REMINDERS, which is how task leases expire.
-    # And independently of both, do NOT disable either — daprd 1.18 connects to BOTH at startup
-    # unconditionally and never becomes Ready without them (verified live — sidecars stuck 1/2 with
-    # "no such host: dapr-placement-server / dapr-scheduler-server-a").
 
 # === OpenFGA (subchart) — Zanzibar authz. lance-ns's values REPLACE rask's `engine: memory`: the
 # datastore is the AGE Postgres (it's just postgres), so grants survive a restart. -----------------

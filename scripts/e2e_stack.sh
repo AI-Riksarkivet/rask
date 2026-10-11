@@ -72,10 +72,11 @@ kind get clusters 2>/dev/null | grep -qx "$CLUSTER" || kind create cluster --con
 # anything later repoints it.
 kind export kubeconfig --name "$CLUSTER"
 export RASK_EXPECT_CONTEXT="kind-$CLUSTER"
-# THE EXTERNAL SECRETS OPERATOR, a platform prerequisite the chart refuses to render without ([[XC-004]]).
-# This throwaway cluster stands in for the platform, so the lane installs it from the same fixture
-# `make k3s-up` uses (deploy/fixtures/external-secrets), on its own release, before rask.
-"$(dirname "$0")/fixtures.sh" external-secrets
+# THE EXTERNAL SECRETS OPERATOR AND DAPR, platform prerequisites the chart refuses to render without
+# ([[XC-004]], [[XC-128]]). This throwaway cluster stands in for the platform, so the lane installs them from
+# the same fixtures `make k3s-up` uses (deploy/fixtures/external-secrets, deploy/fixtures/dapr), each on its
+# own release, before rask. fixtures.sh waits for each, so Dapr's injector is Ready before any rask pod exists.
+"$(dirname "$0")/fixtures.sh" external-secrets dapr
 # EVERY https REPOSITORY `chart/Chart.yaml` DECLARES, derived rather than listed. `helm dependency
 # build` needs each one even when the component is disabled, and a hand-written list is a second copy
 # of the chart's own dependency set: measured 2026-09-24, it named five of the nine, so the lane died
@@ -139,6 +140,7 @@ HELM_SET=(
 # tag this script builds and the tag it looks for.
 SIDE_LOADED="$("$(dirname "$0")/helm.sh" template "$RELEASE" ./chart "${HELM_SET[@]}" \
   --api-versions external-secrets.io/v1/ExternalSecret --api-versions generators.external-secrets.io/v1alpha1/Password \
+  --api-versions dapr.io/v1alpha1 \
   | uv run python "$(dirname "$0")/side_loaded_images.py" --tag "$TAG")"
 # AN EXPLICIT CHECK, because an empty set is not an empty amount of work — it means this script is
 # about to deploy images it never built, and every pod that needs one sits in ImagePullBackOff.
@@ -185,18 +187,9 @@ step "3/8 deploy the governed stack (auth ON, #3-A/#3-B/#4 flags ON, heavy extra
 # the command and turns every following line into its own, which `bash -n` accepts.
 "$(dirname "$0")/helm.sh" upgrade --install "$RELEASE" ./chart --timeout 600s "${HELM_SET[@]}"
 
-# Dapr's sidecar injector is a MUTATING WEBHOOK: it injects daprd only into pods created AFTER it is Ready.
-# The Dapr control plane is a SUBCHART of this same release, so on a fresh cluster the app pods are created
-# in the same breath as the injector — they win the race, come up with NO sidecar (0/1, not 0/2), and then
-# block forever on `TimeoutError: Dapr health check timed out`, taking every governed app into CrashLoop.
-# On a long-lived local cluster Dapr was already installed and Ready, so the race never armed — the third
-# fresh-cluster ordering bug in this script, and the reason "works locally" kept meaning nothing.
-kubectl rollout status deploy/dapr-sidecar-injector --timeout=300s
-# Recreate the app pods THROUGH the now-ready webhook so they actually receive their sidecar. Pod DELETE,
-# not `rollout restart`: on a re-run against an existing cluster a rebuilt same-tag image only lands on a
-# freshly-scheduled pod, and delete forces that reschedule to pull the just-loaded digest from the node
-# cache (IfNotPresent) — the kind same-tag staleness fix (memory: kind-same-tag-image-gotcha). On a fresh
-# cluster this is simply the sidecar-injection recreate.
+# Recreate the app pods. Pod DELETE, not `rollout restart`: on a re-run against an existing cluster a rebuilt
+# same-tag image only lands on a freshly-scheduled pod, and delete forces that reschedule to pull the just-loaded
+# digest from the node cache (IfNotPresent) — the kind same-tag staleness fix (memory: kind-same-tag-image-gotcha).
 for d in catalog lineage medallion-producer bronze-to-silver silver-to-gold media-to-silver gateway; do
   kubectl delete pods -l "app.kubernetes.io/instance=$RELEASE,app.kubernetes.io/component=$d" \
     --ignore-not-found >/dev/null 2>&1 || true

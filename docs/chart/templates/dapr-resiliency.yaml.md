@@ -111,7 +111,7 @@ values it is rendered with.
 
 ## `apiVersion: dapr.io/v1alpha1`
 
-Service-invocation resiliency (the DAPRIFY mesh, 2026-07-27): with dapr.sidecars every /api/* request
+Service-invocation resiliency (the DAPRIFY mesh, 2026-07-27): with dapr.enabled every /api/* request
 leaves the gateway through its own daprd (RASK_DAPR_ENABLED → localhost:3500/v1.0/invoke/<app-id>/method),
 and Dapr applies invocation resiliency on the CALLING sidecar — so this policy is scoped to the gateway
 and targets every app-id the gateway routes to (services/gateway _routes()). Deliberately modest, no

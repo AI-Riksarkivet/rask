@@ -166,22 +166,15 @@ dex:
 # --- Dapr: the app-API token, the auth secret for the sidecar-delivered routes, is the store's
 # `dapr-app-token`; ESO writes it into `<release>-dapr-app-token` for the injector.
 dapr:
-  # Dapr control-plane HA: multi-replica operator / placement / scheduler + Sentry (the mTLS CA that sits in
-  # the sidecar cert-renewal path). kind ran single-node; in prod a Sentry node-drain/OOM eventually breaks
-  # sidecar identity renewal → all service-invocation + pub/sub across the mesh stops. (prod-readiness P1)
-  global:
-    ha:
-      enabled: true
+  # The control plane is the platform's (ADR 0153): it must run HA (multi-replica operator, placement, scheduler and
+  # Sentry, the mTLS CA in the sidecar cert-renewal path) and its injector must set `sidecarDropALLCapabilities`,
+  # or the sidecar keeps NET_RAW while the app container beside it has none. Both are prerequisites
+  # (docs/architecture/deployment.md), not values here.
   dashboard:
     enabled: false # don't expose the Dapr control-plane UI in prod
-  # The sidecar's own hardening. Both flip together on purpose: `sidecarRestricted` sets the daprd
-  # container's securityContext, and the injector must drop ALL capabilities or the sidecar keeps
-  # NET_RAW while the app container beside it has none — a pod is only as restricted as its loosest
-  # container. Live-proven 2026-07-13; absent from this overlay until 2026-09-16, which read as a
-  # decision and was an omission.
+  # The sidecar's own hardening: `sidecarRestricted` sets the daprd container's securityContext. A pod is only as
+  # restricted as its loosest container, which is why the injector's drop-ALL above is a prerequisite.
   sidecarRestricted: true
-  dapr_sidecar_injector:
-    sidecarDropALLCapabilities: true
 
 # --- Infra pod security contexts. Default OFF in values.yaml because the dev loop runs PSA-unlabelled;
 # live-proven on 2026-07-13. Pod IDENTITY is not a switch: every first-party pod runs as its own

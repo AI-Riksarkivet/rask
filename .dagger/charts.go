@@ -183,6 +183,7 @@ func (m *Rask) Charts(
 const renderArgs = "--set image.repository=ghcr.io/example/rask " +
 	"--set-string ray.dashboardUrl=http://ray.example.com:8265 " +
 	"--api-versions external-secrets.io/v1/ExternalSecret " +
+	"--api-versions dapr.io/v1alpha1 " +
 	"--set-string frontend.oidc.publicIssuer=http://localhost:8080/dex " +
 	"--set-string frontend.oidc.publicOrigin=http://localhost:8080 " +
 	"--set openbao.devMode=false " +
@@ -220,9 +221,8 @@ grep -q "k8s-app: kube-dns" /tmp/np.yaml
 grep -q -- "-openbao" /tmp/np.yaml
 grep -q "NotIn" /tmp/np.yaml`
 
-// securityGate: the DEFAULT render wires a dedicated tokenless SA into every first-party pod and ships no
-// `default`-SA secret reader; the infra security contexts stay a switch whose ON render carries the
-// non-root runAsUser tiers.
+// securityGate: the DEFAULT render wires a dedicated tokenless SA into every first-party pod; the infra
+// security contexts stay a switch whose ON render carries the non-root runAsUser tiers.
 const securityGate = `set -euo pipefail
 RENDER_ARGS="` + renderArgs + `"
 # Render CONFIGURATION, not prose. Every assertion in these gates is about what the chart produces for
@@ -235,14 +235,14 @@ render() { helm template chart $RENDER_ARGS "$@" | grep -v '^[[:space:]]*#'; }
 # RENDERED TO A FILE FIRST, so set -e sees a failed render: inside '$(render | grep -c X || true)' the
 # '|| true' swallows it and a render of nothing reads as a count of zero. The 'kind: Deployment' probe
 # proves the render produced a manifest before anything is concluded from it. Measured 2026-10-02 on
-# this render: 45 ServiceAccounts, 29 'automountServiceAccountToken: false', 32 pods on a '-sa-' SA.
+# this render: 45 ServiceAccounts, 29 'automountServiceAccountToken: false', 32 pods on a '-sa-' SA; on
+# 2026-10-11, with Dapr's control plane and the observability stack out of the chart: 30, 26 and 30.
 render > /tmp/sa.yaml
 grep -q "kind: Deployment" /tmp/sa.yaml
 sa_objects=$(grep -c "^kind: ServiceAccount" /tmp/sa.yaml || true); [ "$sa_objects" -ge 30 ] || exit 1
 automount_off=$(grep -c "automountServiceAccountToken: false" /tmp/sa.yaml || true); [ "$automount_off" -ge 25 ] || exit 1
 wired=$(grep -c "serviceAccountName: .*-sa-" /tmp/sa.yaml || true); [ "$wired" -ge 25 ] || exit 1
 # 'if', not '!': set -e ignores a negated command, so '! grep -q' could never fail this gate.
-if grep -q "name: dapr-secret-reader" /tmp/sa.yaml; then exit 1; fi
 if grep -q "runAsUser: 999" /tmp/sa.yaml; then exit 1; fi
 render --set security.infraContexts.enabled=true > /tmp/sec.yaml
 grep -q "runAsUser: 999" /tmp/sec.yaml

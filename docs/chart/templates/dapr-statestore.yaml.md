@@ -5,10 +5,10 @@ every release revision, under a 1 MiB ceiling. Each section is headed by the tem
 
 ## `{{- if and .Values.dapr.enabled .Values.stateStore.enabled }}`
 
-The `dapr.enabled` half is not optional: this renders a dapr.io/v1alpha1 Component, and the
-Component CRD ships only inside the gated Dapr subchart. Every sibling Dapr-CR template gates on
-both; this one did not, so `dapr.enabled=false` rendered one Component against a CRD that was
-never installed and the whole install failed with 'no matches for kind "Component"'.
+The `dapr.enabled` half is not optional: this renders a dapr.io/v1alpha1 Component, served only
+where a Dapr control plane is installed (a prerequisite; with `dapr.enabled` on and no dapr.io API the
+render refuses, templates/dapr-component.yaml). Every sibling Dapr-CR template gates on `dapr.enabled`,
+so `dapr.enabled=false` renders no Component a cluster without Dapr could not accept.
 
 ## `secretKeyRef:`
 

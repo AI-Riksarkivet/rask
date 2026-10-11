@@ -1,7 +1,7 @@
 {{- $root := . }}
 {{- $age := include "lance.ageConnectHost" . }}
-{{- if and .Values.catalog.controlEmit (not .Values.dapr.sidecars) }}
-{{- fail "catalog.controlEmit=true requires dapr.sidecars=true: the /control-events broadcast ingest publishes + receives via the Dapr sidecar and is authenticated by the sidecar-injected APP_API_TOKEN — without it the catalog fails closed at boot. Enable dapr.sidecars, or set catalog.controlEmit=false." }}
+{{- if and .Values.catalog.controlEmit (not .Values.dapr.enabled) }}
+{{- fail "catalog.controlEmit=true requires dapr.enabled=true: the /control-events broadcast ingest publishes + receives via the Dapr sidecar and is authenticated by the sidecar-injected APP_API_TOKEN — without it the catalog fails closed at boot. Enable dapr.enabled, or set catalog.controlEmit=false." }}
 {{- end }}
 {{- if and (gt (int ((hasKey .Values.services.catalog "replicas") | ternary .Values.services.catalog.replicas 1)) 1) (not .Values.catalog.controlEmit) }}
 {{- fail "services.catalog.replicas > 1 requires catalog.controlEmit=true: the warehouse-binding cache is invalidated across replicas by the broadcast control-event subscription (#46) — without it a second replica keeps routing dropped namespaces at deleted warehouses' buckets. Enable catalog.controlEmit, or run one replica." }}
@@ -18,7 +18,7 @@ spec:
   template:
     metadata:
       annotations:
-        {{- if .Values.dapr.sidecars }}
+        {{- if .Values.dapr.enabled }}
         {{- include "rask.daprAnnotations" (list $root .Values.services.catalog.daprAppId .Values.services.catalog.port) | nindent 8 }}
         {{- end }}
       labels:
@@ -133,12 +133,12 @@ spec:
             {{- end }}
             - { name: LANCE_ERASURE_RELEASE_GRACE_DAYS, value: {{ required "catalog.erasure.releaseGraceDays is required" .Values.catalog.erasure.releaseGraceDays | quote }} }
             - { name: LANCE_ERASURE_CLEANUP_WINDOW_DAYS, value: {{ required "maintenance.olderThanDays is required" .Values.maintenance.olderThanDays | quote }} }
-            {{- if and .Values.dapr.enabled .Values.dapr.sidecars }}
+            {{- if .Values.dapr.enabled }}
             - { name: LANCE_ERASURE_RELEASE_BINDING_NAME, value: {{ .Values.catalog.erasure.bindingName | quote }} }
             {{- end }}
-            {{- if .Values.dapr.sidecars }}
+            {{- if .Values.dapr.enabled }}
 
-            {{- if .Values.dapr.sidecars }}
+            {{- if .Values.dapr.enabled }}
 
 {{- include "lance.appTokenEnv" (list $root $root.Values.services.catalog.daprAppId) | nindent 12 }}
             {{- end }}
@@ -198,7 +198,7 @@ spec:
   ports: [{ name: http, port: {{ .Values.services.catalog.port }}, targetPort: http }]
   selector: { app.kubernetes.io/component: catalog, app.kubernetes.io/instance: {{ .Release.Name }} }
 ---
-{{- if and .Values.dapr.enabled .Values.dapr.sidecars .Values.services.lineage.reconcile.enabled }}
+{{- if and .Values.dapr.enabled .Values.services.lineage.reconcile.enabled }}
 apiVersion: dapr.io/v1alpha1
 kind: Component
 metadata:
@@ -225,7 +225,7 @@ spec:
   template:
     metadata:
       annotations:
-        {{- if .Values.dapr.sidecars }}
+        {{- if .Values.dapr.enabled }}
         {{- include "rask.daprAnnotations" (list $root .Values.services.lineage.daprAppId .Values.services.lineage.port) | nindent 8 }}
         {{- end }}
       labels:
@@ -273,7 +273,7 @@ spec:
             {{- if include "lance.otelEnabled" $root }}
             {{- include "lance.otelEnv" (list $root "lineage") | nindent 12 }}
             {{- end }}
-            {{- if .Values.dapr.sidecars }}
+            {{- if .Values.dapr.enabled }}
 
 {{- include "lance.appTokenEnv" (list $root $root.Values.services.lineage.daprAppId) | nindent 12 }}
             {{- end }}
@@ -284,7 +284,7 @@ spec:
             - { name: LINEAGE_RUN_RETENTION_DAYS, value: {{ .Values.services.lineage.runRetentionDays | quote }} }
             - { name: LINEAGE_EVENTS_RETENTION_DAYS, value: {{ .Values.services.lineage.eventsRetentionDays | quote }} }
             - { name: LINEAGE_AGE_STATEMENT_TIMEOUT_SECONDS, value: {{ .Values.services.lineage.ageStatementTimeoutSeconds | quote }} }
-            - { name: LINEAGE_DAPR_ENABLED, value: {{ .Values.dapr.sidecars | quote }} }
+            - { name: LINEAGE_DAPR_ENABLED, value: {{ .Values.dapr.enabled | quote }} }
             - { name: LINEAGE_DAPR_PUBSUB, value: {{ include "lance.subPubsub" (list $root .Values.services.lineage.daprAppId) | quote }} }
             - { name: LINEAGE_DAPR_TOPIC, value: {{ .Values.pubsub.topic | quote }} }
             {{- if .Values.dapr.resiliency.enabled }}

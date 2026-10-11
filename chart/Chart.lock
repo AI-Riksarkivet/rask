@@ -2,14 +2,11 @@ dependencies:
 - name: nats
   repository: https://nats-io.github.io/k8s/helm/charts/
   version: 2.14.2
-- name: dapr
-  repository: https://dapr.github.io/helm-charts/
-  version: 1.18.1
 - name: openfga
   repository: https://openfga.github.io/helm-charts
   version: 0.3.12
 - name: cloudnative-pg
   repository: https://cloudnative-pg.github.io/charts
   version: 0.28.3
-digest: sha256:dd011ca6fae9a12a075775bb68cc0e01b19e497e501257cf59abec2362753843
-generated: "2026-10-11T17:44:06.865583248+02:00"
+digest: sha256:1ff57a734404d765ce687fa3c65f15024d4a1b07f9bd2c5ff6c562df5ac566b8
+generated: "2026-10-11T19:02:15.382179928+02:00"

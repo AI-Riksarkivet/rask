@@ -29,11 +29,13 @@ from tests.unit.chart_yaml import FAST_LOADER
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 
-#: The APIs of the External Secrets Operator, a prerequisite the chart checks through `.Capabilities`
-#: ([[XC-004]]): a cluster-less render names the cluster it targets. Without them every render refuses.
-ESO_ARGS: tuple[str, ...] = (
+#: The APIs of the prerequisites the chart checks through `.Capabilities`, the External Secrets Operator
+#: ([[XC-004]]) and Dapr ([[XC-128]]): a cluster-less render names the cluster it targets. Without them every
+#: render refuses.
+PREREQ_ARGS: tuple[str, ...] = (
     "--api-versions", "external-secrets.io/v1/ExternalSecret",
     "--api-versions", "generators.external-secrets.io/v1alpha1/Password",
+    "--api-versions", "dapr.io/v1alpha1",
 )  # fmt: skip
 
 #: The Ray an estate names ([[CP-041]]): with the cascade's Ray lane on (the default) and no in-cluster
@@ -52,7 +54,7 @@ OBSERVABILITY_ARGS: tuple[str, ...] = tuple(arg for value in OBSERVABILITY_SETS 
 UNNAMED_RAY_ARGS: tuple[str, ...] = (
     "--set-string", "frontend.oidc.publicIssuer=https://auth.example.com/dex",
     "--set-string", "frontend.oidc.publicOrigin=https://lance.example.com",
-    *ESO_ARGS,
+    *PREREQ_ARGS,
 )  # fmt: skip
 
 #: Every input the chart refuses to render without. Every caller needs them and none of them is testing

@@ -178,7 +178,7 @@ The two arms, and why one condition cannot serve both:
 `daprIngest` — the service HOSTS a sidecar-delivered route and FAILS CLOSED without the
 token (`service_kit.governed.dapr_auth.assert_app_token_configured` raises whenever
 RASK_DAPR_ENABLED is true and APP_API_TOKEN is unset). So it is gated on
-`dapr.sidecars` ALONE: that key sets RASK_DAPR_ENABLED in the configmap AND renders the
+`dapr.enabled` ALONE: that key sets RASK_DAPR_ENABLED in the configmap AND renders the
 Secret this reference reads, so the three move together and the pod cannot come up armed
 without a key. Adding `auth.enabled` here would crash-loop the pod on an ungoverned dev
 stack, which is the estate's DEFAULT combination.
@@ -197,7 +197,7 @@ guard, so the interaction fails a gate rather than shipping a duplicate-key pod 
 
 One secret for both arms, so the whole plane presents ONE service identity — the same
 `{{ .Release.Name }}-dapr-app-token` the medallion producer, the stage runners and the
-maintenance cron read. It cannot dangle: `dapr.sidecars` is what renders that Secret's
+maintenance cron read. It cannot dangle: `dapr.enabled` is what renders that Secret's
 ExternalSecret (external-secrets.yaml) and it also gates this reference.
 
 Worth keeping from the ingest incident, because it recurred here in mirror image: the

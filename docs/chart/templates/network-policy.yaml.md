@@ -26,3 +26,21 @@ and the receiver retries forever, DaprWorkflowStateMetricsMissing fires, and
 the retention alert it guards goes blind. Gated on the conditions that render
 the Collector and its receiver, so an estate without them carries no
 allow-entry for a pod it never deploys.
+
+## `name: {{ include "lance.fullname" . }}-allow-dapr-control-plane-egress`
+
+Every sidecar dials the Dapr control plane (Sentry for its certificate, placement, the scheduler, the operator's
+API), which is a prerequisite in its own namespace (`dapr.controlPlaneNamespace`, ADR 0153), so the intra-namespace
+egress allow no longer covers it. One rule for the whole namespace rather than per component: the plane's ports are
+the platform's to choose.
+
+## `name: {{ include "lance.fullname" . }}-allow-telemetry-export-egress`
+
+The Collector exports to `observability.export.endpoint`, the platform's backend, usually outside the namespace;
+default-deny egress would drop that silently while the Collector's queue retries into nothing. The port is derived
+from the URL (`lance.urlPort`: explicit, else 443 for https, 80 for http). `prod-render-check` asserts it on :4318.
+
+## `name: {{ include "lance.fullname" $ }}-allow-telemetry-query-egress`
+
+The zones read the store's SQL and PromQL API at `observability.query.url` (the audit viewer, admin pages and
+experiment curves); the same derivation opens its port for the zone pods only.

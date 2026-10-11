@@ -13,7 +13,7 @@ the ordinary prod control, and the reason anyone audits this — REJECTS a pod w
 no requests. The fleet would come up and the release would never converge, because the bootstrap Jobs
 that create the buckets, the streams and the OpenFGA schema would never be admitted.
 
-THE JOB TEMPLATES ALREADY DO THIS (bootstrap-admin, dapr-inject-sweep, greptimedb-ttl-job), each with an
+THE JOB TEMPLATES ALREADY DO THIS (bootstrap-admin among them), each with an
 inline block sized to its own work. This gate is what makes the next one inherit the rule instead of
 relearning it.
 
@@ -33,13 +33,13 @@ import pytest
 import yaml
 from chart_yaml import FAST_LOADER
 
-from tests.unit.chart_render import ESO_ARGS, RAY_ARGS
+from tests.unit.chart_render import PREREQ_ARGS, RAY_ARGS
 
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 
 _OIDC_ARGS = [
-    *ESO_ARGS,
+    *PREREQ_ARGS,
     *RAY_ARGS,
     "--set-string", "frontend.oidc.publicIssuer=https://auth.example.com/dex",
     "--set-string", "frontend.oidc.publicOrigin=https://lance.example.com",
