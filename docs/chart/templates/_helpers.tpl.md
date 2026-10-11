@@ -23,7 +23,7 @@ They render the SAME string only because the release is named `rask` AND `fullna
 deliberate (docs/architecture/lance-ns-merge.md: lance object names become `rask-*`), and `lance.fullname`
 is kept on `.Release.Name` rather than delegated to `rask.fullname` because ~40 grafted lance templates
 build sibling object names from a RAW `{{ .Release.Name }}-…` (the `-dapr-app-token`, `-frontend-session`,
-`-observability-s3`, `-openbao-token` Secrets, the `-pubsub-resiliency` Configuration). Delegating would
+`-openbao-token` Secrets, the `-pubsub-resiliency` Configuration). Delegating would
 move the Deployments but not those, splitting the estate the moment release name ≠ fullnameOverride.
 Install under any other release name and the two planes diverge — keep them equal.
 
@@ -141,13 +141,8 @@ OTLP/OpenTelemetry container env for the rask FLEET (no-op unless observability.
 fleet + controlplane so the OTLP wiring never drifts.
 Usage: {{- include "rask.otelEnv" (list $root "service-name") | nindent 12 }}
 
-MERGE NOTE — this stays DIRECT-to-GreptimeDB (rask's shipped behaviour); the lance-ns apps export
-through the OTel Collector via "lance.otelEnv"/"lance.otlpEndpoint". Two paths, one store: the
-Collector's own exporter lands in the same GreptimeDB, so nothing is lost either way. What DID move
-here from lance-ns is the DATA: the release-derived Greptime host (was hardcoded "rask-greptimedb-
-standalone", which ignored the release name) and the observability.{greptimePort,dbName,tracePipeline}
-knobs, so the fleet and the lance apps cannot disagree about port/db/pipeline. `hasKey`+`ternary`, not
-`| default`, so an explicit 0 is never swallowed (and the chart-wide invariant test forbids it).
+Every plane exports to the in-chart Collector (`lance.otlpEndpoint`), never to a store: the app stays
+backend-agnostic and the Collector adds the backend's headers (`observability.export`).
 
 ## `{{- define "rask.otelResourceAttrs" -}}`
 
@@ -170,16 +165,10 @@ the old name), and it would not close the seam anyway: the historical column alr
 `service.version` is the CHART version, not the running image tag — it answers "which chart
 rendered this pod", not "which build emitted this span".
 
-## `- name: OTEL_EXPORTER_OTLP_HEADERS`
-
-Only the DIRECT-to-GreptimeDB path carries vendor headers; through the Collector the app stays
-backend-agnostic and the Collector adds them. Traces need the pipeline header, metrics must NOT
-have it — hence the signal-specific override.
-
 ## `{{- define "rask.zoneOtelEnv" -}}`
 
 THE SSR ZONES' OTel env — a FOURTH rendering, and deliberately not a fourth source of truth. Every
-value below comes from `lance.otlpEndpoint` / `lance.otelViaCollector` / `rask.otelResourceAttrs`,
+value below comes from `lance.otlpEndpoint` / `rask.otelResourceAttrs`,
 the same derivations the other three use. What differs is only WHICH variables are emitted.
 
 `rask.otelEnv` cannot simply be reused here, and trying it is what produced this helper. That one
@@ -191,10 +180,6 @@ exporter, which would earn it the `lance.dev/logs: otlp` label and delete the st
 that have no other copy.
 
 No metric interval either: the zone SDK builds a tracer provider and no metric reader.
-
-## `- name: OTEL_EXPORTER_OTLP_HEADERS`
-
-Vendor headers only on the DIRECT path, exactly as every other plane does it.
 
 ## `{{- if include "lance.otelEnabled" $root -}}`
 
@@ -214,15 +199,8 @@ setup_otel returns False while every OTEL_* var below still renders.
 
 ## `- name: OTEL_EXPORTER_OTLP_ENDPOINT`
 
-One endpoint derivation for the whole chart. This used to hardcode direct-to-GreptimeDB, so the
-fleet bypassed the Collector entirely and got none of its k8sattributes enrichment.
-
-## `- name: OTEL_EXPORTER_OTLP_HEADERS`
-
-Only the DIRECT-to-GreptimeDB path carries vendor headers; through the Collector the app stays
-backend-agnostic and the Collector adds them. Traces need the pipeline header, metrics must NOT
-have it — hence the signal-specific override. Unconditional headers were only ever correct because
-the endpoint above was hardcoded direct.
+One endpoint derivation for the whole chart, the Collector, so every plane gets its k8sattributes
+enrichment and none names a store.
 
 ## `- name: OTEL_METRIC_EXPORT_INTERVAL`
 
@@ -268,8 +246,7 @@ VALUES THEY REQUIRE (the values.yaml merge must land these or the render breaks)
   sidecarResources.*,resiliency.enabled} · dex.clientId · frontend.{apps,image.tag,serviceIdentity,
   idleTimeoutSeconds,oidc.*} · gateway.port · image.catalog.{repository,tag} · lifecycle.preStopSeconds ·
   medallion.{enabled,port,buckets,producer.daprAppId,stageRunners} · nats.{enabled,externalUrl} ·
-  observability.{enabled,dbName,tracePipeline,greptimePort,environment,externalOtlpEndpoint,
-  otelCollector.{enabled,externalEndpoint}} · openbao.{enabled,port,externalAddr} · pubsub.name ·
+  observability.{enabled,environment} · openbao.{enabled,port,externalAddr} · pubsub.name ·
   resources.{default,<component>} · minio.{bucket,port,externalEndpoint} · security.readOnlyRootFilesystem ·
   services.{catalog,lineage}.{port,daprAppId,reconcile.bindingName}
 `minio.bucket` (singular) is the one that is easy to lose: rask's values ship `minio.buckets` (a
@@ -324,8 +301,7 @@ init loops until the AGE StatefulSet (applied in the same wave) answers, migrate
 stops crash-looping and goes Ready; `--wait` returns. No wrapper script, no ordering knowledge
 outside the chart.
 
-Jobs that depend on the APPS instead (bootstrap-admin needs a booted catalog; the Greptime TTL
-job needs a live GreptimeDB) stay post-install hooks — nothing waits on them, which is precisely
+Jobs that depend on the APPS instead (bootstrap-admin needs a booted catalog) stay post-install hooks — nothing waits on them, which is precisely
 what a post-install hook is for.
 
 A plain Job's spec is IMMUTABLE, so the name carries the release revision: an upgrade renders a
@@ -391,23 +367,13 @@ Call: {{ include "lance.stageBucket" (list $root "gold") }}.
 
 ## `{{- define "lance.otlpEndpoint" -}}`
 
-The OTLP endpoint the apps export to. OTel-first: the Collector is the default target. Priority:
-external Collector (prod) > in-cluster Collector > a raw externalOtlpEndpoint (legacy) > GreptimeDB-direct.
-The GreptimeDB-direct port is read through hasKey/ternary (not `| default`) so a values merge that drops
-observability.greptimePort renders :4000 instead of a portless, silently-broken URL.
-
-## `{{- define "lance.otelViaCollector" -}}`
-
-Non-empty when the apps export THROUGH a Collector (external or in-cluster). In that case they send
-plain OTLP and the Collector adds GreptimeDB's db-name/pipeline headers; only the direct-to-GreptimeDB paths
-carry those headers on the app side.
+The OTLP endpoint every plane exports to: the in-chart Collector, rask's one telemetry seam (ADR 0153). Where the
+telemetry goes after it is `observability.export`, the Collector's business alone.
 
 ## `{{- define "lance.otelEnabled" -}}`
 
-Whether the apps should carry the OTel SDK wiring (instrument + otelEnv + the lance-tracing Dapr config).
-Decoupled from `observability.enabled`: that flag deploys the IN-CLUSTER stack (GreptimeDB/OTel Collector/Perses), but
-telemetry must also flow when it's OFF and `externalOtlpEndpoint` ships OTLP to an external collector (the OTel
-operator path) — otherwise externalize silently emits nothing. Non-empty string = on (helm `if` truthiness).
+Whether the apps carry the OTel SDK wiring (instrument + otelEnv + the lance-tracing Dapr config): exactly when
+`observability.enabled` deploys the Collector they export to. Non-empty string = on (helm `if` truthiness).
 
 ## `{{- define "lance.openbaoServiceAccount" -}}`
 
@@ -535,16 +501,12 @@ needs anyway.
 
 OTel SDK env for an app (call: include "lance.otelEnv" (list $root "<service.name>")). The apps run
 under `opentelemetry-instrument` and export all three signals OTLP. OTel-first: the target is the Collector
-(lance.otlpEndpoint), which adds GreptimeDB's headers — so the app stays backend-agnostic (plain OTLP, no
-vendor headers). ONLY on the direct-to-GreptimeDB paths (no Collector) does the app carry the db-name header
-on every signal + the trace-pipeline header on traces (metrics/logs must NOT carry it → separate
-*_TRACES_HEADERS). The SDK appends /v1/{traces,metrics,logs} to the endpoint.
+(lance.otlpEndpoint), which adds the backend's headers — so the app stays backend-agnostic (plain OTLP, no
+vendor headers). The SDK appends /v1/{traces,metrics,logs} to the endpoint.
 
 NOT the same as "rask.otelEnv": this one is Python-launcher-specific (the OTEL_PYTHON_* knobs).
-Both names coexist, but they no longer DIFFER on routing — the second half of this sentence used to
-read "rask's fleet keeps its own direct-to-GreptimeDB block" and has been false since the fleet was
-converged: "rask.otelEnv" derives its endpoint from "lance.otlpEndpoint" too, so both are
-Collector-first and fall back to the store only when the Collector is disabled.
+Both names coexist and do not differ on routing: "rask.otelEnv" derives its endpoint from
+"lance.otlpEndpoint" too, so both export to the Collector.
 
 ## `- { name: OTEL_LOGS_EXPORTER, value: "otlp" }`
 
@@ -1091,8 +1053,7 @@ secretKeyRef) pairs, so it CAN carry vendor headers — and it does not need to,
 deploys a Collector that adds them itself. That Collector's `otlp` receiver already listened on
 4317 and 4318 and was already wired into the traces pipeline.
 
-Gated on otelEnabled, NOT observability.enabled: telemetry also ships to an external collector
-(externalOtlpEndpoint).
+Gated on otelEnabled, the one predicate every plane's export reads.
 
 ## `endpointAddress: {{ . | quote }}`
 
@@ -1267,7 +1228,7 @@ The shape checks the mint and seed scripts share: an NKEY user seed is SU + 56 a
 
 ## `{{- define "lance.platformBuckets" -}}`
 
-The PLATFORM buckets, comma-joined: `minio.buckets` plus each enabled feature's own. The bucket-init
+The PLATFORM buckets, comma-joined: `minio.buckets`. The bucket-init
 Job creates them and `orphan_buckets` exempts them, both from here.
 
 ## `{{- define "lance.maintenancePlatformBuckets" -}}`

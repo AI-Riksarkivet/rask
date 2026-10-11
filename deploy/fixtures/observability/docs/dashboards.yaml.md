@@ -1,7 +1,7 @@
-# chart/templates/perses-dashboards.yaml
+# deploy/fixtures/observability/chart/templates/dashboards.yaml
 
-Rationale for `chart/templates/perses-dashboards.yaml`. It lives here because Helm stores the chart's templates in
-every release revision, under a 1 MiB ceiling. Each section is headed by the template line it explains.
+Rationale for the observability fixture's `templates/dashboards.yaml`, kept beside the fixture rather than in its
+templates. Each section is headed by the template line it explains.
 
 ## `apiVersion: v1`
 

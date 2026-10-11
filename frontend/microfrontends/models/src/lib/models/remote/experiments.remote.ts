@@ -12,7 +12,7 @@ import type { ApiResult } from '@rask/api/client';
 
 const GREPTIME_API = env.GREPTIME_API ?? '';
 
-// The three panels of the deployed Perses `training` dashboard (chart/templates/perses-dashboards.yaml),
+// The three panels of the deployed Perses `training` dashboard (deploy/fixtures/observability/chart/templates/dashboards.yaml),
 // query-for-query. Kept here as the single source so the page renders exactly what Perses shows.
 const PANELS = [
 	{

@@ -1,9 +1,9 @@
 # On-call runbook
 
 Symptom → cause → action for the known failure modes of the Lance-lakehouse estate. Grounded in how this
-stack actually fails. With alerting enabled (`observability.alerting.enabled`, on in prod), the proven
-rules (`chart/alerting/rules.yml`) page via vmalert → Alertmanager — note the live vmalert→GreptimeDB
-round-trip is still an unrehearsed drill (see [docs/adr/0032-p3b-alerting-rule-logic-proven-hermetically-the-live.md "P3b"](../adr/0032-p3b-alerting-rule-logic-proven-hermetically-the-live.md)). On kind (alerting off),
+stack actually fails. The proven rules (`deploy/alerting/rules.yml`) page through the platform's evaluator; in
+development the observability fixture's vmalert → Alertmanager evaluates them — note the live vmalert→GreptimeDB
+round-trip is still an unrehearsed drill (see [docs/adr/0032-p3b-alerting-rule-logic-proven-hermetically-the-live.md "P3b"](../adr/0032-p3b-alerting-rule-logic-proven-hermetically-the-live.md)). Without an evaluator,
 these are found by watching the Perses dashboards (`make dashboards`) or a user report — not a page.
 
 ## Orientation

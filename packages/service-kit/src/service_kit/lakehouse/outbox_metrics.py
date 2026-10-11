@@ -166,7 +166,7 @@ def record_refused(count: int) -> None:
     """Always emit, same reason again — and here it matters more, because the alert that guards on this
     series must be able to read a zero. A rule written as "depth > 0 and no refusals" evaluates to
     nothing at all if the refused series does not exist yet, which is the silent no-fire this module has
-    already paid for once (see the `_seconds` suffix note in `chart/alerting/rules.yml`)."""
+    already paid for once (see the `_seconds` suffix note in `deploy/alerting/rules.yml`)."""
     _refused.add(count)
 
 

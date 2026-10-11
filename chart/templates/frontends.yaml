@@ -91,10 +91,12 @@ spec:
               value: {{ printf "http://%s-catalog:%v" (include "rask.fullname" $root) $root.Values.services.catalog.port | quote }}
             - name: LINEAGE_API
               value: {{ printf "http://%s-lineage:%v" (include "rask.fullname" $root) $root.Values.services.lineage.port | quote }}
+            {{- with ($root.Values.observability.query).url }}
             - name: GREPTIME_API
-              value: {{ printf "http://%s:%v" (include "lance.greptimeHost" $root) $root.Values.observability.greptimePort | quote }}
+              value: {{ . | quote }}
             - name: GREPTIME_AUDIT_TABLE
-              value: {{ $root.Values.observability.auditTable | quote }}
+              value: {{ $root.Values.observability.query.auditTable | quote }}
+            {{- end }}
             {{- if $root.Values.nats.enabled }}
             - name: NATS_MONITOR_API
               value: {{ printf "http://%s-headless:8222" (include "lance.natsHost" $root) | quote }}

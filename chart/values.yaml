@@ -46,8 +46,9 @@ storage:
   # that declares one takes its credentials from the Dapr secret store (`objects.py::_creds`, cached
   # and fail-closed); one that declares none falls back to the deployment's process env. That fallback
   # is what put the store's ROOT credential in the viewer's environment.
-  # These two ARE the built-in defaults (`service_kit.schemas.storage.DEFAULT_STORES`) — same names,
-  # buckets and roles — carrying the secret that makes the Dapr path the only path.
+  # The warehouse row IS the built-in default (`service_kit.schemas.storage.DEFAULT_STORES`) — same name,
+  # bucket and role — carrying the secret that makes the Dapr path the only path. The telemetry store is
+  # the platform's (ADR 0153), so no observability bucket is registered.
   # -- Object-store registry rendered as RASK_STORES for the fleet and the explorer viewer; each entry is {name, bucket, role, secret, description, endpoint?, insecure?}, `secret` a Dapr secret-store key.
   stores:
     - name: lance-catalog
@@ -55,12 +56,6 @@ storage:
       role: bronze
       secret: viewer-s3
       description: The lakehouse warehouse — the governed medallion datasets.
-    # While observability is on, this row's bucket must equal `observability.bucket`.
-    - name: rask-observability
-      bucket: rask-observability
-      role: observability
-      secret: viewer-s3
-      description: Telemetry retained by GreptimeDB. Operational, not archival.
 
 singleTenant:
   # -- Renders the single-tenant default workloads (every fleet service, domain zones). False installs front-door services only; the object store is gated by `minio.enabled`.
@@ -858,7 +853,7 @@ security:
 # hardening. When enabled: namespace default-deny Ingress+Egress, kube-dns egress allow (same change —
 # the audit's footgun), intra-namespace allows, api-server egress, and EXCLUSIVE client lists for the
 # guarded stores (openbao ← secret-consuming app pods ONLY; age-postgres ← its real clients;
-# minio ← the data plane + GreptimeDB). Default OFF; flip in values-prod on a policy-enforcing CNI.
+# minio ← the data plane). Default OFF; flip in values-prod on a policy-enforcing CNI.
 # ⚠ Under default-deny, EVERY Job/CronJob pod template needs explicit component labels or the policy
 # blocks it silently (kindnet hides the failure) — see the templates' job specs.
 networkPolicy:
@@ -2562,8 +2557,8 @@ autoscaling:
   #
   # The reference's preferred shape is a Pods-type p95 target, and it was costed rather than waved
   # at: `service_kit.setup_otel` already exports `http.server.*`, and KEDA's prometheus scaler would
-  # query `http://rask-greptimedb-standalone:4000/v1/prometheus` — the same endpoint vmalert already
-  # uses, so the query path is proven, not speculative. Declined 2026-08-28 (owner): it is a twelfth
+  # query the telemetry store's PromQL endpoint (`observability.query.url` + `/v1/prometheus`) — the
+  # endpoint the platform's alert evaluator uses, so the query path is proven, not speculative. Declined 2026-08-28 (owner): it is a twelfth
   # subchart, its CRDs, and a new silent failure mode (scaler cannot reach GreptimeDB → no scaling,
   # no error) for an object no profile enables. Revisit when something actually turns this on.
   # -- Renders CPU-based HPAs for catalog and lineage. Needs metrics-server; off by default.
@@ -2743,26 +2738,23 @@ minio:
   # -- The lakehouse root bucket (catalog `LANCE_REST_ROOT`, warehouse registry, lineage outbox).
   bucket: lance-catalog
   # The PLATFORM buckets no feature owns: buckets the estate makes for itself, which no warehouse record
-  # claims. Neither the root nor a feature's own bucket is listed, because each has its own key: the Job
-  # adds `minio.bucket` itself, and `observability.bucket` joins the set only while
-  # `observability.enabled` is on (`lance.platformBuckets` in _helpers.tpl). A name listed here AND under
-  # its own key outlives a rename of that key, as a bucket the Job makes and nothing uses.
+  # claims. The root is not listed, because it has its own key: the Job adds `minio.bucket` itself
+  # (`lance.platformBuckets` in _helpers.tpl). A name listed here AND under its own key outlives a rename
+  # of that key, as a bucket the Job makes and nothing uses.
   # The bucket-init Job (templates/minio-buckets.yaml) CREATES that set, with minio.bucket and the
   # medallion.buckets zones, and is the only provisioner of platform buckets: the in-cluster store is a
   # plain StatefulSet that provisions none, and an external S3 has nothing else either. (Warehouse
   # buckets are the catalog's, made at runtime by `provision_bucket`.) So the Job creates rather than
   # waits: a platform bucket it waited for would never appear. The maintenance reconcile exempts the
-  # same set from `orphan_buckets`. Turning observability off leaves its bucket on the store (nothing
-  # deletes a bucket), and `orphan_buckets` then reports it, holding the trash purge, until it is
-  # deleted: a telemetry bucket no enabled feature uses is an orphan an operator can act on.
+  # same set from `orphan_buckets`. A bucket dropped from this set stays on the store (nothing deletes a
+  # bucket), and `orphan_buckets` then reports it, holding the trash purge, until an operator deletes it.
   # GOVERNED tiers only. The raw buckets (images-batch*) are NOT here: raw is external (R23) and lives
   # on HCP. A local bucket sharing a name with an external one makes the browser report the empty
   # local one instead of 404ing.
   # -- Extra platform buckets the bucket-init Job creates and the reconcile exempts from orphan_buckets; governed tiers only, not the root or feature buckets.
   buckets: []
   # Externalize: when set, the apps (catalog/lineage/compaction + vending STS) connect HERE instead of the
-  # in-cluster MinIO — pair with minio.enabled=false to use a managed S3. NOTE: the greptimedb-standalone
-  # subchart's S3 endpoint (under `greptimedb-standalone.objectStorage.s3.endpoint`) must be overridden too.
+  # in-cluster MinIO — pair with minio.enabled=false to use a managed S3.
   # -- S3 endpoint the apps use instead of the in-cluster MinIO; pair with `minio.enabled=false`. Empty uses the in-cluster store.
   externalEndpoint: "" # e.g. https://s3.us-east-1.amazonaws.com
   # (minio.persistence is GONE with the first-party Deployment — durability is the Tenant's
@@ -3446,10 +3438,10 @@ openfga:
   # of 0.001 lands near 18 spans/s — comparable to the catalog's own share — and still traces one Check
   # every ~100 s, which is enough to see the shape of a resolution.
   #
-  # TO THE COLLECTOR, not to GreptimeDB: the Collector's `otlphttp/greptime_traces` exporter sets
-  # `x-greptime-pipeline-name` (otel-collector.yaml:486) because that is a GreptimeDB INGESTION
-  # requirement rather than an OTLP one, so OpenFGA speaks plain OTLP and the header is added
-  # downstream — which is the point of the Collector being the single seam.
+  # TO THE COLLECTOR, not to the store: the Collector's `otlphttp/traces` exporter adds
+  # `observability.export.traceHeaders`, a store's INGESTION requirement rather than an OTLP one, so
+  # OpenFGA speaks plain OTLP and the header is added downstream — which is the point of the
+  # Collector being the single seam.
   # -- Subchart passthrough: OpenFGA OTLP tracing to the OTel Collector; off by default, ratio 0.001 because each Check emits ~1,900 spans.
   telemetry:
     trace:
@@ -3948,278 +3940,52 @@ allocator:
   # -- ARROW_DEFAULT_MEMORY_POOL on every lakehouse container; `system` routes Arrow through malloc so `arenaMax` bounds it.
   arrowMemoryPool: system
 
-# ==== observability stack ===================================================
-# OTel-first: a single OpenTelemetry Collector is the telemetry hub, GreptimeDB the store, Perses the
-# dashboards. GreptimeDB is ONE unified store for metrics+logs+traces, backed by the in-cluster S3. The
-# Collector RECEIVES app OTLP, TAILS infra-pod logs (filelog), and SCRAPES the Dapr sidecars
-# (prometheus + k8s SD), exporting everything OTLP → GreptimeDB (:4000/v1/otlp).
-# `observability.enabled` gates the two subcharts' (greptimedb-standalone, perses) Chart.yaml condition AND the OTLP wiring.
-# RESOLVED (owner ruling 2026-07-27): the OTel Collector's filelog receiver owns log shipping
-# (infra-pod logs → `opentelemetry_logs`). The Vector subchart is retired — its Chart.yaml dep,
-# the `vector:` values block, and its Chart.lock entry are gone; exactly ONE log-shipping path remains.
+# ==== observability ==========================================================
+# rask's telemetry seam is ONE OpenTelemetry Collector (templates/otel-collector.yaml): it RECEIVES the fleet's
+# OTLP, TAILS infra-pod logs (filelog), SCRAPES the Dapr sidecars, the Dapr control plane, Ray and OpenFGA, and
+# EXPORTS everything over OTLP/HTTP to the endpoint named here. What stores, graphs and alerts on that telemetry is
+# the platform's (ADR 0153): rask installs no store, no dashboards and no alert evaluator. Its alert rules are an
+# artefact of their own (deploy/alerting/rules.yml), and development gets the chain from
+# deploy/fixtures/observability (GreptimeDB, Perses, vmalert, Alertmanager), which deploy/values-local.yaml names.
 #
 # THE AUDIT STORE'S CONTRACT, A PREREQUISITE LIKE ESO ([[XC-003]], owner 2026-10-10). Whatever store receives the
 # Collector's export (traces, metrics, and the `lance_audit` trail) must REFUSE an unauthenticated write and an
 # unauthenticated delete on every listener it serves, and admit the credential the Collector presents. The store is
-# downstream of the Collector and so not rask's to configure (R8); what rask owns is the Collector's half: the in-chart
-# Collector sends HTTP basic auth on all three exporters, read from files ESO writes from the store's
-# `otel-collector-greptime` secret (fields username, password; the dev OpenBao mints it, a platform store must hold it).
-# An operator Collector (`otelCollector.externalEndpoint`) carries the same duty. GAP, stated: the bundled dev
-# GreptimeDB has no user provider, so it ignores the credential and any pod in the namespace can still delete from
-# `lance_audit` until the store that replaces it (XC-118) enforces this contract.
+# downstream of the Collector and so not rask's to configure; what rask owns is the Collector's half: it sends HTTP
+# basic auth on every exporter, read from files ESO writes from the store's `otel-collector-greptime` secret (fields
+# username, password; the dev OpenBao mints it, a platform store must hold it). GAP, stated: the fixture's GreptimeDB
+# has no user provider, so it ignores the credential.
 observability:
-  # -- Deploy the in-cluster telemetry stack (GreptimeDB and Perses subcharts, the OTel Collector, retention Job) and turn on OTLP export from the fleet.
-  enabled: true
+  # -- Deploy rask's OTel Collector and turn on OTLP export from the fleet, Dapr and OpenFGA to it; needs `export.endpoint`.
+  enabled: false
   # -- Value of the `deployment.environment.name` OTel resource attribute; empty falls back to the release namespace.
   environment: rask # deployment.environment.name resource attr — override per deploy (dev / staging / prod)
-  # OTel Collector — the single telemetry hub (receives app OTLP + tails infra logs + scrapes Dapr metrics).
-  # enabled: deploy the in-cluster Collector (dev). externalEndpoint: point at an operator-managed
-  # external Collector instead (prod) — when set, NO in-cluster Collector is deployed and the apps + the
-  # scrape config are that platform's concern; the chart just aims its OTLP export there.
   otelCollector:
-    # -- Deploy the in-cluster OTel Collector (app OTLP, infra log tailing, Dapr scrape); ignored when `externalEndpoint` is set.
-    enabled: true
-    # -- Container image for the in-cluster OTel Collector (contrib distribution).
+    # -- Container image for the OTel Collector (contrib distribution).
     image: otel/opentelemetry-collector-contrib:0.157.0
-    # -- OTLP endpoint of an operator-managed external Collector; when set no in-cluster Collector is deployed and apps export there.
-    externalEndpoint: "" # e.g. http://otel-collector.observability.svc:4318 — set in prod, deploys nothing
-  # Legacy escape hatch: ship OTLP to an off-cluster endpoint AND run no in-cluster store. Prefer
-  # otelCollector.externalEndpoint (the OTel-first prod path); this stays for a raw non-Collector target.
-  # -- Raw off-cluster OTLP endpoint used when no Collector is in play; prefer `otelCollector.externalEndpoint`. Empty = unused.
-  externalOtlpEndpoint: "" # e.g. http://otel-collector.observability:4318/v1/otlp
-  # GreptimeDB's bucket. Two static values must name it too, because neither can read this key:
-  # `greptimedb-standalone.objectStorage.s3.bucket` and the `storage.stores` row whose role is
-  # `observability`. templates/observability.yaml refuses a render in which either names another.
-  # -- S3 bucket GreptimeDB stores data in; must equal `greptimedb-standalone.objectStorage.s3.bucket` and the observability `storage.stores` row.
-  bucket: "rask-observability"
-  # Retention for logs/traces/metrics. Applied as a database-level TTL on the
-  # GreptimeDB `public` database via a post-install/post-upgrade hook Job
-  # (templates/greptimedb-ttl-job.yaml), so every table (opentelemetry_logs,
-  # opentelemetry_traces, the metrics physical table) inherits it. Empty string
-  # = no TTL (unbounded growth). GreptimeDB accepts e.g. "14d", "30d", "90d".
-  # -- Database-level TTL on GreptimeDB's database for logs, traces and metrics, set by a hook Job (e.g. 14d); empty = no TTL.
-  retention: "14d"
-  # THE GOVERNANCE TRAIL IS NOT TELEMETRY, and until 2026-09-18 it aged out as if it were: measured on
-  # the live store, 8,590,872 `lance.audit` rows sat inside `opentelemetry_logs` beside 114,938,016
-  # telemetry rows under one `ttl = '14days'`. The Collector now routes them to their own table
-  # (`x-greptime-log-table-name`, verified against GreptimeDB v1.1.1) and the retention hook gives that
-  # table its own TTL, which overrides the database's — also verified, read back by SHOW CREATE TABLE.
-  #
-  # Empty string leaves the audit table on the database TTL, which is the old behaviour and is a
-  # choice rather than a default. This does NOT put a credential in front of `:4000`; an
-  # unauthenticated in-cluster DELETE is still accepted (XC-003's remaining clause), so this decides
-  # what ages out, never who may erase it.
-  # -- Separate TTL for the audit table (`auditTable`), overriding the database TTL; empty leaves audit records on `retention`.
-  auditRetention: "400d"
-  # -- GreptimeDB table the Collector routes `lance.audit` records to; also read by the lakehouse admin viewer.
-  auditTable: lance_audit # the table `lance.audit` records are routed to, read by the admin viewer
-  # -- GreptimeDB HTTP port serving OTLP ingest (/v1/otlp), PromQL (/v1/prometheus), SQL and health.
-  greptimePort: 4000 # GreptimeDB HTTP: /v1/otlp (ingest), /v1/prometheus (query), /v1/sql, /health
-  # -- GreptimeDB database every signal lands in (the `x-greptime-db-name` header) and the retention Job alters.
-  dbName: public # the GreptimeDB database all signals land in (x-greptime-db-name header)
-  # -- GreptimeDB pipeline name sent as `x-greptime-pipeline-name` on trace export; GreptimeDB requires it to ingest OTLP traces.
-  tracePipeline: greptime_trace_v1 # required pipeline header for OTLP trace ingestion → opentelemetry_traces
+  # Where the Collector sends what it collects. Every exporter presents the credential above. The headers are
+  # the backend's ingestion contract, not OTLP's: GreptimeDB picks its database from `x-greptime-db-name`,
+  # ingests traces only through the pipeline `x-greptime-pipeline-name` names, and writes a log stream to the
+  # table `x-greptime-log-table-name` names (the governance trail is routed apart from telemetry so it can be
+  # kept longer).
+  export:
+    # -- OTLP/HTTP base URL the Collector exports traces, metrics and logs to (`/v1/traces` etc. are appended); the platform's backend. Required while `enabled`: empty fails the render.
+    endpoint: ""
+    # -- Headers sent on every export.
+    headers:
+      x-greptime-db-name: public
+    # -- Headers added to the trace export.
+    traceHeaders:
+      x-greptime-pipeline-name: greptime_trace_v1
+    # -- Headers added to the export of `lance.audit` records, which leave on their own exporter.
+    auditHeaders:
+      x-greptime-log-table-name: lance_audit
+  # The zones' audit viewer (home), the admin observability pages (lakehouse) and the experiment curves (models)
+  # read the store directly, as GREPTIME_API: SQL at `<url>/v1/sql`, PromQL at `<url>/v1/prometheus`.
+  query:
+    # -- Base URL of the store's SQL and PromQL API the zones read (GREPTIME_API); empty leaves those panels without data.
+    url: ""
+    # -- Table the audit viewer reads `lance.audit` records from; the same table `export.auditHeaders` routes them to.
+    auditTable: lance_audit
   # -- Dapr tracing sampling rate in the Dapr Configuration, as a string from 0 to 1; "1" traces every request.
   samplingRate: "1" # Dapr trace sampling — full, so the catalog→lineage context always propagates
-  # Alerting engine (P3b): vmalert evaluates chart/alerting/rules.yml against GreptimeDB's PromQL endpoint
-  # (:4000/v1/prometheus) and routes firing alerts through Alertmanager. Default OFF (dev has no on-call);
-  # values-prod flips it on. The rules are PROVEN to fire by `make alert-rules-check` (promtool); the live
-  # query round-trip + a real receiver route are a prod drill. Set webhookUrl to your Slack/PagerDuty webhook.
-  alerting:
-    # -- Deploy vmalert and Alertmanager to evaluate chart/alerting/rules.yml against GreptimeDB; off by default.
-    enabled: false
-    # -- Container image for vmalert, the rule evaluator.
-    vmalertImage: victoriametrics/vmalert:v1.106.1
-    # -- Container image for Alertmanager, which groups and routes firing alerts.
-    alertmanagerImage: prom/alertmanager:v0.28.0
-    # -- How often vmalert evaluates the alert rules (vmalert `-evaluationInterval`).
-    evaluationInterval: "1m"
-    # -- Slack or PagerDuty webhook Alertmanager pages; empty means alerts are received and grouped but sent nowhere.
-    webhookUrl: "" # empty → Alertmanager still receives + groups alerts, but pages nowhere (black-hole)
-  # RETIRED (gateway fold): edgeAuth (§5e) backed the nginx gateway's public /perses/ + /greptime/
-  # basic-auth. The nginx gateway is deleted and no Ingress path routes the telemetry UIs, so they
-  # are cluster-internal (port-forward) and the edge credential guarded nothing. GreptimeDB
-  # `auth.enabled` + Perses OIDC via Dex remain the documented follow-on if they are re-exposed.
-
-# GreptimeDB standalone subchart — unified metrics/logs/traces store on the in-cluster MinIO S3.
-# RESOLVED (docs/adr/0124-chart-unification-one-control-plane-each-one-object-store.md, "operator Tenant wins"): the endpoint names the ONE object store — the
-# the object store's S3 Service `rask-minio:9000`, which renders whenever minio.enabled
-# (regardless of singleTenant). The values below are STATIC subchart values that cannot follow chart
-# helpers: `bucket` must equal `observability.bucket` (the render refuses it otherwise), externalizing
-# the store means overriding `endpoint` too (values-prod's EXTERNALIZE block documents the pairing;
-# prod_render_check proves it atomic), and `existingSecretName` must equal the
-# rendered `<release>-observability-s3` Secret (templates/observability.yaml — minio.accessKey/secretKey,
-# the ONE store credential pair).
-greptimedb-standalone:
-  # The ONLY seam this subchart offers for engine tuning (its templates/configmap.yaml renders
-  # `config.toml: {{ .Values.configToml | indent 4 }}` and then APPENDS the storage + logging blocks,
-  # which is why neither appears below). It was unset until 2026-08-23, so every knob here ran at
-  # GreptimeDB's stock default — defaults sized for a dedicated large machine, not an 8Gi container.
-  #
-  # WHY THIS EXISTS. The pod OOMKilled 13 times inside a 7h27m window on 2026-08-23 after running
-  # 6d21h clean at this same 8Gi ceiling. The live `GET :4000/config` showed the three work-driven
-  # allocators as the literal string "unlimited" — query.memory_pool_size, scan_memory_limit,
-  # experimental_compaction_memory_limit — while ~4.3GiB of the 8GiB was already committed to stock
-  # caches plus the write buffer. A store configured that way has no ceiling: it is killed by
-  # whatever grows next, and something always does. (What grew: a new `ray-pods` scrape job adding
-  # 4,099 series in one step — see otel-collector.yaml. That was the TRIGGER; this was the DEFECT,
-  # and fixing only the trigger leaves the next one to find it.)
-  #
-  # BOUNDING IS NOT SHRINKING, and the direction of failure is the point. With these set, an
-  # oversized scan fails ITS OWN QUERY (`scan_memory_on_exhausted = "fail"`, the default) instead of
-  # taking the process down and losing every log, metric and trace the estate holds. One loud failure
-  # beats a silent hole in the record. That mattered more when this was written than it does now: the
-  # Collector had no `sending_queue`, so anything in flight at each OOM was simply lost. It has one as
-  # of ebcb7f68 (persistent, backed by the `file_storage` extension), so a rejected write is now queued
-  # and retried rather than dropped — which makes the fail-the-query direction chosen here safer than
-  # it was, not less necessary.
-  #
-  # SIZING against the 8Gi limit below. Worst case sums to ~6.3GiB, leaving real headroom:
-  #   caches ~1.31GiB + write-buffer reject 1GiB + query 2GiB + scan 1GiB + compaction 1GiB.
-  # The concurrency knobs are cut for the same reason: stock is num_workers 32 / 16 compactions /
-  # 32 flushes / 64 purges and `parallelism = 0` (= every core), sized off the NODE's 64 cores on a
-  # container whose CPU request is 100m. Each is a per-unit multiplier on the allocators above.
-  #
-  # These are a BOUND, not a measurement. Nothing has profiled which subsystem actually allocates —
-  # heap profiling is already enabled (`/debug/prof/mem`, POST) and nobody has pulled it. Revisit
-  # with a profile, not by raising a number: 2Gi -> 8Gi is what was tried before, and it bought six
-  # quiet days rather than a fix.
-  # -- Subchart passthrough: GreptimeDB engine config.toml, bounding query, scan, compaction and cache memory and worker counts to fit the 8Gi limit.
-  configToml: |
-    mode = 'standalone'
-
-    [query]
-    parallelism = 8
-    memory_pool_size = "2GiB"
-
-    # `region_engine` is an ARRAY of engine tables, not a map — the `[[ ]]` is load-bearing.
-    # Written as a plain `[region_engine.mito]` this renders valid TOML that GreptimeDB then REFUSES
-    # at startup: `invalid type: map, expected a sequence`, exit 1, crash loop. Learned the hard way
-    # on 2026-08-23 — `tomllib.loads` parsing cleanly is NOT evidence the engine accepts the schema,
-    # and a render-time gate that only checks TOML validity will pass this bug straight through.
-    [[region_engine]]
-    [region_engine.mito]
-    num_workers = 8
-    max_background_compactions = 4
-    max_background_flushes = 8
-    max_background_purges = 8
-    global_write_buffer_size = "512MiB"
-    global_write_buffer_reject_size = "1GiB"
-    scan_memory_limit = "1GiB"
-    experimental_compaction_memory_limit = "1GiB"
-    page_cache_size = "512MiB"
-    vector_cache_size = "256MiB"
-    sst_meta_cache_size = "128MiB"
-    selector_result_cache_size = "128MiB"
-    range_result_cache_size = "128MiB"
-    prefilter_result_cache_size = "64MiB"
-    manifest_cache_size = "128MiB"
-  # Memory bound (#139) — see the note under `openfga.resources`. Sized HIGHEST of the group on
-  # purpose: this is a database ingesting OTLP traces + RED metrics from the whole fleet, so it is
-  # the one workload here whose footprint genuinely grows with how busy the estate is.
-  #
-  # RAISED 2Gi -> 8Gi (2026-08-16) because 2Gi was not headroom, it was a crash loop. MEASURED on the
-  # live cluster: 8 restarts, lastState OOMKilled, exit 137. Idle sits at ~619Mi, so the ceiling was
-  # never hit at rest — it is hit by the spikes this workload is FOR (mito compaction, parquet
-  # metadata preload, OTLP ingest bursts), which is exactly when telemetry matters most.
-  #
-  # The failure is silent in the worst way: GreptimeDB is the sole sink for the estate's logs, metrics
-  # AND traces, so every OOM is a hole in the record of what the estate was doing — and nothing else
-  # reports it, because the thing that would report it is what just died. It is also why the
-  # maintenance sweep's summary could not be confirmed end-to-end even after its logger was un-muted.
-  #
-  # 8Gi is not a measured working-set, it is room to stop the loop: the node carries 503Gi and runs at
-  # ~26%, so the cost of being generous here is nil next to the cost of a blind estate. Revisit with a
-  # real high-water measurement once it has survived a busy period without restarting.
-  #
-  # IT HAD NOT, AND THEN IT DID. The paragraph above was written while the loop was still running:
-  # 8Gi alone did not stop it (13 OOMKills on 2026-08-23, the last at 15:34:13Z). What stopped it was
-  # bounding the engine — the `configToml` block above — after which the pod has run at restartCount 0
-  # with no prior termination. Two things that were true of the loop and are worth keeping, because
-  # they are why the bound is written the way it is:
-  #   * Every restart was a hole in the estate's logs, metrics AND traces at once, and the only thing
-  #     that could report the hole is the thing that died. That blind spot is now covered:
-  #     `chart/alerting/rules.yml` carries 29 rules including four GreptimeDB ones (Restarting,
-  #     MemoryHigh, Down, MetricsMissing, added in f6af38bf) — though they evaluate nowhere until
-  #     `alerting.enabled` is turned on, which is a separate open decision (see PARK-ALERT-1, #472).
-  #   * Whatever was in flight at each OOM was dropped rather than retried, because the Collector had
-  #     no `sending_queue`. It has one now (ebcb7f68).
-  # Raising the ceiling again is the obvious move and is probably still not the answer: nothing has
-  # measured WHICH subsystem allocates (mito compaction vs OTLP ingest burst vs parquet preload), and
-  # a limit raised without that is a guess with a bigger number. Bounding query memory
-  # is the other lever nobody has pulled.
-  # -- Subchart passthrough: CPU and memory requests/limits for GreptimeDB (8Gi memory limit).
-  resources:
-    requests: { cpu: 100m, memory: 256Mi }
-    limits: { memory: 8Gi }
-  # -- Subchart passthrough: GreptimeDB's S3 store; `bucket` must equal `observability.bucket`, credentials from `<release>-observability-s3`.
-  objectStorage:
-    s3:
-      bucket: "rask-observability"
-      region: "us-east-1"
-      root: "/greptimedb"
-      endpoint: "http://rask-minio:9000"
-    credentials:
-      existingSecretName: "rask-observability-s3"
-
-# Perses subchart — dashboards-as-code over GreptimeDB's Prometheus-compatible API.
-perses:
-  # Memory bound (#139) — see the note under `openfga.resources`.
-  # -- Subchart passthrough: CPU and memory requests/limits for Perses.
-  resources:
-    requests: { cpu: 25m, memory: 64Mi }
-    limits: { memory: 256Mi }
-  # Perses bundles its datasource/panel plugins and extracts them into
-  # /etc/perses/plugins at startup, but the container runs readOnlyRootFilesystem
-  # so that path isn't writable → "datasource schemas are not loaded" and the
-  # GreptimeDB datasource fails to provision. Give it a writable emptyDir there
-  # (keeps readOnlyRootFilesystem: true).
-  # -- Subchart passthrough: a writable emptyDir for Perses plugins and the `rask-perses-dashboards` ConfigMap of dashboards-as-code.
-  volumes:
-    - name: perses-plugins
-      emptyDir: {}
-    # Dashboards-as-code: the rask-perses-dashboards ConfigMap (templates/
-    # perses-dashboards.yaml) holds the rask Project + its Dashboards.
-    - name: perses-dashboards
-      configMap:
-        name: rask-perses-dashboards
-  # -- Subchart passthrough: mounts the plugins emptyDir at /etc/perses/plugins and the dashboards ConfigMap at /etc/perses/dashboards.
-  volumeMounts:
-    - name: perses-plugins
-      mountPath: /etc/perses/plugins
-    - name: perses-dashboards
-      mountPath: /etc/perses/dashboards
-  # Provision a GreptimeDB datasource via the chart's datasources values key
-  # (renders a ConfigMap mounted at /etc/perses/datasources). GreptimeDB exposes
-  # a Prometheus-compatible query API at :4000/v1/prometheus.
-  #
-  # Use PROXY mode, not directUrl: with directUrl the *browser* queries the URL,
-  # but rask-greptimedb-standalone is an in-cluster DNS name unreachable from a
-  # laptop hitting Perses over `kubectl port-forward` → "failed to fetch". Proxy
-  # mode routes queries through the Perses server (which can resolve it), so the
-  # browser only ever talks to Perses.
-  # -- Subchart passthrough: the default GreptimeDB Prometheus datasource, queried through the Perses server in proxy mode.
-  datasources:
-    - kind: GlobalDatasource
-      metadata:
-        name: greptimedb
-      spec:
-        default: true
-        plugin:
-          kind: PrometheusDatasource
-          spec:
-            proxy:
-              kind: HTTPProxy
-              spec:
-                url: "http://rask-greptimedb-standalone:4000/v1/prometheus"
-  # Add /etc/perses/datasources to provisioning.folders so Perses scans the
-  # datasource ConfigMap mounted there (the chart mounts datasources: at that
-  # path but the default server config only lists /etc/perses/provisioning).
-  # -- Subchart passthrough: Perses provisioning folders (provisioning, datasources, dashboards) and how often they are rescanned.
-  config:
-    provisioning:
-      folders:
-        - /etc/perses/provisioning
-        - /etc/perses/datasources
-        - /etc/perses/dashboards
-      interval: 1m

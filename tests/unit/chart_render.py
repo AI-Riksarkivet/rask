@@ -42,6 +42,11 @@ ESO_ARGS: tuple[str, ...] = (
 #: renders without it.
 RAY_ARGS: tuple[str, ...] = ("--set-string", "ray.dashboardUrl=http://ray.example.com:8265")
 
+#: Observability ON with the backend an operator names ([[XC-127]]): off by default, it renders the Collector and the
+#: fleet's OTLP export only with an endpoint to send to. A gate of a pod's telemetry wiring states it.
+OBSERVABILITY_SETS: tuple[str, ...] = ("observability.enabled=true", "observability.export.endpoint=http://otlp.example.com:4318/v1/otlp")
+OBSERVABILITY_ARGS: tuple[str, ...] = tuple(arg for value in OBSERVABILITY_SETS for arg in ("--set", value))
+
 #: The fail-closed OIDC guards' dummy inputs plus the ESO APIs, naming no Ray: the base of a gate of the
 #: Ray guard itself.
 UNNAMED_RAY_ARGS: tuple[str, ...] = (

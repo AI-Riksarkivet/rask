@@ -78,6 +78,45 @@ spec:
     - ports:
         - { protocol: TCP, port: 443 }
         - { protocol: TCP, port: 6443 }
+{{- $o := .Values.observability }}
+{{- if $o.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "lance.fullname" . }}-allow-telemetry-export-egress
+  labels: {{- include "lance.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: { app.kubernetes.io/component: otel-collector }
+  policyTypes: [Egress]
+  egress:
+    - ports:
+        - { protocol: TCP, port: {{ include "lance.urlPort" $o.export.endpoint }} }
+{{- end }}
+{{- with ($o.query).url }}
+{{- if $.Values.frontend.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "lance.fullname" $ }}-allow-telemetry-query-egress
+  labels: {{- include "lance.labels" $ | nindent 4 }}
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values:
+          {{- range $.Values.frontend.apps }}
+          - web-{{ .name }}
+          {{- end }}
+  policyTypes: [Egress]
+  egress:
+    - ports:
+        - { protocol: TCP, port: {{ include "lance.urlPort" . }} }
+{{- end }}
+{{- end }}
 {{- with .Values.networkPolicy.extraEgress }}
 ---
 # Deployment-specific egress (externalized S3/NATS/OTLP endpoints) — values-supplied, verbatim.
@@ -181,8 +220,7 @@ spec:
                 {{- $ageClients = concat $ageClients .Values.stateStore.scopes }}
                 {{- end }}
 
-                {{- $oc := .Values.observability.otelCollector | default dict }}
-                {{- if and .Values.observability.enabled $oc.enabled (not $oc.externalEndpoint) .Values.stateStore.enabled }}
+                {{- if and .Values.observability.enabled .Values.stateStore.enabled }}
                 {{- $ageClients = append $ageClients "otel-collector" }}
                 {{- end }}
                 values:
@@ -194,8 +232,7 @@ spec:
       ports:
         - { protocol: TCP, port: {{ .Values.age.port }} }
 ---
-# (3d) minio:9000 — the lakehouse bytes. Clients: the data-plane services + GreptimeDB (its
-# object storage) + the snapshot backup job. The ray-lance demo pods live outside the release's
+# (3d) minio:9000 — the lakehouse bytes. Clients: the data-plane services + the snapshot backup job. The ray-lance demo pods live outside the release's
 # labels — add them via networkPolicy.minioExtraFrom (default provided in values).
 # The component label is stamped by the chart's own StatefulSet (templates/minio.yaml), so the
 # selector below cannot miss the way it could when a third-party operator owned the pod labels.
@@ -236,8 +273,6 @@ spec:
                   {{- range .Values.medallion.stageRunners }}
                   - {{ .name }}
                   {{- end }}
-        - podSelector:
-            matchLabels: { app.kubernetes.io/name: greptimedb-standalone }
         {{- if .Values.ray.enabled }}
         # The HTR runner executes inside the KubeRay-managed RayService pods (PageLoader reads the
         # image cache, AltoWriter writes ALTO — s3://images-batch*). The chart's head template stamps
@@ -280,7 +315,7 @@ spec:
 # (3e) nats:8222 — the NATS monitoring endpoint (varz/connz/jsz), surfaced in the ops view that now
 # lives at /lakehouse/admin. NATS is on the (3a) exclusion list, so the two nats rules here are its
 # ONLY ingress: this one admits the 8222 monitor port from the LAKEHOUSE zone pods alone; (3f) below
-# admits client traffic on 4222. Selector mirrors the subchart-pod idiom used for greptimedb above;
+# admits client traffic on 4222. Selector is the subchart-pod idiom (`app.kubernetes.io/name`);
 # component=nats (not just name) so nats-box is not a target.
 #
 # This said web-admin until 2026-07-25. The 7→4 zone merge deleted that component, so the rule

@@ -213,9 +213,6 @@ other plane. That is the blast-radius change; a credential that can rewrite the 
 that governs it is root wearing another name, which is exactly what
 `minio-scoped-users`' own header warns about.
 
-The observability store stays denied for the reason every sibling denies it: it is
-platform telemetry, not tenant data, and nothing in the catalog reads or writes it.
-
 ## `mc admin policy create rfs rask-viewer /tmp/viewer.json`
 
 THE TIGHTEST POLICY IN THE ESTATE, and it can be: the object browser has no write path
@@ -228,10 +225,6 @@ permission error to the operator — it renders the bucket as EMPTY, which is th
 failure the store-registry fix already paid for once (`_client_for`: a bucket holding
 millions of objects rendered as empty, and nothing errored). Narrowing the read here
 would buy little and reintroduce the least debuggable failure this plane has.
-
-NO observability DENY, unlike the other three: this identity cannot write anywhere, so
-the worst it can do to that bucket is read telemetry the same operator is already
-looking at in Perses.
 
 ## `{{- range $ref, $locs := $fixture }}`
 

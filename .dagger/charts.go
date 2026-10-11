@@ -11,13 +11,10 @@ import (
 // busybox base would silently misbehave — Debian gives the same tools CI's ubuntu-latest runner has.
 const chartsBaseImage = "debian:trixie-slim"
 
-// greptimeImage is the SAME image the chart's greptimedb-standalone subchart deploys, because the
-// drill's whole claim is that the PRODUCTION ENGINE accepts an expression — promtool is Prometheus and
-// the two do not take the same PromQL. Replaying against a different GreptimeDB than the estate runs
-// would answer a question nobody asked.
-//
-// Pinned here and pinned there: `chart/charts/greptimedb-standalone-0.4.5.tgz` carries
-// `image.registry/repository/tag`, so a bump on either side has to reach the other in the same change.
+// greptimeImage is the SAME image the observability fixture's GreptimeDB runs (deploy/fixtures/observability,
+// greptimedb-standalone 0.4.5, whose `image.registry/repository/tag` it carries), because the drill's whole
+// claim is that the engine the rules are evaluated against accepts an expression — promtool is Prometheus
+// and the two do not take the same PromQL. A bump on either side has to reach the other in the same change.
 const greptimeImage = "docker.io/greptime/greptimedb:v1.1.1"
 
 // helmVersion pins Helm deliberately. The CI `test` job uses azure/setup-helm@v4 with no version input

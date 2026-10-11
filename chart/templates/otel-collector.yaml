@@ -1,10 +1,12 @@
 
 {{- $o := .Values.observability }}
 {{- $c := $o.otelCollector | default dict }}
-{{- if and $o.enabled $c.enabled (not $c.externalEndpoint) }}
+{{- if $o.enabled }}
 {{- $fullname := include "lance.fullname" . }}
 {{- $sa := printf "%s-otel-collector" $fullname }}
-{{- $greptime := printf "http://%s:%v/v1/otlp" (include "lance.greptimeHost" .) $o.greptimePort }}
+{{- $x := $o.export | default dict }}
+{{- $endpoint := required "observability.export.endpoint: the OTLP/HTTP endpoint the Collector exports to (the platform's telemetry backend)" $x.endpoint }}
+{{- $headers := $x.headers | default dict }}
 
 {{- $daprState := and .Values.dapr.enabled .Values.stateStore.enabled (or .Values.age.enabled .Values.age.externalHost) }}
 ---
@@ -53,11 +55,11 @@ data:
       # and manages its own offset persistence. fsGroup 65534 makes the dir writable by the non-root runtime.
       file_storage:
         directory: /var/lib/otelcol/file_storage
-      # The audit store's credential (values.yaml `observability`), from files ESO writes; watched, so a rotation needs no restart.
-      basicauth/greptime:
+      # The export credential (values.yaml `observability`), from files ESO writes; watched, so a rotation needs no restart.
+      basicauth/export:
         client_auth:
-          username_file: /var/run/secrets/rask/greptime/username
-          password_file: /var/run/secrets/rask/greptime/password
+          username_file: /var/run/secrets/rask/export/username
+          password_file: /var/run/secrets/rask/export/password
     receivers:
       otlp:
         protocols:
@@ -203,7 +205,7 @@ data:
               # merely large.
               #
               # Two of the 113 ARE read, by the ray dashboard's backpressure panel
-              # (perses-dashboards.yaml: ray_data_num_tasks_submitted and
+              # (deploy/fixtures/observability dashboards.yaml: ray_data_num_tasks_submitted and
               # ray_data_task_submission_backpressure_time), so this keeps exactly those and drops the
               # rest. A blanket `drop: ray_data_.*` would have blanked that panel silently — the
               # failure mode this whole change exists to avoid.
@@ -215,7 +217,7 @@ data:
               # Dropped HERE and not at Ray on purpose: the Ray cluster is operated outside this repo
               # (open_ray_handover.md), so a fix depending on its config is one this chart cannot land.
               # Reversible in one edit if a workload ever needs the per-operator detail — but bound the
-              # store first (chart/values.yaml `greptimedb-standalone.configToml`), because this drop is
+              # store first (the store's own memory configuration), because this drop is
               # a cardinality economy, NOT the reason the store stopped dying.
               #
               # WHAT IT DOES NOT DO: reclaim anything. 113 `ray_data_*` tables are already resident in
@@ -238,17 +240,6 @@ data:
                   regex: ';ray_data_.*'
                   action: drop
 
-            # The telemetry store's OWN health. Until 2026-08-23 nothing scraped it, and the
-            # consequence was not subtle: GreptimeDB was OOMKilled 13 times in one day (exit 137,
-            # 8Gi limit) and every surface that could have reported it is downstream of the store
-            # that was dying. No `kube_*` or `container_*` series exist anywhere in the estate —
-            # kube-state-metrics is not deployed and is not even a toggle — so there was no second
-            # path either. A store that cannot be observed cannot be alerted on, which is why this
-            # job has to land BEFORE the GreptimeDB* rules in chart/alerting/rules.yml can exist
-            # and has to stay for as long as they do.
-            #
-            # Selector verified live: pod label app.kubernetes.io/name=greptimedb-standalone, and
-            # the HTTP port is named `http` (4000), not `metrics` — it serves /v1/otlp, /v1/sql,
             # OPENFGA (:2112) — a FOURTH job, unreachable by the three above for the Ray job's exact
             # reason: `dapr-sidecars` and `dapr-control-plane` both `keep` on a `dapr.io/*` pod
             # annotation at their first relabel step and an OpenFGA pod carries neither, so it was
@@ -285,30 +276,6 @@ data:
                 - source_labels: [__name__]
                   action: drop
                   regex: "(go_|process_).*"
-            # /v1/prometheus AND /metrics on the one port, so keying on the port NAME the way the
-            # ray-pods job does would select nothing here.
-            #
-            # Yes, this writes greptime_* series into the store it measures. That is the standard
-            # self-monitoring trade and it is the right one at this scale: the alternative is a
-            # second store for one target. It does mean R7/R9 (`process_start_time_seconds` /
-            # `up`) are the load-bearing ones — they are answered by the SCRAPER, so they still
-            # fire when the store itself is the thing that is down.
-            - job_name: greptimedb
-              scrape_interval: 30s
-              kubernetes_sd_configs:
-                - role: pod
-                  namespaces: { names: [{{ .Release.Namespace }}] }
-              relabel_configs:
-                - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name]
-                  action: keep
-                  regex: greptimedb-standalone
-                - source_labels: [__meta_kubernetes_pod_container_port_name]
-                  action: keep
-                  regex: http
-                - source_labels: [__meta_kubernetes_namespace]
-                  target_label: namespace
-                - source_labels: [__meta_kubernetes_pod_name]
-                  target_label: pod
 {{- if $daprState }}
       sqlquery/daprstate:
         driver: postgres
@@ -367,12 +334,10 @@ data:
           span:
             - 'name == "/TaskHubSidecarService/Hello"'
     exporters:
-      otlphttp/greptime_traces:
-        endpoint: {{ $greptime | quote }}
-        headers:
-          x-greptime-db-name: {{ $o.dbName | quote }}
-          x-greptime-pipeline-name: {{ $o.tracePipeline | quote }}
-        auth: { authenticator: basicauth/greptime }
+      otlphttp/traces:
+        endpoint: {{ $endpoint | quote }}
+        headers: {{- merge (dict) ($x.traceHeaders | default dict) $headers | toYaml | nindent 10 }}
+        auth: { authenticator: basicauth/export }
         sending_queue:
           enabled: true
           storage: file_storage
@@ -382,12 +347,10 @@ data:
           initial_interval: 5s
           max_interval: 30s
           max_elapsed_time: 300s
-      otlphttp/greptime_audit:
-        endpoint: {{ $greptime | quote }}
-        headers:
-          x-greptime-db-name: {{ $o.dbName | quote }}
-          x-greptime-log-table-name: {{ $o.auditTable | quote }}
-        auth: { authenticator: basicauth/greptime }
+      otlphttp/audit:
+        endpoint: {{ $endpoint | quote }}
+        headers: {{- merge (dict) ($x.auditHeaders | default dict) $headers | toYaml | nindent 10 }}
+        auth: { authenticator: basicauth/export }
         sending_queue:
           enabled: true
           storage: file_storage
@@ -397,11 +360,10 @@ data:
           initial_interval: 5s
           max_interval: 30s
           max_elapsed_time: 300s
-      otlphttp/greptime:
-        endpoint: {{ $greptime | quote }}
-        headers:
-          x-greptime-db-name: {{ $o.dbName | quote }}
-        auth: { authenticator: basicauth/greptime }
+      otlphttp:
+        endpoint: {{ $endpoint | quote }}
+        headers: {{- $headers | toYaml | nindent 10 }}
+        auth: { authenticator: basicauth/export }
         sending_queue:
           enabled: true
           storage: file_storage
@@ -412,24 +374,24 @@ data:
           max_interval: 30s
           max_elapsed_time: 300s
     service:
-      extensions: [health_check, file_storage, basicauth/greptime]
+      extensions: [health_check, file_storage, basicauth/export]
       pipelines:
         traces:
           receivers: [otlp]
           processors: [memory_limiter, k8sattributes, filter/drop_keepalive, batch]
-          exporters: [otlphttp/greptime_traces]
+          exporters: [otlphttp/traces]
         metrics:
           receivers: [otlp, prometheus{{ if $daprState }}, sqlquery/daprstate{{ end }}]
           processors: [memory_limiter, k8sattributes, batch]
-          exporters: [otlphttp/greptime]
+          exporters: [otlphttp]
         logs:
           receivers: [otlp, filelog]
           processors: [memory_limiter, k8sattributes, filter/drop_app_file_logs, filter/drop_audit, batch]
-          exporters: [otlphttp/greptime]
+          exporters: [otlphttp]
         logs/audit:
           receivers: [otlp]
           processors: [memory_limiter, k8sattributes, filter/audit_only, batch]
-          exporters: [otlphttp/greptime_audit]
+          exporters: [otlphttp/audit]
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -473,14 +435,14 @@ spec:
             - { name: varlogpods, mountPath: /var/log/pods, readOnly: true }
             - { name: varlibdockercontainers, mountPath: /var/lib/docker/containers, readOnly: true }
             - { name: offsets, mountPath: /var/lib/otelcol/file_storage }
-            - { name: greptime-credential, mountPath: /var/run/secrets/rask/greptime, readOnly: true }
+            - { name: export-credential, mountPath: /var/run/secrets/rask/export, readOnly: true }
       volumes:
         - name: config
           configMap: { name: {{ $sa }} }
         - { name: varlogpods, hostPath: { path: /var/log/pods } }
         - { name: varlibdockercontainers, hostPath: { path: /var/lib/docker/containers } }
         - { name: offsets, emptyDir: { sizeLimit: 2Gi } }
-        - { name: greptime-credential, secret: { secretName: {{ $sa }}-greptime, defaultMode: 0440 } }
+        - { name: export-credential, secret: { secretName: {{ $sa }}-export, defaultMode: 0440 } }
 ---
 apiVersion: v1
 kind: Service

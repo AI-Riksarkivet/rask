@@ -35,7 +35,7 @@ set -- "${NAMES[@]}"
 for name in "$@"; do
   dir="$ROOT/deploy/fixtures/$name"
   [ -f "$dir/fixture.env" ] || { echo "no fixture '$name' (deploy/fixtures/$name/fixture.env)" >&2; exit 2; }
-  RELEASE='' NAMESPACE='' REPO='' CHART='' VERSION='' SHARED_NAMESPACE=''
+  RELEASE='' NAMESPACE='' REPO='' CHART='' VERSION='' SHARED_NAMESPACE='' SET_FILES=''
   # shellcheck source=/dev/null
   . "$dir/fixture.env"
   for key in RELEASE NAMESPACE CHART; do
@@ -47,12 +47,29 @@ for name in "$@"; do
     SOURCE=("$CHART" --repo "$REPO" --version "$VERSION")
   else
     SOURCE=("$dir/$CHART")
+    # A local chart that names upstream charts as dependencies vendors them first; `dependency build` resolves only
+    # repositories the local helm config knows, so each one the chart declares is added under a name derived from it.
+    if grep -q '^dependencies:' "$dir/$CHART/Chart.yaml"; then
+      REPOS=()
+      while read -r repo; do
+        REPOS+=("fixture-$(printf '%s' "$repo" | sha256sum | cut -c1-8)")
+        "$HELM" repo add "${REPOS[-1]}" "$repo" >/dev/null
+      done < <("$HELM" dependency list "$dir/$CHART" | awk 'NR > 1 && $3 ~ /^https?:/ { print $3 }' | sort -u)
+      "$HELM" repo update "${REPOS[@]}" >/dev/null
+      "$HELM" dependency build "$dir/$CHART" >/dev/null
+    fi
   fi
   # values.yaml is the fixture's settings; values-live-pins.yaml, when present, is what the cluster runs (an image tag
   # from a dev registry), written by scripts/k3s-pins.sh and layered last so a rerun never reverts a running image.
   VALUES=()
   [ -f "$dir/values.yaml" ] && VALUES+=(-f "$dir/values.yaml")
   [ -f "$dir/values-live-pins.yaml" ] && VALUES+=(-f "$dir/values-live-pins.yaml")
+  # SET_FILES names repo files a value is read from (`<key>=<path from the repo root>`, space-separated): an artefact
+  # that lives outside the fixture's chart, as the alerting rules do.
+  for pair in $SET_FILES; do
+    [ -f "$ROOT/${pair#*=}" ] || { echo "deploy/fixtures/$name/fixture.env: SET_FILES names ${pair#*=}, which does not exist" >&2; exit 2; }
+    VALUES+=(--set-file "${pair%%=*}=$ROOT/${pair#*=}")
+  done
 
   # THE HANDOVER. Every object this fixture renders that already exists under another Helm release is annotated
   # helm.sh/resource-policy=keep first, so that release's next upgrade (the one that stops rendering it) leaves it

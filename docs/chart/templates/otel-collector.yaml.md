@@ -11,15 +11,15 @@ OTel-first telemetry hub. A single OpenTelemetry Collector (contrib) that:
     retired, owner ruling 2026-07-27), dropping from the app pods (lance.dev/logs=otlp) ONLY the lines
     their own SDK also exported — the uvicorn/crash/daprd tier on those pods has no OTLP twin and is kept,
   - SCRAPES the Dapr sidecars' :9090 via the prometheus receiver + k8s SD (the DaprConsumerWedge source),
-and exports all three signals OTLP → GreptimeDB (:4000/v1/otlp), adding GreptimeDB's db-name header on every
-signal and the trace-pipeline header on traces only (a separate exporter, since metrics/logs must NOT carry it).
+and exports all three signals over OTLP/HTTP to `observability.export.endpoint`, the platform's backend
+(ADR 0153; in development the observability fixture's GreptimeDB). The backend's ingestion headers come from
+values: `export.headers` on every signal, `export.traceHeaders` on traces only and `export.auditHeaders` on the
+audit trail, each a separate exporter because the others must NOT carry them. The endpoint is `required`: a
+Collector with nowhere to send fails the render rather than queueing into nothing.
 
-Deploys only when observability.enabled AND otelCollector.enabled AND no externalEndpoint is set: in prod you
-run the OTel operator + an external Collector and set observability.otelCollector.externalEndpoint, so this
-whole file renders nothing and the apps just aim their OTLP at that existing Collector. Single Deployment (not
-a DaemonSet): filelog reads the node it lands on — correct on single-node kind/dev; prod uses the external
-operator-managed Collector (agent DaemonSet + gateway) instead. NetworkPolicy is a prod switch and prod is
-external, so the in-cluster dev Collector isn't gated by it.
+Deploys whenever observability.enabled. Single Deployment (not a DaemonSet): filelog reads the node it lands
+on, which is correct on a single node. Under NetworkPolicy its egress to an endpoint outside the namespace
+needs a `networkPolicy.extraEgress` entry.
 
 ## `{{- $daprState := and .Values.dapr.enabled .Values.stateStore.enabled (or .Values.age.enabled .Values.age.e...`
 
@@ -42,13 +42,13 @@ enumerated live on 2026-08-26 against the `ingest` sidecar, daprd's ENTIRE metri
 dapr_error_code_total, dapr_grpc_io_*, dapr_http_*, dapr_runtime_component_{init_total,loaded}
 and go_*. No workflow metric, no actor metric, no state-store metric — and
 `dapr_runtime_workflow_*` (already documented as unreliable for this codebase in
-chart/alerting/rules.yml) is absent outright. A fourth scrape job would have had no target.
+deploy/alerting/rules.yml) is absent outright. A fourth scrape job would have had no target.
 
 So the state store is read directly. `spec.workflow.stateRetentionPolicy` in observability.yaml
 is the ONLY thing that removes workflow history — there is deliberately no application-side
 purge (DaprWorkflowClient has no list-instances API, so a sweep could not name what to purge
 after a restart) — and if it stops collecting, the first symptom is a full disk. These two
-gauges are what chart/alerting/rules.yml's `dapr-workflow-state` group alerts on, so a rename
+gauges are what deploy/alerting/rules.yml's `dapr-workflow-state` group alerts on, so a rename
 here has to reach those rules in the same change.
 
 A COLLECTOR RECEIVER RATHER THAN A postgres_exporter SIDECAR: no second image to vendor, scan
@@ -129,10 +129,10 @@ fixed in the same change were 31,916 over the same window, and those are exclude
 (rask.otelEnv's OTEL_PYTHON_FASTAPI_EXCLUDED_URLS) because the app owns them — dropping them
 here instead would pay to serialize and ship spans only to discard them at the far end.
 
-## `otlphttp/greptime_traces:`
+## `otlphttp/traces:`
 
-Traces carry GreptimeDB's trace-pipeline header (→ opentelemetry_traces); metrics/logs must NOT, so
-they get a separate exporter with only the db-name header. Both hit the same /v1/otlp base; the
+Traces carry `export.traceHeaders` (GreptimeDB's trace-pipeline header → opentelemetry_traces); metrics/logs
+must NOT, so they get a separate exporter with only `export.headers`. Both hit the same /v1/otlp base; the
 otlphttp exporter appends /v1/{traces,metrics,logs} per signal (same as the app SDK did).
 
 DURABILITY. Both exporters queue and retry; `batch` alone is not durability — it holds a
@@ -151,10 +151,10 @@ queue would trade dropped telemetry for a filled node. `queue_size` is explicit 
 volume carries a `sizeLimit`. `max_elapsed_time` is finite for the same reason — past five
 minutes the queue, not the retry loop, is what carries the data.
 
-## `otlphttp/greptime_audit:`
+## `otlphttp/audit:`
 
-The audit trail's own table. `x-greptime-log-table-name` is what GreptimeDB's OTLP log
-ingestion routes on — verified against the running v1.1.1 rather than taken from docs: a
+The audit trail's own table, named by `export.auditHeaders`. `x-greptime-log-table-name` is what
+GreptimeDB's OTLP log ingestion routes on — verified against the running v1.1.1 rather than taken from docs: a
 protobuf record carrying the header created the named table. Same endpoint, same durability
 settings as the shared exporter; only the destination table differs.
 
@@ -214,6 +214,6 @@ filelog offset checkpoints (file_storage extension) — writable via fsGroup 655
 sizeLimit because this dir now backs the exporters' persistent sending_queue as well as
 filelog's read offsets — without it a store outage trades dropped telemetry for a full node.
 
-## `- { name: greptime-credential, secret: { secretName: {{ $sa }}-greptime, defaultMode: 0440 } }`
+## `- { name: export-credential, secret: { secretName: {{ $sa }}-export, defaultMode: 0440 } }`
 
 0440 under the pod's fsGroup 65534, the group the Collector's uid reads its SA token through already.

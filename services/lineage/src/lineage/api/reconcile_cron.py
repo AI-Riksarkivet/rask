@@ -193,7 +193,7 @@ def record_sweep(report: SweepReport) -> None:
 
     Named and beside it rather than inlined in the tick, because the tick's body is budgeted
     (`test_reconcile_sweep_shape.py` caps `_on_cron` at 45 lines) and because a WARN alone cannot page:
-    `chart/alerting/rules.yml` evaluates series, not log bodies.
+    `deploy/alerting/rules.yml` evaluates series, not log bodies.
 
     THE TWO CLASSES ARE COUNTED DIFFERENTLY ON PURPOSE. `unknown_to_graph` counts TABLES — one per
     governed table with no node — while `versions_below_tip` counts VERSIONS across datasets, because a

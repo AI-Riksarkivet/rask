@@ -1217,106 +1217,10 @@ tests:
         alertname: MaintenanceSweepNotCompleting
         exp_alerts: []
 
-  # ---- the telemetry backend itself (lance-observability) --------------------------------------
-  # These four are the estate's only witness to its own store dying. Written the day GreptimeDB was
-  # OOMKilled for the 13th time with nothing reporting any of them.
-
-  # GreptimeDB restarted: process_start_time_seconds changes value. `for: 0m` — one restart is enough.
-  - interval: 1m
-    input_series:
-      - series: 'process_start_time_seconds{job="greptimedb",pod="rask-greptimedb-standalone-0"}'
-        values: "1000x10 2000x10"
-    alert_rule_test:
-      - eval_time: 12m
-        alertname: GreptimeDBRestarting
-        exp_alerts:
-          - exp_labels:
-              severity: critical
-              service: observability
-              job: greptimedb
-              pod: rask-greptimedb-standalone-0
-            exp_annotations:
-              summary: "GreptimeDB restarted in the last 15 minutes"
-              description: "The estate's only metrics/logs/traces store restarted. Check for OOMKill first — `kubectl get pod rask-greptimedb-standalone-0 -o jsonpath='{.status.containerStatuses[0].lastState}'` — exit 137 means the 8Gi limit was hit. Every dashboard and every other rule in this file went blind for the duration. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled"
-
-  # A store that has NOT restarted must stay quiet, or the rule is noise on every scrape.
-  - interval: 1m
-    input_series:
-      - series: 'process_start_time_seconds{job="greptimedb",pod="rask-greptimedb-standalone-0"}'
-        values: "1000x30"
-    alert_rule_test:
-      - eval_time: 20m
-        alertname: GreptimeDBRestarting
-        exp_alerts: []
-
-  # Memory above 75% of the 8Gi limit for 10m → warn while the store is still UP. 6.5GiB > 6GiB.
-  - interval: 1m
-    input_series:
-      - series: 'process_resident_memory_bytes{job="greptimedb",pod="rask-greptimedb-standalone-0"}'
-        values: "6979321856x20"
-    alert_rule_test:
-      - eval_time: 15m
-        alertname: GreptimeDBMemoryHigh
-        exp_alerts:
-          - exp_labels:
-              severity: warning
-              service: observability
-            exp_annotations:
-              summary: "GreptimeDB resident memory is above 75% of its limit"
-              description: "Approaching the cgroup ceiling; an OOMKill takes the whole telemetry plane with it. The in-process caches are budgeted at ~4.3GiB of the 8GiB and three limits (experimental_compaction_memory_limit, scan_memory_limit, query.memory_pool_size) are Unlimited, so the remainder is unbounded by configuration."
-
-  # 3.3GiB — the measured steady state — must NOT page.
-  - interval: 1m
-    input_series:
-      - series: 'process_resident_memory_bytes{job="greptimedb",pod="rask-greptimedb-standalone-0"}'
-        values: "3543348838x20"
-    alert_rule_test:
-      - eval_time: 15m
-        alertname: GreptimeDBMemoryHigh
-        exp_alerts: []
-
-  # The scrape failing for 5m → the store is gone.
-  - interval: 1m
-    input_series:
-      - series: 'up{job="greptimedb",pod="rask-greptimedb-standalone-0"}'
-        values: "1x5 0x15"
-    alert_rule_test:
-      - eval_time: 15m
-        alertname: GreptimeDBDown
-        exp_alerts:
-          - exp_labels:
-              severity: critical
-              service: observability
-            exp_annotations:
-              summary: "GreptimeDB is not answering its scrape"
-              description: "The store is down. Ingest is being dropped, not buffered — the fleet exports OTLP/HTTP straight to it. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled"
-
-  # ABSENT IS NOT ZERO, applied to the watcher itself: if the scrape JOB is removed, GreptimeDBDown
-  # goes quiet and looks exactly like health. This is the rule that refuses to let that pass.
-  - interval: 1m
-    input_series:
-      - series: 'up{job="some-other-target"}'
-        values: "1x20"
-    alert_rule_test:
-      - eval_time: 15m
-        alertname: GreptimeDBMetricsMissing
-        exp_alerts:
-          - exp_labels:
-              severity: critical
-              service: observability
-              job: greptimedb
-            exp_annotations:
-              summary: "Nothing is scraping GreptimeDB at all"
-              description: "No `up{job=\"greptimedb\"}` series exists, so GreptimeDBDown and GreptimeDBMemoryHigh are both dead. Either the scrape job was removed from chart/templates/otel-collector.yaml or the collector is not running. This alert is the reason their silence is not mistaken for health."
-      # ...and GreptimeDBDown is indeed silent in exactly this scenario, which is the point.
-      - eval_time: 15m
-        alertname: GreptimeDBDown
-        exp_alerts: []
-
   # ------------------------------------------------------------------------------------------------
   # Dapr workflow history retention. The threshold is 2851200s = 792h = the longest configured
   # retention window (720h) plus a 72h collection margin; the coupling to values.yaml is held by hand,
-  # since rules.yml is mounted via .Files.Get and cannot be templated.
+  # since rules.yml is a static artefact and cannot be templated.
   # ------------------------------------------------------------------------------------------------
 
   # A history row 33.5 days old — past 792h — held for 40 min. The scheduler has stopped collecting.

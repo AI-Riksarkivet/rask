@@ -1,26 +1,21 @@
-
-{{- $al := .Values.observability.alerting | default dict }}
-{{- if and .Values.observability.enabled $al.enabled }}
-
-{{- $fullname := include "lance.fullname" . }}
-{{- $greptime := printf "http://%s-greptimedb-standalone:%v/v1/prometheus" $fullname .Values.observability.greptimePort }}
+{{- $al := .Values.alerting }}
+{{- $rules := required "alerting.rules: pass deploy/alerting/rules.yml with --set-file (scripts/fixtures.sh does, from fixture.env SET_FILES)" $al.rules }}
+{{- $name := .Release.Name }}
 ---
-# The proven alert rules, mounted into vmalert. Single source of truth: chart/alerting/rules.yml is the same
-# file `make alert-rules-check` validates, so a rule can't drift between the promtool proof and what deploys.
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: {{ $fullname }}-alert-rules
-  labels: {{- include "lance.labels" . | nindent 4 }}
+  name: {{ $name }}-alert-rules
+  labels: {{- include "observability.labels" . | nindent 4 }}
 data:
   rules.yml: |
-{{ .Files.Get "alerting/rules.yml" | indent 4 }}
+{{ $rules | indent 4 }}
 ---
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: {{ $fullname }}-alertmanager
-  labels: {{- include "lance.labels" . | nindent 4 }}
+  name: {{ $name }}-alertmanager
+  labels: {{- include "observability.labels" . | nindent 4 }}
 data:
   alertmanager.yml: |
     route:
@@ -39,8 +34,8 @@ data:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ $fullname }}-vmalert
-  labels: {{- include "lance.labels" . | nindent 4 }}
+  name: {{ $name }}-vmalert
+  labels: {{- include "observability.labels" . | nindent 4 }}
 spec:
   replicas: 1
   selector:
@@ -48,36 +43,37 @@ spec:
   template:
     metadata:
       labels:
-        {{- include "lance.labels" . | nindent 8 }}
+        {{- include "observability.labels" . | nindent 8 }}
         app.kubernetes.io/component: vmalert
       annotations:
-        checksum/rules: {{ .Files.Get "alerting/rules.yml" | sha256sum }}
+        checksum/rules: {{ $rules | sha256sum }}
     spec:
-      serviceAccountName: {{ $fullname }}-sa-vmalert
+      serviceAccountName: {{ $name }}
       securityContext: { runAsNonRoot: true, runAsUser: 65534, fsGroup: 65534 }
       containers:
         - name: vmalert
           image: {{ $al.vmalertImage }}
           args:
             - -rule=/etc/alerting/rules.yml
-            - -datasource.url={{ $greptime }}
-            - -notifier.url=http://{{ $fullname }}-alertmanager:9093
+            - -datasource.url={{ include "observability.store" . }}/v1/prometheus
+            - -datasource.headers=Content-Type:application/x-www-form-urlencoded
+            - -notifier.url=http://{{ $name }}-alertmanager:9093
             - -evaluationInterval={{ $al.evaluationInterval }}
             - -httpListenAddr=:8880
           ports: [{ name: http, containerPort: 8880 }]
           readinessProbe: { httpGet: { path: /health, port: http }, initialDelaySeconds: 5, periodSeconds: 10 }
           livenessProbe: { httpGet: { path: /health, port: http }, initialDelaySeconds: 10, periodSeconds: 20 }
-          resources: {{- include "lance.resources" (dict "root" . "comp" "vmalert") | nindent 12 }}
+          resources: {{- toYaml $al.resources | nindent 12 }}
           volumeMounts: [{ name: rules, mountPath: /etc/alerting, readOnly: true }]
       volumes:
         - name: rules
-          configMap: { name: {{ $fullname }}-alert-rules }
+          configMap: { name: {{ $name }}-alert-rules }
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ $fullname }}-vmalert
-  labels: {{- include "lance.labels" . | nindent 4 }}
+  name: {{ $name }}-vmalert
+  labels: {{- include "observability.labels" . | nindent 4 }}
 spec:
   selector: { app.kubernetes.io/component: vmalert, app.kubernetes.io/instance: {{ .Release.Name }} }
   ports: [{ name: http, port: 8880, targetPort: http }]
@@ -85,8 +81,8 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ $fullname }}-alertmanager
-  labels: {{- include "lance.labels" . | nindent 4 }}
+  name: {{ $name }}-alertmanager
+  labels: {{- include "observability.labels" . | nindent 4 }}
 spec:
   replicas: 1
   selector:
@@ -94,10 +90,10 @@ spec:
   template:
     metadata:
       labels:
-        {{- include "lance.labels" . | nindent 8 }}
+        {{- include "observability.labels" . | nindent 8 }}
         app.kubernetes.io/component: alertmanager
     spec:
-      serviceAccountName: {{ $fullname }}-sa-alertmanager
+      serviceAccountName: {{ $name }}
       securityContext: { runAsNonRoot: true, runAsUser: 65534, fsGroup: 65534 }
       containers:
         - name: alertmanager
@@ -108,21 +104,20 @@ spec:
           ports: [{ name: http, containerPort: 9093 }]
           readinessProbe: { httpGet: { path: /-/ready, port: http }, initialDelaySeconds: 5, periodSeconds: 10 }
           livenessProbe: { httpGet: { path: /-/healthy, port: http }, initialDelaySeconds: 10, periodSeconds: 20 }
-          resources: {{- include "lance.resources" (dict "root" . "comp" "alertmanager") | nindent 12 }}
+          resources: {{- toYaml $al.resources | nindent 12 }}
           volumeMounts:
             - { name: config, mountPath: /etc/alertmanager, readOnly: true }
             - { name: data, mountPath: /alertmanager }
       volumes:
         - name: config
-          configMap: { name: {{ $fullname }}-alertmanager }
+          configMap: { name: {{ $name }}-alertmanager }
         - { name: data, emptyDir: {} }
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ $fullname }}-alertmanager
-  labels: {{- include "lance.labels" . | nindent 4 }}
+  name: {{ $name }}-alertmanager
+  labels: {{- include "observability.labels" . | nindent 4 }}
 spec:
   selector: { app.kubernetes.io/component: alertmanager, app.kubernetes.io/instance: {{ .Release.Name }} }
   ports: [{ name: http, port: 9093, targetPort: http }]
-{{- end }}

@@ -5,8 +5,7 @@
 {{- $nats := include "lance.natsMints" . }}
 {{- $natsUsers := include "lance.natsUsers" . | splitList " " | compact }}
 {{- $natsTable := include "lance.natsTable" . | fromJson }}
-{{- $otel := .Values.observability.otelCollector | default dict }}
-{{- $otelSeed := and .Values.observability.enabled $otel.enabled (not $otel.externalEndpoint) }}
+{{- $otelSeed := .Values.observability.enabled }}
 {{- if not .Values.openbao.devMode }}
 apiVersion: v1
 kind: ConfigMap

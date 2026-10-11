@@ -334,7 +334,7 @@ def test_a_terminal_run_is_COUNTED_by_status_and_volume(monkeypatch: pytest.Monk
     `RunOutcome(status="FAILED")` rather than letting the orchestrator raise — so the sidecar's
     `dapr_runtime_workflow_execution_count_total` records `status="success"` for a run that died. An
     alert on that label reads green while every harvest fails, and the service had no metrics module at
-    all: `grep -rn opentelemetry services/ingest/` returned nothing, and `chart/alerting/rules.yml`
+    all: `grep -rn opentelemetry services/ingest/` returned nothing, and `deploy/alerting/rules.yml`
     duly contains zero ingest rules.
 
     Volume rides the same terminal activity because it is the only place that knows both halves: rows

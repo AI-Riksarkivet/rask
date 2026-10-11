@@ -1,8 +1,9 @@
-# Alert rules for the Lance-lakehouse estate — evaluated by vmalert against GreptimeDB's PromQL endpoint
-# (:4000/v1/prometheus), routed by Alertmanager. Deployed by chart/templates/alerting.yaml when
-# observability.alerting.enabled. Seeded from the Perses panels already labelled "alertable" — every metric
-# below is one this estate actually emits. Proven to FIRE on synthetic series by rules_test.yml
-# (`make alert-rules-check` → promtool). The live datasource round-trip is a drill (see docs/adr/0032-p3b-alerting-rule-logic-proven-hermetically-the-live.md "P3b").
+# Alert rules for the Lance-lakehouse estate, in Prometheus rule-file format: an artefact the platform's
+# evaluator loads (vmalert, Prometheus, a GreptimeDB ruler), never part of the rask chart. In development the
+# observability fixture's vmalert loads this file (deploy/fixtures/observability) against its GreptimeDB's PromQL
+# endpoint and routes through Alertmanager. Every metric below is one this estate emits through the OTel Collector.
+# Proven to FIRE on synthetic series by rules_test.yml (`make alert-rules-check` → promtool), and accepted by the
+# GreptimeDB engine by `make alert-rules-drill` (docs/adr/0032-p3b-alerting-rule-logic-proven-hermetically-the-live.md).
 # The point: these turn SILENT failures (data quietly stops flowing) into a page. See docs/runbooks/RUNBOOK-oncall.md.
 groups:
   - name: lance-lineage
@@ -1045,93 +1046,6 @@ groups:
             raise the head/worker memory limit.
             Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled
 
-  # T-OBS — the telemetry backend itself. Every other group in this file describes something the
-  # store can tell you about; this group is the one that tells you the store is gone. It has to be
-  # here because it cannot be anywhere else: there are no `kube_*` or `container_*` series anywhere
-  # in the estate (kube-state-metrics is not deployed and is not a toggle), so a pod that OOMKills
-  # is invisible unless something scrapes it directly.
-  #
-  # Written 2026-08-23, the day rask-greptimedb-standalone-0 was OOMKilled for the 13th time
-  # (exit 137, 8Gi limit). It had run 6d21h clean before that morning, so this is a load/state
-  # regression, not a chronic mis-size — which is exactly the shape an alert catches and a one-off
-  # limit bump does not. Nothing reported any of the 13.
-  #
-  # These depend on the `greptimedb` scrape job in chart/templates/otel-collector.yaml, in BOTH
-  # directions: the rules must not ship without the job, and the job must not be deleted while the
-  # rules exist.
-  - name: lance-observability
-    rules:
-
-      # `up` and `process_start_time_seconds` are answered by the SCRAPER, not by GreptimeDB's own
-      # instrumentation, so these two still work when GreptimeDB is the thing that is broken. The
-      # greptime_* self-metrics do not have that property and are deliberately not used here.
-      - alert: GreptimeDBRestarting
-        expr: changes(process_start_time_seconds{job="greptimedb"}[15m]) > 0
-        for: 0m
-        labels:
-          severity: critical
-          service: observability
-        annotations:
-          summary: "GreptimeDB restarted in the last 15 minutes"
-          description: >-
-            The estate's only metrics/logs/traces store restarted. Check for OOMKill first —
-            `kubectl get pod rask-greptimedb-standalone-0 -o jsonpath='{.status.containerStatuses[0].lastState}'`
-            — exit 137 means the 8Gi limit was hit. Every dashboard and every other rule in this file
-            went blind for the duration. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled
-
-      # Fires while the store is still UP, which is the entire point — GreptimeDBRestarting only
-      # tells you afterwards. RSS, not greptime_cgroups_memory_usage_bytes: the cgroup figure
-      # includes reclaimable page cache from the disk-backed file cache and reads ~1GiB higher
-      # (measured live: cgroup 3.67GiB vs RSS 3.34GiB), so it would fire early and be tuned out.
-      #
-      # 6442450944 = 6GiB = 75% of the current 8Gi limit. This literal MUST move with
-      # greptimedb-standalone.resources.limits.memory in values.yaml — rules.yml is mounted via
-      # .Files.Get and cannot be templated, so a change to the limit changes this literal in the same
-      # commit.
-      - alert: GreptimeDBMemoryHigh
-        expr: max(process_resident_memory_bytes{job="greptimedb"}) > 6442450944
-        for: 10m
-        labels:
-          severity: warning
-          service: observability
-        annotations:
-          summary: "GreptimeDB resident memory is above 75% of its limit"
-          description: >-
-            Approaching the cgroup ceiling; an OOMKill takes the whole telemetry plane with it. The
-            in-process caches are budgeted at ~4.3GiB of the 8GiB and three limits
-            (experimental_compaction_memory_limit, scan_memory_limit, query.memory_pool_size) are
-            Unlimited, so the remainder is unbounded by configuration.
-
-      # Two rules, not `min(up{...}) == 0 or absent(up{...})`: GreptimeDB refuses the composite
-      # form outright (HTTP 500). See the note at NotificationsReconcilerStalled.
-      - alert: GreptimeDBDown
-        expr: min(up{job="greptimedb"}) == 0
-        for: 5m
-        labels:
-          severity: critical
-          service: observability
-        annotations:
-          summary: "GreptimeDB is not answering its scrape"
-          description: >-
-            The store is down. Ingest is being dropped, not buffered — the fleet exports OTLP/HTTP
-            straight to it. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled
-
-      # The scrape job itself vanishing looks identical to a healthy quiet store unless something
-      # asserts the series EXISTS. Returns 1 today and goes quiet once the job lands.
-      - alert: GreptimeDBMetricsMissing
-        expr: absent(up{job="greptimedb"})
-        for: 10m
-        labels:
-          severity: critical
-          service: observability
-        annotations:
-          summary: "Nothing is scraping GreptimeDB at all"
-          description: >-
-            No `up{job="greptimedb"}` series exists, so GreptimeDBDown and GreptimeDBMemoryHigh are
-            both dead. Either the scrape job was removed from chart/templates/otel-collector.yaml or
-            the collector is not running. This alert is the reason their silence is not mistaken for
-            health.
-
   # ==================================================================================================
   # Dapr workflow history — the one plane the sidecar exports NO metric about.
   #
@@ -1166,8 +1080,8 @@ groups:
       # 2851200 = 792h = the longest configured window (720h) + a 72h collection margin. The margin is
       # for the scheduler's own cadence, not slack: a row is only eligible once its instance reaches a
       # terminal state, so a legitimately-retained row can be a little older than the nominal window.
-      # This literal MUST move with dapr.workflowRetention in chart/values.yaml — rules.yml is mounted
-      # via .Files.Get and cannot be templated, so a change to the retention changes this literal in the
+      # This literal MUST move with dapr.workflowRetention in chart/values.yaml — rules.yml is a static
+      # artefact and cannot be templated, so a change to the retention changes this literal in the
       # same commit.
       #
       # `for: 30m` rather than something shorter because this is a slow failure with a slow fix. It is
@@ -1318,7 +1232,7 @@ groups:
             GreptimeDB is broken. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled
 
   # The ingest plane's own failure signal, which existed and was read by nothing. `ingest/metrics.py`
-  # states the gap in its OWN docstring — "chart/alerting/rules.yml duly contains zero ingest rules: no
+  # states the gap in its OWN docstring — "deploy/alerting/rules.yml duly contains zero ingest rules: no
   # page fires for a run that failed, a fan-out that stalled, or units that never landed" — and that
   # sentence was true for as long as the file existed.
   #

@@ -9,15 +9,14 @@ storage. (The cron route is invoked directly here; the Dapr binding fires the sa
 Run (port-forward maintenance + greptime), or `make e2e-compaction`:
 
     kubectl port-forward svc/rask-maintenance 8000:8000 &
-    kubectl port-forward svc/rask-greptimedb-standalone 4000:4000 &
+    kubectl port-forward -n observability svc/greptimedb 4000:4000 &
     LANCE_E2E_MAINTENANCE_URL=http://localhost:8000 LANCE_E2E_GREPTIME_URL=http://localhost:4000 \
     uv run pytest tests/e2e-py/test_maintenance_e2e.py -v
 
-Those Service names were `lance-ns-compaction` / `lance-ns-greptimedb-standalone` and were stale on
-both halves: the chart renders every object as `{{ include "lance.fullname" . }}-…` (= `rask-…`, the
-release name), and the service was renamed `compaction` -> `maintenance` because it does four things,
-not one. A port-forward against a Service that does not exist fails with `services … not found`,
-which reads as "the release is broken" rather than "this instruction is old".
+The chart renders every object as `{{ include "lance.fullname" . }}-…` (= `rask-…`, the release name).
+The telemetry store is the platform's; on a dev estate it is the observability fixture's `greptimedb`
+in namespace `observability`. A port-forward against a Service that does not exist fails with
+`services … not found`, which reads as "the release is broken" rather than "this instruction is old".
 """
 
 from __future__ import annotations

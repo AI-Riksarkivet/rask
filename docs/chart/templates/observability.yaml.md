@@ -3,10 +3,6 @@
 Rationale for `chart/templates/observability.yaml`. It lives here because Helm stores the chart's templates in
 every release revision, under a 1 MiB ceiling. Each section is headed by the template line it explains.
 
-## `{{- $got := dict "greptimedb-standalone.objectStorage.s3.bucket" (index .Values "greptimedb-standalone" "ob...`
-
-see `observability.bucket`
-
 ## `apiVersion: dapr.io/v1alpha1`
 
 THE SIDECAR Configuration. Named for tracing because that is all it carried when it was written; it
@@ -56,7 +52,7 @@ else), so the window it waits out is a REMINDER — and since Dapr 1.15 reminder
 scheduler's etcd. Chain: instance goes terminal -> the app's retentioner registers a reminder -> the
 reminder fires from the scheduler's etcd -> the retentioner DELETES that instance's rows.
 
-THAT SHAPE IS WHY chart/alerting/rules.yml CARRIES `DaprWorkflowHistoryNotCollected`. The timer and
+THAT SHAPE IS WHY deploy/alerting/rules.yml CARRIES `DaprWorkflowHistoryNotCollected`. The timer and
 the data it governs sit in DIFFERENT failure domains — a reminder in a 3-replica etcd StatefulSet,
 rows in Postgres — and the symptom of a lost reminder is SILENCE: rows with nothing scheduled to
 collect them, forever, reported by nothing. A central reconciling controller (Argo's model)

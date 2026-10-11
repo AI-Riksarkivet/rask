@@ -221,35 +221,29 @@ ingress:
   className: nginx # match your cluster's Ingress controller (nginx / traefik / …) — this names the CLUSTER's controller class, not rask's gateway; kgateway is the intended future edge
   host: "" # e.g. lance.example.com
 
-# RETIRED (gateway fold): observability.edgeAuth backed the nginx gateway's public /perses/ +
-# /greptime/ locations; the nginx gateway is deleted and no Ingress path routes them, so the
-# telemetry UIs are cluster-internal. GreptimeDB auth + Perses OIDC stay the follow-on if re-exposed.
+# The telemetry store, its dashboards and its alerting are the platform's (ADR 0153). rask's Collector exports to
+# the OTLP endpoint named here, and the platform's evaluator loads deploy/alerting/rules.yml.
 observability:
+  # ON in prod: the Collector ships the estate's telemetry and the `lance.audit` trail to the platform's backend.
+  enabled: true
   # The resource attribute every trace and metric carries. values.yaml defaults it to `rask` with the
   # note "override per deploy" and this overlay never did, so prod telemetry — the cascade's included —
   # was indistinguishable from dev in GreptimeDB. Measured on this render 2026-09-16:
   # `deployment.environment.name=rask`. An alert that fires on "the estate" cannot say which one.
   environment: prod
-  # Alerting engine ON (P3b): vmalert evaluates the proven rules against GreptimeDB + routes via Alertmanager.
-  # Set webhookUrl (Slack/PagerDuty) out-of-band to actually page — empty groups alerts but pages nowhere.
-  alerting:
-    enabled: true
-  # Dapr sidecar metrics (the DaprConsumerWedge signal) are scraped by the OTel Collector's prometheus
-  # receiver at operator-adoption time — not a bespoke scraper. See the OpenTelemetry-Collector EXTERNALIZE note.
+  # `export.endpoint` (the platform's OTLP backend; the render refuses it empty) and `query.url` (its
+  # SQL/PromQL API for the zones) are the deployer's to name. The store must meet the audit store's
+  # contract (values.yaml `observability`): refuse unauthenticated writes and deletes, admit
+  # `otel-collector-greptime`.
 
 # ===================================================================================================
 # EXTERNALIZE the durable/managed tier (tier 3 in docs/DURABILITY.md). Disable the in-cluster component
 # AND set its external endpoint — the apps then connect to the managed service (verified: no in-cluster
 # DNS leaks into app env). Uncomment per service.
 # ---------------------------------------------------------------------------------------------------
-# rustfs (rustfs-operator / any managed S3):         # managed S3 for the lakehouse AND observability bucket
+# rustfs (rustfs-operator / any managed S3):         # managed S3 for the lakehouse
 #   enabled: false
 #   externalEndpoint: https://s3.us-east-1.amazonaws.com
-# greptimedb-standalone:                             # REQUIRED COMPANION — the subchart's object-store endpoint
-#   objectStorage:                                   # is a static subchart value that CANNOT follow the
-#     s3:                                            # minio.externalEndpoint helper, so it must be repointed
-#       endpoint: https://s3.us-east-1.amazonaws.com # HERE too or GreptimeDB writes to the deleted in-cluster
-#                                                    # RustFS. prod-render-check guards this pairing.
 # age (CloudNativePG):                               # managed Postgres for the AGE graph + OpenFGA datastore
 #   enabled: false
 #   externalHost: lance-pg-rw                        # the CNPG Cluster's -rw service
@@ -273,12 +267,6 @@ observability:
 #   streamReplicas: 3                                # raft-replicated streams (needs the 3+ node cluster)
 # ray (the one Ray plane, REQUIRED):                 # compute's prune, the cascade's submits and Serve discovery
 #   dashboardUrl: https://ray.internal:8265          # all read it; unset with no in-cluster head fails the render
-# THE AUDIT STORE (prerequisite, values.yaml `observability`): it refuses unauthenticated writes and deletes on
-#   every listener and admits the Collector's credential, `otel-collector-greptime` in the platform store (username,
-#   password). The bundled GreptimeDB does not enforce it, so a deploy that keeps it keeps an erasable audit trail.
-# observability (OpenTelemetry Collector):           # ship telemetry to an off-cluster / OTel-operator Collector
-#   enabled: false                                   # apps + Dapr still emit OTLP (otelEnabled tracks the endpoint,
-#   externalOtlpEndpoint: http://otel-collector.observability:4318/v1/otlp # not just observability.enabled)
 # GPU metrics (NVIDIA DCGM operator): the engine's, beside its KubeRay and Kueue (ADR 0153) — the dcgm-exporter
 # is node-level infra (a DaemonSet the DCGM operator owns), scraped by the OTel Collector's prometheus receiver
 # (the same one that takes the Dapr sidecars). Nothing to flip in this chart until GPU Ray workers land.

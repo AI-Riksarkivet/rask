@@ -132,12 +132,6 @@ spec:
                       "arn:aws:s3:::*/_gates/*",
                       "arn:aws:s3:::*/__manifest/*"
                     ]
-                  },
-                  {
-                    "Sid": "NeverTheObservabilityStore",
-                    "Effect": "Deny",
-                    "Action": ["s3:*"],
-                    "Resource": ["arn:aws:s3:::{{ .Values.observability.bucket }}", "arn:aws:s3:::{{ .Values.observability.bucket }}/*"]
                   }
                 ]
               }
@@ -208,12 +202,6 @@ spec:
                     "Effect": "Deny",
                     "Action": ["s3:PutObject", "s3:DeleteObject"],
                     "Resource": ["arn:aws:s3:::*/__manifest/*"]
-                  },
-                  {
-                    "Sid": "NeverTheObservabilityStore",
-                    "Effect": "Deny",
-                    "Action": ["s3:*"],
-                    "Resource": ["arn:aws:s3:::{{ .Values.observability.bucket }}", "arn:aws:s3:::{{ .Values.observability.bucket }}/*"]
                   }
                 ]
               }
@@ -280,12 +268,6 @@ spec:
                       "arn:aws:s3:::*/_trash/*",
                       "arn:aws:s3:::*/__manifest/*"
                     ]
-                  },
-                  {
-                    "Sid": "NeverTheObservabilityStore",
-                    "Effect": "Deny",
-                    "Action": ["s3:*"],
-                    "Resource": ["arn:aws:s3:::{{ .Values.observability.bucket }}", "arn:aws:s3:::{{ .Values.observability.bucket }}/*"]
                   }
                 ]
               }
@@ -332,12 +314,6 @@ spec:
                     "Effect": "Allow",
                     "Action": ["s3:DeleteObject"],
                     "Resource": ["arn:aws:s3:::*/_lineage_outbox/*"]
-                  },
-                  {
-                    "Sid": "NeverTheObservabilityStore",
-                    "Effect": "Deny",
-                    "Action": ["s3:*"],
-                    "Resource": ["arn:aws:s3:::{{ .Values.observability.bucket }}", "arn:aws:s3:::{{ .Values.observability.bucket }}/*"]
                   }
                 ]
               }
@@ -362,15 +338,6 @@ spec:
                       "s3:CreateBucket", "s3:DeleteBucket"
                     ],
                     "Resource": ["arn:aws:s3:::*", "arn:aws:s3:::*/*"]
-                  },
-                  {
-                    "Sid": "NeverTheObservabilityStore",
-                    "Effect": "Deny",
-                    "Action": ["s3:*"],
-                    "Resource": [
-                      "arn:aws:s3:::{{ .Values.observability.bucket }}",
-                      "arn:aws:s3:::{{ .Values.observability.bucket }}/*"
-                    ]
                   }
                 ]
               }

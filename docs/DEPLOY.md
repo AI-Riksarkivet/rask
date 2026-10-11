@@ -62,15 +62,17 @@ catalog --DaprClient.publish_event--> [daprd sidecar] --pubsub.jetstream--> NATS
   (catalog + compaction).
 - `make verify` publishes a `create_table` event and asserts AGE recorded the creator.
 
-## Observability (OTel Collector + GreptimeDB + Perses — the rask stack)
+## Observability (rask's OTel Collector; GreptimeDB + Perses + vmalert are the platform's)
 
 All three OTel signals are **valuable and queryable**, mirroring rask: the apps run under
 `opentelemetry-instrument` and export **plain OTLP to a single in-chart OTel Collector**
 (`observability.otelCollector`, `chart/templates/otel-collector.yaml`) — the one telemetry hub. The
 Collector receives the app OTLP, `filelog`-tails the no-SDK infra-pod logs, and scrapes the Dapr
-sidecars' `:9090` via its `prometheus` receiver, then exports all three signals OTLP → GreptimeDB
-(adding the `x-greptime-*` db-name/pipeline headers the apps no longer carry). GreptimeDB is one unified
-store; Perses dashboards it over GreptimeDB's Prometheus-compatible API. Verified end-to-end
+sidecars' `:9090` via its `prometheus` receiver, then exports all three signals over OTLP to
+`observability.export.endpoint`, adding the backend's headers from `observability.export.*` (the apps carry
+none). The store, its dashboards and alerting are the platform's (ADR 0153); in development the
+`observability` fixture provides them: GreptimeDB, one unified store, and Perses dashboarding it over
+GreptimeDB's Prometheus-compatible API (`deploy/fixtures/observability`). Verified end-to-end
 (`make e2e-obs`):
 
 - **Traces** → `opentelemetry_traces`. A **single distributed trace spans catalog → Dapr publish →

@@ -1,7 +1,7 @@
 """Domain metrics for the ingest plane — the service had none at all.
 
 `grep -rn opentelemetry services/ingest/` returned nothing before this module, and
-`chart/alerting/rules.yml` duly contains zero ingest rules: no page fires for a run that failed, a
+`deploy/alerting/rules.yml` duly contains zero ingest rules: no page fires for a run that failed, a
 fan-out that stalled, or units that never landed.
 
 Dapr's own workflow families cannot fill the gap, because the run-level `status` label is FALSE for

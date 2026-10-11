@@ -46,11 +46,11 @@ import yaml
 
 
 REPO = Path(__file__).resolve().parents[1]
-RULES = REPO / "chart/alerting/rules.yml"
+RULES = REPO / "deploy/alerting/rules.yml"
 
 
 def resolve_datasource() -> str | None:
-    """RASK_GREPTIME_URL, else the k3s ClusterIP. Never a guess -- returns None if it cannot ask."""
+    """RASK_GREPTIME_URL, else the observability fixture's ClusterIP on k3s. Never a guess -- returns None if it cannot ask."""
     if url := os.environ.get("RASK_GREPTIME_URL"):
         return url.rstrip("/")
     kubectl = shutil.which("kubectl")
@@ -60,7 +60,7 @@ def resolve_datasource() -> str | None:
     env = {**os.environ, "KUBECONFIG": os.environ.get("KUBECONFIG", "/etc/rancher/k3s/k3s.yaml")}
     try:
         out = subprocess.run(  # noqa: S603 - argv is a literal; kubectl resolved via shutil.which
-            [kubectl, "get", "svc", "rask-greptimedb-standalone", "-o", "jsonpath={.spec.clusterIP}"],
+            [kubectl, "get", "svc", "greptimedb", "--namespace", "observability", "-o", "jsonpath={.spec.clusterIP}"],
             capture_output=True,
             text=True,
             timeout=30,

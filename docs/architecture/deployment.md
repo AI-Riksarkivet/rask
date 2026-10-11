@@ -126,7 +126,7 @@ admit as the trainer (`ray.engineServiceAccount`).
   - `cnpg.enabled` — CloudNativePG operator + `Cluster` named `rask-postgres`; app connects to `rask-postgres-rw:5432`. Values under `cnpg.*` (instances, storage, imageName, user, database).
   - `minio.enabled` — MinIO as a first-party StatefulSet, no operator (LH-133: RustFS gates STS `AssumeRole` to root and cannot grant the right, so the catalog could not hold a scoped identity there). S3 at `rask-minio:9000`, console on `:9001`. 1 pod / 4 PVCs (erasure-coding minimum). Buckets, users and policies are provisioned by the `mc` hooks. Values under `minio.*`.
   - `ray.enabled` — KubeRay `RayService` (head + Serve app). GPU-shaped rendering is derived, see below.
-  - `observability.enabled` — two optional subcharts + the first-party OTel Collector (see below).
+  - `observability.enabled` — the first-party OTel Collector and the fleet's OTLP export to it (see below).
 
 ### GPUs are the engine's
 
@@ -143,51 +143,41 @@ default** class provisions — the only portable answer (`local-path` is k3s's p
 exist on kind, whose default is `standard`). Note `storageClassName: ""` is *not* the same as omitting it:
 the empty string disables dynamic provisioning, which is why the templates use `with`. No test pins it.
 
-### Observability stack (`observability.enabled`)
+### Observability (`observability.enabled`)
 
-The `observability.enabled` toggle gates two subcharts (GreptimeDB, Perses), the
-first-party OTel Collector template, and all OTLP wiring in the fleet and Ray
-deployments. The Collector is the **single log shipper** (Vector retired, owner ruling
-2026-07-27).
+rask's telemetry seam is one **OTel Collector** (`chart/templates/otel-collector.yaml`, `rask-otel-collector`),
+the **single log shipper** (Vector retired, owner ruling 2026-07-27). It receives the fleet's OTLP, tails
+infra-pod logs (filelog), scrapes the Dapr sidecars, the Dapr control plane, Ray and OpenFGA, and exports
+everything over OTLP/HTTP to **`observability.export.endpoint`**, with the backend's ingestion headers from
+`observability.export.{headers,traceHeaders,auditHeaders}` and HTTP basic auth from the store's
+`otel-collector-greptime` secret (via ESO, as mounted files).
+
+**The store, dashboards and alerting are a prerequisite, not part of the chart** (ADR 0153). A platform names
+its OTLP backend in `observability.export.endpoint` (values-prod leaves it empty and the render refuses
+that), the SQL/PromQL API the zones' audit viewer and experiment curves read in `observability.query.url`,
+and loads rask's alert rules, **`deploy/alerting/rules.yml`** (Prometheus rule-file format; proven by
+`make alert-rules-check` and replayed against GreptimeDB by `make alert-rules-drill`), into its own
+evaluator. The store must meet the audit store's contract in `chart/values.yaml` `observability`.
+
+**Development** gets the chain from the `observability` fixture (`deploy/fixtures/observability`, release
+`observability` in namespace `observability`, installed by `make k3s-up`), which `deploy/values-local.yaml` names:
 
 | Component | Version | Service | Role |
 |---|---|---|---|
-| **OTel Collector** | first-party template (`chart/templates/otel-collector.yaml`) | `rask-otel-collector` | Telemetry hub: receives app OTLP, tails infra-pod logs via the filelog receiver (→ table `opentelemetry_logs`), scrapes Dapr sidecar metrics; exports everything OTLP → GreptimeDB `:4000/v1/otlp` |
-| **GreptimeDB** | `greptimedb-standalone` 0.4.5 (app 1.1.1) | `rask-greptimedb-standalone` | Unified metrics/logs/traces store; `:4000` HTTP (OTLP at `/v1/otlp`, Prometheus query/write, SQL), `:4001` gRPC |
-| **Perses** | 0.22.0 | `rask-perses:8080` | Dashboard UI; a GreptimeDB Prometheus `GlobalDatasource` (`http://rask-greptimedb-standalone:4000/v1/prometheus`) is pre-configured |
-
-**Storage:** GreptimeDB writes to the in-cluster MinIO S3 at `rask-minio:9000`,
-bucket `rask-observability`. The bucket-init Job (`chart/templates/minio-buckets.yaml`)
-creates it from `observability.bucket` while `observability.enabled` is on; the store itself
-provisions no bucket, so that Job is the only provisioner of the platform buckets, and no manual
-bucket creation is required. Renaming it means setting `greptimedb-standalone.objectStorage.s3.bucket`
-and the `storage.stores` observability row to the same name: both are static values, and the render
-refuses either when it disagrees with `observability.bucket`.
+| **GreptimeDB** | `greptimedb-standalone` 0.4.5 (app 1.1.1) | `greptimedb.observability:4000` | Metrics/logs/traces store on a local volume: OTLP at `/v1/otlp`, PromQL at `/v1/prometheus`, SQL at `/v1/sql`; a retention Job sets the database and audit-table TTLs |
+| **Perses** | 0.22.0 | `perses.observability:8080` | rask's dashboards-as-code over GreptimeDB's PromQL |
+| **vmalert** | v1.106.1 | `observability-vmalert:8880` | Evaluates `deploy/alerting/rules.yml` (passed with `--set-file`) |
+| **Alertmanager** | v0.28.0 | `observability-alertmanager:9093` | Groups and holds firing alerts (no receiver: pages nowhere) |
 
 **App instrumentation:** `service_kit.setup_otel` instruments the FastAPI fleet —
 the services built on `make_service_app` call it automatically, and the gateway
 (a bespoke proxy app, no `Settings`) calls it directly with `service_name="gateway"`
-so the front-door spans root every distributed trace. The Ray Serve htrflow app is
-similarly instrumented. It wires both **traces** (`BatchSpanProcessor`) and **RED
-metrics** (`MeterProvider` + periodic exporter): the FastAPI/HTTPX instrumentation
-emits `http.server.*`/`http.client.*` request count, duration, and active-request
-metrics automatically — no per-endpoint code. All export OTLP/HTTP **directly to
-GreptimeDB `:4000/v1/otlp`** — the chart injects `OTEL_EXPORTER_OTLP_ENDPOINT`,
-`OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf`, and `RASK_OTEL_ENABLED` when
-`observability.enabled=true`. Headers are split by signal: traces carry
-`OTEL_EXPORTER_OTLP_TRACES_HEADERS` with `x-greptime-pipeline-name=greptime_trace_v1`
-(GreptimeDB **requires** a pipeline for trace ingestion — without it
-`/v1/otlp/v1/traces` returns 400), while metrics use the generic
-`OTEL_EXPORTER_OTLP_HEADERS` (db-name only — metrics need no pipeline). Traces land in
-`opentelemetry_traces`; metrics become PromQL-queryable series
-(`http_server_duration_milliseconds_*`, etc.) that Perses charts. When the toggle is
-off the env vars are absent and instrumentation is a no-op. Standard OTLP is used
-throughout; OTel-Arrow is not used (the Python SDK lacks OTAP support).
-
-**Dashboards:** the chart provisions a Perses Project `rask` + a **"Fleet — RED"**
-dashboard (`chart/templates/perses-dashboards.yaml`, mounted into a
-`perses.config.provisioning.folders` path) — per-service request rate, 5xx error
-rate, p95 latency, and in-flight requests off the metrics above.
+so the front-door spans root every distributed trace. It wires both **traces** and **RED
+metrics**: the FastAPI/HTTPX instrumentation emits `http.server.*`/`http.client.*` request count,
+duration, and active-request metrics automatically. Every plane exports plain OTLP/HTTP to the
+Collector (`OTEL_EXPORTER_OTLP_ENDPOINT`, `RASK_OTEL_ENABLED` when `observability.enabled=true`) and names
+no store; the Collector adds the backend's headers. When the toggle is off the env vars are absent and
+instrumentation is a no-op. Standard OTLP throughout; OTel-Arrow is not used (the Python SDK lacks OTAP support).
 
 Greenfield local cutover (drops old PVCs): `make k3s-purge && make k3s-up`.
 

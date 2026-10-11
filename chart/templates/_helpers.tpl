@@ -79,10 +79,7 @@ dapr.io/config: "lance-tracing"
 {{- end -}}
 
 {{- define "lance.daprOtlpTarget" -}}
-{{- $c := .Values.observability.otelCollector | default dict -}}
-{{- if $c.externalEndpoint -}}{{ $c.externalEndpoint | trimPrefix "https://" | trimPrefix "http://" | trimSuffix "/v1/otlp" | trimSuffix "/" }}
-{{- else if and .Values.observability.enabled $c.enabled -}}{{ include "lance.fullname" . }}-otel-collector:4318
-{{- end -}}
+{{- if .Values.observability.enabled -}}{{ include "lance.fullname" . }}-otel-collector:4318{{- end -}}
 {{- end -}}
 
 {{- define "rask.otelResourceAttrs" -}}
@@ -96,19 +93,10 @@ dapr.io/config: "lance-tracing"
 {{- $svc := index . 1 -}}
 {{- $o := $root.Values.observability -}}
 {{- if include "lance.otelEnabled" $root -}}
-{{- $db := (hasKey $o "dbName") | ternary $o.dbName "public" -}}
-{{- $pipeline := (hasKey $o "tracePipeline") | ternary $o.tracePipeline "greptime_trace_v1" -}}
 - name: OTEL_EXPORTER_OTLP_ENDPOINT
   value: "{{ include "lance.otlpEndpoint" $root }}"
 - name: OTEL_EXPORTER_OTLP_PROTOCOL
   value: "http/protobuf"
-{{- if not (include "lance.otelViaCollector" $root) }}
-
-- name: OTEL_EXPORTER_OTLP_HEADERS
-  value: "x-greptime-db-name={{ $db }}"
-- name: OTEL_EXPORTER_OTLP_TRACES_HEADERS
-  value: "x-greptime-db-name={{ $db }},x-greptime-pipeline-name={{ $pipeline }}"
-{{- end }}
 - name: OTEL_SERVICE_NAME
   value: {{ $svc | quote }}
 - name: OTEL_RESOURCE_ATTRIBUTES
@@ -122,8 +110,6 @@ dapr.io/config: "lance-tracing"
 {{- $o := $root.Values.observability -}}
 
 {{- if include "lance.otelEnabled" $root -}}
-{{- $db := (hasKey $o "dbName") | ternary $o.dbName "public" -}}
-{{- $pipeline := (hasKey $o "tracePipeline") | ternary $o.tracePipeline "greptime_trace_v1" -}}
 {{/**/}}
 - name: RASK_OTEL_ENABLED
   value: "true"
@@ -132,13 +118,6 @@ dapr.io/config: "lance-tracing"
   value: "{{ include "lance.otlpEndpoint" $root }}"
 - name: OTEL_EXPORTER_OTLP_PROTOCOL
   value: "http/protobuf"
-{{- if not (include "lance.otelViaCollector" $root) }}
-
-- name: OTEL_EXPORTER_OTLP_HEADERS
-  value: "x-greptime-db-name={{ $db }}"
-- name: OTEL_EXPORTER_OTLP_TRACES_HEADERS
-  value: "x-greptime-db-name={{ $db }},x-greptime-pipeline-name={{ $pipeline }}"
-{{- end }}
 
 - name: OTEL_METRIC_EXPORT_INTERVAL
   value: "5000"
@@ -192,8 +171,6 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 
 {{- define "lance.openbaoHost" -}}{{ .Release.Name }}-openbao{{- end -}}
 
-{{- define "lance.greptimeHost" -}}{{ .Release.Name }}-greptimedb-standalone{{- end -}}
-
 {{- define "lance.catalogImage" -}}
 {{- $name := (.Values.image.catalog).repository | default "lance-rest-catalog" -}}
 {{- include "rask.image" (list . $name) -}}
@@ -213,24 +190,16 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- .Values.age.externalHost | default (include "lance.ageHost" .) -}}
 {{- end -}}
 
-{{- define "lance.otlpEndpoint" -}}
-{{- $o := .Values.observability -}}
-{{- $c := $o.otelCollector | default dict -}}
-{{- $gp := (hasKey $o "greptimePort") | ternary $o.greptimePort 4000 -}}
-{{- if $c.externalEndpoint -}}{{ $c.externalEndpoint }}
-{{- else if and $o.enabled $c.enabled -}}http://{{ include "lance.fullname" . }}-otel-collector:4318
-{{- else if $o.externalOtlpEndpoint -}}{{ $o.externalOtlpEndpoint }}
-{{- else -}}http://{{ include "lance.greptimeHost" . }}:{{ $gp }}/v1/otlp{{- end -}}
-{{- end -}}
+{{- define "lance.otlpEndpoint" -}}http://{{ include "lance.fullname" . }}-otel-collector:4318{{- end -}}
 
-{{- define "lance.otelViaCollector" -}}
-{{- $c := .Values.observability.otelCollector | default dict -}}
-{{- if or $c.externalEndpoint (and .Values.observability.enabled $c.enabled) -}}true{{- end -}}
+{{- define "lance.urlPort" -}}
+{{- $u := urlParse . -}}
+{{- $hp := splitList ":" $u.host -}}
+{{- if gt (len $hp) 1 -}}{{ last $hp }}{{- else if eq $u.scheme "https" -}}443{{- else -}}80{{- end -}}
 {{- end -}}
 
 {{- define "lance.otelEnabled" -}}
-{{- $c := .Values.observability.otelCollector | default dict -}}
-{{- if or .Values.observability.enabled .Values.observability.externalOtlpEndpoint $c.externalEndpoint -}}true{{- end -}}
+{{- if .Values.observability.enabled -}}true{{- end -}}
 {{- end -}}
 
 {{- define "lance.openbaoServiceAccount" -}}
@@ -374,10 +343,6 @@ lineage-events{{ with $bn }},{{ . }}{{ end }}
 - { name: OTEL_SERVICE_NAME, value: {{ $svc | quote }} }
 - { name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "{{ include "lance.otlpEndpoint" $root }}" }
 - { name: OTEL_EXPORTER_OTLP_PROTOCOL, value: "http/protobuf" }
-{{- if not (include "lance.otelViaCollector" $root) }}
-- { name: OTEL_EXPORTER_OTLP_HEADERS, value: "x-greptime-db-name={{ $o.dbName }}" }
-- { name: OTEL_EXPORTER_OTLP_TRACES_HEADERS, value: "x-greptime-db-name={{ $o.dbName }},x-greptime-pipeline-name={{ $o.tracePipeline }}" }
-{{- end }}
 - { name: OTEL_TRACES_EXPORTER, value: "otlp" }
 - { name: OTEL_METRICS_EXPORTER, value: "otlp" }
 
@@ -935,9 +900,6 @@ keys_shaped() { case "$1" in *,) return 1 ;; *,*) pub_shaped "${1%%,*}" && pub_s
 
 {{- define "lance.platformBuckets" -}}
 {{- $buckets := .Values.minio.buckets | default list -}}
-{{- if .Values.observability.enabled -}}
-{{- $buckets = append $buckets .Values.observability.bucket -}}
-{{- end -}}
 {{- join "," (compact $buckets | uniq) -}}
 {{- end -}}
 

@@ -27,10 +27,8 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 |------------|------|---------|
 | https://cloudnative-pg.github.io/charts | cloudnative-pg | 0.28.3 |
 | https://dapr.github.io/helm-charts/ | dapr | 1.18.1 |
-| https://greptimeteam.github.io/helm-charts/ | greptimedb-standalone | 0.4.5 |
 | https://nats-io.github.io/k8s/helm/charts/ | nats | 2.14.2 |
 | https://openfga.github.io/helm-charts | openfga | 0.3.12 |
-| https://perses.github.io/helm-charts | perses | 0.22.0 |
 
 ## Values
 
@@ -182,9 +180,6 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | frontend.service.port | int | `3000` | Port each zone's Bun server listens on and its Service exposes. |
 | frontend.serviceIdentity | string | `"service-web"` | FGA subject the zones' BFF uses for service reads; the `<release>-sa-web` ServiceAccount maps to it. Must be reader on the warehouse. |
 | fullnameOverride | string | `"rask"` | Base name for every rendered object; pinned to `rask` so in-cluster Services resolve as `rask-<component>`. |
-| greptimedb-standalone.configToml | string | `"mode = 'standalone'\n\n[query]\nparallelism = 8\nmemory_pool_size = \"2GiB\"\n\n# `region_engine` is an ARRAY of engine tables, not a map — the `[[ ]]` is load-bearing.\n# Written as a plain `[region_engine.mito]` this renders valid TOML that GreptimeDB then REFUSES\n# at startup: `invalid type: map, expected a sequence`, exit 1, crash loop. Learned the hard way\n# on 2026-08-23 — `tomllib.loads` parsing cleanly is NOT evidence the engine accepts the schema,\n# and a render-time gate that only checks TOML validity will pass this bug straight through.\n[[region_engine]]\n[region_engine.mito]\nnum_workers = 8\nmax_background_compactions = 4\nmax_background_flushes = 8\nmax_background_purges = 8\nglobal_write_buffer_size = \"512MiB\"\nglobal_write_buffer_reject_size = \"1GiB\"\nscan_memory_limit = \"1GiB\"\nexperimental_compaction_memory_limit = \"1GiB\"\npage_cache_size = \"512MiB\"\nvector_cache_size = \"256MiB\"\nsst_meta_cache_size = \"128MiB\"\nselector_result_cache_size = \"128MiB\"\nrange_result_cache_size = \"128MiB\"\nprefilter_result_cache_size = \"64MiB\"\nmanifest_cache_size = \"128MiB\"\n"` | Subchart passthrough: GreptimeDB engine config.toml, bounding query, scan, compaction and cache memory and worker counts to fit the 8Gi limit. |
-| greptimedb-standalone.objectStorage | object | `{"credentials":{"existingSecretName":"rask-observability-s3"},"s3":{"bucket":"rask-observability","endpoint":"http://rask-minio:9000","region":"us-east-1","root":"/greptimedb"}}` | Subchart passthrough: GreptimeDB's S3 store; `bucket` must equal `observability.bucket`, credentials from `<release>-observability-s3`. |
-| greptimedb-standalone.resources | object | `{"limits":{"memory":"8Gi"},"requests":{"cpu":"100m","memory":"256Mi"}}` | Subchart passthrough: CPU and memory requests/limits for GreptimeDB (8Gi memory limit). |
 | image.catalog | object | `{"repository":"lance-rest-catalog","tag":"dev"}` | Lakehouse image (catalog, lineage, medallion, maintenance, media services): `repository` is the image name under image.repository, `tag` is required (empty fails the render). |
 | image.digest | string | `""` | Global digest pin (sha256:...) for every first-party image; wins over `tag`. Empty uses tags. |
 | image.digests | object | `{}` | Per-component digest map keyed by component name; beats `tags` and the global tag. |
@@ -338,25 +333,16 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | networkPolicy.extraEgress | list | `[]` | List of extra egress rules, verbatim NetworkPolicy entries, for external backends (off-cluster S3, managed NATS, external OTLP). |
 | networkPolicy.minioExtraFrom | list | `[{"podSelector":{"matchLabels":{"app":"ray-lance-head"}}},{"podSelector":{"matchLabels":{"app":"ray-lance-worker"}}}]` | List of extra NetworkPolicy `from` peers allowed to reach the object store; defaults admit the ray-lance demo pods. |
 | networkPolicy.openbaoExtraFrom | list | `[]` | List of extra NetworkPolicy `from` peers allowed to reach OpenBao (e.g. the external-secrets namespace). |
-| observability.alerting.alertmanagerImage | string | `"prom/alertmanager:v0.28.0"` | Container image for Alertmanager, which groups and routes firing alerts. |
-| observability.alerting.enabled | bool | `false` | Deploy vmalert and Alertmanager to evaluate chart/alerting/rules.yml against GreptimeDB; off by default. |
-| observability.alerting.evaluationInterval | string | `"1m"` | How often vmalert evaluates the alert rules (vmalert `-evaluationInterval`). |
-| observability.alerting.vmalertImage | string | `"victoriametrics/vmalert:v1.106.1"` | Container image for vmalert, the rule evaluator. |
-| observability.alerting.webhookUrl | string | `""` | Slack or PagerDuty webhook Alertmanager pages; empty means alerts are received and grouped but sent nowhere. |
-| observability.auditRetention | string | `"400d"` | Separate TTL for the audit table (`auditTable`), overriding the database TTL; empty leaves audit records on `retention`. |
-| observability.auditTable | string | `"lance_audit"` | GreptimeDB table the Collector routes `lance.audit` records to; also read by the lakehouse admin viewer. |
-| observability.bucket | string | `"rask-observability"` | S3 bucket GreptimeDB stores data in; must equal `greptimedb-standalone.objectStorage.s3.bucket` and the observability `storage.stores` row. |
-| observability.dbName | string | `"public"` | GreptimeDB database every signal lands in (the `x-greptime-db-name` header) and the retention Job alters. |
-| observability.enabled | bool | `true` | Deploy the in-cluster telemetry stack (GreptimeDB and Perses subcharts, the OTel Collector, retention Job) and turn on OTLP export from the fleet. |
+| observability.enabled | bool | `false` | Deploy rask's OTel Collector and turn on OTLP export from the fleet, Dapr and OpenFGA to it; needs `export.endpoint`. |
 | observability.environment | string | `"rask"` | Value of the `deployment.environment.name` OTel resource attribute; empty falls back to the release namespace. |
-| observability.externalOtlpEndpoint | string | `""` | Raw off-cluster OTLP endpoint used when no Collector is in play; prefer `otelCollector.externalEndpoint`. Empty = unused. |
-| observability.greptimePort | int | `4000` | GreptimeDB HTTP port serving OTLP ingest (/v1/otlp), PromQL (/v1/prometheus), SQL and health. |
-| observability.otelCollector.enabled | bool | `true` | Deploy the in-cluster OTel Collector (app OTLP, infra log tailing, Dapr scrape); ignored when `externalEndpoint` is set. |
-| observability.otelCollector.externalEndpoint | string | `""` | OTLP endpoint of an operator-managed external Collector; when set no in-cluster Collector is deployed and apps export there. |
-| observability.otelCollector.image | string | `"otel/opentelemetry-collector-contrib:0.157.0"` | Container image for the in-cluster OTel Collector (contrib distribution). |
-| observability.retention | string | `"14d"` | Database-level TTL on GreptimeDB's database for logs, traces and metrics, set by a hook Job (e.g. 14d); empty = no TTL. |
+| observability.export.auditHeaders | object | `{"x-greptime-log-table-name":"lance_audit"}` | Headers added to the export of `lance.audit` records, which leave on their own exporter. |
+| observability.export.endpoint | string | `""` | OTLP/HTTP base URL the Collector exports traces, metrics and logs to (`/v1/traces` etc. are appended); the platform's backend. Required while `enabled`: empty fails the render. |
+| observability.export.headers | object | `{"x-greptime-db-name":"public"}` | Headers sent on every export. |
+| observability.export.traceHeaders | object | `{"x-greptime-pipeline-name":"greptime_trace_v1"}` | Headers added to the trace export. |
+| observability.otelCollector.image | string | `"otel/opentelemetry-collector-contrib:0.157.0"` | Container image for the OTel Collector (contrib distribution). |
+| observability.query.auditTable | string | `"lance_audit"` | Table the audit viewer reads `lance.audit` records from; the same table `export.auditHeaders` routes them to. |
+| observability.query.url | string | `""` | Base URL of the store's SQL and PromQL API the zones read (GREPTIME_API); empty leaves those panels without data. |
 | observability.samplingRate | string | `"1"` | Dapr tracing sampling rate in the Dapr Configuration, as a string from 0 to 1; "1" traces every request. |
-| observability.tracePipeline | string | `"greptime_trace_v1"` | GreptimeDB pipeline name sent as `x-greptime-pipeline-name` on trace export; GreptimeDB requires it to ingest OTLP traces. |
 | openbao.devMode | bool | `true` | Run OpenBao in-memory, auto-unsealed with a fixed root token (demo only). False runs a sealed file-backed server an operator must init and unseal. |
 | openbao.devToken | string | `"root"` | Root token of the dev-mode server (used only when `devMode` is true). |
 | openbao.enabled | bool | `true` | Run the first-party OpenBao secret store that the Dapr secret stores and ESO read. |
@@ -376,11 +362,6 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | openfga.replicaCount | int | `1` | Subchart passthrough: number of OpenFGA server replicas. |
 | openfga.resources | object | `{"limits":{"memory":"2Gi"},"requests":{"cpu":"50m","memory":"512Mi"}}` | Subchart passthrough: CPU and memory requests/limits for the OpenFGA server. |
 | openfga.telemetry | object | `{"trace":{"enabled":false,"otlp":{"endpoint":"rask-otel-collector:4317"},"sampleRatio":0.001}}` | Subchart passthrough: OpenFGA OTLP tracing to the OTel Collector; off by default, ratio 0.001 because each Check emits ~1,900 spans. |
-| perses.config | object | `{"provisioning":{"folders":["/etc/perses/provisioning","/etc/perses/datasources","/etc/perses/dashboards"],"interval":"1m"}}` | Subchart passthrough: Perses provisioning folders (provisioning, datasources, dashboards) and how often they are rescanned. |
-| perses.datasources | list | `[{"kind":"GlobalDatasource","metadata":{"name":"greptimedb"},"spec":{"default":true,"plugin":{"kind":"PrometheusDatasource","spec":{"proxy":{"kind":"HTTPProxy","spec":{"url":"http://rask-greptimedb-standalone:4000/v1/prometheus"}}}}}}]` | Subchart passthrough: the default GreptimeDB Prometheus datasource, queried through the Perses server in proxy mode. |
-| perses.resources | object | `{"limits":{"memory":"256Mi"},"requests":{"cpu":"25m","memory":"64Mi"}}` | Subchart passthrough: CPU and memory requests/limits for Perses. |
-| perses.volumeMounts | list | `[{"mountPath":"/etc/perses/plugins","name":"perses-plugins"},{"mountPath":"/etc/perses/dashboards","name":"perses-dashboards"}]` | Subchart passthrough: mounts the plugins emptyDir at /etc/perses/plugins and the dashboards ConfigMap at /etc/perses/dashboards. |
-| perses.volumes | list | `[{"emptyDir":{},"name":"perses-plugins"},{"configMap":{"name":"rask-perses-dashboards"},"name":"perses-dashboards"}]` | Subchart passthrough: a writable emptyDir for Perses plugins and the `rask-perses-dashboards` ConfigMap of dashboards-as-code. |
 | podDisruptionBudget.enabled | bool | `false` | Renders a PodDisruptionBudget for each service, controlplane and zone running more than one replica. |
 | podDisruptionBudget.minAvailable | int | `1` | minAvailable of every rendered PodDisruptionBudget. |
 | pubsub.controlName | string | `"catalog-control-pubsub"` | Name of the broadcast (no queue group) Dapr pubsub component for catalog.control.v1; must match the catalog's LANCE_CONTROL_PUBSUB default. Used when `controlEmit` is on. |
@@ -495,7 +476,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | stateStore.scopes | list | `["annotator","catalog","ingest","flows","notifications"]` | App-ids allowed to load the state store; the secret-store scope is derived from this list too. Adding one needs a restart of scoped pods. |
 | stateStore.secretStore | string | `"lance-secrets"` | Dapr secret store that resolves the state store's connection string (OpenBao, never a k8s Secret). |
 | stateStore.tableName | string | `"state"` | Postgres table holding Dapr state rows. |
-| storage.stores | list | `[{"bucket":"lance-catalog","description":"The lakehouse warehouse — the governed medallion datasets.","name":"lance-catalog","role":"bronze","secret":"viewer-s3"},{"bucket":"rask-observability","description":"Telemetry retained by GreptimeDB. Operational, not archival.","name":"rask-observability","role":"observability","secret":"viewer-s3"}]` | Object-store registry rendered as RASK_STORES for the fleet and the explorer viewer; each entry is {name, bucket, role, secret, description, endpoint?, insecure?}, `secret` a Dapr secret-store key. |
+| storage.stores | list | `[{"bucket":"lance-catalog","description":"The lakehouse warehouse — the governed medallion datasets.","name":"lance-catalog","role":"bronze","secret":"viewer-s3"}]` | Object-store registry rendered as RASK_STORES for the fleet and the explorer viewer; each entry is {name, bucket, role, secret, description, endpoint?, insecure?}, `secret` a Dapr secret-store key. |
 | vending.allowExternalBlobs | bool | `false` | Allow blob-v2 columns to reference arbitrary external objects (Blob.from_uri) on create. Off by default: an SSRF and dangling-pointer risk; prefer `externalBlobBases`. |
 | vending.assumeRoleArn | string | `"arn:aws:iam::000000000000:role/lance-vend"` | Role ARN passed on AssumeRole in `sts`/`web_identity` mode (LANCE_S3_ASSUME_ROLE_ARN); stores with inherited policies ignore it but boto3 requires it. |
 | vending.encryption | object | `{}` | Server-side encryption for direct writes, carried in vended storage options: `algorithm` (AES256, aws:kms, aws:kms:dsse) and `kmsKeyId` (kms only). Empty = bucket default. |

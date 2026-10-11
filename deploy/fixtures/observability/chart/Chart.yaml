@@ -1,0 +1,15 @@
+apiVersion: v2
+name: observability
+description: >-
+  NOT FOR PRODUCTION. A development observability chain for rask's OTel Collector to export to: GreptimeDB on a local
+  volume, Perses with rask's dashboards, vmalert evaluating rask's alerting rules, and Alertmanager. A platform runs its
+  own; rask names its OTLP endpoint through `observability.export.endpoint`.
+type: application
+version: 0.1.0
+dependencies:
+  - name: greptimedb-standalone
+    version: "0.4.5"
+    repository: https://greptimeteam.github.io/helm-charts/
+  - name: perses
+    version: "0.22.0"
+    repository: https://perses.github.io/helm-charts

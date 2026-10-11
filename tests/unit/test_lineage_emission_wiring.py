@@ -39,7 +39,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.unit.chart_render import ESO_ARGS, RAY_ARGS
+from tests.unit.chart_render import ESO_ARGS, OBSERVABILITY_SETS, RAY_ARGS
 
 
 REPO = Path(__file__).resolve().parents[2]
@@ -122,7 +122,7 @@ def test_rendered_config_does_not_degrade_to_a_noop_emitter(monkeypatch: pytest.
     """
     from lineage_kit.emitter import NoopEmitter, build_emitter
 
-    rendered = _render("ray.enabled=true", "singleTenant.enabled=true", "compaction.enabled=true")
+    rendered = _render("ray.enabled=true", "singleTenant.enabled=true", "compaction.enabled=true", *OBSERVABILITY_SETS)
     endpoints = set(_env_values(rendered, "RASK_LINEAGE_ENDPOINT"))
     assert endpoints, "the chart renders RASK_LINEAGE_ENDPOINT nowhere — lineage-kit's HTTP transport degrades to NoopEmitter on every pod"
     assert len(endpoints) == 1, f"emitting services disagree on the lineage endpoint: {sorted(endpoints)}"
@@ -154,7 +154,7 @@ def test_every_lineage_producer_renders_the_endpoint() -> None:
     Self-maintaining: a new producer is caught the moment it renders a lineage topic, which it must do
     to publish at all.
     """
-    rendered = _render("ray.enabled=true", "singleTenant.enabled=true", "compaction.enabled=true")
+    rendered = _render("ray.enabled=true", "singleTenant.enabled=true", "compaction.enabled=true", *OBSERVABILITY_SETS)
 
     # Walk env in document order so each var is attributed to the container it sits in. OTEL_SERVICE_NAME
     # is the per-container marker; the topic/endpoint that follow belong to that service.

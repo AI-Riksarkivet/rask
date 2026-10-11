@@ -95,25 +95,10 @@ Ingress disabled — port-forward the gateway:
 
 {{- if .Values.observability.enabled }}
 
-Observability (OTel Collector + GreptimeDB + Perses):
-  - greptimedb: {{ include "lance.greptimeHost" $root }}:{{ (hasKey .Values.observability "greptimePort") | ternary .Values.observability.greptimePort 4000 }} (HTTP: OTLP ingest, Prometheus query/write, SQL)
-  - perses:     {{ include "rask.fullname" $root }}-perses:8080 (dashboards; GreptimeDB Prometheus datasource pre-configured)
-{{- with .Values.observability.otelCollector }}
-{{- if .enabled }}
+Observability (rask's OTel Collector; the store, dashboards and alerting are the platform's):
   - collector:  {{ include "lance.fullname" $root }}-otel-collector:4318 (OTLP/HTTP in; also tails infra pod logs)
-{{- else if .externalEndpoint }}
-  - collector:  {{ .externalEndpoint }} (EXTERNAL — no in-cluster Collector is deployed)
-{{- end }}
-{{- end }}
-  - storage:    bucket {{ .Values.observability.bucket }} ({{ include "rask.fullname" $root }}-minio:{{ .Values.minio.port }})
-  App OTLP target (catalog/lineage/medallion/compaction): {{ include "lance.otlpEndpoint" $root }}
-  The rask fleet (incl. gateway) and Ray Serve export OTLP/HTTP straight to GreptimeDB
-  (table opentelemetry_traces, pipeline greptime_trace_v1; gated by RASK_OTEL_ENABLED).
-{{- with .Values.observability.alerting }}
-{{- if .enabled }}
-  - alerting:   vmalert + Alertmanager evaluating chart/alerting/rules.yml against GreptimeDB PromQL
-{{- end }}
-{{- end }}
+  - export:     {{ .Values.observability.export.endpoint }}
+  - rules:      deploy/alerting/rules.yml, for the platform's alert evaluator
 {{- end }}
 
 {{- with .Values.dapr }}

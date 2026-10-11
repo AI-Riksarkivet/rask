@@ -17,12 +17,12 @@ the dev seed reads the signing pairs from the outgoing OpenBao pod (openbao.yaml
 
 stateStore.scopes appended + uniq'd, same derivation as the openbao rule above.
 
-## `{{- $oc := .Values.observability.otelCollector | default dict }}`
+## `{{- if and .Values.observability.enabled .Values.stateStore.enabled }}`
 
-The in-cluster OTel Collector is a 5432 client too: its `sqlquery/daprstate`
+The OTel Collector is a 5432 client too: its `sqlquery/daprstate`
 receiver reads the workflow-history volume and age that nothing else can
 measure (daprd exports no workflow or state-store metric at all). Blocked here
 and the receiver retries forever, DaprWorkflowStateMetricsMissing fires, and
-the retention alert it guards goes blind. Gated on the same three conditions
-that render the receiver, so a prod estate on an EXTERNAL Collector does not
-carry an allow-entry for a pod it never deploys.
+the retention alert it guards goes blind. Gated on the conditions that render
+the Collector and its receiver, so an estate without them carries no
+allow-entry for a pod it never deploys.

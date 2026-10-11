@@ -81,7 +81,7 @@ die() {
 	exit 1
 }
 
-# The slice A11 needs, and nothing else. The full chart renders observability (GreptimeDB, Perses), the
+# The slice A11 needs, and nothing else. The full chart renders observability (the OTel Collector), the
 # frontend zones and more — none of which the lane touches, all of which cost
 # minutes of pull and schedule time. Disabling them is not a shortcut: it is the difference between
 # a verification anyone will run and one nobody will.

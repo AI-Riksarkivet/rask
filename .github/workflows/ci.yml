@@ -109,7 +109,7 @@ jobs:
   #             promtool is PROMETHEUS; vmalert queries GreptimeDB, and the two do not accept the same
   #             PromQL — two rules once shipped that promtool called SUCCESS and GreptimeDB answered
   #             400 and 500, so they could never fire and nothing said so. This boots the SAME
-  #             GreptimeDB the chart deploys as a Dagger service and replays every expression against
+  #             GreptimeDB the observability fixture runs as a Dagger service and replays every expression against
   #             it. An empty store is enough: the drill asserts the endpoint ACCEPTS the query, not
   #             that any series exists.
   #   nats-auth the chart's NATS permission table (`nats.auth.users`) on the chart's own nats-server in

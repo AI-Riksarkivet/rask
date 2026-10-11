@@ -219,10 +219,7 @@ def _run_bucket_init(rendered: str, monkeypatch: pytest.MonkeyPatch) -> tuple[in
     return exit_code, present
 
 
-@pytest.mark.parametrize("observability", [False], ids=["observability-off"])
-def test_the_bucket_init_creates_every_platform_bucket_and_every_zone(
-    observability: bool, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_the_bucket_init_creates_every_platform_bucket_and_every_zone(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     """Every bucket a value hands the bucket-init Job must exist once it has run on an EMPTY store.
 
     Each source is its own hop in the template, and a hop dropped is invisible while another value names
@@ -231,7 +228,6 @@ def test_the_bucket_init_creates_every_platform_bucket_and_every_zone(
     rendered = _helm_template(
         "singleTenant.enabled=true",
         "explorer.enabled=true",
-        f"observability.enabled={str(observability).lower()}",
         "minio.bucket=root-x",
         "minio.buckets={extra-platform}",
         "medallion.buckets.gold=acme-gold",
@@ -243,51 +239,20 @@ def test_the_bucket_init_creates_every_platform_bucket_and_every_zone(
     assert not missing, f"the Job left these buckets uncreated: {sorted(missing)}"
 
 
-#: `observability.bucket` renamed with the two static values the render pairs it with: GreptimeDB's own
-#: key and the storage registry's observability row. A `--set` list index replaces the whole list, so
-#: both rows are restated.
-_OBSERVABILITY_BUCKET_RENAMED = (
-    "observability.bucket=obs-x",
-    "greptimedb-standalone.objectStorage.s3.bucket=obs-x",
-    "storage.stores[0].name=lance-catalog",
-    "storage.stores[0].bucket=lance-catalog",
-    "storage.stores[0].role=bronze",
-    "storage.stores[1].name=obs-x",
-    "storage.stores[1].bucket=obs-x",
-    "storage.stores[1].role=observability",
-)
+def test_a_renamed_bucket_leaves_nothing_behind_under_its_old_name(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """Rename the root: the Job makes it under its new name only. A default spelled a second time in the values
+    shows up here as a bucket the Job makes under the old name, which nothing uses.
 
-
-@pytest.mark.parametrize("observability", [True, False], ids=["observability-on", "observability-off"])
-def test_a_renamed_bucket_leaves_nothing_behind_under_its_old_name(
-    observability: bool, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """Rename the root and GreptimeDB's bucket: the Job makes each under its new name only, and GreptimeDB
-    writes to the one it makes. A default spelled a second time in the values shows up here as a bucket
-    the Job makes under the old name, which nothing uses.
-
-    With observability off the platform set is empty, which is the render that hands the Job an empty
+    With no platform bucket declared the platform set is empty, which is the render that hands the Job an empty
     name unless the template drops it.
     """
     values = yaml.safe_load((CHART / "values.yaml").read_text())
-    spellings = {"root-x", "obs-x", values["minio"]["bucket"], values["observability"]["bucket"]}
-    wanted = {"root-x", "obs-x"} if observability else {"root-x"}
-    rendered = _helm_template(
-        "singleTenant.enabled=true",
-        "explorer.enabled=true",
-        f"observability.enabled={str(observability).lower()}",
-        "minio.bucket=root-x",
-        *_OBSERVABILITY_BUCKET_RENAMED,
-    )
+    spellings = {"root-x", values["minio"]["bucket"]}
+    rendered = _helm_template("singleTenant.enabled=true", "explorer.enabled=true", "minio.bucket=root-x", "minio.buckets=null")
     exit_code, present = _run_bucket_init(rendered, monkeypatch)
 
     assert exit_code == 0, f"the bucket-init Job fails on a store it provisioned itself (exit {exit_code}):\n{capsys.readouterr().err}"
-    assert present & spellings == wanted, (
-        f"observability.enabled={observability}: the Job made {sorted(present & spellings)} of {sorted(spellings)}, wanted {sorted(wanted)}"
-    )
-    if observability:
-        docs = [doc for doc in yaml.load_all(rendered, Loader=FAST_LOADER) if isinstance(doc, dict)]
-        assert 'bucket = "obs-x"' in _greptimedb_config(docs), "GreptimeDB writes to a bucket the Job does not make"
+    assert present & spellings == {"root-x"}, f"the Job made {sorted(present & spellings)} of {sorted(spellings)}, wanted ['root-x']"
 
 
 def test_every_dapr_annotated_pod_carries_the_injector_webhook_label() -> None:
@@ -573,21 +538,6 @@ def _rendered_docs(*set_values: str) -> list[dict]:
     return [doc for doc in yaml.load_all(_helm_template(*set_values), Loader=FAST_LOADER) if isinstance(doc, dict)]
 
 
-def _greptimedb_config(docs: list[dict]) -> str:
-    """The telemetry store's rendered `config.toml`, as text.
-
-    Located by CONTENT, not by name: the subchart names its ConfigMap
-    `<release>-greptimedb-standalone-config`, and a release-name change would silently return {} from a
-    name match, turning every gate below green against a config it could no longer find.
-    """
-    for doc in docs:
-        data = doc.get("data") or {}
-        toml = data.get("config.toml", "")
-        if doc.get("kind") == "ConfigMap" and "[storage]" in toml and "greptimedb" in toml:
-            return toml
-    return ""
-
-
 def _fleet_config(docs: list[dict]) -> dict[str, str]:
     """The fleet ConfigMap — the one carrying `RASK_API_PREFIX` and the gateway's upstream addresses."""
     for doc in docs:
@@ -656,6 +606,7 @@ _PROD_INPUTS = (
     "-f", str(REPO / "deploy/values-prod.yaml"),
     "--set", "image.catalog.tag=v0", "--set", "frontend.image.tag=v0", "--set", "image.repository=ghcr.io/example/rask",
     "--set", "signing.provisioned=true", "--set", "nats.auth.provisioned=true",
+    "--set-string", "observability.export.endpoint=http://otlp.example.com:4318/v1/otlp",
     "--set", "backups.volumeSnapshot.snapshotClassName=csi-snapclass", "--set", "ingress.host=lance.example.com",
 )  # fmt: skip
 _LOCAL_INPUTS = ("--set", "image.localImages=true", "-f", str(REPO / "deploy/values-local.yaml"))
@@ -1117,8 +1068,8 @@ def test_the_chart_TURNS_DOCS_OFF_by_default_and_ON_when_asked() -> None:
 #:
 #: Two different reasons, kept apart on purpose:
 #:
-#:  * SUBCHARTS — dapr, nats, openfga, dex, cloudnative-pg, openbao, rustfs,
-#:    greptimedb, perses, vmalert, alertmanager. Not ours to template, so not ours to harden.
+#:  * SUBCHARTS — dapr, nats, openfga, dex, cloudnative-pg, openbao, rustfs. Not ours to template,
+#:    so not ours to harden.
 #:  * INFRA PODS WE DO TEMPLATE — the OTel collector. Its securityContext is gated behind
 #:    `security.infraContexts.enabled`, which values.yaml defaults OFF and stages explicitly:
 #:    "both default OFF (behavior-identical); flip after the §7a live checks". That is a known,
@@ -1127,7 +1078,6 @@ def test_the_chart_TURNS_DOCS_OFF_by_default_and_ON_when_asked() -> None:
 #:    hand-written first-party tuple where nobody could tell the difference.
 _UNCOVERED_DEPLOYMENTS = (
     "dapr", "nats", "openfga", "dex", "cloudnative-pg", "openbao", "minio",
-    "greptimedb", "perses", "vmalert", "alertmanager",
     "otel-collector",
 )  # fmt: skip
 

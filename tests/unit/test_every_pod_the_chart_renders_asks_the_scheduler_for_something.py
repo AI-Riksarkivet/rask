@@ -51,6 +51,7 @@ _PROD_ARGS = [
     "--set", "frontend.image.tag=v0",
     "--set", "signing.provisioned=true",
     "--set", "nats.auth.provisioned=true",
+    "--set-string", "observability.export.endpoint=http://otlp.example.com:4318/v1/otlp",
     "--set", "backups.volumeSnapshot.snapshotClassName=csi-snapclass",
     "--set", "ingress.host=lance.example.com",
     "--set", "image.repository=ghcr.io/example/rask",

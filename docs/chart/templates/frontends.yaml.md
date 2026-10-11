@@ -154,10 +154,10 @@ nobody. The medallion is still reachable SERVER-side, through the gateway's own
 
 ## `- name: GREPTIME_AUDIT_TABLE`
 
-The table the governance trail lives in. Rendered from the SAME value the Collector's
-`x-greptime-log-table-name` header carries, so the writer and the reader cannot name two
-different tables — which is how a viewer ends up reporting an empty audit log while the
-rows land elsewhere.
+The table the governance trail lives in, `observability.query.auditTable`. It must name the table
+`observability.export.auditHeaders` routes the trail to, or the viewer reports an empty audit log while
+the rows land elsewhere. Both default to `lance_audit`; the two values are the platform's to keep equal,
+since the export header is the backend's contract, not a name rask can derive.
 
 ## `- name: NATS_MONITOR_API`
 

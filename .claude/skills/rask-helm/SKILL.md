@@ -62,8 +62,9 @@ for a revision the API server refuses. Python's default `gzip.compress` is level
 further** — enough to read "fits" for a
 revision that the API server refuses.
 
-`.helmignore` keeps non-runtime files out of `chart.files`. `alerting/rules_test.yml` (promtool's
-fixture, read from the working tree, never from the package) was 40,912 packed bytes on its own.
+`.helmignore` keeps non-runtime files out of `chart.files`. The alert rules are not chart files at all
+([[XC-127]]): `deploy/alerting/rules.yml` is an artefact the platform's evaluator loads; `rules_test.yml` alone,
+when it still sat in the chart, was 40,912 packed bytes.
 
 **It has hit the ceiling three times**, each time answered by trimming rather than by removing what
 fills it. v35 on 2026-08-15 (`HELM_DRIVER=sql`, then CNPG's CRDs moved out in `b56a49c9`); the SQL
@@ -96,8 +97,10 @@ second case. Kueue's upstream docs only ever install it as its own release in `k
 - **What leaves the chart lands in `deploy/fixtures/`** (ADR 0153, [[XC-124]]): one directory per prerequisite, an
   upstream chart pinned in `fixture.env`, installed as its own release by `scripts/fixtures.sh` before rask's
   (`make k3s-fixtures`, a prerequisite of `make k3s-up`; `FIXTURES` names which, default `external-secrets kuberay-operator
-  ray-cluster`, the dev Ray engine ([[XC-125]]); a GPU
-  node with no device plugin yet adds `nvidia-device-plugin`). The e2e lanes install ESO through the same script.
+  ray-cluster observability`: the dev Ray engine ([[XC-125]]) and the telemetry chain the Collector exports to
+  ([[XC-127]]); a GPU node with no device plugin yet adds `nvidia-device-plugin`). A fixture's `SET_FILES` passes an
+  artefact from outside its chart with `--set-file` (the alert rules), and a local fixture chart with upstream
+  `dependencies:` is vendored from its own `Chart.lock`. The e2e lanes install ESO through the same script.
   The §3 handover is automatic: every object the fixture renders that another release (or none) already owns is
   annotated keep and the install takes `--take-ownership`, so run the fixture BEFORE the rask upgrade that stops
   rendering the object. Fixtures are not for production: namespace label

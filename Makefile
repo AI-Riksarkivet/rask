@@ -164,7 +164,7 @@ frontend-images: ## Build every zone image from the one parametrized dockerfile 
 # prod-overlay HA/security invariants and the alert-rule proofs had never once run. Exactly the
 # defect the OpenAPI note above records ("referenced them by name for months before they existed"),
 # repeated one section down; and both assets already specify their own commands — scripts/
-# prod_render_check.sh's header says "Run: `make prod-render-check`", and chart/alerting/
+# prod_render_check.sh's header says "Run: `make prod-render-check`", and deploy/alerting/
 # rules_test.yml's says this target runs check-then-test. Only the wrappers were missing.
 #
 # Bare `helm`/`promtool` on purpose: the Dagger container curls both to /usr/local/bin and
@@ -231,8 +231,8 @@ notifications-rig: ## Mailpit + a counting Slack sink for the channel idempotenc
 alert-rules-check: ## promtool: the alert rules are valid AND actually fire on synthetic series
 	@PROMTOOL=$$(command -v promtool 2>/dev/null || echo $(LOCALBIN)/promtool); \
 	  [ -x "$$PROMTOOL" ] || { echo "!! promtool not found on PATH or in $(LOCALBIN) — run 'make bootstrap'"; exit 1; }; \
-	  "$$PROMTOOL" check rules chart/alerting/rules.yml && \
-	  "$$PROMTOOL" test rules chart/alerting/rules_test.yml
+	  "$$PROMTOOL" check rules deploy/alerting/rules.yml && \
+	  "$$PROMTOOL" test rules deploy/alerting/rules_test.yml
 
 # promtool is PROMETHEUS. Production is vmalert -> GreptimeDB, and the two do not accept the same
 # PromQL: two rules shipped that promtool called SUCCESS and GreptimeDB answered 400/500, so they
@@ -692,9 +692,7 @@ K3S_IMAGES = $(COMPOSE_IMAGES) $(ZONES:%=web-%) ray-cluster lance-rest-catalog m
 K3S_DEP_REPOS = nats=https://nats-io.github.io/k8s/helm/charts/ \
                 dapr=https://dapr.github.io/helm-charts/ \
                 openfga=https://openfga.github.io/helm-charts \
-                cnpg=https://cloudnative-pg.github.io/charts \
-                greptime=https://greptimeteam.github.io/helm-charts/ \
-                perses=https://perses.github.io/helm-charts
+                cnpg=https://cloudnative-pg.github.io/charts
 
 k3s-install: ## One-time host bootstrap: k3s + helm only (everything else is the chart; sudo)
 	./scripts/k3s-install.sh
@@ -777,8 +775,9 @@ DROP_CREDENTIAL_VALUES := --set dapr.appToken=null --set frontend.oidc.sessionSe
 
 # The prerequisites a dev estate gets from deploy/fixtures, each its own release, installed before rask's
 # (NOT FOR PRODUCTION; deploy/fixtures/README.md). The Ray engine the cascade submits to is two of them, the operator
-# first. A GPU node with no device plugin yet adds nvidia-device-plugin.
-FIXTURES ?= external-secrets kuberay-operator ray-cluster
+# first; observability is the store, dashboards and alerting rask's Collector exports to. A GPU node with no device
+# plugin yet adds nvidia-device-plugin.
+FIXTURES ?= external-secrets kuberay-operator ray-cluster observability
 
 k3s-fixtures: ## Install the development fixtures (FIXTURES) as their own releases, before the rask chart
 	KUBECONFIG=$(KUBECONFIG) ./scripts/fixtures.sh $(FIXTURES)

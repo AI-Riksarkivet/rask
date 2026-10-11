@@ -12,9 +12,9 @@ GreptimeDB store, not mocks:
 
 Run (port-forward the three services first), or `make e2e-obs`:
 
-    kubectl port-forward svc/lance-ns-catalog               2333:2333 &
-    kubectl port-forward svc/lance-ns-lineage               8000:8000 &
-    kubectl port-forward svc/lance-ns-greptimedb-standalone 4000:4000 &
+    kubectl port-forward svc/rask-catalog                      2333:2333 &
+    kubectl port-forward svc/rask-lineage                      8000:8000 &
+    kubectl port-forward -n observability svc/greptimedb      4000:4000 &
     LANCE_E2E_CATALOG_URL=http://localhost:2333 \
     LANCE_E2E_LINEAGE_URL=http://localhost:8000 \
     LANCE_E2E_GREPTIME_URL=http://localhost:4000 \

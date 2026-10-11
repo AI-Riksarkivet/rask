@@ -77,3 +77,5 @@ sbom-*.cdx.json
 docs/architecture/*.html
 docs/architecture/*.visual-check.*
 .soak/
+# a fixture chart's vendored upstream dependencies, rebuilt by scripts/fixtures.sh from its Chart.lock
+deploy/fixtures/*/chart/charts/

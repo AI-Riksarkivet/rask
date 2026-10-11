@@ -119,21 +119,15 @@ class StoreRegistry(BaseModel):
 #: page images and ALTO is the platform having an opinion about the workload — and it reached every
 #: service, since `service-kit` is imported by all of them.
 #:
-#: A workload's buckets belong in ``RASK_STORES`` for the deployment that has them. The two below
-#: stay because they are infrastructure the platform provisions and reads for itself, not a
-#: statement about what anyone batch-processes.
+#: A workload's buckets belong in ``RASK_STORES`` for the deployment that has them. The warehouse
+#: below stays because it is infrastructure the platform provisions and reads for itself, not a
+#: statement about what anyone batch-processes. The telemetry store is the platform's (ADR 0153).
 DEFAULT_STORES: tuple[Store, ...] = (
     Store(
         name="lance-catalog",
         bucket="lance-catalog",
         role=StorageRole.BRONZE,
         description="The lakehouse warehouse — the governed medallion datasets.",
-    ),
-    Store(
-        name="rask-observability",
-        bucket="rask-observability",
-        role=StorageRole.OBSERVABILITY,
-        description="Telemetry retained by GreptimeDB. Operational, not archival.",
     ),
 )
 

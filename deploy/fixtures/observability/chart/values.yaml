@@ -1,0 +1,170 @@
+# NOT FOR PRODUCTION (deploy/fixtures/README.md). The observability chain a platform team runs for rask's OTel
+# Collector to export to: GreptimeDB, Perses, vmalert and Alertmanager, in the `observability` namespace.
+
+# The store rask's Collector writes and the zones' audit viewer reads (rask `observability.export` / `query`).
+store:
+  # -- GreptimeDB HTTP port: /v1/otlp (ingest), /v1/prometheus (PromQL), /v1/sql, /health.
+  port: 4000
+  # -- GreptimeDB database every signal lands in (rask's export header `x-greptime-db-name`); the retention Job alters it.
+  dbName: public
+  # Retention for logs/traces/metrics: a database-level TTL set by the post-install/post-upgrade Job
+  # (templates/retention-job.yaml), so every table (opentelemetry_logs, opentelemetry_traces, the metrics
+  # physical table) inherits it. Empty = no TTL (unbounded growth).
+  # -- Database-level TTL for logs, traces and metrics (e.g. 14d); empty = no TTL.
+  retention: "14d"
+  # THE GOVERNANCE TRAIL IS NOT TELEMETRY: measured 2026-09-18 on the live store, 8,590,872 `lance.audit` rows
+  # sat inside `opentelemetry_logs` beside 114,938,016 telemetry rows under one `ttl = '14days'`. rask's Collector
+  # routes them to their own table (`x-greptime-log-table-name`, verified against GreptimeDB v1.1.1) and the
+  # retention Job gives that table its own TTL, which overrides the database's (read back by SHOW CREATE TABLE).
+  # -- GreptimeDB table rask's Collector routes `lance.audit` records to (rask's `observability.export.auditHeaders`).
+  auditTable: lance_audit
+  # -- Separate TTL for the audit table, overriding the database TTL; empty leaves audit records on `retention`.
+  auditRetention: "400d"
+
+# rask's dashboards-as-code (templates/dashboards.yaml), which Perses mounts at /etc/perses/dashboards.
+dashboards:
+  # -- Name of the dashboards ConfigMap; `perses.volumes` mounts it by this name.
+  configMap: perses-dashboards
+
+# vmalert evaluates rask's alerting rules (deploy/alerting/rules.yml, passed with --set-file by
+# scripts/fixtures.sh) against GreptimeDB's PromQL endpoint and routes firing alerts through Alertmanager.
+alerting:
+  # -- The Prometheus rule file vmalert loads; required, set from deploy/alerting/rules.yml.
+  rules: ""
+  # -- Container image for vmalert, the rule evaluator.
+  vmalertImage: victoriametrics/vmalert:v1.106.1
+  # -- Container image for Alertmanager, which groups and routes firing alerts.
+  alertmanagerImage: prom/alertmanager:v0.28.0
+  # -- How often vmalert evaluates the rules (vmalert `-evaluationInterval`).
+  evaluationInterval: "1m"
+  # -- Webhook Alertmanager pages; empty means alerts are received and grouped but sent nowhere (visible on :9093).
+  webhookUrl: ""
+  # -- CPU and memory requests/limits for vmalert and for Alertmanager.
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits: { cpu: "1", memory: 512Mi }
+
+greptimedb-standalone:
+  # -- Subchart passthrough: the store's Service is `greptimedb` (port 4000), the name deploy/values-local.yaml's export endpoint and Perses use.
+  fullnameOverride: greptimedb
+  # The ONLY seam this subchart offers for engine tuning: its templates/configmap.yaml renders
+  # `config.toml: {{ .Values.configToml | indent 4 }}` and then APPENDS the storage and logging blocks.
+  # GreptimeDB's stock defaults are sized for a dedicated large machine: measured 2026-08-23, the live
+  # `GET :4000/config` read "unlimited" for query.memory_pool_size, scan_memory_limit and
+  # experimental_compaction_memory_limit while ~4.3GiB of 8GiB was committed to caches plus the write
+  # buffer, and the pod was OOMKilled 13 times in 7h27m (the growth was 4,099 new Ray series in one step).
+  #
+  # BOUNDING IS NOT SHRINKING: with these set, an oversized scan fails ITS OWN QUERY
+  # (`scan_memory_on_exhausted = "fail"`, the default) instead of taking the process down with every log,
+  # metric and trace it holds; rask's Collector queues and retries a rejected write.
+  #
+  # SIZING against the 8Gi limit below. Worst case sums to ~6.3GiB:
+  #   caches ~1.31GiB + write-buffer reject 1GiB + query 2GiB + scan 1GiB + compaction 1GiB.
+  # The concurrency knobs are cut for the same reason: stock is num_workers 32 / 16 compactions /
+  # 32 flushes / 64 purges and `parallelism = 0` (= every core), sized off the NODE's cores on a
+  # container whose CPU request is 100m. Each is a per-unit multiplier on the allocators above.
+  # These are a bound, not a profile (`/debug/prof/mem`, POST, would say which subsystem allocates).
+  # -- Subchart passthrough: GreptimeDB engine config.toml, bounding query, scan, compaction and cache memory and worker counts to fit the 8Gi limit.
+  configToml: |
+    mode = 'standalone'
+
+    [query]
+    parallelism = 8
+    memory_pool_size = "2GiB"
+
+    # `region_engine` is an ARRAY of engine tables, not a map — the `[[ ]]` is load-bearing.
+    # Written as a plain `[region_engine.mito]` this renders valid TOML that GreptimeDB REFUSES at
+    # startup (`invalid type: map, expected a sequence`, exit 1): TOML that parses is not evidence the
+    # engine accepts the schema.
+    [[region_engine]]
+    [region_engine.mito]
+    num_workers = 8
+    max_background_compactions = 4
+    max_background_flushes = 8
+    max_background_purges = 8
+    global_write_buffer_size = "512MiB"
+    global_write_buffer_reject_size = "1GiB"
+    scan_memory_limit = "1GiB"
+    experimental_compaction_memory_limit = "1GiB"
+    page_cache_size = "512MiB"
+    vector_cache_size = "256MiB"
+    sst_meta_cache_size = "128MiB"
+    selector_result_cache_size = "128MiB"
+    range_result_cache_size = "128MiB"
+    prefilter_result_cache_size = "64MiB"
+    manifest_cache_size = "128MiB"
+  # Sized highest of the fixture: a database ingesting the whole fleet's OTLP, whose footprint grows
+  # with how busy the estate is. Measured 2026-08-16: idle ~619Mi, and a 2Gi limit OOMKilled under the
+  # spikes this workload is for (mito compaction, parquet metadata preload, OTLP ingest bursts). 8Gi is
+  # room above those spikes with the engine bounded (`configToml`), not a measured working set.
+  # -- Subchart passthrough: CPU and memory requests/limits for GreptimeDB (8Gi memory limit).
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { memory: 8Gi }
+  # -- Subchart passthrough: the store keeps its data on a local volume (`dataHome`), not in an object store.
+  persistence:
+    enabled: true
+    size: 20Gi
+
+# Perses subchart — rask's dashboards-as-code over GreptimeDB's Prometheus-compatible API.
+perses:
+  # -- Subchart passthrough: the Perses Service is `perses` (port 8080).
+  fullnameOverride: perses
+  # -- Subchart passthrough: CPU and memory requests/limits for Perses.
+  resources:
+    requests: { cpu: 25m, memory: 64Mi }
+    limits: { memory: 256Mi }
+  # Perses bundles its datasource/panel plugins and extracts them into
+  # /etc/perses/plugins at startup, but the container runs readOnlyRootFilesystem
+  # so that path isn't writable → "datasource schemas are not loaded" and the
+  # GreptimeDB datasource fails to provision. Give it a writable emptyDir there
+  # (keeps readOnlyRootFilesystem: true).
+  # -- Subchart passthrough: a writable emptyDir for Perses plugins and the `perses-dashboards` ConfigMap of dashboards-as-code.
+  volumes:
+    - name: perses-plugins
+      emptyDir: {}
+    # Dashboards-as-code: the perses-dashboards ConfigMap (templates/dashboards.yaml)
+    # holds the rask Project + its Dashboards.
+    - name: perses-dashboards
+      configMap:
+        name: perses-dashboards
+  # -- Subchart passthrough: mounts the plugins emptyDir at /etc/perses/plugins and the dashboards ConfigMap at /etc/perses/dashboards.
+  volumeMounts:
+    - name: perses-plugins
+      mountPath: /etc/perses/plugins
+    - name: perses-dashboards
+      mountPath: /etc/perses/dashboards
+  # Provision a GreptimeDB datasource via the chart's datasources values key
+  # (renders a ConfigMap mounted at /etc/perses/datasources). GreptimeDB exposes
+  # a Prometheus-compatible query API at :4000/v1/prometheus.
+  #
+  # Use PROXY mode, not directUrl: with directUrl the *browser* queries the URL,
+  # but greptimedb is an in-cluster DNS name unreachable from a
+  # laptop hitting Perses over `kubectl port-forward` → "failed to fetch". Proxy
+  # mode routes queries through the Perses server (which can resolve it), so the
+  # browser only ever talks to Perses.
+  # -- Subchart passthrough: the default GreptimeDB Prometheus datasource, queried through the Perses server in proxy mode.
+  datasources:
+    - kind: GlobalDatasource
+      metadata:
+        name: greptimedb
+      spec:
+        default: true
+        plugin:
+          kind: PrometheusDatasource
+          spec:
+            proxy:
+              kind: HTTPProxy
+              spec:
+                url: "http://greptimedb:4000/v1/prometheus"
+  # Add /etc/perses/datasources to provisioning.folders so Perses scans the
+  # datasource ConfigMap mounted there (the chart mounts datasources: at that
+  # path but the default server config only lists /etc/perses/provisioning).
+  # -- Subchart passthrough: Perses provisioning folders (provisioning, datasources, dashboards) and how often they are rescanned.
+  config:
+    provisioning:
+      folders:
+        - /etc/perses/provisioning
+        - /etc/perses/datasources
+        - /etc/perses/dashboards
+      interval: 1m

@@ -1,0 +1,9 @@
+dependencies:
+- name: greptimedb-standalone
+  repository: https://greptimeteam.github.io/helm-charts/
+  version: 0.4.5
+- name: perses
+  repository: https://perses.github.io/helm-charts
+  version: 0.22.0
+digest: sha256:0e8573521066cfcd7565f582b2f4bf9b0d87e0e5998d949464792f24b6a33318
+generated: "2026-10-11T17:43:27.108864588+02:00"

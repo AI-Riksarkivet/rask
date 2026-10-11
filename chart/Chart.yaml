@@ -5,9 +5,8 @@ description: >-
   one release named `rask`): the service fleet (gateway, compute,
   controlplane + the SvelteKit microfrontend zones), the Lance lakehouse
   REST catalog with in-service lineage (OpenLineage → Apache AGE), the medallion + media planes,
-  governance (Dex OIDC + OpenFGA), event-driven on Dapr pub/sub over NATS JetStream, plus the
-  cluster infra foundation (CloudNativePG, RustFS,
-  GreptimeDB/Perses observability).
+  governance (Dex OIDC + OpenFGA), event-driven on Dapr pub/sub over NATS JetStream, and the
+  OTel Collector that exports its telemetry to the OTLP endpoint the operator names.
 type: application
 # 0.2.0 (rask) + 0.1.0 (lance-ns) merged into one chart — a whole second system's templates and
 # values landed here, so this is a real minor bump, not a no-op.
@@ -23,10 +22,10 @@ maintainers:
 # prod install with external infra can turn them off. k3s itself + helm are the
 # only out-of-chart bootstrap (scripts/k3s-install.sh).
 #
-# lance-ns merge (P4, "one control plane each", docs/adr/0124-chart-unification-one-control-plane-each-one-object-store.md): lance-ns declared five subcharts —
-# dapr 1.18.1, nats 2.14.2, openfga 0.3.9, greptimedb-standalone 0.4.5, perses 0.22.0 —
-# and rask already ships all five at the IDENTICAL version and repository, so the dedupe
-# is lossless: no dependency was added, dropped, re-versioned, or aliased. Everything
+# lance-ns merge (P4, "one control plane each", docs/adr/0124-chart-unification-one-control-plane-each-one-object-store.md): lance-ns declared
+# dapr, nats and openfga at the IDENTICAL version and repository rask ships, so the dedupe was lossless.
+# GreptimeDB and Perses are not rask's (ADR 0153): the observability chain is a prerequisite, and
+# development gets it from deploy/fixtures/observability. Everything
 # lance-ns brings beyond these five (Apache-AGE Postgres, Dex, OpenBao, external-secrets,
 # the OTel Collector, the openfga migrate Job, alerting, security-sa, ha) is a FIRST-PARTY
 # template, not a subchart — it needs no entry here. lance-ns's richer subchart *values*
@@ -73,14 +72,3 @@ dependencies:
     version: "0.28.3"
     repository: https://cloudnative-pg.github.io/charts
     condition: cnpg.enabled
-  # Observability — GreptimeDB (unified metrics/logs/traces store) + Perses (dashboards-as-code),
-  # both shared with lance-ns at the same version.
-  - name: greptimedb-standalone
-    version: "0.4.5"
-    repository: https://greptimeteam.github.io/helm-charts/
-    condition: observability.enabled
-  # Vector RETIRED (owner ruling 2026-07-27): the OTel Collector (templates/otel-collector.yaml) is the single log shipper — its filelog receiver tails infra-pod logs into `opentelemetry_logs`.
-  - name: perses
-    version: "0.22.0"
-    repository: https://perses.github.io/helm-charts
-    condition: observability.enabled

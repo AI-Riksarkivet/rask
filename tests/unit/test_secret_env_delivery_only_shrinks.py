@@ -32,6 +32,7 @@ from typing import Any
 
 import yaml
 
+from tests.unit.chart_render import OBSERVABILITY_SETS
 from tests.unit.test_invariants import _helm_template
 
 
@@ -50,7 +51,7 @@ def _secret_env_entries() -> list[tuple[str, str, bool]]:
     Read off the RENDER rather than the live cluster so the gate runs without one, and so a change is
     caught in review rather than after it is deployed.
     """
-    raw = _helm_template("dapr.enabled=true", "medallion.enabled=true")
+    raw = _helm_template("dapr.enabled=true", "medallion.enabled=true", *OBSERVABILITY_SETS)
     found: list[tuple[str, str, bool]] = []
     for doc in yaml.safe_load_all(raw):
         if not doc or doc.get("kind") not in ("Deployment", "StatefulSet", "Job", "CronJob"):
@@ -107,7 +108,7 @@ PLAINTEXT_SECRET_BASELINE = 0
 
 def _plaintext_secret_entries(rendered: str | None = None) -> list[tuple[str, str]]:
     """Every env entry whose literal VALUE is minted secret material, as (workload, var)."""
-    raw = rendered if rendered is not None else _helm_template("dapr.enabled=true", "medallion.enabled=true")
+    raw = rendered if rendered is not None else _helm_template("dapr.enabled=true", "medallion.enabled=true", *OBSERVABILITY_SETS)
     found: list[tuple[str, str]] = []
     for doc in yaml.safe_load_all(raw):
         if not doc or doc.get("kind") not in ("Deployment", "StatefulSet", "Job", "CronJob"):

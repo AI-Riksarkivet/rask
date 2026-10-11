@@ -29,13 +29,15 @@ PROD_VALUES="${PROD_VALUES:-deploy/values-prod.yaml}"
 # does NOT pin a registry (the deployer supplies theirs), so the check must. signing.provisioned is the operator's attestation that the event-signing
 # keys exist in the sealed store (templates/signing-provisioned.yaml refuses a non-dev store without it), and
 # nats.auth.provisioned the same for the NATS users and route credential (templates/nats-provisioned.yaml).
+# observability.export.endpoint is the platform's OTLP backend, which values-prod leaves for the deployer to name.
 COMMON=(--api-versions external-secrets.io/v1/ExternalSecret
         --set frontend.oidc.publicIssuer=https://auth.example.com/dex
         --set frontend.oidc.publicOrigin=https://lance.example.com
         --set image.repository=ghcr.io/example/rask
         --set signing.provisioned=true
         --set nats.auth.provisioned=true
-        --set-string ray.dashboardUrl=https://ray.example.com:8265)
+        --set-string ray.dashboardUrl=https://ray.example.com:8265
+        --set-string observability.export.endpoint=http://otlp.example.com:4318/v1/otlp)
 OUT="$(mktemp)"
 trap 'rm -f "$OUT"' EXIT
 
@@ -112,19 +114,16 @@ spread=$(grep -c "topologySpreadConstraints:" "$OUT" || true)
 tiers=$(grep -c "memory: 1Gi" "$OUT" || true)
 [ "$tiers" -ge 3 ] || fail "prod must tier the memory-heavy workloads (catalog/age/minio) to 1Gi, got $tiers"
 
-# 7. Alerting engine (P3b): vmalert + Alertmanager deployed, vmalert wired to GreptimeDB's PromQL endpoint,
-# and the PROVEN rules actually mounted (a known alertname must appear — proves .Files.Get loaded rules.yml,
-# not an empty ConfigMap). Off on the default render.
-grep -q "name: rask-vmalert$" "$OUT" || fail "prod must deploy vmalert (the alert evaluator)"
-grep -q "name: rask-alertmanager$" "$OUT" || fail "prod must deploy Alertmanager"
-grep -q "datasource.url=http://rask-greptimedb-standalone:.*prometheus" "$OUT" \
-  || fail "vmalert must query GreptimeDB's PromQL endpoint"
-grep -q "LineageOutboxNotDraining" "$OUT" || fail "the proven alert rules must be mounted into vmalert"
+# 7. The Collector exports to the endpoint the deployer names, and rask ships no store or alert engine of its own
+# (ADR 0153): the alert rules are deploy/alerting/rules.yml, for the platform's evaluator.
+grep -q 'endpoint: "http://otlp.example.com:4318/v1/otlp"' "$OUT" || fail "prod's Collector must export to observability.export.endpoint"
+# Default-deny egress would drop an off-namespace export silently: the Collector's egress must open the endpoint's port.
+grep -A12 "name: rask-allow-telemetry-export-egress$" "$OUT" | grep -q "port: 4318 }" \
+  || fail "prod's NetworkPolicy must let the Collector reach the export endpoint's port (4318)"
+grep -qE "name: rask-(vmalert|alertmanager|greptimedb-standalone|perses)$" "$OUT" \
+  && fail "prod must not render an observability store, dashboard or alert engine (they are the platform's)"
 
-# 8. The DaprConsumerWedge rule is mounted (SLO-as-code, ready for when the OTel Collector scrapes the Dapr
-# sidecars), and NO bespoke scraper is shipped — the redundant vmagent was removed; the OTel Collector's
-# prometheus receiver owns that scrape at operator-adoption time.
-grep -q "DaprConsumerWedge" "$OUT" || fail "the consumer-wedge rule must be mounted (SLO-as-code)"
+# 8. NO bespoke scraper is shipped — the OTel Collector's prometheus receiver owns the Dapr scrape.
 grep -q "name: rask-vmagent$" "$OUT" && fail "vmagent must NOT be shipped (the OTel Collector owns the Dapr scrape)"
 
 # 8b. THE EDGE'S FORMERLY-UNAUTHENTICATED DOORS STAY SHUT IN PROD.
@@ -168,27 +167,14 @@ peak=$((cap * body + headroom))
 [ "$peak" -le "$(to_bytes "$cat_mem")" ] \
   || fail "catalog sizing incoherent: $cap × $body buffered bodies + 512Mi headroom = $peak bytes > the $cat_mem limit"
 
-# 10. RustFS externalize is ATOMIC (operator-handoff audit): the greptimedb-standalone object-store endpoint
-# is a static subchart value that can't follow the minio.externalEndpoint helper, so externalizing the object store
-# without ALSO repointing GreptimeDB leaves its object backend at the deleted in-cluster service. The
-# values-prod EXTERNALIZE block documents both as a pair; prove that when BOTH are set no in-cluster minio
-# DNS survives anywhere (app env OR the greptime config), and that setting ONLY the minio half leaks.
+# 10. Externalizing the object store leaves no in-cluster store DNS anywhere in the render (app env, jobs, configs).
 EXT_S3=https://s3.ext.example.com
 atomic=$(helm template rask "$CHART" -f "$PROD_VALUES" \
   --set image.catalog.tag=v0 --set frontend.image.tag=v0 \
   --set backups.volumeSnapshot.snapshotClassName=csi-snapclass --set ingress.host=lance.example.com \
-  --set minio.enabled=false --set minio.externalEndpoint="$EXT_S3" \
-  --set greptimedb-standalone.objectStorage.s3.endpoint="$EXT_S3" "${COMMON[@]}" 2>/dev/null)
-grep -q "rask-minio:9000" <<<"$atomic" \
-  && fail "externalizing the object store + the greptime endpoint companion still leaks in-cluster store DNS"
-# Negative: minio externalized but the greptime companion OMITTED must still show the leak (proves the pairing
-# is load-bearing, i.e. the guard above isn't vacuous).
-leak=$(helm template rask "$CHART" -f "$PROD_VALUES" \
-  --set image.catalog.tag=v0 --set frontend.image.tag=v0 \
-  --set backups.volumeSnapshot.snapshotClassName=csi-snapclass --set ingress.host=lance.example.com \
-  --set minio.enabled=false --set minio.externalEndpoint="$EXT_S3" "${COMMON[@]}" 2>/dev/null)
-grep -q "rask-minio:9000" <<<"$leak" \
-  || fail "the store-externalize coherence guard is vacuous (expected the greptime leak without the companion override)"
+  --set minio.enabled=false --set minio.externalEndpoint="$EXT_S3" "${COMMON[@]}")
+grep -q "rask-minio:9000" <<<"$atomic" && fail "externalizing the object store still leaks in-cluster store DNS"
+grep -q "$EXT_S3" <<<"$atomic" || fail "the externalized object store endpoint reaches nothing in the render"
 
 # 11. The prod render takes every credential from the store through ESO: the SecretStore and the
 # ExternalSecrets render, no Secret the chart renders carries a credential key, and nothing is generated
@@ -243,4 +229,4 @@ grep -q "sidecarDropALLCapabilities" "$OUT" \
 grep -q "deployment.environment.name=prod" "$OUT" \
   || fail "prod telemetry must carry deployment.environment.name=prod (observability.environment) — it renders $(grep -oE 'deployment\.environment\.name=[^,\"]*' "$OUT" | sort -u | head -1)"
 
-echo "✓ prod-render-check: NetworkPolicy=$np, OpenFGA=3, Dapr-HA on, PDBs=$pdb (backends+OpenFGA+zones named), spread=$spread, tiers=$tiers, alerting on, no-bespoke-scraper, write-cap=$cap fits $cat_mem, minio-externalize atomic, ESO path renders, hook pods labeled, ServiceAccounts=$sa, token-automount-refusals=$automount"
+echo "✓ prod-render-check: NetworkPolicy=$np, OpenFGA=3, Dapr-HA on, PDBs=$pdb (backends+OpenFGA+zones named), spread=$spread, tiers=$tiers, export named, no-bespoke-scraper, write-cap=$cap fits $cat_mem, minio-externalize atomic, ESO path renders, hook pods labeled, ServiceAccounts=$sa, token-automount-refusals=$automount"

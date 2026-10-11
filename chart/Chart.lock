@@ -11,11 +11,5 @@ dependencies:
 - name: cloudnative-pg
   repository: https://cloudnative-pg.github.io/charts
   version: 0.28.3
-- name: greptimedb-standalone
-  repository: https://greptimeteam.github.io/helm-charts/
-  version: 0.4.5
-- name: perses
-  repository: https://perses.github.io/helm-charts
-  version: 0.22.0
-digest: sha256:1bc48bcdbae978613499d8c0cd8a16ee7ce8b1bbcda2a0fcafb983846d0f1bc7
-generated: "2026-10-11T17:06:02.166218087+02:00"
+digest: sha256:dd011ca6fae9a12a075775bb68cc0e01b19e497e501257cf59abec2362753843
+generated: "2026-10-11T17:44:06.865583248+02:00"

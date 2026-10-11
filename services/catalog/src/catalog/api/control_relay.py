@@ -242,7 +242,7 @@ async def _drain(settings: Settings, publisher: object | None, verify: StagedVer
     """
     options = settings.storage_options()
     depth, oldest_age = await run_in_threadpool(outbox.backlog, settings.control_outbox_uri, options)
-    # ONE instrument for both lanes, on purpose. `chart/alerting/rules.yml` alerts on
+    # ONE instrument for both lanes, on purpose. `deploy/alerting/rules.yml` alerts on
     # `max(outbox_depth) > 0` and `max(outbox_oldest_age_seconds) > 300` — lane-agnostic by
     # construction — so observing here makes a stuck CONTROL outbox pageable with no new rule, and the
     # OTel resource's `service.name` (catalog vs lineage) says which lane is stuck. The alternative,

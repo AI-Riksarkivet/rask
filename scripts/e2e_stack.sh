@@ -10,7 +10,7 @@
 # flags the suites need, seeds the exact grants/buckets they assume, then runs the five e2e suites the
 # goal names: CAS, client-direct (#2), warehouses (#3-A), multibase (#3-B), outbox (#4).
 #
-# Heavy optional components (observability: OTel Collector/Perses/Greptime, web, maintenance) are DISABLED — they
+# Heavy optional components (observability: the OTel Collector, web, maintenance) are DISABLED — they
 # are not under test here and a GitHub runner is 2 cores / 7 GB. `make e2e-obs` covers observability.
 #
 # Idempotent: safe to re-run against an existing cluster. Env overrides: CLUSTER, RELEASE, KEEP_STACK=1.

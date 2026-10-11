@@ -59,7 +59,7 @@ from typing import Any
 import pytest
 
 from tests.unit import chart_render
-from tests.unit.chart_render import DEFAULT_ARGS, REPO
+from tests.unit.chart_render import DEFAULT_ARGS, OBSERVABILITY_ARGS, REPO
 from tests.unit.openbao_standins import BAO, NK, NSC, install
 
 
@@ -267,7 +267,7 @@ def test_the_dev_store_is_seeded_by_its_own_pod_and_keeps_its_signing_keys(  # n
     succeeds: bool,  # noqa: FBT001
     case: str,
 ) -> None:
-    docs = chart_render.render(*overlay)
+    docs = chart_render.render(*overlay, *OBSERVABILITY_ARGS)
     workload, container = _seed(docs)
     env = chart_render.env_of(container)
     [mint] = [c for _, name, c in chart_render.containers(docs) if name == "mint"]

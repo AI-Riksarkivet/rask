@@ -119,7 +119,7 @@ def gauge(monkeypatch: pytest.MonkeyPatch) -> _Gauge:
 
 
 def test_the_count_reaches_a_series_an_alert_can_read(gauge: _Gauge) -> None:
-    """A WARN cannot page: `chart/alerting/rules.yml` evaluates series, not log bodies."""
+    """A WARN cannot page: `deploy/alerting/rules.yml` evaluates series, not log bodies."""
     record_sweep(summarize_sweep(_STATUSES, governed={"models$e2etrain16211", *_GRAPH}, graph=_GRAPH))
 
     assert (1, "unknown_to_graph") in gauge.points

@@ -72,47 +72,26 @@ def _platform_buckets(docs: list[dict]) -> dict[str, list[str]]:
     return {name: [b for b in value.split(",") if b] for name, value in _maintenance_env(docs, "MAINTENANCE_S3_PLATFORM_BUCKETS").items()}
 
 
-@pytest.mark.parametrize("observability", [True, False], ids=["observability-on", "observability-off"])
-def test_a_renamed_bucket_is_exempt_under_its_new_name_only(observability: bool) -> None:
-    """`orphan_buckets` exempts what the bucket-init Job makes, and the Job makes GreptimeDB's bucket only
-    while observability is on. Renamed, so a default spelled a second time shows up as a stray exemption:
-    a bucket nothing makes, behind which a real orphan of that name would hide.
-
-    The root needs no entry: maintenance exempts the bucket it sweeps, `MAINTENANCE_S3_BUCKET`, so that
-    env must carry the new name. With observability off, a telemetry bucket left on the store is
-    reported, because the feature that made it is gone.
+def test_a_renamed_root_is_exempt_under_its_new_name_only() -> None:
+    """Maintenance exempts the bucket it sweeps, `MAINTENANCE_S3_BUCKET`, so a renamed root must reach that env, and the
+    platform set must not carry the default spelling a second time: that would be a stray exemption, a bucket nothing
+    makes, behind which a real orphan of that name would hide.
     """
     values = yaml.safe_load((_ROOT / "chart" / "values.yaml").read_text())
-    spellings = {"root-x", "obs-x", values["minio"]["bucket"], values["observability"]["bucket"]}
-    wanted = {"obs-x"} if observability else set()
-    docs = _render(
-        "--set",
-        f"observability.enabled={str(observability).lower()}",
-        "--set",
-        "minio.bucket=root-x",
-        "--set",
-        "observability.bucket=obs-x",
-        "--set",
-        "greptimedb-standalone.objectStorage.s3.bucket=obs-x",
-        # The storage registry's observability row is paired too, and this test does not read it.
-        "--set",
-        "storage.stores=null",
-    )
+    docs = _render("--set", "minio.bucket=root-x", "--set", "minio.buckets={extra-platform}")
     found = _platform_buckets(docs)
 
     assert set(found) == set(_MAINTENANCE), f"the platform-bucket env is missing from: {sorted(set(_MAINTENANCE) - set(found))}"
     for name, buckets in found.items():
-        assert set(buckets) & spellings == wanted, (
-            f"observability.enabled={observability}: {name} exempts {sorted(set(buckets) & spellings)}, wanted {sorted(wanted)}"
-        )
+        assert buckets == ["extra-platform"], f"{name} exempts {buckets}, wanted only the declared platform bucket (not {values['minio']['bucket']!r})"
     root = _maintenance_env(docs, "MAINTENANCE_S3_BUCKET")
     assert root == dict.fromkeys(_MAINTENANCE, "root-x"), f"the renamed root is not the bucket maintenance sweeps and exempts: {root}"
 
 
 def test_an_empty_platform_set_adds_no_empty_bucket() -> None:
-    """With observability off and `minio.buckets` empty the platform set is the empty string, which
-    splits to one empty name. Only the declared base may remain."""
-    docs = _render("--set", "observability.enabled=false", "--set", "minio.buckets=null", "--set", "catalog.multibase.dataBases[0]=s3://second-store/data")
+    """With `minio.buckets` empty the platform set is the empty string, which splits to one empty name.
+    Only the declared base may remain."""
+    docs = _render("--set", "minio.buckets=null", "--set", "catalog.multibase.dataBases[0]=s3://second-store/data")
     found = _maintenance_env(docs, "MAINTENANCE_S3_PLATFORM_BUCKETS")
 
     assert set(found) == set(_MAINTENANCE), f"the platform-bucket env is missing from: {sorted(set(_MAINTENANCE) - set(found))}"

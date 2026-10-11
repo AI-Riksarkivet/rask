@@ -40,11 +40,14 @@ kubectl get ns >/dev/null 2>&1 || fail "no reachable cluster (KUBECONFIG=$KUBECO
 # broke this script's OWN `can_administer` probe below — the check that decides whether bob's token
 # is safe to offer — so the non-admin legs skipped for a reason that had nothing to do with bob.
 # Measured 2026-09-06: rask-openfga ports are grpc=8081, http=8080, playground=3000, metrics=2112.
+# svc <name> [namespace]: the release's own namespace unless one is named (a fixture's, for the telemetry store).
 svc() {
   local name="$1" ip port
-  ip="$(kubectl get svc "$name" -o jsonpath='{.spec.clusterIP}' 2>/dev/null || true)"
-  port="$(kubectl get svc "$name" -o jsonpath='{.spec.ports[?(@.name=="http")].port}' 2>/dev/null || true)"
-  [ -n "$port" ] || port="$(kubectl get svc "$name" -o jsonpath='{.spec.ports[0].port}' 2>/dev/null || true)"
+  local ns=()
+  [ -n "${2:-}" ] && ns=(--namespace "$2")
+  ip="$(kubectl get svc "$name" "${ns[@]}" -o jsonpath='{.spec.clusterIP}' 2>/dev/null || true)"
+  port="$(kubectl get svc "$name" "${ns[@]}" -o jsonpath='{.spec.ports[?(@.name=="http")].port}' 2>/dev/null || true)"
+  [ -n "$port" ] || port="$(kubectl get svc "$name" "${ns[@]}" -o jsonpath='{.spec.ports[0].port}' 2>/dev/null || true)"
   [ -n "$ip" ] && [ -n "$port" ] && printf '%s:%s' "$ip" "$port"
 }
 
@@ -61,7 +64,8 @@ S3="$(svc "$RELEASE-minio")"         || true
 [ -n "$S3" ] || S3="$(svc "$RELEASE-rustfs-io")" || true
 DEX="$(svc "$RELEASE-dex")"          || true
 FGA="$(svc "$RELEASE-openfga")"      || true
-GREPTIME="$(svc "$RELEASE-greptimedb-standalone")" || true
+# The telemetry store is the platform's; on a dev estate, the observability fixture's (deploy/fixtures/observability).
+GREPTIME="$(svc greptimedb observability)" || true
 MAINT="$(svc "$RELEASE-maintenance")" || true
 # The producer answers to a LEGACY name in the suites. `LANCE_E2E_LANCERAY_URL` predates the rename
 # and every consumer probes it as `("medallion-producer", LANCERAY)` — so the variable names the
