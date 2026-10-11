@@ -73,11 +73,14 @@ for item in items:
     meta = item["metadata"]
     owner = (meta.get("annotations") or {}).get("meta.helm.sh/release-name")
     if owner != release:
-        print(item["kind"], meta["name"], meta.get("namespace", ""), owner or "-")
+        # "-" for an absent field: `read` collapses runs of blanks, so an empty namespace would shift the owner left.
+        print(item["kind"], meta["name"], meta.get("namespace") or "-", owner or "-")
 ' "$RELEASE")"
   if [ -n "$held" ]; then
     while read -r kind obj ns owner; do
-      kubectl annotate "$kind" "$obj" ${ns:+--namespace "$ns"} helm.sh/resource-policy=keep --overwrite >/dev/null
+      NS=()
+      [ "$ns" != "-" ] && NS=(--namespace "$ns")
+      kubectl annotate "$kind" "$obj" "${NS[@]}" helm.sh/resource-policy=keep --overwrite >/dev/null
       echo ">> $name: $kind/$obj (release $owner) kept and handed to release $RELEASE"
     done <<<"$held"
     OWN=(--take-ownership)
