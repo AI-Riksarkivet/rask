@@ -1,0 +1,110 @@
+{{- $r := .Values.rask.release }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $r }}-sa-ray
+  labels: {rask.dev/fixture: not-for-production}
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $r }}-hf-cache
+  labels: {rask.dev/fixture: not-for-production}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- with .Values.hfCache.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.hfCache.size }}
+---
+apiVersion: ray.io/v1
+kind: RayCluster
+metadata:
+  name: {{ $r }}-ray
+  labels: {rask.dev/fixture: not-for-production}
+spec:
+  upgradeStrategy: { type: Recreate }
+  rayVersion: {{ .Values.rayVersion | quote }}
+  {{- with .Values.authSecretName }}
+  authOptions:
+    mode: token
+    secretName: {{ . }}
+  {{- end }}
+  headGroupSpec:
+    rayStartParams:
+      {{- toYaml .Values.rayStartParams | nindent 6 }}
+      {{- if .Values.otel.enabled }}
+      tracing-startup-hook: "service_kit.ray_tracing:setup_tracing"
+      {{- end }}
+      num-gpus: "{{ .Values.gpuCount }}"
+    template:
+      spec:
+        serviceAccountName: {{ $r }}-sa-ray
+        {{- if gt (int .Values.gpuCount) 0 }}
+        runtimeClassName: {{ .Values.runtimeClassName }}
+        {{- end }}
+        containers:
+          - name: ray-head
+            image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+            imagePullPolicy: {{ .Values.image.pullPolicy }}
+            env:
+              {{- if .Values.otel.enabled }}
+              - {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: {{ .Values.otel.endpoint | default (printf "http://%s-otel-collector:4318" $r) | quote }}}
+              - {name: OTEL_EXPORTER_OTLP_PROTOCOL, value: http/protobuf}
+              - {name: OTEL_SERVICE_NAME, value: ray}
+              - {name: OTEL_RESOURCE_ATTRIBUTES, value: "service.namespace=rask,deployment.environment.name={{ .Values.otel.environment }}"}
+              - {name: RAY_SERVE_TRACING_EXPORTER_IMPORT_PATH, value: "service_kit.ray_tracing:serve_span_processors"}
+              - {name: RAY_SERVE_TRACING_SAMPLING_RATIO, value: "1.0"}
+              {{- end }}
+              - {name: RAY_LOGGING_CONFIG_ENCODING, value: JSON}
+              - {name: RAY_SERVE_LOG_ENCODING, value: JSON}
+              - {name: RAY_ENABLE_UV_RUN_RUNTIME_ENV, value: "0"}
+              - {name: HF_HOME, value: /cache/hf}
+              - name: HF_TOKEN
+                valueFrom: {secretKeyRef: {name: {{ $r }}-hf-token, key: token, optional: true}}
+              - {name: S3_ENDPOINT, value: "http://{{ $r }}-minio:{{ .Values.rask.s3Port }}"}
+              - {name: S3_REGION, value: {{ .Values.rask.s3Region | quote }}}
+              - name: S3_KEY
+                valueFrom: {secretKeyRef: {name: {{ $r }}-infra-credentials, key: ray-compute-access-key}}
+              - name: S3_SECRET
+                valueFrom: {secretKeyRef: {name: {{ $r }}-infra-credentials, key: ray-compute-secret-key}}
+              - {name: RASK_LINEAGE_ENDPOINT, value: "http://{{ $r }}-lineage:8000"}
+              - {name: RASK_LINEAGE_ENDPOINT_PATH, value: api/v1/lineage}
+              {{- with .Values.env }}
+              {{- toYaml . | nindent 14 }}
+              {{- end }}
+            ports:
+              - {containerPort: 6379, name: gcs}
+              - {containerPort: 8265, name: dashboard}
+              - {containerPort: 10001, name: client}
+              - {containerPort: 8000, name: serve}
+              - {containerPort: 8080, name: metrics}
+            resources:
+              requests:
+                {{- toYaml .Values.resources.requests | nindent 16 }}
+              limits:
+                {{- if gt (int .Values.gpuCount) 0 }}
+                nvidia.com/gpu: {{ .Values.gpuCount }}
+                {{- end }}
+                {{- toYaml .Values.resources.limits | nindent 16 }}
+            volumeMounts:
+              {{- range .Values.identityAudiences }}
+              - {name: identity-{{ . }}, mountPath: /var/run/secrets/rask/identity/{{ . }}, readOnly: true}
+              {{- end }}
+              - {name: dshm, mountPath: /dev/shm}
+              - {name: hf-cache, mountPath: /cache/hf}
+        volumes:
+          {{- range .Values.identityAudiences }}
+          - name: identity-{{ . }}
+            projected:
+              sources:
+                - serviceAccountToken: {audience: {{ . }}, expirationSeconds: 600, path: token}
+          {{- end }}
+          - name: dshm
+            emptyDir: {medium: Memory, sizeLimit: {{ .Values.shmSize }}}
+          - name: hf-cache
+            persistentVolumeClaim: {claimName: {{ $r }}-hf-cache}
+  workerGroupSpecs: []

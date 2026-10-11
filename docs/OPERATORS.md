@@ -38,10 +38,9 @@ that weren't. Fixed:
   `extension_control_path` and runs `create_graph`/cypher). Needs K8s 1.33+/containerd 2.1/CNPG 1.27; for
   older clusters the custom-full-image (PG16) bridge is documented. Physical PITR replaces the pg_dump path
   (safer for AGE). OpenFGA (plain SQL) is unaffected.
-- **KubeRay (#1)** — the submit seam is already agnostic. `ray.cluster.enabled` renders the RayCluster and
-  every Ray consumer (compute's prune, the cascade's submits, Serve discovery) derives its head Service;
-  an external Ray is `ray.dashboardUrl`, the one key they all read. A render with the cascade's Ray lane on
-  and neither set fails.
+- **KubeRay (#1)** — not rask's (ADR 0153). Every Ray consumer (compute's prune, the cascade's submits, Serve
+  discovery) reads one key, `ray.dashboardUrl`, the engine's address; a render with the cascade's Ray lane on
+  and it unset fails. In development the `kuberay-operator` and `ray-cluster` fixtures run the engine.
 
 **What we never build: a custom lance-ns operator.** An operator earns its complexity when state of
 record lives in CRDs and needs reconciling. Ours does not: catalog/lakehouse state lives in **Lance

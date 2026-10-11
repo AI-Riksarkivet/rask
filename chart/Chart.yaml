@@ -2,11 +2,11 @@ apiVersion: v2
 name: rask
 description: >-
   rask — an agnostic multimodal AI platform as ONE umbrella chart (one `helm install`,
-  one release named `rask`): the service fleet (gateway, ray,
+  one release named `rask`): the service fleet (gateway, compute,
   controlplane + the SvelteKit microfrontend zones), the Lance lakehouse
   REST catalog with in-service lineage (OpenLineage → Apache AGE), the medallion + media planes,
   governance (Dex OIDC + OpenFGA), event-driven on Dapr pub/sub over NATS JetStream, plus the
-  cluster infra foundation (KubeRay, Kueue, CloudNativePG, RustFS,
+  cluster infra foundation (Kueue, CloudNativePG, RustFS,
   GreptimeDB/Perses observability).
 type: application
 # 0.2.0 (rask) + 0.1.0 (lance-ns) merged into one chart — a whole second system's templates and
@@ -35,15 +35,6 @@ maintainers:
 dependencies:
   # Aliases must be lowercase RFC1123 (subcharts derive container/resource names
   # from .Chart.Name = the alias); camelCase breaks them.
-  - name: kuberay-operator
-    alias: kuberay
-    # >= 1.6.0 is REQUIRED for ray.auth (gate 7 / R3): the RayService controller is itself a
-    # dashboard-REST client, and only 1.6+ sends the auth token on those calls; 1.6.0 also adds
-    # spec.authOptions (mode/secretName) so the operator consumes our pre-existing
-    # <release>-ray-auth-token Secret and injects the env on every Ray container itself.
-    version: "1.6.2"
-    repository: https://ray-project.github.io/kuberay-helm/
-    condition: kuberay.enabled
   # Shared with lance-ns at the same version — the single bus. lance-ns's values win
   # (credentialed + netpol'd JetStream); its stream-provision Job + Dapr pubsub are the
   # first real consumers of what rask ships streamless.

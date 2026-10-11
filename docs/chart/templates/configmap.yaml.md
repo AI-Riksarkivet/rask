@@ -3,18 +3,6 @@
 Rationale for `chart/templates/configmap.yaml`. It lives here because Helm stores the chart's templates in
 every release revision, under a 1 MiB ceiling. Each section is headed by the template line it explains.
 
-## `{{- if ne $k "RASK_SERVE_GPU_FRAC" }}`
-
-RASK_SERVE_GPU_FRAC is DERIVED below, never passed through — it must collapse to 0 on a
-GPU-less estate. Emitting the raw value here too would let this ConfigMap contradict the
-RayService's serveConfigV2, which is precisely the kind of "configured 1.0, running 0" split
-that costs a live debugging round.
-
-## `RASK_SERVE_GPU_FRAC: {{ include "rask.serveGpuFrac" . | quote }}`
-
-Each Serve replica's GPU fraction, derived from the ONE GPU signal (ray.gpuCount) by
-rask.serveGpuFrac — the same include the RayService uses, so the two cannot drift.
-
 ## `RASK_DOCS: {{ .Values.docs.enabled | quote }}`
 
 Interactive API docs, off unless a deployment asks (see values.yaml `docs`). The gateway reads
@@ -48,8 +36,8 @@ healthy one Service name away.
 ## `RASK_NOTIFICATIONS_PUBSUB: {{ include "lance.subPubsub" (list . "notifications") | quote }}`
 
 The per-subscriber pubsub COMPONENT this app subscribes `lineage.events.v1` on, derived from the
-same `lance.subPubsub` helper that names the Component itself (dapr-component.yaml) — the
-RASK_SERVE_GPU_FRAC treatment above, for the same reason. The service's own default happens to
+same `lance.subPubsub` helper that names the Component itself (dapr-component.yaml), so the two cannot
+disagree. The service's own default happens to
 equal this render at `pubsub.name: lineage-pubsub`, which is exactly what makes the drift silent:
 override `pubsub.name` and the app would subscribe on a component that does not exist, which daprd
 reports as a startup error and the pod survives — a Ready pod with a dead subscription.

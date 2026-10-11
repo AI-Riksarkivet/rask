@@ -689,8 +689,7 @@ KUBECTL ?= KUBECONFIG=$(KUBECONFIG) kubectl
 K3S_IMAGES = $(COMPOSE_IMAGES) $(ZONES:%=web-%) ray-cluster lance-rest-catalog minio
 
 # Subchart repos (Chart.yaml dependencies). OCI deps (kueue) need no repo add.
-K3S_DEP_REPOS = kuberay=https://ray-project.github.io/kuberay-helm/ \
-                nats=https://nats-io.github.io/k8s/helm/charts/ \
+K3S_DEP_REPOS = nats=https://nats-io.github.io/k8s/helm/charts/ \
                 dapr=https://dapr.github.io/helm-charts/ \
                 openfga=https://openfga.github.io/helm-charts \
                 cnpg=https://cloudnative-pg.github.io/charts \
@@ -777,8 +776,9 @@ DROP_CREDENTIAL_VALUES := --set dapr.appToken=null --set frontend.oidc.sessionSe
 # store from it (values.yaml `secrets.hfTokenInStore`); the token reaches kubectl on stdin, never argv.
 
 # The prerequisites a dev estate gets from deploy/fixtures, each its own release, installed before rask's
-# (NOT FOR PRODUCTION; deploy/fixtures/README.md). A GPU node with no device plugin yet adds nvidia-device-plugin.
-FIXTURES ?= external-secrets
+# (NOT FOR PRODUCTION; deploy/fixtures/README.md). The Ray engine the cascade submits to is two of them, the operator
+# first. A GPU node with no device plugin yet adds nvidia-device-plugin.
+FIXTURES ?= external-secrets kuberay-operator ray-cluster
 
 k3s-fixtures: ## Install the development fixtures (FIXTURES) as their own releases, before the rask chart
 	KUBECONFIG=$(KUBECONFIG) ./scripts/fixtures.sh $(FIXTURES)

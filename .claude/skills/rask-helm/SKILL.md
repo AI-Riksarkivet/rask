@@ -92,10 +92,12 @@ second case. Kueue's upstream docs only ever install it as its own release in `k
   answer and … the intended end state". It was deferred, not rejected; ADR 0153 decides it.
 - **What leaves the chart lands in `deploy/fixtures/`** (ADR 0153, [[XC-124]]): one directory per prerequisite, an
   upstream chart pinned in `fixture.env`, installed as its own release by `scripts/fixtures.sh` before rask's
-  (`make k3s-fixtures`, a prerequisite of `make k3s-up`; `FIXTURES` names which, default `external-secrets`; a GPU
-  node with no device plugin yet adds `nvidia-device-plugin`). The e2e lanes install ESO through the same script. A fixture's `ADOPT_CRDS`
-  is the §3 handover: it annotates each named CRD keep and installs with `--take-ownership`, so run the fixture
-  BEFORE the rask upgrade that drops the subchart. Fixtures are not for production: namespace label
+  (`make k3s-fixtures`, a prerequisite of `make k3s-up`; `FIXTURES` names which, default `external-secrets kuberay-operator
+  ray-cluster`, the dev Ray engine ([[XC-125]]); a GPU
+  node with no device plugin yet adds `nvidia-device-plugin`). The e2e lanes install ESO through the same script.
+  The §3 handover is automatic: every object the fixture renders that another release (or none) already owns is
+  annotated keep and the install takes `--take-ownership`, so run the fixture BEFORE the rask upgrade that stops
+  rendering the object. Fixtures are not for production: namespace label
   `rask.dev/fixture=not-for-production`, release description the same.
 
 ## 3. Removing a subchart that owns CRDs deletes the CRDs AND every object of that kind
@@ -211,7 +213,9 @@ catalog, lineage, maintenance, the medallion, OpenBao and Dex ran as `default` w
   `shouldRecreatePodsForUpgrade`): without it the head keeps the spec it started with, its SA included,
   until someone deletes the pod. The hash leaves out replicas, so autoscaling recreates nothing, and the
   cost is that a change to the cluster's spec ends the jobs running on it, as any singleton's rollout
-  does. KubeRay refuses the field on a cluster a RayService creates, so it sits in `raycluster.yaml`.
+  does. KubeRay refuses the field on a cluster a RayService creates. The rask chart renders no RayCluster
+  ([[XC-125]]); this holds for the `ray-cluster` fixture (`deploy/fixtures/ray-cluster/chart`), which
+  carries the field.
 - **Changing the dev OpenBao's pod spec empties its store**, because `server -dev` keeps it in memory.
   The `seed` container in that pod writes only to its own server and gates the pod's readiness on a
   key it writes last, and a rollout surges first so the seed can carry each signing identity's Ed25519

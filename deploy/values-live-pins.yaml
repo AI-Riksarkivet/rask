@@ -20,6 +20,3 @@ image:
     web-models: "main-90b8d0ed"
     web-studio: "main-90b8d0ed"
   digests: {}
-ray:
-  image:
-    tag: "lakehouse-68d4ca3c"

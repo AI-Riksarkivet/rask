@@ -17,10 +17,11 @@ from pathlib import Path
 import pytest
 import yaml
 
-from tests.unit.chart_render import REPO, env_of, render, render_text
+from tests.unit.chart_render import REPO, env_of, render, render_fixture, render_text
 
 
-#: The overlay `make k3s-up` deploys, which also renders the Ray head the default leaves out.
+#: The overlay `make k3s-up` deploys. The Ray head that calls the trainer's doors is the ray-cluster fixture's, which
+#: `make k3s-up` installs beside it.
 DEPLOYED = ("--set", "image.localImages=true", "-f", str(REPO / "deploy/values-local.yaml"))
 
 #: The producer's door also admits ingest's account, which no pod presents: clause 5's live proof mints a
@@ -33,7 +34,7 @@ DECLARED = {"rask-catalog": "RASK_CATALOG_SERVICE_IDENTITY", "rask-lineage": "RA
 
 def _pod_specs() -> dict[str, dict]:
     pods: dict[str, dict] = {}
-    for doc in render(*DEPLOYED):
+    for doc in (*render(*DEPLOYED), *render_fixture("ray-cluster")):
         kind, name = doc.get("kind"), doc.get("metadata", {}).get("name")
         if kind in {"Deployment", "StatefulSet"}:
             pods[f"{kind}/{name}"] = doc["spec"]["template"]["spec"]

@@ -1,5 +1,8 @@
 """A Ray job's REQUIRED environment comes from the pod that runs it, not from whoever submitted it.
 
+The pod is the engine's: rask installs no Ray (ADR 0153), and `make k3s-up` runs the head from the ray-cluster fixture
+(`deploy/fixtures/ray-cluster`), so this reads that fixture's render.
+
 `scripts/ray_stage_job.py:86` reads ``os.environ["S3_ENDPOINT"]`` with a BRACKET — a job that does not
 get it dies `KeyError` before it reads a byte. Measured on the deployed head 2026-09-18
 (`kubectl get pod -l ray.io/is-ray-node=yes`): the container carries `S3_KEY` and `S3_SECRET` and NOT
@@ -42,52 +45,29 @@ rows while the running pod did not, and `helm get manifest` showed a change that
 
 from __future__ import annotations
 
-import shutil
-import subprocess
-from pathlib import Path
-
-import pytest
-import yaml
-from chart_yaml import FAST_LOADER
-
-from tests.unit.chart_render import ESO_ARGS, RAY_ARGS
+from tests.unit.chart_render import render_fixture
 
 
-REPO = Path(__file__).resolve().parents[2]
-
-#: Names `scripts/ray_stage_job.py` reads from the process environment and that no `WorkOrder` can
-#: supply, so the POD must carry them. `S3_KEY`/`S3_SECRET` are here for completeness: they already
-#: come from the pod, and a regression that moved them back onto the wire would put a credential into
-#: `GET /api/jobs/<id>`, which the dashboard answers to any reader.
-_POD_MUST_PROVIDE = ("S3_ENDPOINT", "S3_KEY", "S3_SECRET")
-
-
-def _render(*extra: str) -> list[dict]:
-    if not shutil.which("helm"):  # pragma: no cover - CI installs helm
-        pytest.skip("helm not on PATH")
-    cmd = ["helm", "template", "rask", str(REPO / "chart")]
-    cmd += [*ESO_ARGS, *RAY_ARGS]
-    cmd += ["--set-string", "frontend.oidc.publicIssuer=http://localhost:8080/dex"]
-    cmd += ["--set-string", "frontend.oidc.publicOrigin=http://localhost:8080"]
-    cmd += ["--set", "image.localImages=true", *extra]
-    out = subprocess.run(cmd, capture_output=True, text=True, check=True).stdout
-    return [d for d in yaml.load_all(out, Loader=FAST_LOADER) if d]
-
-
-def _ray_head_env(docs: list[dict]) -> dict[str, dict]:
-    """Every env row on the RayCluster head container, by name."""
-    for doc in docs:
-        if doc.get("kind") != "RayCluster":
-            continue
-        for container in doc["spec"]["headGroupSpec"]["template"]["spec"]["containers"]:
-            if container["name"] in {"ray-head", "ray"}:
-                return {row["name"]: row for row in container.get("env", [])}
-    raise AssertionError("no RayCluster head container rendered — this gate would pass over nothing")
+#: Names `scripts/ray_stage_job.py` reads from the process environment and that no `WorkOrder` can supply, so the
+#: POD must carry them. `S3_KEY`/`S3_SECRET` already come from the pod, and a regression that moved them back onto
+#: the wire would put a credential into `GET /api/jobs/<id>`, which the dashboard answers to any reader.
+#: `RASK_LINEAGE_ENDPOINT` is `build_emitter`'s first alias: without it the stage lane's emitter is a no-op that drops
+#: every event at DEBUG while every job reports SUCCESS.
+_POD_MUST_PROVIDE = ("S3_ENDPOINT", "S3_KEY", "S3_SECRET", "RASK_LINEAGE_ENDPOINT")
 
 
 def test_the_head_carries_every_name_a_stage_job_requires() -> None:
-    """The job reads these off its own process env; the pod is the only thing that can put them there."""
-    env = _ray_head_env(_render("--set", "ray.cluster.enabled=true"))
+    """The job reads these off its own process env; the pod is the only thing that can put them there.
 
-    missing = [name for name in _POD_MUST_PROVIDE if name not in env]
-    assert not missing, f"the Ray head does not provide {missing} — a stage job on it dies before reading a byte"
+    The worker groups are checked in the same pass because the head's process env is what a job inherits only while
+    every task runs on the head: a worker group would need this env too, and the assertion would measure half the cluster.
+    """
+    clusters = [doc for doc in render_fixture("ray-cluster") if doc.get("kind") == "RayCluster"]
+    assert clusters, "the ray-cluster fixture renders no RayCluster — this gate would pass over nothing"
+
+    for cluster in clusters:
+        head = next(c for c in cluster["spec"]["headGroupSpec"]["template"]["spec"]["containers"] if c["name"] == "ray-head")
+        env = {row["name"] for row in head.get("env") or []}
+        missing = [name for name in _POD_MUST_PROVIDE if name not in env]
+        assert not missing, f"the Ray head does not provide {missing} — a stage job on it dies or emits into nothing"
+        assert not cluster["spec"].get("workerGroupSpecs"), "a worker group exists and inherits nothing from the head's env"

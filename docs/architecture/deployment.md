@@ -103,9 +103,13 @@ The runner accepts `--address ray://…:10001`. Job submission goes through the 
 service** (`:8804`, over `ray-kit`'s Job SDK wrapper) to the Ray dashboard REST API at
 `RAY_DASHBOARD_URL`. The chart renders that address, the medallion's `MEDALLION_RAY_ADDRESS` and the
 annotator's Serve discovery from one helper, `rask.rayDashboardUrl`, so `compute` prunes job history on
-the cluster the cascade submits to: `ray.dashboardUrl` names an external Ray; left empty, the in-cluster
-head Service of the RayCluster (`ray.cluster.enabled`) or RayService (`singleTenant.enabled`) is used;
-with neither and the cascade's Ray lane on (`medallion.ray`), the render fails.
+the cluster the cascade submits to: `ray.dashboardUrl` names the engine, and left empty with the cascade's
+Ray lane on (`medallion.ray`) the render fails. The chart installs no Ray (ADR 0153): no KubeRay operator, no
+RayCluster or RayService. The engine owner runs Ray; in development `make k3s-up` installs the
+`kuberay-operator` and `ray-cluster` fixtures (`deploy/fixtures`, not for production), whose head Service is
+`rask-ray-head-svc`, and `deploy/values-local.yaml` names it. rask's side of the seam is the address, the
+token its Ray clients present (`ray.auth.enabled`, `<release>-ray-auth-token`), and the engine identity its doors
+admit as the trainer (`ray.engineServiceAccount`).
 
 ## Helm chart (`chart/`)
 
@@ -124,25 +128,12 @@ with neither and the cascade's Ray lane on (`medallion.ray`), the render fails.
   - `ray.enabled` — KubeRay `RayService` (head + Serve app). GPU-shaped rendering is derived, see below.
   - `observability.enabled` — two optional subcharts + the first-party OTel Collector (see below).
 
-### GPU: one signal, `ray.gpuCount` (default 0)
+### GPUs are the engine's
 
-The chart ships a **CPU-only** estate so a fresh kind/CI/laptop cluster installs with no overrides, and
-`ray.gpuCount` is the single fact everything GPU-shaped derives from (`rask.gpuEnabled` /
-`rask.serveGpuFrac` in `chart/templates/_helpers.tpl`):
-
-| Derived from `ray.gpuCount` | At 0 (default) |
-|---|---|
-| `RASK_SERVE_GPU_FRAC` — the htrflow Serve actor's reservation, in the fleet ConfigMap **and** `serveConfigV2` | `0` (the CPU path; the raw `config.RASK_SERVE_GPU_FRAC` is never passed through) |
-| head `num-gpus` rayStartParam + `nvidia.com/gpu` limit | `0` / omitted |
-| `runtimeClassName: nvidia` on the head | not rendered |
-| Kueue ClusterQueue `nvidia.com/gpu` nominalQuota | `0` |
-
-A GPU node: `--set ray.gpuCount=<n>` (and a real `config.RASK_SERVE_GPU_FRAC`, e.g. `0.49` for two replicas
-per GPU), on a cluster where something advertises `nvidia.com/gpu` and serves the `nvidia` RuntimeClass. The
-chart installs neither: in production that is the platform's NVIDIA GPU Operator or device plugin; in
-development, on a node where nothing advertises `nvidia.com/gpu` yet, it is the `nvidia-device-plugin` fixture
-(`deploy/fixtures/README.md`, not for production). k3s creates the `nvidia` RuntimeClass itself. With
-`ray.gpuCount>0` NOTES says so.
+The chart reserves no GPU and renders no Serve application: GPUs, a device plugin, the `nvidia` RuntimeClass and
+each Serve replica's GPU fraction belong to the engine. In development the `ray-cluster` fixture's `gpuCount`
+sizes its head, the `nvidia-device-plugin` fixture advertises `nvidia.com/gpu` on a node where nothing does yet,
+and k3s creates the `nvidia` RuntimeClass itself (`deploy/fixtures/README.md`).
 
 ### StorageClasses: omit, don't guess
 

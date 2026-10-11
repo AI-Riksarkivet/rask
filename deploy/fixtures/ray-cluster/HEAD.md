@@ -1,21 +1,7 @@
-# chart/templates/_ray-cluster-config.tpl
+# The Ray head, line by line
 
-Rationale for `chart/templates/_ray-cluster-config.tpl`. It lives here because Helm stores the chart's templates in
-every release revision, under a 1 MiB ceiling. Each section is headed by the template line it explains.
-
-## `{{- define "rask.rayClusterConfig" }}`
-
-THE RAY CLUSTER'S SHAPE, DEFINED ONCE.
-Two objects need it and they are different questions. A RayService wraps a cluster to run SERVE
-applications; a RayCluster is the cluster on its own, for the batch lane that submits Jobs and
-serves nothing. Rendering the spec twice would put the estate's OTel wiring, its token auth, its
-GPU runtime class and its credential plumbing in two files that drift silently — and drift here
-is invisible, because whichever object an estate does not render is never checked.
-
-THE INDENTATION IS 4 SPACES AND STAYS THAT WAY. It is what `rayClusterConfig:` already required,
-and YAML only demands that a mapping's keys be consistent and deeper than their parent — so the
-same block sits under a RayCluster's `spec:` unchanged. Re-indenting to 2 would have made the
-extraction a rewrite of 250 lines whose render nobody could diff.
+Why the ray-cluster fixture's head (`chart/templates/raycluster.yaml`) is shaped as it is. Each section is headed by
+the rask-chart line that rendered the setting; the setting itself is in `chart/values.yaml` here (ADR 0153, XC-125).
 
 ## `authOptions:`
 
@@ -184,20 +170,17 @@ resource the cluster never advertises has no business appearing in the pod spec 
 it makes the manifest claim a GPU plane that does not exist, which is exactly what
 sent the live-proof debugging at the head pod instead of at the Serve actor.
 
-## `env:`
+## GCS fault tolerance: not in this fixture
 
-GCS FAULT TOLERANCE via the EMBEDDED RocksDB backend — the third path, and the one
-that needs no Redis. Ray documents it ALPHA, Linux-only and SINGLE-WRITER; the
-claim above is ReadWriteOnce for that last reason.
-WHAT IT BUYS, honestly: it persists the GCS's CLUSTER METADATA, so a head restart
-stops erasing the job records the cascade polls — which is what turns an UNKNOWN
-job state into a known terminal one and lets the executor claim DURABLE_RECORD.
-WHAT IT DOES NOT: it is not application state. On a head-only cluster the driver
-still dies with the head; workers are what make that survivable.
+The rask chart's `ray.cluster.gcsFaultTolerance` (an embedded RocksDB GCS store on a ReadWriteOnce claim, so a head
+restart keeps the job records the cascade polls) is not carried here; it was off on the estate. An engine that wants a
+known terminal state across a head restart adds it: Ray documents the embedded backend as alpha, Linux-only and
+single-writer, and it persists cluster metadata, not the driver.
 
-## `- name: gcs-store`
+## `upgradeStrategy: { type: Recreate }`
 
-A CLAIM, NOT AN EMPTYDIR, and the distinction is the whole feature: the GCS store
-exists to outlive the pod that writes it, and an emptyDir dies with exactly that
-pod. ReadWriteOnce is also load-bearing rather than a default — RocksDB is
-single-writer, so the claim must not be attachable twice.
+A CHART CHANGE TO THE POD SPEC REACHES THE RUNNING PODS. KubeRay 1.6.2 recreates a RayCluster's
+pods on a spec change only under `Recreate` (raycluster_controller.go shouldRecreatePodsForUpgrade);
+otherwise the head keeps the spec it started with, its ServiceAccount included. The hash leaves out
+replicas, so autoscaling recreates nothing. KubeRay refuses the field on a cluster a RayService creates
+(validation.go ValidateRayClusterUpgradeOptions), so a RayService-shaped engine leaves it out.

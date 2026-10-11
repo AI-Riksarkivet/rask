@@ -6,12 +6,8 @@ metadata:
     {{- include "rask.labels" . | nindent 4 }}
 data:
   {{- range $k, $v := .Values.config }}
-
-  {{- if ne $k "RASK_SERVE_GPU_FRAC" }}
   {{ $k }}: {{ $v | quote }}
   {{- end }}
-  {{- end }}
-  RASK_SERVE_GPU_FRAC: {{ include "rask.serveGpuFrac" . | quote }}
   RASK_DOCS: {{ .Values.docs.enabled | quote }}
   RASK_DAPR_ENABLED: {{ .Values.dapr.sidecars | quote }}
   RASK_COMPUTE_URL: {{ printf "http://%s-compute:8804" (include "rask.fullname" .) | quote }}

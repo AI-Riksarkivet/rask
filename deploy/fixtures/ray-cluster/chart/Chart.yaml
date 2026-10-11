@@ -1,0 +1,7 @@
+apiVersion: v2
+name: ray-cluster
+description: >-
+  NOT FOR PRODUCTION. A development Ray cluster for rask's Ray engine adapter: one head, no workers, run by the
+  KubeRay operator. An engine owner runs Ray however they choose; rask reaches it only through ray.dashboardUrl.
+type: application
+version: 0.1.0

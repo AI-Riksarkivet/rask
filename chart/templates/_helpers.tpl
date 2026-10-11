@@ -44,14 +44,6 @@ app.kubernetes.io/component: {{ $component }}
 {{- end -}}
 {{- end -}}
 
-{{- define "rask.gpuEnabled" -}}
-{{- if gt (int .Values.ray.gpuCount) 0 }}true{{- end -}}
-{{- end -}}
-
-{{- define "rask.serveGpuFrac" -}}
-{{- if include "rask.gpuEnabled" . }}{{ .Values.config.RASK_SERVE_GPU_FRAC }}{{ else }}0{{ end }}
-{{- end -}}
-
 {{- define "rask.daprPodLabels" -}}
 {{- if .Values.dapr.sidecars -}}
 dapr.io/enabled: "true"
@@ -98,30 +90,6 @@ dapr.io/config: "lance-tracing"
 {{- printf "service.namespace=rask,deployment.environment.name=%s,service.version=%s" ($o.environment | default .Release.Namespace) .Chart.AppVersion -}}
 {{- end -}}
 
-{{- define "rask.rayOtelEnv" -}}
-{{- $root := index . 0 -}}
-{{- $svc := index . 1 -}}
-{{- $o := $root.Values.observability -}}
-{{- if include "lance.otelEnabled" $root -}}
-{{- $db := (hasKey $o "dbName") | ternary $o.dbName "public" -}}
-{{- $pipeline := (hasKey $o "tracePipeline") | ternary $o.tracePipeline "greptime_trace_v1" -}}
-- name: OTEL_EXPORTER_OTLP_ENDPOINT
-  value: "{{ include "lance.otlpEndpoint" $root }}"
-- name: OTEL_EXPORTER_OTLP_PROTOCOL
-  value: "http/protobuf"
-{{- if not (include "lance.otelViaCollector" $root) }}
-
-- name: OTEL_EXPORTER_OTLP_HEADERS
-  value: "x-greptime-db-name={{ $db }}"
-- name: OTEL_EXPORTER_OTLP_TRACES_HEADERS
-  value: "x-greptime-db-name={{ $db }},x-greptime-pipeline-name={{ $pipeline }}"
-{{- end }}
-- name: OTEL_SERVICE_NAME
-  value: {{ $svc | quote }}
-- name: OTEL_RESOURCE_ATTRIBUTES
-  value: {{ include "rask.otelResourceAttrs" $root | quote }}
-{{- end }}
-{{- end -}}
 
 {{- define "rask.zoneOtelEnv" -}}
 {{- $root := index . 0 -}}
@@ -623,7 +591,7 @@ securityContext:
 {{- $_ := set $m (printf "%smaintenance" $sa) (required "maintenance.catalogServiceIdentity is blank" $v.maintenance.catalogServiceIdentity) -}}
 {{- end -}}
 {{- if or (eq $door "lineage") (and (eq $door "stage" "producer") $v.medallion.enabled $v.medallion.ray) -}}
-{{- if and $v.ray.enabled (or $v.ray.cluster.enabled $v.singleTenant.enabled) }}{{- $_ := set $m (printf "%sray" $sa) (required "medallion.train.trainerIdentity is blank" $v.medallion.train.trainerIdentity) }}{{- end -}}
+{{- with $v.ray.engineServiceAccount }}{{- $_ := set $m (printf "system:serviceaccount:%s:%s" $root.Release.Namespace .) (required "medallion.train.trainerIdentity is blank" $v.medallion.train.trainerIdentity) }}{{- end -}}
 {{- end -}}
 {{- if eq $door "lineage" -}}
 {{- if $v.frontend.enabled }}{{- $_ := set $m (printf "%sweb" $sa) (required "frontend.serviceIdentity is blank" $v.frontend.serviceIdentity) }}{{- end -}}
@@ -988,18 +956,14 @@ keys_shaped() { case "$1" in *,) return 1 ;; *,*) pub_shaped "${1%%,*}" && pub_s
 {{- define "rask.rayDashboardUrl" -}}
 {{- if .Values.ray.dashboardUrl -}}
 {{- .Values.ray.dashboardUrl -}}
-{{- else if and .Values.ray.enabled (or .Values.singleTenant.enabled .Values.ray.cluster.enabled) -}}
-{{- printf "http://%s-ray-head-svc:%v" (include "rask.fullname" .) .Values.ray.dashboardPort -}}
 {{- else if and .Values.medallion.enabled .Values.medallion.ray -}}
-{{- fail "medallion.ray submits to a Ray cluster this render does not name: set ray.dashboardUrl to the external Ray dashboard, or enable ray.cluster.enabled (or singleTenant.enabled) for an in-cluster head" -}}
+{{- fail "medallion.ray submits to a Ray engine this render does not name: set ray.dashboardUrl to the engine's Ray dashboard. rask installs no Ray (ADR 0153); in development the ray-cluster fixture serves http://rask-ray-head-svc:8265 (deploy/fixtures)." -}}
 {{- end -}}
 {{- end -}}
 
 {{- define "rask.rayServeOrigin" -}}
 {{- if .Values.frontend.serveUrl -}}
 {{- .Values.frontend.serveUrl -}}
-{{- else if and .Values.ray.enabled .Values.singleTenant.enabled (not .Values.ray.dashboardUrl) -}}
-{{- printf "http://%s-ray-serve-svc:8000" (include "rask.fullname" .) -}}
 {{- else -}}
 {{- include "rask.rayDashboardUrl" . -}}
 {{- end -}}

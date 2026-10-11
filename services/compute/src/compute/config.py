@@ -5,8 +5,8 @@ auth knobs — so the problem was not "auth is off here" but "auth CANNOT be tur
 `GovernedAuthSettings` there is no `RASK_OIDC_ENABLED` to bind, and no chart value could gate this
 service however the estate was configured.
 
-What that left open: `compute` proxies the Ray dashboard using a token the chart deliberately turns
-ON (`chart/templates/rayservice.yaml`, `ray.auth.enabled` → `RAY_AUTH_TOKEN`), and the gateway carries
+What that left open: `compute` proxies the Ray dashboard using a token the estate deliberately turns
+ON (`ray.auth.enabled` → `RAY_AUTH_TOKEN`), and the gateway carries
 `{prefix}/ray` and `/api/serve` to the public edge. Jobs, actors, tasks, cluster state, driver logs
 and the whole Serve status API, to anonymous callers. `proxy.py`'s own comment — "Never widen this
 without an auth layer in front of /api" — was an acknowledgement that no such layer existed.

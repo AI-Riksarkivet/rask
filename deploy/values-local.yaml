@@ -103,20 +103,13 @@ maintenance:
   tombstoneSweep: true
   tombstoneSweepDryRun: true
 
-# THE OPERATOR-MANAGED HEAD ([[CP-042]]): a RayCluster named `<release>-ray` gives KubeRay's own
-# `<release>-ray-head-svc`, the one address compute prunes on and the cascade submits to ([[CP-041]]),
-# so `ray.dashboardUrl` stays empty here.
-#
-# The image is spelled with its registry because the Ray templates do not go through `rask.image`
-# (that is [[CP-050]]), so `localImages` does not reach them and a bare `ray-cluster:dev` would resolve
-# to Docker Hub.
+# THE ENGINE ([[CP-041]]): the ray-cluster fixture's RayCluster `rask-ray` gives KubeRay's own `rask-ray-head-svc`,
+# the one address compute prunes on and the cascade submits to.
 ray:
-  cluster:
-    enabled: true
-  # The registry only. The TAG comes from the live release or deploy/values-live-pins.yaml: this file is
-  # applied after both by `make k3s-up`, so a tag here reverts the running head on every converge.
-  image:
-    repository: localhost:5000/ray-cluster
+  # The ray-cluster fixture's head (deploy/fixtures/ray-cluster), installed before rask by `make k3s-up`, and the
+  # identity it runs as, which rask's doors admit as the trainer.
+  dashboardUrl: http://rask-ray-head-svc:8265
+  engineServiceAccount: rask-sa-ray
 
 # Interactive API docs (/docs, /redoc, /openapi.json) across the release.
 #

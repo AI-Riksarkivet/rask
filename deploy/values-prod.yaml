@@ -149,11 +149,11 @@ backups:
 openbao:
   devMode: false
 
-# --- Ray token auth ON (gate 7 / R3): a prod render that deploys Ray (singleTenant.enabled) FAILS
-# CLOSED without this (ray-auth-token.yaml guard) — an unauthenticated Ray dashboard is remote code
-# execution. kuberay 1.6.2 (Chart.yaml) consumes the chart's <release>-ray-auth-token Secret via
-# spec.authOptions and its RayService controller authenticates its own reconcile calls. The token is
-# the store's `ray-auth-token`, which ESO writes into that Secret. ---------------------------------
+# --- Ray token auth ON (gate 7 / R3): rask's Ray clients present the store's `ray-auth-token`, which ESO
+# writes into `<release>-ray-auth-token`. Enforcing it is the engine's (KubeRay's spec.authOptions.secretName
+# on the same Secret): an engine serving an unauthenticated dashboard is remote code execution, and rask,
+# which installs no Ray (ADR 0153), cannot refuse that from its own render. rask's own route to Ray,
+# compute's /api/ray and /api/serve proxy, is gated by OIDC and FGA. ------------------------------------
 ray:
   auth:
     enabled: true

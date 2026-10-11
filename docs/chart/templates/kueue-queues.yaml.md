@@ -24,13 +24,12 @@ the three Kueue resource kinds.
 it plus the ReplicaSets it owns. Granted here, beside the container that uses them, because a
 control whose permission lives in another file is one nobody notices was never granted.
 
-## `nominalQuota: {{ if include "rask.gpuEnabled" . }}{{ index .Values.kueue.queues.nominalQuota "nvidia.com/gp...`
+## `nominalQuota: {{ index .Values.kueue.queues.nominalQuota "nvidia.com/gpu" | quote }}`
 
-Derived from the ONE GPU signal: the values comment demands this equal the
-cluster's total schedulable nvidia.com/gpu ("never set it above the real GPU
-count — Kueue would admit a pod that can't schedule"), and on a GPU-less estate
-that total is 0. Hardcoding 1 there admits a GPU RayService that then sits
-Pending forever, which reads as a Kueue bug rather than a missing GPU.
+The values comment demands this equal the cluster's total schedulable nvidia.com/gpu ("never set it above the
+real GPU count — Kueue would admit a pod that can't schedule"), so it defaults to 0, the total on a GPU-less
+estate. A quota above the real count admits a GPU workload that then sits Pending forever, which reads as a Kueue
+bug rather than a missing GPU.
 
 ## `initContainers:`
 

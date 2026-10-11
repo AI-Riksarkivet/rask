@@ -32,8 +32,8 @@ Services (ClusterIP):
 {{- if .Values.minio.enabled }}
   - minio:    {{ include "rask.fullname" $root }}-minio:{{ .Values.minio.port }} (in-cluster, console :{{ .Values.minio.consolePort }} via -minio console)
 {{- end }}
-{{- if .Values.ray.enabled }}
-  - ray:       {{ include "rask.fullname" $root }}-ray-head-svc:{{ .Values.ray.dashboardPort }} (KubeRay; htrflow at {{ .Values.ray.serveRoutePrefix }})
+{{- with include "rask.rayDashboardUrl" . }}
+  - ray:       {{ . }} (the engine's; rask installs no Ray)
 {{- end }}
 {{- with .Values.nats }}
 {{- if .enabled }}
@@ -148,16 +148,6 @@ Reminders:
     missing allow, not a crash — and every Job/CronJob pod template needs its component labels or the
     policy blocks it silently. Check the policies before you debug the app.
 {{- end }}
-{{- end }}
-{{- if include "rask.gpuEnabled" . }}
-  * ray.gpuCount={{ .Values.ray.gpuCount }}: this chart installs no device plugin, so something else must advertise
-    nvidia.com/gpu and serve the nvidia RuntimeClass (the platform's GPU Operator or plugin; in development the
-    nvidia-device-plugin fixture, deploy/fixtures). If nothing does, the Ray head stays Pending.
-    Check: kubectl get nodes -o jsonpath='{.items[*].status.allocatable}' | tr ' ' '\n' | grep nvidia
-{{- else }}
-  * GPU-LESS estate (ray.gpuCount=0, the chart default): the htrflow Serve actor is derived to
-    RASK_SERVE_GPU_FRAC=0 and runs on CPU. For a GPU node, install a device plugin first, then:
-      helm upgrade ... --set ray.gpuCount=<n> --set config.RASK_SERVE_GPU_FRAC=<frac>
 {{- end }}
 
 {{- with .Values.services.lineage }}

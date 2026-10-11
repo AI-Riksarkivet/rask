@@ -93,6 +93,21 @@ def render(*extra: str) -> tuple[dict, ...]:
     return tuple(doc for doc in yaml.load_all(render_text(*extra), Loader=FAST_LOADER) if isinstance(doc, dict))
 
 
+@functools.cache
+def render_fixture(name: str, *extra: str) -> tuple[dict, ...]:
+    """Every mapping document a development fixture's own chart (`deploy/fixtures/<name>/chart`) renders, as release `name`.
+
+    The rask chart installs no engine (ADR 0153); `make k3s-up` installs it from a fixture, so a gate about what the
+    deployed engine carries reads the fixture's render.
+    """
+    helm = shutil.which("helm") or str(REPO / ".localbin/helm")
+    if not pathlib.Path(helm).exists():
+        pytest.skip("helm not available")
+    argv = [helm, "template", name, str(REPO / "deploy/fixtures" / name / "chart"), "--namespace", "default", *extra]
+    text = subprocess.run(argv, capture_output=True, text=True, check=True).stdout  # noqa: S603
+    return tuple(doc for doc in yaml.load_all(text, Loader=FAST_LOADER) if isinstance(doc, dict))
+
+
 def containers(docs: tuple[dict, ...]) -> list[tuple[str, str, dict]]:
     """`(workload, container_name, container)` for every first-class workload shape.
 

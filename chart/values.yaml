@@ -25,7 +25,7 @@ nameOverride: ""
 imagePullSecrets: []
 
 # singleTenant gates the LEGACY single-tenant default workloads (the default
-# domain services + /default frontends + default Postgres/Ray/NATS/migration).
+# domain services + /default frontends + default Postgres/NATS/migration).
 # Default false => front-door-only install (picker + controlplane + gateway +
 # operators). Set true to restore the old single-tenant stack.
 # NOTE: this is separate from the operator subchart toggles (cnpg/...),
@@ -63,7 +63,7 @@ storage:
       description: Telemetry retained by GreptimeDB. Operational, not archival.
 
 singleTenant:
-  # -- Renders the single-tenant default workloads (every fleet service, the RayService, domain zones). False installs front-door services only; the object store is gated by `minio.enabled`.
+  # -- Renders the single-tenant default workloads (every fleet service, domain zones). False installs front-door services only; the object store is gated by `minio.enabled`.
   enabled: false
 
 # Optional override: if set, this Secret is used verbatim instead of the chart's `<release>-app`
@@ -105,16 +105,10 @@ docs:
 config:
   # -- Path prefix the fleet apps mount their API under, via the shared fleet ConfigMap.
   RASK_API_PREFIX: "/api"
-  # -- Ray Serve replica count per deployment, passed to the RayService and the fleet ConfigMap.
-  RASK_SERVE_REPLICAS: "1"
-  # -- GPU fraction each Serve replica reserves. Rendered as 0 when the estate has no GPU; the render fails if 0 on a GPU estate.
-  RASK_SERVE_GPU_FRAC: "1.0"
   # -- AWS region written to the fleet ConfigMap for S3 clients; any value works against RustFS/MinIO.
   AWS_REGION: "us-east-1"
   # -- Skips TLS verification for the S3 client (`storage.client` reads it as an alias of RASK_S3_INSECURE). String "true" or "false".
   HCP_INSECURE: "true"
-  # -- Written to the fleet ConfigMap; "0" stops Ray from re-resolving dependencies with `uv run` in a job's runtime_env.
-  RAY_ENABLE_UV_RUN_RUNTIME_ENV: "0"
 
 # Per-service definitions. TWO planes share this map, by design of the merge:
 #   * the rask FLEET (compute, gateway) — rendered by templates/fleet.yaml, which ranges over this
@@ -918,11 +912,10 @@ frontend:
   # -- Request-body ceiling of each zone's Bun server (BODY_SIZE_LIMIT), kept above the BFF's 25 MB inference guard.
   bodySizeLimit: 32M
   # Ray Serve's HTTP ingress origin, for the zones that run inference (studio's flow builder, the
-  # annotator's producer calls). Empty => derived from the one Ray plane (`rask.rayServeOrigin`): a
-  # RayService's `<release>-ray-serve-svc:8000`, else the dashboard every Ray consumer names (an
-  # external dashboard host serves the apps too), so the builder cannot list an app it is unable to call.
-  # Set this ONLY when Serve lives somewhere the dashboard does not.
-  # -- Ray Serve HTTP origin for zones that run inference; empty derives it from the Ray plane (the Serve service or the dashboard URL).
+  # annotator's producer calls). Empty => the dashboard every Ray consumer names (`rask.rayServeOrigin`;
+  # an external dashboard host serves the apps too), so the builder cannot list an app it is unable to call.
+  # Set this when the engine serves Serve somewhere the dashboard does not.
+  # -- Ray Serve HTTP origin for zones that run inference; empty uses `ray.dashboardUrl`.
   serveUrl: ''
   image:
     # The DEFAULT tag; shared across zones. A zone may override it with `tag:` on its apps entry below —
@@ -2798,160 +2791,31 @@ minio:
     rolePolicy: readwrite # built-in full-S3 base policy; the per-request session policy narrows it per-table
 
 ray:
-  # -- Allow the in-cluster Ray head (RayService under `singleTenant`, or RayCluster under `cluster.enabled`) and its HF cache PVC.
+  # THE ENGINE SEAM (ADR 0153). rask installs no Ray: no operator, no RayCluster, no RayService. It
+  # names the engine's address, the token its Ray clients present, and the engine identity its doors
+  # trust; how the engine runs Ray is the engine owner's. In development the kuberay-operator and
+  # ray-cluster fixtures provide one (deploy/fixtures, not for production).
+  # -- rask talks to a Ray engine: the NetworkPolicy admits the pods KubeRay marks `ray.io/is-ray-node`, and the Collector scrapes them.
   enabled: true
   # THE ONE RAY PLANE ([[CP-041]]): every Ray consumer renders its address from `rask.rayDashboardUrl`
   # — compute's RAY_DASHBOARD_URL (job-history prune, jobs board, /api/serve), the cascade's
-  # MEDALLION_RAY_ADDRESS, the annotator's Serve discovery and the zones' Serve origin. Set => an
-  # external Ray, used verbatim; empty => the in-cluster head Service a RayService (singleTenant) or
-  # RayCluster (`cluster.enabled`) creates; neither, with `medallion.ray` on, fails the render. No
-  # default host: an estate names its Ray, as it names its OIDC issuer.
-  # -- Address of the Ray dashboard every Ray consumer uses. Set for an external Ray; empty uses the in-cluster head Service.
+  # MEDALLION_RAY_ADDRESS, the annotator's Serve discovery and the zones' Serve origin. Empty with
+  # `medallion.ray` on fails the render: an estate names its engine, as it names its OIDC issuer.
+  # -- Address of the engine's Ray dashboard, used verbatim by every Ray consumer; the ray-cluster fixture serves http://rask-ray-head-svc:8265.
   dashboardUrl: ""
-  # THE BATCH LANE'S OWN CLUSTER — a RayCluster the KubeRay operator owns, as opposed to the
-  # RayService `singleTenant` renders (which wraps a cluster of its own to run Serve applications).
-  # Mutually exclusive with it: two objects would give the estate two heads, and the one the Ray
-  # plane does not name is the one nobody notices is idle.
-  #
-  # OFF by default because an estate pointed at an external Ray (`dashboardUrl` set) must not gain a
-  # second one it did not ask for. On, it replaces the hand-applied `deploy/ray-lance-demo.yaml` head
-  # — which nothing reconciles, and whose own header says "NOT for production: production is KubeRay
-  # (RayCluster CR)".
-  cluster:
-    # -- Render a KubeRay RayCluster for the batch lane; mutually exclusive with the `singleTenant` RayService. Off by default.
-    enabled: false
-    # GCS FAULT TOLERANCE via Ray's EMBEDDED RocksDB backend — the path that needs no Redis, and so
-    # no exception to the estate's rule against one.
-    #
-    # WHAT IT BUYS: the GCS persists its cluster metadata, so a head restart stops erasing the job
-    # records the cascade polls. Today a restart in the 30 s window between submit and first poll
-    # makes every later poll 404, which the medallion compensates for with MAX_UNSEEN_POLLS and
-    # MAX_RESUBMITS — that BOUNDS the loss without removing it, and its `abandoned` verdict means a
-    # job may still be running with nobody watching.
-    #
-    # WHAT IT DOES NOT BUY, stated so the toggle is not read as more than it is: this is cluster
-    # metadata, never application state. On a head-only cluster the driver still dies with the head.
-    #
-    # ALPHA, Linux-only, SINGLE-WRITER — Ray's own words. The single-writer restriction is why the
-    # claim is ReadWriteOnce and why this belongs on an operator-managed head: `replicas: 1` on a
-    # plain Deployment does NOT give single-writer, because the default RollingUpdate strategy starts
-    # the replacement before the original goes.
-    gcsFaultTolerance:
-      # -- Persist the Ray GCS metadata on embedded RocksDB so a head restart keeps job records (alpha, single writer, no Redis).
-      enabled: false
-      # -- Size of the ReadWriteOnce claim holding the GCS RocksDB state.
-      size: 2Gi
-      # Empty => the cluster's default provisioner, which is the only portable answer.
-      # -- StorageClass of the GCS claim; empty uses the cluster's default provisioner.
-      storageClass: ""
-  # === Ray token auth (gate 7 / R3) — RAY_AUTH_MODE=token on the head + every Ray-talking client.
-  # DEFAULT OFF for dev; values-prod flips it ON (the ray-auth-token.yaml prod guard demands it).
-  # The kuberay >= 1.6.0 prerequisite is SATISFIED (Chart.yaml pins kuberay-operator 1.6.2):
-  # rask deploys a RayService, and the RayService controller is itself a dashboard-REST client
-  # (it PUTs/polls /api/serve/applications to reconcile Serve apps) — 1.6+ reads the auth Secret
-  # and sends the token on those calls; pre-1.6.0 it 401-wedged at WaitForServeDeploymentReady.
-  # Wiring is KubeRay-NATIVE spec.authOptions (rayservice.yaml): authOptions.secretName hands the
-  # operator the chart's pre-existing <release>-ray-auth-token Secret (verified in the 1.6.2
-  # source — reconcileAuthSecret skips generation when secretName is set, and the operator
-  # injects RAY_AUTH_MODE/RAY_AUTH_TOKEN into every Ray container). rask.rayAuthEnv covers the
-  # fleet-consumer half (compute). Requires ray.rayVersion >= 2.52.0 (operator validation).
+  # Ray token auth (RAY_AUTH_MODE=token). The token is the store's `ray-auth-token`, written by ESO into
+  # `<release>-ray-auth-token` (the dev OpenBao generates it in-cluster), never a value. rask's Ray
+  # clients present it (rask.rayAuthEnv); the engine enforces the same Secret (the ray-cluster
+  # fixture's `authSecretName`, KubeRay's authOptions).
   auth:
-    # -- Ray token auth (`RAY_AUTH_MODE=token`) on the head and every Ray client, via KubeRay authOptions; needs `rayVersion` >= 2.52.0. Off for dev.
+    # -- rask's Ray clients present the token in `<release>-ray-auth-token`; the engine must enforce the same one. Off for dev.
     enabled: false
-    # The token is the store's `ray-auth-token`, written by ESO into `<release>-ray-auth-token`; the dev
-    # OpenBao's is generated in-cluster. Never a value.
-  # MUST MATCH WHAT THE IMAGE SHIPS, and the lock is the source of truth for that:
-  # .docker/ray-cluster.dockerfile builds with `uv sync --package ray-cluster-env` from the root uv.lock,
-  # and packages/ray-cluster-env requires ray[data,default,serve]>=2.58. This read 2.56.1 while the container ran 2.57.0 —
-  # so the KubeRay operator, which uses rayVersion for its own compatibility gating (see authOptions
-  # below, which needs >= 2.52.0), was reasoning about a cluster that did not exist. Nothing compares
-  # the two automatically, so bump this WITH the lock, never on its own.
-  # -- Ray version KubeRay reasons about; must match the version the image's lock installs and be bumped with it.
-  rayVersion: "2.58.0"
-  image:
-    # `ray-cluster`: names the KubeRay cluster image, distinct from the fleet's
-    # Ray-plane SERVICE image (`ray` under R20, `compute` since R22)
-    # name when the -api suffix died (R20), so the cluster image renamed with it.
-    # -- Repository of the agnostic Ray head image (built from .docker/ray-cluster.dockerfile).
-    repository: ray-cluster
-    # -- Tag of the Ray cluster image.
-    tag: "dev"
-    # -- Pull policy of the Ray cluster image.
-    pullPolicy: IfNotPresent
-  # THE SERVE APPLICATIONS THIS DEPLOYMENT RUNS. A list, because the platform must be able to express
-  # more than one — the template used to hardcode a single `- name: htrflow`, so a second workload
-  # could not be deployed without editing a platform template. Naming a workload HERE is correct: this
-  # is a deployment's own configuration, and the chart it configures knows nothing about it.
-  #
-  # `params` is the workload's own half of the contract; each key is rendered as RASK_PARAM_<KEY> so a
-  # workload cannot reach a platform variable by choosing a colliding name.
-  # -- Serve applications the RayService runs, each with name, importPath, routePrefix, its own image (runtime_env.image_uri) and optional params (RASK_PARAM_<KEY>).
-  serveApplications:
-    - name: htrflow
-      importPath: "runner.htrflow_service:htrflow_app"
-      routePrefix: "/htrflow"
-      # The image whose environment satisfies `importPath`, rendered as runtime_env.image_uri so THIS
-      # application's replicas run it while the head stays agnostic. Built by
-      #   scripts/dagger-image.sh --runner htr --tag ray-htr:dev
-      # from the parametrized .docker/ray-runner.dockerfile (platform closure + one sealed runner).
-      #
-      # Empty means "the head image already provides this import path". That was the effective
-      # setting until 2026-08-25 and it was FALSE: fd7dd7e0 emptied `ray-cluster` of every runner on
-      # 2026-08-18 and moved the workload to its own image, but nothing pointed the chart at the
-      # result — so the declared application could never be imported and only the RayService's
-      # reconcile loop knew. Ray pulls this by reference, so it must be a registry address in a real
-      # deployment (k3s side-loads :dev images into containerd, which is why the local default works).
-      image: "ray-htr:dev"
-  # Kept for the compute zone's route hint and the NOTES output — the FIRST application's prefix.
-  # Not read by the RayService any more; serveApplications above is the source of truth.
-  # -- Route prefix of the first Serve application, shown in NOTES; the RayService reads `serveApplications` instead.
-  serveRoutePrefix: "/htrflow"
-  # -- Import path of the first Serve application. Not read by any chart template; `serveApplications` is the source of truth.
-  importPath: "runner.htrflow_service:htrflow_app"
-  # -- Port of the in-cluster Ray head's dashboard, used to build the default Ray address when `dashboardUrl` is empty.
-  dashboardPort: 8265
-  # -- Ray Serve HTTP port (8000). Not read by any chart template.
-  servePort: 8000
-  # -- Ray client port (10001). Not read by any chart template.
-  clientPort: 10001
-  # -- Ray GCS port (6379). Not read by any chart template.
-  redisPort: 6379
-  # ── THE ONE GPU SIGNAL ──────────────────────────────────────────────────────────────────────────
-  # GPUs the Ray head advertises. Everything GPU-shaped in this chart DERIVES from this number
-  # (rask.gpuEnabled / rask.serveGpuFrac in templates/_helpers.tpl):
-  #   * the head's `num-gpus` rayStartParam and its `nvidia.com/gpu` limit (omitted entirely at 0),
-  #   * `runtimeClassName: nvidia` on the head (the RuntimeClass object is the device plugin's),
-  #   * RASK_SERVE_GPU_FRAC — the htrflow Serve actor's reservation — in BOTH the fleet ConfigMap and
-  #     the RayService serveConfigV2; at 0 it collapses to 0, which is what makes the CPU path work,
-  #   * the Kueue ClusterQueue's nvidia.com/gpu nominalQuota.
-  # DEFAULT 0, i.e. a CPU-only estate that installs cleanly on kind/CI/a laptop. It used to default to
-  # 1 while the Serve fraction defaulted to 1.0, so a GPU-less cluster left the RayService permanently
-  # `Initializing` — no stable head Service, and the compute zone reporting "Ray offline" next to a
-  # Running head (live-proof 2026-07-28, defect 3; it took THREE manual --set overrides to unstick).
-  # A GPU node needs something advertising nvidia.com/gpu and the nvidia RuntimeClass: the platform's device
-  # plugin or GPU Operator, or in development the nvidia-device-plugin fixture (deploy/fixtures).
-  # -- GPUs the Ray head advertises; every GPU setting derives from it. 0 is a CPU-only estate; a GPU node also needs a device plugin and the nvidia RuntimeClass (deploy/fixtures/nvidia-device-plugin in development).
-  gpuCount: 0
-  # -- RuntimeClass of the Ray head; rendered only when `gpuCount` > 0.
-  runtimeClassName: "nvidia" # only rendered when gpuCount > 0
-  # -- Size of the Ray head's Hugging Face weight-cache PVC.
-  hfCacheStorage: "10Gi"
-  # The HF weight-cache PVC's class. "" => the cluster's DEFAULT StorageClass (this was hardcoded
-  # `local-path`, the same non-portable name as minio.storageClass — it wedged the PVC, and with it
-  # the Ray head, on any cluster whose provisioner is named anything else).
-  # -- StorageClass of the HF weight-cache PVC; empty uses the cluster's default class.
-  hfCacheStorageClass: ""
-  # -- Size limit of the Ray head's /dev/shm memory volume.
-  shmSize: "8Gi"
-  # Ray SERVE trace sampling. Upstream defaults to 0.01 — one request in a hundred — which makes a
-  # small smoke test produce zero spans and read as broken. 1.0 while the estate's Serve traffic is
-  # low; lower it deliberately if Serve ever carries real volume.
-  # -- Fraction of Ray Serve requests traced (string, 0 to 1); 1.0 traces every request.
-  serveTracingSamplingRatio: "1.0"
-  # -- CPU/memory requests and limits of the Ray head container.
-  resources:
-    requests: {cpu: "2", memory: "8Gi"}
-    limits: {cpu: "4", memory: "16Gi"}
+  # The engine identity rask's doors trust: its projected service-account tokens (audiences
+  # rask-lineage, rask-medallion) are admitted as `medallion.train.trainerIdentity`, so a training job's
+  # lineage and its outcome report are the trainer's. The engine creates the account; rask only names it.
+  # -- Service account (in the release namespace) whose tokens rask admits as the trainer; empty admits none. The ray-cluster fixture runs its head as `<rask>-sa-ray`.
+  engineServiceAccount: ""
+
 
 ingress:
   # -- Renders the Ingress publishing `/` and `/api`. Only one release per cluster may hold a host-less Ingress.
@@ -3013,11 +2877,6 @@ ingress:
 # One `helm install` brings these up alongside the app. Turn off for a prod
 # install that uses externally-managed infra. Subchart value overrides live
 # under the same key as the toggle.
-# kuberay-operator subchart (aliased 'kuberay' in Chart.yaml)
-kuberay:
-  # -- Installs the KubeRay operator subchart (Chart.yaml condition) that reconciles the Ray cluster CRs.
-  enabled: true
-
 # === NATS (subchart) — JetStream backs the Dapr pubsub.jetstream component =========================
 # rask shipped this OFF ("platform NATS was single-tenant; per-project renders its own"). The merge
 # turns it ON: the lance-ns event fabric (lineage publish, the medallion cascade, the catalog control
@@ -3607,8 +3466,8 @@ kueue:
       cpu: "18"
       # -- ClusterQueue nominal memory quota; size it to the cluster.
       memory: "120Gi"
-      # -- ClusterQueue GPU quota; set to the total schedulable GPUs, never above. Rendered as 0 when `ray.gpuCount` is 0.
-      "nvidia.com/gpu": "1"
+      # -- ClusterQueue GPU quota; set to the total schedulable GPUs, never above. 0 on a GPU-less cluster.
+      "nvidia.com/gpu": "0"
 
 # === OpenFGA (subchart) — Zanzibar authz. lance-ns's values REPLACE rask's `engine: memory`: the
 # datastore is the AGE Postgres (it's just postgres), so grants survive a restart. -----------------

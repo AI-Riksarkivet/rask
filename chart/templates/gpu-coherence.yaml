@@ -1,5 +1,0 @@
-
-{{- if and (include "rask.gpuEnabled" .) (hasKey .Values.config "RASK_SERVE_GPU_FRAC") (eq (float64 .Values.config.RASK_SERVE_GPU_FRAC) 0.0) }}
-
-{{- fail (printf "rask chart: ray.gpuCount=%v (a GPU estate) but config.RASK_SERVE_GPU_FRAC=%v — every Serve replica would reserve no GPU and run on CPU while %v GPU(s) sit idle. Set config.RASK_SERVE_GPU_FRAC to the per-replica fraction (e.g. 0.49 for 2 replicas/GPU), or set ray.gpuCount=0 for a deliberate CPU estate." .Values.ray.gpuCount .Values.config.RASK_SERVE_GPU_FRAC .Values.ray.gpuCount) }}
-{{- end }}

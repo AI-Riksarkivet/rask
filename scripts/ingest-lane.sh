@@ -88,7 +88,6 @@ die() {
 lane_values() {
 	cat <<-'YAML'
 		ray: {enabled: false}
-		kuberay: {enabled: false}
 		kueue: {enabled: false}
 		observability: {enabled: false}
 		frontend: {enabled: false}

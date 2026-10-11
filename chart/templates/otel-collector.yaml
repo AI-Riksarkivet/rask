@@ -151,7 +151,7 @@ data:
                   target_label: pod
             # RAY (:8080) — a THIRD job, and it exists because neither job above can ever match a Ray
             # pod. Both `keep` on a `dapr.io/*` pod annotation at their first relabel step; Ray pods
-            # carry none (`grep -n dapr chart/templates/rayservice.yaml` -> no matches), so every Ray
+            # carry none (KubeRay creates them with no Dapr annotation), so every Ray
             # pod was dropped before any other rule ran. The consequence was total rather than partial:
             # no ray_tasks/ray_actors by state, no GCS liveness, no OOM-kill counter
             # (ray_memory_manager_worker_eviction_total), no object-store spill, no ray_serve_* replica

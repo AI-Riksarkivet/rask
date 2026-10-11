@@ -1,0 +1,43 @@
+# The rask release this engine serves. Every rask name below derives from it: the cluster `<rask>-ray` (KubeRay
+# names its head Service `<rask>-ray-head-svc`, what rask's ray.dashboardUrl points at), the identity
+# `<rask>-sa-ray` (rask's ray.engineServiceAccount), the lineage and OTel endpoints, the object store, and the Secrets
+# the head reads by reference.
+rask:
+  release: rask
+  # Port of rask's object-store Service (`<rask>-minio`).
+  s3Port: 9000
+  s3Region: us-east-1
+# Telemetry from the head and its jobs to rask's OTel Collector (`<rask>-otel-collector:4318`); off when rask runs
+# without observability. `environment` is rask's `observability.environment`, so Ray series sit beside the fleet's.
+otel:
+  enabled: true
+  endpoint: ""
+  environment: rask
+rayVersion: "2.58.0"
+image:
+  # The head image with rask's job scripts baked in (.docker/ray-cluster.dockerfile), pushed to the dev registry.
+  repository: localhost:5000/ray-cluster
+  tag: dev
+  pullPolicy: IfNotPresent
+# GPUs the head advertises. Above 0 the head asks for nvidia.com/gpu and runs under runtimeClassName, which needs a
+# device plugin (the nvidia-device-plugin fixture) and k3s's nvidia RuntimeClass.
+gpuCount: 0
+runtimeClassName: nvidia
+# The Secret holding the Ray auth token (key `auth_token`), the one rask's ray.auth reference names; empty runs Ray
+# with no auth.
+authSecretName: ""
+rayStartParams:
+  dashboard-host: "0.0.0.0"
+# Extra environment on the head, beside what the template derives from `rask.release`.
+env: []
+# Projected service-account tokens the head's jobs present to rask, one per audience, mounted at
+# /var/run/secrets/rask/identity/<audience>/token.
+identityAudiences: [rask-lineage, rask-medallion]
+resources:
+  requests: {cpu: "2", memory: 8Gi}
+  limits: {cpu: "4", memory: 16Gi}
+shmSize: 8Gi
+hfCache:
+  size: 10Gi
+  # "" leaves storageClassName out, so the cluster's default class provisions.
+  storageClass: ""

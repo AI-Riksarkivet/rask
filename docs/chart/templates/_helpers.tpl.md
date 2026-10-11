@@ -45,44 +45,15 @@ Component labels: pass (list . "<component>")
 ## `{{- define "rask.rayAuthEnv" -}}`
 
 The RAY_AUTH_MODE/RAY_AUTH_TOKEN env pair for FLEET consumers that talk to a token-authed
-Ray (the `rayClient` services — compute). Ray-cluster containers do NOT use this include:
-spec.authOptions (rayservice.yaml, kuberay >= 1.6.0) makes the operator inject the same pair
-into head/worker/autoscaler containers itself. No-op unless ray.auth.enabled — so every
+Ray (the `rayClient` services — compute). The engine enforces the same token itself (KubeRay's
+spec.authOptions.secretName; the ray-cluster fixture's `authSecretName`). No-op unless ray.auth.enabled — so every
 consumer flips with the ONE toggle and the secretKeyRef can never dangle (ESO writes the Secret
-under the same gate in external-secrets.yaml, data key `auth_token`, the KubeRay
-operator-Secret convention rayservice.yaml's spec.authOptions.secretName relies on). Usage: {{- include "rask.rayAuthEnv" . | nindent 16 }}
+under the same gate in external-secrets.yaml, data key `auth_token`, the KubeRay operator-Secret convention). Usage: {{- include "rask.rayAuthEnv" . | nindent 16 }}
 
-## `{{- define "rask.gpuEnabled" -}}`
+## `{{- define "rask.daprPodLabels" -}}`
 
 The ONE store's root identity is minio.accessKey (a value) and the store's `minio-secret-key`
 (never a value): the server, `<release>-infra-credentials` and the hooks all read that pair.
-
-── The ONE GPU signal: ray.gpuCount ────────────────────────────────────────────────────────────
-`ray.gpuCount` is the single fact every GPU-shaped decision in this chart derives from. It exists
-because a live kind run (2026-07-28, defects 3 + 6) needed FOUR
-manual overrides to make a GPU-less estate coherent — ray.gpuCount=0, config.RASK_SERVE_GPU_FRAC=0,
-ray.runtimeClassName="" and the device plugin off — and getting any one of them wrong wedged the deploy with no
-diagnostic (the RayService stayed `Initializing`, so no stable head Service ever appeared and the
-compute zone read "Ray offline" beside a perfectly healthy head).
-
-Derived from it: the head's `num-gpus` rayStartParam + `nvidia.com/gpu` limit, its
-`runtimeClassName`, the htrflow Serve actor's GPU fraction (rask.serveGpuFrac, fed to
-BOTH the fleet ConfigMap and the RayService serveConfigV2), and the Kueue ClusterQueue's
-nvidia.com/gpu nominalQuota. The device plugin and the nvidia RuntimeClass object are not the
-chart's: the platform provides them, and in development the nvidia-device-plugin fixture does
-(deploy/fixtures, ADR 0153).
-
-"true" when this estate has GPUs at all; "" (falsey) otherwise.
-
-## `{{- define "rask.serveGpuFrac" -}}`
-
-A Serve replica's GPU fraction, DERIVED — never the raw config value. `config.RASK_SERVE_GPU_FRAC`
-states the intent for a GPU node; on a GPU-less estate it MUST collapse to 0 or Ray Serve waits forever
-for a resource the cluster will never advertise, and the whole RayService (hence the stable head
-Service, hence the compute zone) never comes up. Both render sites include this, so the ConfigMap and
-the serveConfigV2 runtime_env cannot disagree.
-
-## `{{- define "rask.daprPodLabels" -}}`
 
 Dapr sidecar pod annotations (no-op unless dapr.sidecars) — the ONE annotation surface for the whole
 estate: the rask fleet + controlplane AND the lance planes (services.yaml catalog/lineage,
@@ -177,52 +148,6 @@ here from lance-ns is the DATA: the release-derived Greptime host (was hardcoded
 standalone", which ignored the release name) and the observability.{greptimePort,dbName,tracePipeline}
 knobs, so the fleet and the lance apps cannot disagree about port/db/pipeline. `hasKey`+`ternary`, not
 `| default`, so an explicit 0 is never swallowed (and the chart-wide invariant test forbids it).
-
-OTLP env for the RAY plane (call: include "rask.rayOtelEnv" (list $root "<service.name>")).
-A THIRD rendering, and deliberately not a third source of truth: every value below is derived from
-`lance.otlpEndpoint` / `lance.otelViaCollector` / `lance.otelEnabled`, the same single derivation
-the lance plane uses. What differs is only WHICH variables are emitted — `lance.otelEnv` also
-renders OTEL_*_EXPORTER and OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED, which really are
-launcher-only, plus OTEL_METRIC_EXPORT_INTERVAL and OTEL_PYTHON_FASTAPI_EXCLUDED_URLS, which are
-NOT — both take effect with no launcher (verified against the installed SDK), and the fleet now
-carries them too. Ray is exempt for a different reason: it builds no metric reader and serves no
-FastAPI
-app, so those would be inert config on every Ray pod. Duplicated DATA is the defect; a narrower
-projection of one derivation is not.
-
-WHY THIS EXISTS AT ALL. The block it replaces was hand-rolled inside `serveConfigV2.runtime_env`
-with the release name, db name and trace pipeline as string LITERALS — the exact defect
-`rask.otelEnv`'s own comment above records having fixed elsewhere ("was hardcoded
-rask-greptimedb-standalone, which ignored the release name"). Rendered side by side, every other
-pod said `<release>-otel-collector:4318` and the RayService said `rask-greptimedb-standalone:4000`,
-a Service the same render does not create.
-
-AND WHY IT IS CALLED FROM CONTAINER ENV, NOT serveConfigV2. `runtime_env.env_vars` scopes to ONE
-Serve application's build task and replica actors. It never reaches the ray-head container, GCS,
-the raylet, the dashboard agent, or the Serve controller/proxy actors. Container env does, and
-workers inherit the raylet's environment — so one include covers the whole plane and extends to
-the first workerGroupSpecs entry by adding the same line there.
-
-Gated on `lance.otelEnabled`, NOT `observability.enabled`: the former is also true when
-`externalOtlpEndpoint` ships telemetry off-cluster, and the narrower gate silently turned Ray's
-telemetry off in exactly that posture while every other pod kept exporting.
-
-The service name is the PLATFORM's, never a workload's — CLAUDE.md: no chart may know a workload's
-name. The workload rides in Ray Serve's own `application`/`deployment` label values.
-
-The OTLP target for DAPR SIDECARS — a BARE host:port, which is why it cannot reuse
-`lance.otlpEndpoint`. Dapr sets no URL path of its own: with `protocol: http` it posts to
-`<endpointAddress>/v1/traces`, while GreptimeDB ingests at `/v1/otlp/v1/traces` — a prefix Dapr
-has no way to express. Port 4318 (OTLP/HTTP), matching `protocol: http` at the call site: the
-externalEndpoint values in this chart are HTTP URLs, so deriving a bare host:port from one and
-then declaring gRPC would point the sidecar at an HTTP listener and fail — caught by rendering
-the externalize posture rather than by trusting the default one. So the Collector is the only correct target, and that is fine, because the
-Collector is what adds GreptimeDB's db-name and trace-pipeline headers on behalf of
-backend-agnostic senders. Its `otlp` receiver already listens on 4317 and 4318 and is already
-wired into the traces pipeline; the receiving half was built and idle.
-
-Empty when no Collector is reachable, so the `with` at the call site omits the whole `otel:`
-block rather than rendering an endpoint that resolves to nothing.
 
 ## `{{- define "rask.otelResourceAttrs" -}}`
 

@@ -31,7 +31,6 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | https://nats-io.github.io/k8s/helm/charts/ | nats | 2.14.2 |
 | https://openfga.github.io/helm-charts | openfga | 0.3.12 |
 | https://perses.github.io/helm-charts | perses | 0.22.0 |
-| https://ray-project.github.io/kuberay-helm/ | kuberay(kuberay-operator) | 1.6.2 |
 | oci://registry.k8s.io/kueue/charts | kueue | 0.18.1 |
 
 ## Values
@@ -97,9 +96,6 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | config.AWS_REGION | string | `"us-east-1"` | AWS region written to the fleet ConfigMap for S3 clients; any value works against RustFS/MinIO. |
 | config.HCP_INSECURE | string | `"true"` | Skips TLS verification for the S3 client (`storage.client` reads it as an alias of RASK_S3_INSECURE). String "true" or "false". |
 | config.RASK_API_PREFIX | string | `"/api"` | Path prefix the fleet apps mount their API under, via the shared fleet ConfigMap. |
-| config.RASK_SERVE_GPU_FRAC | string | `"1.0"` | GPU fraction each Serve replica reserves. Rendered as 0 when the estate has no GPU; the render fails if 0 on a GPU estate. |
-| config.RASK_SERVE_REPLICAS | string | `"1"` | Ray Serve replica count per deployment, passed to the RayService and the fleet ConfigMap. |
-| config.RAY_ENABLE_UV_RUN_RUNTIME_ENV | string | `"0"` | Written to the fleet ConfigMap; "0" stops Ray from re-resolving dependencies with `uv run` in a job's runtime_env. |
 | controlplane.enabled | bool | `true` | Deploy the controlplane service (the `/api/projects` surface) and its resiliency policy. |
 | controlplane.port | int | `8820` | HTTP port the controlplane listens on. |
 | controlplane.urlScheme | string | `"http"` | Scheme of each project's entry link in the home gallery (RASK_PROJECT_URL_SCHEME): `http` or `https`. |
@@ -183,7 +179,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | frontend.resources | object | `{"limits":{"cpu":"500m","memory":"256Mi"},"requests":{"cpu":"50m","memory":"64Mi"}}` | Default CPU and memory requests/limits per zone container, used when `resources.web-<zone>` is not set. |
 | frontend.securityContext.allowPrivilegeEscalation | bool | `false` | Container securityContext for zones: forbid privilege escalation. |
 | frontend.securityContext.capabilities | object | `{"drop":["ALL"]}` | Container securityContext capabilities for zones; drops ALL Linux capabilities. |
-| frontend.serveUrl | string | `""` | Ray Serve HTTP origin for zones that run inference; empty derives it from the Ray plane (the Serve service or the dashboard URL). |
+| frontend.serveUrl | string | `""` | Ray Serve HTTP origin for zones that run inference; empty uses `ray.dashboardUrl`. |
 | frontend.service.port | int | `3000` | Port each zone's Bun server listens on and its Service exposes. |
 | frontend.serviceIdentity | string | `"service-web"` | FGA subject the zones' BFF uses for service reads; the `<release>-sa-web` ServiceAccount maps to it. Must be reader on the warehouse. |
 | fullnameOverride | string | `"rask"` | Base name for every rendered object; pinned to `rask` so in-cluster Services resolve as `rask-<component>`. |
@@ -204,14 +200,13 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | ingress.enabled | bool | `true` | Renders the Ingress publishing `/` and `/api`. Only one release per cluster may hold a host-less Ingress. |
 | ingress.host | string | `""` | Hostname the Ingress routes. Empty is a cluster-wide catch-all on `/` and `/api`. |
 | ingress.tls | list | `[]` | List of Ingress TLS entries ({secretName, hosts}). Empty serves plain HTTP. |
-| kuberay.enabled | bool | `true` | Installs the KubeRay operator subchart (Chart.yaml condition) that reconciles the Ray cluster CRs. |
 | kueue.enabled | bool | `true` | Installs the Kueue subchart (Chart.yaml condition) that admits GPU workloads against the ClusterQueue quota. |
 | kueue.queues.clusterQueueName | string | `"rask"` | Name of the cluster-wide ClusterQueue that holds the nominal quota. |
 | kueue.queues.enabled | bool | `true` | Creates the default ResourceFlavor, ClusterQueue and LocalQueue through a post-install/upgrade hook Job (templates/kueue-queues.yaml). |
 | kueue.queues.flavorName | string | `"rask"` | Name of the ResourceFlavor the ClusterQueue quotas are declared under. |
 | kueue.queues.kubectlImage | string | `"registry.k8s.io/kubectl:v1.31.3"` | Image for the kueue-setup hook Job's containers, which wait for the Kueue webhook and `kubectl apply` the queues. |
 | kueue.queues.localQueueName | string | `"rask"` | Name of the LocalQueue in the release namespace; workloads reference it with the `kueue.x-k8s.io/queue-name` label. |
-| kueue.queues.nominalQuota."nvidia.com/gpu" | string | `"1"` | ClusterQueue GPU quota; set to the total schedulable GPUs, never above. Rendered as 0 when `ray.gpuCount` is 0. |
+| kueue.queues.nominalQuota."nvidia.com/gpu" | string | `"0"` | ClusterQueue GPU quota; set to the total schedulable GPUs, never above. 0 on a GPU-less cluster. |
 | kueue.queues.nominalQuota.cpu | string | `"18"` | ClusterQueue nominal CPU quota; size it to the cluster. |
 | kueue.queues.nominalQuota.memory | string | `"120Gi"` | ClusterQueue nominal memory quota; size it to the cluster. |
 | lifecycle.maintenanceTerminationGracePeriodSeconds | int | `120` | Grace period in seconds for maintenance pods, long enough that an in-flight sweep or Lance write is not SIGKILLed. |
@@ -402,31 +397,10 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | pubsub.controlName | string | `"catalog-control-pubsub"` | Name of the broadcast (no queue group) Dapr pubsub component for catalog.control.v1; must match the catalog's LANCE_CONTROL_PUBSUB default. Used when `controlEmit` is on. |
 | pubsub.name | string | `"lineage-pubsub"` | Name of the shared lineage publish Dapr pubsub component; each subscriber app gets a derived `<name>-<app-id>` component with its own queue group. |
 | pubsub.topic | string | `"lineage.events.v1"` | Topic OpenLineage run events are published and subscribed on (LANCE_DAPR_TOPIC, MEDALLION_LINEAGE_TOPIC and siblings). |
-| ray.auth.enabled | bool | `false` | Ray token auth (`RAY_AUTH_MODE=token`) on the head and every Ray client, via KubeRay authOptions; needs `rayVersion` >= 2.52.0. Off for dev. |
-| ray.clientPort | int | `10001` | Ray client port (10001). Not read by any chart template. |
-| ray.cluster.enabled | bool | `false` | Render a KubeRay RayCluster for the batch lane; mutually exclusive with the `singleTenant` RayService. Off by default. |
-| ray.cluster.gcsFaultTolerance.enabled | bool | `false` | Persist the Ray GCS metadata on embedded RocksDB so a head restart keeps job records (alpha, single writer, no Redis). |
-| ray.cluster.gcsFaultTolerance.size | string | `"2Gi"` | Size of the ReadWriteOnce claim holding the GCS RocksDB state. |
-| ray.cluster.gcsFaultTolerance.storageClass | string | `""` | StorageClass of the GCS claim; empty uses the cluster's default provisioner. |
-| ray.dashboardPort | int | `8265` | Port of the in-cluster Ray head's dashboard, used to build the default Ray address when `dashboardUrl` is empty. |
-| ray.dashboardUrl | string | `""` | Address of the Ray dashboard every Ray consumer uses. Set for an external Ray; empty uses the in-cluster head Service. |
-| ray.enabled | bool | `true` | Allow the in-cluster Ray head (RayService under `singleTenant`, or RayCluster under `cluster.enabled`) and its HF cache PVC. |
-| ray.gpuCount | int | `0` | GPUs the Ray head advertises; every GPU setting derives from it. 0 is a CPU-only estate; a GPU node also needs a device plugin and the nvidia RuntimeClass (deploy/fixtures/nvidia-device-plugin in development). |
-| ray.hfCacheStorage | string | `"10Gi"` | Size of the Ray head's Hugging Face weight-cache PVC. |
-| ray.hfCacheStorageClass | string | `""` | StorageClass of the HF weight-cache PVC; empty uses the cluster's default class. |
-| ray.image.pullPolicy | string | `"IfNotPresent"` | Pull policy of the Ray cluster image. |
-| ray.image.repository | string | `"ray-cluster"` | Repository of the agnostic Ray head image (built from .docker/ray-cluster.dockerfile). |
-| ray.image.tag | string | `"dev"` | Tag of the Ray cluster image. |
-| ray.importPath | string | `"runner.htrflow_service:htrflow_app"` | Import path of the first Serve application. Not read by any chart template; `serveApplications` is the source of truth. |
-| ray.rayVersion | string | `"2.58.0"` | Ray version KubeRay reasons about; must match the version the image's lock installs and be bumped with it. |
-| ray.redisPort | int | `6379` | Ray GCS port (6379). Not read by any chart template. |
-| ray.resources | object | `{"limits":{"cpu":"4","memory":"16Gi"},"requests":{"cpu":"2","memory":"8Gi"}}` | CPU/memory requests and limits of the Ray head container. |
-| ray.runtimeClassName | string | `"nvidia"` | RuntimeClass of the Ray head; rendered only when `gpuCount` > 0. |
-| ray.serveApplications | list | `[{"image":"ray-htr:dev","importPath":"runner.htrflow_service:htrflow_app","name":"htrflow","routePrefix":"/htrflow"}]` | Serve applications the RayService runs, each with name, importPath, routePrefix, its own image (runtime_env.image_uri) and optional params (RASK_PARAM_<KEY>). |
-| ray.servePort | int | `8000` | Ray Serve HTTP port (8000). Not read by any chart template. |
-| ray.serveRoutePrefix | string | `"/htrflow"` | Route prefix of the first Serve application, shown in NOTES; the RayService reads `serveApplications` instead. |
-| ray.serveTracingSamplingRatio | string | `"1.0"` | Fraction of Ray Serve requests traced (string, 0 to 1); 1.0 traces every request. |
-| ray.shmSize | string | `"8Gi"` | Size limit of the Ray head's /dev/shm memory volume. |
+| ray.auth.enabled | bool | `false` | rask's Ray clients present the token in `<release>-ray-auth-token`; the engine must enforce the same one. Off for dev. |
+| ray.dashboardUrl | string | `""` | Address of the engine's Ray dashboard, used verbatim by every Ray consumer; the ray-cluster fixture serves http://rask-ray-head-svc:8265. |
+| ray.enabled | bool | `true` | rask talks to a Ray engine: the NetworkPolicy admits the pods KubeRay marks `ray.io/is-ray-node`, and the Collector scrapes them. |
+| ray.engineServiceAccount | string | `""` | Service account (in the release namespace) whose tokens rask admits as the trainer; empty admits none. The ray-cluster fixture runs its head as `<rask>-sa-ray`. |
 | resources.age | object | `{"limits":{"cpu":"1","memory":"2Gi"},"requests":{"cpu":"250m","memory":"512Mi"}}` | CPU/memory requests and limits for the AGE Postgres StatefulSet (lineage and OpenFGA databases). |
 | resources.assist | object | `{"limits":{"cpu":"8","memory":"6Gi"},"requests":{"cpu":"1","memory":"2Gi"}}` | CPU/memory requests and limits for the assist model runner (two warm torch models). |
 | resources.catalog | object | `{"limits":{"cpu":"1","memory":"512Mi"},"requests":{"cpu":"250m","memory":"128Mi"}}` | CPU/memory requests and limits for the catalog; requests sized so the HPA CPU target is meaningful. |
@@ -524,7 +498,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | signing.enforce | bool | `true` | Lineage refuses unsigned or non-verifying events when the secret store and auth are also on. False renders no signer sets and lineage verifies nothing. |
 | signing.mintImage | string | `"natsio/nats-box:0.19.7"` | Image of the dev OpenBao's `mint` init container that generates each identity's NKEY pair. |
 | signing.provisioned | bool | `false` | Attest that signing keys exist for every identity in a non-dev store; the render fails until it is true there. |
-| singleTenant.enabled | bool | `false` | Renders the single-tenant default workloads (every fleet service, the RayService, domain zones). False installs front-door services only; the object store is gated by `minio.enabled`. |
+| singleTenant.enabled | bool | `false` | Renders the single-tenant default workloads (every fleet service, domain zones). False installs front-door services only; the object store is gated by `minio.enabled`. |
 | stateStore.componentVersion | string | `"v1"` | Version of the Dapr Postgres state store component. |
 | stateStore.enabled | bool | `true` | Render the Dapr Postgres state store component (actor and workflow state) on the AGE `stateDb`. |
 | stateStore.metadataTableName | string | `"dapr_metadata"` | Table the Dapr state store keeps its own metadata in. |
