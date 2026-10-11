@@ -227,7 +227,7 @@ observability:
   # `export.endpoint` (the platform's OTLP backend; the render refuses it empty) and `query.url` (its
   # SQL/PromQL API for the zones) are the deployer's to name. The store must meet the audit store's
   # contract (values.yaml `observability`): refuse unauthenticated writes and deletes, admit
-  # `otel-collector-greptime`.
+  # `otel-collector-export`.
 
 # ===================================================================================================
 # EXTERNALIZE the durable/managed tier (tier 3 in docs/DURABILITY.md). Disable the in-cluster component

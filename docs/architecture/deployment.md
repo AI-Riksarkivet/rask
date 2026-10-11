@@ -166,7 +166,7 @@ the **single log shipper** (Vector retired, owner ruling 2026-07-27). It receive
 infra-pod logs (filelog), scrapes the Dapr sidecars, the Dapr control plane, Ray and OpenFGA, and exports
 everything over OTLP/HTTP to **`observability.export.endpoint`**, with the backend's ingestion headers from
 `observability.export.{headers,traceHeaders,auditHeaders}` and HTTP basic auth from the store's
-`otel-collector-greptime` secret (via ESO, as mounted files).
+`otel-collector-export` secret (via ESO, as mounted files).
 
 **The store, dashboards and alerting are a prerequisite, not part of the chart** (ADR 0153). A platform names
 its OTLP backend in `observability.export.endpoint` (values-prod leaves it empty and the render refuses

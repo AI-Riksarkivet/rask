@@ -4,7 +4,7 @@ ADR 0153 (XC-127): the store, its dashboards and its alerting are the platform's
 `observability.export` is its whole contract: every pipeline leaves through an exporter aimed at `export.endpoint`, with
 the backend's headers from values, and nothing else in the render points telemetry anywhere. [[XC-003]], owner decision
 2026-10-10: the store refuses an unauthenticated write or delete, so every exporter presents the credential
-(`secret/otel-collector-greptime` in the store, seeded create-if-absent by the dev OpenBao), which ESO writes into a
+(`secret/otel-collector-export` in the store, seeded create-if-absent by the dev OpenBao), which ESO writes into a
 Secret and the Collector reads as mounted files through the basicauth extension's `*_file` settings, which it watches,
 so a rotation reaches it without a restart. An exporter without the authenticator is refused by an enforcing store; an
 extension missing from `service.extensions` stops the Collector at start; an inline password or an env-delivered one

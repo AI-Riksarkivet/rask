@@ -3864,7 +3864,7 @@ allocator:
 # Collector's export (traces, metrics, and the `lance_audit` trail) must REFUSE an unauthenticated write and an
 # unauthenticated delete on every listener it serves, and admit the credential the Collector presents. The store is
 # downstream of the Collector and so not rask's to configure; what rask owns is the Collector's half: it sends HTTP
-# basic auth on every exporter, read from files ESO writes from the store's `otel-collector-greptime` secret (fields
+# basic auth on every exporter, read from files ESO writes from the store's `otel-collector-export` secret (fields
 # username, password; the dev OpenBao mints it, a platform store must hold it). GAP, stated: the fixture's GreptimeDB
 # has no user provider, so it ignores the credential.
 observability:

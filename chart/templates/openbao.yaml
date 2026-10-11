@@ -342,12 +342,12 @@ spec:
 
               echo "seeded secret/lance into OpenBao"
               {{- if $otelSeed }}
-              c="$HOME/seed/otel-collector-greptime"
+              c="$HOME/seed/otel-collector-export"
               if [ ! -s "$c" ]; then
-                if svc_get otel-collector-greptime password; then v=$got; else v=$(head -c 30 /dev/urandom | base64 | tr '+/' '-_' | tr -d '\n'); fi
+                if svc_get otel-collector-export password; then v=$got; else v=$(head -c 30 /dev/urandom | base64 | tr '+/' '-_' | tr -d '\n'); fi
                 (umask 077; printf '%s' "$v" > "$c")
               fi
-              bao kv put secret/otel-collector-greptime username=otel-collector password=@"$c" >/dev/null
+              bao kv put secret/otel-collector-export username=otel-collector password=@"$c" >/dev/null
               {{- end }}
 
               {{- if $nats }}
@@ -391,7 +391,7 @@ spec:
               path "{{ $.Values.externalSecrets.kvMount }}/data/hf-token" { capabilities = ["read"] }
               {{- end }}
               {{- if $otelSeed }}
-              path "{{ $.Values.externalSecrets.kvMount }}/data/otel-collector-greptime" { capabilities = ["read"] }
+              path "{{ $.Values.externalSecrets.kvMount }}/data/otel-collector-export" { capabilities = ["read"] }
               {{- end }}
               POLICY
               bao write auth/{{ $.Values.externalSecrets.kubernetesAuthPath }}/role/{{ $.Values.externalSecrets.role }} \

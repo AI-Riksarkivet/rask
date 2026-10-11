@@ -24,7 +24,7 @@ lance.signingIdentities, two secrets: signing-public-<identity> (field `keys`) a
 (field `seed`), described in values.yaml `signing:`; the render refuses a non-dev store until an operator
 created them and signing.provisioned says so. Likewise nats-user-<user> per values.yaml `nats.auth` user, and
 nats-route (and nats-server, in operator mode), attested by nats.auth.provisioned. With the in-chart Collector,
-otel-collector-greptime (fields username, password), the credential the audit store admits. The devMode seed below is the
+otel-collector-export (fields username, password), the credential the audit store admits. The devMode seed below is the
 authoritative list — keep this comment and that `bao kv put` in sync.
 
 TWO CONSUMERS, ONE KEY (2026-08-09). `publisher-oidc-client-secret` now serves the publish saga AND
@@ -159,7 +159,7 @@ the Deployment's own `$linScoped` test — a field the service is told to read a
 nothing writes is a fail-closed boot, since `fetch_required_secrets` raises rather
 than degrading.
 
-## `c="$HOME/seed/otel-collector-greptime"`
+## `c="$HOME/seed/otel-collector-export"`
 
 THE COLLECTOR'S AUDIT-STORE CREDENTIAL ([[XC-003]]), create-if-absent: kept, else carried from the store behind
 the Service, else minted.

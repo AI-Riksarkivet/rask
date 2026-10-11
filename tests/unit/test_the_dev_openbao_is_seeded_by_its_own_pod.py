@@ -25,7 +25,7 @@ changes reaches the store on the next rollout without touching the trust root th
 `nats-server` and those two before the readiness key; a root it cannot read or use stops the seed, because a store that is
 Ready without its users hands every sidecar an empty credential. The bundle is kept like the signing pairs.
 
-[[XC-003]] puts the in-chart Collector's audit-store credential through it: `otel-collector-greptime` is kept, else carried
+[[XC-003]] puts the in-chart Collector's audit-store credential through it: `otel-collector-export` is kept, else carried
 from the store behind the Service, else minted, so a surge keeps the credential the store admits.
 
 [[XC-004]] makes every other credential of the store a generated one: ESO's Password generator fills
@@ -222,7 +222,7 @@ def _arrange_nats(case: str, stores: Path, tmp_path: Path, env: dict[str, str]) 
         tar.add(root, arcname=".")
     (served / "nats-root").write_text(f"nsc={base64.b64encode(packed.getvalue()).decode()}\n")
     (served / "nats-route").write_text("user=route\npassword=an-earlier-route-password\n")
-    (served / "otel-collector-greptime").write_text("username=otel-collector\npassword=an-earlier-collector-password\n")
+    (served / "otel-collector-export").write_text("username=otel-collector\npassword=an-earlier-collector-password\n")
     return {
         "operator": (root / "operator").read_text(),
         "account": (root / "APP.pub").read_text(),
@@ -428,12 +428,12 @@ def test_the_dev_store_is_seeded_by_its_own_pod_and_keeps_its_signing_keys(  # n
         assert root["operator"] == carried["operator"] and route["password"] == carried["password"], (
             "the trust root or the route credential behind the Service was replaced, so the running server refuses every new client"
         )
-    collector = _store(stores, "local", "secret/otel-collector-greptime")
+    collector = _store(stores, "local", "secret/otel-collector-export")
     assert collector.get("username") == "otel-collector" and collector.get("password"), f"the Collector's audit-store credential is not seeded: {collector}"
     if carried:
         assert collector["password"] == carried["collector"], "the Collector's credential behind the Service was replaced, so the store refuses it"
     if local == "restart":
-        first = _store(stores, "before-restart", "secret/otel-collector-greptime").get("password")
+        first = _store(stores, "before-restart", "secret/otel-collector-export").get("password")
         assert first and collector["password"] == first, "a server restarted in place was seeded a new Collector credential, not the one it held"
     assert collector["password"] not in streams, "the Collector's credential reached an output stream or a bao argument list"
     for user, (publish, subscribe) in users.items():
