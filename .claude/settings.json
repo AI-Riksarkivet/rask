@@ -25,7 +25,8 @@
     "gsap@ra-skills": true,
     "architecture-diagram@ra-skills": true,
     "svelte-flow@ra-skills": true,
-    "dapr-skills@diagrid-labs": true
+    "dapr-skills@diagrid-labs": true,
+    "mattpocock-skills@claude-plugins-official": true
   },
   "extraKnownMarketplaces": {
     "ra-skills": {
