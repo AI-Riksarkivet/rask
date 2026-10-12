@@ -604,7 +604,6 @@ securityContext:
 {{- if $v.auth.enabled -}}
 {{- range list "catalog" "lineage" "jobs" "hooks" }}{{ $out = append $out (printf "%s%s" $sa .) }}{{ end -}}
 {{- if $v.maintenance.enabled }}{{ $out = append $out (printf "%smaintenance" $sa) }}{{ end -}}
-{{- if $v.controlplane.enabled }}{{ $out = append $out (printf "%s%s-controlplane" $p (include "rask.fullname" .)) }}{{ end -}}
 {{- if $v.explorer.enabled }}{{ range $n, $_ := $v.explorer.services }}{{ $out = append $out (printf "%s%s" $sa $n) }}{{ end }}{{ end -}}
 {{- range $n, $s := $v.services }}{{ if and (not (has $n (list "catalog" "lineage"))) (or $s.frontDoor $v.singleTenant.enabled) $s.governedAuth }}{{ $out = append $out (printf "%s%s" $sa $n) }}{{ end }}{{ end -}}
 {{- range ($v.auth.externalFgaClients | default list) }}{{- if not (regexMatch "^[a-z0-9-]+:[a-z0-9.-]+$" .) }}{{- fail (printf "auth.externalFgaClients entry %q is not <namespace>:<serviceaccount>" .) }}{{- end }}{{ $out = append $out (printf "system:serviceaccount:%s" .) }}{{ end -}}

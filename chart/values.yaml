@@ -1,7 +1,7 @@
 # rask umbrella chart values — the MERGED estate (rask 0.2.0 + lance-ns 0.1.0, one release named `rask`).
 #
 # Two systems now install from this one file:
-#   * the rask fleet (gateway/controlplane/flows/notifications),
+#   * the rask fleet (gateway/flows/notifications),
 #     KubeRay Serve, the MinIO StatefulSet, the SvelteKit microfrontend zones;
 #   * the lance-ns lakehouse (catalog + lineage + maintenance + media), governance
 #     (Dex OIDC + OpenFGA), the Dapr/NATS event fabric, OpenBao, and the OTel-first observability tier.
@@ -26,7 +26,7 @@ imagePullSecrets: []
 
 # singleTenant gates the LEGACY single-tenant default workloads (the default
 # domain services + /default frontends + default Postgres/NATS/migration).
-# Default false => front-door-only install (picker + controlplane + gateway +
+# Default false => front-door-only install (picker + gateway +
 # operators). Set true to restore the old single-tenant stack.
 # NOTE: the OBJECT STORE is
 # deliberately NOT in this list: minio.enabled alone gates the operator Tenant
@@ -105,7 +105,7 @@ config:
   HCP_INSECURE: "true"
 
 # Per-service definitions. TWO planes share this map, by design of the merge:
-#   * the rask FLEET (gateway, controlplane, flows, notifications) — rendered by templates/fleet.yaml, which ranges over this
+#   * the rask FLEET (gateway, flows, notifications) — rendered by templates/fleet.yaml, which ranges over this
 #     map but only emits the `gateway` entry unless singleTenant.enabled;
 #   * the lance-ns LAKEHOUSE apps (catalog, lineage) — rendered by templates/services.yaml, which
 #     reads .Values.services.catalog / .Values.services.lineage by NAME.
@@ -406,7 +406,7 @@ image:
   # DIGEST on one more. Rendering all of them from one value overwrites every image with a tag that is not on
   # the node — observed twice on 2026-08-06, once taking the whole fleet to ImagePullBackOff.
   #
-  # Keys are the COMPONENT name the template passes to `rask.image` (`gateway`, `controlplane`,
+  # Keys are the COMPONENT name the template passes to `rask.image` (`gateway`, `notifications`,
   # `lance-rest-catalog`, `web-lakehouse`, …) — the same string that appears in the rendered
   # reference. `digests` beats `tags`, exactly as the global `digest` beats the global `tag`.
   #
@@ -577,11 +577,9 @@ lifecycle:
   teardownSeconds: 10
 
 # === Pod hardening (applied to every FIRST-PARTY app container via the lance.securityContext helper) --
-# This line used to say "every app container", and for six Deployments it was false: fleet.yaml and
-# controlplane.yaml called the helper nowhere, so gateway/compute/controlplane/flows/notifications
-# rendered with no securityContext at all — including the pod the Ingress routes /api to. They call it
-# now, and tests/unit/test_every_first_party_workload_is_hardened.py derives its subject list from the
-# render, so a new first-party workload is covered by default rather than by memory.
+# fleet.yaml calls the helper for every fleet workload, including the pod the Ingress routes /api to, and
+# tests/unit/test_every_first_party_workload_is_hardened.py derives its subject list from the render, so a new
+# first-party workload is covered by default rather than by memory.
 # INFRA pods are a separate, deliberately staged decision — see security.infraContexts below.
 # runAsNonRoot + drop-ALL-caps + RuntimeDefault seccomp are unconditional (the restricted PodSecurity
 # baseline). readOnlyRootFilesystem is the one tunable: on by default (each app has a writable /tmp
@@ -605,7 +603,7 @@ security:
   tmpSizeLimit: 2Gi
   # POD IDENTITY is not a value. Every first-party workload runs as its own ServiceAccount
   # (templates/security-sa.yaml), tokenless on the SA object. A first-party pod holds a Kubernetes API
-  # token only when its SA carries a grant it uses: OpenBao under ESO, and the RBAC-bound controlplane,
+  # token only when its SA carries a grant it uses: OpenBao under ESO, and the RBAC-bound
   # Collector, Dapr dashboard and snapshot pods. `default` is the identity every unnamed pod in the
   # namespace shares, and a Dapr control plane grants it `secrets: get` unless its `dapr_rbac.secretReader`
   # is off (deploy/fixtures/dapr/values.yaml). Pinned by
@@ -651,15 +649,6 @@ networkPolicy:
   # -- List of extra egress rules, verbatim NetworkPolicy entries, for external backends (off-cluster S3, managed NATS, external OTLP).
   extraEgress: []
 
-# Platform control-plane: read-only listing of operator Project CRs for the
-# home picker. Its own ServiceAccount + ClusterRole (read projects only).
-controlplane:
-  # -- Deploy the controlplane service (the `/api/projects` surface) and its resiliency policy.
-  enabled: true
-  # -- HTTP port the controlplane listens on.
-  port: 8820
-  # -- Scheme of each project's entry link in the home gallery (RASK_PROJECT_URL_SCHEME): `http` or `https`.
-  urlScheme: http
 
 # === Micro-frontend zones: the SvelteKit SSR zones deployed from the ONE parametrized
 # frontend.dockerfile (image <name>:tag). The catch-all `home` owns "/"; each domain zone is pinned to
@@ -1894,7 +1883,7 @@ backups:
 # (single-node dev); the prod overlay turns the PDB on. Stateful stores (AGE/MinIO) get HA from their
 # operators (CNPG), NOT from here. ------------------------------------------------
 podDisruptionBudget:
-  # -- Renders a PodDisruptionBudget for each service, controlplane and zone running more than one replica.
+  # -- Renders a PodDisruptionBudget for each service and zone running more than one replica.
   enabled: false
   # -- minAvailable of every rendered PodDisruptionBudget.
   minAvailable: 1

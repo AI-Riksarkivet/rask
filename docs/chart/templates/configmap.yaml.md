@@ -8,11 +8,6 @@ every release revision, under a 1 MiB ceiling. Each section is headed by the tem
 Interactive API docs, off unless a deployment asks (see values.yaml `docs`). The gateway reads
 this one: its aggregated Swagger is served under the Ingress-published /api prefix.
 
-## `RASK_CONTROLPLANE_URL: {{ printf "http://%s-controlplane:8820" (include "rask.fullname" .) | quote }}`
-
-Gateway upstreams (in-cluster DNS). The core/search/volumes rows died in the
-R6/R20 media wave — their capabilities serve from the media plane below.
-
 ## `RASK_FLOWS_URL: {{ printf "http://%s-flows:%v" (include "rask.fullname" .) .Values.services.flows.port | qu...`
 
 The studio flow-builder's server half. Without this the gateway's /api/flows row falls back to its

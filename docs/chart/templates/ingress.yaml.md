@@ -38,7 +38,7 @@ Empty host => no host rule => catch-all (any Host / bare IP / VS Code-forwarded 
 ## `- path: /api`
 
 /api is the FLEET gateway (services.gateway, uvicorn `gateway:app` on
-:8888): it path-routes to controlplane, flows, notifications and the lance planes, and
+:8888): it path-routes to flows, notifications and the lance planes, and
 it is what the zones' relative /api/* client fetches
 resolve to (SSR uses the in-cluster URL instead). It renders in every
 install (fleet.yaml is not gated), so this rule never dangles.

@@ -3,7 +3,7 @@
 `fga_root_object` moves from `warehouse:lance_catalog` to `estate:rask`, and every check aimed at it
 moves with it: `can_observe_events` (the admin console, the whole-estate lineage projection),
 `can_browse_storage` (the object browser), and the bare
-`reader` / `writer` that compute, controlplane and flows gate their whole routers on.
+`reader` / `writer` that compute and flows gate their whole routers on.
 
 THE TUPLES DO NOT MOVE THEMSELVES. A principal holding `owner` on the old root passes every one of
 those doors today and NONE of them the moment the setting flips, so the grants have to exist on the new
@@ -59,13 +59,13 @@ RUNG_MAP: Final[dict[str, str]] = {"owner": "owner"}
 #: `estate#writer` is what flows gates run/terminate on. A service that may append bronze rows to one
 #: warehouse would have acquired the authority to execute flows across the estate, purely as a
 #: side-effect of a setting being repointed. Verified before narrowing: none of those services, nor
-#: `notifications`, calls compute, controlplane or flows, so nothing in use is lost.
+#: `notifications`, calls compute or flows, so nothing in use is lost.
 #:
 #: `maintainer` is absent from both lists because `type estate` does not define it at all — it is a
 #: warehouse rung describing who may rewrite bytes, which the estate root has no opinion about.
 NOT_CARRIED: Final[dict[str, str]] = {
     "writer": "estate#writer is what flows gates run/terminate/read on",
-    "reader": "estate#reader is what compute and controlplane gate their whole routers on",
+    "reader": "estate#reader is what compute gates its whole router on",
     "maintainer": "type estate does not define it — it is a warehouse rung",
 }
 

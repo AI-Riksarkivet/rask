@@ -33,7 +33,6 @@ export RASK_API_PREFIX="${RASK_API_PREFIX:-/api}"
 OFFSET="${PORT_OFFSET:-0}"
 GATEWAY_PORT="${GATEWAY_PORT:-$((8888 + OFFSET))}"
 COMPUTE_PORT="${COMPUTE_PORT:-$((8804 + OFFSET))}"
-CONTROLPLANE_PORT="${CONTROLPLANE_PORT:-$((8820 + OFFSET))}"
 FLOWS_PORT="${FLOWS_PORT:-$((8840 + OFFSET))}"
 NOTIFICATIONS_PORT="${NOTIFICATIONS_PORT:-$((8850 + OFFSET))}"
 VIEWER_PORT="${VIEWER_PORT:-$((8101 + OFFSET))}"
@@ -42,8 +41,6 @@ ANNOTATOR_PORT="${ANNOTATOR_PORT:-$((8103 + OFFSET))}"
 
 # Wire the gateway's upstreams to THIS fleet's per-service ports (else, when
 # offset, it would route to whatever holds the default ports). No-op at OFFSET=0.
-export RASK_COMPUTE_URL="${RASK_COMPUTE_URL:-http://127.0.0.1:${COMPUTE_PORT}}"
-export RASK_CONTROLPLANE_URL="${RASK_CONTROLPLANE_URL:-http://127.0.0.1:${CONTROLPLANE_PORT}}"
 export RASK_FLOWS_URL="${RASK_FLOWS_URL:-http://127.0.0.1:${FLOWS_PORT}}"
 export RASK_NOTIFICATIONS_URL="${RASK_NOTIFICATIONS_URL:-http://127.0.0.1:${NOTIFICATIONS_PORT}}"
 export RASK_EXPLORER_VIEWER_URL="${RASK_EXPLORER_VIEWER_URL:-http://127.0.0.1:${VIEWER_PORT}}"
@@ -64,7 +61,6 @@ run() {  # run <name> <port> <module> [extra env assignments...]
 
 run gateway      "$GATEWAY_PORT"      gateway:app
 run compute      "$COMPUTE_PORT"      compute:app
-run controlplane "$CONTROLPLANE_PORT" controlplane:app
 # The studio flow-builder's backend: /api/flows/{catalog,validate,runs}. Needs nothing to boot — the
 # catalog is declared in-process and validation is pure — so it comes up green with no Ray, no Serve
 # and no sidecar; a `model` node then fails honestly, naming the address it could not reach. The

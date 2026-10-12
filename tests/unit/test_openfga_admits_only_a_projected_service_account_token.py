@@ -74,7 +74,7 @@ def test_every_fga_client_presents_a_projected_token_openfga_admits(overlay: tup
         if {(s.get("audience"), s["path"]) for s in sources} != {(audience, token.name)}:
             missing.append(f"{workload}/{name}")
 
-    assert len(clients) >= 9, f"the render names fewer OpenFGA clients than the estate runs: {clients}"
+    assert len(clients) >= 8, f"the render names fewer OpenFGA clients than the estate runs: {clients}"
     assert missing == [], f"these FGA clients present no projected {audience!r} token at RASK_FGA_TOKEN_FILE: {missing}"
     assert admitted == accounts, (
         f"OpenFGA's subject list differs from the FGA clients' accounts: refused {sorted(accounts - admitted)}, admitted non-clients {sorted(admitted - accounts)}"

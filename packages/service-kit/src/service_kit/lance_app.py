@@ -2,7 +2,7 @@
 
 Three factories, three planes, and the split is deliberate rather than accidental:
 
-* ``service_kit.make_service_app`` — the FLEET plane (compute, controlplane, ingest, flows,
+* ``service_kit.make_service_app`` — the FLEET plane (compute, flows,
   notifications). Routers mount under ``RASK_API_PREFIX``; config is ``service_kit.config.Settings``.
 * ``service_kit.media.app.build_media_app`` — the MEDIA plane (viewer, search, annotator). Routers
   mount at the root; config is ``MediaSettings``; CORS must expose the Range headers a browser needs

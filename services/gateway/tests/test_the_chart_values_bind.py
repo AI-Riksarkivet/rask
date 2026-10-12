@@ -20,7 +20,6 @@ _RENDERED = {
     "RASK_API_PREFIX": "/api",
     "RASK_DOCS": "false",
     "RASK_DAPR_ENABLED": "true",
-    "RASK_CONTROLPLANE_URL": "http://rask-controlplane:8820",
     "RASK_FLOWS_URL": "http://rask-flows:8840",
     "RASK_NOTIFICATIONS_URL": "http://rask-notifications:8850",
     "RASK_CATALOG_API_URL": "http://rask-catalog:2333",

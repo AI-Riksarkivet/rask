@@ -17,20 +17,6 @@ spec:
       app.kubernetes.io/instance: {{ $.Release.Name }}
 {{- end }}
 {{- end }}
-{{- if gt (int ((hasKey $.Values.controlplane "replicas") | ternary $.Values.controlplane.replicas 1)) 1 }}
----
-apiVersion: policy/v1
-kind: PodDisruptionBudget
-metadata:
-  name: {{ include "lance.fullname" $ }}-controlplane
-  labels: {{- include "lance.labels" $ | nindent 4 }}
-spec:
-  minAvailable: {{ $.Values.podDisruptionBudget.minAvailable }}
-  selector:
-    matchLabels:
-      app.kubernetes.io/component: controlplane
-      app.kubernetes.io/instance: {{ $.Release.Name }}
-{{- end }}
 {{- if and .Values.frontend.enabled (gt (int (ternary .Values.frontend.replicas 1 (hasKey .Values.frontend "replicas"))) 1) }}
 {{- range .Values.frontend.apps }}
 ---

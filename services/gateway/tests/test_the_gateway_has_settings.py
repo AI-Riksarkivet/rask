@@ -29,7 +29,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 
-_ENV_KNOBS = ("RASK_DOCS", "RASK_API_PREFIX", "RASK_DAPR_ENABLED", "DAPR_HTTP_PORT", "RASK_CONTROLPLANE_URL")
+_ENV_KNOBS = ("RASK_DOCS", "RASK_API_PREFIX", "RASK_DAPR_ENABLED", "DAPR_HTTP_PORT", "RASK_NOTIFICATIONS_URL")
 
 
 def _clean(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -40,7 +40,7 @@ def _clean(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_a_dotenv_file_configures_every_knob_not_only_the_ones_read_late(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     """One config file, one answer. `RASK_DOCS` is the knob the import-time read could never see."""
     _clean(monkeypatch)
-    (tmp_path / ".env").write_text("RASK_API_PREFIX=/api\nRASK_DOCS=true\nRASK_CONTROLPLANE_URL=http://controlplane.dotenv:9000\n")
+    (tmp_path / ".env").write_text("RASK_API_PREFIX=/api\nRASK_DOCS=true\nRASK_NOTIFICATIONS_URL=http://notifications.dotenv:9000\n")
     monkeypatch.chdir(tmp_path)
 
     import gateway
@@ -50,7 +50,7 @@ def test_a_dotenv_file_configures_every_knob_not_only_the_ones_read_late(tmp_pat
     settings = gw.build_gateway_settings()
     assert settings.api_prefix == "/api"
     assert settings.docs_enabled is True, "the docs knob was read at import, before any .env was loaded"
-    assert settings.controlplane_url == "http://controlplane.dotenv:9000"
+    assert settings.notifications_url == "http://notifications.dotenv:9000"
     # And the app built from that file actually serves them.
     assert gw.app.openapi_url == "/openapi.json"
 
@@ -81,11 +81,11 @@ def test_the_dapr_lane_is_decided_at_startup_not_per_request(tmp_path, monkeypat
 
     with TestClient(gw.app) as client:
         gw.app.state.http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-        client.get("/api/projects")
+        client.get("/api/notifications/inbox")
         # The operator's shell changes underneath the running process. It must change nothing.
         monkeypatch.setenv("RASK_DAPR_ENABLED", "true")
         monkeypatch.setenv("DAPR_HTTP_PORT", "3500")
-        client.get("/api/projects")
+        client.get("/api/notifications/inbox")
 
     assert len(seen) == 2
     assert all("/v1.0/invoke/" not in url for url in seen), f"a live request was re-routed through the sidecar mid-flight: {seen}"

@@ -3,7 +3,7 @@ name: rask
 description: >-
   rask — an agnostic multimodal AI platform as ONE umbrella chart (one `helm install`,
   one release named `rask`): the service fleet (gateway, compute,
-  controlplane + the SvelteKit microfrontend zones), the Lance lakehouse
+  the SvelteKit microfrontend zones), the Lance lakehouse
   REST catalog with in-service lineage (OpenLineage → Apache AGE), the medallion tiers + media plane,
   governance (Dex OIDC + OpenFGA), event-driven on Dapr pub/sub over NATS JetStream (Dapr's control
   plane and the NATS bus are prerequisites; the chart carries rask's Components, Configurations,

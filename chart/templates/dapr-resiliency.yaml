@@ -80,9 +80,6 @@ spec:
 {{- $invoked = append $invoked $name }}
 {{- end }}
 {{- end }}
-{{- if .Values.controlplane.enabled }}
-{{- $invoked = append $invoked "controlplane" }}
-{{- end }}
 {{- if .Values.explorer.enabled }}
 {{- range $name, $svc := .Values.explorer.services }}
 {{- $invoked = append $invoked $svc.daprAppId }}

@@ -112,7 +112,7 @@ def test_the_gateway_STAMPS_the_chain_it_stripped(proxied) -> None:
     """Stripping alone would be worse than passing through: a backend with no chain at all cannot
     tell a direct call from a proxied one. The gateway replaces the claim with its own."""
     client, captured = proxied
-    client.get("/api/projects", headers={"x-forwarded-for": "203.0.113.9"})
+    client.get("/api/notifications/inbox", headers={"x-forwarded-for": "203.0.113.9"})
 
     forwarded = captured[0].headers
     assert forwarded.get("x-forwarded-for"), "the chain was stripped and never re-stamped"
@@ -135,6 +135,6 @@ def test_the_stamped_client_is_the_one_UVICORN_resolved(gw) -> None:
 
     with TestClient(gw.app, client=("198.51.100.7", 1234)) as client:
         gw.app.state.http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-        client.get("/api/projects", headers={"x-forwarded-for": "203.0.113.9"})
+        client.get("/api/notifications/inbox", headers={"x-forwarded-for": "203.0.113.9"})
 
     assert seen and seen[0] == "198.51.100.7", f"the forwarded client was {seen!r}, not the peer the server resolved"

@@ -35,7 +35,7 @@ zones additionally get the media plane's upstreams, scoped per zone.
 ## `{{- $gwPort := $root.Values.services.gateway.port -}}`
 
 The zones' gateway is the RASK FLEET gateway (services.gateway, uvicorn `gateway:app`
-on :8888) — the process that path-routes /api/* to ray/controlplane/the lance planes,
+on :8888) — the process that path-routes /api/* to the fleet and the lance planes,
 and the target the zones' relative /api/* fetches resolve to through
 the Ingress. lance-ns's own nginx gateway (top-level `gateway:`, :8080,
 templates/gateway.yaml) is RETIRED and deleted (docs/adr/0117-nginx-is-retired-and-the-fastapi-gateway-is-the-in-cluster.md),

@@ -11,7 +11,6 @@ root_packages =
     maintenance
     notifications
     annotator
-    controlplane
     service_kit
     lineage_kit
     ray_kit
@@ -38,7 +37,6 @@ source_modules =
     lineage
     maintenance
     notifications
-    controlplane
     service_kit
     lineage_kit
 forbidden_modules =
@@ -54,7 +52,6 @@ source_modules =
     catalog
     lineage
     maintenance
-    controlplane
     service_kit
 forbidden_modules =
     dapr.ext.workflow

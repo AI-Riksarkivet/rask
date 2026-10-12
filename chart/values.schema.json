@@ -309,23 +309,6 @@
                 }
             }
         },
-        "controlplane": {
-            "type": "object",
-            "properties": {
-                "enabled": {
-                    "description": "Deploy the controlplane service (the `/api/projects` surface) and its resiliency policy.",
-                    "type": "boolean"
-                },
-                "port": {
-                    "description": "HTTP port the controlplane listens on.",
-                    "type": "integer"
-                },
-                "urlScheme": {
-                    "description": "Scheme of each project's entry link in the home gallery (RASK_PROJECT_URL_SCHEME): `http` or `https`.",
-                    "type": "string"
-                }
-            }
-        },
         "dapr": {
             "type": "object",
             "properties": {
@@ -1703,7 +1686,7 @@
             "type": "object",
             "properties": {
                 "enabled": {
-                    "description": "Renders a PodDisruptionBudget for each service, controlplane and zone running more than one replica.",
+                    "description": "Renders a PodDisruptionBudget for each service and zone running more than one replica.",
                     "type": "boolean"
                 },
                 "minAvailable": {

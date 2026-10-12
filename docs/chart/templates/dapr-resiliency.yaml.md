@@ -157,8 +157,8 @@ trivially remote-triggerable one on a healthy fleet.
 
 Target only app-ids whose pods can actually render — mirror the templates' own gates
 (fleet.yaml ranges .Values.services minus the lakehouse entries, gateway always + the rest
-under singleTenant; services.yaml renders catalog/lineage unconditionally; controlplane.yaml,
-medallion.yaml, media.yaml carry their own toggles). Derived, not restated, so a new fleet
+under singleTenant; services.yaml renders catalog/lineage unconditionally;
+explorer.yaml carries its own toggle). Derived, not restated, so a new fleet
 entry is picked up here automatically.
 
 ## `{{- range $name, $svc := .Values.services }}`

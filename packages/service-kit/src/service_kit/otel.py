@@ -282,11 +282,9 @@ def setup_otel(app: FastAPI, service_name: str, settings: Settings | None = None
 
         BotocoreInstrumentor().instrument(tracer_provider=tracer_provider)
 
-    # urllib3 — THE KUBERNETES LEG, and the one no other instrumentor reaches. The k8s client
-    # (`controlplane/k8s.py`) speaks urllib3 directly rather than requests or httpx, so the
-    # controlplane's whole reason for existing — reading Project CRs for the home picker — produced no
-    # client span at all. It also catches any library that vendors urllib3 without going through
-    # `requests`.
+    # urllib3 — the leg no other instrumentor reaches. The generated lance-namespace client
+    # (`lance-namespace-urllib3-client`) speaks urllib3 directly rather than requests or httpx, as does
+    # any library that vendors urllib3 without going through `requests`.
     with suppress(ImportError):
         from opentelemetry.instrumentation.urllib3 import URLLib3Instrumentor
 

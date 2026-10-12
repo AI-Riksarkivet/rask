@@ -161,8 +161,7 @@ draining, and the kubelet kept routing to it: the readiness contract inverted.
 `service_kit.probes` reports `starting`, `shutting_down` and a service's own hard
 dependency, and nothing asked it. `/api/health` is untouched — it is the
 frontend-facing badge. The three probes, the boot budget and the measured 5s timeout
-now live in ONE helper shared with controlplane.yaml, which is hand-written and had
-already drifted from this block twice.
+now live in ONE helper.
 
 ## `{{- toYaml (index $root.Values.resources $name | default $root.Values.resources.fleet) | nindent 12 }}`
 

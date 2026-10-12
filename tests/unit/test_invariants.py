@@ -316,7 +316,7 @@ def test_a_per_component_pin_beats_the_global_tag_and_a_digest_beats_the_pin() -
     """
     pinned = _helm_template(*_REAL_REGISTRY, "image.tags.gateway=PINNED")
     assert 'image: "reg.example/gateway:PINNED"' in pinned, "a per-component tag did not reach the render"
-    assert 'image: "reg.example/controlplane:dev"' in pinned, "the pin leaked onto a component that did not ask for it"
+    assert 'image: "reg.example/notifications:dev"' in pinned, "the pin leaked onto a component that did not ask for it"
 
     # A digest is a CONTENT pin — a reconciler's, typically — so no tag may undo it.
     both = _helm_template(*_REAL_REGISTRY, "image.tags.gateway=IGNORED", "image.digests.gateway=sha256:abc")

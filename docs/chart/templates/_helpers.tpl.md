@@ -28,13 +28,13 @@ move the Deployments but not those, splitting the estate the moment release name
 Install under any other release name and the two planes diverge — keep them equal.
 
 LABELS: `rask.labels` emits app.kubernetes.io/name=rask, `lance.labels` emits =lance-ns. Kept distinct on
-purpose: rask workloads select on {name,instance,component} (fleet.yaml/controlplane.yaml/frontends.yaml)
+purpose: rask workloads select on {name,instance,component} (fleet.yaml/frontends.yaml)
 while lance Services select on {component,instance} only (services.yaml). Different `name` values are what
 guarantee a rask selector can never adopt a lance pod inside the shared release.
 =====================================================================================================
 
 ---------------------------------------------------------------------------------------------------
-rask — the base chart's helpers (fleet: gateway, controlplane, frontends —
+rask — the base chart's helpers (fleet: gateway, flows, notifications, frontends —
 the orchestrator died at P7a; core-api/search-api/volumes-api died in the R6/R20 wave).
 ---------------------------------------------------------------------------------------------------
 
@@ -48,7 +48,7 @@ The ONE store's root identity is minio.accessKey (a value) and the store's `mini
 (never a value): the server, `<release>-infra-credentials` and the hooks all read that pair.
 
 Dapr sidecar pod annotations (no-op unless dapr.enabled) — the ONE annotation surface for the whole
-estate: the rask fleet + controlplane AND the lance planes (services.yaml catalog/lineage,
+estate: the rask fleet AND the lance planes (services.yaml catalog/lineage,
 maintenance.yaml, explorer.yaml viewer/search/annotator) all render
 THIS helper, so the sidecar contract can never drift between planes (DAPRIFY 2026-07-27). Carries the full union of what the two planes shipped:
   - enabled / app-id / app-port / log-level (the original rask surface)
@@ -128,7 +128,7 @@ a new consumer added there gets its Configuration without a second edit here.
 ## `{{- define "lance.daprOtlpTarget" -}}`
 
 OTLP/OpenTelemetry container env for the rask FLEET (no-op unless observability.enabled). Shared by
-fleet + controlplane so the OTLP wiring never drifts.
+fleet so the OTLP wiring never drifts.
 Usage: {{- include "rask.otelEnv" (list $root "service-name") | nindent 12 }}
 
 Every plane exports to the in-chart Collector (`lance.otlpEndpoint`), never to a store: the app stays
@@ -583,13 +583,12 @@ include "lance.resources" (dict "root" $ "comp" "catalog"). (prod-readiness P2)
 
 ## `{{- define "rask.proxyHeaderArgs" -}}`
 
-THE FLEET'S PROBE TRIPLE — one definition for fleet.yaml's range AND controlplane.yaml.
+THE FLEET'S PROBE TRIPLE — one definition for every fleet.yaml workload.
 Call: include "rask.fleetProbes" $svc   (pass an empty dict to take every default).
 
-Two templates rendering the same three probes is how controlplane missed two fixes in a row: it
-is written by hand rather than by fleet.yaml's range, so the measured `timeoutSeconds` fix had to
-be copied across and the startupProbe never arrived at all. One definition, and a test that
-asserts the two render identically, is what stops a third divergence.
+A hand-written template rendering its own copy of the three probes missed two fixes in a row: the
+measured `timeoutSeconds` fix had to be copied across and the startupProbe never arrived at all.
+One definition is what stops the next divergence.
 
 THE STARTUP PROBE IS THE POINT. `lance.appProbes` has carried one since prod-readiness P1 and
 states the hazard: uvicorn runs the FastAPI lifespan BEFORE it binds the socket, so every

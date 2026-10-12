@@ -77,7 +77,7 @@ class FgaSettings:
     #: The estate's root FGA object — the one a platform-wide PRIVILEGE is checked against, as
     #: opposed to a per-tenant one. Shared here rather than redeclared per service because it is a
     #: coordinate every governed service must agree on: the catalog gates `GET /v1/events` on it,
-    #: lineage gates its whole-estate projection on it, compute and controlplane gate their routers
+    #: lineage gates its whole-estate projection on it, compute gates its routers
     #: on `reader` there, flows on `writer`, and the viewer gates its object browser on it. Three
     #: copies of the same default in three configs is exactly how one of them ends up naming a
     #: different object and quietly authorizing against something nobody grants.

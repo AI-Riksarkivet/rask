@@ -41,7 +41,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 #: The apps composed through `make_service_app`. The gateway is absent from THIS list only because it
 #: is not composed by the factory — it builds its own FastAPI. It serves the same pair and is probed
 #: at it; see the gateway block at the end of this file.
-FACTORY_APPS = ["compute", "controlplane", "flows", "notifications"]
+FACTORY_APPS = ["compute", "flows", "notifications"]
 
 
 def _app(module: str):

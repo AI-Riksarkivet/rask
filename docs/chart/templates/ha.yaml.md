@@ -6,7 +6,7 @@ every release revision, under a 1 MiB ceiling. Each section is headed by the tem
 ## `{{- if .Values.podDisruptionBudget.enabled }}`
 
 HA for the stateless request-serving services — the lakehouse pair AND the fleet, derived from
-`.Values.services` rather than named, plus controlplane from its own values block. Off by default
+`.Values.services` rather than named. Off by default
 (single-node kind); the prod overlay enables the PDB after bumping replicas. The stateful stores
 (AGE/MinIO) get HA from their operators in rask (CNPG), NOT from here. The
 event-driven subscribers are intentionally excluded — eviction is safe there (Dapr redelivers, and
@@ -26,9 +26,6 @@ lineage) and the fleet (gateway, flows, notifications) alike. This was a literal
 replica it wrote a `minAvailable: 1` budget over a single pod, which blocks EVERY voluntary drain
 — a node cordon then hangs instead of proceeding. That is this file's own header warning, applied
 to the backends rather than only to the zones. Scale first, bound second, never the inverse.
-`controlplane` renders from its own template and reads `.Values.controlplane`, not
-`.Values.services`; being outside this map is how it stayed invisible to chart-wide fixes, so it
-gets its own block below rather than being forgotten again.
 
 ## `behavior:`
 
@@ -41,7 +38,7 @@ five-minute cooldown, and the template had no `behavior` block at all.
 ## `{{- if and .Values.maintenance.enabled .Values.maintenance.dedicatedWorkers.enabled .Values.maintenance.wor...`
 
 THE MAINTENANCE WORKER, which renders from its own template and is outside `.Values.services` —
-the same way `controlplane` above "stayed invisible to chart-wide fixes". It runs
+and a workload outside that map stays invisible to chart-wide fixes unless it gets its own block. It runs
 `dedicatedWorkers.replicas` (2) and executes every compaction in the estate, so a drain taking
 both at once stops maintenance entirely. The PLANNER deliberately gets none: it is one replica,
 and `minAvailable: 1` over one replica blocks every voluntary drain — the inverse hazard this

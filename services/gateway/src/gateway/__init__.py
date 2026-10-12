@@ -187,7 +187,6 @@ def _routes(settings: GatewaySettings | None = None) -> list[Route]:
     # build below — gets a fresh read rather than having to construct one.
     settings = settings or build_gateway_settings()
     prefix = settings.api_prefix
-    controlplane = ("controlplane", settings.controlplane_url)
     # lance-plane upstreams (P1 gateway fold). Localhost defaults follow the lance
     # dev conventions: catalog 2333, lineage 8000, explorer trio 8101/8102/8103 (chart explorer.services).
     catalog = ("catalog", settings.catalog_url)
@@ -211,7 +210,6 @@ def _routes(settings: GatewaySettings | None = None) -> list[Route]:
         Route("/api/explorer", "/api", *viewer),
         Route("/api/catalog", "", *catalog),
         Route("/api/lineage", "", *lineage),
-        Route(f"{prefix}/projects", f"{prefix}/projects", *controlplane),
         # PREFIX-INTERPOLATED, not the literal "/api/flows": the flows service is composed by `make_service_app`, which
         # mounts every router under `settings.api_prefix` — the SAME env var `_routes` reads at the top.
         # So public and upstream track the prefix together and cannot drift apart, which is exactly what
@@ -523,7 +521,7 @@ async def healthz(request: Request) -> JSONResponse:
     take the gateway NotReady.
 
     The body is the estate-wide ``Liveness`` model, so the gateway's probe schema
-    matches controlplane's ``/api/health`` and the lance plane's ``/livez``
+    matches the fleet's ``/api/health`` and the lance plane's ``/livez``
     (the path differs by design — see above — the shape must not).
 
     IT REPORTS THE DRAIN, which a constant cannot, at the INGRESS every request in the estate passes

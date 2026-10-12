@@ -55,10 +55,6 @@ services:
   # store is a process-local dict (v0) with no durable fallback, so a second worker would answer
   # GET /flows/runs/{id} with a 404 for a live run. Raise it when that store is durable, not before.
   # Pinned by tests/unit/test_prod_ha_posture.py.
-# controlplane renders from its own template, so it is not under `services:` — the reason it kept
-# missing chart-wide fixes. A read-only k8s client for Project CRs; it holds no state.
-controlplane:
-  replicas: 2
 frontend:
   replicas: 2
   # A governed backend needs a UI that can sign in. auth.enabled is true above, and

@@ -168,7 +168,7 @@ spec:
 # apps — their daprd resolves the state store's connectionString through the lance-secrets
 # component at boot (dapr-component.yaml derives the secret-store scope from stateStore.scopes the
 # same way), so blocking them here wedges the sidecar on component init. The newly-sidecared fleet/
-# controlplane pods load NO openbao-backed component and stay excluded: web/gateway/dex/minio/age
+# fleet pods load NO openbao-backed component and stay excluded: web/gateway/dex/minio/age
 # can NEVER reach it. External-secrets (off-namespace, when enabled) needs an entry in
 # networkPolicy.openbaoExtraFrom.
 apiVersion: networking.k8s.io/v1

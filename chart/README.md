@@ -88,9 +88,6 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | config.AWS_REGION | string | `"us-east-1"` | AWS region written to the fleet ConfigMap for S3 clients; any value works against RustFS/MinIO. |
 | config.HCP_INSECURE | string | `"true"` | Skips TLS verification for the S3 client (`storage.client` reads it as an alias of RASK_S3_INSECURE). String "true" or "false". |
 | config.RASK_API_PREFIX | string | `"/api"` | Path prefix the fleet apps mount their API under, via the shared fleet ConfigMap. |
-| controlplane.enabled | bool | `true` | Deploy the controlplane service (the `/api/projects` surface) and its resiliency policy. |
-| controlplane.port | int | `8820` | HTTP port the controlplane listens on. |
-| controlplane.urlScheme | string | `"http"` | Scheme of each project's entry link in the home gallery (RASK_PROJECT_URL_SCHEME): `http` or `https`. |
 | dapr.apiTimeoutSeconds | int | `30` | Deadline in seconds for every DaprClient gRPC call (DAPR_API_TIMEOUT_SECONDS), so a wedged sidecar fails a publish instead of hanging it. |
 | dapr.controlPlaneNamespace | string | `"dapr-system"` | Namespace the Dapr control plane runs in; the Collector scrapes it and, under NetworkPolicy, every pod may reach it. |
 | dapr.dashboard.enabled | bool | `true` | Deploy the Dapr dashboard web UI (templates/dapr-dashboard.yaml), reached by port-forward; requires `dapr.enabled`. |
@@ -287,7 +284,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | openfga.replicaCount | int | `1` | Subchart passthrough: number of OpenFGA server replicas. |
 | openfga.resources | object | `{"limits":{"memory":"2Gi"},"requests":{"cpu":"50m","memory":"512Mi"}}` | Subchart passthrough: CPU and memory requests/limits for the OpenFGA server. |
 | openfga.telemetry | object | `{"trace":{"enabled":false,"otlp":{"endpoint":"rask-otel-collector:4317"},"sampleRatio":0.001}}` | Subchart passthrough: OpenFGA OTLP tracing to the OTel Collector; off by default, ratio 0.001 because each Check emits ~1,900 spans. |
-| podDisruptionBudget.enabled | bool | `false` | Renders a PodDisruptionBudget for each service, controlplane and zone running more than one replica. |
+| podDisruptionBudget.enabled | bool | `false` | Renders a PodDisruptionBudget for each service and zone running more than one replica. |
 | podDisruptionBudget.minAvailable | int | `1` | minAvailable of every rendered PodDisruptionBudget. |
 | pubsub.controlName | string | `"catalog-control-pubsub"` | Name of the broadcast (no queue group) Dapr pubsub component for catalog.control.v1; must match the catalog's LANCE_CONTROL_PUBSUB default. Used when `controlEmit` is on. |
 | pubsub.name | string | `"lineage-pubsub"` | Name of the shared lineage publish Dapr pubsub component; each subscriber app gets a derived `<name>-<app-id>` component with its own queue group. |

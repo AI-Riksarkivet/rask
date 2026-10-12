@@ -665,7 +665,7 @@ medallion-demo: ## Live medallion walkthrough — watch the DAG build at http://
 # (`flows` is STILL absent and has been since it landed: `.docker/flows.dockerfile` and a `rask-flows`
 # Deployment both exist, so an in-cluster flows is unverifiable today for the identical reason. Named
 # rather than fixed here — it is another plane's diff.)
-COMPOSE_IMAGES = gateway compute controlplane notifications
+COMPOSE_IMAGES = gateway compute notifications
 # SvelteKit SSR microfrontend zone images — one web-<zone> image per $(ZONES) entry,
 # all built from the one parametrized .docker/frontend.dockerfile via --build-arg
 # APP=<name>. (R22: the web- prefix keeps the zone image namespace disjoint from the
