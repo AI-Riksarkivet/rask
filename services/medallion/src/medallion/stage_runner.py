@@ -79,7 +79,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # crashed the pod. A stage runner that cannot authorize must not sit in the subscription quietly
     # refusing every stage — nothing downstream would report it.
     settings = get_settings()
-    app.state.fga = None
     await attach_auth(app, settings, service="medallion-stage-runner", fatal=True)
     # THIS STAGE RUNNER'S OWN SIGNING KEY, resolved through its own sidecar. `start_signing` makes one bounded attempt
     # to resolve the key and does not wait for it to be published, so the probes and the retry answers are served from

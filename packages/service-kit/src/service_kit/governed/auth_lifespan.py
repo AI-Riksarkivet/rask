@@ -204,16 +204,20 @@ async def attach_auth(
     provision: bool = False,
     fatal: bool = False,
 ) -> None:
-    """Put `app.state.oidc` and `app.state.fga` in place when configured.
+    """Put `app.state.oidc`, `app.state.sa_oidc` and `app.state.fga` in place when configured, and None otherwise.
 
     Call from a lifespan, before yielding. `service` names the caller in the log lines, which is the
     only thing that differed between the copies this replaces. See the module docstring for what
     `provision` and `fatal` select and which services need which.
 
-    An attribute is only ASSIGNED when its half actually built, so a caller that pre-sets
-    `app.state.fga = None` (the services whose dependencies read the attribute directly rather than
-    through `getattr`) keeps its explicit None.
+    All three start at None, so the doors read this lifespan's settings and nothing an earlier lifespan of the same
+    app object built: a producer door reads a lingering `sa_oidc` as "a verifier is configured" and refuses the
+    acknowledged-open caller (measured 2026-10-12, CI's serial `ms-test` lane, where one suite's lifespan with a
+    service-account issuer preceded another's without).
     """
+    app.state.oidc = None
+    app.state.sa_oidc = None
+    app.state.fga = None
     if settings.oidc_enabled and settings.oidc_issuer and settings.oidc_audience:
         try:
             from service_kit.governed import oidc

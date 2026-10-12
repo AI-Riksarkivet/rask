@@ -92,17 +92,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # dapr.resiliency.enabled chart resiliency; the /dlq-event route ERROR-logs + acks — park-and-alert,
     # not replay — docs/RESILIENCE.md gap #2, fixed 2026-07-12).
     app.state.dapr = DaprClient()
-    # BOTH DEFAULT TO None BEFORE THE BUILD, because this app's dependencies read the attributes
-    # directly rather than through `getattr`: the trainer consumer (#115a) gates as its own identity
-    # and the client MUST exist here or the gate is silently off with RASK_FGA_ENABLED=true
-    # (review 2026-07-10 caught exactly that bypass), and #64's OIDC verifier is the /produce human
-    # door. `attach_auth` also builds `sa_oidc`, the service-account verifier a service is admitted by.
+    # `attach_auth` sets `fga`, `oidc` and `sa_oidc`, None when unconfigured: this app's dependencies read the attributes
+    # directly rather than through `getattr`. The trainer consumer (#115a) gates as its own identity and the client MUST
+    # exist here or the gate is silently off with RASK_FGA_ENABLED=true (review 2026-07-10 caught exactly that bypass),
+    # #64's OIDC verifier is the /produce human door, and `sa_oidc` the service-account verifier a service is admitted by.
     #
     # `fatal=True` KEEPS THIS APP'S POSTURE: it wrapped neither construction in a `try`, so a failed
     # build has always crashed the pod. That is the loud failure, and the cascade head is not a place
     # to serve 503s quietly — a producer that cannot authorize is a cascade that does not run.
-    app.state.fga = None
-    app.state.oidc = None
     await attach_auth(app, get_settings(), service="medallion-producer", fatal=True)
     settings = get_settings()
     # THE PRODUCER'S OWN SIGNING KEY, resolved through its own sidecar, and installed BEFORE the workflow runtime starts and
