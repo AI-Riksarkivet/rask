@@ -23,10 +23,6 @@ TAG="${CATALOG_IMG##*:}"
 BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/.localbin"
 export PATH="$BIN:$PATH"
 
-# The two data-distribution buckets #3-B spreads fragments across (must be allowlisted in the chart AND
-# physically provisioned — the allowlist is a governance gate, not a provisioner).
-BASE_A="s3://mb-a"
-BASE_B="s3://mb-b"
 
 PF_PIDS=()
 cleanup() {
@@ -127,23 +123,9 @@ fi
 echo "   node holds catalog digest ${CATALOG_DIGEST}"
 
 ALREADY_BUILT="$CATALOG_IMG"
-HELM_SET=(
-  --set image.localImages=true
-  # The bus the nats fixture runs ([[XC-129]]).
-  --set-string nats.url=nats://rask-nats:4222
-  --set auth.enabled=true
-  --set medallion.fgaEnabled=true
-  # The ray-OFF core lane (the Ray path's home is ray_e2e_stack.sh): with the medallion's Ray lane on and
-  # no Ray named, the chart refuses the render ([[CP-041]]).
-  --set medallion.ray=false
-  --set catalog.warehouses.enabled=true
-  --set-json "catalog.multibase.dataBases=[\"$BASE_A\",\"$BASE_B\"]"
-  --set services.lineage.outbox.enabled=true
-  --set services.lineage.reconcile.enabled=true
-  --set observability.enabled=false
-  --set maintenance.enabled=false
-  --set frontend.enabled=false
-)
+# The governed stack's values, shared with scripts/install_from_empty.sh so the two lanes install one shape.
+# shellcheck source=scripts/stack_values.sh
+. "$(dirname "$0")/stack_values.sh"
 
 # EVERY SIDE-LOADED IMAGE THE CHART SCHEDULES, derived from the render rather than a list kept here.
 # `image.localImages=true` means a bare `<component>:dev` resolves on the NODE, so an image this

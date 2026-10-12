@@ -79,6 +79,12 @@ both introduce a key and consume it before it exists.
 
 Ordering WITHIN a phase: after any hook that provisions buckets.
 
+## `limits: { cpu: "200m", memory: "384Mi" }`
+
+`mc` is killed at 128Mi: on CI's kind node its container hit `OOMKilled/137` three times part-way through the users
+(XC-133, CI run 38233340359) and the install failed on the Job's backoff; the estate's runs fit under it with no margin.
+384Mi is three times the size that failed.
+
 ## `ttlSecondsAfterFinished: 3600`
 
 Reap the finished pod, exactly as `openfga-migrate.yaml` does and for the identical reason: this
