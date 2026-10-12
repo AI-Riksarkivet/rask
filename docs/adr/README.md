@@ -170,3 +170,4 @@ before they had a record here; each names its source document and the date of th
 | [0155](0155-the-medallion-is-tier-governance-in-the-catalog.md) | LH-461 | The medallion is tier governance inside the catalog; the lakehouse runs no stage, no training and no engine (2026-10-12) |
 | [0156](0156-the-audit-grilling-amends-0155.md) | LH-464 | The lakehouse audit's grilling amends ADR 0155: a tag gate, provenance in the spec Context, and one tier judge (2026-10-12) |
 | [0157](0157-stock-clients-commit-through-managed-versioning.md) | C3 | Stock clients commit through managed versioning; pylance 13 now; the controlplane is deleted (2026-10-12) |
+| [0158](0158-provenance-is-a-service-the-lineage-graph-is-bring-your-own.md) | LH-468 | Provenance is a rask service; the lineage graph is bring-your-own (2026-10-12) |
