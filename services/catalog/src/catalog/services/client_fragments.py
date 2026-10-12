@@ -411,26 +411,14 @@ def verify_blob_sidecars(
             _read_last_byte(column, address, size, handle)
 
 
-class _BasePath(Protocol):
-    @property
-    def path(self) -> str: ...
-
-    @property
-    def is_dataset_root(self) -> bool: ...
-
-
-class _BasePaths(Protocol):
-    def base_paths(self) -> dict[int, _BasePath]: ...
-
-
 def _external_bases(table: lance.LanceDataset, recorded: Sequence[base_registry.RecordedBase]) -> dict[int, str]:
     """``{base id: base URI}`` of the table's registered non-root bases its record holds as external blob bases, by path and store.
 
-    ``_ds.base_paths()`` is the library's own answer for the manifest's bases, as
+    ``base_paths()`` is the library's own answer for the manifest's bases, as
     ``service_kit.lakehouse.features.manifest_base_path_refs`` reads it.
     """
     allowed = {(entry.path, entry.store) for entry in recorded if entry.role is base_registry.BaseRole.EXTERNAL_BLOB and not entry.is_dataset_root}
-    declared = cast(_BasePaths, getattr(table, "_ds")).base_paths()  # noqa: B009 — pylance's private handle, typed by the Protocol
+    declared = table.base_paths()
     return {base_id: base.path for base_id, base in declared.items() if not base.is_dataset_root and (normalise(base.path), store_of(base.path)) in allowed}
 
 

@@ -1,7 +1,7 @@
 """[[LH-245]] A commit through a catalog door never deletes a version, armed table or not.
 
 Lance runs version cleanup inside any commit whose resulting manifest carries ``lance.auto_cleanup.*`` config
-(`lance_docs/guide.md:3857-3923`), under whoever commits and past every legal hold and protected base.
+(`lance_docs/guide.md:4412-4476`), under whoever commits and past every legal hold and protected base.
 Measured live on helm rev 280 before this fix: three appends through the insert door on an armed table
 deleted versions 1 and 2, because the sweep that disarms a table had not reached it. So the door that
 commits disarms the ref first, and the append rebases onto that config-only commit and deletes nothing

@@ -370,7 +370,8 @@ def judge_registered_table(ns: LanceNamespace, so: dict[str, str], segments: lis
         raise InvalidInputError(
             f"the dataset at {location!r} was created without stable row ids: its `_rowid` is a physical address that compaction "
             "rewrites, Lance tracks no row versions for it, and its change feed would answer empty windows. Stable row ids are "
-            "create-time-only (lance_docs/file_format.md:4011-4015); recreate it with enable_stable_row_ids=True, then register that."
+            "create-time-only through pylance (lance_docs/file_format.md:5878-5889; the format's migration is Rust-only); "
+            "recreate it with enable_stable_row_ids=True, then register that."
         )
     entries = entries_for_registration(
         location, facts.bases, registry=context.registry, configured=context.configured, data_allowlist=context.data_allowlist, governed=context.governed

@@ -5,7 +5,7 @@ the activity's result — a pod eviction in the window between the catalog's 200
 checkpoint. Dapr then re-runs the activity (that is its contract: activities re-execute, decisions
 replay), the retry re-reads `read_version` fresh, and the door — which had no memory of the first
 attempt — appended the same fragments again. The format cannot refuse it: Append never conflicts
-with Append (`lance_docs/file_format.md:4828-4834`), which is a FEATURE for concurrent writers and
+with Append (`lance_docs/file_format.md:6772-6778`), which is a FEATURE for concurrent writers and
 a trap for a replayed one. Nine runs of one fixture prefix measured today's bronze at nine copies
 per file through the RE-RUN flavour of the same hole; this is the CRASH flavour.
 

@@ -6,9 +6,9 @@ the same day after the lance_docs check.
 ## Context
 
 Lance separates retention from cleanup. A version that must survive is tagged: "Tagged versions are exempt from
-cleanup" (`lance_docs/guide.md:3821`, `3989-3992`), and branches keep their referenced files the same way
-(`guide.md:4051-4053`). Lance's own advice for a rollback window is to "create a tag … delay cleanup"
-(`guide.md:770-777`). Deleting a tag or a branch is therefore what makes its versions reclaimable (`guide.md:3992`,
+cleanup" (`lance_docs/guide.md:4376`, `4544-4547`), and branches keep their referenced files the same way
+(`guide.md:4608-4610`). Lance's own advice for a rollback window is to "create a tag … delay cleanup"
+(`guide.md:861-868`). Deleting a tag or a branch is therefore what makes its versions reclaimable (`guide.md:4547`,
 `4053`): it is history reclaim, not entity deletion.
 
 `version/delete` checks protection (`services/catalog/src/catalog/api/v1/endpoints/versions.py:245-246`), and so do tag

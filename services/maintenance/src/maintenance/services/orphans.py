@@ -16,16 +16,18 @@ fetched 2026-08-04):
 * `_indices/<uuid>/` directories absent from every live manifest;
 * `_transactions/*.txn` files from failed or rolled-back commits — a conflict leaves them behind
   ("transaction files remain in storage describing each commit attempt"), so a busy table accrues
-  them. Whether Lance will ever take one depends on the LISTING FLOOR, not on its age:
-  `cleanup_old_versions` clamps its unreferenced-file listing to the commit timestamp of the earliest
-  RETAINED manifest (`rust/lance/src/dataset/cleanup.rs:332-341`, applied to `_transactions/`, `data/`
-  and `_deletions/` alike at :721-731) before the 7-day unverified rule (:345) filters what was
-  listed. Measured against pylance 11.0.0 with `delete_unverified=True` bypassing the age filter, the
-  flip is at that timestamp to the second: offsets -3600/-60/-1/0 s are removed, +1/+60/+3600 s are
-  kept. So a file written AFTER the last surviving commit is invisible to cleanup at any `older_than`
-  and with any flag — permanently, once a dataset has collapsed to one live version — while a file
-  below the floor clears itself as soon as it passes 7 days. `OrphanFile.reclaimable_by_lance` carries
-  which, because only the second class justifies a reclaimer;
+  them. Whether Lance will ever take one depends on its DIRECTORY. `cleanup_old_versions` clamps its
+  listing of `_transactions/` and `_deletions/` to the commit timestamp of the earliest RETAINED
+  manifest before the 7-day unverified rule filters what was listed, while `data/` is listed through
+  `max(floor, now - 7 days)` (all of it with `delete_unverified=True`, lance #8944) and `_indices/` in
+  full (lance v13.0.0 `rust/lance/src/dataset/cleanup.rs:756-778`). Measured against pylance 11.0.0
+  with `delete_unverified=True` bypassing the age filter, a transaction file flips at that timestamp to
+  the second: offsets -3600/-60/-1/0 s are removed, +1/+60/+3600 s are kept; on pylance 13.0.0 a data
+  file above the floor is removed. So a transaction or deletion file written AFTER the last surviving
+  commit is invisible to cleanup at any `older_than` and with any flag — permanently, once a dataset
+  has collapsed to one live version — while a data or index file, and any file below the floor, clears
+  itself once it passes 7 days. `OrphanFile.reclaimable_by_lance` carries which, because only the
+  first class justifies a reclaimer;
 * manifests of versions that were deleted;
 * `_versions/latest_version_hint.json`, which the spec calls "purely an optimization" and "always
   safe to delete".
@@ -103,6 +105,12 @@ _RESERVED_MARKER = ".lance-reserved"
 #: mark live files as orphans, the single most dangerous way this pass can be wrong.
 _MAX_VERSIONS = 500
 
+#: The kinds `cleanup_old_versions` lists PAST the listing floor (lance v13.0.0 `cleanup.rs:764-777`):
+#: `data/` through `max(floor, now - 7 days)` since lance #8944, `_indices/` with no cutoff. An
+#: unreferenced file of these kinds is cleared by time alone, so it is never stranded. Every other kind
+#: is judged against the floor.
+_LISTED_PAST_THE_FLOOR_KINDS = frozenset({"data", "indices"})
+
 
 class OrphanFile(BaseModel):
     """One file under a dataset prefix that no live version's manifest references."""
@@ -114,9 +122,9 @@ class OrphanFile(BaseModel):
     #: Which Lance-owned area it sits in: data / deletions / indices / transactions / versions / other.
     kind: str
     size_bytes: int = 0
-    #: True when `cleanup_old_versions` can still SEE this file, so time alone clears it; False when it
-    #: sits above the listing floor and no Lance call will ever enumerate it; None when the floor could
-    #: not be read.
+    #: True when `cleanup_old_versions` can still SEE this file, so time alone clears it (always, for a
+    #: data or index file); False when it is a floor-bound kind above the listing floor and no Lance call
+    #: will ever enumerate it; None when the floor could not be read.
     #:
     #: The distinction is what makes the purge gate meaningful. Measured on the deployed estate
     #: 2026-09-18, `orphan_files` fell 1011 -> 32 in ten minutes as the ordinary sweep took 979 files at
@@ -441,11 +449,14 @@ def _classify_against_floor(orphans: list[OrphanFile], ds: lance.LanceDataset, d
     deserializing a manifest (18.4x, per its own comment) and `versions()` is the opposite — it reads
     all of them. Most datasets have no orphans, and those pay nothing.
 
-    THE FLOOR is the EARLIEST RETAINED manifest's commit timestamp. `cleanup.rs:332-341` clamps the
-    unreferenced-file listing to it — for `_versions/`, `_transactions/`, `data/` and `_deletions/`
-    alike (:721-731) — BEFORE the 7-day unverified rule (:345) filters what was listed. A file above
-    this instant is invisible to cleanup at any `older_than` and with `delete_unverified=True`;
-    measured against pylance 11.0.0, the flip is at the manifest timestamp to the second.
+    THE FLOOR is the EARLIEST RETAINED manifest's commit timestamp, and it binds only the directories
+    Lance lists through it (lance v13.0.0 `cleanup.rs:756-778`): `_transactions/` and `_deletions/`
+    are clamped to it BEFORE the 7-day unverified rule filters what was listed, so a file of theirs
+    above this instant is invisible to cleanup at any `older_than` and with `delete_unverified=True`
+    (measured against pylance 11.0.0, the flip is at the manifest timestamp to the second). `data/` is
+    listed through `max(floor, now - 7 days)` (lance #8944) and `_indices/` with no cutoff, so an
+    orphan there is Lance's whatever its mtime, and the floor is not read for a dataset holding only
+    those (:data:`_LISTED_PAST_THE_FLOOR_KINDS`).
 
     BOTH SIDES GO THROUGH `.timestamp()`, and that is the care this function takes. Measured on this
     host: `versions()[i]["timestamp"]` is NAIVE LOCAL (`2026-09-19 00:04:01`) while
@@ -456,14 +467,18 @@ def _classify_against_floor(orphans: list[OrphanFile], ds: lance.LanceDataset, d
     An unreadable floor leaves the class None. "We could not tell" and "Lance will take it" must stay
     distinguishable, for the same reason `checked=False` is not `orphans=[]`.
     """
-    if not orphans:
+    floor_bound = [orphan for orphan in orphans if orphan.kind not in _LISTED_PAST_THE_FLOOR_KINDS]
+    for orphan in orphans:
+        if orphan.kind in _LISTED_PAST_THE_FLOOR_KINDS:
+            orphan.reclaimable_by_lance = True
+    if not floor_bound:
         return
     try:
         floor = min(committed_at(v).timestamp() for v in ds.versions())
     except Exception as exc:  # noqa: BLE001 — an unreadable floor leaves the class UNKNOWN, never guessed
         log.warning("orphan_floor_unreadable", extra={"dataset": dataset_uri, "error": str(exc)})
         return
-    for orphan in orphans:
+    for orphan in floor_bound:
         orphan.reclaimable_by_lance = orphan.mtime_epoch <= floor
 
 

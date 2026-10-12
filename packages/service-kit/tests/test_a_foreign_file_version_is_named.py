@@ -1,6 +1,6 @@
-"""The mixed-file-version predicate agrees with Lance's own commit, on real pylance 12.
+"""The mixed-file-version predicate agrees with Lance's own commit, on the installed pylance.
 
-pylance 11 refused to commit data files at a version other than the table's; pylance 12 commits them
+pylance 11 refused to commit data files at a version other than the table's; pylance 12 and 13 commit them
 and stamps the sticky reader flag 256. So ``describe_foreign_data_file_versions`` is the refusal rask
 now owns, and the only thing that makes it correct is agreeing with what Lance actually does. Each
 case here writes real fragments, asks the predicate, then commits and reads the flag Lance set.
@@ -30,7 +30,7 @@ def test_the_predicate_refuses_exactly_when_lance_would_set_flag_256(
 ) -> None:
     uri = str(tmp_path / "t.lance")
     lance.write_dataset(_ids(1, 2), uri, data_storage_version=table_version, enable_stable_row_ids=stable)
-    written = lance.fragment.write_fragments(_ids(3), uri, **({"data_storage_version": append_version} if append_version else {}))
+    written = lance.fragment.write_fragments(_ids(3), uri, data_storage_version=append_version)
     fragments = [lance.FragmentMetadata.from_json(json.dumps(f.to_json())) for f in written]
 
     verdict = describe_foreign_data_file_versions(lance.dataset(uri).data_storage_version, [d for f in fragments for d in f.files])

@@ -42,7 +42,7 @@ def _dataset(tmp: Path, *, stable: bool) -> str:
             uri,
             mode="create" if start == 0 else "append",
             data_storage_version="2.2",
-            **({"enable_stable_row_ids": True} if stable and start == 0 else {}),
+            enable_stable_row_ids=stable and start == 0,
         )
     return uri
 

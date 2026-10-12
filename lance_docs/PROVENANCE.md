@@ -26,29 +26,39 @@ the vendored copy sat 79 lines behind carrying the superseded shape. Comparing t
 is a network check; its home is a scheduled job, and none exists yet.
 
 **A known, deliberate deviation rides on this file.** The catalog's `merge_insert` door still takes
-`on` as a single key (`catalog/api/v1/endpoints/data.py`): the installed `lance-namespace` 0.11.0 model
+`on` as a single key (`catalog/api/v1/endpoints/data.py`): the installed `lance-namespace` 0.11.1 model
 types it `str`, so accepting a list would fail inside `MergeInsertIntoTableRequest` rather than at the
 door. Vendoring the current spec makes that deviation VISIBLE rather than hidden behind a stale
 document — which is the point. It closes when the SDK bump lands.
 
+**The pin is one minor AHEAD of the installed SDK, on purpose.** `eb1de88e` is byte-identical to the
+`v0.12.0` tag; the lock holds `lance-namespace` 0.11.1, because pylance 13.0.0 declares
+`lance-namespace>=0.11.1,<0.12` (its PyPI `requires_dist`, read 2026-10-12) and 0.12+ installs beside no
+released pylance (ADR 0157). `v0.13.0` (`8528f9f2`) adds only the optional `minimum_nprobes` /
+`maximum_nprobes` query fields; it is re-vendored with the SDK bump to 0.13, not before, so the copy
+does not run two minors ahead of the SDK the catalog actually speaks.
+
 ## Not machine-checked
 
-These five are tool-generated concatenations of a whole documentation tree ("Directory structure:
-└── …"), not copies of a single upstream file, so no diff can verify them and none is attempted. Each
-source path was confirmed to exist on 2026-09-14; none of the bundles records the commit it was
-scraped at, so **a citation from these is weaker than one from `spec.yaml` and should be spot-checked
-against the live docs when it is load-bearing.**
+These five are concatenations of a whole documentation tree ("Directory structure: └── …"), not
+copies of a single upstream file. **`file_format.md` and `guide.md` are regenerated from the `v13.0.0`
+tag of `lance-format/lance`** — every file under `docs/src/format/` and `docs/src/guide/` in that
+tree's order (files, dot-files last, then directories), images left out, trailing whitespace trimmed by the
+repo's pre-commit hooks, in the shape the older bundles used — so they ARE the release's text and move with the next pylance bump. The other three
+record no commit they were scraped at, so **a citation from those is weaker than one from `spec.yaml`
+and should be spot-checked against the live docs when it is load-bearing.**
 
-**EACH NOW NAMES A COMMIT, AND IT IS A CHECKED-AGAINST COMMIT, NOT A SCRAPED-AT ONE.** The commit a
-bundle was generated at was never recorded and is not recoverable, so claiming one would be inventing
-provenance. What IS knowable is the upstream commit a bundle has been read against — so that is what
-the table carries, with the claim that was checked. A citation is therefore as strong as the
-spot-check beside it, and no stronger.
+**THE THREE OLDER BUNDLES NAME A CHECKED-AGAINST COMMIT, NOT A SCRAPED-AT ONE.** The commit they were
+generated at was never recorded and is not recoverable, so claiming one would be inventing provenance.
+What IS knowable is the upstream commit each has been read against — so that is what the table
+carries, with the claim that was checked. A citation from them is as strong as the spot-check beside
+it, and no stronger. `lance_sdk.md` was not regenerated: it is the rendered LanceDB site, and nothing
+pins it to lancedb 0.40.0.
 
 | File | Source tree | Checked against | Claim verified |
 | --- | --- | --- | --- |
-| `file_format.md` | `lance-format/lance` — `docs/src/format/` | `6bd1a86a` (2026-09-18), read 2026-09-19 | three branch-reclaim claims — see below |
-| `guide.md` | `lance-format/lance` — `docs/src/guide/` | `1f7b847c` (2026-09-19), read 2026-09-20 | `guide/blob.md:42` writes blob v2 with `data_storage_version="2.2"` and `blob_array` — the pair [[LH-085]] rests on |
+| `file_format.md` | `lance-format/lance` — `docs/src/format/` | **generated at tag `v13.0.0`** (commit `0923349b`), 2026-10-12 — the installed pylance | the whole tree; images skipped |
+| `guide.md` | `lance-format/lance` — `docs/src/guide/` | **generated at tag `v13.0.0`** (commit `0923349b`), 2026-10-12 — the installed pylance | the whole tree |
 | `namespace.md` | `lance-format/lance-namespace` — `docs/src/` | `62db3400` (2026-09-14), read 2026-09-20 | `catalog/rest/index.md:145-147` types `page_token`, `limit` and `delimiter` as Query parameters — the distinction [[LH-021]] used to separate spec vocabulary from rask dialect |
 | `ray.md` | `lance-format/lance-ray` — `docs/src/` | `ae670c23` (2026-09-14), read 2026-09-20 | `write.md:31` declares `data_storage_version` on `write_lance`, which is what lets the media lane preserve blob typing |
 | `lance_sdk.md` | LanceDB's rendered Python API reference | **no commit exists** — a rendered docs site, not a repo file tree | — |
@@ -86,31 +96,35 @@ against the live source as the paragraph above instructs. All three are unchange
 | a file with no `base_id` resolves against the dataset root | `docs/src/format/table/layout.md:72` |
 | "Source dataset remains immutable and can be garbage collected independently" | `docs/src/format/table/layout.md:156` |
 
-**The bundle IS stale where the row said, and measurably so.** It names five feature flags;
-`rust/lance-table/src/feature_flags.rs` allocates ELEVEN plus a sentinel at `1 << 11`. The six it does
-not name are `disable_transaction_file`, `unstable_data_overlay_files`, `covered_index_metadata`,
-`mixed_data_file_versions`, `frag_reuse_with_stable_row_ids` and `fragment_reuse_index`. That gap is
-why `service_kit.lakehouse.features` reads the Rust source rather than this bundle. No test compares
-its names with `feature_flags.rs`: `tests/unit/test_maintenance_features.py` pins only the names of
-the two flags it exercises (mixed data file versions and data overlays).
+**The `v13.0.0` bundle names every feature flag the release allocates.** Its table
+(`file_format.md:7482-7513`) lists fourteen, `1` through `8192`, with `16384` and above unknown, which
+matches `rust/lance-table/src/feature_flags.rs` at the same tag (`FLAG_UNKNOWN = 1 << 14`).
+`service_kit.lakehouse.features` names all fourteen. No test compares those names with the Rust source:
+`tests/unit/test_maintenance_features.py` pins only the names of the two flags it exercises (mixed data
+file versions and data overlays).
 
-**`guide.md:229` (and `:894`) holds for the manifest's version under every commit except
-`write_dataset(mode="overwrite", data_storage_version=X)`; it does not bind each data file's version.**
-Measured on pylance 12.0.0, 2026-09-25, on local tables at 2.1 and 2.2 with stable row ids:
+**A dataset's default file format version is fixed at create; each data file's is not.** The
+`v13.0.0` guide says so itself (`guide.md:232-235`: "Append and compaction can select another exact
+`2.x` version without rewriting existing files or changing that default"; `guide.md:983` keeps the
+older "fixed once created" line for the default). Measured on pylance 12.0.0, 2026-09-25, on local
+tables at 2.1 and 2.2 with stable row ids:
 
 - An append (`write_dataset(mode="append")` or a committed `LanceOperation.Append`), or a committed
   `LanceOperation.Overwrite`, whose files were written at ANOTHER version keeps the manifest's
   version, writes the files at the named one, and sets reader and writer flag 256
-  (`mixed_data_file_versions`), which the vendored flag table (`file_format.md:5452-5474`) does not
-  list. The flag is sticky: it survived deleting the foreign rows, a `write_dataset` overwrite and
-  `compact_files` back to a single file version.
+  (`mixed_data_file_versions`, `file_format.md:7504`). The flag is sticky: it survived deleting the
+  foreign rows, a `write_dataset` overwrite and `compact_files` back to a single file version.
 - `merge_insert`, `delete`, `add_columns`, `update`, `compact_files` and an overwrite that names no
   version keep the manifest's version. `write_dataset(mode="overwrite", data_storage_version=X)` moves
   it to X; it does not set flag 256, and on a table that already carries the flag it does not clear it.
+- From pylance 13.0.0, `update()`, `merge_insert().data_storage_version()` and `compact_files()` also
+  take a `data_storage_version`, which can stamp the flag: measured 2026-10-12 (only `update` was run),
+  `update(data_storage_version="2.1")` on a 2.2 table leaves flags `(258, 258)`. No rask code passes it,
+  and the `/commit` guard does not see those calls.
 
 `service_kit.lakehouse.features.describe_foreign_data_file_versions` names the files that would set it.
 
-**`guide.md:2989-2991` holds for the pool named `lance-cpu`. The pool that tracks the CPU count is
+**`guide.md:3382-3384` holds for the pool named `lance-cpu`. The pool that tracks the CPU count is
 `lance_background`, and neither variable sizes its base.** Measured on pylance 12.0.0, 2026-09-25, counting
 a fresh process's threads by name (`/proc/self/task/*/comm`) after it writes a 200,000-row local
 table and scans it once; each row is the range over 5 fresh processes. `taskset -c` sets affinity,

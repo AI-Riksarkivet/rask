@@ -445,11 +445,13 @@ def _orphans_by_reclaimability(report: ReconcileReport) -> dict[str, int]:
     anniversary of the writes that made them, so the same number meant "wait" on one tick and "act" on
     the next. The split is what carries that difference.
 
-    The line is the LISTING FLOOR, not an age. `cleanup_old_versions` clamps its unreferenced-file
-    listing to the earliest retained manifest's commit timestamp
-    (`rust/lance/src/dataset/cleanup.rs:332-341`) BEFORE the 7-day unverified rule (:345) filters what
-    was listed, so a file above that instant is unreachable at any `older_than` and with
-    `delete_unverified=True` — permanently, once a dataset has collapsed to one live version.
+    The line is the LISTING FLOOR, not an age, for the kinds Lance lists through it.
+    `cleanup_old_versions` clamps its listing of `_transactions/` and `_deletions/` to the earliest
+    retained manifest's commit timestamp BEFORE the 7-day unverified rule filters what was listed
+    (lance v13.0.0 `rust/lance/src/dataset/cleanup.rs:756-778`), so such a file above that instant is
+    unreachable at any `older_than` and with `delete_unverified=True` — permanently, once a dataset has
+    collapsed to one live version. A `data/` or `_indices/` orphan is listed past the floor (lance
+    #8944), so it always counts as `lance_will_reclaim`.
 
     `unknown` is its own bucket rather than folded into either, because a floor that could not be read
     is "we could not tell". Reporting that as "Lance will take it" is the conflation `checked=False`

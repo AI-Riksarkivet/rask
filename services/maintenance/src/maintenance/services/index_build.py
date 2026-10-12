@@ -88,7 +88,7 @@ def build_index(item: IndexWorkItem, *, write_options: Mapping[str, str]) -> Ind
     """
     dataset = lance.dataset(item.uri, storage_options=dict(write_options) or None, session=shared_lance_session())
     # THE REF THE UNIT NAMES, not always main. A branch is not openable by path — it lives at
-    # `tree/{branch}/` with its own `_versions/` and no `data/` (`lance_docs/file_format.md:2746-2761`)
+    # `tree/{branch}/` with its own `_versions/` and no `data/` (`lance_docs/file_format.md:3673-3688`)
     # — so it is checked out of the dataset the URI names, the same idiom the compaction pair uses.
     # Without this the catalog's `maintenance/reindex` could only refuse a branch: this worker is what
     # opens the dataset, so a door accepting `branch` would have main's index rebuilt while the API

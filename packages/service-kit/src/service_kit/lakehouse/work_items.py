@@ -147,7 +147,7 @@ class IndexWorkItem(BaseModel):
     uri: str
     #: The REF to build on — a branch name, or empty for main. A FIELD rather than a spelling of
     #: ``uri``, because a branch is not openable by path: it lives at ``tree/{branch}/`` with its own
-    #: ``_versions/`` and no ``data/`` (`lance_docs/file_format.md:2746-2761`), so the worker has to
+    #: ``_versions/`` and no ``data/`` (`lance_docs/file_format.md:3673-3688`), so the worker has to
     #: check the ref out of the dataset the URI names.
     #:
     #: It is what lets the catalog's ``maintenance/reindex`` accept a branch at all. Without it the

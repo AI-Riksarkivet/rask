@@ -1,7 +1,7 @@
 """A table's unenforced primary key, held at every catalog door that lands rows ([[LH-243]]).
 
 Lance records the key in field metadata (`lance-schema:unenforced-primary-key`,
-`lance_docs/file_format.md:2887-2910`) and checks it on no write. Measured on pylance 12.0.0 against a
+`lance_docs/file_format.md:4678-4701`) and checks it on no write. Measured on pylance 12.0.0 against a
 table that declares `id` as its key: a create whose rows repeat a key commits both, an append re-using a
 held key commits it, and a merge-insert whose UNMATCHED source rows repeat a key inserts every copy. The
 format leaves enforcement to the writer ("Users can use specific workloads like merge-insert to enforce
@@ -22,7 +22,7 @@ twice: within the rows the write carries, and against the rows the table holds w
   held key and writes no file (measured on 12.0.0). Both merges run on a scalar index on the key where one
   exists (Lance plans the join on the scalar-index path).
 
-A table that declares no key is append-only by the format's definition (`file_format.md:2250-2251`)
+A table that declares no key is append-only by the format's definition (`file_format.md:3152-3153`)
 and is not judged.
 
 Two bounds, both measured on pylance 12.0.0:

@@ -35,7 +35,7 @@ def read_delta(from_uri: str, base_version: int | None) -> pa.Table:
     (:func:`read_deleted`). A never-updated row carries its creation version in that column, so one
     predicate selects the inserts and the in-place corrections together; `_row_created_at_version`
     alone selects only the inserts. Both columns need `enable_stable_row_ids` at CREATION
-    (lance_docs/file_format.md:4011-4015).
+    (lance_docs/file_format.md:5878-5889).
 
     base_version None means "everything": a first run has no delta boundary, and an anti-join against
     an empty silver would be the same answer at more cost.
@@ -79,7 +79,7 @@ def write_silver(to_uri: str, rows: pa.Table, run_id: str) -> dict[str, Any]:
 
     NOT append: a redelivered publication event must converge, not duplicate. merge_insert maps to
     Lance's Update transaction, so concurrent merges are retryable at the application level rather
-    than auto-rebased (file_format.md:5155-5159) — which is why the stage runner holds a per-dataset
+    than auto-rebased (file_format.md:7104-7108) — which is why the stage runner holds a per-dataset
     single-flight (E3) and why this function does not try to be clever about concurrency itself.
     """
     try:

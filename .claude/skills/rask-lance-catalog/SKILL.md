@@ -404,7 +404,13 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   exempts tagged versions for that reason); `.lance-reserved` is a structural marker; and a large
   binary column's bytes live in `data/<data-file-stem>/*.blob`, a SIDECAR that `data_files()` does not
   name — the first live run called 29 MB of real page images reclaimable. Conversely `_transactions/
-  *.txn` genuinely accumulate forever (the spec keeps one per commit attempt) and nothing prunes them.
+  *.txn` and `_deletions/` files ABOVE the listing floor (the earliest retained manifest) accumulate
+  forever: `cleanup_old_versions` lists those two directories only up to the floor. `data/` and
+  `_indices/` are listed past it (lance #8944 for `data/`, pylance 13.0.0), so an unreferenced data or
+  index file is Lance's own to reclaim once it is 7 days old; `orphans._LISTED_PAST_THE_FLOOR_KINDS`
+  classifies by that, and the floor raise (`floor.py`, [[LH-094]]) acts only for the floor-bound kinds.
+  The cost of #8944: a vended-credential writer that stages fragments and commits more than 7 days later
+  loses them to the sweep's cleanup.
 - The FGA-only live seed (`fga_seed_demo.py`) writes projects no registry knows — the origin of
   "ghost projects". The replacement SHIPPED: `scripts/seed_estate.py` drives the real doors in
   hierarchy order — `POST /v1/projects` → `POST /v1/warehouses` → `POST /v1/warehouses/{id}/namespaces`
@@ -460,7 +466,8 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   `target_rows_per_fragment=32` — NATIVE `dataset.optimize.compact_files` reduces **4 → 2**. Same
   dataset shape, same option, opposite result, so Lance is not the defect. The job's call matches
   lance-ray 0.5.0's signature (`compact_files(uri, *, compaction_options, num_workers,
-  storage_options, ...)`), so it is not misuse either. Nothing tracks the upstream fix: no suite drives
+  storage_options, ...)`), so it is not misuse either. The upgrade study of 2026-10-12 reports the same result on lance-ray 0.5.0 + pylance
+  13.0.0. Nothing tracks the upstream fix: no suite drives
   this demo job, which exercises lance-ray itself; the lakehouse runs no Ray job of its own (ADR 0155).
 - **CHECK THE TRASH RECORD BEFORE TOUCHING BYTES — including when you are "only looking".** The sweep
   reports `versions_removed: 0` on datasets holding versions far older than the retention, and the

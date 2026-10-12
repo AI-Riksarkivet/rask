@@ -14,7 +14,7 @@ destructive it sounds. Reindex carries the ref on the work item so the worker op
 named. Preview calls ``_base_refs`` zero times and mutates nothing. Compact is answered by
 ``require_compactable``, an evidence gate that refuses a real shallow clone on COST. Run reclaims, and
 its reclaim is contained by the LAYOUT: a branch keeps its own ``_versions``/``_transactions``/``data``
-under ``tree/{branch}/`` (``lance_docs/file_format.md:2746-2761``), so ``cleanup_old_versions`` through
+under ``tree/{branch}/`` (``lance_docs/file_format.md:3673-3688``), so ``cleanup_old_versions`` through
 a branch handle deletes the branch's own files. Measured on pylance 11.0.0, on a branch that had
 overwritten every parent fragment — the sharpest case, where all of the parent's bytes are garbage from
 the branch's point of view — one data file went and it was the branch's own; the parent's ``data/``
@@ -205,7 +205,7 @@ async def compact_maintenance(
     # NO SHAPE REFUSAL HERE. A branch is answered by `require_compactable`, which is evidence-based and
     # already refuses a real shallow clone on COST — "compacting one materialises the shared data into
     # its own root, 1,072 -> 108,199 bytes against a 119,693-byte base". A branch IS a shallow clone
-    # (`file_format.md:2744`), so it reaches that gate and gets that answer, measured against THIS
+    # (`file_format.md:3671`), so it reaches that gate and gets that answer, measured against THIS
     # dataset rather than asserted from its shape.
     #
     # The door used to refuse first, and its reason was wrong about the harm: measured on pylance
@@ -332,6 +332,9 @@ async def reindex_maintenance(
     ds = await run_in_threadpool(disarm_commit_path_cleanup, ds, segments)
     spec = await run_in_threadpool(index_specs.describe_index_for_rebuild, ds, body.index_name)
     params = {**spec.params, **body.params}
+    # Kept before the build, because Lance may build less than was asked (lance #9134) and the next
+    # rebuild must still ask for it (`index_specs.record_requested_params`).
+    await run_in_threadpool(index_specs.record_requested_params, ds, spec, body.params)
 
     publisher = getattr(request.app.state, "dapr_client", None)
     item = IndexWorkItem(

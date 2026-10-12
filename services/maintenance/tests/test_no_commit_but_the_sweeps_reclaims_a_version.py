@@ -1,7 +1,7 @@
 """Version reclamation has one owner, the sweep, and no writer's commit deletes a version ([[LH-245]]).
 
 Lance's automatic cleanup runs INSIDE the commit of whoever writes, every N commits, from the
-`lance.auto_cleanup.*` manifest keys (`lance_docs/guide.md:3857-3923`). Measured on pylance 12.0.0: with
+`lance.auto_cleanup.*` manifest keys (`lance_docs/guide.md:4412-4476`). Measured on pylance 12.0.0: with
 `interval=1, older_than=0s`, one ordinary append took a table from versions 1..7 to 7..8. That deletion
 passes none of the sweep's gates (a legal hold, a protected base), runs under the writer's identity,
 and is recorded nowhere, so a tick removes every key before any gate can return.

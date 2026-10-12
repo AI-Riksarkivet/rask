@@ -13,7 +13,7 @@ So it DOES merge this ref's own fragments, and the parent is not endangered. The
 duplication — the branch stops being a shallow clone — which is precisely what `require_compactable`
 already measures and refuses on ("compacting one materialises the shared data into its own root,
 1,072 -> 108,199 bytes against a 119,693-byte base"). A branch IS a shallow clone
-(`lance_docs/file_format.md:2744`), so it reaches that gate and gets that answer.
+(`lance_docs/file_format.md:3671`), so it reaches that gate and gets that answer.
 
 THE SHAPE REFUSAL ALSO MADE THE ANSWER PERMANENT. A branch that has already been materialised owns
 every fragment it reads and is as cheap to compact as any table; a gate that refuses on the shape of

@@ -1,6 +1,6 @@
 """A BRANCH of a protected root is maintained; only the cross-root relations are refused.
 
-THE DISTINCTION IS THE FORMAT'S, NOT THIS ESTATE'S. `lance_docs/file_format.md:2744` — "Each branch
+THE DISTINCTION IS THE FORMAT'S, NOT THIS ESTATE'S. `lance_docs/file_format.md:3671` — "Each branch
 dataset is technically a shallow clone of the source dataset" — is the sentence that made all four
 containment relations look alike, and the LAYOUT two lines below it is what separates them:
 `tree/{branch_name}/` holds the branch's own `_versions/`, `_transactions/`, `_deletions/` and
@@ -70,7 +70,7 @@ def test_a_branch_of_a_protected_root_is_NOT_refused(tmp_path: Path) -> None:
 
 
 def test_the_root_ITSELF_is_still_refused(tmp_path: Path) -> None:
-    """The half that must not move. `file_format.md:3187` says the format will garbage-collect a
+    """The half that must not move. `file_format.md:5016` says the format will garbage-collect a
     source out from under its clone, so equality is the relation the estate-wide pre-pass exists for.
     """
     src, _branch = _parent_with_branch(tmp_path)

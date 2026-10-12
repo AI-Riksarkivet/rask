@@ -5,20 +5,22 @@ dataset whose orphans sit above its listing floor, which moves the floor above t
 `cleanup_old_versions`'s on the next ordinary sweep, under Lance's own rule. So the orphan half of
 reclamation stays what `purge.py` says it is — report-only, never a path this service names and removes.
 
-WHY A FLOOR EXISTS AT ALL. `cleanup_old_versions` clamps its unreferenced-file listing to the commit
-timestamp of the EARLIEST RETAINED MANIFEST (`rust/lance/src/dataset/cleanup.rs:332-341`, applied to
-`_versions/`, `_transactions/`, `data/` and `_deletions/` at `:721-731`) BEFORE the 7-day unverified rule
-at `:345` filters what was listed. `older_than` never enters that cutoff. Measured against pylance
-11.0.0 with `delete_unverified=True` bypassing the age filter, the flip is at the manifest timestamp to
-the second: -3600/-60/-1/0 s REMOVED, +1/+60/+3600 s KEPT.
+WHY A FLOOR EXISTS AT ALL. `cleanup_old_versions` clamps its listing of `_transactions/` and
+`_deletions/` to the commit timestamp of the EARLIEST RETAINED MANIFEST BEFORE the 7-day unverified
+rule filters what was listed (lance v13.0.0 `rust/lance/src/dataset/cleanup.rs:756-778`). `older_than`
+never enters that cutoff. Measured against pylance 11.0.0 with `delete_unverified=True` bypassing the
+age filter, the flip is at the manifest timestamp to the second: -3600/-60/-1/0 s REMOVED,
++1/+60/+3600 s KEPT. `data/` and `_indices/` are listed past the floor (lance #8944 for `data/`), so an
+orphan there is Lance's whatever its mtime and never needs this pass; `orphans.py` classifies by kind.
 
-SO A FILE ABOVE THE FLOOR IS PERMANENT, not late. A dataset collapsed to one live version holds every
-file written after that surviving commit forever, and nothing Lance offers will enumerate it. That is
-not a pathological case: **any** restore, re-upload or lifecycle rehydrate rewrites object mtimes above
-the manifest timestamps that reference them and recreates it wholesale. Measured on the deployed estate
-2026-09-19 — the MinIO PVCs were created `2026-09-11T10:50:09Z` while
-`m2proof_silver$m2-proof-1788537252` embeds epoch `2026-09-04T15:54:12Z`, so every object was
-re-uploaded a week after the commit that references it and the whole dataset sat above its own floor.
+SO A TRANSACTION OR DELETION FILE ABOVE THE FLOOR IS PERMANENT, not late. A dataset collapsed to one
+live version holds every such file written after that surviving commit forever, and nothing Lance
+offers will enumerate it. That is not a pathological case: **any** restore, re-upload or lifecycle
+rehydrate rewrites object mtimes above the manifest timestamps that reference them and recreates it
+wholesale. Measured on the deployed estate 2026-09-19 — the MinIO PVCs were created
+`2026-09-11T10:50:09Z` while `m2proof_silver$m2-proof-1788537252` embeds epoch `2026-09-04T15:54:12Z`,
+so every object was re-uploaded a week after the commit that references it and the whole dataset sat
+above its own floor.
 
 THE COMMIT IS A REAL VERSION AND ITS COST IS ACCEPTED, not hidden (owner ruling 2026-09-19,
 `docs/adr/0066-four-rulings-on-the-lakehouse-s-unblocked-rows-owner-2026.md`): the dataset gains a version representing no data change, written for a GC side
@@ -107,22 +109,28 @@ class FloorReport(BaseModel):
 
 
 def _eligible(orphans: list[OrphanFile]) -> dict[str, list[OrphanFile]]:
-    """Group orphans by dataset, keeping only datasets where EVERY orphan is stranded above the floor.
+    """Group the STRANDED orphans by dataset, keeping only datasets with no undecided orphan.
 
     THREE CLASSES, and only one of them is this module's business. ``reclaimable_by_lance is True`` is a
-    file waiting out the 7-day rule — time clears it and a commit written for it is a phantom version
-    bought for nothing. ``None`` means the floor could not be read, and "we could not tell" must never
-    become "act": the whole justification for writing to a governed table is that the residue is
-    provably permanent, and an unread floor proves nothing. Only ``False`` is stranded.
+    file Lance will take once it passes the 7-day rule — time clears it, so it neither earns a commit nor
+    blocks one, and it is left out of the raise's count. ``None`` means the floor could not be read, and
+    "we could not tell" must never become "act": the whole justification for writing to a governed
+    table is that the residue is provably permanent, and an unread floor proves nothing. Only ``False``
+    is stranded.
 
-    ALL-OR-NOTHING PER DATASET rather than per file, because the commit is per dataset: raising the
-    floor for one stranded file also sweeps up its siblings whatever their class, so a dataset holding
-    even one undecided orphan is one this pass has not established a case for.
+    AN UNDECIDED ORPHAN DISQUALIFIES ITS DATASET, because the commit is per dataset: raising the floor
+    for one stranded file also sweeps up its siblings, so a dataset holding even one orphan whose class
+    is unknown is one this pass has not established a case for.
     """
     by_dataset: dict[str, list[OrphanFile]] = {}
     for orphan in orphans:
         by_dataset.setdefault(orphan.dataset, []).append(orphan)
-    return {uri: found for uri, found in by_dataset.items() if all(o.reclaimable_by_lance is False for o in found)}
+    eligible: dict[str, list[OrphanFile]] = {}
+    for uri, found in by_dataset.items():
+        stranded = [o for o in found if o.reclaimable_by_lance is False]
+        if stranded and all(o.reclaimable_by_lance is not None for o in found):
+            eligible[uri] = stranded
+    return eligible
 
 
 def _current_floor(uri: str, storage_options: dict[str, str]) -> float | None:

@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import lance
 import pyarrow as pa
@@ -33,11 +33,11 @@ def _ids(start: int, stop: int) -> pa.Table:
     return pa.table({"id": pa.array(range(start, stop), pa.int64())})
 
 
-def _table(root: Path, name: str, *, append_version: str | None) -> str:
+def _table(root: Path, name: str, *, append_version: Literal["2.2"] | None) -> str:
     """A 2.1 + stable-row-id table of four fragments, plus one append at ``append_version``."""
     uri = str(root / name)
     lance.write_dataset(_ids(0, 8), uri, data_storage_version="2.1", enable_stable_row_ids=True, max_rows_per_file=2)
-    lance.write_dataset(_ids(8, 10), uri, mode="append", **({"data_storage_version": append_version} if append_version else {}))
+    lance.write_dataset(_ids(8, 10), uri, mode="append", data_storage_version=append_version)
     return uri
 
 

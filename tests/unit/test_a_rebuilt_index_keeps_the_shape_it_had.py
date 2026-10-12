@@ -6,7 +6,7 @@ symptom is recall or latency nobody can attribute. So the property under test is
 "an index exists afterwards".
 
 WHY THE READBACK NEEDS TWO CALLS, which is the whole reason this module exists. Measured on pylance
-11.0.0 — the version the deployed catalog runs — `describe_indices()` carries `.name`,
+11.0.0 and again on 13.0.0 (2026-10-12), `describe_indices()` carries `.name`,
 `.index_type`, `.field_names`, `.type_url` and `.details`, and for a vector index `.details` is
 `{"metric_type": ..., "compression": {"num_bits": ..., "num_sub_vectors": ...}, "runtime_hints": {...}}`.
 **`num_partitions` is not in it.** It appears only as `indices[0].num_partitions` in
@@ -39,7 +39,9 @@ from catalog.services import index_specs
 
 
 VECTOR_DIMENSION = 8
-ROWS = 512
+#: Enough rows to train the 4 partitions asked for: from pylance 13.0.0 a smaller table builds fewer and
+#: only warns (lance #9134; measured 512 -> 2, 768 -> 3, 1024 -> 4).
+ROWS = 1024
 
 
 @pytest.fixture(scope="module")

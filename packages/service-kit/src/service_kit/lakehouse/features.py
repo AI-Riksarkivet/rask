@@ -111,15 +111,12 @@ FLAG_STABLE_ROW_IDS = 2
 FLAG_USE_V2_FORMAT_DEPRECATED = 4
 FLAG_TABLE_CONFIG = 8
 FLAG_BASE_PATHS = 16
-#: THE FOUR BITS THE VENDORED TABLE DOES NOT CARRY. `lance_docs/file_format.md` stops at 16 and says
-#: "flags with bit values 32 and above are unknown"; upstream's own
-#: `rust/lance-table/src/feature_flags.rs` allocates ELEVEN flags and puts its `FLAG_UNKNOWN` sentinel
-#: at `1 << 11` — read against the source 2026-09-19, not inferred, and the vendored
-#: `lance_docs/file_format.md` names only five of the eleven, which is the doc-lag
-#: `lance_docs/PROVENANCE.md` warns a load-bearing citation must be spot-checked against. Named here so a refusal says WHICH feature it declined instead of
-#: "32 (unknown)": an operator can act on "disable_transaction_file", not on a bare bit.
-#: **Naming is not supporting** — none of them enters :data:`SUPPORTED`, so all four still refuse;
-#: pylance 10.0.0 has no symbol for 32 or 128 at all, which makes refusal the only correct answer today.
+#: THE BITS ABOVE 16. Upstream's `rust/lance-table/src/feature_flags.rs` at v13.0.0 allocates FOURTEEN
+#: flags and puts its `FLAG_UNKNOWN` sentinel at `1 << 14`; the vendored `lance_docs/file_format.md`
+#: table (re-vendored at v13.0.0) names all fourteen. Named here so a refusal says WHICH feature it
+#: declined instead of "32 (unknown)": an operator can act on "disable_transaction_file", not on a bare
+#: bit. **Naming is not supporting** — none of them enters :data:`SUPPORTED`, so all of them still
+#: refuse.
 #:
 #: 32 is WRITER-REQUIRED ONLY, which is why it is the concrete case for the reader/writer split: a
 #: dataset that sets it writer-side is one a read-only pass may safely scan.
@@ -135,14 +132,19 @@ FLAG_COVERED_INDEX_METADATA = 128
 #: A dataset setting it references recognised V2 data files at DIFFERENT exact versions, which is a
 #: layout no rewrite here has been checked against. Named for the refusal message only.
 FLAG_MIXED_DATA_FILE_VERSIONS = 256
-#: THE FRAGMENT REUSE INDEX PAIR, read from `rust/lance-table/src/feature_flags.rs` on 2026-09-19.
-#: Neither is set by anything this estate does today — probed on pylance 11.0.0, a `compact_files`
-#: with `defer_index_remap=True` (the sweep's own call, and the one that USES the FRI) leaves the
-#: manifest at `(0, 0)` — so naming them changes no verdict now. They are here because `SUPPORTED`
-#: fails closed: the day a pylance bump starts stamping one, the sweep refuses that dataset, and the
-#: only difference between a diagnosable refusal and a dead end is whether the bit has a name.
+#: THE FRAGMENT REUSE INDEX PAIR and the three bits above them, read from
+#: `rust/lance-table/src/feature_flags.rs` at v13.0.0. None is set by anything this estate does —
+#: measured on pylance 13.0.0, a `compact_files` with `defer_index_remap=True` (the sweep's own call,
+#: and the one that USES the FRI) writes a legacy FRI and leaves the manifest at `(0, 0)`; a release
+#: build sets 512 only in debug builds, 2048 only behind an environment opt-in, and masks 4096 and 8192
+#: as reserved — so naming them changes no verdict now. They are here because `SUPPORTED` fails closed:
+#: the day a pylance bump starts stamping one, the sweep refuses that dataset, and the only difference
+#: between a diagnosable refusal and a dead end is whether the bit has a name.
 FLAG_FRAG_REUSE_WITH_STABLE_ROW_IDS = 512
 FLAG_FRAGMENT_REUSE_INDEX = 1024
+FLAG_SPILLED_ROW_LINEAGE = 2048
+FLAG_FRAGMENT_TREE = 4096
+FLAG_INDEPENDENT_COVERING_FIELDS = 8192
 
 #: Flags this pass can compact / GC / scan without being wrong.
 #:
@@ -192,6 +194,9 @@ _FLAG_NAMES = {
     FLAG_MIXED_DATA_FILE_VERSIONS: "mixed data file versions",
     FLAG_FRAG_REUSE_WITH_STABLE_ROW_IDS: "fragment reuse with stable row ids",
     FLAG_FRAGMENT_REUSE_INDEX: "fragment reuse index",
+    FLAG_SPILLED_ROW_LINEAGE: "spilled row lineage (unstable)",
+    FLAG_FRAGMENT_TREE: "fragment tree (reserved)",
+    FLAG_INDEPENDENT_COVERING_FIELDS: "independent covering fields (reserved)",
 }
 
 #: Manifest protobuf field numbers. Pinned by ``test_maintenance_features.py`` against the documented
@@ -268,7 +273,7 @@ class BasePathRef(BaseModel):
 def manifest_base_path_refs(ds: ManifestCarrier) -> list[BasePathRef]:
     """Every ``BasePath`` this dataset declares, path AND kind, from the LIBRARY rather than the bytes.
 
-    `ds._ds.base_paths()` returns `{id: DatasetBasePath(id, name, path, is_dataset_root)}` and is the
+    `ds.base_paths()` (public from pylance 13.0.0) returns `{id: DatasetBasePath(id, name, path, is_dataset_root)}` and is the
     authoritative answer. This function used to walk the manifest protobuf for field 18 instead —
     a second source of truth for something the library exposes, and the one that travels with any
     schema copy. Verified equal on pylance 10.0.0 against a real `shallow_clone`: the accessor gives
@@ -283,9 +288,9 @@ def manifest_base_path_refs(ds: ManifestCarrier) -> list[BasePathRef]:
     A base carrying no path is dropped rather than recorded as an empty root: `""` compares equal to
     nothing useful downstream and reads as a base that exists.
     """
-    accessor = getattr(getattr(ds, "_ds", None), "base_paths", None)
+    accessor = getattr(ds, "base_paths", None)
     if accessor is None:
-        # A carrier that is not a real `LanceDataset` (a double, an older pylance) declares nothing
+        # A carrier that is not a real `LanceDataset` (a double) declares nothing
         # rather than raising: every caller treats "no bases" as the ordinary case, and the refusal
         # this feeds is fail-closed on the FLAG, which is read from the bytes and unaffected here.
         return []
@@ -411,8 +416,8 @@ def unsupported_read_flags(*, reader: int, writer: int) -> str | None:
 def describe_foreign_data_file_versions(table_version: str, data_files: Iterable[VersionedDataFile]) -> str | None:
     """Why committing ``data_files`` to a table at ``table_version`` would mix file versions, or ``None``.
 
-    pylance 12 commits such a set and stamps reader and writer flag 256, which no operation removes:
-    maintenance refuses the table, and pylance 11 and lancedb 0.34 (lance core 8) cannot open it.
+    pylance 12 and 13 commit such a set and stamp reader and writer flag 256, which no operation removes:
+    maintenance refuses the table, and pylance 11 and lancedb 0.34 (lance core 8) cannot open it (lancedb 0.40 can).
     pylance 11 refused the commit itself. Measured on 12.0.0 over 2.0/2.1/2.2 tables, with and without
     stable row ids, and appends at every version: this refuses exactly when Lance's commit sets the flag.
 
@@ -607,7 +612,7 @@ def data_file_base_paths(ds: FragmentCarrier) -> set[str]:
     """The path of every base some data file of ``ds`` resolves through, as the manifest states it.
 
     :class:`CompactionBases` answers WHETHER any file lives under a base; a caller that must tell one
-    base from another needs WHICH. ``DataFile.base_id`` names the base and ``ds._ds.base_paths()`` maps
+    base from another needs WHICH. ``DataFile.base_id`` names the base and ``ds.base_paths()`` maps
     it to its path, the accessor :func:`manifest_base_path_refs` reads.
 
     RAISES when either cannot be read, or when a file names a base the manifest does not declare: which
@@ -616,7 +621,7 @@ def data_file_base_paths(ds: FragmentCarrier) -> set[str]:
     through = {file.base_id for fragment in ds.get_fragments() for file in fragment.data_files() if file.base_id is not None}
     if not through:
         return set()
-    accessor = getattr(getattr(ds, "_ds", None), "base_paths", None)
+    accessor = getattr(ds, "base_paths", None)
     if accessor is None:
         raise TypeError(f"{type(ds).__name__} cannot map the bases {sorted(through)} its data files name")
     declared = {int(base_id): str(base.path) for base_id, base in accessor().items()}

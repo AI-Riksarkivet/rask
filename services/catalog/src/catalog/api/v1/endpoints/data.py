@@ -696,8 +696,8 @@ async def read_table_blob(
 
     ONE ROW PER REQUEST, and a client wanting the same byte range from MANY rows should not loop here
     ([[LH-035]]). pylance's ``LanceDataset.read_blob_ranges(blob_column, requests, selector=…)`` takes a
-    sequence of ``(row, offset, length)`` tuples and plans them as ONE call — verified against the
-    installed pylance 11.0.0 — so N loops over this endpoint become N round trips and N independent
+    sequence of ``(row, offset, length)`` tuples and plans them as ONE call — verified against
+    pylance 11.0.0, and its signature unchanged on 13.0.0 — so N loops over this endpoint become N round trips and N independent
     plans where the batched API makes one. This door is deliberately the credential-less SINGLE-blob
     path; it is not the shape to build a scan on, and nothing here would tell a caller that.
 
@@ -806,7 +806,7 @@ def query_table(
 def table_changes(id: str, body: TableChangesRequest, ns: NamespaceDep, settings: SettingsDep, so: StorageOptionsDep, token: CurrentToken = None) -> Response:
     """Rows that changed in ``(begin_version, end_version]`` — Arrow-IPC, like ``query``.
 
-    Answers the change data feed `lance_docs/file_format.md:4270-4298` documents, from one snapshot at
+    Answers the change data feed `lance_docs/file_format.md:6214-6242` documents, from one snapshot at
     the window's end, and refuses a window the version columns cannot describe; the rules and the
     consumer contract live in `catalog.services.changes`, the read in `dataplane.read_changes`.
 

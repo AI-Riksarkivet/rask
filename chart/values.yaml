@@ -907,7 +907,7 @@ vending:
   # reaches it.
   #
   # EMPTY BY DEFAULT = whatever the bucket does, which is every deployment's behaviour today. The names
-  # and their contract come from `lance_docs/guide.md:2417-2419`: algorithm must be AES256, aws:kms or
+  # and their contract come from `lance_docs/guide.md:2667-2669`: algorithm must be AES256, aws:kms or
   # aws:kms:dsse, and a kmsKeyId REQUIRES one of the two kms values. The catalog refuses an invalid
   # pairing at boot rather than passing it on — object_store ignores an option it does not recognise,
   # so a wrong value would write plaintext while the config claimed encryption.
@@ -1492,9 +1492,9 @@ maintenance:
   trashPurgeMaxPerTick: 25
   # [[LH-094]] — raise a stranded dataset's Lance LISTING FLOOR so its residue becomes reclaimable.
   #
-  # `cleanup_old_versions` clamps its unreferenced-file listing to the earliest retained manifest's
-  # commit timestamp BEFORE the 7-day rule, so a file whose mtime is above that instant is invisible to
-  # Lance permanently — not late. Any restore, re-upload or lifecycle rehydrate puts every object mtime
+  # `cleanup_old_versions` lists `_transactions/` and `_deletions/` only up to the earliest retained
+  # manifest's commit, before the 7-day rule, so such a file above it is invisible to Lance for good
+  # (`data/` and `_indices/` are listed past it, lance #8944). Any restore, re-upload or lifecycle rehydrate puts every object mtime
   # above every manifest and creates it estate-wide. This writes ONE metadata-only commit per stranded
   # dataset, which moves the floor past the residue; Lance then does the deleting on the next sweep.
   #

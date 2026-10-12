@@ -9,7 +9,7 @@ The namespace spec defines vending: DescribeTable (and DeclareTable) take `vend_
 directly to Lance to initialize storage access", may include vended credentials, and carry `expires_at_millis` when
 they are temporary (`spec.yaml:2883-2891`). Because the client hands those options unchanged to Lance, the endpoint in
 them must be one the client can reach, wherever it runs. A Lance table may also span several base paths, each in a
-different bucket or store, and Lance accepts options per base with `base_<id>.<key>` keys (`lance_docs/guide.md:2351-2356`).
+different bucket or store, and Lance accepts options per base with `base_<id>.<key>` keys (`lance_docs/guide.md:2599-2604`).
 
 rask's vendor uses one `_endpoint` both for the STS call and for the endpoint it hands out
 (`services/catalog/src/catalog/core/vending.py:694-727,751-761`). The chart sets `LANCE_S3_STS_ENDPOINT` to the S3
@@ -36,6 +36,6 @@ Idea taken from: Lakekeeper's separate `sts-endpoint` setting.
   becomes configurable.
 - Per-base vending is a Lance SDK convention rask carries, not spec: the spec's `storage_options` is a flat map. Its
   constraints: base ids are assigned by the manifest, so the vendor reads them from it; `base_store_params`, keyed by
-  URI, takes precedence over `base_<id>.<key>` (`guide.md:2373-2378`); and an S3-compatible client needs both region
-  and endpoint (`guide.md:2423-2425`).
+  URI, takes precedence over `base_<id>.<key>` (`guide.md:2627-2629`); and an S3-compatible client needs both region
+  and endpoint (`guide.md:2705-2707`).
 - Unconfirmed: whether `vending.py` already scopes per base for multi-base and shallow-cloned tables; LH-177 checks it.

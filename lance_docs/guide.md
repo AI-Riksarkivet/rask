@@ -107,7 +107,11 @@ are not read into memory automatically.
 ```python
 from lance.arrow import ImageURIArray
 
-ImageURIArray.from_uris(["/tmp/image1.jpg", "file:///tmp/image2.jpg", "s3://example/image3.jpg"])
+ImageURIArray.from_uris([
+   "/tmp/image1.jpg",
+   "file:///tmp/image2.jpg",
+   "s3://example/image3.jpg"
+])
 # <lance.arrow.ImageURIArray object at 0x...>
 # ['/tmp/image1.jpg', 'file:///tmp/image2.jpg', 's3://example/image3.jpg']
 ```
@@ -153,14 +157,14 @@ uris = [os.path.join(os.path.dirname(__file__), "images/1.png")]
 encoded_images = ImageURIArray.from_uris(uris).read_uris()
 print(encoded_images.to_tensor())
 
-
 def pillow_decoder(images):
     import io
     import numpy as np
     from PIL import Image
 
-    return np.stack(np.asarray(Image.open(io.BytesIO(img.as_py()))) for img in images.storage)
-
+    return np.stack(
+        np.asarray(Image.open(io.BytesIO(img.as_py()))) for img in images.storage
+    )
 
 print(encoded_images.to_tensor(pillow_decoder))
 # <lance.arrow.FixedShapeImageTensorArray object at 0x...>
@@ -226,20 +230,19 @@ If you're unsure about whether you need a blob column in the first place (and wh
 This page focuses on blob workflows in Python and uses Lance file format terminology.
 
 - `data_storage_version` means the Lance **file format version** of a dataset.
-- A dataset's `data_storage_version` is fixed once the dataset is created.
-- If you need a different file format version, write a **new dataset**.
+- A dataset has a default file format version. Append and compaction can select
+  another exact `2.x` version without rewriting existing files or changing that default.
+- File format `0.1` cannot be mixed with the `2.x` family.
 
 ```python
 import lance
 import pyarrow as pa
 from lance import blob_array, blob_field
 
-schema = pa.schema(
-    [
-        pa.field("id", pa.int64()),
-        blob_field("blob"),
-    ]
-)
+schema = pa.schema([
+    pa.field("id", pa.int64()),
+    blob_field("blob"),
+])
 
 table = pa.table(
     {
@@ -261,31 +264,71 @@ Blob support is tied to the dataset's file format version. Earlier file format v
 (`< 2.2`) stored blobs using the `lance-encoding:blob` metadata field, while Blob
 v2 introduces a new storage layout that requires file format `>= 2.2`.
 
-The two
-schemes are mutually exclusive: for file format `>= 2.2`, legacy blob metadata
-(`lance-encoding:blob`) is rejected on write. The table below is the single
-source of truth for which scheme is supported at each `data_storage_version`.
+The target file version selects the physical Blob encoding. For `>= 2.2`,
+dataset writers also accept legacy blob-marked binary inputs and convert them
+to Blob v2 before encoding. Older files keep their original encoding.
 
 | Dataset `data_storage_version` | Legacy blob metadata (`lance-encoding:blob`) | Blob v2 (`lance.blob.v2`) |
 |---|---|---|
 | `0.1`, `2.0`, `2.1` | Supported for write/read | Not supported |
-| `2.2+` | Not supported for write | Supported for write/read (recommended) |
+| `2.2+` | Accepted as input; written as Blob v2 | Supported for write/read (recommended) |
+
+### Mixing legacy Blob and Blob v2 files
+
+Append with `data_storage_version="2.2"` to start writing Blob v2 into an
+existing `2.0` or `2.1` dataset. Both legacy blob-marked binary inputs and
+`blob_field` / `blob_array` inputs are accepted. No separate upgrade operation
+or historical-payload rewrite is required.
+
+When the first Blob v2 file for a legacy column is committed, the snapshot uses
+the Blob v2 logical schema for that column. Descriptor scans return the v2
+`kind, position, size, blob_id, blob_uri` struct across all fragments, including
+selections containing only old files. Old payloads appear as Inline descriptors
+pointing into their original data files. `take_blobs`, `read_blobs`, and
+`blob_handling="all_binary"` continue to expose the same payloads, nulls, and
+empty values. Historical snapshots retain their previous schema.
+
+Descriptor consumers that access fields by position or compare exact Arrow
+schemas must account for the extended structure. Interpret `position` together
+with `kind` and the object reference. See [the schema-transition discussion](https://github.com/lance-format/lance/issues/9458).
+
+The dataset's default file version remains unchanged. Select `2.2` or newer
+explicitly when writing Blob v2 structs or compacting the mixed column into
+Blob v2 files. Compaction rewrites the selected fragments; it is not required
+to enable new Blob v2 writes.
 
 ## Blob v2: Write Patterns
 
 Use `blob_field` and `blob_array` to build blob v2 columns.
+
+### Logical Arrow schema
+
+A blob v2 field is tagged with `ARROW:extension:name = "lance.blob.v2"`. Writers
+accept these logical struct shapes:
+
+| Shape | Children | Use |
+|---|---|---|
+| Minimal | `data: LargeBinary?`, `uri: Utf8?` | Inline bytes or a complete external object |
+| Complete | Minimal fields plus `position: UInt64?`, `size: UInt64?` | An optional byte range within an external object |
+
+Every non-null row must set exactly one of `data` and `uri`. For the complete
+shape, `position` and `size` must either both be set or both be null, a range
+requires `uri`, and an explicit range must have `size > 0`. Use inline `b""` for
+an empty blob; a URI without range fields still represents the complete external
+object, including an empty object. Python's `blob_field` and `BlobType` use the
+complete shape. Lance preserves an accepted logical shape, including child
+fields, nullability, and metadata, across create, append, and merge-insert
+writes; descriptor scans still return the compact stored descriptor shape.
 
 ```python
 import lance
 import pyarrow as pa
 from lance import Blob, blob_array, blob_field
 
-schema = pa.schema(
-    [
-        pa.field("id", pa.int64()),
-        blob_field("blob", nullable=True),
-    ]
-)
+schema = pa.schema([
+    pa.field("id", pa.int64()),
+    blob_field("blob", nullable=True),
+])
 
 # A single column can mix:
 # - inline bytes
@@ -295,14 +338,12 @@ schema = pa.schema(
 rows = pa.table(
     {
         "id": [1, 2, 3, 4],
-        "blob": blob_array(
-            [
-                b"inline-bytes",
-                "s3://bucket/path/video.mp4",
-                Blob.from_uri("s3://bucket/archive.tar", position=4096, size=8192),
-                None,
-            ]
-        ),
+        "blob": blob_array([
+            b"inline-bytes",
+            "s3://bucket/path/video.mp4",
+            Blob.from_uri("s3://bucket/archive.tar", position=4096, size=8192),
+            None,
+        ]),
     },
     schema=schema,
 )
@@ -329,6 +370,9 @@ Note:
   metadata for the same column are rejected.
 - `blob_pack_file_size_threshold` is a write option for rolling packed `.blob`
   sidecar files. It does not control inline-vs-packed placement.
+- Blob v2 fields can be nested inside structs and variable-length lists. Blob-aware
+  scans preserve the surrounding nested layout; use `blob_handling="all_binary"`
+  to materialize nested blob payloads as bytes.
 
 ### Example: packed external blobs (single container file)
 
@@ -361,12 +405,10 @@ with tarfile.open("container.tar", "r") as tf:
         m = tf.getmember(name)
         blob_values.append(Blob.from_uri(container_uri, position=m.offset_data, size=m.size))
 
-schema = pa.schema(
-    [
-        pa.field("name", pa.utf8()),
-        blob_field("blob"),
-    ]
-)
+schema = pa.schema([
+    pa.field("name", pa.utf8()),
+    blob_field("blob"),
+])
 
 rows = pa.table(
     {
@@ -390,8 +432,9 @@ Choose the read API based on the payload shape you want:
 
 | API | Returns | Use When |
 |---|---|---|
-| `read_blobs` | `List[Tuple[int, bytes]]` | You need complete blob payloads in memory, such as training loaders or batch preprocessing. |
-| `take_blobs` | `List[BlobFile]` | You need file-like objects for streaming, seeking, or partial reads. |
+| `read_blobs` | `List[Tuple[int, Optional[bytes]]]` | You need complete blob payloads in memory, such as training loaders or batch preprocessing. |
+| `read_blob_ranges` | `List[Tuple[int, int, Optional[bytes]]]` | You need selected byte ranges from multiple rows without materializing complete blobs. |
+| `take_blobs` | `List[Optional[BlobFile]]` | You need file-like objects for streaming, seeking, or partial reads. |
 | `scanner(..., blob_handling="all_binary")` | Arrow binary columns | You want blob columns in a scan result or `pyarrow.Table`. |
 
 Do not wrap `take_blobs` in your own thread pool just to call `read()` or
@@ -399,7 +442,8 @@ Do not wrap `take_blobs` in your own thread pool just to call `read()` or
 batched blob reads through Lance's scheduler.
 
 Exactly one selector must be provided to `read_blobs` or `take_blobs`: `ids`,
-`indices`, or `addresses`.
+`indices`, or `addresses`. `read_blob_ranges` accepts the same selector kinds
+through its required `selector` argument.
 
 | Selector | Typical Use | Stability |
 |---|---|---|
@@ -439,6 +483,48 @@ row_addrs = ds.to_table(columns=[], with_row_address=True).column("_rowaddr").to
 rows = ds.read_blobs("blob", addresses=row_addrs[:2])
 ```
 
+Blob selection APIs preserve logical result cardinality. `read_blobs()` and
+`take_blobs()` return one element per selected row, and `read_blob_ranges()`
+returns one element per request. A null blob is returned as `None`; a valid
+empty blob remains a non-null empty payload or zero-length `BlobFile`.
+
+### Read row-specific byte ranges
+
+Use `read_blob_ranges` to read multiple blob-local ranges with one planned API
+call. Each request is a `(row, offset, length)` tuple, and `selector` determines
+whether every `row` is interpreted as a row ID, row address, or dataset index.
+
+```python
+import lance
+
+ds = lance.dataset("./blobs_v22.lance")
+results = ds.read_blob_ranges(
+    "blob",
+    requests=[
+        (7, 0, 1024),
+        (7, 4096, 1024),
+        (12, 0, 0),
+    ],
+    selector="indices",
+)
+
+for request_index, row_address, data in results:
+    if data is None:
+        # The selected blob is null.
+        continue
+    print(request_index, row_address, len(data))
+```
+
+Each result contains the zero-based `request_index`, the resolved physical row
+address, and the requested bytes. `request_index` identifies the original
+request when the same row appears more than once.
+
+A request on a null blob returns `None`, including when its range is empty. An
+empty range on a non-null blob returns `b""` without payload I/O. For every
+request, `offset + length` must fit in an unsigned 64-bit integer. A range on a
+non-null blob must not extend beyond its logical size; blob-local bounds are not
+evaluated for null blobs because they have no logical payload length.
+
 ### Read blob columns as Arrow binary
 
 ```python
@@ -451,14 +537,20 @@ payloads = table.column("blob").to_pylist()
 
 ### Open file-like blob handles lazily
 
+Sequential reads are buffered, 512 KiB by default. Pass `buffer_size=0`
+for unbuffered reads. `read_range` and `read_ranges` do not use this
+buffer.
+
 ```python
 import lance
 
 ds = lance.dataset("./blobs_v22.lance")
 blobs = ds.take_blobs("blob", indices=[0, 1])
 
-with blobs[0] as f:
-    header = f.read(1024)
+blob = blobs[0]
+if blob is not None:
+    with blob as f:
+        header = f.read(1024)
 ```
 
 ### Example: decode video frames lazily
@@ -469,6 +561,8 @@ import lance
 
 ds = lance.dataset("./videos_v22.lance")
 blob = ds.take_blobs("video", indices=[0])[0]
+if blob is None:
+    raise ValueError("video blob is null")
 
 start_ms, end_ms = 500, 1000
 
@@ -496,16 +590,14 @@ and mark `LargeBinary` fields with a metadata kwarg `"lance-encoding:blob": true
 import lance
 import pyarrow as pa
 
-schema = pa.schema(
-    [
-        pa.field("id", pa.int64()),
-        pa.field(
-            "video",
-            pa.large_binary(),
-            metadata={"lance-encoding:blob": "true"},
-        ),
-    ]
-)
+schema = pa.schema([
+    pa.field("id", pa.int64()),
+    pa.field(
+        "video",
+        pa.large_binary(),
+        metadata={"lance-encoding:blob": "true"},
+    ),
+])
 
 table = pa.table(
     {
@@ -522,12 +614,15 @@ ds = lance.write_dataset(
 )
 ```
 
-As mentioned above, this write pattern is invalid for `data_storage_version >= 2.2`.
-For new datasets, it's recommended to use Lance file format 2.2, which uses blob v2 by default.
+With `data_storage_version >= 2.2`, dataset writers convert this input to Blob v2.
+For new datasets, prefer `blob_field` / `blob_array` with file format 2.2.
 
 ## Rewrite to a New Blob v2 Dataset
 
-If your current dataset consists of legacy blobs (stored in file formats <2.2) and you want to opt in to blob v2, you must rewrite it as a new dataset with `data_storage_version="2.2"`.
+To replace all historical legacy Blob encodings at once, you can rewrite them
+into a new dataset with `data_storage_version="2.2"`. This is optional for
+`2.0` / `2.1` tables, which can instead append Blob v2 files as described above.
+File format `0.1` tables still require a rewrite to move into the `2.x` family.
 
 ```python
 import lance
@@ -537,12 +632,10 @@ from lance import blob_array, blob_field
 legacy = lance.dataset("./legacy_blob_dataset")
 raw = legacy.scanner(columns=["id", "video"], blob_handling="all_binary").to_table()
 
-new_schema = pa.schema(
-    [
-        pa.field("id", pa.int64()),
-        blob_field("video"),
-    ]
-)
+new_schema = pa.schema([
+    pa.field("id", pa.int64()),
+    blob_field("video"),
+])
 
 rewritten = pa.table(
     {
@@ -567,27 +660,27 @@ lance.write_dataset(
 
 Not every binary column needs to be a blob column. Plain Arrow `binary`/`large_binary` stores bytes *inline*, interleaved with your other columns, which is simplest and fastest for really small blobs (e.g., thumbnail images). Using a blob column to store the binary payload makes sense when either of these holds:
 
-- **You need partial or streaming reads.** Inline binary is always read in full; there is no way to fetch a byte range without materializing the entire value. Blob columns expose `take_blobs` → `BlobFile` handles that seek and range-read, so you pay only for the bytes you touch.
+- **You need partial or streaming reads.** Inline binary is always read in full; there is no way to fetch a byte range without materializing the entire value. Blob columns expose `read_blob_ranges` for planned row-specific range reads and `take_blobs` → `BlobFile` handles for caller-driven seeks, so you pay only for the bytes you touch.
 - **Your values are large (roughly 1 MB or more on average).** Operations that rewrite entire rows, such as compaction or some updates, must copy the large inline payloads forward into the new version — even when those bytes never changed. The bigger the payload, the more bytes you rewrite per logical change (write amplification). A blob column keeps large payloads in separate `.blob` files that are referenced rather than re-copied, so these operations don't rewrite the heavy bytes.
 
 !!! tip
-    As a rule of thumb, if average payload size is below a few tens of KB and you only ever read whole values, plain inline binary is fine. Above ~1 MB, or any time you want file-like access, prefer a blob column. Blob v2 also tunes this automatically: by default it keeps payloads under 16 KiB inline, packs mid-sized payloads into shared `.blob` sidecars, and gives payloads over 2 MiB their own dedicated `.blob` file.
+    As a rule of thumb, if average payload size is below a few tens of KB and you only ever read whole values, plain inline binary is fine. Above ~1 MB, or any time you want file-like access, prefer a blob column. Blob v2 also tunes this automatically: by default it keeps payloads up to 64 KiB inline, packs payloads over 64 KiB and up to 4 MiB into shared `.blob` sidecars, and gives payloads over 4 MiB their own dedicated `.blob` file. These thresholds are configurable per column.
 
 ## Troubleshooting
 
 This section contains commonly noticed issues or errors, and explains how to address them.
 
 ### Blob v2 requires file version >= 2.2
-**Cause**: You are writing blob v2 values into a dataset/file format below `2.2`.  
+**Cause**: You are writing blob v2 values into a dataset/file format below `2.2`.
 **Fix**: Write to a dataset created with `data_storage_version="2.2"` (or newer).
 
 ### Legacy blob columns ... are not supported for file version >= 2.2
-**Cause**: You are using legacy blob metadata (`lance-encoding:blob`) while writing `2.2+` data.  
-**Fix**: Replace legacy metadata-based columns with blob v2 columns (`blob_field` / `blob_array`).
+**Cause**: A lower-level file writer received legacy blob metadata instead of prepared Blob v2 input.
+**Fix**: Use the dataset writer, which adapts legacy byte inputs, or prepare Blob v2 columns with the file-level Blob APIs.
 
 
 ### Exactly one of ids, indices, or addresses must be specified
-**Cause**: `read_blobs` or `take_blobs` received none or multiple selectors.  
+**Cause**: `read_blobs` or `take_blobs` received none or multiple selectors.
 **Fix**: Provide exactly one of `ids`, `indices`, or `addresses`.
 
 
@@ -609,7 +702,7 @@ else is appending data to it, either your schema change or the append will fail,
 depending on the order of the operations. Thus, it's recommended to perform
 schema changes when no other writes are happening.
 
-## Adding new columns 
+## Adding new columns
 
 ### Schema only
 
@@ -624,30 +717,22 @@ dataset = lance.write_dataset(table, "null_columns")
 
 # With pyarrow Field
 dataset.add_columns(pa.field("embedding", pa.list_(pa.float32(), 128)))
-assert dataset.schema == pa.schema(
-    [
-        ("id", pa.int64()),
-        ("embedding", pa.list_(pa.float32(), 128)),
-    ]
-)
+assert dataset.schema == pa.schema([
+    ("id", pa.int64()),
+    ("embedding", pa.list_(pa.float32(), 128)),
+])
 
 # With pyarrow Schema
-dataset.add_columns(
-    pa.schema(
-        [
-            ("label", pa.string()),
-            ("score", pa.float32()),
-        ]
-    )
-)
-assert dataset.schema == pa.schema(
-    [
-        ("id", pa.int64()),
-        ("embedding", pa.list_(pa.float32(), 128)),
-        ("label", pa.string()),
-        ("score", pa.float32()),
-    ]
-)
+dataset.add_columns(pa.schema([
+    ("label", pa.string()),
+    ("score", pa.float32()),
+]))
+assert dataset.schema == pa.schema([
+    ("id", pa.int64()),
+    ("embedding", pa.list_(pa.float32(), 128)),
+    ("label", pa.string()),
+    ("score", pa.float32()),
+])
 ```
 
 This operation is very fast, as it only updates the metadata of the dataset.
@@ -671,12 +756,10 @@ existing rows.
 ```python
 table = pa.table({"name": pa.array(["Alice", "Bob", "Carla"])})
 dataset = lance.write_dataset(table, "names")
-dataset.add_columns(
-    {
-        "hash": "sha256(name)",
-        "status": "'active'",
-    }
-)
+dataset.add_columns({
+    "hash": "sha256(name)",
+    "status": "'active'",
+})
 print(dataset.to_table().to_pandas())
 #     name                                               hash  status
 # 0  Alice  b';\xc5\x10b\x97<E\x8dZo-\x8dd\xa0#$cT\xad~\x0...  active
@@ -703,13 +786,13 @@ import numpy as np
 table = pa.table({"id": pa.array([1, 2, 3])})
 dataset = lance.write_dataset(table, "ids")
 
-
 @lance.batch_udf(checkpoint_file="embedding_checkpoint.sqlite")
 def add_random_vector(batch):
     embeddings = np.random.rand(batch.num_rows, 128).astype("float32")
-    return pa.RecordBatch.from_arrays([pa.FixedSizeListArray.from_arrays(embeddings.flatten(), 128)], names=["embedding"])
-
-
+    return pa.RecordBatch.from_arrays(
+        [pa.FixedSizeListArray.from_arrays(embeddings.flatten(), 128)],
+        names=["embedding"]
+    )
 dataset.add_columns(add_random_vector)
 ```
 
@@ -726,14 +809,21 @@ dataset.
 For example, imagine we have a dataset of embeddings and ids:
 
 ```python
-table = pa.table({"id": pa.array([1, 2, 3]), "embedding": pa.array([np.array([1, 2, 3]), np.array([4, 5, 6]), np.array([7, 8, 9])])})
+table = pa.table({
+   "id": pa.array([1, 2, 3]),
+   "embedding": pa.array([np.array([1, 2, 3]), np.array([4, 5, 6]),
+                          np.array([7, 8, 9])])
+})
 dataset = lance.write_dataset(table, "embeddings", mode="overwrite")
 ```
 
 Now if we want to add a column of labels we have generated, we can do so by merging a new table:
 
 ```python
-new_data = pa.table({"id": pa.array([1, 2, 3]), "label": pa.array(["horse", "rabbit", "cat"])})
+new_data = pa.table({
+   "id": pa.array([1, 2, 3]),
+   "label": pa.array(["horse", "rabbit", "cat"])
+})
 dataset.merge(new_data, "id")
 print(dataset.to_table().to_pandas())
 #    id  embedding   label
@@ -749,7 +839,8 @@ method. This is a metadata-only operation and does not delete the data on disk. 
 it very quick.
 
 ```python
-table = pa.table({"id": pa.array([1, 2, 3]), "name": pa.array(["Alice", "Bob", "Carla"])})
+table = pa.table({"id": pa.array([1, 2, 3]),
+                 "name": pa.array(["Alice", "Bob", "Carla"])})
 dataset = lance.write_dataset(table, "names", mode="overwrite")
 dataset.drop_columns(["name"])
 print(dataset.schema)
@@ -796,22 +887,15 @@ This works for nested columns as well. To address a nested column, use a dot
 
 ```python
 data = [
-    {"meta": {"id": 1, "name": "Alice"}},
-    {"meta": {"id": 2, "name": "Bob"}},
+  {"meta": {"id": 1, "name": "Alice"}},
+  {"meta": {"id": 2, "name": "Bob"}},
 ]
-schema = pa.schema(
-    [
-        (
-            "meta",
-            pa.struct(
-                [
-                    ("id", pa.int32()),
-                    ("name", pa.string()),
-                ]
-            ),
-        )
-    ]
-)
+schema = pa.schema([
+    ("meta", pa.struct([
+        ("id", pa.int32()),
+        ("name", pa.string()),
+    ]))
+])
 dataset = lance.write_dataset(data, "nested_rename")
 dataset.alter_columns({"path": "meta.id", "name": "new_id"})
 print(dataset.to_table().to_pandas())
@@ -837,9 +921,14 @@ can change a float32 embedding column into a float16 column to save disk space
 at the cost of lower precision:
 
 ```python
-table = pa.table({"id": pa.array([1, 2, 3]), "embedding": pa.FixedShapeTensorArray.from_numpy_ndarray(np.random.rand(3, 128).astype("float32"))})
+table = pa.table({
+   "id": pa.array([1, 2, 3]),
+   "embedding": pa.FixedShapeTensorArray.from_numpy_ndarray(
+       np.random.rand(3, 128).astype("float32"))
+})
 dataset = lance.write_dataset(table, "embeddings")
-dataset.alter_columns({"path": "embedding", "data_type": pa.list_(pa.float16(), 128)})
+dataset.alter_columns({"path": "embedding",
+                       "data_type": pa.list_(pa.float16(), 128)})
 print(dataset.schema)
 # id: int64
 # embedding: fixed_size_list<item: halffloat>[128]
@@ -900,12 +989,10 @@ import lance
 import pyarrow as pa
 from lance import blob_array, blob_field
 
-schema = pa.schema(
-    [
-        pa.field("id", pa.int64()),
-        blob_field("video"),
-    ]
-)
+schema = pa.schema([
+    pa.field("id", pa.int64()),
+    blob_field("video"),
+])
 
 table = pa.table(
     {
@@ -928,27 +1015,22 @@ import pyarrow as pa
 import lance
 
 # Define schema with a blob column for videos
-schema = pa.schema(
-    [
-        pa.field("id", pa.int64()),
-        pa.field("filename", pa.utf8()),
-        pa.field("video", pa.large_binary(), metadata={"lance-encoding:blob": "true"}),
-    ]
-)
+schema = pa.schema([
+    pa.field("id", pa.int64()),
+    pa.field("filename", pa.utf8()),
+    pa.field("video", pa.large_binary(), metadata={"lance-encoding:blob": "true"}),
+])
 
 # Read video file
 with open("sample_video.mp4", "rb") as f:
     video_data = f.read()
 
 # Create and write dataset
-table = pa.table(
-    {
-        "id": [1],
-        "filename": ["sample_video.mp4"],
-        "video": [video_data],
-    },
-    schema=schema,
-)
+table = pa.table({
+    "id": [1],
+    "filename": ["sample_video.mp4"],
+    "video": [video_data],
+}, schema=schema)
 
 ds = lance.write_dataset(
     table,
@@ -973,7 +1055,6 @@ blobs = ds.take_blobs("video", indices=[0])
 
 # Use with libraries that accept file-like objects
 import av  # pip install av
-
 with av.open(blobs[0]) as container:
     for frame in container.decode(video=0):
         # Process video frames without loading entire video into memory
@@ -999,26 +1080,21 @@ Lance provides excellent support for array types, which are critical for storing
 
     # Create a schema with a vector embedding column
     # This defines a 128-dimensional float32 vector
-    schema = pa.schema(
-        [
-            pa.field("id", pa.int64()),
-            pa.field("text", pa.utf8()),
-            pa.field("vector", pa.list_(pa.float32(), 128)),  # FixedSizeList of 128 floats
-        ]
-    )
+    schema = pa.schema([
+        pa.field("id", pa.int64()),
+        pa.field("text", pa.utf8()),
+        pa.field("vector", pa.list_(pa.float32(), 128)),  # FixedSizeList of 128 floats
+    ])
 
     # Create sample data with embeddings
     num_rows = 1000
     vectors = np.random.rand(num_rows, 128).astype(np.float32)
 
-    table = pa.Table.from_pydict(
-        {
-            "id": list(range(num_rows)),
-            "text": [f"document_{i}" for i in range(num_rows)],
-            "vector": [v.tolist() for v in vectors],
-        },
-        schema=schema,
-    )
+    table = pa.Table.from_pydict({
+        "id": list(range(num_rows)),
+        "text": [f"document_{i}" for i in range(num_rows)],
+        "vector": [v.tolist() for v in vectors],
+    }, schema=schema)
 
     # Write to Lance format
     ds = lance.write_dataset(table, "./embeddings.lance")
@@ -1055,7 +1131,7 @@ Lance provides excellent support for array types, which are critical for storing
         // Create sample data
         let ids = Int64Array::from(vec![0, 1, 2]);
         let texts = StringArray::from(vec!["doc_0", "doc_1", "doc_2"]);
-        
+
         // Create vector embeddings (128-dimensional)
         let values: Vec<f32> = (0..384).map(|i| i as f32 / 100.0).collect();
         let values_array = Float32Array::from(values);
@@ -1139,22 +1215,17 @@ import lance
 import pyarrow as pa
 
 # Schema with variable-length arrays
-schema = pa.schema(
-    [
-        pa.field("id", pa.int64()),
-        pa.field("tags", pa.list_(pa.utf8())),  # Variable number of string tags
-        pa.field("scores", pa.list_(pa.float32())),  # Variable number of float scores
-    ]
-)
+schema = pa.schema([
+    pa.field("id", pa.int64()),
+    pa.field("tags", pa.list_(pa.utf8())),      # Variable number of string tags
+    pa.field("scores", pa.list_(pa.float32())), # Variable number of float scores
+])
 
-table = pa.Table.from_pydict(
-    {
-        "id": [1, 2, 3],
-        "tags": [["python", "ml"], ["rust"], ["data", "analytics", "ai"]],
-        "scores": [[0.9, 0.8], [0.95], [0.7, 0.85, 0.9]],
-    },
-    schema=schema,
-)
+table = pa.Table.from_pydict({
+    "id": [1, 2, 3],
+    "tags": [["python", "ml"], ["rust"], ["data", "analytics", "ai"]],
+    "scores": [[0.9, 0.8], [0.95], [0.7, 0.85, 0.9]],
+}, schema=schema)
 
 ds = lance.write_dataset(table, "./variable_arrays.lance")
 ```
@@ -1170,37 +1241,27 @@ import lance
 import pyarrow as pa
 
 # Schema with nested struct
-schema = pa.schema(
-    [
-        pa.field("id", pa.int64()),
-        pa.field(
-            "metadata",
-            pa.struct(
-                [
-                    pa.field("source", pa.utf8()),
-                    pa.field("timestamp", pa.timestamp("us")),
-                    pa.field("embedding_model", pa.utf8()),
-                ]
-            ),
-        ),
-        pa.field("vector", pa.list_(pa.float32(), 384)),  # 384-dim embedding
-    ]
-)
+schema = pa.schema([
+    pa.field("id", pa.int64()),
+    pa.field("metadata", pa.struct([
+        pa.field("source", pa.utf8()),
+        pa.field("timestamp", pa.timestamp("us")),
+        pa.field("embedding_model", pa.utf8()),
+    ])),
+    pa.field("vector", pa.list_(pa.float32(), 384)),  # 384-dim embedding
+])
 
-table = pa.Table.from_pydict(
-    {
-        "id": [1, 2],
-        "metadata": [
-            {"source": "web", "timestamp": "2024-01-15T10:30:00", "embedding_model": "text-embedding-3-small"},
-            {"source": "api", "timestamp": "2024-01-15T11:45:00", "embedding_model": "text-embedding-3-small"},
-        ],
-        "vector": [
-            [0.1] * 384,
-            [0.2] * 384,
-        ],
-    },
-    schema=schema,
-)
+table = pa.Table.from_pydict({
+    "id": [1, 2],
+    "metadata": [
+        {"source": "web", "timestamp": "2024-01-15T10:30:00", "embedding_model": "text-embedding-3-small"},
+        {"source": "api", "timestamp": "2024-01-15T11:45:00", "embedding_model": "text-embedding-3-small"},
+    ],
+    "vector": [
+        [0.1] * 384,
+        [0.2] * 384,
+    ],
+}, schema=schema)
 
 ds = lance.write_dataset(table, "./with_metadata.lance")
 ```
@@ -1214,23 +1275,18 @@ Map writes require Lance file format version 2.2 or later.
 import lance
 import pyarrow as pa
 
-schema = pa.schema(
-    [
-        pa.field("id", pa.int64()),
-        pa.field("attributes", pa.map_(pa.utf8(), pa.utf8())),
-    ]
-)
+schema = pa.schema([
+    pa.field("id", pa.int64()),
+    pa.field("attributes", pa.map_(pa.utf8(), pa.utf8())),
+])
 
-table = pa.Table.from_pydict(
-    {
-        "id": [1, 2],
-        "attributes": [
-            [("color", "red"), ("size", "large")],
-            [("color", "blue"), ("material", "cotton")],
-        ],
-    },
-    schema=schema,
-)
+table = pa.Table.from_pydict({
+    "id": [1, 2],
+    "attributes": [
+        [("color", "red"), ("size", "large")],
+        [("color", "blue"), ("material", "cotton")],
+    ],
+}, schema=schema)
 
 ds = lance.write_dataset(table, "./with_maps.lance", data_storage_version="2.2")
 ```
@@ -1286,19 +1342,19 @@ This maps to Lance's `FixedSizeList(Float32, 384)` type, which is optimized for:
 
 1. **Use FixedSizeList for embeddings**: Always use `FixedSizeList` (not variable-length `List`) for vector embeddings to enable efficient storage and indexing.
 
-2. **Choose appropriate precision**: 
+2. **Choose appropriate precision**:
    - `Float32` is the standard choice, balancing precision and storage
    - `Float16` or `BFloat16` can reduce storage by 50% with minimal accuracy loss
    - `Int8` for quantized embeddings
 
 3. **Align dimensions for SIMD**: Vector dimensions divisible by 8 enable optimal SIMD acceleration. Common dimensions: 128, 256, 384, 512, 768, 1024, 1536.
 
-4. **Create indexes for large datasets**: For datasets with more than ~10,000 vectors, create an ANN index for fast search:
+4. **Create indices for large datasets**: For datasets with more than ~10,000 vectors, create an ANN index for fast search:
 
     ```python
     # IVF_PQ is recommended for most use cases
     ds.create_index("vector", index_type="IVF_PQ", num_partitions=256, num_sub_vectors=16)
-    
+
     # IVF_HNSW_SQ offers better recall at the cost of more memory
     ds.create_index("vector", index_type="IVF_HNSW_SQ", num_partitions=256)
     ```
@@ -1307,7 +1363,10 @@ This maps to Lance's `FixedSizeList(Float32, 384)` type, which is optimized for:
 
     ```python
     # Combine vector search with metadata filtering
-    results = ds.to_table(filter="category = 'electronics'", nearest={"column": "vector", "q": query, "k": 10})
+    results = ds.to_table(
+        filter="category = 'electronics'",
+        nearest={"column": "vector", "q": query, "k": 10}
+    )
     ```
 
 ## See Also
@@ -1415,6 +1474,27 @@ First, multiple workers build segments in parallel:
    `create_index_builder(...).fragments(...).execute_uncommitted()`
    or Python `create_index_uncommitted(..., fragment_ids=...)`
 2. each worker writes one segment under `indices/<segment_uuid>/`
+
+### Worker Shuffle Memory
+
+Vector workers using the two-file IVF shuffler can set
+`LANCE_SHUFFLE_MAX_PRELOADED_OFFSETS_BYTES` to control the maximum allocated bytes
+retained for the shuffle offsets table. The default is `268435456` (256 MiB).
+Set it before starting the shuffle; reopened shuffle readers also use the setting.
+Values must be non-negative integers in bytes. `0` disables offset preloading;
+invalid values return an error.
+
+For example, allow up to 512 MiB per shuffle:
+
+```shell
+export LANCE_SHUFFLE_MAX_PRELOADED_OFFSETS_BYTES=536870912
+```
+
+When offsets fit, the reader can combine adjacent partitions into read windows.
+If the limit is exceeded or allocation fails, the reader uses offsets from disk
+and reads partitions individually. The limit applies to each shuffle, so memory
+use adds up across concurrent builds. It does not include decoded data, index
+construction, or other buffers, and it does not limit total process memory.
 
 ### Segment Merge
 
@@ -1547,12 +1627,10 @@ from lance.fragment import write_fragments
 
 # Run on each worker
 data_uri = "./dist_write"
-schema = pa.schema(
-    [
-        ("a", pa.int32()),
-        ("b", pa.string()),
-    ]
-)
+schema = pa.schema([
+    ("a", pa.int32()),
+    ("b", pa.string()),
+])
 
 # Run on worker 1
 data1 = {
@@ -1588,12 +1666,13 @@ fragments_json1 = [json.dumps(fragment.to_json()) for fragment in fragments_1]
 fragments_json2 = [json.dumps(fragment.to_json()) for fragment in fragments_2]
 
 # On one worker, collect all fragments
-all_fragments = [FragmentMetadata.from_json(f) for f in fragments_json1 + fragments_json2]
+all_fragments = [FragmentMetadata.from_json(f) for f in \
+    fragments_json1 + fragments_json2]
 
 # Commit the fragments into a single dataset
 # Use LanceOperation.Overwrite to overwrite the dataset or create new dataset.
 op = lance.LanceOperation.Overwrite(schema, all_fragments)
-read_version = 0  # Because it is empty at the time.
+read_version = 0 # Because it is empty at the time.
 lance.LanceDataset.commit(
     data_uri,
     op,
@@ -1626,7 +1705,7 @@ Appending additional data follows a similar process. Use `lance.LanceOperation.A
 import lance
 
 ds = lance.dataset(data_uri)
-read_version = ds.version  # record the read version
+read_version = ds.version # record the read version
 
 op = lance.LanceOperation.Append(all_fragments)
 lance.LanceDataset.commit(
@@ -1647,13 +1726,10 @@ import pyarrow.compute as pc
 
 dataset = lance.dataset("./add_columns_example")
 assert len(dataset.get_fragments()) == 2
-assert dataset.to_table().combine_chunks() == pa.Table.from_pydict(
-    {
-        "name": ["alice", "bob", "charlie", "craig", "dave", "eve"],
-        "age": [25, 33, 44, 55, 66, 77],
-    },
-    schema=schema,
-)
+assert dataset.to_table().combine_chunks() == pa.Table.from_pydict({
+    "name": ["alice", "bob", "charlie", "craig", "dave", "eve"],
+    "age": [25, 33, 44, 55, 66, 77],
+}, schema=schema)
 
 
 def name_len(names: RecordBatch) -> RecordBatch:
@@ -1661,7 +1737,6 @@ def name_len(names: RecordBatch) -> RecordBatch:
         [pc.utf8_length(names["name"])],
         ["name_len"],
     )
-
 
 # On Worker 1
 frag1 = dataset.get_fragments()[0]
@@ -1694,7 +1769,7 @@ Output:
 3    craig   55         5
 4     dave   66         4
 5      eve   77         3
-``` 
+```
 
 ## Update Columns
 
@@ -1754,11 +1829,15 @@ update_data2 = pa.table(
 
 # Update fragment 0
 fragment0 = dataset.get_fragment(0)
-updated_fragment0, fields_modified0 = fragment0.update_columns(update_data1, left_on="id", right_on="id")
+updated_fragment0, fields_modified0 = fragment0.update_columns(
+    update_data1, left_on="id", right_on="id"
+)
 
 # Update fragment 1
 fragment1 = dataset.get_fragment(1)
-updated_fragment1, fields_modified1 = fragment1.update_columns(update_data2, left_on="id", right_on="id")
+updated_fragment1, fields_modified1 = fragment1.update_columns(
+    update_data2, left_on="id", right_on="id"
+)
 
 union_fields_modified = list(set(fields_modified0 + fields_modified1))
 # Commit the changes for both fragments
@@ -1766,7 +1845,9 @@ op = lance.LanceOperation.Update(
     updated_fragments=[updated_fragment0, updated_fragment1],
     fields_modified=union_fields_modified,
 )
-updated_dataset = lance.LanceDataset.commit(str(dataset_uri), op, read_version=dataset.version)
+updated_dataset = lance.LanceDataset.commit(
+    str(dataset_uri), op, read_version=dataset.version
+)
 
 # Verify the update
 dataset = lance.dataset(dataset_uri)
@@ -1784,6 +1865,117 @@ Output:
 5   6   Frank     92
 6   7  Gracie     88
 7   8   Henry     82
+```
+
+### Handling stable row id
+
+On a dataset created with `enable_stable_row_ids=True`, each row keeps the same
+`_rowid` for its lifetime, even when an update rewrites it into a different
+fragment. Lance cannot infer which new row replaces which old one, so when you
+assemble the transaction yourself, carrying those ids across is your job: read
+the rows you are rewriting with `with_row_id=True` and attach their ids to the
+new fragment with `lance.fragment.RowIdSequence`.
+
+Rows you leave without an id are treated as newly inserted. That is not an error,
+so a fragment written without `row_id_meta` commits successfully while silently
+giving every rewritten row a fresh identity, breaking `_rowid` for anything
+downstream that relies on it.
+
+You do **not** need to supply `created_at_version_meta` or
+`last_updated_at_version_meta`. Leave them as `None`. Lance derives both while
+building the manifest: `last_updated_at_version_meta` becomes the version being
+committed, and `created_at_version_meta` is copied from whichever existing row
+carries the same stable row id, so a rewritten row keeps the version it first
+appeared in.
+
+#### Mixing updated and new rows
+
+A single fragment may hold both rewritten rows and brand new ones. Order it so
+that **the rewritten rows come first and the new rows last**, then pass only the
+row ids of the rewritten rows. The row ids bind to the leading rows in fragment
+order, and the commit generates new ids for the remaining rows.
+
+Do not generate ids for the new rows yourself. Row ids are handed out from a counter
+in the manifest, and a commit that loses a race is retried against the version
+that won, which may have consumed the very ids you picked. Only the commit knows
+which values are free, so it assigns them after conflict resolution has settled.
+Supplying more row ids than the fragment has rows is rejected.
+
+```python
+import lance
+import pyarrow as pa
+import pyarrow.compute as pc
+from lance.fragment import RowIdSequence, write_fragments
+
+schema = pa.schema([("id", pa.int64()), ("score", pa.int64())])
+dataset_uri = "./stable_row_ids.lance"
+dataset = lance.write_dataset(
+    pa.table({"id": [1, 2, 3, 4], "score": [85, 90, 75, 80]}, schema=schema),
+    dataset_uri,
+    enable_stable_row_ids=True,
+)
+
+# On a worker: read the rows to rewrite, keeping their stable row ids.
+rows = dataset.to_table(columns=["id", "score"], with_row_id=True)
+rewritten = rows.filter(pc.field("id").isin([2, 3]))
+
+# Rewritten rows first, then the row that did not exist before.
+new_data = pa.table(
+    {
+        "id": rewritten["id"].to_pylist() + [5],
+        "score": [95, 70, 60],
+    },
+    schema=schema,
+)
+fragments = write_fragments(new_data, dataset_uri, schema=schema)
+assert len(fragments) == 1
+
+# Only the rewritten rows have ids. The trailing row gets one at commit time.
+fragments[0].row_id_meta = RowIdSequence(rewritten["_rowid"]).to_inline_metadata()
+
+# On the committing worker: tombstone the old copies of the rewritten rows.
+updated_fragment = dataset.get_fragments()[0].delete("id in (2, 3)")
+
+op = lance.LanceOperation.Update(
+    updated_fragments=[updated_fragment],
+    new_fragments=fragments,
+)
+dataset = lance.LanceDataset.commit(dataset_uri, op, read_version=dataset.version)
+
+print(dataset.to_table(with_row_id=True).to_pandas())
+```
+
+Output:
+```
+   id  score  _rowid
+0   1     85       0
+1   4     80       3
+2   2     95       1
+3   3     70       2
+4   5     60       4
+```
+
+Row ids 1 and 2 followed their rows into the new fragment, and the inserted row
+received the next unused id. Reading the lineage columns shows that the rewritten
+rows kept their original creation version while the inserted row is stamped with
+the version that added it:
+
+```python
+print(
+    dataset.to_table(
+        columns=["id", "_row_created_at_version", "_row_last_updated_at_version"]
+    ).to_pandas()
+)
+```
+
+Output:
+```
+   id  _row_created_at_version  _row_last_updated_at_version
+0   1                        1                             1
+1   4                        1                             1
+2   2                        1                             2
+3   3                        1                             2
+4   5                        2                             2
 ```
 
 
@@ -1837,12 +2029,14 @@ Extracts a value from JSON using JSONPath syntax.
 **Example:**
 ```python
 # Sample data: {"user": {"name": "Alice", "age": 30}}
-result = dataset.to_table(filter="json_extract(data, '$.user.name') = '\"Alice\"'")
+result = dataset.to_table(
+    filter="json_extract(data, '$.user.name') = '\"Alice\"'"
+)
 # Returns: "\"Alice\"" for strings, "30" for numbers, "true" for booleans
 ```
 
 !!! note
-    `json_extract` returns values in JSON format. String values include quotes (e.g., `"Alice"`), 
+    `json_extract` returns values in JSON format. String values include quotes (e.g., `"Alice"`),
     numbers are returned as-is (e.g., `30`), and booleans as `true`/`false`.
 
 #### json_get
@@ -1860,7 +2054,9 @@ Retrieves a field or array element from JSON, returning it as JSONB for further 
 ```python
 # Access nested JSON by chaining json_get calls
 # Sample data: {"user": {"profile": {"name": "Alice"}}}
-result = dataset.to_table(filter="json_get_string(json_get(json_get(data, 'user'), 'profile'), 'name') = 'Alice'")
+result = dataset.to_table(
+    filter="json_get_string(json_get(json_get(data, 'user'), 'profile'), 'name') = 'Alice'"
+)
 
 # Access array elements by index
 # Sample data: ["first", "second", "third"]
@@ -1888,7 +2084,9 @@ Extracts a string value from JSON.
 
 **Example:**
 ```python
-result = dataset.to_table(filter="json_get_string(data, 'name') = 'Alice'")
+result = dataset.to_table(
+    filter="json_get_string(data, 'name') = 'Alice'"
+)
 
 # Array access example
 # Sample data: ["first", "second"]
@@ -1913,7 +2111,9 @@ Extracts an integer value with strict type conversion.
 **Example:**
 ```python
 # {"age": 30} works, {"age": "30"} may work if JSONB allows string parsing
-result = dataset.to_table(filter="json_get_int(data, 'age') > 25")
+result = dataset.to_table(
+    filter="json_get_int(data, 'age') > 25"
+)
 ```
 
 #### json_get_float
@@ -1931,7 +2131,9 @@ Extracts a floating-point value with strict type conversion.
 
 **Example:**
 ```python
-result = dataset.to_table(filter="json_get_float(data, 'score') >= 90.5")
+result = dataset.to_table(
+    filter="json_get_float(data, 'score') >= 90.5"
+)
 ```
 
 #### json_get_bool
@@ -1949,7 +2151,9 @@ Extracts a boolean value with strict type conversion.
 
 **Example:**
 ```python
-result = dataset.to_table(filter="json_get_bool(data, 'active') = true")
+result = dataset.to_table(
+    filter="json_get_bool(data, 'active') = true"
+)
 ```
 
 ### Existence and Array Functions
@@ -1965,7 +2169,9 @@ Checks if a JSONPath exists in the JSON data.
 **Example:**
 ```python
 # Find records that have an age field
-result = dataset.to_table(filter="json_exists(data, '$.user.age')")
+result = dataset.to_table(
+    filter="json_exists(data, '$.user.age')"
+)
 ```
 
 #### json_array_contains
@@ -1976,7 +2182,7 @@ Checks if a JSON array contains a specific value.
 
 **Returns:** Boolean
 
-**Comparison Logic:** 
+**Comparison Logic:**
 - Compares array elements as JSON strings
 - For string matching, tries both with and without quotes
 - Example: searching for 'python' matches both `"python"` and `python` in the array
@@ -1984,7 +2190,9 @@ Checks if a JSON array contains a specific value.
 **Example:**
 ```python
 # Sample data: {"tags": ["python", "ml", "data"]}
-result = dataset.to_table(filter="json_array_contains(data, '$.tags', 'python')")
+result = dataset.to_table(
+    filter="json_array_contains(data, '$.tags', 'python')"
+)
 ```
 
 #### json_array_length
@@ -1993,7 +2201,7 @@ Returns the length of a JSON array.
 
 **Syntax:** `json_array_length(json_column, json_path)`
 
-**Returns:** 
+**Returns:**
 - Integer: length of the array
 - null: if path doesn't exist
 - Error: if path points to a non-array value
@@ -2001,10 +2209,14 @@ Returns the length of a JSON array.
 **Example:**
 ```python
 # Find records with more than 3 tags
-result = dataset.to_table(filter="json_array_length(data, '$.tags') > 3")
+result = dataset.to_table(
+    filter="json_array_length(data, '$.tags') > 3"
+)
 
 # Empty arrays return 0
-result = dataset.to_table(filter="json_array_length(data, '$.empty_array') = 0")
+result = dataset.to_table(
+    filter="json_array_length(data, '$.empty_array') = 0"
+)
 ```
 
 ## JSON Indexing
@@ -2022,20 +2234,15 @@ import lance
 import pyarrow as pa
 from lance.indices import IndexConfig
 
-table = pa.table(
-    {
-        "id": [1, 2, 3, 4],
-        "data": pa.array(
-            [
-                json.dumps({"x": 7, "y": 10}),
-                json.dumps({"x": 11, "y": 22}),
-                json.dumps({"y": 0}),
-                json.dumps({"x": 10}),
-            ],
-            type=pa.json_(),
-        ),
-    }
-)
+table = pa.table({
+    "id": [1, 2, 3, 4],
+    "data": pa.array([
+        json.dumps({"x": 7, "y": 10}),
+        json.dumps({"x": 11, "y": 22}),
+        json.dumps({"y": 0}),
+        json.dumps({"x": 10}),
+    ], type=pa.json_()),
+})
 
 lance.write_dataset(table, "json-index.lance")
 dataset = lance.dataset("json-index.lance")
@@ -2092,77 +2299,103 @@ import json
 
 # Create nested JSON data
 data = [
-    {"id": 1, "user": {"profile": {"name": "Alice", "settings": {"theme": "dark", "notifications": True}}, "scores": [95, 87, 92]}},
-    {"id": 2, "user": {"profile": {"name": "Bob", "settings": {"theme": "light", "notifications": False}}, "scores": [88, 91, 85]}},
+    {
+        "id": 1,
+        "user": {
+            "profile": {
+                "name": "Alice",
+                "settings": {
+                    "theme": "dark",
+                    "notifications": True
+                }
+            },
+            "scores": [95, 87, 92]
+        }
+    },
+    {
+        "id": 2,
+        "user": {
+            "profile": {
+                "name": "Bob",
+                "settings": {
+                    "theme": "light",
+                    "notifications": False
+                }
+            },
+            "scores": [88, 91, 85]
+        }
+    }
 ]
 
 # Convert to Lance dataset
 json_strings = [json.dumps(d) for d in data]
-table = pa.table({"data": pa.array(json_strings, type=pa.json_())})
+table = pa.table({
+    "data": pa.array(json_strings, type=pa.json_())
+})
 
 lance.write_dataset(table, "nested.lance")
 dataset = lance.dataset("nested.lance")
 
 # Query nested fields using JSONPath
-dark_theme_users = dataset.to_table(filter="json_extract(data, '$.user.profile.settings.theme') = '\"dark\"'")
+dark_theme_users = dataset.to_table(
+    filter="json_extract(data, '$.user.profile.settings.theme') = '\"dark\"'"
+)
 
 # Or using chained json_get
-high_scorers = dataset.to_table(filter="json_array_length(data, '$.user.scores') >= 3")
+high_scorers = dataset.to_table(
+    filter="json_array_length(data, '$.user.scores') >= 3"
+)
 ```
 
 ### Combining JSON with Other Data Types
 
 ```python
 # Create mixed-type table with JSON metadata
-products = pa.table(
-    {
-        "id": [1, 2, 3],
-        "name": ["Laptop", "Phone", "Tablet"],
-        "price": [999.99, 599.99, 399.99],
-        "specs": pa.array(
-            [
-                json.dumps({"cpu": "i7", "ram": 16, "storage": 512}),
-                json.dumps({"screen": 6.1, "battery": 4000, "5g": True}),
-                json.dumps({"screen": 10.5, "battery": 7000, "stylus": True}),
-            ],
-            type=pa.json_(),
-        ),
-    }
-)
+products = pa.table({
+    "id": [1, 2, 3],
+    "name": ["Laptop", "Phone", "Tablet"],
+    "price": [999.99, 599.99, 399.99],
+    "specs": pa.array([
+        json.dumps({"cpu": "i7", "ram": 16, "storage": 512}),
+        json.dumps({"screen": 6.1, "battery": 4000, "5g": True}),
+        json.dumps({"screen": 10.5, "battery": 7000, "stylus": True})
+    ], type=pa.json_())
+})
 
 lance.write_dataset(products, "products.lance")
 dataset = lance.dataset("products.lance")
 
 # Find products with specific specs
-result = dataset.to_table(filter="price < 600 AND json_get_bool(specs, '5g') = true")
+result = dataset.to_table(
+    filter="price < 600 AND json_get_bool(specs, '5g') = true"
+)
 ```
 
 ### Handling Arrays in JSON
 
 ```python
 # Create data with JSON arrays
-records = pa.table(
-    {
-        "id": [1, 2, 3],
-        "data": pa.array(
-            [
-                json.dumps({"name": "Project A", "tags": ["python", "ml", "production"]}),
-                json.dumps({"name": "Project B", "tags": ["rust", "systems"]}),
-                json.dumps({"name": "Project C", "tags": ["python", "web", "api", "production"]}),
-            ],
-            type=pa.json_(),
-        ),
-    }
-)
+records = pa.table({
+    "id": [1, 2, 3],
+    "data": pa.array([
+        json.dumps({"name": "Project A", "tags": ["python", "ml", "production"]}),
+        json.dumps({"name": "Project B", "tags": ["rust", "systems"]}),
+        json.dumps({"name": "Project C", "tags": ["python", "web", "api", "production"]})
+    ], type=pa.json_())
+})
 
 lance.write_dataset(records, "projects.lance")
 dataset = lance.dataset("projects.lance")
 
 # Find projects with Python
-python_projects = dataset.to_table(filter="json_array_contains(data, '$.tags', 'python')")
+python_projects = dataset.to_table(
+    filter="json_array_contains(data, '$.tags', 'python')"
+)
 
 # Find projects with more than 3 tags
-complex_projects = dataset.to_table(filter="json_array_length(data, '$.tags') > 3")
+complex_projects = dataset.to_table(
+    filter="json_array_length(data, '$.tags') > 3"
+)
 ```
 
 ## Performance Considerations
@@ -2197,24 +2430,19 @@ migrate.
 
 ## 9.0.0
 
-* Newly created FTS / inverted indexes now default to format v2 instead of v1.
-  The `LANCE_FTS_FORMAT_VERSION` environment variable no longer controls the
-  format used for newly created indexes. Users who need a specific index layout
-  should pass the index creation parameter `format_version` explicitly.
+* Unless overridden, newly created FTS indexes use format v2. The code analyzer
+  and `block_size=256` require format v3, so readers must support v3 before an
+  index using either option is created. `document_granularity="list_element"`
+  also requires v3 reader capability, independently of the posting format.
 
-* This affects users who create FTS / inverted indexes and need those indexes to
-  be readable by older Lance versions, or who depend on the v1 index layout. In
-  those cases, pass `format_version=1` when creating the index. Otherwise, newly
-  created indexes will use v2 by default, and older Lance readers may not be able
-  to read them.
+* To keep new indexes readable by nodes that support at most format v1 or v2,
+  set `format_version` in the index creation parameters, or set
+  `LANCE_FTS_FORMAT_VERSION` for a rollout-wide override. Formats v1 and v2
+  require the text analyzer and `block_size=128`.
 
-  ```python
-  dataset.create_scalar_index("text", "INVERTED", format_version=1)
-  ```
-
-* Existing v1 FTS indexes remain queryable. Operations that maintain an existing
-  v1 index, including append, incremental indexing, optimize, and mem-wal
-  maintained-index flush, should continue preserving the v1 format.
+* Operations that maintain an existing FTS index, including append, incremental
+  indexing, optimize, and mem-wal maintained-index flush, preserve its format
+  version.
 
 ## 7.2.0
 
@@ -2287,15 +2515,15 @@ do not expect `lance-arrow` to ever be stable, and you may want to consider fork
 this to just `lance::Error`.  We have also removed some internal error utilities (such as `OptionExt`) from the public
 API and do not plan on reintroducing these.
 
-* The Python and Rust `dataset::diff_meta` API has been removed in favor of `dataset::delta`, 
-which returns a `DatasetDelta` that offers both metadata diff through `list_transactions` and data diff 
+* The Python and Rust `dataset::diff_meta` API has been removed in favor of `dataset::delta`,
+which returns a `DatasetDelta` that offers both metadata diff through `list_transactions` and data diff
 through `get_inserted_rows` and `get_updated_rows`.
 
 * Some other minor utilities which had previously been public are now private.  It is unlikely anyone was utilizing'
 these.  Please open an issue if you were relying on any of these.
 
-* The `lance-namespace` Rust crate now splits into `lance-namespace` that contains the main `LanceNamespace` trait 
-and data models, and `lance-namespace-impls` that has different implementations of the namespace. 
+* The `lance-namespace` Rust crate now splits into `lance-namespace` that contains the main `LanceNamespace` trait
+and data models, and `lance-namespace-impls` that has different implementations of the namespace.
 The `DirectoryNamespace` and `RestNamespace` interfaces have been refactored to be more user friendly.
 The `DirectoryNamespace` also now uses Lance ObjectStore for IO instead of directly depending on Apache OpenDAL.
 
@@ -2325,7 +2553,6 @@ storage option:
 
 ```python
 import lance
-
 ds = lance.dataset("s3://path", storage_options={"timeout": "60s"})
 ```
 
@@ -2336,16 +2563,37 @@ These options apply to all object stores.
 | Key                          | Description                                                                                                                                                                                                                                                                                             |
 |------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `allow_http`                 | Allow non-TLS, i.e. non-HTTPS connections. Default, `False`.                                                                                                                                                                                                                                            |
-| `download_retry_count`       | Number of times to retry a download. Default, `3`. This limit is applied when the HTTP request succeeds but the response is not fully downloaded, typically due to a violation of `request_timeout`.                                                                                                    |
+| `block_size`                 | Gap in bytes below which two reads of one file are merged into a single request. Default, `4096` for local files and `65536` for object stores. Larger values cut the request count of scattered reads (for example a `take` of rows spread across a file) at the cost of reading the bytes in between.                                                                                                     |
+| `download_retry_count`       | Number of times to retry a download. Default, `3`. This limit is applied when the HTTP request succeeds but the response is not fully downloaded, typically due to a violation of `timeout`.                                                                                                            |
 | `allow_invalid_certificates` | Skip certificate validation on https connections. Default, `False`. Warning: This is insecure and should only be used for testing.                                                                                                                                                                      |
 | `connect_timeout`            | Timeout for only the connect phase of a Client. Default, `5s`.                                                                                                                                                                                                                                          |
-| `request_timeout`            | Timeout for the entire request, from connection until the response body has finished. Default, `30s`.                                                                                                                                                                                                   |
+| `timeout`                    | Timeout for the entire request, from connection until the response body has finished. Default, `30s`. This applies to each individual request, so on a large write it must cover one complete multipart part upload; raise it alongside `LANCE_INITIAL_UPLOAD_SIZE`.                                    |
 | `user_agent`                 | User agent string to use in requests.                                                                                                                                                                                                                                                                   |
 | `proxy_url`                  | URL of a proxy server to use for requests. Default, `None`.                                                                                                                                                                                                                                             |
 | `proxy_ca_certificate`       | PEM-formatted CA certificate for proxy connections                                                                                                                                                                                                                                                      |
 | `proxy_excludes`             | List of hosts that bypass proxy. This is a comma separated list of domains and IP masks. Any subdomain of the provided domain will be bypassed. For example, `example.com, 192.168.1.0/24` would bypass `https://api.example.com`, `https://www.example.com`, and any IP in the range `192.168.1.0/24`. |
 | `client_max_retries`         | Number of times for the object store client to retry the request. Default, `3`.                                                                                                                                                                                                                         |
 | `client_retry_timeout`       | Timeout for the object store client to retry the request in seconds. Default, `180`.                                                                                                                                                                                                                    |
+
+### Bulk copy strategy
+
+Lance streams bulk index-file movement and dataset deep-clone files through
+read and write APIs by default. This avoids requiring a provider-native copy
+operation and works across different object stores.
+
+Set `LANCE_IO_SERVER_SIDE_COPY_ENABLED` to a truthy value (`1`, `true`, `on`,
+`yes`, or `y`, case-insensitive) to opt cloud copies whose source and destination
+share the same object-store client into the provider-native server-side copy
+operation. Cross-client, cross-store, and local copies do not use this setting.
+Native copy can reduce client bandwidth and transfer cost, but it requires copy
+support from the object-store integration and is subject to the provider
+request's timeout and retry behavior.
+
+Deep clone bounds non-local file movement to four concurrent files by default.
+Set `LANCE_DEEP_CLONE_STREAM_CONCURRENCY` to a positive integer to override this
+operation-specific limit. The bound also applies when server-side copy is
+enabled because S3 and GCS copies above the provider's single-copy size limit
+fall back to streaming through Lance.
 
 ## Per-Base Configuration
 
@@ -2357,7 +2605,6 @@ override them for that base only.
 
 ```python
 import lance
-
 ds = lance.dataset(
     "az://account-a/path",
     storage_options={
@@ -2372,10 +2619,14 @@ ds = lance.dataset(
 ```
 
 Base ids are assigned when bases are registered (`initial_bases` ids are assigned
-sequentially starting at 1, in order) and can be inspected through the manifest base
-paths. Keys that do not match `base_<id>.<key>` exactly (e.g. `base_url`) are treated
-as regular storage options. Exact per-base parameter maps (`base_store_params`,
-keyed by base path URI) take precedence over base-scoped keys for that base.
+sequentially starting at 1, in order) and can be inspected with
+`ds.base_paths()`. The returned dictionary maps each base id to its registered
+`DatasetBasePath`; its iteration order is unspecified, and it does not include the
+primary storage unless that path was explicitly registered as a base.
+
+Keys that do not match `base_<id>.<key>` exactly (e.g. `base_url`) are treated as
+regular storage options. Exact per-base parameter maps (`base_store_params`, keyed
+by base path URI) take precedence over base-scoped keys for that base.
 
 ## S3 Configuration
 
@@ -2388,14 +2639,13 @@ passed as parameters to the `storage_options` parameter:
 
 ```python
 import lance
-
 ds = lance.dataset(
     "s3://bucket/path",
     storage_options={
         "access_key_id": "my-access-key",
         "secret_access_key": "my-secret-key",
         "session_token": "my-session-token",
-    },
+    }
 )
 ```
 
@@ -2418,6 +2668,38 @@ The following keys can be used as both environment variables or keys in the
 | `aws_sse_kms_key_id`                                                | The KMS key ID to use for server-side encryption. If set, `aws_server_side_encryption` must be `"aws:kms"` or `"aws:kms:dsse"`.                  |
 | `aws_sse_bucket_key_enabled`                                        | Whether to use bucket keys for server-side encryption.                                                                                           |
 
+### Credential provider selection
+
+By default, Lance uses the standard AWS credential provider chain (environment
+variables, shared config file, web identity tokens, ECS, EC2 instance metadata).
+
+The `aws_provider_scheme` storage option pins a dataset to a specific credential
+provider, which is useful when two datasets in the same process need different
+AWS auth (for example, one bucket using IRSA and another using ECS container
+credentials).
+
+| Value | Behavior |
+|-------|----------|
+| `token` | Use static access-key credentials. Returns an error if `aws_access_key_id` and `aws_secret_access_key` are not set. |
+| `ecs` | Use the ECS/Pod Identity container credential endpoint. Reads `AWS_CONTAINER_CREDENTIALS_FULL_URI` or `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI` from the environment. |
+| `irsa` | Use IRSA (IAM Roles for Service Accounts) web identity token credentials. Reads `AWS_WEB_IDENTITY_TOKEN_FILE` and `AWS_ROLE_ARN` from the environment. |
+
+```python
+import lance
+
+# Bucket A — use IRSA (web identity token from the environment)
+ds_a = lance.dataset(
+    "s3://bucket-a/path",
+    storage_options={"aws_provider_scheme": "irsa"},
+)
+
+# Bucket B — use ECS container credentials
+ds_b = lance.dataset(
+    "s3://bucket-b/path",
+    storage_options={"aws_provider_scheme": "ecs"},
+)
+```
+
 ### S3-compatible stores
 
 Lance can also connect to S3-compatible stores, such as MinIO. To do so, you must
@@ -2425,13 +2707,12 @@ specify both region and endpoint:
 
 ```python
 import lance
-
 ds = lance.dataset(
     "s3://bucket/path",
     storage_options={
         "region": "us-east-1",
         "endpoint": "http://minio:9000",
-    },
+    }
 )
 ```
 
@@ -2451,13 +2732,12 @@ you can configure express bucket access explicitly through storage option `s3_ex
 
 ```python
 import lance
-
 ds = lance.dataset(
     "s3://my-bucket--use1-az4--x-s3/path/imagenet.lance",
     storage_options={
         "region": "us-east-1",
         "s3_express": "true",
-    },
+    }
 )
 ```
 
@@ -2469,12 +2749,11 @@ Alternatively, you can pass the path to the JSON file in the `storage_options`
 
 ```python
 import lance
-
 ds = lance.dataset(
     "gs://my-bucket/my-dataset",
     storage_options={
         "service_account": "path/to/service-account.json",
-    },
+    }
 )
 ```
 
@@ -2501,13 +2780,12 @@ the account name and key in the `storage_options` parameter:
 
 ```python
 import lance
-
 ds = lance.dataset(
     "az://my-container/my-dataset",
     storage_options={
         "account_name": "some-account",
         "account_key": "some-key",
-    },
+    }
 )
 ```
 
@@ -2530,7 +2808,7 @@ These keys can be used as both environment variables or keys in the `storage_opt
 | `azure_msi_resource_id` / `msi_resource_id` | Msi resource id for use with managed identity authentication. |
 | `azure_federated_token_file` / `federated_token_file` | File containing token for Azure AD workload identity federation. |
 | `azure_use_azure_cli` / `use_azure_cli` | Use azure cli for acquiring access token. |
-| `azure_disable_tagging` / `disable_tagging` | Disables tagging objects. This can be desirable if not supported by the backing store. | 
+| `azure_disable_tagging` / `disable_tagging` | Disables tagging objects. This can be desirable if not supported by the backing store. |
 
 ## AliCloud Object Storage Service Configuration
 
@@ -2540,7 +2818,6 @@ passed as parameters to the `storage_options` parameter:
 
 ```python
 import lance
-
 ds = lance.dataset(
     "oss://bucket/path",
     storage_options={
@@ -2549,7 +2826,7 @@ ds = lance.dataset(
         "oss_access_key_id": "my-access-key",
         "oss_secret_access_key": "my-secret-key",
         "oss_security_token": "my-session-token",
-    },
+    }
 )
 ```
 
@@ -2571,7 +2848,6 @@ parameter; explicit `storage_options` override environment variables:
 
 ```python
 import lance
-
 ds = lance.dataset(
     "tos://bucket/path",
     storage_options={
@@ -2580,7 +2856,7 @@ ds = lance.dataset(
         "tos_access_key_id": "my-access-key",
         "tos_secret_access_key": "my-secret-key",
         "tos_security_token": "my-session-token",
-    },
+    }
 )
 ```
 
@@ -2604,14 +2880,13 @@ parameter; explicit `storage_options` override environment variables:
 
     ```python
     import lance
-
     ds = lance.dataset(
         "cos://bucket/path",
         storage_options={
             "cos_endpoint": "https://cos.ap-guangzhou.myqcloud.com",
             "cos_secret_id": "my-secret-id",
             "cos_secret_key": "my-secret-key",
-        },
+        }
     )
     ```
 
@@ -2641,19 +2916,90 @@ parameter; explicit `storage_options` override environment variables:
 | `cos_secret_key` | Secret key used for COS authentication. Optional if credentials are provided by environment. |
 | `cos_enable_versioning` | Whether to enable object versioning on the bucket. Optional. |
 
+!!! warning
+
+    Tencent COS does not reliably enforce put-if-not-exists on buckets that have
+    ever had versioning enabled, even if versioning is now suspended. To prevent
+    silent manifest overwrites, Lance requires a custom distributed commit lock
+    for COS writes. Pass the same `commit_lock` implementation to every Python
+    writer, or provide a custom `CommitHandler` in Rust. Reads do not require a
+    commit lock.
+
 !!! note
 
     The OpenDAL `CosConfig` currently exposes a limited set of options. Additional
     settings such as the security token (`TENCENTCLOUD_SECURITY_TOKEN`) and region
     (`TENCENTCLOUD_REGION`) must be configured via environment variables.
 
+## Hugging Face Configuration
+
+Use `hf://datasets/<owner>/<repo>/<path>` to read a Lance dataset hosted on
+Hugging Face. Pass these options through `storage_options`:
+
+| Key | Description |
+| --- | --- |
+| `hf_token` | Hugging Face access token. Falls back to `HF_TOKEN` or `HUGGINGFACE_TOKEN` when omitted. |
+| `hf_revision` | Repository revision, such as a commit ID, branch, or tag. Defaults to `main`. |
+| `hf_download_mode` | `http` (default) or `xet`. |
+| `hf_enable_resolve_cache` | `"true"` reuses resolved HTTP download URLs and XET file metadata across readers. Defaults to `"false"`. |
+
+These options also accept names without the `hf_` prefix. The prefixed name
+takes precedence when both are supplied. `hf_enable_resolve_cache` accepts only
+the strings `"true"` and `"false"`.
+
+Enable the resolve cache only when existing files will not change. Updates,
+including changes behind a moving branch or tag, may remain invisible while
+cached results are reused. HTTP download URLs refresh near expiry, and issued
+URLs may remain usable until expiry after Hub permissions change. The cache
+reduces Hub resolution requests; it does not cache file contents.
+
+```python
+import lance
+
+ds = lance.dataset(
+    "hf://datasets/owner/repo/data.lance",
+    storage_options={"hf_enable_resolve_cache": "true"},
+)
+```
+
 ## GooseFS Configuration
 
 [GooseFS](https://cloud.tencent.com/product/goosefs) is a distributed caching
-filesystem. Lance accesses GooseFS through its Master gRPC service. The URL format
-is `goosefs://host:port/path`, where `host:port` is the GooseFS Master address
-(default port: `9200`, may be omitted, e.g. `goosefs://10.0.0.1/path`) and
+filesystem. Lance accesses GooseFS through its Master gRPC service. The URL
+format is either:
+
+- `goosefs://host:port/path`, where `host:port` is the GooseFS Master address
+  (default port: `9200`, may be omitted, e.g. `goosefs://10.0.0.1/path`)
+- `goosefs:///path`, with an empty authority, when the master address comes
+  from `goosefs_master_addr`, `GOOSEFS_MASTER_ADDR`, or
+  `goosefs-site.properties`
+
 `/path` is the filesystem path within GooseFS.
+
+Manifest commits on `goosefs://` use `ConditionalPutCommitHandler`
+(`PutMode::Create` / if-not-exists), backed by GooseFS master's atomic
+no-replace rename so concurrent writers cannot clobber each other's
+versioned manifests.
+
+!!! warning "Mixed-version writers are NOT safe"
+
+    The `if-not-exists` guarantee only holds when **every** writer for a
+    dataset routes through this new handler. A writer running an older
+    Lance release still selects `UnsafeCommitHandler` for `goosefs://`
+    and writes the version path unconditionally, which can overwrite a
+    manifest that an upgraded writer has already won. Safe concurrent
+    commits therefore require:
+
+    - all writers for the dataset run a Lance release that includes this
+      routing change, **or**
+    - writers share an external coordination boundary (e.g. a single-writer
+      queue, table-level lock, or a gateway that serializes commits) that
+      prevents the old code path from racing the new one.
+
+    When upgrading in place, quiesce all writers (drain jobs, scale
+    clients to zero, or route traffic through a writer coordinator) before
+    rolling out the new Lance version, then bring writers back on the new
+    version together.
 
 !!! note "About the dataset path"
 
@@ -2767,23 +3113,39 @@ is `goosefs://host:port/path`, where `host:port` is the GooseFS Master address
     For writes, the same `storageOptions(...)` setter is available on
     `WriteDatasetBuilder` and `WriteFragmentBuilder`.
 
-The Master address can be resolved from (in priority order):
+The Master address is resolved at OpenDAL build time (highest priority first):
 
-1. The `goosefs_master_addr` storage option (supports HA: `"addr1:port,addr2:port"`).
-2. The `GOOSEFS_MASTER_ADDR` environment variable.
-3. The host and port from the URL authority.
+1. The `GOOSEFS_MASTER_ADDR` environment variable.
+2. `goosefs.master.rpc.addresses` or `goosefs.master.hostname` in
+   `goosefs-site.properties` (discovered via `$GOOSEFS_CONFIG_FILE`,
+   `$GOOSEFS_CONF_DIR`, `$GOOSEFS_HOME/conf`, `~/.goosefs`, and
+   `/etc/goosefs`). This is the same file the GooseFS SDK already loads;
+   a Hadoop-style `goosefs:///path` URL relies on it.
+3. The `goosefs_master_addr` storage option (supports HA:
+   `"addr1:port,addr2:port"`).
+4. The host and port from the URL authority.
 
-The following keys can be used as both environment variables or keys in the
-`storage_options` parameter:
+Lance forwards `goosefs_master_addr` and the URL authority as OpenDAL's
+`master_addr`. It does **not** require a host in the URL, so
+`goosefs:///path` can rely on `goosefs-site.properties`. OpenDAL fails the
+store build only when none of the sources above supply an address.
 
-| Key | Description |
-|-----|-------------|
-| `goosefs_master_addr` / `GOOSEFS_MASTER_ADDR` | GooseFS Master address. Supports a single address (`host:port`) or comma-separated HA addresses (`addr1:port,addr2:port`). Optional if the address is provided in the URL. |
-| `goosefs_write_type` / `GOOSEFS_WRITE_TYPE` | Write type, e.g. `MUST_CACHE`, `CACHE_THROUGH`, `THROUGH`, `ASYNC_THROUGH`. Optional. |
-| `goosefs_block_size` / `GOOSEFS_BLOCK_SIZE` | GooseFS block size in bytes (this is the GooseFS-side block size, not Lance's I/O block size). Optional. |
-| `goosefs_chunk_size` / `GOOSEFS_CHUNK_SIZE` | Chunk size in bytes used when reading or writing files. Optional. |
-| `goosefs_auth_type` / `GOOSEFS_AUTH_TYPE` | Authentication type. Either `nosasl` or `simple` (case-insensitive; the value is passed through to OpenDAL). Optional. |
-| `goosefs_auth_username` / `GOOSEFS_AUTH_USERNAME` | Username used in `simple` authentication mode. Optional. |
+A site file that declares masters outranks the URL authority because the file
+can carry a full HA master list, which a single URI host cannot express.
+
+`storage_options` keys **must be lowercase**. Uppercase or mixed-case spellings
+such as `GOOSEFS_MASTER_ADDR` are rejected with an explicit error — they are
+not ignored, and they are not treated as the matching environment variable.
+Environment variables keep the `GOOSEFS_*` form.
+
+| storage_options key | env var | Description |
+|---------------------|---------|-------------|
+| `goosefs_master_addr` | `GOOSEFS_MASTER_ADDR` | GooseFS Master address. Supports a single address (`host:port`) or comma-separated HA addresses (`addr1:port,addr2:port`). Optional if the address is provided in the URL, `GOOSEFS_MASTER_ADDR`, or `goosefs-site.properties`. |
+| `goosefs_write_type` | `GOOSEFS_WRITE_TYPE` | Write type, e.g. `MUST_CACHE`, `CACHE_THROUGH`, `THROUGH`, `ASYNC_THROUGH`. Optional. |
+| `goosefs_block_size` | `GOOSEFS_BLOCK_SIZE` | GooseFS block size (this is the GooseFS-side block size, not Lance's I/O block size). Accepts a raw byte count or GooseFS suffixes such as `64MB` (binary units: `1KB = 1024`). Optional. |
+| `goosefs_chunk_size` | `GOOSEFS_CHUNK_SIZE` | Chunk size used when reading or writing files. Accepts a raw byte count or GooseFS suffixes such as `4MB` (binary units: `1KB = 1024`). Optional. |
+| `goosefs_auth_type` | `GOOSEFS_AUTH_TYPE` | Authentication type. Either `nosasl` or `simple` (case-insensitive; the value is passed through to OpenDAL). Optional. |
+| `goosefs_auth_username` | `GOOSEFS_AUTH_USERNAME` | Username used in `simple` authentication mode. Optional. |
 
 !!! note "Running the GooseFS integration tests"
 
@@ -2806,8 +3168,8 @@ FILE: docs/src/guide/observability.md
 
 Lance can publish operational metrics to your monitoring stack. The table below
 is the authoritative catalogue of the metrics Lance emits, shared verbatim with
-the Rust [`lance::metrics`](https://docs.rs/lance/latest/lance/metrics/) module
-documentation.
+the Rust [`lance::metrics`](https://github.com/lance-format/lance/blob/main/rust/lance/src/metrics.md)
+module documentation.
 
 --8<-- "rust/lance/src/metrics.md"
 
@@ -2815,8 +3177,8 @@ documentation.
 
 Lance emits through the [`metrics`](https://docs.rs/metrics) crate facade, so it
 is not tied to a specific backend — you install a recorder/exporter and route
-the metrics wherever you like. Metrics are available from **both** the Rust and
-Python APIs.
+the metrics wherever you like. Metrics are available from the Rust, Python, and
+Java APIs.
 
 ### Rust
 
@@ -2860,6 +3222,37 @@ from lance.otel import instrument_lance_metrics
 # Uses the global MeterProvider; pass meter_provider=... to target a specific one.
 instrument_lance_metrics()
 ```
+
+### Java
+
+The Java SDK includes an OpenTelemetry bridge in `org.lance.otel`. Register it
+before opening datasets or performing Lance IO so the process-global Rust
+recorder sees every emitted metric:
+
+```java
+import org.lance.otel.LanceMetrics;
+
+LanceMetrics.instrument();
+```
+
+The OpenTelemetry API is a dependency of the Java SDK. The application must
+still configure an OpenTelemetry SDK, metric reader, and exporter for collection
+and delivery.
+
+The no-argument method uses OpenTelemetry's global `MeterProvider`. To register
+with an explicitly configured provider, pass it directly:
+
+```java
+SdkMeterProvider provider = SdkMeterProvider.builder()
+    .registerMetricReader(metricReader)
+    .build();
+LanceMetrics.instrument(provider);
+```
+
+Repeated calls with the same provider are idempotent. Passing a different
+provider unregisters the existing callback before registering the new one. Call
+`LanceMetrics.close()` to stop exporting while retaining the process-global Rust
+metric state.
 
 From there the metrics flow through whatever OpenTelemetry pipeline you have
 configured (OTLP, Prometheus, console, …). Because OpenTelemetry has no
@@ -3019,7 +3412,7 @@ Keys are often a composite of multiple fields and all keys are scoped to the dat
 | Deletion Files    | Dataset URI, fragment_id, version, id, file_type | The deletion vector for a frag      |
 | Row Id Mask       | Dataset URI, version                             | The row id sequence for the dataset |
 | Row Id Index      | Dataset URI, version                             | The row id index for the dataset    |
-| Row Id Sequence   | Dataset URI, fragment_id                         | The row id sequence for a fragment  |
+| Row Id Sequence   | Dataset URI, fragment_id, row_id_meta            | The row id sequence for a fragment  |
 | Index Metadata    | Dataset URI, version                             | The index metadata for the dataset  |
 | Index Details¹    | Dataset URI, index uuid                          | The index details for an index      |
 | File Global Meta  | Dataset URI, file path                           | The global metadata for a file      |
@@ -3066,6 +3459,41 @@ large data you may need to turn down the `batch_size` to keep memory usage under
 working with 1024-dimensional vector embeddings (e.g. 32-bit floats) then 8192 rows would be 32MB of data. If you
 spread that across 16 CPU threads then you would need 512MB of compute memory per scan. You might find working
 with 1024 rows per batch is more appropriate.
+
+#### Tuning remote scans
+
+An ordered dataset scan still overlaps I/O from multiple fragments. `scan_in_order=True` controls the order in
+which batches are returned; it does not make fragment reads sequential. This is why a dataset scan can issue
+more concurrent requests than scanning one fragment directly. The following controls tune different parts of
+the scan:
+
+* `fragment_readahead` limits how many fragments may have reads scheduled concurrently. Set it to `1` to match
+  the fragment-level I/O pattern, then increase it if the storage connection has spare bandwidth.
+* `LANCE_IO_THREADS` limits concurrent storage requests for the process. Cloud stores default to 64, which is
+  intended for high-bandwidth, in-region access and can be too aggressive across regions or over the public
+  internet.
+* `io_buffer_size` limits buffered I/O bytes and applies backpressure when decoding falls behind.
+* `batch_readahead` limits concurrent batch decoding. It does not control the size of storage range requests.
+
+For a bandwidth-constrained remote connection, start with conservative settings and tune upward:
+
+```shell
+LANCE_IO_THREADS=8 python scan.py
+```
+
+```python
+scanner = dataset.scanner(
+    fragment_readahead=1,
+    batch_readahead=2,
+    io_buffer_size=64 * 1024 * 1024,
+)
+for batch in scanner.to_batches():
+    process(batch)
+```
+
+Lance reads encoded pages from storage, so reducing `batch_size` changes the returned and decoded batch sizes
+but may not reduce the initial range request. The first batch can require loading one encoded page for each
+selected column.
 
 In summary, scans could use up to `(2 * io_buffer_size) + (batch_size * num_compute_threads)` bytes of memory.
 Keep in mind that `io_buffer_size` is a soft limit (e.g. we cannot read less than one page at a time right now)
@@ -3165,6 +3593,14 @@ To enable the FRI, set `defer_index_remap=True` when compacting:
 ```python
 dataset.optimize.compact_files(defer_index_remap=True)
 ```
+
+Rust callers can open the FRI for the dataset version they have loaded with
+`Dataset::frag_reuse_index()`, which returns `None` when that version has no FRI. The returned
+index exposes the raw remap: a physical row address is either unmapped, deleted by a recorded
+compaction, or mapped to the last address reached through the retained mappings. Neither outcome
+is validated against the loaded manifest. Unmapped addresses may still have moved in a compaction
+whose history was trimmed, and mapped destinations may since have been removed, so callers that
+need a complete translation must verify coverage and destinations themselves.
 
 For details on the index format and usage patterns, see the
 [Fragment Reuse Index specification](../format/index/system/frag_reuse.md).
@@ -3323,14 +3759,55 @@ exact size depends on the quantizer:
 100M * (768 + 8) = ~72.3 GiB
 ```
 
-**RQ (RaBitQ):** Vectors are currently quantized to 1-bit binary codes. Each row also stores per-row
-scale and offset factors (4 bytes each) used for distance correction. Each row requires
-`dimension / 8 + 16` bytes (8 bytes for the row ID plus 8 bytes for the factors). For example, 100M
-rows with 768 dimensions and 1 bit per dimension:
+**RQ (RaBitQ):** New indexes default to 5 bits per dimension. Every bit width stores a 1-bit sign
+code plus three 4-byte correction factors. Multi-bit indexes also store the remaining bits in
+64-dimension-padded blocks and two additional 4-byte correction factors. Including the 8-byte row
+ID, the approximate size per row is:
+
+- 1-bit: `dimension / 8 + 20` bytes
+- Multi-bit: `dimension / 8 + round_up(dimension, 64) * (num_bits - 1) / 8 + 28` bytes
+
+For example, the default 5-bit index for 100M rows with 768 dimensions requires:
 
 ```
-100M * (768 / 8 + 16) = ~10.8 GiB
+100M * (768 / 8 + 768 * 4 / 8 + 28) = ~47.3 GiB
 ```
+
+The 5-bit default retains more information for the higher-fidelity distance estimates used by
+`Normal` and `Accurate` search modes, at the cost of more quantization work and index I/O during
+the build and a larger index. `Fast` search mode uses only the 1-bit sign code even when the index
+stores additional bits. Set `num_bits=1` explicitly to minimize index size and build I/O; the same
+100M-row example uses about 10.8 GiB, but searches cannot use the multi-bit distance estimate and
+may have lower recall.
+
+#### AMX Acceleration
+
+On Linux x86_64 with an AMX-FP16 CPU (Intel Granite Rapids / Xeon 6 and newer), a `float16`
+vector column indexed with `dot` distance uses the AMX tile instructions, provided the build
+machine had clang >= 16 or gcc >= 13 to compile the kernel. There is nothing to enable —
+Lance checks the CPU at run time and falls back to the previous implementation everywhere else.
+
+The accelerated paths are also shape-gated, because below these sizes a tile pass costs more
+than it saves and the kernel declines the work:
+
+| Condition | Why |
+|---|---|
+| `float16` vectors, `dot` distance | The kernel is fp16-specific; other types and metrics keep their existing paths |
+| `dimension >= 32` | One tile pass covers 32 dimensions; a shorter vector would be all scalar cleanup |
+| `num_centroids >= 32` | The GEMM steps its centroid loop by 32 and has no partial-tile path |
+
+Anything outside them behaves exactly as it does today, so a small dataset or a low-dimensional
+column simply keeps the previous implementation rather than changing behaviour.
+
+Index build also changes algorithm where all of the above hold: comparing every vector against
+every centroid becomes affordable, so partition assignment is exact instead of approximated with
+a graph search over the centroids. Recall improves, and partition assignments differ from what an
+older build produced.
+
+Set `LANCE_DISABLE_AMX=1` to take the AMX paths out of service without rebuilding — for
+A/B measurement, or to get the previous behaviour back. Because it also moves partition
+assignment back to the approximate path, an index built with it set is not equivalent to one
+built without it; compare recall, not just build time.
 
 
 ================================================
@@ -3347,7 +3824,8 @@ Begin by writing a `pyarrow.Table` using the `lance.write_dataset` function.
 import lance
 import pyarrow as pa
 
-table = pa.Table.from_pylist([{"name": "Alice", "age": 20}, {"name": "Bob", "age": 30}])
+table = pa.Table.from_pylist([{"name": "Alice", "age": 20},
+                              {"name": "Bob", "age": 30}])
 ds = lance.write_dataset(table, "./alice_and_bob.lance")
 ```
 
@@ -3358,26 +3836,84 @@ You will need to provide a `pyarrow.Schema` for the dataset in this case.
 ```python
 from typing import Iterator
 
-
 def producer() -> Iterator[pa.RecordBatch]:
     """An iterator of RecordBatches."""
     yield pa.RecordBatch.from_pylist([{"name": "Alice", "age": 20}])
     yield pa.RecordBatch.from_pylist([{"name": "Bob", "age": 30}])
 
+schema = pa.schema([
+    ("name", pa.string()),
+    ("age", pa.int32()),
+])
 
-schema = pa.schema(
-    [
-        ("name", pa.string()),
-        ("age", pa.int32()),
-    ]
-)
-
-ds = lance.write_dataset(producer(), "./alice_and_bob.lance", schema=schema, mode="overwrite")
+ds = lance.write_dataset(producer(),
+                         "./alice_and_bob.lance",
+                         schema=schema, mode="overwrite")
 print(ds.count_rows())  # Output: 2
 ```
 
 `lance.write_dataset` supports writing `pyarrow.Table`, `pandas.DataFrame`,
 `pyarrow.dataset.Dataset`, and `Iterator[pyarrow.RecordBatch]`.
+
+## Choosing a data file version
+
+`data_storage_version` selects the format of newly written data files. For an
+existing V2 dataset, an operation can select `"2.0"`, `"2.1"`, `"2.2"`, or `"2.3"`
+without rewriting the other files. The dataset's `data_storage_version` property
+is the default for writes that omit a target, not a summary of its existing
+files. Create and overwrite establish this default; append, update, merge-insert,
+and compaction do not change it. V1 and V2 cannot be mixed.
+
+```python
+import lance
+import pyarrow as pa
+
+data = pa.table({"id": [1, 2], "value": [10, 20]})
+ds = lance.write_dataset(data, "./versions.lance", data_storage_version="2.1")
+ds.update({"value": "value + 1"}, data_storage_version="2.2")
+assert ds.data_storage_version == "2.1"
+
+ds.merge_insert("id").when_not_matched_insert_all().data_storage_version("2.2").execute(
+    pa.table({"id": [3], "value": [30]})
+)
+ds.optimize.compact_files(data_storage_version="2.2")
+```
+
+The `"stable"` and `"next"` selectors resolve according to the engine release.
+Use exact versions when the output identity must be independent of that release.
+V2.3 is currently unstable: files written by one unstable revision may not be
+readable by a later revision. Use it only for experimentation.
+Compaction plans fix the target before distributing tasks, including when the
+target comes from the dataset default. The target survives Python pickle and
+Java serialization; workers do not reinterpret it using their own release defaults.
+
+Java update, merge-insert, and compaction options use
+`withDataStorageVersion(DataStorageVersion.V2_2)`. The shared `DataStorageVersion`
+enum also provides `STABLE` and `NEXT` selectors.
+
+Compaction can convert selected fragments to another supported V2 version.
+Binary copy requires every selected file to match the output version, as well
+as the usual eligibility checks. In particular, overlays need reencoding to
+preserve updated values. `try_binary_copy` falls back to reencoding when inputs
+are ineligible; `force_binary_copy` rejects them. A version mismatch error includes
+the target version, actual version, and file path. A persistent compaction target
+can be set through `lance.compaction.data_storage_version` in the table config;
+an explicit operation target takes precedence.
+
+### Upgrading clients before mixed-version writes
+
+Before writing files that differ from the dataset default, upgrade every reader
+and writer to a mixed-version-aware release. Drain, restart, or fence writers
+that opened the dataset using an older release. The commit automatically sets
+the paired mixed-version reader/writer feature flags when needed; there is no
+separate activation API. These flags remain set even if compaction later makes
+the files homogeneous again.
+
+Older clients that do not recognize the flags reject the resulting snapshots.
+The flags cannot retroactively fence an older writer that already read a prior
+manifest. Historical homogeneous datasets remain readable by clients that
+support their file versions; see [table versioning](../format/table/versioning.md)
+for the feature flag contract.
 
 ## Adding Rows
 
@@ -3388,7 +3924,8 @@ or `lance.write_dataset` with `mode=append`.
 import lance
 import pyarrow as pa
 
-table = pa.Table.from_pylist([{"name": "Alice", "age": 20}, {"name": "Bob", "age": 30}])
+table = pa.Table.from_pylist([{"name": "Alice", "age": 20},
+                              {"name": "Bob", "age": 30}])
 ds = lance.write_dataset(table, "./insert_example.lance")
 
 new_table = pa.Table.from_pylist([{"name": "Carla", "age": 37}])
@@ -3466,14 +4003,15 @@ more efficient to use the merge insert operation described below.
 import lance
 
 # Change the ages of both Alice and Bob
-new_table = pa.Table.from_pylist([{"name": "Alice", "age": 30}, {"name": "Bob", "age": 20}])
+new_table = pa.Table.from_pylist([{"name": "Alice", "age": 30},
+                                  {"name": "Bob", "age": 20}])
 
 # This works, but is inefficient, see below for a better approach
 dataset = lance.dataset("./alice_and_bob.lance")
 for idx in range(new_table.num_rows):
-    name = new_table[0][idx].as_py()
-    new_age = new_table[1][idx].as_py()
-    dataset.update({"age": new_age}, where=f"name='{name}'")
+  name = new_table[0][idx].as_py()
+  new_age = new_table[1][idx].as_py()
+  dataset.update({"age": new_age}, where=f"name='{name}'")
 ```
 
 ## Merge Insert
@@ -3498,11 +4036,14 @@ print(dataset.to_table().to_pandas())
 # 1    Bob   30
 
 # Change the ages of both Alice and Bob
-new_table = pa.Table.from_pylist([{"name": "Alice", "age": 2}, {"name": "Bob", "age": 3}])
+new_table = pa.Table.from_pylist([{"name": "Alice", "age": 2},
+                                  {"name": "Bob", "age": 3}])
 # This will use `name` as the key for matching rows.  Merge insert
 # uses a JOIN internally and so you typically want this column to
 # be a unique key or id of some kind.
-rst = dataset.merge_insert("name").when_matched_update_all().execute(new_table)
+rst = dataset.merge_insert("name") \
+       .when_matched_update_all() \
+       .execute(new_table)
 print(dataset.to_table().to_pandas())
 #     name  age
 # 0  Alice    2
@@ -3524,12 +4065,15 @@ this:
 
 ```python
 # Bob is already in the table, but Carla is new
-new_table = pa.Table.from_pylist([{"name": "Bob", "age": 30}, {"name": "Carla", "age": 37}])
+new_table = pa.Table.from_pylist([{"name": "Bob", "age": 30},
+                                  {"name": "Carla", "age": 37}])
 
 dataset = lance.dataset("./alice_and_bob.lance")
 
 # This will insert Carla but leave Bob unchanged
-_ = dataset.merge_insert("name").when_not_matched_insert_all().execute(new_table)
+_ = dataset.merge_insert("name") \
+       .when_not_matched_insert_all() \
+       .execute(new_table)
 # Verify that Carla was added but Bob remains unchanged
 print(dataset.to_table().to_pandas())
 #     name  age
@@ -3550,12 +4094,16 @@ import lance
 import pyarrow as pa
 
 # Change Carla's age and insert David
-new_table = pa.Table.from_pylist([{"name": "Carla", "age": 27}, {"name": "David", "age": 42}])
+new_table = pa.Table.from_pylist([{"name": "Carla", "age": 27},
+                                  {"name": "David", "age": 42}])
 
 dataset = lance.dataset("./alice_and_bob.lance")
 
 # This will update Carla and insert David
-_ = dataset.merge_insert("name").when_matched_update_all().when_not_matched_insert_all().execute(new_table)
+_ = dataset.merge_insert("name") \
+       .when_matched_update_all() \
+       .when_not_matched_insert_all() \
+       .execute(new_table)
 # Verify the results
 print(dataset.to_table().to_pandas())
 #     name  age
@@ -3576,7 +4124,8 @@ example:
 import lance
 import pyarrow as pa
 
-new_table = pa.Table.from_pylist([{"name": "Edgar", "age": 46}, {"name": "Francene", "age": 44}])
+new_table = pa.Table.from_pylist([{"name": "Edgar", "age": 46},
+                                  {"name": "Francene", "age": 44}])
 
 dataset = lance.dataset("./alice_and_bob.lance")
 print(dataset.to_table().to_pandas())
@@ -3587,7 +4136,10 @@ print(dataset.to_table().to_pandas())
 # 3    Donna   50
 
 # This will remove anyone above 40 and insert our new data
-_ = dataset.merge_insert("name").when_not_matched_insert_all().when_not_matched_by_source_delete("age >= 40").execute(new_table)
+_ = dataset.merge_insert("name") \
+       .when_not_matched_insert_all() \
+       .when_not_matched_by_source_delete("age >= 40") \
+       .execute(new_table)
 # Verify the results - people over 40 replaced with new data
 print(dataset.to_table().to_pandas())
 #        name  age
@@ -3603,7 +4155,6 @@ To open a Lance dataset, use the `lance.dataset` function:
 
 ```python
 import lance
-
 ds = lance.dataset("s3://bucket/path/imagenet.lance")
 # Or local path
 ds = lance.dataset("./imagenet.lance")
@@ -3625,7 +4176,11 @@ Due to Lance being a high-performance columnar format, it enables efficient read
 **Column (projection)** push-down and **filter (predicates)** push-downs.
 
 ```python
-table = ds.to_table(columns=["image", "label"], filter="label = 2 AND text IS NOT NULL", limit=1000, offset=3000)
+table = ds.to_table(
+    columns=["image", "label"],
+    filter="label = 2 AND text IS NOT NULL",
+    limit=1000,
+    offset=3000)
 ```
 
 Lance understands the cost of reading heavy columns such as `image`.
@@ -3873,8 +4428,8 @@ ds = lance.write_dataset(
     table,
     "./my_dataset.lance",
     auto_cleanup_options=AutoCleanupConfig(
-        interval=20,  # run cleanup every 20 commits
-        older_than_seconds=3600,  # remove versions older than 1 hour
+        interval=20,             # run cleanup every 20 commits
+        older_than_seconds=3600, # remove versions older than 1 hour
     ),
 )
 ```
@@ -3900,12 +4455,10 @@ ds.optimize.disable_auto_cleanup()
 Auto cleanup parameters can also be set directly via dataset config keys:
 
 ```python
-ds.update_config(
-    {
-        "lance.auto_cleanup.interval": "20",
-        "lance.auto_cleanup.older_than": "3600s",
-    }
-)
+ds.update_config({
+    "lance.auto_cleanup.interval": "20",
+    "lance.auto_cleanup.older_than": "3600s",
+})
 ```
 
 !!! warning
@@ -3943,10 +4496,12 @@ The `reference` parameter (used in `create`, `update`, and `checkout_version`) a
 - An **integer**: version number in the **current branch** (e.g., `1`)
 - A **string**: tag name (e.g., `"stable"`)
 - A **tuple** `(branch_name, version)`: a specific version in a named branch
-  - `(None, 2)` means version 2 on the main branch
-  - `("main", 2)` means version 2 on the main branch (explicit)
+  - `(None, 2)` means version 2 on the default branch
+  - `("main", 2)` means version 2 on the default branch (explicit)
   - `("experiment", 3)` means version 3 on the experiment branch
   - `("branch-name", None)` means the latest version on that branch
+
+In reference contexts, `"main"` is an alias for the default branch and is equivalent to `None`.
 
 !!! note
 
@@ -3990,7 +4545,7 @@ print(ds.tags.list_ordered())
     process.
 
     To remove a version that has been tagged, you must first `LanceDataset.tags.delete()`
-    the associated tag. 
+    the associated tag.
 
 ## Branches
 
@@ -4005,7 +4560,7 @@ The `reference` parameter works the same as for Tags (see above).
 
     Each branch maintains its own linear version history, so version numbers may overlap across branches. Use `(branch_name, version_number)` tuples as global identifiers for operations like `checkout_version` and `tags.create`.
 
-    "main" is a reserved branch name. Lance uses "main" to identify the default branch.
+    `"main"` is reserved for the default branch. Use `"main"` or `None` when referring to the default branch in reference tuples or checkout APIs, but choose a different name when creating, deleting, or updating branches.
 
 ### Create and checkout branches
 ```python
@@ -4015,7 +4570,7 @@ import pyarrow as pa
 # Open dataset
 ds = lance.dataset("/tmp/test.lance")
 
-# Create branch from latest version (default: current branch's latest)
+# Create branch from the currently checked-out version
 experiment_branch = ds.create_branch("experiment")
 experimental_data = pa.Table.from_pydict({"a": [11], "b": [12]})
 lance.write_dataset(experimental_data, experiment_branch, mode="append")
@@ -4027,6 +4582,8 @@ ds.tags.create("experiment-rc", ("experiment", None))
 experiment_rc = ds.checkout_version("experiment-rc")
 # Checkout the latest version of the experimental branch by tuple
 experiment_latest = ds.checkout_version(("experiment", None))
+# Checkout the latest version of the default branch explicitly
+main_latest = ds.checkout_version(("main", None))
 
 # Create a new branch from a tag
 new_experiment = ds.create_branch("new-experiment", "experiment-rc")
@@ -4070,6 +4627,39 @@ ${system data directory}/lance/language_models
 It also supports configuring user dictionaries,
 which makes it convenient for users to expand their own dictionaries without retraining the language models.
 
+## Inspect Query Tokenization
+
+Use `lance.tokenize` to inspect the tokens that a full-text query will produce
+without creating a dataset or index:
+
+```python
+import lance
+
+tokens = lance.tokenize("the Cats and Dogs")
+[(token.text, token.position) for token in tokens]
+# [("cat", 0), ("dog", 2)]
+```
+
+Positions start at the first retained query token and preserve gaps left by stop
+word removal and other filters. This is the same representation used for phrase
+matching. The function accepts the tokenizer-related options supported by
+`LanceDataset.create_scalar_index`, including custom stop words, n-grams, and the
+code analyzer:
+
+```python
+tokens = lance.tokenize(
+    "getUserName::value42",
+    analyzer="code",
+    split_identifiers=True,
+    index_operators=True,
+)
+```
+
+Options set to `None` use the selected analyzer profile's default. For example,
+the code analyzer disables stemming and stop-word removal unless explicitly
+overridden. The exception is `max_token_length`: omitting it keeps the default
+length limit of 40, while `max_token_length=None` disables the limit.
+
 ## ICU Tokenizer
 
 ICU uses Unicode word boundary rules and bundled dictionary data for complex scripts. It is useful for mixed-language text and does not require downloading a language model.
@@ -4112,7 +4702,7 @@ Create a file named config.json in the root directory of the current model.
 ```
 
 - The "main" field is optional. If not filled, the default is "dict.txt".
-- "users" is the path of the user dictionary. For the format of the user dictionary, please refer to https://github.com/messense/jieba-rs/blob/main/src/data/dict.txt.
+- "users" is the path of the user dictionary. For the format of the user dictionary, please refer to https://github.com/messense/jieba-rs/blob/main/jieba/src/data/dict.txt.
 
 ## Language Models of Lindera
 
@@ -4167,4 +4757,3 @@ nav:
   - Performance Guide: performance.md
   - Tokenizer: tokenizer.md
   - Extension Arrays: arrays.md
-

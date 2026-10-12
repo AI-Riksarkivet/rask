@@ -17,4 +17,4 @@ spelling, while userinfo, a query, a fragment or a bad port make it another stor
 store and stays open, and a re-POST with `"endpoint": ""` returns a record to the estate's store. Lakekeeper
 makes the same call at the same door: it validates a warehouse's storage credential at create
 (`crates/lakekeeper/src/api/management/v1/warehouse/mod.rs:97-110`). Consuming a reference end to end
-(per-base `base_store_params` or `base_<id>.<key>`, `lance_docs/guide.md:2354-2377`) is the work that lifts the refusal.
+(per-base `base_store_params` or `base_<id>.<key>`, `lance_docs/guide.md:2602-2629`) is the work that lifts the refusal.

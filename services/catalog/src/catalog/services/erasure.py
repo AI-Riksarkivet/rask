@@ -102,9 +102,10 @@ and a branch only when its own head still stands on the version's files, since d
 destroys someone's working ref ([[LH-178]]); `held_by_retention` names what the retention window keeps.
 
 **WHAT THIS CANNOT PROMISE, stated because an erasure report that overclaims is worse than none.**
-Reclamation is still bounded by Lance's listing floor: `cleanup_old_versions` clamps its file listing
-to the earliest RETAINED manifest's commit timestamp, so bytes written above that instant are
-invisible to it ([[LH-094]]). This reports what it reclaimed rather than asserting the bytes are gone,
+Reclamation is still bounded by Lance's listing floor: `cleanup_old_versions` clamps its listing of
+`_transactions/` and `_deletions/` to the earliest RETAINED manifest's commit timestamp, so those files
+written above that instant are invisible to it ([[LH-094]]); `data/` is listed past the floor from
+pylance 13.0.0 (lance #8944). This reports what it reclaimed rather than asserting the bytes are gone,
 and a caller who needs that guarantee needs the floor raised first. Nor does it reclaim a file no
 version references that is younger than 7 days — an aborted write's residue — because Lance cannot
 tell it from an in-flight write's (`lance_docs/lance_sdk.md` cleanup_old_versions `delete_unverified`).
@@ -270,6 +271,7 @@ class _Dataset(Protocol):
     def optimize(self) -> Any: ...
     def cleanup_old_versions(self, older_than: timedelta | None = None, *, error_if_tagged_old_versions: bool = True) -> Any: ...
     def get_fragments(self) -> Any: ...
+    def base_paths(self) -> Any: ...
     def tracked_files(self, *, min_version: int | None = None) -> Any: ...
     def all_files(self) -> Any: ...
     @property
@@ -736,7 +738,7 @@ def _unproved_segments(handle: _Dataset, history: _History, listing: _StorageLis
     Any other segment is unproved while a file of it is on storage; one whose base lies outside the table
     cannot be compared with the listing, so it stays unproved.
     """
-    bases = {int(base_id): str(base.path) for base_id, base in handle._ds.base_paths().items()}
+    bases = {int(base_id): str(base.path) for base_id, base in handle.base_paths().items()}
     root = str(handle.uri)
     present = {int(fragment.fragment_id) for fragment in handle.get_fragments()}
     unproved: list[str] = []
@@ -1279,7 +1281,7 @@ def _record_held(report: ErasureReport, dataset: _Dataset, refs: Sequence[str | 
 def _held_outside(handle: _Dataset, predicate: str) -> dict[str, set[str]]:
     """``{surface: locations}`` for the subject's bytes ``handle``'s version keeps outside the table's own files,
     rows a deletion vector hides included."""
-    bases = {int(base_id): base for base_id, base in handle._ds.base_paths().items()}
+    bases = {int(base_id): base for base_id, base in handle.base_paths().items()}
     root = str(handle.uri)
     held: dict[str, set[str]] = {}
     for fragment in handle.get_fragments():

@@ -4,8 +4,8 @@
 table keeps answering queries, so the only symptom of a silently re-partitioned vector index is recall
 or latency that nobody attributes to the repair.
 
-**IT TAKES TWO CALLS, and that is the non-obvious part.** Measured on pylance 11.0.0 (the version the
-deployed catalog runs), `describe_indices()` — the non-deprecated call — carries `.name`,
+**IT TAKES TWO CALLS, and that is the non-obvious part.** Measured on pylance 11.0.0 and again on
+13.0.0 (2026-10-12), `describe_indices()` — the non-deprecated call — carries `.name`,
 `.index_type`, `.field_names`, `.type_url` and `.details`, where a vector index's `.details` is
 ``{"metric_type": ..., "compression": {"num_bits": ..., "num_sub_vectors": ...}, "runtime_hints": {...}}``.
 `num_partitions` is NOT among them; it appears only as ``indices[0].num_partitions`` in
@@ -18,6 +18,18 @@ decision comes off the live index rather than from a list of type names that a n
 would silently fall out of — the failure `IndexWorkItem.kind` warns about, where a worker guessing
 between the two builds an index that answers queries wrongly rather than not at all.
 
+**WHAT WAS ASKED FOR IS RECORDED, because Lance no longer builds it on a small table.** From pylance
+13.0.0 a vector index on a table too small to train is built with fewer IVF partitions than requested
+and only a warning says so (lance #9134; measured 512 rows asking 4 -> 2, 768 -> 3, 1024 -> 4). The
+readback then reports what was built, and a later rebuild on the grown table would keep the shrunken
+count. So the parameters a rebuild request names are kept in the dataset's own config under
+:data:`REQUESTED_PARAMS_KEY_PREFIX` (:func:`record_requested_params`), on the ref they were asked on, and
+merge over the readback for as long as the index keeps the column and type they were asked for; the
+index drop door removes the record (:func:`forget_requested_params`). Config rather than a control-root
+record because it travels with the dataset and its branches through a rename and dies with the table;
+the commit it costs is an `UpdateConfig`, which `lineage.core.reconcile.MAINTENANCE_OPERATIONS` already
+treats as maintenance.
+
 `runtime_hints` are deliberately NOT carried back: they are the tuning of the build that ran
 (k-means iteration counts, sample rates, shuffle concurrency), not of the index that resulted, and
 pylance takes them from its own environment rather than as `create_index` keywords.
@@ -28,6 +40,7 @@ All IO is blocking; callers threadpool it.
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 
 from lance.query import DocumentGranularity
@@ -36,6 +49,12 @@ from pydantic import BaseModel, ConfigDict
 
 from service_kit.lakehouse.work_items import SCALAR_INDEX, SCALAR_INDEX_TYPES, VECTOR_INDEX
 
+
+log = logging.getLogger(__name__)
+
+#: Dataset-config key prefix for the build parameters a rebuild request named, one key per index name.
+#: Namespaced under `rask.` so an operator reading the config can tell it from Lance's own keys.
+REQUESTED_PARAMS_KEY_PREFIX = "rask.index.requested."
 
 #: `.type_url`'s vector marker. Scalar kinds each carry their own `/lance.table.<Kind>IndexDetails`,
 #: so the discriminator is written as "vector, else scalar" rather than as a list of scalar spellings
@@ -122,16 +141,69 @@ def describe_index_for_rebuild(dataset: Any, index_name: str) -> RebuildSpec:
     details = _usable_details(described.details or {})
     is_vector = described.type_url == _VECTOR_TYPE_URL
     params = _vector_params(dataset, index_name, details) if is_vector else {k: v for k, v in details.items() if k not in _NON_KEYWORD_DETAILS}
-    return RebuildSpec(
-        name=described.name,
-        # A multi-column index cannot be rebuilt through a single-column call, and pylance's own
-        # create doors take one column; naming the first would rebuild a narrower index than the one
-        # being repaired, so it is refused rather than truncated.
-        column=_sole_column(described.field_names, index_name),
-        kind=VECTOR_INDEX if is_vector else SCALAR_INDEX,
-        index_type=described.index_type if is_vector else _scalar_type(described.index_type),
-        params=params,
-    )
+    # A multi-column index cannot be rebuilt through a single-column call, and pylance's own create
+    # doors take one column; naming the first would rebuild a narrower index than the one being
+    # repaired, so it is refused rather than truncated.
+    column = _sole_column(described.field_names, index_name)
+    index_type = described.index_type if is_vector else _scalar_type(described.index_type)
+    requested = _requested(dataset, index_name)
+    if requested is not None and (requested.column, requested.index_type) == (column, index_type):
+        params = {**params, **_usable_details(requested.params)}
+    return RebuildSpec(name=described.name, column=column, kind=VECTOR_INDEX if is_vector else SCALAR_INDEX, index_type=index_type, params=params)
+
+
+class RequestedParams(BaseModel):
+    """The build parameters a rebuild request named for one index, and the index they were named for.
+
+    ``column`` and ``index_type`` are kept so a record follows only the index it was asked for: one
+    recreated under the same name on another column, or as another type, does not inherit it.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    column: str
+    index_type: str
+    params: dict[str, Any]
+
+
+def record_requested_params(dataset: Any, spec: RebuildSpec, params: dict[str, Any]) -> None:
+    """Keep ``params`` as what was asked for ``spec``'s index, merged over any earlier request.
+
+    Commits only when the record changes, so a rebuild that names no parameter, or names the ones
+    already recorded, writes no version. Called BEFORE the rebuild is run or queued: what is kept is
+    the request, so a build that fails or shrinks still leaves the next rebuild asking for it.
+    """
+    if not params:
+        return
+    earlier = _requested(dataset, spec.name)
+    carried = earlier.params if earlier is not None and (earlier.column, earlier.index_type) == (spec.column, spec.index_type) else {}
+    record = RequestedParams(column=spec.column, index_type=spec.index_type, params={**carried, **params})
+    if record == earlier:
+        return
+    dataset.update_config({REQUESTED_PARAMS_KEY_PREFIX + spec.name: record.model_dump_json()})
+
+
+def forget_requested_params(dataset: Any, index_name: str) -> None:
+    """Remove ``index_name``'s recorded request, committing only when there is one."""
+    key = REQUESTED_PARAMS_KEY_PREFIX + index_name
+    if key in dataset.config():
+        dataset.update_config({key: None})
+
+
+def _requested(dataset: Any, index_name: str) -> RequestedParams | None:
+    """The recorded request for ``index_name``, or ``None`` when there is none or it cannot be read.
+
+    An unreadable record is logged and ignored rather than raised: failing the repair over it would
+    withhold the remedy, and the readback still rebuilds the index that exists.
+    """
+    raw = dataset.config().get(REQUESTED_PARAMS_KEY_PREFIX + index_name)
+    if raw is None:
+        return None
+    try:
+        return RequestedParams.model_validate_json(raw)
+    except ValueError as exc:
+        log.warning("index_requested_params_unreadable", extra={"index": index_name, "error": str(exc)})
+        return None
 
 
 def _usable_details(details: dict[str, Any]) -> dict[str, Any]:

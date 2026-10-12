@@ -358,7 +358,7 @@ class ReconcileReport(BaseModel):
     orphan_files: list[OrphanFile] = Field(default_factory=list)
     #: How many of `orphan_files` the purge GATES on — those Lance can never reclaim, plus any whose
     #: class could not be decided. Its own field because it is not `len(orphan_files)`: an orphan below
-    #: its dataset's listing floor clears itself on the ordinary sweep, and blocking on those is a delay
+    #: its dataset's listing floor, or any data or index orphan, clears itself on the ordinary sweep, and blocking on those is a delay
     #: rather than a control. Measured 2026-09-18, `orphan_files` fell 1011 -> 32 in ten minutes when
     #: 979 of them passed 7 days; the 32 that stayed are the finding.
     orphan_files_blocking: int = 0
@@ -1345,10 +1345,10 @@ def _orphan_category(report: ReconcileReport, settings: MaintenanceSettings, sou
     report.orphan_files = scan.orphans
     report.counts["orphan_files"] = len(scan.orphans)
     # THE COUNT IS EVERY ORPHAN; THE GATE IS ONLY WHAT LANCE CANNOT TAKE. `reclaimable_by_lance is True`
-    # means the file sits below its dataset's listing floor, so the ordinary sweep collects it once it
-    # passes the 7-day unverified rule — waiting on that is a delay, not a control. `None` gates with
-    # the blocking class: an unreadable floor is "we could not tell", and the purge deletes bytes on the
-    # strength of this report.
+    # means Lance still lists the file (a data or index file, or one below its dataset's listing floor),
+    # so the ordinary sweep collects it once it passes the 7-day unverified rule — waiting on that is a
+    # delay, not a control. `None` gates with the blocking class: an unreadable floor is "we could not
+    # tell", and the purge deletes bytes on the strength of this report.
     report.orphan_files_blocking = sum(1 for orphan in scan.orphans if orphan.reclaimable_by_lance is not True)
     report.total += report.orphan_files_blocking
     for note in scan.incomplete:

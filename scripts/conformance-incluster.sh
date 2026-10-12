@@ -99,8 +99,8 @@ spec:
             limits: { memory: "4Gi" }
       volumes:
         # Ray needs a session dir and pylance needs a spill store; `readOnlyRootFilesystem` with no
-        # writable /tmp makes pylance 11 PANIC on opening ANY dataset (LocalSpillStore cannot create
-        # its temp dir), which reads as a client fault rather than a container one.
+        # writable /tmp made pylance PANIC on opening ANY dataset (measured on 11: LocalSpillStore cannot
+        # create its temp dir), which reads as a client fault rather than a container one.
         - name: tmp
           emptyDir: { sizeLimit: 2Gi }
 YAML

@@ -542,7 +542,7 @@ def create_table(
             # A new version of the same table, so the table's provenance rides onto it ([[LH-242]]).
             # Disarmed first ([[LH-245]]): an overwrite carries the table's config forward, keys included.
             current = disarm_commit_path_cleanup(lance.dataset(existing, storage_options=so, session=shared_lance_session()), segments)
-            # The table's key, not the payload's: a key is fixed once set (`lance_docs/file_format.md:2893`).
+            # The table's key, not the payload's: a key is fixed once set (`lance_docs/file_format.md:4684`).
             primary_keys.refuse_repeats_within(table, primary_keys.key_columns(current.lance_schema), door="create")
             dataset = _write_blob(
                 provenance_guard.keep_provenance(current.schema, table),
@@ -1103,7 +1103,7 @@ def commit_appended_fragments(
     serialized ``FragmentMetadata`` into a metadata-ONLY Lance commit under ROOT creds, so no data byte ever
     transits the catalog and the version + lineage emit stay atomic (the External Manifest Store pattern —
     namespace.md). ``write_fragments`` inherits the table's ``data_storage_version`` only when the client
-    names none; pylance 12 commits fragments at another version and stamps the sticky reader flag 256, so
+    names none; pylance 12 and 13 commit fragments at another version and stamp the sticky reader flag 256, so
     :func:`_refuse_foreign_file_versions` judges the fragments' file versions before Lance sees them. Lance
     assigns/rebases stable row ids at commit (row_id_lineage.md). CREATE and OVERWRITE stay server-side to
     centralize the 2.2 invariant and to owner-govern the destructive reset. Append auto-rebases against
@@ -2394,7 +2394,7 @@ def read_changes(
     YIELDING BOUNDS WHAT THIS FUNCTION HOLDS, NOT WHAT LANCE HOLDS. The scan itself runs under the
     process scan defaults the catalog sets at boot (`catalog.main.bound_lance_scans`, [[LH-247]]):
     Lance's own size a batch in ROWS (8,192, whatever their width) and buffer up to 2 GB of IO ahead of
-    the consumer (`lance_docs/guide.md:3048-3072`), and on a 164 MB table of 1024-dim float32 vectors
+    the consumer (`lance_docs/guide.md:3441-3462`), and on a 164 MB table of 1024-dim float32 vectors
     this feed peaked the catalog at 597,224 kB against its 524,288 kB limit (pylance 12.0.0, measured
     from outside a one-CPU catalog over a moto store). No scanner option is passed here, so the feed
     and the native backend's scans share one bound an operator can move in one place.

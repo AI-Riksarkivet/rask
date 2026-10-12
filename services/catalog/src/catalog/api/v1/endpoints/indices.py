@@ -51,7 +51,7 @@ from catalog.core.config import Settings
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.core.lineage_emit import CREATE_INDEX, DROP_INDEX
 from catalog.core.namespace import open_dataset_for_commit
-from catalog.services import dataplane, native
+from catalog.services import dataplane, index_specs, native
 from service_kit import dapr_publish
 from service_kit.lakehouse.work_items import SCALAR_INDEX, VECTOR_INDEX, IndexWorkItem
 
@@ -247,6 +247,10 @@ async def drop_table_index(
     req = DropTableIndexRequest(id=segments, index_name=index_name)
     await run_in_threadpool(partial(open_dataset_for_commit, ns, so, segments, checked=False))
     response: DropTableIndexResponse = await run_in_threadpool(native.call, ns, "drop_table_index", req)
+    # Reopened after the drop, on the version it committed. The event below is pinned by the drop's own
+    # transaction, so a config commit here does not move the version it names.
+    dropped = await run_in_threadpool(partial(open_dataset_for_commit, ns, so, segments, checked=False))
+    await run_in_threadpool(index_specs.forget_requested_params, dropped, index_name)
     await lineage_deps.emit_measured_write(
         emitter,
         segments,

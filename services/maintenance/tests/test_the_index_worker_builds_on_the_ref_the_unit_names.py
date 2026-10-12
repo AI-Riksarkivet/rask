@@ -10,7 +10,7 @@ the branch's identifier. A branch keeps its own version sequence, so the version
 (main's latest) names a different snapshot, and a recreated branch restarts its numbering.
 
 A branch is NOT openable by path — it lives at `tree/{branch}/` with its own `_versions/` and no
-`data/` (`lance_docs/file_format.md:2746-2761`) — so the ref is checked out of the dataset the URI
+`data/` (`lance_docs/file_format.md:3673-3688`) — so the ref is checked out of the dataset the URI
 names, the same idiom the compaction pair uses.
 
 THE CONTROL LEG IS WHAT MAKES THIS MEAN ANYTHING. A branch that holds the same rows as main would

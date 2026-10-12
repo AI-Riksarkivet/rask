@@ -169,7 +169,7 @@ def _spliced_fragment(estate: _Estate, base: str) -> dict[str, Any]:
     Through a bucket-root base the file's path must name the victim's directory, which pylance escapes
     (``victim%2Fdata%2F…``), so that splice cannot resolve; the refusal must cover it all the same.
     """
-    pin = next(key for key, declared in estate.open(estate.attacker)._ds.base_paths().items() if declared.name == "pin")
+    pin = next(key for key, declared in estate.open(estate.attacker).base_paths().items() if declared.name == "pin")
     prefix = "" if base == estate.victim else f"{estate.victim.removeprefix(f'{estate.root}/')}/data/"
     fragment = json.loads(json.dumps(estate.open(estate.victim).get_fragments()[0].metadata.to_json()))
     for data_file in fragment["files"]:
@@ -279,7 +279,7 @@ def test_the_vend_and_read_doors_refuse_the_planting_table(estate: _Estate, plan
     victim_dir = estate.victim.removeprefix(f"{estate.root}/")
     estate.open(escape).add_bases([lance.DatasetBasePath(f"{escape}/%2e%2e/{victim_dir}", name="pin", is_dataset_root=True)])
     handle = estate.open(escape)
-    pin = next(key for key, declared in handle._ds.base_paths().items() if declared.name == "pin")
+    pin = next(key for key, declared in handle.base_paths().items() if declared.name == "pin")
     fragment = json.loads(json.dumps(estate.open(estate.victim).get_fragments()[0].metadata.to_json()))
     for data_file in fragment["files"]:
         data_file["base_id"] = pin

@@ -18,6 +18,7 @@ Directory structure:
     │   │   ├── fmindex.md
     │   │   ├── fts.md
     │   │   ├── label_list.md
+    │   │   ├── minhash_lsh.md
     │   │   ├── ngram.md
     │   │   ├── rtree.md
     │   │   ├── zonemap.md
@@ -31,6 +32,8 @@ Directory structure:
     │       └── .pages
     └── table/
         ├── branch_tag.md
+        ├── data_overlay_file.md
+        ├── fragment_metadata.md
         ├── index.md
         ├── layout.md
         ├── mem_wal.md
@@ -50,6 +53,11 @@ FILE: docs/src/format/AGENTS.md
 # Format Documentation Guidelines
 
 Also see [root AGENTS.md](../../../AGENTS.md) for cross-language standards.
+
+## Change Process
+
+- Changes here require a PMC vote on the pull request, enforced by the `format-spec-vote` CI gate. See [Lance Format Specification Changes](../community/voting.md#lance-format-specification-changes).
+- Keep a spec change in its own PR, together with the matching `protos/` change and only the library edits needed to compile. Put the implementation in a follow-up PR — voters need to read the contract, not its implementation.
 
 ## Style
 
@@ -464,6 +472,148 @@ The protobuf for the full zip layout describes the compression of the data buffe
 size of the control words and how many bits we have per value (for fixed-width data) or how many bits we
 have per offset (for variable-width data).
 
+### Sparse Page Layout
+
+Sparse pages require Lance 2.3. They represent flat or nested Arrow structure directly as slot-domain mappings instead
+of dense repetition and definition events. Writers emit this layout only in files declared as 2.3 or above. The layout is
+identified only by `PageLayout`; field metadata does not identify the layout of an existing page.
+
+A domain is a layer-local integer coordinate space `[0, num_slots)`, and a slot is one element in that space. The
+outer-most domain contains the page's top-level rows. Each layer maps its parent domain to the next layer's parent
+domain, and the terminal child domain contains the leaf value slots stored in value chunks.
+
+Structural layers are ordered from outer-most to inner-most:
+
+- validity maps a nullable item or struct slot to valid or null
+- list maps non-empty parent slots to variable-size child ranges
+- fixed-size-list maps each parent slot to a child range of a fixed dimension
+
+The layer list may be empty for a flat, non-nullable leaf page. In that case the scheduling domain and
+`num_visible_items` must be equal. The explicit writer currently emits its normalized all-valid layer even when a flat
+page could use this shorter wire representation.
+
+A list slot that is valid and absent from `non_empty_positions` is an empty list. Maps use the same structural contract
+as lists. The terminal child-domain size equals `SparseLayout.num_visible_items`.
+
+`SparseLayout.num_visible_items` is the number of leaf value slots encoded in value chunks. Null leaf slots count
+because they still occupy positions in Arrow's leaf value buffer; a nullable primitive with 100 slots, including 30
+nulls, has 100 visible items. `SparseLayout.num_items` is the number of entries in the equivalent dense repetition and
+definition stream. It equals `num_visible_items` plus one structural placeholder for every list slot without children.
+The first layer's `num_slots` is the logical top-level row count used for projection.
+
+Position sets have four semantic representations: `empty`, `all`, one non-empty `range`, or an `explicit`
+delta-compressed `u64` buffer. Count sets are `empty`, one positive `constant` value, or an `explicit` compressed `u64`
+buffer. Every layer has a `SparseValiditySet` whose meaning is explicit:
+
+- `SPARSE_VALIDITY_NULL_POSITIONS`: stored positions are null and all other positions are valid
+- `SPARSE_VALIDITY_VALID_POSITIONS`: stored positions are valid and all other positions are null
+
+The unspecified validity meaning is invalid. Both polarities are part of the wire contract and have identical Arrow
+semantics after normalization.
+
+#### Writer Selection
+
+Writers may emit this layout only for Lance 2.3+ fields. A field can request it explicitly with
+`lance-encoding:structural-encoding=sparse`; the same request is an input error for earlier file versions. Without an
+explicit structural encoding, the Lance 2.3 writer selects sparse only when the dense mini-block repetition/definition
+budget would split the page or one top-level row exceeds that budget, and only when the value path is supported by the
+sparse writer. Explicit `miniblock`, `fullzip`, and `sparse` requests are not changed by this automatic policy. Lance
+2.2 and earlier writers never select sparse.
+
+Unsupported sparse value paths, including dictionary values and variable-width packed structs, retain their dense
+behavior. Writers normalize Arrow validity and list structure once. Within-budget dense pages do not build sparse
+position/count plans. All-valid layers use null positions plus `empty`; all-null layers use valid positions plus
+`empty`. Other layers choose the validity polarity with the lower semantic encoded cost, with ties using null
+positions. Field metadata controls writer selection only: readers always use `PageLayout` to determine the layout of
+an encoded page and must not use field metadata for that decision.
+
+Pages without a value payload keep the existing canonical `ConstantLayout`: structural-only types such as an empty
+struct, and leaf pages whose visible values are all null, do not emit `SparseLayout`. An explicitly sparse page with
+at least one non-null visible value does emit `SparseLayout`, even when all non-null values are equal. This boundary
+avoids introducing a second structural-only representation without evidence that it improves the existing constant
+encoding.
+
+#### Buffers and Selective Reads
+
+A sparse page contains the following physical buffers:
+
+| Buffer | Contents |
+| ------ | -------- |
+| 0 | Value chunk metadata, one 8-byte entry per chunk |
+| 1 | Mini-block compressed value chunks without repetition or definition levels |
+| 2+ | One buffer for each explicit position or count set, in structural-layer field order |
+
+Each value chunk metadata entry stores `(chunk_size / 8) - 1` as little-endian `u32`, followed by its visible value
+count as little-endian `u32`. Chunk sizes must be positive multiples of 8 and fit this representation. The sum of
+chunk sizes must equal buffer 1 exactly and the sum of chunk value counts must equal `num_visible_items`. A value chunk
+contains at most 32,768 visible values. `num_buffers` describes the number of value buffers inside every chunk and
+excludes the structural buffers.
+
+General-compressed sparse buffers use the existing length-prefixed LZ4 or Zstd representation and must not contain
+another general-compression wrapper. SparseLayout does not impose additional size or descriptor-complexity limits on
+otherwise representable buffers.
+
+Readers normalize structural metadata once, project requested top-level ranges through each layer, and read only value
+chunks that intersect the resulting leaf ranges. When no leaf range remains, readers rebuild offsets and validity from
+the structural plan without reading buffer 1.
+
+#### Caching and Point Reads
+
+Reader initialization loads buffer 0 and every explicit structural buffer, then validates and normalizes them into a
+cached page plan. The cached state contains parsed value-chunk descriptors and prefix offsets, decoded semantic
+position/count sets, validity, and the ordered structural layers. It does not contain value payload bytes from buffer
+1. The plan is cached per field and page and reused by later scans, range reads, and takes.
+
+After that plan is cached, reading one primitive leaf value reads only the value chunk that contains it. A cold read
+first loads the structural metadata and then the intersecting value chunk. Reading one top-level list or
+fixed-size-list value may intersect multiple leaf chunks and reads each intersecting chunk. A selection whose projected
+structure contains no leaf slots reads no value chunk.
+
+#### Validation
+
+Readers must reject malformed sparse metadata instead of inferring or repairing it. Required checks include:
+
+- physical buffer count, chunk-count bounds, and every checked offset/size range
+- first-layer row domain, adjacent parent/child domain chaining, and terminal visible-value domain
+- semantic set cardinality, explicit position ordering and bounds, and validity meaning
+- exact `num_items`
+- list non-empty positions being valid, count cardinality, positive counts, and child-count sum
+- fixed-size-list dimension and checked child-domain multiplication
+- value chunk byte/value sums, size representation and alignment, general-compression headers, descriptor buffer
+  count, and complete chunk consumption
+
+```protobuf
+%%% proto.message.SparseLayout %%%
+```
+
+```protobuf
+%%% proto.message.SparseStructuralLayer %%%
+```
+
+```protobuf
+%%% proto.message.SparseValidityLayer %%%
+```
+
+```protobuf
+%%% proto.message.SparseListLayer %%%
+```
+
+```protobuf
+%%% proto.message.SparseFixedSizeListLayer %%%
+```
+
+```protobuf
+%%% proto.message.SparseValiditySet %%%
+```
+
+```protobuf
+%%% proto.message.SparsePositionSet %%%
+```
+
+```protobuf
+%%% proto.message.SparseCountSet %%%
+```
+
 ### Constant Page Layout
 
 This layout is used when all (visible) values in the page are the same scalar value.
@@ -686,7 +836,7 @@ options. However, they can also be set in the field metadata in the schema.
 | `lance-encoding:dict-values-compression-level` | Integers (scheme dependent) | Varies by scheme | Compression level for dictionary values general compression                             |
 | `lance-encoding:general`             | `off`, `on`                          | `off`            | Whether to apply general compression.                                                   |
 | `lance-encoding:packed`              | Any string                           | Not set          | Whether to apply packed struct encoding (see above).                                    |
-| `lance-encoding:structural-encoding` | `miniblock`, `fullzip`               | Not set          | Force a particular structural encoding to be applied (only useful for testing purposes) |
+| `lance-encoding:structural-encoding` | `miniblock`, `fullzip`, `sparse`     | Not set          | Force a structural encoding; `sparse` requires Lance 2.3.                                |
 
 ### Configuration Details
 
@@ -1013,10 +1163,10 @@ major number is changed when the file format itself is modified while the minor 
 strategy is modified. Newer versions will typically have better performance and compression but may not be readable
 by older versions of Lance.
 
-In addition, the `next` alias points to an unstable format version and should not be used for production use cases.
-Breaking changes could be made to unstable encodings and that would mean that files written with these encodings are
-no longer readable by any newer versions of Lance. The `next` version should only be used for experimentation and
-benchmarking upcoming features.
+Any version explicitly labeled unstable, including the current 2.3 format and the `next` alias, should not be used for
+production use cases. Unstable formats have no compatibility guarantee: breaking encoding changes may make files
+written by one Lance build unreadable by later builds. They should only be used for experimentation and benchmarking
+upcoming features.
 
 The `stable` and `next` aliases are resolved by the specific Lance release you are using. During a format rollout
 (for example, 2.3), prefer explicit version pinning for deterministic behavior across environments.
@@ -1029,10 +1179,39 @@ The following values are supported:
 | 2.0            | 0.16.0                | Any                   | Rework of the Lance file format that removed row groups and introduced null support for lists, fixed size lists, and primitives |
 | 2.1            | 0.38.1                | Any                   | Enhances integer and string compression, adds support for nulls in struct fields, and improves random access performance with nested fields. |
 | 2.2            | None                  | Any                   | Adds support for newer nested type/encoding capabilities (including map support) and 2.2-era storage features. |
-| 2.3 (unstable) | None                  | Any                   | Adds experimental encodings for upcoming features. |
+| 2.3 (unstable) | None                  | Unspecified           | Adds sparse structural pages and other experimental encodings. |
 | legacy         | N/A                   | N/A                   | Alias for 0.1 |
 | stable         | N/A                   | N/A                   | Alias for the default version for new datasets in the Lance release you are running. |
 | next           | N/A                   | N/A                   | Alias for the latest unstable version in the Lance release you are running.|
+
+## Compatibility Caveats
+
+Stable formats carry a compatibility guarantee, but certain data patterns exposed encoder bugs
+that required encoding changes to fix.  Files containing those patterns written by the fixed
+encoder are not readable by readers predating the fix.  The affected scenarios are listed here
+so operators running mixed-version deployments know the minimum reader version required.
+
+### FixedSizeList with all-null inner values (Lance 11.1.0)
+
+**Affected format**: 2.1 and later.
+
+**Scenario**: A `FixedSizeList` column where every inner value (not the outer list item itself)
+is null — for example, `FixedSizeList<nullable Float32, dim=4>` where all eight Float32 values
+across two outer rows are null.
+
+**Buggy writer (Lance < 11.1.0)**: The encoder wrote `bits_per_value=0` into the FullZip page
+layout.  Readers of any version rejected these pages with an error, so the data was unreadable
+regardless of reader version.
+
+**Fixed writer (Lance ≥ 11.1.0)**: The encoder stores per-row validity bytes for the null inner
+values, producing `bits_per_value > 0`.  The fixed reader (Lance ≥ 11.1.0) can also decode the
+old buggy pages, so old files written before 11.1.0 become readable after upgrading.
+
+**Forward compatibility**: Files containing this pattern written by Lance ≥ 11.1.0 are **not
+readable by Lance < 11.1.0**.  Old readers encounter the `Compression::Constant` inner encoding
+in the FSL descriptor and panic rather than returning an error.
+
+**Minimum reader version for new files**: Lance 11.1.0.
 
 
 ================================================
@@ -1042,7 +1221,6 @@ nav:
   - Specification: index.md
   - Encoding Strategy: encoding.md
   - Versioning: versioning.md
-
 
 ================================================
 FILE: docs/src/format/index/index.md
@@ -1147,7 +1325,12 @@ Index segments are created and updated through a transactional process:
 2. **Prepare the metadata**: Create an `IndexMetadata` message with:
    - `uuid`: The newly generated UUID
    - `name`: The index name (must match existing segments if adding to an existing index)
-   - `fields`: The column(s) being indexed
+   - `fields`: The columns the index is keyed on, in key order.
+   - `covering_fields`: An independent declaration of the columns whose values the index carries,
+     letting a query that only projects those columns be answered without a fragment take. A field
+     may appear in both lists when the index carries a value it is also keyed on. Empty for an index
+     that carries no extra columns. Declaring a column here does not by itself make it servable --
+     see [Serving carried columns](#serving-carried-columns).
    - `fragment_bitmap`: The set of fragment IDs covered by this segment
    - `index_details`: Index-specific configuration and parameters
    - `version`: The format version of this index type
@@ -1157,10 +1340,11 @@ Index segments are created and updated through a transactional process:
    in its `IndexSection`. This is done atomically using the same transaction mechanism
    as data writes.
 
-When updating an indexed column in place (without deleting the row), the engine must
-remove the affected fragment IDs from the `fragment_bitmap` field of any index segments
-that cover those fragments. This marks those fragments as needing re-indexing without
-invalidating the entire segment and prevents invalid data from being read from the index.
+When updating a column in place (without deleting the row), the engine must remove the
+affected fragment IDs from the `fragment_bitmap` field of any index segment whose `fields`
+or `covering_fields` include that column. This marks those fragments as needing re-indexing
+without invalidating the entire segment and prevents invalid data from being read from the
+index.
 
 ## Index Compatibility
 
@@ -1177,6 +1361,74 @@ Before using an index segment, engines must verify they support it:
 
 When an engine cannot use an index segment, it should fall back to scanning the
 fragments that would have been covered by that segment.
+
+### Covering-field contracts
+
+A manifest that uses independent key and covering declarations must set
+`FLAG_COVERED_INDEX_METADATA` and `FLAG_INDEPENDENT_COVERING_FIELDS` in both its reader
+and writer feature flags. In this contract, `fields` contains only the key fields and
+`covering_fields` separately contains the carried fields. The lists have no positional
+relationship and may overlap. The index dependency set is their union.
+
+For backwards compatibility, a manifest with `FLAG_COVERED_INDEX_METADATA` but without
+`FLAG_INDEPENDENT_COVERING_FIELDS` uses the legacy contract: the carried columns form the
+trailing suffix of `fields` in emission order, so `covering_fields` equals
+`fields[len(fields) - len(covering_fields)..]`. A column the index is both keyed on and
+carries appears twice, once as a key and once in the carried suffix: `fields = [1, 1]` with
+`covering_fields = [1]` is keyed on `1` and carries `1`. Readers must select the contract
+from the manifest flags before interpreting any `IndexMetadata`.
+
+### Activating independent declarations
+
+Setting `FLAG_INDEPENDENT_COVERING_FIELDS` reinterprets every `IndexMetadata` in the
+manifest's index section, so a writer must not set it while any entry remains in legacy
+form. A legacy `fields = [vector, payload]` with `covering_fields = [payload]` reads
+under the new contract as keyed on both columns, and a query on `payload` would then be
+planned against an index that is really keyed on `vector`.
+
+Activation is therefore a single atomic manifest change. A writer that sets the flag must
+normalize every entry of the index section in that same manifest to the key prefix:
+replace `fields` with `fields[..len(fields) - len(covering_fields)]` and leave
+`covering_fields` unchanged. For example, `fields = [1, 1]` with `covering_fields = [1]`
+becomes `fields = [1]` with `covering_fields = [1]`. A
+writer that cannot normalize an entry must not set the flag; it may instead set the flag
+only on a manifest in which no entry declares covering fields at all. No committed
+manifest may set the flag while holding a legacy-form entry.
+
+A commit that loses a conflict and retries must normalize the index section of the
+manifest it is retrying against rather than the one it first read, so an entry another
+writer committed in between is never carried forward unnormalized.
+
+Derived manifests retain the flag. Every manifest built from one that sets it keeps the
+bit set, unless a writer converts every entry back to the legacy contract in one atomic
+change of its own. Because `FLAG_COVERED_INDEX_METADATA` is recomputed from covering
+declarations on every commit, a writer that sets `FLAG_INDEPENDENT_COVERING_FIELDS` must
+also keep `FLAG_COVERED_INDEX_METADATA` set in both feature words whenever the independent
+bit is set, including manifests with no covering entries and manifests that drop the last
+covering index. The two bits are retained together until an atomic reverse conversion
+clears them together.
+
+### Serving carried columns
+
+`IndexMetadata.covering_fields` records the columns an index segment *declares* it
+carries. It does not establish that the segment's storage holds their values.
+
+**The segment's storage schema is authoritative.** Before answering a query from a
+carried column, an engine must confirm that column is present and bound to the declared
+logical field in the storage it opened, and fall back to a take against the base table
+when it cannot. A segment whose metadata identifies a column its storage does not hold is
+a legal state, not corruption: a maintenance operation that cannot carry the payload
+through a rebuild is permitted to withdraw it and leave the `covering_fields` listed in
+the metadata.
+
+!!! note "Capability varies by segment"
+
+    Whether a segment's storage holds a declared column depends on the index type, on the
+    writer that produced the segment, and on what later maintenance did to it, so one
+    logical index may hold values for some of its segments and not others. An engine
+    therefore verifies each selected segment rather than inferring capability from the
+    index type, the writer version, or the `covering_fields` metadata alone, and serves
+    from the base table every column it cannot verify.
 
 ## Loading an index
 
@@ -1196,7 +1448,14 @@ When loading an index:
 The `IndexMetadata` message contains important information about the index segment:
 
 - `uuid`: the unique identifier of the index segment.
-- `fields`: the column(s) the index is built on.
+- `fields`: the columns the index is keyed on, in key order.
+- `covering_fields`: the independently declared columns whose values the index carries alongside
+  its own data. A field may also occur in `fields`. Empty for an index that carries no extra
+  columns. Every id in `covering_fields` names a top-level field. Covering a struct column
+  carries the whole struct, its children included, as one column. This declaration is not
+  authoritative for what the segment can serve -- see
+  [Serving carried columns](#serving-carried-columns) and the legacy interpretation under
+  [Covering-field contracts](#covering-field-contracts).
 - `fragment_bitmap`: the set of fragment IDs covered by this index segment.
 - `index_details`: a protobuf `Any` message that contains index-specific details, such as index type,
   parameters, and storage format. This allows different index types to store their own metadata.
@@ -1226,7 +1485,7 @@ or updated. These should be filtered out during query execution.
   </figcaption>
 </figure>
 
-There are three situations to consider:
+There are four situations to consider:
 
 1. **A fragment has some deleted rows.** A few of the rows in the fragment have been marked
    as deleted, but some of the rows are still present. The row addresses from the deletion
@@ -1234,9 +1493,27 @@ There are three situations to consider:
 2. **A fragment has been completely deleted.** This can be detected by checking if a
    fragment ID present in the fragment bitmap is missing from the dataset.
    Any row addresses from this fragment should be filtered out.
-3. **A fragment has had the indexed column updated in place.** This cannot be detected just
-   by examining metadata. To prevent reading invalid data, the engine should filter out any
+3. **A fragment has had one of the index's columns updated in place.** This cannot be detected
+   just by examining metadata. To prevent reading invalid data, the engine should filter out any
    row addresses that are not in the index's current `fragment_bitmap`.
+   The column need not be one the index is keyed on: every column in the union of `fields` and
+   `covering_fields` counts. A carried column can be updated while the keyed column is untouched,
+   and a segment left covering that fragment would answer from an obsolete carried value.
+4. **A fragment has an updated value in an [overlay file](../table/data_overlay_file.md).**
+   This can be detected by checking if any of the fragments in the index's `fragment_bitmap`
+   have overlay files. For each overlay whose `committed_version` is greater than the index
+   segment's `dataset_version`, the overlay carries updated values not reflected in the index,
+   so its covered rows must be excluded from index results. Excluded rows are re-evaluated
+   against their current (overlaid) values on the flat path — dropping them without
+   re-evaluation would silently lose rows that match under the new value. Exclusion is
+   field-aware: only overlays covering a column in the union of the index's `fields` and
+   `covering_fields` matter. Restricting this to the keyed columns would leave a fragment
+   covered after an overlay updated a carried one, and the index would then serve a stale
+   carried value.
+   You may exclude just the affected rows or the whole fragment; the latter is simpler and
+   safer but re-evaluates more rows than necessary.
+   See [Data Overlay Files](../table/data_overlay_file.md#index-integration)
+   for the exclusion set, re-evaluation, and correctness invariant.
 
 ## Compaction and remapping
 
@@ -1269,7 +1546,8 @@ logical identifier that remains constant even when rows are moved during compact
 **Benefits:**
 
 - No remapping needed after compaction
-- Updates only invalidate the index if the indexed column data changes
+- Updates only invalidate the index if data in the union of its `fields` and
+  `covering_fields` changes
 
 **Tradeoffs:**
 
@@ -1478,15 +1756,15 @@ FILE: docs/src/format/index/scalar/btree.md
 ================================================
 # BTree Index
 
-The BTree index is a two-level structure that provides efficient range queries and sorted access. 
-It strikes a balance between an expensive memory structure containing all values 
+The BTree index is a two-level structure that provides efficient range queries and sorted access.
+It strikes a balance between an expensive memory structure containing all values
 and an expensive disk structure that can't be efficiently searched.
 
-The upper layers of the BTree are designed to be cached in memory and stored in a 
-BTree structure (`page_lookup.lance`), while the leaves are searched using sub-indices 
-(`page_data.lance`, currently just a flat file). 
-This design enables efficient memory usage - for example, with 1 billion values, 
-the index can store 256K leaves of size 4K each, requiring only a few MiB of memory 
+The upper layers of the BTree are designed to be cached in memory and stored in a
+BTree structure (`page_lookup.lance`), while the leaves are searched using sub-indices
+(`page_data.lance`, currently just a flat file).
+This design enables efficient memory usage - for example, with 1 billion values,
+the index can store 256K leaves of size 4K each, requiring only a few MiB of memory
 (depending on data type) for the BTree metadata while narrowing any search to just 4K values.
 
 ## Index Details
@@ -1547,7 +1825,7 @@ In Lance, the FM-Index is designed to scale dynamically across millions of docum
 
 ## High-Level Architecture
 
-The FM-Index indexes raw text by treating columns of strings or binary payloads as raw byte arrays. 
+The FM-Index indexes raw text by treating columns of strings or binary payloads as raw byte arrays.
 
 ```
                      +----------------------------------------+
@@ -1571,7 +1849,7 @@ Each segment contains its own self-contained physical FM-Index mapping byte sub-
 
 ## Data Normalization & Sanitization
 
-The FM-Index is **normalization-independent by design** because it operates entirely on raw bytes. 
+The FM-Index is **normalization-independent by design** because it operates entirely on raw bytes.
 
 ### Byte Sanitization vs. Text Normalization
 
@@ -1579,7 +1857,7 @@ The FM-Index is **normalization-independent by design** because it operates enti
    The physical FM-Index uses specific sentinel bytes internally to mark boundaries:
    - `\x00` is reserved as the global Burrows-Wheeler Transform (BWT) terminator character.
    - `\xFF` is reserved as the document/row separator character.
-   
+
    To avoid breaking the indexing structures, any incoming occurrences of `\x00` or `\xFF` are sanitized by remapping them to space (`\x20`) characters at index-build time. No other bytes are changed in this layer.
 
 2. **Text Normalization (User/Application Layer)**:
@@ -1644,6 +1922,15 @@ An FTS index may contain multiple partitions. Each partition has its own set of 
 | `_rowid`      | UInt64 | false    | Document row ID                  |
 | `_num_tokens` | UInt32 | false    | Number of tokens in the document |
 
+Partitioned `docs.lance` files may include the optional schema metadata key
+`total_tokens`. Its decimal `UInt64` value is the sum of `_num_tokens` in that
+file. `_num_tokens` remains the canonical per-document data. Readers use the
+metadata value to construct exact corpus statistics without scanning the column;
+when the key is absent, they compute the sum from `_num_tokens`. Writers produce
+the key from the same document table in the same file commit. A present value
+that cannot be parsed, or that differs when `_num_tokens` is subsequently
+loaded, is file corruption.
+
 ### FTS List File Schema
 
 | Column                 | Type                    | Nullable | Description                                                      |
@@ -1652,6 +1939,8 @@ An FTS index may contain multiple partitions. Each partition has its own set of 
 | `_max_score`           | Float32                 | false    | Maximum score for the token (for query optimization)             |
 | `_length`              | UInt32                  | false    | Number of documents containing the token                         |
 | `_compressed_position` | List<List<LargeBinary>> | true     | Optional compressed position lists for phrase queries            |
+
+The posting-list file schema metadata includes `posting_block_size`, the number of documents encoded per compressed posting block. Older indexes that do not have this metadata use the legacy block size `128`.
 
 ### Metadata File Schema
 
@@ -1677,6 +1966,7 @@ The metadata file contains JSON-serialized configuration and partition informati
 | `min_gram`          | UInt32  | 2         | Minimum n-gram length (only for ngram tokenizer)               |
 | `max_gram`          | UInt32  | 15        | Maximum n-gram length (only for ngram tokenizer)               |
 | `prefix_only`       | Boolean | false     | Generate only prefix n-grams (only for ngram tokenizer)        |
+| `block_size`        | UInt32  | 128       | Documents per compressed posting block. Must be 128 or 256. Missing values from older indexes read as 128. `256` is experimental and may introduce breaking changes. |
 
 ## Tokenizers
 
@@ -1763,7 +2053,7 @@ parse tokens in different format.
 ### Text Type
 Text type includes text and list of text. Tokens are generated by base_tokenizer.
 
-The example below shows how text document is parsed into tokens. 
+The example below shows how text document is parsed into tokens.
 ```text
 Tom lives in San Francisco.
 ```
@@ -1870,8 +2160,8 @@ This allows each worker to operate independently during the tokenization phase. 
 
 ## Accelerated Queries
 
-Lance SDKs provide dedicated full text search APIs to leverage the FTS index capabilities. 
-These APIs support complex query types beyond simple token matching, 
+Lance SDKs provide dedicated full text search APIs to leverage the FTS index capabilities.
+These APIs support complex query types beyond simple token matching,
 enabling sophisticated text search operations.
 Here are the query types enabled by the FTS index:
 
@@ -1921,6 +2211,432 @@ The label list index provides exact results for the following query types:
 | **array_has / array_contains**      | Array contains the specified value     | Bitmap lookup for a single label            | Exact       |
 | **array_has_all**                   | Array contains all specified values    | Intersects bitmaps for all specified labels | Exact       |
 | **array_has_any**                   | Array contains any of specified values | Unions bitmaps for all specified labels     | Exact       |
+
+
+================================================
+FILE: docs/src/format/index/scalar/minhash_lsh.md
+================================================
+# MinHash LSH Index (Near-Duplicate Search)
+
+!!! warning "Experimental"
+
+    This index is an experimental format feature. Its details message and
+    its files may change incompatibly without a separate vote; after such a
+    change the index must be rebuilt, the data itself is never rewritten.
+    The feature is removed if its stabilization vote does not pass. Design
+    discussion: [lance#8820](https://github.com/lance-format/lance/discussions/8820).
+
+The MinHash LSH index finds near duplicates of a text: rows whose content is
+essentially the same as the query with a few edits, such as reposts with a
+different footer, mirror pages, or copy-pasted records with small changes. It
+scores rows by the **estimated Jaccard similarity** of their token shingle
+sets, a literal measure of overlap that needs no model. Unlike the Full-Text
+Search index, which ranks rows by term relevance, and unlike a vector index,
+which finds rows that mean the same thing, this index answers "which rows are
+copies of this one".
+
+The index is approximate: candidates are found with locality sensitive hashing
+(LSH) over MinHash signatures and ranked by comparing signatures, so the
+reported similarity is an estimate, and rows whose similarity is below the
+index's threshold are usually not found.
+
+## High-Level Architecture
+
+Every indexed text is turned into a fixed-length **signature** of `num_hashes`
+values, and the signature is split into `num_bands` **bands** whose hashes are
+the lookup keys. Two rows become candidates for each other when they share at
+least one band key; candidates are then ranked by the fraction of equal
+signature values.
+
+```
+              text
+               |  tokenize, shingle, hash
+               v
+   +-----------------------------------------+
+   |   signature: num_hashes 16-bit values   |   1 - (fraction of equal values)
+   +-----------------------------------------+   = Jaccard distance
+       |  split into num_bands bands, hash each
+       v
+   band keys ------------> bands table   (candidate lookup: rows sharing a key)
+   signature ------------> signature table  (ranking the candidates)
+```
+
+The index uses Lance's **Segmented Index** architecture: each segment covers a
+disjoint group of fragments and holds its own bands table and signature table.
+Scores depend only on the two signatures being compared, never on corpus
+statistics, so results from different segments merge exactly.
+
+```
+                     +----------------------------------------+
+                     |            Lance Dataset               |
+                     |   (Disjoint groups of Fragments 0..N)  |
+                     +----------------------------------------+
+                                         |
+                                         v
+                     +----------------------------------------+
+                     |            Segmented Index             |
+                     |  +-----------+ +-----------+ +-------+ |
+                     |  | Segment 1 | | Segment 2 | | ...   | |
+                     |  | bands +   | | bands +   | |       | |
+                     |  | signatures| | signatures| |       | |
+                     |  +-----------+ +-----------+ +-------+ |
+                     +----------------------------------------+
+```
+
+## Index Details
+
+```protobuf
+%%% proto.message.MinHashLshIndexDetails %%%
+```
+
+| Parameter           | Default                                                          | Effect                                                                                                                                                                                                                     |
+|:--------------------|:-----------------------------------------------------------------|:---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `num_hashes`        | 128                                                              | Signature length, 1 to 4096 and a multiple of `num_bands`. More hashes make the similarity estimate more precise (error about `1 / sqrt(num_hashes)`) and the signature table larger (`8 + 2 * num_hashes` bytes per row). |
+| `num_bands`         | 16                                                               | Number of bands, 1 to 256. With `num_hashes` it sets the similarity threshold `(1 / num_bands) ^ (num_bands / num_hashes)`. The bands table costs `12 * num_bands` bytes per row.                                         |
+| `shingle_size`      | 3                                                                | Tokens per shingle. Shorter shingles tolerate more edits but let unrelated texts that share common phrases look alike; 5 suits long documents, 2 very short texts.                                                         |
+| `tokenizer`         | full text search default, without stemming and stop-word removal | The tokenizer, recorded as the Full-Text Search index records it. Stemming and stop-word removal are off by default because merging different words inflates similarity.                                                  |
+| `signature_version` | 0                                                                | Version of the signature procedure, including its hash seed. Managed by Lance, not a user parameter.                                                                                                                       |
+
+Reference points: the probability that a row with true Jaccard similarity `J`
+becomes a candidate is `1 - (1 - J^r)^b` with `b = num_bands` and
+`r = num_hashes / num_bands`.
+
+| `num_hashes` / `num_bands` | Threshold | Found at J = 0.9 | Found at J = 0.7 | Bytes per row |
+|:---------------------------|:----------|:-----------------|:-----------------|:--------------|
+| 64 / 8                     | 0.77      | 99%              | 38%              | 232           |
+| 128 / 16 (default)         | 0.71      | 99.99%           | 61%              | 456           |
+| 96 / 16                    | 0.63      | 100%             | 87%              | 392           |
+
+Bands of fewer than six values admit a noticeable share of unrelated rows into
+the candidate set on tables of billions of rows and are better left to offline
+use.
+
+A query is tokenized from the details alone, so the details must identify the
+tokenizer completely: settings the Full-Text Search details cannot record
+(custom stop words, document-level text extraction) and tokenizers that load
+dictionaries from the deployment (`jieba/*`, `lindera/*`) are rejected. For
+CJK text, `ngram` or `icu` gives deterministic shingles.
+
+## Signature Generation
+
+The build side and the query side run the same procedure, so a query is
+comparable with every stored row. The exact procedure, its constants and
+known-answer vectors are in [Version 0 Reference](#version-0-reference):
+
+1. Tokenize the text with the configured tokenizer.
+2. Form shingles of `shingle_size` consecutive tokens. A text with fewer
+   tokens than `shingle_size` forms one shingle of all its tokens; a text with
+   no tokens (NULL, empty, whitespace only) has no signature, is not indexed,
+   and never appears in results.
+3. Hash every shingle to 64 bits with a fixed seed.
+4. Apply `num_hashes` fixed permutations and keep the minimum of each over
+   all shingles of the text.
+5. Store each minimum as a 16-bit value. A minimum shrinks as the text grows,
+   so its raw high bits would agree between any two long texts; the stored
+   value is a multiply-shift hash of the minimum, which keeps the chance that
+   two different minima collide negligible against the `1 / num_hashes`
+   resolution of the estimate.
+
+Band keys are hashes of the `num_hashes / num_bands` consecutive values of a
+band, prefixed with the band number so that the keys of one band are
+contiguous.
+
+The estimated Jaccard similarity of two signatures is the fraction of
+positions whose values are equal; the reported `_distance` is
+`1 - estimated similarity`. Every constant of the procedure is fixed by
+`signature_version`, and every segment of an index must carry identical
+details, so signatures written by different segments or at query time are
+always comparable. Changing a parameter requires rebuilding the index.
+
+## Storage Layout
+
+Each segment consists of two Lance files:
+
+- `signatures.lance` — one row per indexed document: its `_rowid` and its
+  signature as a fixed-size list of `num_hashes` 16-bit values. The row number
+  is the segment-local document id, so a segment holds at most `2^32`
+  documents; larger tables use several segments. Rows are fixed width and
+  stored without compression, so one document's signature is a single ranged
+  read at a known offset.
+- `bands.lance` — one row per (band key, document id) pair, sorted by band key
+  and then document id. A bucket is the run of rows sharing a key. The file is
+  divided into logical pages of a fixed number of rows recorded in the file
+  (4096 as written), and a page table holding the largest key of every page
+  is stored in a global buffer of the file and kept in memory when the index
+  is open, so the pages of any bucket are known without reading the file.
+
+Both files repeat the serialized index details and the file format version as
+schema metadata; a segment is opened only when both files match the details of
+the index. The file schemas, metadata keys and the page table encoding are in
+[Version 0 Reference](#version-0-reference).
+
+## Segments, Appends and Merging
+
+- **Building**: `create_index` reads the text column, signs every row and
+  writes one segment. Distributed builds create one uncommitted segment per
+  worker over disjoint fragment sets and commit them together; the commit
+  rejects segments whose details differ.
+- **Unindexed appends**: fragments appended after the build are not covered
+  by any segment. `optimize_indices` adds a segment over them. Until then a
+  query still searches those rows, signing them on the fly with the index
+  parameters, unless the scan asks for indexed rows only (`fast_search`).
+- **Segment merging**: merging segments rebuilds one segment from the stored
+  signatures without tokenizing the text again — the signatures of the
+  surviving rows are concatenated, band keys are recomputed and the bands
+  table is rewritten. A merge whose result would exceed `2^32` documents is
+  rejected and the segments stay separate.
+- **Deletes and compaction**: deleted rows are filtered at query time; after a
+  compaction the stored row ids are remapped like those of every other scalar
+  index.
+
+## Query Evaluation
+
+When a search is submitted (`nearest = MinHashQuery(text, column)`):
+
+1. The query text is signed with the parameters recorded in the index, and its
+   band keys are computed.
+2. In every segment, each band key is looked up through the page table, which
+   yields the pages of the key's bucket; the pages of all buckets are fetched
+   through the page cache, the missing ones with bounded scattered reads. The
+   document ids in the buckets form the candidate set.
+3. The candidates' signatures are read — from memory when resident, otherwise
+   with scattered reads, or with a sequential scan when the candidates cover a
+   large share of the segment — and each candidate's Jaccard distance to the
+   query is computed. Rows removed by filters or deletions are skipped.
+4. Each segment keeps its `limit` closest rows; rows not covered by any
+   segment are scored the same way by the query engine.
+5. The per-segment results are merged by distance, and the `limit` closest
+   rows are returned with their `_distance`.
+
+## Compatibility
+
+- A reader that does not know this index opens a dataset that has one
+  normally: the index is listed under a name derived from the type URL of
+  its details and is not used by queries. Creating the index sets no reader
+  or writer feature flag.
+- A writer that does not create the index changes nothing for readers that
+  know it.
+- Dropping the feature is dropping the index: its files live only under the
+  index's own `_indices/{uuid}/` directory, and no data file, manifest field
+  or other index is rewritten.
+
+## Version 0 Reference
+
+This section is normative for `signature_version = 0` and
+`minhash_lsh_index_version = 0`: an independent implementation must reproduce
+the signatures, band keys and files defined here exactly. All arithmetic is on
+unsigned 64-bit integers modulo `2^64`, and every multi-byte value is
+little-endian.
+
+### Signature Procedure
+
+1. **Tokenize** the text with the configured tokenizer. A token is the UTF-8
+   bytes of the token text the tokenizer emits, in emission order.
+2. **Shingle**: a shingle is `shingle_size` consecutive tokens joined with the
+   single byte `0x1F`; a text of `n` tokens has `n - shingle_size + 1`
+   shingles, one starting at every token position. A text with fewer tokens
+   than `shingle_size` but at least one token forms one shingle of all its
+   tokens. A text with no tokens (NULL, empty, whitespace only, or every token
+   discarded by the tokenizer) has no signature.
+3. **Hash** every shingle to 64 bits: `x = XXH64(shingle bytes, seed = 42)`.
+4. **Coefficients** come from a SplitMix64 generator whose state `s` starts at
+   42. One draw is:
+
+    ```
+    s    = s + 0x9E3779B97F4A7C15
+    z    = s
+    z    = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9
+    z    = (z ^ (z >> 27)) * 0x94D049BB133111EB
+    draw = z ^ (z >> 31)
+    ```
+
+    The draws are consumed in this order: for `i = 0 .. num_hashes - 1`,
+    `a_i = draw() | 1` and then `b_i = draw()`; after all pairs, for
+    `i = 0 .. num_hashes - 1`, `c_i = draw() | 1`. The coefficients depend on
+    `num_hashes` only.
+5. **Permute and take the minima**: `m_i = min over all shingles x of
+   (a_i * x + b_i)`, comparing the full 64-bit values.
+6. **Compress** each minimum to 16 bits: `signature[i] = (c_i * m_i) >> 48`.
+7. **Band keys**: the signature is split into `num_bands` bands of
+   `r = num_hashes / num_bands` consecutive values; band `j` holds
+   `signature[j * r .. (j + 1) * r)` and its key is
+
+    ```
+    band_key_j = (j << 56) | (XXH64(band bytes, seed = 42) & 0x00FFFFFFFFFFFFFF)
+    ```
+
+    where the band bytes are the band's `r` values, each written as 2
+    little-endian bytes, in signature order.
+
+The estimated Jaccard similarity of two signatures is the number of positions
+`i` with equal `signature[i]` divided by `num_hashes`; `_distance` is
+`1 - estimated similarity`, and rows at equal distance are ordered by row id.
+
+### Known-Answer Vectors
+
+An implementation must reproduce these values, computed with
+`num_hashes = 4`, `num_bands = 2`, `shingle_size = 2`, the default tokenizer
+and `signature_version = 0`.
+
+Coefficients:
+
+| `i` | `a_i`                | `b_i`                | `c_i`                |
+|:----|:---------------------|:---------------------|:---------------------|
+| 0   | `0xbdd732262feb6e95` | `0x28efe333b266f103` | `0x5705b8770b3d7dd5` |
+| 1   | `0x47526757130f9f53` | `0x581ce1ff0e4ae394` | `0x9e54d738297f77af` |
+| 2   | `0x09bc585a244823f3` | `0xde4431fa3c80db06` | `0x3474724a775b19bf` |
+| 3   | `0x37e9671c45376d5d` | `0xccf635ee9e9e2fa4` | `0x7e348a0e451650bf` |
+
+Text `"The quick brown fox"` tokenizes to `the`, `quick`, `brown`, `fox`:
+
+| Shingle bytes          | `XXH64`              |
+|:-----------------------|:---------------------|
+| `the` `0x1F` `quick`   | `0x4c0b0d36203ce55f` |
+| `quick` `0x1F` `brown` | `0x09c7ae895d82b184` |
+| `brown` `0x1F` `fox`   | `0x68e7f4b1be7b4c1f` |
+
+| `i` | `m_i`                | `signature[i]` |
+|:----|:---------------------|:---------------|
+| 0   | `0x0959767d77eafad7` | `0xb00f`       |
+| 1   | `0x464e4457275cd2a1` | `0x59d6`       |
+| 2   | `0x50f41804abaa5973` | `0x511a`       |
+| 3   | `0x8944bd01067b09e7` | `0xcd2c`       |
+
+Band keys: `0x00f30f3501d458ea` (band 0), `0x01aec5df28d04915` (band 1).
+
+Text `"Fox"` has one token, fewer than `shingle_size`, so its only shingle is
+`fox` with `XXH64` `0x07c0130ab04388d5`; the minima are `0x2bb8ade505081afc`,
+`0x0a273c6ff9a78ba3`, `0x802f20573838dc35`, `0x1ef46a8d372c9605`, the
+signature is `0x2970 0xd6db 0x65f8 0xadfc`, and the band keys are
+`0x003cf6e803312eca` and `0x017c5504fbc83f36`.
+
+The texts `""` and `"  \n"` have no tokens and therefore no signature.
+
+### Signature File Schema
+
+`signatures.lance` holds one row per indexed document. Row `i` is document
+`i` of the segment; rows are written in document id order and never
+reordered.
+
+```python
+pa.schema(
+    [
+        pa.field("_rowid", pa.uint64(), nullable=False),
+        pa.field(
+            "signature",
+            pa.list_(pa.field("item", pa.uint16(), nullable=False), num_hashes),
+            nullable=False,
+            metadata={
+                "lance-encoding:structural-encoding": "fullzip",
+                "lance-encoding:compression": "none",
+            },
+        ),
+    ],
+    metadata={
+        "minhash_lsh_details": "<hexadecimal serialized MinHashLshIndexDetails>",
+        "minhash_lsh_index_version": "0",
+    },
+)
+```
+
+`_rowid` is the row id of the indexed row as the dataset hands it to the
+index: the row address, or the stable row id when the dataset has stable row
+ids enabled, like every scalar index. `signature` is the signature of the
+[Signature Procedure](#signature-procedure); its values are never null (the
+Lance schema does not record the nullability of a fixed-size list item, so a
+reader treats a null value as corruption of the file). The field metadata of
+`signature` selects the full-zip structural encoding without compression, so
+every row occupies the same `2 * num_hashes` bytes and a reader fetches the
+signature of document `i` by row number as one ranged read.
+
+### Bands File Schema
+
+`bands.lance` holds one row per (band key, document id) pair, sorted by
+`band_key` and then `doc_id`, ascending.
+
+```python
+pa.schema(
+    [
+        pa.field(
+            "band_key",
+            pa.uint64(),
+            nullable=False,
+            metadata={"lance-encoding:compression": "none"},
+        ),
+        pa.field(
+            "doc_id",
+            pa.uint32(),
+            nullable=False,
+            metadata={"lance-encoding:compression": "none"},
+        ),
+    ],
+    metadata={
+        "minhash_lsh_details": "<hexadecimal serialized MinHashLshIndexDetails>",
+        "minhash_lsh_index_version": "0",
+        "minhash_lsh_num_docs": "<decimal document count>",
+        "minhash_lsh_page_rows": "4096",
+        "minhash_lsh_page_table_buffer": "<decimal global buffer index>",
+    },
+)
+```
+
+`band_key` is the key of step 7 of the [Signature Procedure](#signature-procedure);
+`doc_id` is the segment-local document id, the row number in
+`signatures.lance`. Both columns are stored without compression, so any run
+of rows is one ranged read per column. The file is divided into logical pages
+of `minhash_lsh_page_rows` rows: page `p` holds rows
+`[p * page_rows, (p + 1) * page_rows)`, and the last page may be shorter. A
+bucket may span any number of pages.
+
+### Schema Metadata
+
+| Key                             | File    | Value                                                                                                                                                                                                          |
+|:--------------------------------|:--------|:---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `minhash_lsh_details`           | both    | Lower-case hexadecimal encoding of the serialized `MinHashLshIndexDetails` the segment was built from. A reader decodes it and requires it to describe, field by field, the same details as the index metadata. |
+| `minhash_lsh_index_version`     | both    | Decimal file layout version; `0` for the layout described here. Independent of `signature_version`.                                                                                                           |
+| `minhash_lsh_num_docs`          | `bands` | Decimal number of documents of the segment; equals the row count of `signatures.lance`.                                                                                                                       |
+| `minhash_lsh_page_rows`         | `bands` | Decimal number of rows per logical page; positive. Writers use `4096`.                                                                                                                                        |
+| `minhash_lsh_page_table_buffer` | `bands` | Decimal index of the global buffer of `bands.lance` that holds the page table.                                                                                                                                |
+
+### Page Table
+
+The page table is a global buffer of `bands.lance` holding
+`ceil(num_rows / page_rows)` little-endian UInt64 values; entry `p` is the
+largest `band_key` of page `p`, that is the key of its last row. It is read
+when the segment is opened and kept in memory while the index is open. The
+bucket of key `K` lies in the pages from the first page whose entry is `>= K`
+through the first page whose entry is `> K` (or the last page when there is
+none); the pages strictly between hold nothing but that bucket. Both
+positions are binary searches over the table, so a bucket's page range is
+known without reading the file.
+
+### Opening a Segment
+
+A reader opens a segment in this order and treats a failed check as
+corruption of the named file, except where noted:
+
+1. Parse the index details and check the ranges of
+   [Index Details](#index-details).
+2. Open both files. In each, the schema must match its definition above
+   exactly in field names, types, nullability and list size, which must equal
+   `num_hashes`; `minhash_lsh_details` must be present, decode, validate and
+   equal the index details field by field; and `minhash_lsh_index_version`
+   must be present. A version greater than the one the reader implements is
+   rejected as unsupported, not as corruption.
+3. In `bands.lance`, `minhash_lsh_page_rows` must be positive and
+   `minhash_lsh_num_docs` must equal the row count of `signatures.lance`.
+4. Read the page table buffer; its length must be a multiple of 8 and its
+   entry count must be `ceil(num_rows / page_rows)` for the row count of
+   `bands.lance`.
+
+While answering queries, a page that does not decode to non-null `UInt64`
+and `UInt32` columns, and a `doc_id` that is not below
+`minhash_lsh_num_docs`, are corruption of `bands.lance`; a signature batch
+with a null value is corruption of `signatures.lance`.
+
+The fragments a segment covers are recorded in the index metadata of the
+dataset, never derived from the stored `_rowid` values (which do not identify
+fragments once stable row ids are enabled).
 
 
 ================================================
@@ -2006,19 +2722,19 @@ Hilbert sorting is performed in three steps:
           # x, y: integers in [0 .. 2^bits - 1]
           h = 0
           mask = (1 << bits) - 1
- 
+
           for s from bits-1 down to 0:
               rx = (x >> s) & 1
               ry = (y >> s) & 1
               d  = ((3 * rx) XOR ry) << (2 * s)
               h  = h | d
- 
+
               if ry == 0:
                   if rx == 1:
                       x = (~x) & mask
                       y = (~y) & mask
                   swap(x, y)
- 
+
           return h
       ```
       - The resulting `h` is stored as the item’s Hilbert value (type `u32` with `bits = 16`).
@@ -2173,6 +2889,8 @@ nav:
   - Bloom Filter: bloom_filter.md
   - Full Text Search: fts.md
   - N-gram: ngram.md
+  - MinHash LSH (experimental): minhash_lsh.md
+  - FM-Index: fmindex.md
   - RTree: rtree.md
 
 
@@ -2181,61 +2899,245 @@ FILE: docs/src/format/index/system/frag_reuse.md
 ================================================
 # Fragment Reuse Index
 
-The Fragment Reuse Index is an internal index used to optimize fragment operations 
-during compaction and dataset updates.
+The Fragment Reuse Index (FRI) is an internal index that keeps existing indices
+usable while fragments are compacted or reclustered. It records how old physical
+row addresses map to new addresses, without changing surviving row values.
 
-When data modifications happen against a Lance table,
-it could trigger compaction and index optimization at the same time to improve data layout and index coverage.
-By default, compaction will remap all indices at the same time to prevent read regression.
-This means both compaction and index optimization could modify the same index and cause one process to fail.
-Typically, the compaction would fail because it has to modify all indices and takes longer,
-resulting in table layout degrading over time.
+## Use Case 1: Compact Fragments
 
-Fragment Reuse Index allows a compaction to defer the index remap process.
-Suppose a compaction removes fragments A and B and produces C.
-At query runtime, it reuses the old fragments A and B by 
-updating the row addresses related to A and B in the index to the latest ones in C.
-Because indices are typically cached in memory after initial load,
-the in-memory index is up to date after the fragment reuse application process.
+When data modifications happen against a Lance table, they can trigger compaction
+and index optimization at the same time to improve data layout and index coverage.
+By default, compaction remaps all indices to prevent read regression.
+This means both compaction and index optimization can modify the same index and
+cause one process to fail. Typically, compaction fails because it has to modify
+all indices and takes longer, resulting in table layout degrading over time.
+
+Fragment Reuse Index allows compaction to defer the index remap process.
+Suppose a compaction removes fragments A and B and produces C. At query runtime,
+the existing indices are reused by translating their addresses in A and B to
+addresses in C. Because indices are typically cached in memory after initial
+load, the translated index can be reused by subsequent queries.
+
+## Use Case 2: Recluster Fragments
+
+Fragments are often organized by data arrival order. Queries filtering by fields
+such as day or user UUID may therefore need to search many fragments or index
+segments. An external engine, such as Spark, can reorganize rows into destination
+fragments grouped by those fields.
+
+A **stable partition** assigns source rows to destination fragments while
+preserving their relative source order within each destination. This lets FRI
+reuse existing indices after reclustering. Sorting or arbitrarily shuffling rows
+within a destination requires a different mapping; it is not represented by the
+stable-partition format defined here.
 
 ## Index Details
+
+FRI uses one system-index entry named `__lance_frag_reuse`. Its
+`IndexMetadata.index_details` contains `FragmentReuseIndexDetails`:
 
 ```protobuf
 %%% proto.message.FragmentReuseIndexDetails %%%
 ```
 
+The outer `InlineContent` / `ExternalFile` choice applies to the entire history.
+Small histories are stored inline; larger histories store the serialized
+`InlineContent` in `_indices/<FRI UUID>/details.binpb`. Updating the history
+replaces the FRI metadata. Stable-partition row maps are separate immutable files
+and are not rewritten with that history.
+
+### FRI Index Versions
+
+`IndexMetadata.index_version` identifies the format required to interpret FRI;
+it is not a dataset version or the sequence number of a rewrite.
+
+- **Version 0** retains the existing compaction format and read/write behavior.
+  `InlineContent.legacy_versions` keeps the original field number, 1, and wire
+  representation of `versions`.
+- **Version 1** adds `InlineContent.transitions` at field 2. It supports both
+  ordered compaction and stable partition. Each legacy group can be interpreted
+  as an ordered-compaction transition, forming one history with the new records.
+
+Adding a transition or a new mapping type does not itself require increasing
+`index_version`. Readers may skip unsupported mappings and fall back to scanning
+where a complete translation path is unavailable. Writers must reject operations
+that require interpreting or maintaining unsupported mappings; operations that
+carry the existing history unchanged need not interpret them. Changes to the
+shared metadata contract that require reader upgrades must increase `index_version`.
+
+### Shared Transition Metadata
+
+Each transition records ordered `sources` and `destinations`, plus exactly one
+mapping. A fragment digest contains its ID, physical row count, and deleted row
+count. Source counts describe the rewrite input; destination counts describe the
+newly written fragments, with zero deletions.
+
+Sources define scan order; destinations define output order for compaction and
+label order for stable partition. The surviving source row count must equal the
+total destination row count. Each fragment has at most one producer and one
+consumer in the retained history, and the graph must be acyclic. A fragment's
+physical row count stays constant across transitions; its deletion count may
+increase. Translation follows these dependencies, not the serialized list order.
+
+## Mappings
+
+### Ordered Compaction
+
+Ordered compaction concatenates surviving rows in source-fragment order, with
+ascending physical row offsets within each source, then splits that stream into
+the ordered destination fragments.
+
+`changed_row_addrs` stores a serialized RoaringTreemap of surviving source
+addresses. A physical address uses the upper 32 bits for the fragment ID and the
+lower 32 bits for the row offset. A valid source row absent from the bitmap was
+deleted.
+
+To translate a surviving row, count the surviving rows in preceding source
+fragments and the surviving rows before its offset in its own fragment. Their
+sum is its zero-based position in the output stream. Find the destination whose
+cumulative physical-row range contains that position and subtract the start of
+that range to obtain the destination offset.
+
+The legacy `Group` and the new `OrderedCompaction` mapping use this same ordering
+and bitmap representation. No per-row destination labels are required.
+
+### Stable Partition
+
+A stable partition processes source fragments sequentially in their recorded
+order and assigns each surviving row a label: the zero-based position of its
+destination in `destinations`. Rows with the same label retain their relative
+source order. Deleted source rows carry a null label.
+
+The mapping payload is one immutable Lance file,
+`_fri/<map_id>/stable_partition.lance`. `map_id` is a UUID independent of the FRI
+index UUID, so the file survives FRI metadata rewrites. `map_size_bytes` records
+its exact size. An unset `base_id` selects the dataset base; otherwise it selects
+the corresponding `Manifest.base_paths` entry. Relocating a dataset requires
+copying these files or updating their references.
+
+#### Row Map File Schema
+
+The row map is a Lance file with one nullable `uint16` label per physical source
+row. Rows follow source-fragment order, then physical row offset within each
+fragment, including deleted rows.
+
+```python
+import pyarrow as pa
+
+row_map_schema = pa.schema([pa.field("label", pa.uint16(), nullable=True)])
+```
+
+A label tells us which destination receives the row: `0` means
+`destinations[0]`, `1` means `destinations[1]`, and `null` means the row was
+deleted at rewrite time. It stores the destination's position in the list, not
+its fragment ID or row offset. The number of destinations must be between 1
+and 65,536, and each non-null label must be smaller than that number.
+
+#### Counts Matrix
+
+Labels tell us the destination fragment. To find the row offset inside that
+fragment, we count earlier source rows with the same label.
+
+To avoid reading all earlier labels, source rows are divided into blocks.
+For each block and destination, the counts matrix stores the cumulative number
+of rows sent to that destination through the end of the block. Null labels are
+not counted. `block_rows` must be positive; the current writer uses 65,536.
+Only the final block may be shorter.
+
+The matrix is stored in a Lance global buffer. The schema metadata key
+`lance:stable_partition:counts_buffer_index` contains its buffer index as a
+decimal string. Readers locate the buffer through the normal Lance file metadata.
+
+The buffer starts with a 28-byte header, in this order:
+
+- Magic: four bytes, `LSPC`.
+- Version: `u32`, value 1.
+- Representation: `u32`, value 0 for the dense grid.
+- Number of destinations: `u32`.
+- Rows per block: `u32`.
+- Total physical source rows: `u64`.
+
+All integers are unsigned and little-endian. The header is followed by
+`ceil(total_rows / block_rows) * num_destinations` cumulative `u32` counts,
+ordered by block, then destination. No extra bytes are allowed. Unsupported
+versions or representations must be rejected.
+
+Counts must never decrease, and a block cannot contribute more live rows than
+its length. Final destination counts must match the destination digests. The
+label-file row count and header total must match the sum of source physical row
+counts. An empty file has no grid rows and zero destination totals.
+
+#### Address Translation
+
+For source fragment `s` and row offset `o`:
+
+1. Find its label-file position: the physical row counts of all preceding source
+   fragments, plus `o`.
+2. Read the block containing that position. A null label means the row was deleted;
+   otherwise label `d` selects `destinations[d]`.
+3. The destination row offset is the count for `d` before this block, plus the
+   number of occurrences of `d` strictly before this row within the block.
+   The count before the first block is zero.
+
+For batch translation, read each requested block once. Initialize destination
+counters from the preceding counts row, then scan the block in order. Each
+non-null label takes the current counter as its offset and increments it.
+Opening FRI history does not require reading labels; translation only needs the
+counts matrix and the requested label blocks.
+
 ## Expected Use Pattern
 
-Fragment Reuse Index should be created if the user defers index remap in compaction.
-The index accumulates a new **reuse version** every time a compaction is executed.
+When indexing or index remapping cannot keep up with compaction or reclustering,
+FRI allows fragment rewrites to proceed while retaining existing indices.
+Each rewrite that defers index remapping records its mapping: a reuse version
+in FRI index version 0, or transitions in index version 1. A rewrite publishes
+its mapping atomically, replacing the FRI entry in the same commit. A
+transition must reference only fragments committed no later than itself.
+Fragments not covered by any index are served by scanning, so correctness
+never depends on a mapping being present.
 
-As long as all the scalar and vector indices are created after the specific reuse version,
-the indices are all caught up and the specific reuse version can be trimmed.
+Once all dependent indices have caught up, the corresponding history can be
+trimmed. Cleanup must retain intermediate transitions still needed to translate
+old addresses. External mapping files can be deleted only when no retained
+dataset version references them.
+
+## Stable Row IDs
+
+Older readers and writers did not expect both stable row IDs and a Fragment Reuse Index but are
+not prevented from opening tables that have both. These older systems could silently corrupt such
+tables. A table version that has both sets `FLAG_FRAG_REUSE_WITH_STABLE_ROW_IDS` in the reader and
+writer [feature flags](../../table/versioning.md#current-feature-flags) to guard against this.
 
 ## Impacts
 
 ### Conflict Resolution
 
-The presence of the Fragment Reuse Index changes how Lance detects conflicts between concurrent
-operations. Operations that would normally conflict with compaction (such as index building) can
-proceed without conflict when the FRI is in use. For full details on how conflict detection is
-affected, see [conflict resolution](../../table/transaction.md#conflict-resolution).
+Deferring index remapping avoids replacing existing indices during a fragment
+rewrite, reducing conflicts with concurrent index building or optimization.
+FRI does not remove conflicts between overlapping rewrites. See
+[conflict resolution](../../table/transaction.md#conflict-resolution).
 
 ### Index Load Cost
 
-When the FRI is present, indices must be remapped at load time. Each time an index is loaded into
-the cache, the FRI is applied to translate old row addresses to current ones. This adds a small
-cost to index loading but does not affect query performance once the index is cached.
+Loading affected indices requires translating their stored row addresses.
+Ordered compaction uses its bitmap and fragment layouts; stable partition also
+reads the required row-map blocks. Translated indices can be cached and reused.
+Longer mapping chains add translation work; trimming unused history reduces it.
 
-### FRI Growth and Cleanup
+### Reader and Writer Compatibility
 
-The FRI grows with each compaction. Every compaction that defers index remapping adds a new reuse
-version to the index. Over time, this can accumulate and increase the cost of index loading since
-more address translations must be applied.
+The first commit publishing FRI index version 1 sets
+`FLAG_FRAGMENT_REUSE_INDEX` (1024) in both manifest flag fields. Subsequent
+manifests retain both bits. FRI index version 0 does not require this flag.
 
-Once all scalar and vector indices have been rebuilt past a given reuse version, that version is no
-longer needed and can be trimmed. Users should schedule a periodic process to trim stale reuse
-versions and keep the FRI size under control.
+Tables using stable row IDs do not support tagged histories; writers must not
+publish `index_version >= 1` on them.
+
+The reader flag prevents older clients from partially interpreting the new
+history. The writer flag prevents them from dropping mappings when rewriting
+FRI metadata. Clients that do not support the corresponding flag must reject
+the read or write and require an upgrade. See
+[feature flags](../../table/versioning.md).
 
 
 ================================================
@@ -2244,7 +3146,7 @@ FILE: docs/src/format/index/system/mem_wal.md
 # MemWAL Index
 
 The MemWAL Index is a system index that serves as the centralized structure for all MemWAL metadata.
-It stores configuration (shard specs, indexes to maintain), merge progress, and shard state snapshots.
+It stores configuration (shard specs, indexes to maintain), SSTable compaction progress, and shard state snapshots.
 
 A table has at most one MemWAL index.
 The table may be a primary-key table or an append-only table without primary-key metadata.
@@ -2339,7 +3241,7 @@ The index file stores the search structure with graph or flat organization.
 The Arrow schema of the Lance file varies depending on the sub-index type used.
 
 !!! note
-All partitions are stored in the same file, and partitions must be written in order.
+    All partitions are stored in the same file, and partitions must be written in order.
 
 ##### FLAT
 
@@ -2355,12 +3257,12 @@ HNSW (Hierarchical Navigable Small World) indices provide fast approximate searc
 
 | Column        | Type          | Nullable | Description            |
 | ------------- | ------------- | -------- | ---------------------- |
-| `__vector_id` | uint64        | false    | Vector identifier      |
-| `__neighbors` | list<uint32>  | false    | Neighbor node IDs      |
-| `_distance`   | list<float32> | false    | Distances to neighbors |
+| `__vector_id` | uint32        | true     | Vector identifier      |
+| `__neighbors` | list<uint32>  | true     | Neighbor node IDs      |
+| `_distance`   | list<float32> | true     | Distances to neighbors |
 
 !!! note
-HNSW consists of multiple levels, and all levels must be written in order starting from level 0.
+    HNSW consists of multiple levels, and all levels must be written in order starting from level 0.
 
 #### Arrow Schema Metadata
 
@@ -2382,8 +3284,8 @@ References the IVF metadata stored in the Lance file global buffer.
 This value records the global buffer index, currently this is always "1".
 
 !!! note
-Global buffer indices in Lance files are 1-based,
-so you need to subtract 1 when accessing them through code.
+    Global buffer indices in Lance files are 1-based,
+    so you need to subtract 1 when accessing them through code.
 
 ##### "lance:flat"
 
@@ -2430,7 +3332,20 @@ Since the auxiliary file stores the actual (quantized) vectors,
 the Arrow schema of the Lance file varies depending on the quantization method used.
 
 !!! note
-All partitions are stored in the same file, and partitions must be written in order.
+    All partitions are stored in the same file, and partitions must be written in order.
+
+Every quantization format below lists only its internal columns. When a V3 IVF
+writer materializes carried values, it appends one trailing column per carried
+field after them, named and typed exactly as in the dataset schema. This physical
+payload may be a subset of the manifest's `covering_fields` declaration (see
+[Index Metadata](../index.md)). A reader returns only columns whose physical
+schema and dataset field ids it verifies across every selected segment; all other
+projected columns come from a base-table take.
+
+A reader discovers carried columns by exclusion, not by position: any column in the
+auxiliary file's schema that is not one of the quantizer's internal columns is a
+carried column. Writers append them in trailing order, but a reader must not depend
+on that ordering to identify them.
 
 ##### FLAT
 
@@ -2438,17 +3353,17 @@ No quantization applied - stores original vectors in their full precision:
 
 | Column   | Type                     | Nullable | Description                                           |
 | -------- | ------------------------ | -------- | ----------------------------------------------------- |
-| `_rowid` | uint64                   | false    | Row identifier                                        |
-| `flat`   | list<float32>[dimension] | false    | Original vector values (list_size = vector dimension) |
+| `_rowid` | uint64                   | true     | Row identifier                                        |
+| `flat`   | list<float32>[dimension] | true     | Original vector values (list_size = vector dimension) |
 
 ##### PQ
 
 Compresses vectors using product quantization for significant memory savings:
 
-| Column      | Type           | Nullable | Description                                 |
-| ----------- | -------------- | -------- | ------------------------------------------- |
-| `_rowid`    | uint64         | false    | Row identifier                              |
-| `__pq_code` | list<uint8>[m] | false    | PQ codes (list_size = number of subvectors) |
+| Column      | Type                                            | Nullable | Description                                   |
+| ----------- | ----------------------------------------------- | -------- | --------------------------------------------- |
+| `_rowid`    | uint64                                          | true     | Row identifier                                |
+| `__pq_code` | list<uint8>[num_sub_vectors * num_bits / 8]     | true     | PQ codes, packed to `num_bits` per subvector  |
 
 ##### SQ
 
@@ -2456,23 +3371,28 @@ Compresses vectors using scalar quantization for moderate memory savings:
 
 | Column      | Type                   | Nullable | Description                             |
 | ----------- | ---------------------- | -------- | --------------------------------------- |
-| `_rowid`    | uint64                 | false    | Row identifier                          |
-| `__sq_code` | list<uint8>[dimension] | false    | SQ codes (list_size = vector dimension) |
+| `_rowid`    | uint64                 | true     | Row identifier                          |
+| `__sq_code` | list<uint8>[dimension] | true     | SQ codes (list_size = vector dimension) |
 
 ##### RQ
 
 Compresses vectors using RabitQ with random rotation and binary quantization for extreme compression:
 
-| Column               | Type                                             | Nullable                 | Description                                                     |
-| -------------------- | ------------------------------------------------ | ------------------------ | --------------------------------------------------------------- |
-| `_rowid`             | uint64                                           | false                    | Row identifier                                                  |
-| `_rabit_codes`       | list<uint8>[dimension / 8]                       | false                    | Binary quantized codes (1 bit per dimension, packed into bytes) |
-| `__add_factors`      | float32                                          | false                    | Additive correction factors for distance computation            |
-| `__scale_factors`    | float32                                          | false                    | Scale correction factors for distance computation               |
-| `__error_factors`    | float32                                          | false for `raw_query`    | Error factors for raw-query lower-bound pruning                 |
-| `__ex_codes`         | list<uint8>[ceil(dimension * (num_bits - 1) / 8)] | false for `num_bits > 1` | Extra RabitQ code bits for multi-bit RQ                         |
-| `__add_factors_ex`   | float32                                          | false for `num_bits > 1` | Additive correction factors for ex-code distance computation    |
-| `__scale_factors_ex` | float32                                          | false for `num_bits > 1` | Scale correction factors for ex-code distance computation       |
+| Column               | Type                                             | Nullable | Present when                | Description                                                     |
+| -------------------- | ------------------------------------------------ | -------- | --------------------------- | --------------------------------------------------------------- |
+| `_rowid`             | uint64                                           | true     | always                      | Row identifier                                                  |
+| `_rabit_codes`       | list<uint8>[ceil(code_dim / 8)]                  | true     | always                      | Binary quantized codes (1 bit per dimension, packed into bytes) |
+| `__add_factors`      | float32                                          | true     | always                      | Additive correction factors for distance computation            |
+| `__scale_factors`    | float32                                          | true     | always                      | Scale correction factors for distance computation               |
+| `__error_factors`    | float32                                          | true     | `raw_query` estimator       | Error factors for raw-query lower-bound pruning                 |
+| `__blocked_ex_codes` | list<uint8>[next_multiple_of(code_dim, 64) * (num_bits - 1) / 8] | true | `num_bits > 1` | Extra RabitQ code bits for multi-bit RQ, in the blocked layout  |
+| `__add_factors_ex`   | float32                                          | true     | `num_bits > 1`              | Additive correction factors for ex-code distance computation    |
+| `__scale_factors_ex` | float32                                          | true     | `num_bits > 1`              | Scale correction factors for ex-code distance computation       |
+
+!!! note
+    Indexes written before the blocked ex-code layout store the same bits in
+    `__ex_codes`, sized `ceil(dimension * (num_bits - 1) / 8)`. Readers still
+    accept that column and repack it at load time; writers no longer emit it.
 
 #### Arrow Schema Metadata
 
@@ -2494,6 +3414,17 @@ It's only used for tracking each partition's offset and length in the auxiliary 
 Contains RabitQ-specific metadata in JSON format (only present for RQ quantization).
 This includes the rotation matrix position, number of bits, and packing information.
 See the RQ metadata specification in the "storage_metadata" section below.
+
+##### "covering_field_ids"
+
+The dataset field ids of the storage file's physical carried columns,
+comma separated in physical schema order (only present when the storage carries
+values). Arrow fields carry no Lance field id, so names and types alone cannot
+prove which logical column a payload came from. Readers use these ids to bind
+physical values to the segment's `covering_fields` declaration, and treat missing,
+malformed, ambiguous, or mismatched metadata as no servable carried capability.
+A merge must not combine shards whose carried columns disagree on these ids, even
+when those columns match by name and type.
 
 ##### "storage_metadata"
 
@@ -2551,7 +3482,7 @@ to rotate vectors before binary quantization:
 
 The rotation matrix has shape `[code_dim, code_dim]` where `code_dim` is the rotated vector
 dimension. IVF_RQ always stores the 1-bit binary sign code in `_rabit_codes`; for `num_bits > 1`,
-the remaining `num_bits - 1` ex-code bits are stored in `__ex_codes` instead of widening the
+the remaining `num_bits - 1` ex-code bits are stored in `__blocked_ex_codes` instead of widening the
 binary code path. New IVF_RQ indexes store raw-query estimator factors. `num_bits=1` indexes only
 store the binary-code factor columns; multi-bit indexes also store separate ex-code additive and
 scale factors.
@@ -2588,19 +3519,17 @@ PQ uses 16 num_sub_vectors (m=16) with 8 num_bits per subvector, and distance ty
 - Rows with Arrow schema:
 
 ```python
-pa.schema(
-    [
-        pa.field("_rowid", pa.uint64()),
-        pa.field("__pq_code", pa.list(pa.uint8(), list_size=16)),  # m subvector codes
-    ]
-)
+pa.schema([
+    pa.field("_rowid", pa.uint64()),
+    pa.field("__pq_code", pa.list_(pa.uint8(), list_size=16)), # num_sub_vectors * num_bits / 8 = 16 * 8 / 8
+])
 ```
 
 ### Appendix 2: Example IVF_RQ Format
 
 This example shows how an `IVF_RQ` index is physically laid out. Assume vectors have dimension 128,
 RQ uses 1 bit per dimension (`num_bits=1`), and distance type is "l2". For `num_bits > 1`, the
-auxiliary schema also includes `__ex_codes`, `__add_factors_ex`, and `__scale_factors_ex`.
+auxiliary schema also includes `__blocked_ex_codes`, `__add_factors_ex`, and `__scale_factors_ex`.
 
 #### Index File
 
@@ -2627,15 +3556,13 @@ auxiliary schema also includes `__ex_codes`, `__add_factors_ex`, and `__scale_fa
 - Rows with Arrow schema:
 
 ```python
-pa.schema(
-    [
-        pa.field("_rowid", pa.uint64()),
-        pa.field("_rabit_codes", pa.list(pa.uint8(), list_size=16)),  # dimension/8 = 128/8 = 16 bytes
-        pa.field("__add_factors", pa.float32()),
-        pa.field("__scale_factors", pa.float32()),
-        pa.field("__error_factors", pa.float32()),
-    ]
-)
+pa.schema([
+    pa.field("_rowid", pa.uint64()),
+    pa.field("_rabit_codes", pa.list_(pa.uint8(), list_size=16)), # ceil(code_dim / 8) = ceil(128 / 8)
+    pa.field("__add_factors", pa.float32()),
+    pa.field("__scale_factors", pa.float32()),
+    pa.field("__error_factors", pa.float32()),
+])
 ```
 
 ### Appendix 3: Accessing Index File with Python
@@ -2670,7 +3597,6 @@ aux_reader = lance.LanceFileReader.read_file("path/to/auxiliary.idx")
 storage_metadata = aux_reader.metadata().schema.metadata.get(b"storage_metadata")
 if storage_metadata:
     import json
-
     pq_metadata = json.loads(storage_metadata.decode())[0]  # First element of the list
     pq_params = json.loads(pq_metadata)
 
@@ -2688,7 +3614,6 @@ FILE: docs/src/format/index/vector/.pages
 ================================================
 nav:
   - index.md
-
 
 ================================================
 FILE: docs/src/format/table/branch_tag.md
@@ -2712,7 +3637,9 @@ Branch names must follow these validation rules:
 4. Cannot contain `..` or `\`
 5. Segments must contain only alphanumeric characters, `.`, `-`, `_`
 6. Cannot end with `.lock`
-7. Cannot be named `main` (reserved for main branch)
+7. Cannot be named `main` (reserved for the default branch)
+
+Branch names are case-sensitive, matching Git/GitHub ref semantics. The exact name `main` is a virtual name for the default branch. It may appear in API reference contexts as an alias for the default branch, but no branch metadata file named `main.json` is created.
 
 ### Branch Metadata Path
 
@@ -2733,7 +3660,7 @@ Each branch metadata file is a JSON file with the following fields:
 
 | JSON Key         | Type   | Optional | Description                                                                    |
 |------------------|--------|----------|--------------------------------------------------------------------------------|
-| `parentBranch`   | string | Yes      | Name of the branch this was created from. `null` indicates branched from main. |
+| `parentBranch`   | string | Yes      | Name of the branch this was created from. `null` indicates branched from the default branch. |
 | `parentVersion`  | number |          | Version number of the parent branch at the time this branch was created.       |
 | `createAt`       | number |          | Unix timestamp (seconds since epoch) when the branch was created.              |
 | `manifestSize`   | number |          | Size of the initial manifest file in bytes.                                    |
@@ -2761,7 +3688,7 @@ Branch datasets are organized using the `tree/` directory at the dataset root:
 ```
 
 Named branches store their version-specific files under `tree/{branch_name}/`, resembling the GitHub branch path convention.
-It uses the branch name as is to form the path, 
+It uses the branch name as is to form the path,
 which means `/` would create a logical subdirectory (e.g., `bugfix/issue-123`, `feature/user-auth`):
 
 ```
@@ -2812,12 +3739,876 @@ Each tag file is a JSON file with the following fields:
 
 | JSON Key        | Type   | Optional | Description                                                              |
 |-----------------|--------|----------|--------------------------------------------------------------------------|
-| `branch`        | string | Yes      | Branch name being tagged. `null` or absent indicates main branch.        |
+| `branch`        | string | Yes      | Branch name being tagged. `null` or absent indicates the default branch. |
 | `version`       | number |          | Version number being tagged within that branch.                          |
 | `createdAt`     | string | Yes      | RFC 3339 timestamp for when the tag was first created.                  |
 | `updatedAt`     | string | Yes      | RFC 3339 timestamp for the latest tag reference update.                 |
 | `manifestSize`  | number |          | Size of the manifest file in bytes. Used for efficient manifest loading. |
 | `metadata`      | object | Yes      | String key/value metadata map. If absent, it is treated as an empty object. |
+
+
+================================================
+FILE: docs/src/format/table/data_overlay_file.md
+================================================
+# Data Overlay Files
+
+!!! warning "Experimental"
+
+    This feature is currently experimental and not yet supported in any library.
+
+<!-- TODO: When overlay file support is implemented, update this note to state
+     the released version that first supports the feature (and drop the
+     "experimental" framing once it is stable). -->
+
+!!! note "Overlay files require feature flag 64 (data overlay files)"
+
+    A reader or writer that does not understand overlay files must refuse a
+    dataset that uses them. Silently ignoring an overlay would return stale base
+    values, which is a correctness bug rather than a degraded experience.
+
+Overlay files supply new values for a subset of `(row offset, field)` cells
+within a fragment **without rewriting the fragment's base data files**. They make
+updates cheap when only a small fraction of rows and/or columns change: instead
+of rewriting whole columns or moving rows to a new fragment, a writer appends a
+small file carrying just the changed cells.
+
+This is Lance's third mechanism for changing data in place, alongside
+[deletion files](index.md#deletion-files) (which remove rows) and
+[data evolution](index.md#data-evolution) (which adds or rewrites whole columns).
+An overlay changes individual cells.
+
+## Concepts
+
+### Coverage and resolution
+
+Each overlay declares which cells it provides through a **coverage** bitmap (or,
+for sparse overlays, one bitmap per field). The bitmaps index **physical row
+offsets**. They include deleted rows and are stable even as deletion vectors change.
+
+To resolve a cell `(offset, field)` on read, walk the fragment's overlays from
+**newest to oldest**. The first overlay that covers `(offset, field)` wins; its
+value is used. If no overlay covers the cell, the value falls through to the base
+data file (or is `NULL` if no base data file holds that field).
+
+Precedence among overlays is determined by:
+
+1. `committed_version` — higher wins (see [Versioning](#versioning-and-ordering)).
+2. Position in `DataFragment.overlays` as a tiebreaker — a later entry is newer.
+
+A covered offset whose value is `NULL` overrides the cell **to** `NULL`. This is
+distinct from an offset that is simply absent from the bitmap, which falls
+through to the base. Coverage, not value-nullness, decides whether an overlay
+applies.
+
+### Interaction with deletions
+
+Deletions take precedence over overlays. If a row offset is marked deleted in the
+fragment's deletion file, any overlay value for that offset is dead and is
+ignored, regardless of commit order.
+
+### Physical layout
+
+An overlay's data file stores **one value column per field**, in the order of
+`data_file.fields`. It does **not** store a row-offset key column. The position of
+a covered offset's value within its column is the **rank** of that offset in the
+field's coverage bitmap — the number of set bits below it. Resolving a cell is a
+rank lookup plus one value fetch, with no separate offset column to store or
+search.
+
+Because different fields may cover different offset sets, the value columns of a
+single sparse overlay may have **different lengths**. The Lance file format
+permits columns of differing item counts within one file, so a sparse overlay is
+representable as a single file. (See [Writer support](#writer-support) for the
+current implementation status.)
+
+### Dense vs. sparse overlays
+
+A single overlay is one of two shapes:
+
+- **Dense (rectangular).** One `shared_offset_bitmap` applies to every field. Every
+  covered offset has a value for every field. This is the common case for a plain
+  `UPDATE`, where one `SET` list is applied to one set of rows.
+- **Sparse.** A `FieldCoverage` carries one bitmap per field, used when different
+  fields cover different offset sets — for example a `MERGE` with multiple
+  `WHEN MATCHED` branches, where different rows update different columns. A dense
+  overlay would have to widen to the bounding rectangle and fill the untouched
+  cells with their current values (post-images), which for wide columns such as
+  embeddings means re-storing data that did not change. A sparse overlay stores
+  exactly the changed cells.
+
+## Protobuf
+
+<details>
+<summary>DataOverlayFile protobuf message</summary>
+
+```protobuf
+%%% proto.message.DataOverlayFile %%%
+```
+
+</details>
+
+<details>
+<summary>FieldCoverage protobuf message</summary>
+
+```protobuf
+%%% proto.message.FieldCoverage %%%
+```
+
+</details>
+
+## Versioning and ordering
+
+Overlays reuse the dataset version as their ordering clock rather than
+introducing a separate generation counter.
+
+`committed_version` is the dataset version at which an overlay **became
+effective** — the version of the commit that introduced it, **not** the version
+it was read from. It is stamped at commit time and re-stamped if the commit is
+retried, in the same way as the created-at / last-updated-at version sequences.
+
+This single value drives every ordering decision:
+
+- **Overlay vs. overlay** (read precedence): higher `committed_version` wins.
+- **Overlay vs. index** (query correctness): an index records the
+  `dataset_version` it was built from. An index whose `dataset_version >=
+  committed_version` already incorporates the overlay. An overlay whose
+  `committed_version > index.dataset_version` is newer than the index and its
+  cells must be excluded from index results and re-evaluated.
+- **Scheduler signal**: the gap between an overlay's `committed_version` and an
+  index's `dataset_version`, or between an overlay and the base, is a staleness
+  measure the compaction scheduler can use.
+
+!!! note "Why effective version, not read version"
+
+    Suppose an overlay reads version 5 and commits at version 6, while an index
+    is built reading version 5 (before the overlay) and commits at version 7 with
+    `dataset_version = 5`. If the overlay stored its *read* version (5), the test
+    `5 > 5` is false, the row would not be excluded, and the index — which never
+    saw the overlay — would return a stale result. Storing the *effective*
+    version (6) makes `6 > 5` true, the cell is excluded and re-evaluated, and the
+    result is correct.
+
+## Index integration
+
+Building an index over a fragment that has overlays does **not** require dropping
+the fragment from the index's coverage. The fragment stays indexed, and the query
+path reconciles overlays at query time using an **exclusion set**.
+
+The exclusion set for an index on field `F` is the union of the coverage bitmaps,
+restricted to field `F`, of every overlay whose `committed_version >
+index.dataset_version`. The exclusion is **field-aware**: an overlay that touches
+only unrelated columns does not exclude anything from the index on `F`.
+
+`F` here ranges over the union of the index's `fields` and `covering_fields`
+(see [Serving carried columns](../index/index.md#serving-carried-columns)).
+An overlay updating a merely-carried column leaves the keyed value correct while
+making the carried value stale, so it must exclude those rows just the same.
+
+The query then proceeds as:
+
+1. Run the index search as usual, producing candidate rows.
+2. Remove any candidate in the exclusion set. (Its indexed value may be stale.)
+3. **Re-evaluate** the excluded rows against their current values — the same flat
+   path already used for the unindexed tail of fragments. For a scalar predicate
+   this re-applies the filter; for a vector query it re-scores the row's current
+   vector. Rows that still match are added back to the result.
+
+Step 3 is what makes exclusion correct rather than merely safe: removing a row
+from index candidates without re-evaluating it would silently drop a row that
+should match under its new value.
+
+Exclusion is always *sufficient* because a write changes a cell only by adding an
+overlay, and that overlay's `committed_version` — the version of the commit that
+adds it — necessarily exceeds the `dataset_version` of any pre-existing index. So
+every cell a write changes is guaranteed to fall in that index's exclusion set.
+Compaction may remove an overlay only if no index still relies on it for exclusion
+(see [Compaction](#compaction)).
+
+## Compaction
+
+Overlays accumulate read cost — every overlay is a bitmap to test, a possible
+file to open, and additional work to interleave values. Compaction bounds that cost in two modes:
+
+- **Overlay → overlay.** Merge several overlays into fewer, computing the
+  post-image per `(offset, field)` by walking the merged overlays newest-first.
+  The merged overlay takes the **maximum** `committed_version` of its inputs, so
+  the exclusion semantics are preserved. The merged overlays must be **contiguous
+  in `committed_version`** — with overlays at v10, v30, and v50 you cannot merge
+  just v10 and v50, because stamping the result v50 would incorrectly promote
+  v10's values above the intervening v30 for any cell v30 also covers. Indexes can
+  still be re-used, but they may now need to exclude more rows. This is cheap to
+  write and does not touch the base.
+- **Overlay → base.** Fold overlays into a fresh base data file, computing the
+  post-image for every covered cell, then clear the overlays. The base is
+  complete, so every post-image is well defined. Overlay offsets are physical, so
+  they cannot survive a rewrite that reorders rows; folding therefore materializes
+  values rather than carrying overlays forward.
+
+!!! warning "Folding an indexed field must update its index"
+
+    An overlay→base fold removes the overlay, which removes the exclusion signal
+    that kept an index correct. Folding an overlay that covers an indexed field
+    `F` is therefore equivalent to a column rewrite of `F` and must, in the same
+    commit, either rebuild the index to a `dataset_version` at least the folded
+    overlay's `committed_version`, or remove the fragment from the index's
+    coverage so the rows fall to the flat path. Otherwise the index would serve
+    stale values with no overlay to exclude them. This is the same rule that
+    already governs rewriting a column that an index is built on.
+
+When a fragment with overlays is compacted by a row-rewriting operation
+(`RewriteRows`, which produces new fragments with new row addresses), the
+overlays are folded into the new base as part of the rewrite, and existing
+[fragment-reuse remapping](row_id_lineage.md) handles the row-address changes as
+it does today.
+
+## Row lineage
+
+An overlay write updates the `last_updated_at_version` of every covered row, so
+change-data-feed and time-travel queries observe the update. Because overlays are
+addressed by physical offset, they do **not** require stable row IDs to be
+enabled; lineage updates apply only when those features are on.
+
+## Worked example
+
+The following example illustrates how overlays function across their lifecycle, to make the rules above concrete.
+
+A table `users` with stable row IDs enabled and these fields:
+
+| field id | name      | type                    |
+|----------|-----------|-------------------------|
+| 1        | id        | `int32` (primary key)   |
+| 2        | name      | `utf8`                  |
+| 3        | age       | `int32`                 |
+| 4        | embedding | `fixed_size_list<f32,4>`|
+
+Created at version 1 as a single fragment `0` with one base data file
+`data/file0.lance` holding all four columns. `physical_rows = 4`:
+
+| offset | id | name  | age | embedding        |
+|--------|----|-------|-----|------------------|
+| 0      | 1  | Alice | 30  | …                |
+| 1      | 2  | Bob   | 25  | …                |
+| 2      | 3  | Carol | 40  | …                |
+| 3      | 4  | Dave  | 22  | …                |
+
+A BTree scalar index on `age` is built at version 1, covering fragment `0`
+(`dataset_version = 1`).
+
+### Step 1 — write an overlay
+
+```sql
+UPDATE users SET age = age + 1 WHERE id IN (2, 4);   -- Bob (offset 1), Dave (offset 3)
+```
+
+This touches one field (`age`) for two rows, so the writer emits a dense overlay —
+one shared bitmap covering both offsets — and commits it as version 2. Fragment
+`0` gains:
+
+```text
+DataOverlayFile {
+  data_file: { path: "data/overlay-<uuid>.lance", fields: [3], column_indices: [0] }
+  coverage:  shared_offset_bitmap = {1, 3}
+  committed_version: 2
+}
+```
+
+The overlay file stores a single `age` column with two values, `[26, 23]`, at
+ranks `{1,3}.rank(1) = 0` and `{1,3}.rank(3) = 1`. `last_updated_at_version` is
+set to 2 for offsets 1 and 3.
+
+### Step 2 — read
+
+`SELECT id, age FROM users` reads base ages `[30, 25, 40, 22]`. For `age`
+(field 3), the overlay covers offsets 1 and 3, so `age[1]` is replaced with the
+overlay value at rank `{1,3}.rank(1) = 0` → `26`, and `age[3]` with the value at
+rank `{1,3}.rank(3) = 1` → `23`. Result ages: `[30, 26, 40, 23]`.
+
+### Step 3 — index query
+
+```sql
+SELECT * FROM users WHERE age = 26;
+```
+
+The `age` index was built at `dataset_version = 1`; the overlay's
+`committed_version` is 2. Since `2 > 1`, the overlay's coverage for `age`, `{1, 3}`,
+is the exclusion set for this query.
+
+- The index (built at v1) holds Bob's *old* `age = 25`, so a lookup for `26`
+  returns nothing from the index.
+- The whole exclusion set is re-evaluated on the flat path, not just the rows the
+  index returned. Offset 1's current `age` (26, via the overlay) matches, so Bob
+  is returned; offset 3's current `age` (23) does not match and is dropped.
+
+The mirror case `WHERE age = 25` shows exclusion preventing a stale hit: the index
+returns offset 1 (stale `25`), but offset 1 is excluded, re-evaluated to `26`, and
+correctly dropped.
+
+### Step 4 — a second, non-rectangular write
+
+```sql
+MERGE INTO users USING staged ON users.id = staged.id
+WHEN MATCHED AND staged.kind = 'rename'  THEN UPDATE SET name = staged.name        -- Carol(2), Dave(3)
+WHEN MATCHED AND staged.kind = 'embed'   THEN UPDATE SET embedding = staged.embedding -- Bob(1)
+```
+
+`name` is updated for offsets `{2, 3}` and `embedding` for offset `{1}` — different
+fields over different rows. This is a sparse overlay, committed as version 3:
+
+```text
+DataOverlayFile {
+  data_file: { path: "data/overlay-<uuid2>.lance", fields: [2, 4], column_indices: [0, 1] }
+  coverage:  field_coverage { offset_bitmaps: [ {2,3},   {1} ] }
+  //                                     name (field 2)  ^    ^ embedding (field 4)
+  committed_version: 3
+}
+```
+
+The file's `name` column has **two** values (`["Caroline", "David"]`, at
+ranks 0 and 1 of `{2,3}`) and its `embedding` column has **one** value (at rank 0
+of `{1}`) — columns of different lengths in one file.
+
+### Step 5 — read after the second write
+
+`SELECT name, age, embedding FROM users` resolves each field independently,
+newest overlay first:
+
+- `name`: the v3 overlay covers `{2,3}` → `["Alice", "Bob", "Caroline", "David"]`.
+- `age`: the v3 overlay does not cover `age`; the v2 overlay still applies at
+  offsets 1 and 3 → `[30, 26, 40, 23]`.
+- `embedding`: the v3 overlay covers `{1}` → Bob's vector is the new one, others
+  from base.
+
+Overlays from different versions coexist and apply per field.
+
+### Step 6 — compaction (overlay → base)
+
+The scheduler folds both overlays into fragment `0` at version 4, computing
+post-images for `age`, `name`, and `embedding`, and writing a new base data file
+`data/file1.lance` with those columns. In the old file, fields 2, 3, and 4 are
+marked with a tombstone (`-2`); field 1 (`id`) remains. The fragment's `overlays` list is
+cleared. Row addresses are preserved (a column rewrite, not a row rewrite), so
+stable row IDs and the deletion vector are untouched.
+
+Because the fold removed the overlay that was excluding offsets 1 and 3 from the
+`age` index, the commit must drop fragment `0` from its coverage so `age` queries
+fall to the flat path.
+
+## Guidance
+
+!!! note "This section is a stub."
+
+    The following are implementation considerations, not part of the on-disk
+    specification.
+
+### When to overlay vs. rewrite a column vs. move rows
+
+<!-- TODO: Replace the rough heuristic below with concrete thresholds once we
+     have benchmarked the crossover points between overlays, column rewrites,
+     and row moves. -->
+
+*(To be expanded.)* The choice between appending an overlay, rewriting a full
+column (data evolution), and moving updated rows to a new fragment depends on the
+fraction of rows changed, the fraction of columns changed, column width, the
+presence of indexes on the changed columns, and the accumulated overlay read
+cost. Roughly: few rows changed favors overlays; most rows in a few columns
+favors a column rewrite; most columns changed favors moving rows to a new
+fragment.
+
+### Writer support
+
+<!-- TODO: Fill in as writer implementation progresses, including the status of
+     single-file sparse overlays (independent-length columns). -->
+
+*(To be expanded.)* Dense (rectangular) overlays write with the existing
+equal-length file writer today. Sparse overlays stored as a **single** file
+require the writer to emit columns of independent lengths, which the current v2
+writer does not yet do (it advances all columns from one global row counter).
+Until that support lands, a writer can express a sparse update as multiple dense
+overlays in one transaction.
+
+### Scheduling compaction
+
+<!-- TODO: Fill in with a concrete cost/benefit policy once compaction is
+     implemented and benchmarked. -->
+
+*(To be expanded.)* The overlay→overlay and overlay→base modes have very
+different costs; a cost/benefit scheduler decides when each is worthwhile, using
+the version gap as a staleness signal.
+
+## Related specifications
+
+- [Table format overview](index.md)
+- [Transactions: DataOverlay operation](transaction.md#dataoverlay) — write path
+  and conflict semantics
+- [Row ID & Lineage](row_id_lineage.md)
+- [Index Formats: handling overlay rows](../index/index.md#handling-deleted-and-invalidated-rows)
+- [Format Versioning](versioning.md)
+
+
+================================================
+FILE: docs/src/format/table/fragment_metadata.md
+================================================
+# Fragment Metadata Tree
+
+!!! warning "Experimental"
+
+    This layout is unstable. Readers and writers may change it without
+    keeping compatibility with earlier unstable revisions. Flat manifests
+    remain the default.
+
+**This page specifies a proposed on-disk format for storing fragment state.
+Support for creating or reading tree tables is not yet available in released
+Lance versions.**
+
+!!! note "Tree tables require feature flag 4096, `FLAG_FRAGMENT_TREE`"
+
+    A reader or writer that does not understand this layout must refuse the
+    dataset. The flat `fragments` list is empty on a tree table, so a reader
+    that ignored the flag would see an empty table.
+
+In the flat format, each Version Manifest carries the complete fragment list.
+Committing a change and opening a dataset both process that whole list, even
+when the change touches only a few fragments.
+
+The fragment metadata tree (fragment tree) stores those records in immutable
+Lance leaves keyed by fragment ID. Validated changes may remain above the leaves as
+mutations until enough work accumulates to rewrite them.
+
+The Version Manifest defines table-version state. Committing it makes that
+version visible.
+
+![Fragment metadata tree](fragment_metadata_tree.svg)
+
+*A shallow tree is shown. Larger trees may insert interior routing nodes between
+the root and leaves.*
+
+### At a glance
+
+| | |
+|---|---|
+| Read | Read the leaf record, if any, then apply newer mutations for that fragment. |
+| Write | Native Lance validates the change. The tree stores the resulting mutation. |
+| Publish | Write immutable tree objects first, then commit the Version Manifest. |
+
+Protobuf messages are in `protos/fragment_metadata.proto`.
+`Manifest.fragment_tree` is declared in `protos/table.proto`. Operation
+semantics, conflict rules, and native validation stay with
+[transactions](transaction.md). A storage action is the result of a successful
+native transaction.
+
+Readers must treat a violation of any requirement on this page as a corrupt
+snapshot.
+
+## Snapshot
+
+A tree table must set `Manifest.fragment_tree`, leave `Manifest.fragments`
+empty, and set flag 4096 in both `reader_feature_flags` and
+`writer_feature_flags`. These fields must agree. When `FLAG_FRAGMENT_TREE`
+is set, `FragmentTreeMetadata.layout` must select exactly one recognized layout.
+
+Each version stores fragment records either in the tree or in
+`Manifest.fragments`, never both. A writer may convert a flat table by
+publishing a new tree-backed version. Whether and when to convert is
+writer policy.
+
+A `FragmentTree` must contain exactly one of an inline root or a
+`root_uuid`.
+
+An inline root carries the complete `FragmentTreeRoot` in the Version
+Manifest. `mutations_since_root` must be empty.
+
+An external root named by `root_uuid` belongs to the current dataset.
+`root_uuid` must contain exactly 16 bytes, in the order of the UUID's hexadecimal
+digits. Its path is `_bt/root/{uuid}.root`, with lowercase hexadecimal digits and
+hyphens after digits 8, 12, 16, and 20. Readers must reject any other byte length.
+`mutations_since_root` contains every mutation in this version that is not
+represented by that root. Readers must not follow a mutation chain.
+
+```
+Version Manifest N
+├─ root_uuid ──────────► Root R
+└─ mutations_since_root
+
+fragment state N = Root R + mutations_since_root
+```
+
+Opening a version requires its Version Manifest and at most one external root.
+Version history is not consulted.
+
+`buffer` on a root or interior holds mutations already in the tree that have
+not been pushed to that node's children.
+
+## Tree objects
+
+Tree objects are immutable and stored under `_bt/` relative to a dataset root.
+Tree object paths must begin with `_bt/`. Readers must reject absolute paths
+and paths outside `_bt/`.
+
+```
+{dataset_root}/
+    _bt/
+        root/{uuid}.root     FragmentTreeRoot protobuf
+        node/{uuid}.node     FragmentTreeNode protobuf
+        leaf/{uuid}.lance    Lance file of complete fragment records
+```
+
+A `.root` file is a raw `FragmentTreeRoot` protobuf. A `.node` file is a
+raw `FragmentTreeNode` protobuf. Neither has an extra header or footer.
+
+`FragmentTreeRoot` holds its children, buffer, and `next_action_sequence`.
+
+`FragmentTreeNode` holds the child list and a mutation buffer for that
+subtree.
+
+Child `path` values must be non-empty. Resolved child locations within a child
+list must be unique. Equal paths in different datasets name different objects;
+different `base_id` values resolving to the same object do not make it unique.
+
+A leaf is a Lance file of complete fragment records for one fragment-ID range.
+
+## Object references
+
+The Version Manifest root belongs to the current dataset. It is either an
+inline `FragmentTreeRoot` or a `root_uuid` in the current dataset.
+
+A `FragmentTreeChild` contains a `path` relative to its resolved dataset
+and an optional `base_id`.
+
+When `base_id` is set, it must identify a `BasePath` in the Version Manifest
+with `is_dataset_root` set to true. When `base_id` is absent, the reference
+inherits the resolved dataset of the containing tree object.
+Look up entries by `BasePath.id`, not their position in `base_paths`. Zero is a
+valid ID, distinct from an absent `base_id`. IDs must be unique within the
+manifest, and readers must reject an unknown ID.
+
+A child object resolves to `{resolved_dataset}/{path}`. Tree object paths must
+begin with `_bt/` and must not be resolved under `data/`.
+
+A reference with `base_id` set may name an immutable tree object in another
+dataset. Descendant references with no `base_id` inherit that object's resolved
+dataset.
+
+New tree objects must belong to the current dataset. Tree objects owned by
+another dataset must not be modified.
+
+A shallow clone's root must belong to the clone dataset. Unchanged source
+subtrees may be referenced through `base_id`. The clone's `base_paths` must
+contain a `BasePath` for the source dataset root and preserve every `BasePath`
+entry referenced by a shared tree object at the same id. New base paths must
+use previously unused ids.
+If an ID already names a different base, the writer must copy the affected
+objects and remap their references, or reject the operation. It must not change
+the meaning of an ID used by a shared immutable object.
+
+When a tree object is copied into another dataset, references that inherited
+the source dataset must be rewritten with a `base_id` naming that dataset.
+Existing explicit `base_id` values must continue to resolve to the same
+`BasePath` entries.
+
+An `ExternalFile` embedded in `DataFragment` has no `base_id`. Its path is
+relative to the resolved dataset of the tree object or Version Manifest that
+contains the fragment state.
+
+When fragment state is written to a different dataset, each referenced
+`ExternalFile` must be copied to that dataset and its path rewritten before
+publication. The write must fail if any such reference cannot be preserved.
+
+## Leaf format
+
+A leaf is a Lance file with one row per fragment and the following schema.
+Any Lance file version may be used.
+
+```python
+import pyarrow as pa
+
+mapping = pa.dictionary(pa.int32(), pa.binary())
+data_file = pa.struct([
+    pa.field("path", pa.utf8(), nullable=False),
+    pa.field("field_ids", mapping, nullable=False),
+    pa.field("column_indices", mapping, nullable=False),
+    pa.field("major_version", pa.uint32(), nullable=False),
+    pa.field("minor_version", pa.uint32(), nullable=False),
+    pa.field("file_size_bytes", pa.uint64(), nullable=False),
+    pa.field("base_id", pa.uint32(), nullable=True),
+])
+overlay = pa.struct([
+    pa.field("data_file", data_file, nullable=False),
+    pa.field("overlay_meta", pa.binary(), nullable=False),
+])
+leaf_schema = pa.schema([
+    pa.field("id", pa.uint64(), nullable=False),
+    pa.field("fragment_meta", pa.binary(), nullable=False),
+    pa.field("files", pa.list_(pa.field("item", data_file, nullable=False)), nullable=False),
+    pa.field("overlays", pa.list_(pa.field("item", overlay, nullable=False)), nullable=False),
+])
+```
+
+The schema must match exactly, including field order, types, and nullability.
+Only `base_id` may be null; dictionary values must also be non-null. Empty lists
+represent no files or overlays.
+
+Rows must be ordered by strictly increasing `id`. Valid fragment IDs fit in
+`u32`. A fragment must not be split across leaves. Preserve file and overlay
+list order, including duplicate file paths and the overlay precedence defined
+in [Data Overlay Files](data_overlay_file.md).
+
+`fragment_meta` contains the `DataFragment` protobuf with `id` set to 0 and
+`files` and `overlays` cleared. Readers must reject a nonzero protobuf `id` or
+nonempty `files` or `overlays`, then restore these fields from the row.
+All other fragment fields keep their protobuf representation and semantics.
+
+Each file struct represents a `DataFile`: `field_ids` maps to `fields`, and
+`major_version` and `minor_version` map to `file_major_version` and
+`file_minor_version`. Other fields use their protobuf names.
+
+`overlay_meta` contains the `DataOverlayFile` protobuf with `data_file` absent.
+Readers must reject a populated `data_file`, then restore it from the sibling
+struct. Coverage and committed version retain their protobuf semantics.
+
+Each binary dictionary value stores a mapping vector as consecutive little-endian
+signed 32-bit integers, without a length prefix. Empty bytes mean an empty vector.
+Readers must reject lengths not divisible by 4 and out-of-bounds dictionary keys.
+Decoded vectors preserve element order and signed values, and must satisfy the
+`DataFile` mapping rules for that file version.
+
+Lance stores the dictionaries. Keys are local to their dictionary array; compare
+decoded vectors, not keys, across arrays, columns, batches, or leaves.
+
+`file_size_bytes` of 0 means unknown. A null `base_id` inherits the leaf
+object's resolved dataset. A set `base_id` matches `BasePath.id` in this Version
+Manifest's `base_paths`. The same inheritance rule applies to deletion files, overlays,
+and other fragment-owned files. A null `base_id` in a buffered mutation
+inherits the resolved dataset of the structure containing that mutation.
+
+Counts in a leaf are known. `physical_rows` of 0 is zero rows. A deletion file
+must carry `num_deleted_rows`, which must not exceed `physical_rows`.
+
+After decoding a leaf, readers must verify the following fields against its
+parent `FragmentTreeChild`:
+
+- `num_keys` equals the number of rows
+- `total_rows` and `visible_rows` equal the counts recomputed from the
+  fragment records
+- `height` is 0
+- `num_children` is 0
+
+`min_key` is an inherited routing bound. `object_size` is the stored byte
+length of the fetched object. `materialized_through_action_sequence` is stored
+on the child reference. Readers must validate those fields by the rules in
+Routing and Sequence numbers, not by recomputing them from the leaf file.
+
+## Routing
+
+A root may have zero or more children. With no children, mutations may remain
+in the root `buffer` or `FragmentTree.mutations_since_root`. Fragment
+resolution must not descend to a leaf. Once children exist, they route
+fragment IDs as follows.
+
+Interior nodes must have at least two children. The root may have zero, one,
+or more.
+
+Children are ordered by `min_key`. `min_key` is the inclusive lower bound of
+this child's fragment-ID range. It need not equal an ID currently stored in
+the child. The next child's `min_key` is the exclusive upper bound. The
+first child of the root must have `min_key` 0. An interior node's first
+child must begin at the lower bound assigned by its parent. Together, the
+children must partition the parent range. Routing a fragment ID selects the
+rightmost child whose `min_key` is at most that fragment ID.
+
+Ranges must not overlap. Each mutation buffered by an interior must belong to
+exactly one child range. The same rule applies to a root once it has children.
+
+`height` is the number of edges from the referenced object to its leaves.
+Leaves have height 0. Every child of an interior must have height one less
+than that interior, so all leaves in a subtree occur at the same depth.
+
+A leaf must contain at least one fragment record and have `num_children` 0.
+Writers must not retain an empty child.
+
+`num_children` is the number of direct children in the referenced object. It
+is 0 for leaves and at least 2 for interiors. After an interior is decoded,
+readers must verify that this value equals `children.len()`.
+
+`num_keys` is the number of fragment records in the referenced subtree,
+including that object's own buffer. Mutations held by ancestors are excluded.
+After a leaf is decoded, it must equal the number of rows. After an
+interior is decoded, it must equal the sum of the children's `num_keys` plus
+the buffer `fragment_count_delta`s.
+
+`total_rows` is the physical-row count in that subtree, including deleted
+rows. `visible_rows` is that count minus deleted rows. Both include that
+object's own buffer and exclude ancestor mutations. `visible_rows` must not
+exceed `total_rows`. After a leaf is decoded, both must equal the counts
+recomputed from fragment records. After an interior is decoded, both must
+equal the sum of the children's values plus the corresponding buffer deltas.
+
+`object_size` is the stored byte length of the child object. It must be
+nonzero. It is known before the child is fetched and must equal the fetched
+object's byte length.
+
+A child's inherited range is `min_key` inclusive to the next sibling's
+`min_key` exclusive. The last child of the root uses `2^32` as that exclusive
+end. The last child of an interior uses the exclusive end assigned by its
+parent. `min_key` must be at most `2^32 - 1`.
+
+Every fragment ID decoded from a leaf must lie in that leaf's inherited
+range. Every mutation target decoded from a root or interior buffer must lie
+in that node's inherited range. Every descendant child range must be contained
+in its parent's range. Readers apply these checks as objects are decoded. The
+checks do not require opening the rest of the tree.
+
+## Mutations
+
+`FragmentTreeMutation` wraps one `FragmentAction` with a sequence number
+and three count deltas. Every mutation must contain an action. The action must
+select exactly one recognized variant, and any message payload required by
+that variant must be present.
+
+`fragment_count_delta` is 1 when the action creates a record, minus 1 when it
+removes one, and 0 otherwise. `total_rows_delta` and `visible_rows_delta` are
+the record after the action minus the record before it. An absent record
+counts as zero.
+
+When the prior fragment is available, readers must recompute the mutation
+deltas and verify that they match the stored values. Ancestor summaries are
+maintained from these deltas. After materialization, readers must recompute
+leaf summaries from records. Writers must not publish a materialization whose
+recomputed summaries disagree with the derived version totals.
+
+File and deletion-file actions must leave all other `DataFragment` fields
+unchanged. Use `upsert_fragment` when no other action can represent the change.
+This includes changes to overlay files, version sequences, and row-ID state.
+It replaces the complete fragment record.
+
+Removal actions are idempotent. Removing an absent fragment, file, or deletion
+file is a no-op where specified below. Actions that modify an existing
+fragment require that fragment to exist.
+
+| Action | Precondition | Effect |
+|---|---|---|
+| `upsert_fragment` | None | Install the complete record, replacing anything at that id |
+| `remove_fragment` | None | Remove the record at that id. An absent id is a no-op |
+| `add_data_file` | Record present, else reject | Append the file to the end of the ordered file list |
+| `remove_data_file` | Record present, else reject | Remove every file whose path matches, keeping survivor order. No match is a no-op |
+| `add_deletion_file` | Record present, else reject | Set the deletion file, replacing any existing one |
+| `clear_deletion_file` | Record present, else reject | Clear the deletion file. No deletion file is a no-op |
+| `replace_data_file` | Record present and a file whose path equals `expected_path`, else reject | On the first such file set `path`, `file_size_bytes`, and `base_id`. Keep its field ids, column indices, and file version |
+
+`Fragment.files` is an ordered list and paths may repeat. `replace_data_file`
+edits a slot, not a path. Writers must not fold two replacements that chain
+through a renamed path into one. Starting from files `[A, B]`, renaming B to
+A and then replacing the first A with C yields `[C, A]`. Folding them into
+one replacement of B with C yields `[A, C]`.
+
+To resolve a fragment, collect every mutation for its id from
+`mutations_since_root`, the root buffer, and each interior buffer on its
+routing path. Sort by sequence and apply in order to the leaf record, or to
+nothing if there is no leaf or the leaf has no record.
+
+Version fragment count, physical-row count, and visible-row count are derived
+from the root child summaries plus the root buffer deltas, then plus the
+`mutations_since_root` deltas. They are not stored on `FragmentTree`.
+Derived `visible_rows` must not exceed derived `total_rows`.
+
+## Sequence numbers
+
+Mutation sequences must be nonzero and unique.
+Each tree has one sequence namespace. Writers must not reuse a sequence number
+anywhere in the tree.
+
+- `FragmentTreeRoot.next_action_sequence` is at least 1. Every sequence in
+  the root buffer, in every interior buffer below it, and every leaf watermark
+  below it must be less than this value.
+- `FragmentTree.next_action_sequence` is at least the root's value.
+  Every `mutations_since_root` sequence must be at or above the root's value
+  and below `FragmentTree.next_action_sequence`.
+- A leaf watermark of 0 means the leaf has applied nothing, so every mutation
+  routed to it replays.
+
+Readers must verify uniqueness across every mutation source decoded for the
+operation. Uniqueness across unread subtrees is a writer invariant.
+
+Mutations may be serialized in any order. Aggregate counts must not depend on
+serialization order; readers may apply checked deltas in action sequence order.
+
+`materialized_through_action_sequence` records how far a leaf has been
+materialized. It is not part of the leaf contents. The same leaf may
+therefore be referenced with different watermarks. It must be 0 on an
+interior child.
+
+A leaf watermark `N` means every mutation for that leaf's range with a
+sequence at or below `N` has been incorporated into the leaf's records, with
+no holes, and no buffer above the leaf holds a mutation for its range with a
+sequence at or below `N`. Readers must reject a collected mutation whose
+sequence is at or below the owning leaf's
+`materialized_through_action_sequence`.
+
+## Fragment IDs
+
+`Manifest.max_fragment_id` is authoritative for fragment ID allocation. The
+tree has no separate allocator.
+
+`max_fragment_id` is absent only when no fragment ID has ever been allocated or
+reserved in the lineage. It must not decrease. Deletion does not make fragment
+IDs reusable, and restore must not lower the value.
+
+The first allocated fragment ID is 0. Otherwise, allocation uses
+`max_fragment_id + 1`. `ReserveFragments` advances the value. A value of
+`2^32 - 1` exhausts the fragment-ID space.
+
+Every fragment ID stored or targeted by the tree must be at most
+`Manifest.max_fragment_id`. If `max_fragment_id` is absent, the tree must
+contain no fragment records or fragment-targeting mutations.
+
+## Validation
+
+Readers must validate every structure they decode before using it. They must
+not treat a corrupt snapshot as empty.
+
+| Object | Additional checks |
+|---|---|
+| Manifest | Feature flags set, `fragments` empty, `fragment_tree` present, layout selected |
+| `FragmentTree` | Exactly one root representation, sequence range valid, tree object references valid, no target above `max_fragment_id` |
+| Root | Children and buffer valid, derived visible rows at most derived total rows |
+| Node / leaf | Fetched byte length equals parent `object_size`. Shape and aggregate fields that can be recomputed from the object agree with the parent child reference. Routing bounds and the leaf watermark follow Routing and Sequence numbers. |
+
+## Publication and cleanup
+
+Writers compete for the next dataset version, even when changing different
+fragments. A writer that loses the version race must check intervening
+transactions and rebase compatible changes before retrying. Incompatible
+changes fail under the normal transaction rules.
+
+A retry may read the new manifest, transaction history, and affected tree
+objects, then write a transaction record, tree objects, and a new manifest.
+If changes fit in `mutations_since_root`, the external root can be reused without
+rewriting a leaf. Validation, flushing, splitting, or eager loading can require
+additional I/O.
+
+Every tree object reachable from a Version Manifest must be durable before that
+manifest is committed. The manifest commit is the visibility boundary.
+
+A failed attempt leaves unreachable objects that are eligible for cleanup.
+
+Whether to inline the root or publish a new external root is writer policy and
+may change between versions.
+
+Unchanged immutable subtrees may be reused. New tree objects must belong to
+the current dataset. Reused references must preserve their resolved dataset.
+
+Cleanup computes reachability from the fragment state of every
+retained manifest, applying buffers and `mutations_since_root`. The reachable
+set includes the external root named by `root_uuid`, if any, every `.node` and
+`.lance` reachable from that root after resolving child references, and every
+data file, deletion file, and related object that state names.
+A file named only by a pending mutation is reachable through that resolved
+state. A file named only by a mutation that a later mutation in the same
+snapshot supersedes is not. Objects under this dataset's `_bt/` outside the
+set follow the same age and in-progress rules as data files.
+
+An object reachable from any retained manifest of this dataset must not be
+removed. Tree object lifetime across datasets follows the same contract as
+data files named through `base_paths`.
 
 
 ================================================
@@ -2850,7 +4641,7 @@ Lance can commit directly to object storage, but deployments may also coordinate
 ![Overview](../../images/table_overview.png)
 
 A manifest describes a single version of the dataset.
-It contains the complete schema definition including nested fields, the list of data fragments comprising this version, 
+It contains the complete schema definition including nested fields, the list of data fragments comprising this version,
 a monotonically increasing version number, and an optional reference to the index section that describes a list of index metadata.
 
 <details>
@@ -2936,19 +4727,30 @@ For example, when adding a new column, new column data are added by appending ne
 There is no need to rewrite the entire table to just add data for a single column.
 This enables efficient feature engineering and embedding updates for ML/AI workloads.
 
-Each data file should contain a distinct set of field ids. 
-It is not required that all field ids in the dataset schema are found in one of the data files. 
+Each data file should contain a distinct set of field ids.
+It is not required that all field ids in the dataset schema are found in one of the data files.
 If there is no corresponding data file, that column should be read as entirely `NULL`.
 
-Field ids might be replaced with `-2`, a tombstone value. 
-In this case that column should be ignored. This used, for example, when rewriting a column: 
+Field ids might be replaced with `-2`, a tombstone value.
+In this case that column should be ignored. This used, for example, when rewriting a column:
 The old data file replaces the field id with `-2` to ignore the old data, and a new data file is appended to the fragment.
+
+Every negative field id is reserved for system use and never names a field of the
+dataset schema. A reader MUST skip any negative id when it projects the dataset schema
+onto a data file, rather than treat it as a schema field or reject the file. Besides
+`-1` (not yet assigned; only ever exists in memory and must not be written) and the
+`-2` tombstone above, `-3`, `-4` and `-5` are the hidden `_rowid`,
+`_row_created_at_version` and `_row_last_updated_at_version` columns that hold a
+fragment's row lineage sequences when they are not stored in the manifest; see
+[Row ID and Lineage](row_id_lineage.md). Such a column always lives in one of the
+fragment's `files`, next to user columns or in a file holding nothing else, and at
+most one file of a fragment may carry each of these ids.
 
 ## Data Files
 
 Data files store column data for a fragment using the Lance file format.
 Each data file stores a subset of the columns in the fragment.
-Field IDs are assigned either sequentially based on schema position (for Lance file format v1) 
+Field IDs are assigned either sequentially based on schema position (for Lance file format v1)
 or independently of column indices due to variable encoding widths (for Lance file format v2).
 
 <details>
@@ -2992,6 +4794,29 @@ However, this invalidates row addresses and requires rebuilding indices, which c
 ```
 
 </details>
+
+## Data Overlay Files
+
+!!! warning "Experimental"
+
+    This feature is currently experimental and not yet supported in any library.
+
+<!-- TODO: When overlay file support is implemented, update this note to state
+     the released version that first supports the feature. -->
+
+!!! note "Overlay files require feature flag 64 (data overlay files)"
+
+Overlay files supply new values for a subset of cells within
+a fragment without rewriting the base data files. They make updates cheap when only
+a small percentage of rows and/or columns change: a writer appends a small file
+carrying just the changed cells instead of rewriting whole columns or moving rows
+to a new fragment.
+
+For the full specification — coverage and resolution rules, dense vs. sparse layout,
+versioning, index integration, compaction, and a worked example — see the
+[Data Overlay Files Specification](data_overlay_file.md).
+
+
 
 ## Related Specifications
 
@@ -3066,10 +4891,12 @@ A Lance dataset in its basic form stores all files within the dataset root direc
             *.json        -- Tag metadata
         branches/
             *.json        -- Branch metadata
+    _bt/
+        ...               -- Fragment tree objects (see Fragment Metadata Tree)
     tree/
         {branch_name}/
             ...           -- Branch dataset
-            
+
 ```
 
 ## Base Path System
@@ -3102,6 +4929,8 @@ Three types of files can specify alternative base paths: data files, deletion fi
 Each of these file types includes an optional `base_id` field in their metadata that references a base path entry by its numeric identifier.
 When a file's `base_id` is absent, the file is located relative to the dataset root.
 When a file's `base_id` is present, readers must look up the corresponding base path entry in the manifest's `base_paths` array to determine where the file is stored.
+
+Fragment tree children and fragment files stored in the tree also carry optional `base_id`. Resolution is specified in [Fragment Metadata Tree](fragment_metadata.md#object-references).
 
 At read time, path resolution follows a two-step process.
 First, the reader determines the base path: if `base_id` is absent, the base path is the dataset root; otherwise, the reader looks up the base path entry using the `base_id` to obtain the path and its `is_dataset_root` flag.
@@ -3265,7 +5094,7 @@ Append-only MemWAL tables may omit a primary key.
 
 MemWAL adds a set of shards on top of the base table.
 Writers append to shards.
-Each shard keeps recent data in an in-memory MemTable, persists writes to a per-shard WAL, flushes MemTables as small Lance datasets, and later merges those flushed generations into the base table.
+Each shard keeps recent data in an in-memory MemTable, persists writes to a per-shard WAL, flushes MemTables as small Lance datasets, and later compacts those SSTables into the base table.
 
 The base table manifest contains one MemWAL system index entry named `__lance_mem_wal`.
 This index stores MemWAL configuration and global progress metadata inline in `IndexMetadata.index_details`.
@@ -3275,10 +5104,10 @@ Each shard's own manifest remains authoritative for shard-local mutable state.
 
 A **MemWAL shard** is the unit of horizontal write scaling.
 Each shard has exactly one active writer epoch at a time.
-Writers claim a shard, append WAL entries, update the in-memory MemTable, and publish flushed MemTable generations by updating the shard manifest.
+Writers claim a shard, append WAL entries, update the in-memory MemTable, and publish SSTable generations by updating the shard manifest.
 
 For primary-key tables, all rows for the same primary key must map to the same shard.
-If one primary key can appear in multiple shards, asynchronous merge order between shards can make an older row overwrite a newer row.
+If one primary key can appear in multiple shards, asynchronous compaction order between shards can make an older row overwrite a newer row.
 Append-only tables without a primary key do not rely on last-write-wins conflict resolution and may use any deterministic shard assignment suitable for the workload.
 
 ### MemWAL Index
@@ -3291,8 +5120,8 @@ All MemWAL index data is stored in the `MemWalIndexDetails` protobuf message in 
 The index stores:
 
 - **Configuration**: `sharding_specs`, `maintained_indexes`, and `writer_config_defaults`.
-- **Merge progress**: `merged_generations`, the last generation merged into the base table for each shard.
-- **Index catchup progress**: `index_catchup`, the merged generation covered by each base-table index.
+- **Compaction progress**: `compacted_sstables`, the last SSTable compacted into the base table for each shard.
+- **Index catchup progress**: `index_catchup`, the compacted SSTable generation covered by each base-table index.
 - **Shard snapshots**: optional point-in-time snapshot fields for read optimization.
 
 Shard snapshots are not authoritative.
@@ -3300,18 +5129,18 @@ Readers that need the latest shard set list `_mem_wal/` and read each shard's la
 
 ## Shard Architecture
 
-![Shard Architecture](../../images/mem_wal_regional.png)
+![Shard Architecture](../../images/mem_wal_shard.png)
 
 Within a shard, writes first enter an in-memory **MemTable** and are durably appended to the shard **write-ahead log (WAL)**.
 The MemTable is periodically **flushed** to storage as a Lance dataset.
-Flushed MemTables are asynchronously **merged** into the base table.
+SSTables are asynchronously **compacted** into the base table.
 
 ### MemTable
 
 A MemTable holds rows inserted into a shard before those rows are flushed to storage.
 It serves two purposes:
 
-1. It buffers data and per-MemTable indexes before a flushed generation is written.
+1. It buffers data and per-MemTable indexes before an SSTable is written.
 2. It lets readers access data that has not been flushed yet when strong consistency is required.
 
 The storage format does not prescribe the in-memory MemTable layout.
@@ -3319,17 +5148,19 @@ Conceptually, a MemTable is an append log of Arrow record batches.
 Later appends have larger in-memory row positions.
 For primary-key tables, in-memory reads use the largest visible row position as the newest row for a key.
 
-### MemTable Generation
+### SSTable Generation
 
-Each MemTable has a monotonically increasing generation number starting from 1.
-When generation `N` is flushed and discarded, the next MemTable uses generation `N + 1`.
+Within each shard, SSTables have monotonically increasing generation numbers starting from 1.
+When a MemTable is flushed, the resulting SSTable is assigned the shard manifest's `current_generation`, and `current_generation` advances to the next SSTable generation.
+A MemTable does not have a generation.
 
-Generation numbers order data freshness within one shard:
+SSTable generation numbers order persisted data freshness within one shard:
 
-- Base table data has generation 0.
-- Higher MemWAL generations are newer.
-- Within the active in-memory generation, higher row positions are newer.
-- Within a flushed generation, flush-time deletion vectors hide older duplicate primary-key rows, so readers see at most the newest row for each primary key.
+- Base table data is modeled as generation 0.
+- Higher SSTable generations are newer.
+- The active MemTable is newer than every published SSTable.
+- Within the active MemTable, higher row positions are newer.
+- Within an SSTable, flush-time deletion vectors hide older duplicate primary-key rows, so readers see at most the newest row for each primary key.
 
 ## WAL
 
@@ -3374,17 +5205,17 @@ For example, position 5 is encoded as:
 1010000000000000000000000000000000000000000000000000000000000000.arrow
 ```
 
-## Flushed MemTable
+## SSTable
 
-A flushed MemTable is a persisted MemTable generation.
+An SSTable is the immutable result of flushing a MemTable.
 It is stored as a Lance dataset under its shard directory.
 
 !!! note
-    This structure is similar to a sorted string table in other LSM implementations, but MemWAL flushed generations are not sorted by key.
+    Unlike a classic LSM sorted string table, a MemWAL SSTable is not sorted by key; random access is instead served by its BTree primary-key sidecar. It is called an SSTable because it is an immutable, persisted, indexed run.
 
-### Flushed MemTable Storage Layout
+### SSTable Storage Layout
 
-Generation `i` is flushed to:
+An SSTable with generation `i` is written to:
 
 ```text
 _mem_wal/{shard_id}/{random8}_gen_{i}/
@@ -3392,17 +5223,40 @@ _mem_wal/{shard_id}/{random8}_gen_{i}/
 
 `{random8}` is an 8-character random hex value generated for each flush attempt.
 If a flush attempt fails, a retry writes a different directory instead of reusing a partially written one.
-The shard manifest records the successful directory name in `flushed_generations.path`.
+The shard manifest records the successful directory name in the SSTable's `path`.
 
-The generation directory is a standard Lance dataset written with the base table's data storage version.
-Each flushed generation is written as one fragment.
+### SSTable Accounting
+
+Alongside `generation` and `path`, a shard manifest entry may record what the
+SSTable holds, as the writer's MemTable accounted for it at flush:
+
+- `in_memory_bytes`: payload size of the rows, summed over the MemTable's
+  buffers as the window each one holds.
+- `physical_rows`: rows held, counting the older duplicates of a primary key
+  that the generation's deletion vector masks. A scan applying the deletion
+  vector yields fewer.
+- `primary_key_bytes`: total payload size of the primary-key columns over every
+  row in `physical_rows`. Not a per-row size, which varies for a
+  variable-length key.
+
+All three are estimates of payload, not bounds on what reading the SSTable
+costs: they exclude the per-array structure a reader materializes, and
+`primary_key_bytes` is not the size of any encoded form of the key. A consumer
+budgeting memory from them adds its own headroom.
+
+All three are optional. An entry written before they existed records none of
+them, and a reader must not treat an absent value as zero; `primary_key_bytes`
+is also absent on a table with no primary key.
+
+The SSTable directory is a standard Lance dataset written with the base table's data storage version.
+Each SSTable is written as one fragment.
 Additional MemWAL sidecars may be present:
 
 ```text
 {random8}_gen_{i}/
 ├── _versions/
 │   └── {version}.manifest
-├── _deletions/                         # Present when within-generation dedup deletes rows
+├── _deletions/                         # Present when within-SSTable dedup deletes rows
 ├── _indices/                           # Present when maintained user indexes are built
 │   └── {index_uuid}/
 ├── _pk_index/                          # Primary-key sidecar BTree, not a manifest index
@@ -3411,17 +5265,17 @@ Additional MemWAL sidecars may be present:
 
 The exact Lance dataset internals follow the [Lance table storage layout](layout.md).
 
-### Flushed Row Order
+### SSTable Row Order
 
-Flushed MemTable rows are written in forward insert order.
+SSTable rows are written in forward insert order.
 Physical row offsets increase with write time.
-For a duplicate primary key within one flushed generation, the newest row has the largest physical offset.
+For a duplicate primary key within one SSTable, the newest row has the largest physical offset.
 
-Primary-key flushed generations use a deletion vector to expose last-write-wins semantics.
+Primary-key SSTables use a deletion vector to expose last-write-wins semantics.
 During flush, the writer scans rows in forward order, keeps the last occurrence of each primary key, and marks all earlier duplicate offsets deleted.
-The deletion vector is attached to fragment 0 in the generation manifest.
+The deletion vector is attached to fragment 0 in the SSTable's Lance manifest.
 
-Append-only flushed generations without a primary key do not perform primary-key deduplication and retain every row.
+Append-only SSTables without a primary key do not perform primary-key deduplication and retain every row.
 
 ### Tombstone Rows
 
@@ -3430,17 +5284,17 @@ Tombstone rows follow the same forward row ordering and deletion-vector rules as
 If the newest row for a primary key is a tombstone, the deletion vector keeps that tombstone row and hides older rows for the key.
 Read planning then filters `_tombstone = false`, so the key is absent from query results.
 
-### Flushed Primary-Key Sidecars
+### SSTable Primary-Key Sidecars
 
 Primary-key MemTables maintain an implicit BTree for primary-key deduplication, independent of `maintained_indexes`.
-When a primary-key MemTable is flushed, the flushed generation writes two primary-key sidecars:
+When a primary-key MemTable is flushed, the SSTable writes two primary-key sidecars:
 
-- `bloom_filter.bin` stores the generation's primary-key bloom filter and lets point lookups skip generations that cannot contain the queried key.
+- `bloom_filter.bin` stores the SSTable's primary-key bloom filter and lets point lookups skip SSTables that cannot contain the queried key.
 - `_pk_index/` stores a standalone BTree over primary-key values to forward row ids.
 
-The `_pk_index/` sidecar is not a maintained user index, is not registered in the generation manifest, and has no manifest UUID.
-Its identity is its immutable generation path.
-Readers open it directly from `{generation_path}/_pk_index`.
+The `_pk_index/` sidecar is not a maintained user index, is not registered in the SSTable's Lance manifest, and has no manifest UUID.
+Its identity is its immutable SSTable path.
+Readers open it directly from `{sstable_path}/_pk_index`.
 
 The `_pk_index/` directory is a Lance scalar BTree index store:
 
@@ -3488,22 +5342,22 @@ Composite primary-key columns must use one of the supported encodings above.
 
 The sidecar row ids are in the same forward row-position space as the data files, deletion vector, and maintained user indexes.
 The sidecar is used for cross-generation membership and block-list checks.
-It is not used to choose the newest row inside the same flushed generation; the deletion vector has already hidden older same-generation duplicates.
+It is not used to choose the newest row inside the same SSTable; the deletion vector has already hidden older same-generation duplicates.
 
 ### Maintained User Indexes
 
-When the MemWAL index lists `maintained_indexes`, flush may build matching indexes inside the flushed generation.
-These index files live in the generation's `_indices/{index_uuid}/` directory and are recorded in the generation manifest.
+When the MemWAL index lists `maintained_indexes`, flush may build matching indexes inside the SSTable.
+These index files live in the SSTable's `_indices/{index_uuid}/` directory and are recorded in the SSTable's Lance manifest.
 The implicit primary-key BTree sidecar is not included in `maintained_indexes` and does not live under `_indices/`.
 
 These indexes use the same row-position space as the forward-written data files.
-If the generation has a primary key, the generation deletion vector masks stale duplicate rows for indexed reads as well.
+If the SSTable has a primary key, its deletion vector masks stale duplicate rows for indexed reads as well.
 
-### Merging Flushed Generations
+### SSTable Compaction
 
-Flushed generations are merged into the base table in ascending generation order within each shard.
-Lower generation numbers are older and must merge before higher generation numbers.
-The base table merge uses merge-insert semantics so newer rows overwrite older rows for the same primary key.
+SSTables are compacted into the base table in ascending generation order within each shard.
+Lower generation numbers are older and must be compacted before higher generation numbers.
+SSTable compaction uses merge-insert semantics so newer rows overwrite older rows for the same primary key.
 
 ## Shard Manifest
 
@@ -3517,19 +5371,22 @@ The manifest contains:
 - **Identity**: `shard_id`, `shard_spec_id`, and `shard_field_entries`.
 - **Fencing state**: `writer_epoch`.
 - **WAL pointers**: `replay_after_wal_entry_position` and `wal_entry_position_last_seen`.
-- **Generation state**: `current_generation` and `flushed_generations`.
+- **SSTable generation state**: `current_generation` and `sstables`.
 - **Lifecycle state**: `status`, either `ACTIVE` or `SEALED`.
 
 `shard_field_entries` stores computed shard field values as raw Arrow scalar bytes keyed by `ShardingField.field_id`.
 The matching `ShardingField.result_type` determines how to decode each value.
 For example, `int32` values are four little-endian bytes and `utf8` values are raw UTF-8 bytes.
 
-`replay_after_wal_entry_position` is the most recent 1-based WAL position covered by a flushed generation.
+`replay_after_wal_entry_position` is the most recent 1-based WAL position covered by an SSTable.
 The default value 0 means no WAL entry has been covered and recovery starts at position 1.
 
 `wal_entry_position_last_seen` is a best-effort hint for the most recent WAL position observed at manifest update time.
 It is not authoritative because it is not updated on every WAL write.
 Recovery must still probe or list WAL files to find the actual tail.
+
+`current_generation` is the generation number to assign to the next SSTable created by flushing the MemTable.
+Each entry in `sstables` records a published SSTable's `generation` and `path`.
 
 `status = SEALED` marks a reversible in-flight drop-table operation.
 Sealed shards refuse new writer claims.
@@ -3581,13 +5438,23 @@ The `index_details` field contains a `MemWalIndexDetails` protobuf message.
 Important fields:
 
 - `sharding_specs`: sharding configuration used by writers and shard pruning.
-- `maintained_indexes`: names of base-table indexes to maintain in MemTables and flushed generations.
+- `maintained_indexes`: names of base-table indexes to maintain in MemTables and SSTables.
 - `writer_config_defaults`: string map of default writer configuration values persisted for all writers.
-- `merged_generations`: per-shard merge progress, updated atomically with base-table merge commits.
-- `index_catchup`: per-index coverage progress after data has merged to the base table.
+- `compacted_sstables`: per-shard compaction progress, updated atomically with base-table compaction commits.
+- `index_catchup`: per-index coverage progress after data has been compacted into the base table.
 - `snapshot_ts_millis`, `num_shards`, and `inline_snapshots`: optional shard snapshot fields for read optimization.
 
-If a shard is absent from `index_catchup` for an index, that index is assumed to be fully caught up for the shard.
+A shard absent from `index_catchup` for an index means that index is *not* known
+to have caught up, so the shard's SSTables must be retained until some commit
+records that it has.
+
+Catch-up is derived at commit time, not reported by the writer. An index whose segments together span every fragment live at the transaction's read version holds every row compaction had copied into the base table by then, so the commit records it as caught up to that version's `compacted_sstables`. That is the only proof available — nothing maps a compaction generation to the fragments its rows landed in — so covering the table as the transaction read it is how an index shows it covered those rows. Fragments appended since that read are a later catch-up gap and are not required.
+
+Two rules bound what a commit may record. It never credits more than its own `compacted_sstables`, and it clamps to that value, so a position can only describe generations the base table has actually taken in. Otherwise it never lowers a position an index already held, provided that index is unchanged by this commit. "Unchanged" compares each segment's UUID together with its fragment bitmap, not the UUID alone, because an operation can prune the bitmap in place while keeping the UUID; the remaining metadata does not affect which rows the index answers for. An index this commit changes keeps no position it cannot re-earn.
+
+Because the position is derived rather than transmitted, it cannot go stale between inspection and commit, and it survives rebase — `read_version` is fixed for a transaction's life, so what a commit can prove does not move, though a rebased attempt may record a different result because the head it commits against has changed. Any commit can earn a position, so an ordinary index build that happens to cover the table records catch-up as a side effect. A dedicated repair is still needed where no such commit occurs, or where an index does not yet span the table.
+
+A read version with no fragments proves nothing, even though an index trivially covers an empty table. An empty fragment list is also what a manifest written before the `UpdateMemWalState` fragment fix looks like, where the SSTables are the last copy of those rows; crediting coverage there would retire them. The cost is that a table whose rows have all been deleted keeps its SSTables.
 
 Shard snapshots, when present, use the following Lance file schema:
 
@@ -3674,8 +5541,8 @@ The MemWAL storage layout is:
             └── bloom_filter.bin
 ```
 
-Some flushed-generation subdirectories are conditional.
-For example, `_deletions/` is present only when the generation manifest references a deletion vector, `_indices/` is present only when maintained user indexes are built, and `_pk_index/` plus `bloom_filter.bin` are meaningful for primary-key tables.
+Some SSTable subdirectories are conditional.
+For example, `_deletions/` is present only when the SSTable's Lance manifest references a deletion vector, `_indices/` is present only when maintained user indexes are built, and `_pk_index/` plus `bloom_filter.bin` are meaningful for primary-key tables.
 
 ## Implementation Expectation
 
@@ -3684,11 +5551,11 @@ Implementations may choose different in-memory structures, buffering policies, b
 
 An implementation is compatible when it:
 
-1. Writes WAL entries, shard manifests, flushed generations, and MemWAL index metadata using the documented layout.
+1. Writes WAL entries, shard manifests, SSTables, and MemWAL index metadata using the documented layout.
 2. Preserves WAL position, writer fencing, and manifest versioning invariants.
 3. Exposes last-write-wins semantics for primary-key tables.
 4. Preserves append-only semantics for tables without primary keys.
-5. Maintains generation ordering when merging flushed MemTables into the base table.
+5. Maintains generation ordering when compacting SSTables into the base table.
 
 ## Writer Expectations
 
@@ -3697,8 +5564,8 @@ A writer operates on one shard and is responsible for:
 1. Claiming the shard with epoch-based fencing.
 2. Appending WAL entries in sequential 1-based positions.
 3. Maintaining in-memory MemTable state.
-4. Flushing MemTable generations to Lance datasets.
-5. Updating the shard manifest after a generation is durably flushed.
+4. Flushing MemTables to SSTable Lance datasets.
+5. Updating the shard manifest after an SSTable is durably written.
 
 ### Writer Fencing
 
@@ -3723,25 +5590,25 @@ Fence sentinel entries make this collision path explicit without storing data ba
 
 ## Background Job Expectations
 
-Background jobs merge flushed generations into the base table and remove obsolete shard data.
+Background jobs compact SSTables into the base table and remove obsolete shard data.
 
-### MemTable Merger
+### SSTable Compactor
 
-Flushed MemTables must merge into the base table in ascending generation order within each shard.
-The merge uses Lance merge-insert semantics and updates `merged_generations[shard_id]` atomically with the base-table commit.
+SSTables must be compacted into the base table in ascending generation order within each shard.
+The compaction uses Lance merge-insert semantics and updates `compacted_sstables[shard_id]` atomically with the base-table commit.
 
-On commit conflict, a merger reloads the conflicting base-table version:
+On commit conflict, a compactor reloads the conflicting base-table version:
 
-- If the committed `merged_generations[shard_id]` is already greater than or equal to the generation being merged, the merger skips that generation.
-- Otherwise, the merger retries from the latest base-table version.
+- If the committed `compacted_sstables[shard_id]` is already greater than or equal to the generation being compacted, the compactor skips that generation.
+- Otherwise, the compactor retries from the latest base-table version.
 
 ### Garbage Collector
 
-The garbage collector may remove obsolete flushed generations after:
+The garbage collector may remove obsolete SSTables after:
 
-1. The generation has been merged to the base table.
-2. Every maintained index has caught up to cover the merged generation, or the generation is no longer needed for indexed reads.
-3. No retained base-table version needs the generation for time travel or consistency.
+1. The SSTable has been compacted into the base table.
+2. Every index a query may rely on has caught up to cover the SSTable's generation, or the SSTable is no longer needed for indexed reads. An index absent from `index_catchup` has *not* caught up, so this condition is not met for it.
+3. No retained base-table version needs the SSTable for time travel or consistency.
 
 !!! warning
     Deleting WAL files can weaken writer fencing.
@@ -3754,19 +5621,21 @@ The garbage collector may remove obsolete flushed generations after:
 
 ### LSM Tree Merging Read
 
-For primary-key tables, readers merge rows from the base table, flushed MemTables, and optionally in-memory MemTables by primary key.
+For primary-key tables, readers merge rows from the base table, SSTables, and optionally in-memory MemTables by primary key.
 The newest row wins.
 
 Freshness ordering within one shard is:
 
-1. Higher generation wins.
-2. Within the active in-memory generation, higher row position wins.
-3. Within a flushed generation, the generation's deletion vector has already hidden older duplicate primary-key rows.
+1. The active MemTable wins over every SSTable and the base table.
+2. Among SSTables, higher generation wins.
+3. Any uncompacted SSTable wins over the base table.
+4. Within the active MemTable, higher row position wins.
+5. Within an SSTable, its deletion vector has already hidden older duplicate primary-key rows.
 
-The base table has generation 0.
-MemWAL generations are positive.
+For freshness comparisons, the base table uses the sentinel generation 0.
+SSTable generations are positive.
 This ordering applies only to sources selected for the same read plan.
-Readers must not include a flushed generation that is already covered by the base table according to `merged_generations[shard_id]`, because otherwise the positive MemWAL generation would incorrectly outrank base-table rows during deduplication.
+Readers must not include an SSTable that is already covered by the base table according to `compacted_sstables[shard_id]`, because otherwise the positive SSTable generation would incorrectly outrank base-table rows during deduplication.
 Rows from different shards do not need primary-key deduplication if the sharding spec guarantees that each primary key maps to exactly one shard.
 
 Append-only tables without a primary key do not perform primary-key deduplication.
@@ -3775,7 +5644,7 @@ Rows from all selected sources are distinct appended rows.
 ### Tombstones
 
 Readers must treat `_tombstone = true` rows as delete markers.
-In flushed generations, deletion vectors first resolve same-generation duplicate primary keys.
+In SSTables, deletion vectors first resolve same-generation duplicate primary keys.
 Then query planning filters tombstone rows from user-visible results.
 In active in-memory MemTables, the newest visible row position for a primary key wins; if that row is a tombstone, the key is absent.
 
@@ -3791,11 +5660,11 @@ Otherwise, reads are eventually consistent because unflushed data or newly-creat
 
 Reading a stale MemWAL index snapshot does not corrupt last-write-wins ordering, but it can reduce freshness:
 
-- If a merged flushed generation is still listed, readers must skip it when `generation <= merged_generations[shard_id]`.
-  For primary-key tables, including it would let an older flushed row outrank newer base-table contents because MemWAL generations are positive and the base table is modeled as generation 0.
-  For append-only tables, including it would return the same append twice.
-- If a garbage-collected flushed generation is still listed, readers may skip it after failing to open it because its data must already be in the base table or be filtered out by `merged_generations`.
-- If a newly flushed generation is not listed, the read is consistent with the older snapshot but may miss fresher data.
+- If a compacted SSTable is still listed, readers must skip it when `generation <= compacted_sstables[shard_id]`.
+    For primary-key tables, including it would let an older SSTable row outrank newer base-table contents because SSTable generations are positive and the base table is modeled as generation 0.
+    For append-only tables, including it would return the same append twice.
+- If a garbage-collected SSTable is still listed, readers may skip it after failing to open it because its data must already be in the base table or be filtered out by `compacted_sstables`.
+- If a new SSTable is not listed, the read is consistent with the older snapshot but may miss fresher data.
 
 Readers that require latest shard membership should list `_mem_wal/` and read shard manifests instead of relying only on snapshots.
 
@@ -3804,14 +5673,15 @@ Readers that require latest shard membership should list `_mem_wal/` and read sh
 A query planner collects sources from:
 
 1. The base table.
-2. Flushed MemTables that are not yet safely replaceable by base-table indexed reads.
+2. SSTables that are not yet safely replaceable by base-table indexed reads.
 3. Active in-memory MemTables, when available and required by the requested consistency level.
 
-Each source is tagged with its shard and generation.
+Each source is tagged with its shard and freshness tier.
+SSTable sources are also tagged with their generation.
 For primary-key reads, the planner applies LSM deduplication across selected sources.
 For append-only reads, the planner concatenates selected sources without primary-key deduplication.
 
-Bloom filters and `_pk_index/` sidecars help prune flushed generations during point lookups and cross-generation deduplication.
+Bloom filters and `_pk_index/` sidecars help prune SSTables during point lookups and cross-generation deduplication.
 
 ### Shard Pruning
 
@@ -3825,11 +5695,11 @@ For example, with `bucket(user_id, 10)` and predicate `user_id = 123`:
 
 ### Indexed Read Plan
 
-When data is merged from a flushed MemTable into the base table, base-table indexes may lag behind the data commit.
-`index_catchup` records which merged generation each base-table index covers.
+When data is compacted from an SSTable into the base table, base-table indexes may lag behind the data commit.
+`index_catchup` records which compacted generation each base-table index covers.
 
-If an indexed query needs index `I` and `I` has only caught up to generation `G` while `merged_generations[shard_id]` is higher, the planner should read the gap from flushed-generation indexes instead of scanning unindexed base-table rows.
-Once index `I` catches up, the planner can use the base-table index for those merged rows.
+If an indexed query needs index `I` and `I` has only caught up to generation `G` while `compacted_sstables[shard_id]` is higher, the planner should read the gap from SSTable indexes instead of scanning unindexed base-table rows.
+Once index `I` catches up, the planner can use the base-table index for those compacted rows.
 
 ## Appendices
 
@@ -3857,26 +5727,26 @@ Writer A is fenced and must abort.
 Recovery starts from `replay_after_wal_entry_position + 1`, which is entry 11.
 Entries 13, 14, 15, 16, and 17 are valid replay inputs because they were written by epochs that were valid at write time and are not greater than the current shard epoch.
 
-### Appendix 2: Concurrent Merger Example
+### Appendix 2: Concurrent Compactor Example
 
 Initial state:
 
 ```text
 MemWAL index:
-  merged_generations: {shard: 5}
+  compacted_sstables: {shard: 5}
 
 Shard manifest:
   current_generation: 8
-  flushed_generations:
+  sstables:
     - generation: 6, path: "abc12345_gen_6"
     - generation: 7, path: "def67890_gen_7"
 ```
 
-Two mergers both try to merge generation 6.
-Merger A commits first and updates `merged_generations[shard]` to 6 in the same base-table commit as the data.
-Merger B then hits a commit conflict, reloads the latest MemWAL index, sees `merged_generations[shard] >= 6`, skips generation 6, and continues with generation 7.
+Two compactors both try to compact the SSTable at generation 6.
+Compactor A commits first and updates `compacted_sstables[shard]` to 6 in the same base-table commit as the data.
+Compactor B then hits a commit conflict, reloads the latest MemWAL index, sees `compacted_sstables[shard] >= 6`, skips generation 6, and continues with generation 7.
 
-The MemWAL index is the authoritative merge-progress record because it is committed atomically with the base-table data changes.
+The MemWAL index is the authoritative compaction-progress record because it is committed atomically with the base-table data changes.
 
 ### Appendix 3: Bucket Hashing
 
@@ -4008,8 +5878,12 @@ This protocol mirrors fragment ID assignment and ensures row IDs are unique acro
 
 Stable row IDs are a dataset-level feature recorded in the table manifest.
 
-- Stable row IDs **must be enabled when the dataset is first created**.
-- Currently, they **cannot be turned on later** for an existing dataset. Attempts to write with `enable_stable_row_ids = true` against a dataset that was created without stable row IDs will not change the dataset's configuration.
+- Stable row IDs may be enabled when a dataset is created or by migrating an existing dataset.
+- An ordinary write with `enable_stable_row_ids = true` does not migrate an existing dataset. Use the stable row ID migration operation instead; the Rust API exposes it as `Dataset::migrate_to_stable_row_ids`.
+- Before migrating a dataset whose current manifest has no writer version, use the current Lance writer to commit an ordinary no-op deletion with predicate `false`, then reopen the latest version. This metadata-upgrade commit recomputes the authoritative physical row count for every fragment. Do not invoke stable row ID migration directly on such a legacy manifest: affected releases may have recorded stale counts, which would produce incomplete row ID sequences.
+- Before migration, stop all index builds and index commits, drop every secondary index so no index entry remains in the dataset metadata, and keep index creation quiesced until migration completes. An in-flight index commit from a pre-migration snapshot can otherwise attach stale physical row addresses after activation. Recreate indices after migration.
+- Quiesce data-modifying writers during migration. The migration uses a single atomic merge commit and does not retry when a concurrent write causes a conflict; the caller must retry the migration.
+- Migration assigns an ID to every physical row position, including deleted positions, and atomically enables the feature and advances `next_row_id`. Migrating a dataset that already uses stable row IDs is a no-op.
 - When stable row IDs are disabled, the `_rowid` column (if requested) is not stable and should not be used as a persistent identifier.
 
 Row-level version tracking (`_row_created_at_version`, `_row_last_updated_at_version`) and the row ID index described below are only available when stable row IDs are enabled.
@@ -4117,11 +5991,81 @@ The implementation selects the most compact encoding based on the value range, c
 
 </details>
 
-#### Inline vs External Storage
+#### Inline and Spilled Storage
 
-Row ID sequences are stored either inline in the fragment metadata or in external files.
-Sequences smaller than ~200KB are stored inline to avoid additional I/O, while larger sequences are written to external files referenced by path and offset.
-This threshold balances manifest size against the overhead of separate file reads.
+`DataFragment` defines inline and column alternatives for row ID sequences and row
+version sequences. This allows small sequences to stay in the manifest (fewer
+IOPS) while larger sequences (resulting from frequent updates) move outside the
+manifest.
+
+Sequences small enough (~200KB encoded and under) are stored inline in the fragment
+metadata to avoid additional I/O. An inline sequence is rewritten into every manifest
+version.
+
+A larger sequence is **spilled to a hidden column of one of the fragment's data
+files**. The column arm of the oneof (`column_row_ids`, `column_created_at_versions`
+or `column_last_updated_at_versions`) is an empty `RowLineageColumn` marker: it carries
+no file reference, because the file is one of the fragment's `files` and is found by a
+reserved negative field id in that entry's `fields`. Exactly one file of the fragment
+carries each reserved field; zero or more than one is corruption. The `column_indices`
+entry paired with the field id locates the column the way it does for a user column, so
+a lineage column
+may share a file with the user columns or with the other lineage columns, or sit in a
+file that holds nothing else. Reading it uses the ordinary data file reader and its
+encodings.
+
+The marker is valid only in a fragment whose data files are Lance v2 files. A legacy
+v1 data file has no `column_indices` to locate the column by, and a fragment cannot
+mix v1 and v2 files, so a writer on a dataset that stores v1 files MUST leave every
+sequence inline; a marker in a fragment with a v1 data file is corruption.
+
+The columns have this schema, with the field ids `-3`, `-4` and `-5` respectively.
+The three names are reserved: a writer MUST reject a user column with any of them
+(every Lance write path does), so a hidden column never collides with a field of the
+dataset schema.
+
+```python
+import pyarrow as pa
+
+row_lineage_columns = pa.schema([
+    pa.field("_rowid", pa.uint64(), nullable=False),
+    pa.field("_row_created_at_version", pa.uint64(), nullable=False),
+    pa.field("_row_last_updated_at_version", pa.uint64(), nullable=False),
+])
+```
+
+Each column present holds exactly `physical_rows` values, one per physical row in
+physical row order, deleted rows included; the value at offset `i` is the row id or
+version of the row at offset `i`, the same thing the inline encoding's `i`-th entry
+would be. A null value, or a column whose length differs from `physical_rows`, is
+corruption and MUST be rejected rather than read as a default. A file may carry any
+subset of the three columns; a sequence whose arm is not the column marker is not read
+from any file, whatever the file holds.
+
+Which sequences may leave the manifest follows from when their values are known.
+A value the commit assigns -- an appended fragment's row ids, an inserted row's
+created-at version, every row's last-updated-at version -- can change when a commit
+conflict is retried, so it stays inline where the retry can rewrite it; those
+sequences are single runs and cost a few bytes. A value carried over from existing
+rows -- the row ids and created-at versions that compaction or a row rewrite
+preserves -- is fixed before the commit and may be written to a data file.
+A writer spills only on a table that opts in through the `lance.row_lineage.spill`
+config key; a table that never sets it is unchanged.
+
+A writer that emits any column arm MUST set the spilled row lineage feature flag
+(bit 11, value 2048) in both the reader and writer flag words. A reader without that
+bit sees an unset oneof and would take the fragment to have no row IDs at all, on a
+table whose manifest says every fragment has them.
+
+Field numbers 6, 8 and 10 of `DataFragment` (`external_row_ids`,
+`external_last_updated_at_versions`, `external_created_at_versions`) once named an
+opaque byte range in a file holding the same encoding as the inline arm. No Lance
+writer ever emitted them; the column arms replace that design, and the numbers and
+names are reserved.
+
+!!! note
+    Spilled row lineage sequences are not yet a released feature. A released build
+    treats bit 11 as an unknown feature flag and refuses the dataset.
 
 <details>
 <summary>DataFragment row_id_sequence field</summary>
@@ -4130,7 +6074,7 @@ This threshold balances manifest size against the overhead of separate file read
 message DataFragment {
   oneof row_id_sequence {
     bytes inline_row_ids = 5;
-    ExternalFile external_row_ids = 6;
+    RowLineageColumn column_row_ids = 12;
   }
 }
 ```
@@ -4217,7 +6161,7 @@ RowDatasetVersionSequence {
 message DataFragment {
   oneof created_at_version_sequence {
     bytes inline_created_at_versions = 9;
-    ExternalFile external_created_at_versions = 10;
+    RowLineageColumn column_created_at_versions = 14;
   }
 }
 ```
@@ -4260,7 +6204,7 @@ New physical row (current):
 message DataFragment {
   oneof last_updated_at_version_sequence {
     bytes inline_last_updated_at_versions = 7;
-    ExternalFile external_last_updated_at_versions = 8;
+    RowLineageColumn column_last_updated_at_versions = 13;
   }
 }
 ```
@@ -4950,6 +6894,10 @@ This includes operations such as compaction, defragmentation, and re-ordering.
 Rewrite operations change row addresses, requiring index updates.
 New fragment IDs must be reserved via `ReserveFragments` before executing a `Rewrite` transaction.
 
+A rewrite that defers index remapping publishes its address mapping in the
+same commit by replacing the [Fragment Reuse Index](../index/system/frag_reuse.md)
+entry in the manifest's index section.
+
 <details>
 <summary>Rewrite protobuf message</summary>
 
@@ -5080,6 +7028,7 @@ The Restore operation reverts the table to a previous version. It's generally as
 other operation. Here are the operations that conflict with Restore:
 
 - UpdateMemWalState
+- UpdateConfig (only if it updates schema or field metadata, which a restore rewinds)
 
 ### ReserveFragments
 
@@ -5177,6 +7126,7 @@ An UpdateConfig operation only modifies table config and tends to be compatible 
 are the operations that conflict with UpdateConfig:
 
 - Overwrite
+- Restore (only if the UpdateConfig updates schema or field metadata)
 - UpdateConfig (only if the two operations modify the same config)
 
 ### DataReplacement
@@ -5215,6 +7165,64 @@ The following operations are retryable conflicts with DataReplacement:
 
 A concurrent Delete or Update that only adds a deletion vector to a target fragment (without removing it) is compatible: the
 positional column file stays aligned and the rebase preserves the deletion vector.
+
+### DataOverlay
+
+Attaches [overlay files](data_overlay_file.md) to fragments, supplying new values
+for a subset of `(row offset, field)` cells without rewriting the fragments' base
+data files. The overlays are appended to each fragment's existing `overlays` list,
+so overlays written by concurrent commits are preserved. Each overlay's
+`committed_version` is stamped to the new dataset version at commit time (and
+re-stamped on retry), like the created-at / last-updated-at version sequences.
+
+<details>
+<summary>DataOverlay protobuf message</summary>
+
+```protobuf
+%%% proto.message.DataOverlay %%%
+
+%%% proto.message.DataOverlayGroup %%%
+```
+
+</details>
+
+#### DataOverlay Compatibility
+
+A DataOverlay operation only changes cells within existing fragments and preserves
+physical row addresses, so — like DataReplacement — it is intentionally permissive.
+Because overlays stack and the higher `committed_version` wins each covered cell,
+independent backfills never conflict, and a concurrent Delete simply makes the
+overlay value for a deleted offset inert. Here are the operations that conflict
+with DataOverlay:
+
+- Overwrite
+- Restore
+- UpdateMemWalState
+
+The following operations are retryable conflicts with DataOverlay:
+
+- Rewrite (only if overlapping fragments) — row-rewriting compaction or an
+  overlay→base fold changes physical row addresses or consumes the overlays, so
+  the overlay's offsets are no longer valid; the writer must re-read the new
+  fragment, recompute, and retry.
+- Merge (always).
+- A row-moving Update that touches an overlaid fragment — a delete-and-reinsert
+  update (any update that is not a `REWRITE_COLUMNS` column rewrite) relocates the
+  updated rows into new fragments, so the overlay's physical offsets no longer
+  address them; the writer must re-read and retry.
+
+DataOverlay is compatible with another DataOverlay (any fields), Append, Delete, a
+`REWRITE_COLUMNS` column rewrite, and DataReplacement, because all of these
+preserve physical row addresses: overlay offsets stay valid, the overlay is newer
+and wins its covered cells, and the version gate excludes those cells from any
+rebuilt index.
+
+When a DataReplacement or a `REWRITE_COLUMNS` update writes new base values for a
+field, it supersedes any older overlay on that field: the writer tombstones the
+overlay's entry for the rewritten field — replacing the field id with the obsolete
+sentinel, as with obsolete base columns — so the fresh base values are not silently
+shadowed. Overlay entries for other fields are preserved, and an overlay left with
+no live fields is dropped.
 
 ### UpdateMemWalState
 
@@ -5377,7 +7385,9 @@ In this scenario:
 If the backing object store does not support atomic operations (rename-if-not-exists or put-if-not-exists), an external manifest store can be used to enable concurrent writers.
 
 An external manifest store is a key-value store that supports put-if-not-exists operations.
-The external manifest store supplements but does not replace the manifests in object storage.
+It is the concurrency coordinator and fast version index: its conditional write selects one
+immutable staging manifest for each version. The canonical manifest bytes in object storage
+remain authoritative, so the external store supplements but does not replace them.
 A reader unaware of the external manifest store can still read the table, but may observe a version up to one commit behind the true latest version.
 
 ### Commit Process with External Store
@@ -5390,24 +7400,41 @@ The commit process follows a four-step protocol:
    - Write the new manifest to object storage under a unique path determined by a new UUID
    - This staged manifest is not yet visible to readers
 
-2. **Commit to external store**: `PUT_EXTERNAL_STORE base_uri, version, {dataset}/_versions/{version}.manifest-{uuid}`
-   - Atomically commit the path of the staged manifest to the external store using put-if-not-exists
-   - The commit is effectively complete after this step
-   - If this operation fails due to conflict, another writer has committed this version
+2. **Reserve version in external store**: `PUT_EXTERNAL_STORE base_uri, version, {dataset}/_versions/{version}.manifest-{uuid}`
+   - Atomically reserve the version for this staged manifest using put-if-not-exists
+   - The reservation selects one immutable staging object; it is not yet the canonical commit
+   - If this operation fails due to conflict, another writer reserved this version
 
 3. **Finalize in object store**: `COPY_OBJECT_STORE {dataset}/_versions/{version}.manifest-{uuid} → {dataset}/_versions/{version}.manifest`
    - Copy the staged manifest to the final path
+   - Successful materialization at this deterministic path is the commit point
    - This makes the manifest discoverable by readers unaware of the external store
 
 4. **Update external store pointer**: `PUT_EXTERNAL_STORE base_uri, version, {dataset}/_versions/{version}.manifest`
    - Update the external store to point to the finalized manifest path
+   - After copying, read the canonical object's current metadata. Return its ETag to the caller as
+     an opaque physical-generation observation so runtime caches do not collapse a newly committed
+     Dataset into an older cached Dataset at the same URI and version
+   - Do not persist that ETag in the external store. Concurrent finalizers can copy the same selected
+     immutable bytes into different physical generations, and COPY plus external-store publication
+     is not atomic. Every helper therefore publishes the same stable path-and-size tuple
    - Completes the synchronization between external store and object storage
 
 **Fault Tolerance:**
 
-If the writer fails after step 2 but before step 4, the external store and object store are temporarily out of sync.
-Readers detect this condition and attempt to complete the synchronization.
-If synchronization fails, the reader refuses to load to ensure dataset portability.
+If the writer fails after step 2 but before step 3, the external store contains a pending
+reservation. Readers that use the external store detect this state and retry materialization.
+If step 3 succeeds but step 4 fails, the canonical object remains committed; readers use it and
+may repair the external index. Staging deletion is garbage collection and does not affect the
+commit outcome.
+
+**Rolling Upgrade:**
+
+Roll this behavior out normally across the fleet. New readers ignore legacy stored
+ETags, and legacy readers already accept finalized rows without an ETag, so mixed-version rows
+remain compatible. While both legacy finalizers and legacy readers remain, the pre-existing race
+can still republish a stale ETag that a legacy reader rejects. Full protection takes effect when
+the rolling upgrade converges; no row migration or quiesced cutover is required.
 
 ### Reader Process with External Store
 
@@ -5417,7 +7444,9 @@ The reader follows a validation and synchronization protocol:
 
 1. **Query external store**: `GET_EXTERNAL_STORE base_uri, version` → `path`
    - Retrieve the manifest path for the requested version
-   - If the path does not end with a UUID, return it directly (synchronization complete)
+   - If the path does not end with a UUID, validate the canonical object's size. Ignore any legacy
+     stored ETag because it is neither content identity nor dataset-incarnation identity; the
+     validation HEAD still returns the current canonical ETag to the caller
    - If the path ends with a UUID, synchronization is required
 
 2. **Synchronize to object store**: `COPY_OBJECT_STORE {dataset}/_versions/{version}.manifest-{uuid} → {dataset}/_versions/{version}.manifest`
@@ -5425,12 +7454,13 @@ The reader follows a validation and synchronization protocol:
    - This operation is idempotent
 
 3. **Update external store**: `PUT_EXTERNAL_STORE base_uri, version, {dataset}/_versions/{version}.manifest`
-   - Update the external store to reflect the finalized path
-   - Future readers will see the synchronized state
+   - Best-effort record the finalized path and size without an ETag while returning the observed
+     destination ETag to the current caller
+   - If this index repair fails, retain staging so a future reader can retry it
 
 4. **Return finalized path**: Return `{dataset}/_versions/{version}.manifest`
-   - Always return the finalized path
-   - If synchronization fails, return an error to prevent reading inconsistent state
+   - Return once canonical materialization succeeds, even if index repair or staging cleanup fails
+   - If canonical materialization cannot be established, or an observed size differs, return an error
 
 This protocol ensures that datasets using external manifest stores remain portable: copying the dataset directory preserves all data without requiring the external store.
 
@@ -5468,10 +7498,19 @@ they should return an "unsupported" error on any read or write operation.
 | 4        | `FLAG_USE_V2_FORMAT_DEPRECATED` | No              | No              | Files are written with the new v2 format. This flag is deprecated and no longer used.                       |
 | 8        | `FLAG_TABLE_CONFIG`             | No              | Yes             | Table config is present in the manifest.                                                                    |
 | 16       | `FLAG_BASE_PATHS`               | Yes             | Yes             | Dataset uses multiple base paths (for shallow clones or multi-base datasets).                               |
+| 32       | `FLAG_DISABLE_TRANSACTION_FILE` | No              | Yes             | Transactions are recorded in the manifest rather than in a separate transaction file.                       |
+| 64       | `FLAG_UNSTABLE_DATA_OVERLAY_FILES` | Yes          | Yes             | Fragments may carry data overlay files. Unstable: release builds reject it unless explicitly opted in.      |
+| 128      | `FLAG_COVERED_INDEX_METADATA`   | Yes             | Yes             | Some index declares covering columns (`IndexMetadata.covering_fields`). Without `FLAG_INDEPENDENT_COVERING_FIELDS`, the carried columns form the trailing suffix of `fields`. An implementation without this flag may select or maintain an index using the wrong fields. |
+| 256      | `FLAG_MIXED_DATA_FILE_VERSIONS` | Yes             | Yes             | The snapshot may reference recognized V2 data files with different exact versions. Both bits must be set and remain set on later versions. |
+| 512      | `FLAG_FRAG_REUSE_WITH_STABLE_ROW_IDS` | Yes       | Yes             | The table uses stable row IDs and carries a [Fragment Reuse Index](../index/system/frag_reuse.md). |
+| 1024     | `FLAG_FRAGMENT_REUSE_INDEX`     | Yes             | Yes             | The fragment reuse index records tagged transitions (`IndexMetadata.index_version >= 1`). Readers must translate row addresses through them; writers must preserve them. An implementation without this flag would decode the details as the legacy format and silently drop the transitions when it next rewrites the fragment reuse index. See [FRI index versions](../index/system/frag_reuse.md#fri-index-versions). |
+| 2048     | `FLAG_UNSTABLE_SPILLED_ROW_LINEAGE` | Yes         | Yes             | Some fragment stores its row ids or row version sequences as hidden columns of a data file rather than inline. A reader without this flag would see the fragment as having no row ids. Unstable: release builds reject it unless explicitly opted in. |
+| 4096     | `FLAG_FRAGMENT_TREE`            | Yes             | Yes             | Fragment records live in a [fragment tree](fragment_metadata.md). `Manifest.fragments` is empty. |
+| 8192     | `FLAG_INDEPENDENT_COVERING_FIELDS` | Yes          | Yes             | Requires `FLAG_COVERED_INDEX_METADATA` and is retained together with it. `IndexMetadata.fields` contains only key fields, while `covering_fields` independently declares carried fields and may overlap `fields`. Implementations that only support the legacy suffix contract must reject the dataset. |
 
 </div>
 
-Flags with bit values 32 and above are unknown and will cause implementations to reject the dataset with an "unsupported" error.
+Flags with bit values 16384 and above are unknown; unknown flags cause implementations to reject the dataset with an "unsupported" error. The paired mixed-version reader and writer bits must either both be set or both be clear; a half-set manifest is invalid.
 
 
 ================================================
@@ -5485,5 +7524,6 @@ nav:
   - Layout: layout.md
   - Branch & Tag: branch_tag.md
   - Row ID & Lineage: row_id_lineage.md
+  - Data Overlay Files: data_overlay_file.md
+  - Fragment Metadata Tree: fragment_metadata.md
   - MemTable & WAL: mem_wal.md
-

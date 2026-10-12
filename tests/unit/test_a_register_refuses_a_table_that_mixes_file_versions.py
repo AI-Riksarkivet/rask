@@ -151,7 +151,7 @@ class TestThePublicDoor:
         """The judgement runs before the seed and both emits; the clean case proves the spies are wired.
 
         ``unstable`` is a dataset created without stable row ids: its `_rowid` is an address compaction
-        rewrites and its change feed answers empty windows (`lance_docs/file_format.md:4011-4015`).
+        rewrites and its change feed answers empty windows (`lance_docs/file_format.md:5878-5889`).
         """
         from catalog.api import fga_deps
         from catalog.api.v1.endpoints import tables

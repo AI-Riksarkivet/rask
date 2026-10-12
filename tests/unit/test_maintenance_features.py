@@ -391,11 +391,8 @@ class _Fragment:
 class _Unmapped:
     """Fragments naming base 3, and a manifest accessor that declares no such base."""
 
-    class _Handle:
-        def base_paths(self) -> dict[int, object]:
-            return {}
-
-    _ds = _Handle()
+    def base_paths(self) -> dict[int, object]:
+        return {}
 
     def get_fragments(self, filter: object = None) -> list[_Fragment]:  # noqa: A002 — pylance's own keyword
         return [_Fragment()]

@@ -47,8 +47,8 @@ dev = [
     "ruff",
     "ty",
     "datasets>=4.8.4",
-    "pylance>=12.0.0",
-    "lancedb>=0.20",
+    "pylance>=13.0.0",
+    "lancedb>=0.40.0",
     "validate",
     # pytest-timeout — the only tool that can DIAGNOSE a hung suite in Dagger, which is where this
     # suite hangs and a developer box does not. Two dead ends were paid for before it was added, and
@@ -75,7 +75,10 @@ line-length = 160
 # A vulture whitelist is, BY DESIGN, a file of bare names — that is how vulture marks a symbol as
 # used. Every line is an undefined reference to any linter or type checker; it is not real code and
 # is never imported. lance-ns excludes it from ty for the same reason.
-extend-exclude = [".vulture-whitelist.py"]
+#
+# `lance_docs/` is vendored upstream text (`lance_docs/PROVENANCE.md`): its bytes are the release's, so
+# formatting the Python blocks inside its Markdown would make the copy disagree with the tag it names.
+extend-exclude = [".vulture-whitelist.py", "lance_docs"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "S", "C4", "SIM", "RUF", "C901", "RET", "PERF", "FURB", "A", "ANN"]

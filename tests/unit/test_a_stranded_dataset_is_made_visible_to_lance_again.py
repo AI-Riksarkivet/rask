@@ -6,7 +6,7 @@ metadata-only commit, which moves the dataset's floor above them, and Lance's ow
 
 THE FIRST TEST DRIVES REAL LANCE, not a fake, because the claim being made is about upstream's
 behaviour and a fake would only restate the belief under test. It builds the estate's measured shape —
-a dataset collapsed to one live version with an unreferenced file whose mtime is ABOVE the surviving
+a dataset collapsed to one live version with an unreferenced transaction file whose mtime is ABOVE the surviving
 manifest's commit timestamp but in the past — and asserts the before/after: `cleanup_old_versions`
 removes nothing, then after one config commit it removes the file and the rows still read.
 
@@ -69,7 +69,9 @@ def _stranded_dataset(root: Path) -> tuple[str, Path, float]:
     dataset = lance.dataset(uri)
     floor = min(committed_at(version).timestamp() for version in dataset.versions())
 
-    orphan = Path(uri) / "data" / "stranded.lance"
+    # A TRANSACTION file, because Lance lists `_transactions/` and `_deletions/` only up to the floor; a
+    # `data/` file is listed past it (lance #8944) and so is never stranded.
+    orphan = Path(uri) / "_transactions" / "9-dead.txn"
     orphan.write_bytes(b"x" * 64)
     planted = floor + 0.5
     os.utime(orphan, (planted, planted))
@@ -84,21 +86,21 @@ def test_lance_reclaims_a_stranded_file_only_after_the_floor_is_raised(tmp_path:
     uri, orphan, floor = _stranded_dataset(tmp_path)
     assert orphan.stat().st_mtime > floor, "the fixture did not strand the file above the floor"
 
-    before = lance.dataset(uri).cleanup_old_versions(older_than=dt.timedelta(seconds=0), delete_unverified=True)
-    assert before.data_files_removed == 0, "Lance saw a file the floor should have hidden — the fixture is wrong, not Lance"
-    assert orphan.exists()
+    lance.dataset(uri).cleanup_old_versions(older_than=dt.timedelta(seconds=0), delete_unverified=True)
+    assert orphan.exists(), "Lance saw a file the floor should have hidden — the fixture is wrong, not Lance"
 
     report = raise_listing_floors(
         _settings(),
         orphans=[
-            OrphanFile(dataset=uri, path="data/stranded.lance", kind="data", size_bytes=64, reclaimable_by_lance=False, mtime_epoch=orphan.stat().st_mtime)
+            OrphanFile(
+                dataset=uri, path="_transactions/9-dead.txn", kind="transactions", size_bytes=64, reclaimable_by_lance=False, mtime_epoch=orphan.stat().st_mtime
+            )
         ],
         storage_options={},
     )
     assert [r.dataset for r in report.raised] == [uri], report
 
-    after = lance.dataset(uri).cleanup_old_versions(older_than=dt.timedelta(seconds=0), delete_unverified=True)
-    assert after.data_files_removed == 1
+    lance.dataset(uri).cleanup_old_versions(older_than=dt.timedelta(seconds=0), delete_unverified=True)
     assert not orphan.exists()
 
 
@@ -111,7 +113,7 @@ def test_the_commit_is_a_config_change_lineage_already_knows_to_ignore(tmp_path:
     uri, orphan, _ = _stranded_dataset(tmp_path)
     raise_listing_floors(
         _settings(),
-        orphans=[OrphanFile(dataset=uri, path="data/stranded.lance", kind="data", reclaimable_by_lance=False, mtime_epoch=orphan.stat().st_mtime)],
+        orphans=[OrphanFile(dataset=uri, path="_transactions/9-dead.txn", kind="transactions", reclaimable_by_lance=False, mtime_epoch=orphan.stat().st_mtime)],
         storage_options={},
     )
 
@@ -126,7 +128,7 @@ def test_the_commit_is_a_config_change_lineage_already_knows_to_ignore(tmp_path:
 
 
 def _orphan(dataset: str, reclaimable: bool | None, mtime: float = 2_000_000_000.0) -> OrphanFile:
-    return OrphanFile(dataset=dataset, path="data/x.lance", kind="data", reclaimable_by_lance=reclaimable, mtime_epoch=mtime)
+    return OrphanFile(dataset=dataset, path="_transactions/x.txn", kind="transactions", reclaimable_by_lance=reclaimable, mtime_epoch=mtime)
 
 
 @pytest.fixture
@@ -158,12 +160,14 @@ def test_one_undecided_sibling_disqualifies_the_whole_dataset(readable_floor: No
     assert _plan([_orphan("s3://wh/a", False), _orphan("s3://wh/a", None)]).raised == []
 
 
-def test_a_dataset_whose_orphans_are_all_stranded_is_selected(readable_floor: None) -> None:
-    """The control. Without it, a pass that selected nothing would satisfy all three tests above."""
-    plan = _plan([_orphan("s3://wh/a", False), _orphan("s3://wh/a", False)])
+def test_a_dataset_with_stranded_orphans_is_selected_beside_ones_time_clears(readable_floor: None) -> None:
+    """The control, in the estate's shape: a restore strands transaction files beside data files, and
+    the data files are Lance's whatever the floor (lance #8944). They neither earn the commit nor block
+    it, and the raise names only the stranded files it is for."""
+    data_file = OrphanFile(dataset="s3://wh/a", path="data/x.lance", kind="data", reclaimable_by_lance=True, mtime_epoch=2_000_000_000.0)
+    plan = _plan([_orphan("s3://wh/a", False), _orphan("s3://wh/a", False), data_file, _orphan("s3://wh/b", True)])
 
-    assert [r.dataset for r in plan.raised] == ["s3://wh/a"]
-    assert plan.raised[0].orphan_files == 2
+    assert [(r.dataset, r.orphan_files) for r in plan.raised] == [("s3://wh/a", 2)]
 
 
 def test_a_dry_run_writes_no_version(tmp_path: Path) -> None:
@@ -172,7 +176,7 @@ def test_a_dry_run_writes_no_version(tmp_path: Path) -> None:
 
     report = raise_listing_floors(
         _settings(dry_run=True),
-        orphans=[OrphanFile(dataset=uri, path="data/stranded.lance", kind="data", reclaimable_by_lance=False, mtime_epoch=orphan.stat().st_mtime)],
+        orphans=[OrphanFile(dataset=uri, path="_transactions/9-dead.txn", kind="transactions", reclaimable_by_lance=False, mtime_epoch=orphan.stat().st_mtime)],
         storage_options={},
     )
 
@@ -190,7 +194,7 @@ def test_a_floor_that_already_covers_its_orphans_is_refused(tmp_path: Path) -> N
 
     report = raise_listing_floors(
         _settings(),
-        orphans=[OrphanFile(dataset=uri, path="data/stranded.lance", kind="data", reclaimable_by_lance=False, mtime_epoch=1.0)],
+        orphans=[OrphanFile(dataset=uri, path="_transactions/9-dead.txn", kind="transactions", reclaimable_by_lance=False, mtime_epoch=1.0)],
         storage_options={},
     )
 
@@ -205,7 +209,7 @@ def test_an_unreadable_dataset_is_refused_and_does_not_stop_the_others(tmp_path:
         _settings(),
         orphans=[
             _orphan("s3://wh/does-not-exist", False),
-            OrphanFile(dataset=uri, path="data/stranded.lance", kind="data", reclaimable_by_lance=False, mtime_epoch=orphan.stat().st_mtime),
+            OrphanFile(dataset=uri, path="_transactions/9-dead.txn", kind="transactions", reclaimable_by_lance=False, mtime_epoch=orphan.stat().st_mtime),
         ],
         storage_options={},
     )
@@ -256,7 +260,7 @@ def test_the_commit_is_signed_by_the_vended_credential(monkeypatch: pytest.Monke
 
     raise_listing_floors(
         _settings(),
-        orphans=[OrphanFile(dataset=uri, path="data/stranded.lance", kind="data", reclaimable_by_lance=False, mtime_epoch=orphan.stat().st_mtime)],
+        orphans=[OrphanFile(dataset=uri, path="_transactions/9-dead.txn", kind="transactions", reclaimable_by_lance=False, mtime_epoch=orphan.stat().st_mtime)],
         storage_options={"ambient": "yes"},
     )
 
@@ -325,7 +329,7 @@ def test_a_dataset_already_raised_is_not_raised_again(tmp_path: Path) -> None:
     that dataset for want of a write credential and its floor never moved.
     """
     uri, orphan, _ = _stranded_dataset(tmp_path)
-    orphans = [OrphanFile(dataset=uri, path="data/stranded.lance", kind="data", reclaimable_by_lance=False, mtime_epoch=orphan.stat().st_mtime)]
+    orphans = [OrphanFile(dataset=uri, path="_transactions/9-dead.txn", kind="transactions", reclaimable_by_lance=False, mtime_epoch=orphan.stat().st_mtime)]
 
     first = raise_listing_floors(_settings(), orphans=orphans, storage_options={})
     version_after_first = lance.dataset(uri).version

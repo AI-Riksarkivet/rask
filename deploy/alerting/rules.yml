@@ -613,7 +613,7 @@ groups:
           description: >-
             The sweep found a table whose manifest carries reader flag 256 (mixed data file versions).
             The flag is sticky: no Lance operation removes it. pylance 11 and lancedb 0.34 (lance core 8)
-            cannot open the table, and maintenance refuses it on every tick. The only measured heal is
+            cannot open the table (pylance 12+ and lancedb 0.40 can), and maintenance refuses it on every tick. The only measured heal is
             recreating it into a new dataset, which re-mints _rowid and drops history, tags, branches and
             indices. Find the table in the maintenance_dataset_outcome records where
             mixed_data_file_versions is true, and the writer that appended at another data_storage_version.

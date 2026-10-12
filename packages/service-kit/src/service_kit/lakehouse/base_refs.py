@@ -165,7 +165,7 @@ class BaseRefs(BaseModel):
         return frozenset(self.pinned[root])
 
 
-#: The directory a named branch's own files live under — `file_format.md:2763`, "Named branches store
+#: The directory a named branch's own files live under — `file_format.md:3690`, "Named branches store
 #: their version-specific files under `tree/{branch_name}/`".
 _BRANCH_SEGMENT = "/tree/"
 
@@ -175,7 +175,7 @@ def containment_of(location: str, root: str) -> str:
 
     IT DECIDES GC BEHAVIOUR, and one of the four is PERMITTED. `maintenance.services.optimize` reclaims
     a location whose relation to the protected root is ``branch`` and refuses the other three, because a
-    branch is Lance's own business inside one root while an external clone is not — `file_format.md:3187`
+    branch is Lance's own business inside one root while an external clone is not — `file_format.md:5016`
     disclaims exactly that case ("Source dataset remains immutable and can be garbage collected
     independently"). Observed on the deployed estate 2026-09-18 when the permit landed: `relation='branch'`
     refusals went 105 -> 0 and 61 branch datasets reclaimed 97 versions in one tick, with the parent's
@@ -187,7 +187,7 @@ def containment_of(location: str, root: str) -> str:
     "another dataset resolves its files through <root>", which is the PARENT's situation stated about
     the child.
 
-    A branch is the REFERRER, not part of the referent. `file_format.md:2744` — "Each branch dataset is
+    A branch is the REFERRER, not part of the referent. `file_format.md:3671` — "Each branch dataset is
     technically a shallow clone of the source dataset" — and the layout at `:2746-2761` gives
     ``tree/{branch}/`` its own ``_versions/``/``_transactions/``/``_deletions/``/``_indices/`` and no
     ``data/``, so it resolves its data through the parent. That is what makes the parent protected, and

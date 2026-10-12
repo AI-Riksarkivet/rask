@@ -434,7 +434,7 @@ def _compact_files(
     failure can be read against the step that produced it.
     """
     # defer_index_remap: with the Fragment Reuse Index the row-id remap is deferred, so compaction and
-    # index maintenance "no longer conflict" (lance_docs/guide.md:3150) — cuts the CommitConflict class
+    # index maintenance "no longer conflict" (lance_docs/guide.md:3578) — cuts the CommitConflict class
     # of maintain: failures at the source. The `_optimize_indices` step that runs next folds the
     # compacted fragments into the indices; the interplay is pinned by
     # tests/unit/test_maintenance_optimize.py::test_compact_one_defer_index_remap_keeps_indices_working.
@@ -963,7 +963,7 @@ def compact_one(
         # flag 16 for the cost reason above. Letting the branch past THIS gate is what lets that
         # narrower answer be given at all.
         #
-        # The cross-root case is the one Lance disclaims in as many words (`file_format.md:3187`, of a
+        # The cross-root case is the one Lance disclaims in as many words (`file_format.md:5016`, of a
         # clone into another root: "Source dataset remains immutable and can be garbage collected
         # independently"). Nothing in the format protects that clone, which is the whole reason the
         # estate-wide pre-pass exists — so `is`/`under`/`ancestor` keep refusing.

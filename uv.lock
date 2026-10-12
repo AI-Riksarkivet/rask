@@ -188,7 +188,7 @@ requires-dist = [
     { name = "lineage-kit", editable = "packages/lineage-kit" },
     { name = "pyarrow" },
     { name = "pydantic", specifier = ">=2.7" },
-    { name = "pylance", extras = ["otel"], specifier = ">=12.0.0" },
+    { name = "pylance", extras = ["otel"], specifier = ">=13.0.0" },
     { name = "service-kit", extras = ["lancekit"], editable = "packages/service-kit" },
     { name = "shapely", specifier = ">=2.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
@@ -365,7 +365,7 @@ requires-dist = [
     { name = "pyarrow" },
     { name = "pydantic", specifier = ">=2.7" },
     { name = "pydantic-settings", specifier = ">=2.5" },
-    { name = "pylance", extras = ["otel"], specifier = ">=12.0.0" },
+    { name = "pylance", extras = ["otel"], specifier = ">=13.0.0" },
     { name = "service-kit", extras = ["governed", "lakehouse"], editable = "packages/service-kit" },
     { name = "storage", editable = "packages/storage" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
@@ -1603,7 +1603,7 @@ wheels = [
 
 [[package]]
 name = "lancedb"
-version = "0.34.0"
+version = "0.40.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "deprecation" },
@@ -1615,10 +1615,10 @@ dependencies = [
     { name = "tqdm" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/df/f7/5262b9aa593f790757163c0165ab0da1dda054758901bea7e4f02c9cb633/lancedb-0.34.0-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:c462f2e6f933cad659fd0179394eaab578acbc9151fe2ef41bc29b36ecca5058", size = 52654213, upload-time = "2026-07-02T17:13:31.102Z" },
-    { url = "https://files.pythonhosted.org/packages/69/99/05ea0d32229ebea695193ff20c15d6ecae25785ad82a9d4723d98832a284/lancedb-0.34.0-cp39-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:48829e88e708947d0520454ab9e4f8efa35f3e3626469eadd3a6e061b89cb223", size = 55434501, upload-time = "2026-07-02T17:13:34.81Z" },
-    { url = "https://files.pythonhosted.org/packages/cd/4e/4325c13d5afa93c466428a5a0f168ad4d96f5eb4a77bbe7c5100d39c9897/lancedb-0.34.0-cp39-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:05ba8a5b58e064edfbe5be71b1abf2e411b4eaf295d1a173dcb1a55c5bfb5285", size = 58659359, upload-time = "2026-07-02T17:13:38.424Z" },
-    { url = "https://files.pythonhosted.org/packages/d9/5d/8ca165f1386caf6c4d1c515afd52f345b66432264eecfdfb7fd33eefd9af/lancedb-0.34.0-cp39-abi3-win_amd64.whl", hash = "sha256:51cbc11808f9e3332819b9367c975b3a888541447a8e7bea09c57c852a279153", size = 63530726, upload-time = "2026-07-02T17:13:41.612Z" },
+    { url = "https://files.pythonhosted.org/packages/27/2b/855ab90aea9cfd311842be596ca12dcc366df7b2e8209003f95cc8079f6d/lancedb-0.40.0-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:10e6fbacc9a9be5698c8e635f150ef4346e428db71d15b31bc1b79aec2a382ff", size = 67454352, upload-time = "2026-10-07T10:35:02.537Z" },
+    { url = "https://files.pythonhosted.org/packages/a1/07/bcdd8f581db0719a5e99be5abdf2a569c840f9b3b90069eff1181141b291/lancedb-0.40.0-cp310-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:e967577fe42980217e43f9b6ecbe042c5ae314370a34b88f1c54e825f96b26f0", size = 71651477, upload-time = "2026-10-07T10:35:06.644Z" },
+    { url = "https://files.pythonhosted.org/packages/82/f7/4a5b7bff8abf486d4dc43fc1cb06c5c08472a1aee760eb5d9d10bd7c770e/lancedb-0.40.0-cp310-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:aac9e08a710ba2071a8aefc4b4ef7d8534f5f7e4e4ce1761f11469d97c36f1e2", size = 75231099, upload-time = "2026-10-07T10:35:10.459Z" },
+    { url = "https://files.pythonhosted.org/packages/88/38/00ed271fd7fc51761b7d449856913a64951041881e68972602643eae7349/lancedb-0.40.0-cp310-abi3-win_amd64.whl", hash = "sha256:aaea68920b88e3d0b84a9ec84bc1585ad04239b9ca1bfcd1e491c2c12bffddc2", size = 83389723, upload-time = "2026-10-07T10:35:14.427Z" },
 ]
 
 [[package]]
@@ -1707,7 +1707,7 @@ requires-dist = [
     { name = "psycopg-pool", specifier = ">=3.2" },
     { name = "pydantic", specifier = ">=2.7" },
     { name = "pydantic-settings", specifier = ">=2.5" },
-    { name = "pylance", extras = ["otel"], specifier = ">=12.0.0" },
+    { name = "pylance", extras = ["otel"], specifier = ">=13.0.0" },
     { name = "service-kit", extras = ["governed", "lakehouse"], editable = "packages/service-kit" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
 ]
@@ -1767,7 +1767,7 @@ requires-dist = [
     { name = "pyarrow" },
     { name = "pydantic", specifier = ">=2.7" },
     { name = "pydantic-settings", specifier = ">=2.5" },
-    { name = "pylance", extras = ["otel"], specifier = ">=12.0.0" },
+    { name = "pylance", extras = ["otel"], specifier = ">=13.0.0" },
     { name = "service-kit", extras = ["governed", "lakehouse"], editable = "packages/service-kit" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
 ]
@@ -3138,7 +3138,7 @@ crypto = [
 
 [[package]]
 name = "pylance"
-version = "12.0.0"
+version = "13.0.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "lance-namespace" },
@@ -3146,12 +3146,12 @@ dependencies = [
     { name = "pyarrow" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/32/e6/f95aaa102e141a133418ed247051df3077aacb1851ee3bad88f3045fb5fc/pylance-12.0.0-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:58583827b01ae14da220dcea2ea258b008e8d2d20915cf462dee18ddcea068a5", size = 72336247, upload-time = "2026-09-17T16:41:26.318Z" },
-    { url = "https://files.pythonhosted.org/packages/4f/24/1f38770557db8189c63b0eeff497f0a6a9fc799ed2e3b2b023365b3a3ad9/pylance-12.0.0-cp310-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:ca5af2bf6e489b76768b56848b8e9c692ad42d7eedb31a8097fcb57e3146a211", size = 76717015, upload-time = "2026-09-17T16:44:55.744Z" },
-    { url = "https://files.pythonhosted.org/packages/da/a4/4e87599ed6120bb6ae91b7611b9a1685759cc2e12898585c5ee347827168/pylance-12.0.0-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:bac18e8f6fecb9c998c2a7301d782281bac075cf06bb0df5d89fc6fc4e8768e1", size = 80868316, upload-time = "2026-09-17T16:53:32.971Z" },
-    { url = "https://files.pythonhosted.org/packages/c6/81/b1a578be4c3845183f84bcc19cc0e3bacff2052868faeec975e00e3b7bad/pylance-12.0.0-cp310-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:df80a7991fbeab9ca206da4c0110e611696e29fc7b79bc9a88309b1b42c5849f", size = 76735408, upload-time = "2026-09-17T16:45:07.137Z" },
-    { url = "https://files.pythonhosted.org/packages/63/1c/2596ba2f0a7dedb28b7e4d07b6d1996365f501fb9329af422afd31a95179/pylance-12.0.0-cp310-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:d002980aa548336682f1445427ea89cf39e71a452297741ca97627192e4a1678", size = 80846740, upload-time = "2026-09-17T17:01:03.452Z" },
-    { url = "https://files.pythonhosted.org/packages/2d/0c/69df299e26b5594e8b919bc16a6a951295da96f2237eadb2e2b52c2b0316/pylance-12.0.0-cp310-abi3-win_amd64.whl", hash = "sha256:0cd59044927c5ee5a6811ea28b6f4860b2d21932828e770d9e5b39522afcf19d", size = 87083663, upload-time = "2026-09-17T16:55:09.236Z" },
+    { url = "https://files.pythonhosted.org/packages/90/12/fa8b39d84bfac672fd44d1369b31069021829e585ca565d49d33cedc90a1/pylance-13.0.0-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:38cbe8d204785e697909e8faca91adb3b00a2f6a865c425987cb232d0865c010", size = 74507904, upload-time = "2026-10-07T07:00:00.369Z" },
+    { url = "https://files.pythonhosted.org/packages/27/e1/0399a1dc66664ed6d66fc4cd7fdaeb457c4dd5b2ea536241643388a888fb/pylance-13.0.0-cp310-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:22a37a0af446964e79cfd6046f9ea2735fcb42f8020eab63947b2bdca04989c2", size = 78945779, upload-time = "2026-10-07T07:03:56.389Z" },
+    { url = "https://files.pythonhosted.org/packages/7d/72/7ba2a773a9fc3be815f39fae39f1f26b87e1a82aa7adf7cc748cb294ea36/pylance-13.0.0-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:2c94649a35161c6100ed822ac022756bfefb840b7e01cf491505c5245186f7b4", size = 83169863, upload-time = "2026-10-07T07:19:35.436Z" },
+    { url = "https://files.pythonhosted.org/packages/03/48/81ffda7fb308a87e81416f5f5ca67507abd8f0470c7820f68e9b32881260/pylance-13.0.0-cp310-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:22e47adcc2c7300ff876fb398ee9c625973932163ec055adae14871f8a09d7b0", size = 78969946, upload-time = "2026-10-07T07:05:09.987Z" },
+    { url = "https://files.pythonhosted.org/packages/77/4c/8734e6c12500521cc92e3594715cb5d58cd770938127458e4b7252a17a92/pylance-13.0.0-cp310-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:a54496c4e6c01a8c3d49479fce98474c95a265515091d173aa9e16df271d837d", size = 83164662, upload-time = "2026-10-07T07:17:16.085Z" },
+    { url = "https://files.pythonhosted.org/packages/ee/39/7ff19ec586f460f7851f96e07ee20e67815806c19eccc08155aa110a7d0d/pylance-13.0.0-cp310-abi3-win_amd64.whl", hash = "sha256:8a340dcf750171dd6386db0b6ed303bb22594e1c1b266b7fe149ea1684bf4a9a", size = 89711200, upload-time = "2026-10-07T07:07:25.895Z" },
 ]
 
 [package.optional-dependencies]
@@ -3365,11 +3365,11 @@ dev = [
     { name = "datasets", specifier = ">=4.8.4" },
     { name = "duckdb", specifier = ">=1.4" },
     { name = "jsonschema", specifier = ">=4.26" },
-    { name = "lancedb", specifier = ">=0.20" },
+    { name = "lancedb", specifier = ">=0.40.0" },
     { name = "moto", extras = ["s3", "server"], specifier = ">=5.0" },
     { name = "nats-py", specifier = ">=2.15" },
     { name = "openlineage-python", specifier = ">=1.50.0" },
-    { name = "pylance", specifier = ">=12.0.0" },
+    { name = "pylance", specifier = ">=13.0.0" },
     { name = "pytest", specifier = ">=8" },
     { name = "pytest-asyncio", specifier = ">=0.25" },
     { name = "pytest-cov", specifier = ">=7.0" },
@@ -3794,11 +3794,11 @@ dependencies = [
 requires-dist = [
     { name = "fastapi", specifier = ">=0.115" },
     { name = "httpx", specifier = ">=0.27" },
-    { name = "lancedb", specifier = ">=0.34.0" },
+    { name = "lancedb", specifier = ">=0.40.0" },
     { name = "numpy" },
     { name = "pillow", specifier = ">=12.3.0" },
     { name = "pydantic", specifier = ">=2.7" },
-    { name = "pylance", extras = ["otel"], specifier = ">=12.0.0" },
+    { name = "pylance", extras = ["otel"], specifier = ">=13.0.0" },
     { name = "python-multipart", specifier = ">=0.0.9" },
     { name = "service-kit", extras = ["lancekit", "ratelimit"], editable = "packages/service-kit" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
@@ -3864,7 +3864,7 @@ requires-dist = [
     { name = "lance-namespace", marker = "extra == 'lakehouse'", specifier = ">=0.11.0,<0.12" },
     { name = "lance-namespace", marker = "extra == 'lancekit'", specifier = ">=0.11.0,<0.12" },
     { name = "lance-namespace-urllib3-client", marker = "extra == 'lancekit'", specifier = ">=0.11.0,<0.12" },
-    { name = "lancedb", marker = "extra == 'lancekit'", specifier = ">=0.34.0" },
+    { name = "lancedb", marker = "extra == 'lancekit'", specifier = ">=0.40.0" },
     { name = "openfga-sdk", marker = "extra == 'governed'", specifier = ">=0.10.4" },
     { name = "opentelemetry-exporter-otlp-proto-http", specifier = ">=1.44.0" },
     { name = "opentelemetry-instrumentation-aiohttp-client", specifier = ">=0.65b0" },
@@ -3882,7 +3882,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.7" },
     { name = "pydantic-settings", specifier = ">=2.5" },
     { name = "pyjwt", extras = ["crypto"], marker = "extra == 'governed'", specifier = ">=2.8" },
-    { name = "pylance", extras = ["otel"], marker = "extra == 'lancekit'", specifier = ">=12.0.0" },
+    { name = "pylance", extras = ["otel"], marker = "extra == 'lancekit'", specifier = ">=13.0.0" },
     { name = "python-dotenv", specifier = ">=1.0" },
     { name = "slowapi", marker = "extra == 'ratelimit'", specifier = ">=0.1.10" },
     { name = "storage", editable = "packages/storage" },
@@ -4216,7 +4216,7 @@ requires-dist = [
     { name = "numpy" },
     { name = "pyarrow" },
     { name = "pydantic", specifier = ">=2.7" },
-    { name = "pylance", extras = ["otel"], specifier = ">=12.0.0" },
+    { name = "pylance", extras = ["otel"], specifier = ">=13.0.0" },
     { name = "python-multipart", specifier = ">=0.0.9" },
     { name = "service-kit", extras = ["lancekit"], editable = "packages/service-kit" },
     { name = "storage", editable = "packages/storage" },
