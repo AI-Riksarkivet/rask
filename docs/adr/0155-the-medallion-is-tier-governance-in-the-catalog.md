@@ -1,6 +1,6 @@
 # 0155. The medallion is tier governance inside the catalog; the lakehouse runs no stage, no training and no engine (2026-10-12)
 
-**Status:** accepted. Source: owner, 2026-10-12, three grilling rounds after LH-461. Supersedes the stage-runner half of
+**Status:** accepted, amended by [ADR 0156](0156-the-audit-grilling-amends-0155.md) (the gate is a tag gate; provenance travels in the spec Context). Source: owner, 2026-10-12, three grilling rounds after LH-461. Supersedes the stage-runner half of
 the medallion, ADR 0139 (training stays in the producer), ADR 0140 (the Ray adapter runs in compute, reached from the
 lakehouse) and the dispatch seam CP-056 built; extends ADR 0154.
 

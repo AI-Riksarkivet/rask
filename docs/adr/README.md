@@ -168,3 +168,4 @@ before they had a record here; each names its source document and the date of th
 | [0153](0153-the-app-chart-is-the-product.md) | XC-085 | The app chart is the product; operators, compute and observability are prerequisites (2026-10-11) |
 | [0154](0154-the-lakehouse-runs-no-ingest-and-no-workflow-engine.md) | LH-461 | The lakehouse runs no ingest and no workflow engine; data enters through the catalog's namespace doors (2026-10-12) |
 | [0155](0155-the-medallion-is-tier-governance-in-the-catalog.md) | LH-461 | The medallion is tier governance inside the catalog; the lakehouse runs no stage, no training and no engine (2026-10-12) |
+| [0156](0156-the-audit-grilling-amends-0155.md) | LH-464 | The lakehouse audit's grilling amends ADR 0155: a tag gate, provenance in the spec Context, and one tier judge (2026-10-12) |
