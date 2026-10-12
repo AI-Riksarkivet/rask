@@ -3,14 +3,12 @@
 image:
   tags:
     assist-runner: "main-31b161ec"
-    compute: "lakehouse-fdc53bd0"
+    compute: "lakehouse-c90fe02a"
     controlplane: "lakehouse-fdc53bd0"
     flows: "lakehouse-fdc53bd0"
     gateway: "lakehouse-661140a4"
     ingest: "lakehouse-fdc53bd0"
-    lance-rest-catalog: "lakehouse-4134fd31"
-    minio: "lakehouse-5b9f199e"
-    nats: "2.14.2-alpine"
+    lance-rest-catalog: "lakehouse-c90fe02a"
     notifications: "lakehouse-4134fd31"
     web-annotator: "main-90b8d0ed"
     web-compute: "main-90b8d0ed"
