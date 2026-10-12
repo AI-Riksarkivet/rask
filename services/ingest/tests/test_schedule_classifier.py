@@ -1,8 +1,8 @@
-"""`_DaprWorkflowStarter.start` — the seam where a sidecar exception becomes the door's vocabulary.
+"""`DaprWorkflowStarter.start` — the seam where a sidecar exception becomes the door's vocabulary.
 
 WHY THIS FILE EXISTS. F8's fix maps a non-timeout sidecar failure onto a retryable 503 instead of a
 raw 500, and the classification deliberately lives HERE rather than in `api.py`, which knows nothing
-about gRPC. But the reviewer of that fix noted the gap plainly: `_sidecar_error_types()` had a test
+about gRPC. But the reviewer of that fix noted the gap plainly: `sidecar_error_types()` had a test
 of its own TYPE SET, and `api.py` had a test of its MAPPING — driven by a fake starter raising
 `ScheduleUnavailable` directly — so nothing exercised the code that actually decides which exceptions
 become that class. The whole point of F8 rested on an untested branch.
@@ -21,7 +21,8 @@ from typing import Any
 
 import pytest
 
-from ingest import ScheduleUnavailable, _DaprWorkflowStarter, _sidecar_error_types
+from ingest.dapr_workflow import DaprWorkflowStarter, sidecar_error_types
+from ingest.runs import ScheduleUnavailable
 
 
 class _Boom:
@@ -49,7 +50,7 @@ def drive(monkeypatch: pytest.MonkeyPatch):
     def _drive(error: BaseException | None) -> _Boom:
         client = _Boom(error)
         monkeypatch.setattr(wf, "DaprWorkflowClient", lambda *a, **k: client)
-        asyncio.run(_DaprWorkflowStarter().start("run-1", {"run_id": "run-1"}))
+        asyncio.run(DaprWorkflowStarter().start("run-1", {"run_id": "run-1"}))
         return client
 
     return _drive
@@ -86,20 +87,20 @@ def test_an_ALREADY_EXISTS_refusal_CONVERGES_instead_of_raising(drive) -> None:
 
 
 def test_a_TIMEOUT_is_never_re_classified(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`TimeoutError` IS a subclass of `OSError`, so it is structurally inside `_sidecar_error_types()`.
+    """`TimeoutError` IS a subclass of `OSError`, so it is structurally inside `sidecar_error_types()`.
 
     The `except TimeoutError: raise` arm precedes the classifier for exactly this reason — a decided
     outcome must not be put at the mercy of whatever text the exception happens to carry. If the
     ordering is ever swapped, this test fails and the door starts reporting its own bound as a
     sidecar fault.
     """
-    assert issubclass(TimeoutError, tuple(t for t in _sidecar_error_types() if isinstance(t, type)))
+    assert issubclass(TimeoutError, tuple(t for t in sidecar_error_types() if isinstance(t, type)))
 
     import dapr.ext.workflow as wf
 
     monkeypatch.setattr(wf, "DaprWorkflowClient", lambda *a, **k: _Boom(TimeoutError("slow")))
     with pytest.raises(TimeoutError):
-        asyncio.run(_DaprWorkflowStarter().start("run-1", {"run_id": "run-1"}))
+        asyncio.run(DaprWorkflowStarter().start("run-1", {"run_id": "run-1"}))
 
 
 def test_a_clean_schedule_raises_nothing_and_calls_the_engine_once(drive) -> None:

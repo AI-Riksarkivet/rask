@@ -283,7 +283,7 @@ class DaprFlowRunReader(FlowRunReader):
         except Exception:
             # No sidecar, or the instance is unknown. The caller falls back to the local record: a
             # status endpoint that 500s when the engine is unreachable fails at exactly the moment an
-            # operator is using it to find out why. Same reasoning as `ingest.__init__`'s reader.
+            # operator is using it to find out why. Same reasoning as `ingest.dapr_workflow`'s reader.
             log.debug("workflow state unavailable for run %s", run_id, exc_info=True)
             return None
         if state is None:

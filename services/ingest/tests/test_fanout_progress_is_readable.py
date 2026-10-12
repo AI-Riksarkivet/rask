@@ -2,7 +2,7 @@
 
 `chunk_run` publishes per-chunk progress on the CHILD instance under a heading calling it "THE
 FAN-OUT'S ONLY PROGRESS SIGNAL, and it has to come from the child", and `runs.py` promises "a run
-says '320 of 500' while it is still going". But `_DaprWorkflowReader.state` fetched the PARENT
+says '320 of 500' while it is still going". But `DaprWorkflowReader.state` fetched the PARENT
 instance only, and the parent's custom status during the fan-out is what it set BEFORE dispatch --
 `{"units_total": N, "chunks": M}`, with no `units_done` key at all. `units_done` first appears after
 `when_all` has already returned.
@@ -60,7 +60,7 @@ RUN = "run-1"
 def _install(monkeypatch: pytest.MonkeyPatch, instances: dict[str, _State]) -> _Client:
     """Patch the SDK's client factory on the real module.
 
-    Not a `sys.modules` injection: `_DaprWorkflowReader.state` does `import dapr.ext.workflow as wf`,
+    Not a `sys.modules` injection: `DaprWorkflowReader.state` does `import dapr.ext.workflow as wf`,
     which needs the real `dapr.ext` package to resolve before the `as` binding is even attempted — an
     injected submodule leaves the import raising `cannot import name 'ext' from 'dapr'`, the reader
     swallowing it, and every assertion below passing or failing for the wrong reason.
@@ -73,9 +73,9 @@ def _install(monkeypatch: pytest.MonkeyPatch, instances: dict[str, _State]) -> _
 
 
 def _reader() -> Any:
-    from ingest import _DaprWorkflowReader
+    from ingest.dapr_workflow import DaprWorkflowReader
 
-    return _DaprWorkflowReader()
+    return DaprWorkflowReader()
 
 
 def test_the_fan_outs_progress_REACHES_the_status_read(monkeypatch: pytest.MonkeyPatch) -> None:

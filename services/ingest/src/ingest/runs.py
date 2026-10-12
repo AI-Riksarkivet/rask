@@ -51,7 +51,7 @@ class ScheduleUnavailable(Exception):
     configured to use the actor runtime" — and each of those escaped as a raw 500, which tells a
     client its request can never work when the truth is "ask again".
 
-    Raised only by the transport adapter (`_DaprWorkflowStarter`), never by workflow code: a
+    Raised only by the transport adapter (`ingest.dapr_workflow.DaprWorkflowStarter`), never by workflow code: a
     programming error on this side is not retryable and must keep its 500 rather than becoming a
     503 the caller loops on forever.
     """

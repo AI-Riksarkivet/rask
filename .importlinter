@@ -71,6 +71,8 @@ source_modules =
     lineage
     medallion
     maintenance
+    ingest
+    controlplane
     service_kit
 forbidden_modules =
     dapr.ext.workflow
@@ -79,6 +81,8 @@ ignore_imports =
     medallion.workflow -> dapr.ext.workflow
     medallion.services.dapr_saga -> dapr.ext.workflow
     medallion.services.dapr_saga -> dapr.ext.workflow.workflow_state
+    ingest.workflow -> dapr.ext.workflow
+    ingest.dapr_workflow -> dapr.ext.workflow
 allow_indirect_imports = True
 
 [importlinter:contract:settings-import-no-web-stack]

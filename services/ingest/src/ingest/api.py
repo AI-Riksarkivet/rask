@@ -301,7 +301,7 @@ async def dispatch_run(
         # BOTH failures, not just the timeout: a sidecar that answers badly is the same retryable
         # condition as one that answers slowly, and mapping only the timeout left every other
         # transport failure as a 500 on top of a stored record — a run with a status and no executor.
-        # The adapter draws the line (`_DaprWorkflowStarter`); a programming error is not in it.
+        # The adapter draws the line (`ingest.dapr_workflow.DaprWorkflowStarter`); a programming error is not in it.
         #
         # Releasing the lease is what makes the advice true. The attempt is over, so the record goes
         # back to re-drivable immediately rather than waiting the bound out — a client that ignores
