@@ -29,6 +29,25 @@ live chart); the catalog's registry and FGA are the real project store, as in La
   finalize a version or move a tag: without that, the tag gate is not a gate. Precondition, measured first: the object
   store's policy can tell a staged `_versions/*.manifest-<uuid>` from a final `_versions/*.manifest`; if it cannot, the
   catalog keeps refusing managed versioning and bring-your-own writers commit through catalog doors only.
+  **Measured 2026-10-12 (LH-469, #594): the store CAN tell them apart, so the catalog serves managed versioning.**
+  On MinIO `RELEASE.2025-04-22T22-12-26Z` (the estate's pinned build, `.docker/minio.dockerfile`) with an STS
+  session policy built by `vending.build_session_policy(..., "write")` plus the statements below, stock pylance
+  13.0.0 created and appended (v1, v2) through a namespace advertising `managed_versioning=true`; the writer put only
+  `data/`, `_transactions/<n>-<uuid>.txn` and `_versions/<n>.manifest-<uuid>`, and the namespace finalized. The same
+  credential was refused (403) a final `_versions/<n>.manifest` in both naming schemes, a staged-to-final copy,
+  `_versions/latest_version_hint.json`, `_refs/tags/published.json`, `_refs/branches/*`, any delete and a sibling
+  table's prefix. Two things the write tier must carry, both measured:
+  - **An explicit `Deny s3:PutObject` on `<table>/_versions/*.manifest`.** An Allow-only grant on
+    `_versions/*.manifest-*` also matches `<n>.manifest-<uuid>.manifest`, and pylance reads that name as a final
+    manifest: one planted there left the table unopenable ("multiple manifest naming schemes"). The Deny refuses it
+    even with a valid manifest body.
+  - **Put on `_transactions/*`** (the stock writer stages a transaction file before its manifest and fails without
+    it) and on `_deletions/*` (delete and update stage deletion files; granted, not driven by the probe).
+  The same document is expressible on AWS S3: a session policy's explicit deny overrides any allow, and `*`
+  matches across `/` (IAM User Guide, "Session policies" and "Using wildcards in resource ARNs"). It is about 1.4 KB
+  for long bucket and table names, under the 2,048-character inline limit; every sanctioned base adds to it. Not
+  closed by any session policy: `PutObject` overwrites an existing key, so a write credential can replace a
+  committed `data/`, `_transactions/`, `_deletions/` or `_indices/` file (measured 200).
 - **Provenance:** at version/create the catalog reads the staged manifest's transaction properties and refuses a
   silver/gold commit without `rask.run_id` and `rask.inputs` (and checks `can_read_data` on each input); on its own
   doors it stamps them from the Context headers. No manifest is rewritten.

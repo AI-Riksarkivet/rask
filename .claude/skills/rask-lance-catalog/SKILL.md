@@ -370,7 +370,9 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   either. A put over an existing data file is the residue no session policy can refuse.
   **Which spec door vends what, today:** `DescribeTable` with `vend_credentials` vends the READ tier only,
   and `DeclareTable` vends nothing. ADR 0156 C3 makes both vend the highest tier FGA grants the caller,
-  with write credentials that never reach `_refs/` or a final `_versions/*.manifest` (LH-229, #149), and
+  with write credentials that never reach `_refs/` or a final `_versions/*.manifest` (LH-229, #149) — which
+  takes an explicit Deny on `_versions/*.manifest`, not only a narrower Allow, plus put on `_transactions/` and
+  `_deletions/` (measured, ADR 0157 § Decision, LH-469) — and
   C4 confines the maintain tier, which any `can_maintain` holder can be vended now, to the maintenance
   identity (LH-473, #599).
 - **Three doors commit client-produced data, and all three judge its file versions.** `/commit`
