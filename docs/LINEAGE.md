@@ -441,7 +441,7 @@ uv run python -m lineage.seed --write services/lineage/sample_events.json
 
 # tests
 uv run pytest tests/unit/test_lineage.py -q                                   # our logic, no DB
-dagger call test-lineage                                                      # ingest + query vs a real AGE (== make e2e-lineage == CI)
+dagger call test-lineage                                                      # ingest + query vs a real AGE (the CI job e2e-lineage runs this)
 ```
 
 > pylance has no macOS wheel, so the lockfile is Linux-only. `dagger call test-lineage` runs the AGE-backed suite

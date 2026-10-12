@@ -20,7 +20,7 @@ NAMING CONTRACT (the one thing that makes the two planes agree):
     include "lance.fullname" → .Release.Name                       → "rask"
 
 They render the SAME string only because the release is named `rask` AND `fullnameOverride: rask`. That is
-deliberate (docs/architecture/lance-ns-merge.md: lance object names become `rask-*`), and `lance.fullname`
+deliberate (ADR 0108: lance object names become `rask-*`), and `lance.fullname`
 is kept on `.Release.Name` rather than delegated to `rask.fullname` because ~40 grafted lance templates
 build sibling object names from a RAW `{{ .Release.Name }}-…` (the `-dapr-app-token`, `-frontend-session`,
 `-openbao-token` Secrets, the `-pubsub-resiliency` Configuration). Delegating would

@@ -1,4 +1,4 @@
-"""The lance-plane gateway rows (lance-ns-merge.md P1 gateway fold, code half).
+"""The lance-plane gateway rows (ADR 0108, the merge's P1 gateway fold, code half).
 
 Proves each new row proxies to the RIGHT upstream with the RIGHT rewritten path —
 the lance services serve their own internal prefixes (`/v1/...`, `/api/...`), so a

@@ -1,4 +1,4 @@
-"""The lineage sidecar-only 403 guard (lance-ns-merge.md P1: the nginx
+"""The lineage sidecar-only 403 guard (ADR 0108, the merge's P1: the nginx
 `lance.lineageSidecarOnlyRoutes` blocklist, ported to gateway middleware).
 
 Dapr-delivered lineage routes (pub/sub ingest + the cron reconcile binding) must

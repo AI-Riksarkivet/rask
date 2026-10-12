@@ -42,8 +42,9 @@ threads racing the same key at a barrier yield **exactly one winner per round** 
 (3) 8 processes each appending 100 rows to one Lance dataset **all land — 800/800 rows** with the full id set
 intact, exercising Lance's real manifest-CAS commit+retry path under contention. All three pass. This is the
 gate for any backend swap: re-run `make e2e-cas` against a candidate store before trusting it with the
-lakehouse. If a store FAILS, the documented remedy is an external manifest store: the namespace's
-`managed_versioning`, through which the catalog does the put-if-not-exists itself (ADR 0157, LH-471 #597).
+lakehouse. If a store FAILS, the remedy lance_docs describe is an external manifest store: the namespace's
+`managed_versioning`, through which the catalog would do the put-if-not-exists itself. The catalog does not serve it
+yet (its `CreateTableVersion` answers 406); ADR 0157 decides it and LH-471 #597 builds it.
 
 ### 3. External / managed in production
 Development runs every store in-cluster; production names the platform's — disable the in-cluster copy and point

@@ -16,7 +16,7 @@ Declared once in `packages/service-kit/src/service_kit/governed/settings.py`, on
 | `RASK_OIDC_ISSUER` / `RASK_OIDC_AUDIENCE` | The issuer (Dex in development) and audience the token must carry. |
 | `RASK_FGA_ENABLED` | Authorize every request on OpenFGA (on in the chart). |
 | `RASK_FGA_API_URL` / `RASK_FGA_STORE_ID` | The OpenFGA server and store. |
-| `RASK_FGA_ROOT_OBJECT` | The estate's root object (default `warehouse:lance_catalog`). |
+| `RASK_FGA_ROOT_OBJECT` | The estate's root object (default `estate:rask`). |
 | `RASK_SA_ISSUER` / `RASK_SA_AUDIENCE` | The cluster's service-account issuer a service token is verified against. |
 
 ## The catalog

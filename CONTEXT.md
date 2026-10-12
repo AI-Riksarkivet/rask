@@ -52,6 +52,6 @@ with its own token. The NATS topics it travels on are internal.
 _Avoid_: cascade head, bronze arrival
 
 **Promotion gate**:
-The check a project declares for a tier, run when a version is published; readers of a governed tier read the version
-tagged `published`.
+The check a project declares for a tier, run when a version is published by moving the table's `published` tag.
+ADR 0156 makes `@published` the version readers of a governed tier read, and LH-466 #586 builds that.
 _Avoid_: promotion saga, review workflow
