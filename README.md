@@ -69,6 +69,9 @@ without one it is silently skipped. Deployables build from the root lock via `uv
 
 ## Quick start
 
+On a new computer, `scripts/new-machine.sh` walks through all of it: the toolchain, the clone, a handover kit
+from the old machine (memory, `.env`, local branches), and the k3s estate installed from empty.
+
 ```bash
 make install     # bun --cwd=frontend install + uv sync --all-packages
 make build
