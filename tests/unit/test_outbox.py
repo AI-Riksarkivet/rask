@@ -197,14 +197,13 @@ def test_each_staged_event_drops_independently(tmp_path: Any) -> None:
     assert left == ["COMPLETE"], f"dropping one event disturbed the other: {left}"
 
 
-def test_the_drain_RE_PUBLISHES_so_a_recovered_event_can_restart_a_halted_cascade(tmp_path: Any, monkeypatch: Any) -> None:
+def test_the_drain_RE_PUBLISHES_so_every_subscriber_hears_a_recovered_event(tmp_path: Any, monkeypatch: Any) -> None:
     """Ingesting alone repairs the GRAPH and leaves every subscriber unaware.
 
-    The catalog's write announcement is what medallion's `/bronze-arrival` subscription reacts to, so a
-    lost head event does not merely under-report provenance -- the whole bronze->silver->gold run never
-    happens. The relay recovering it into the graph fixes the record and leaves the run halted forever,
-    which is provenance restored and work still undone. Re-publishing is what makes the outbox a recovery
-    mechanism rather than an audit repair.
+    The catalog's write announcement is what the bus's subscribers act on (notifications among them), so
+    a lost event does not merely under-report provenance -- nobody downstream hears of the write. The
+    relay recovering it into the graph fixes the record and leaves every subscriber uninformed.
+    Re-publishing is what makes the outbox a recovery mechanism rather than an audit repair.
 
     Ordering is asserted, not assumed: the publish must happen BEFORE the staged object is dropped, so a
     publish that fails leaves the event for the next tick. The re-ingest then is a no-op (MERGE on run_id).

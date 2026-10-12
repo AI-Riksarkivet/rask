@@ -13,7 +13,6 @@ pipeline runs unlineaged rather than crashing.
 
 from __future__ import annotations
 
-from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
@@ -49,8 +48,6 @@ class LineageSettings(BaseSettings):
     identity_token_file: Path | None = Field(default=DEFAULT_IDENTITY_TOKEN_FILE, validation_alias=AliasChoices("RASK_LINEAGE_IDENTITY_TOKEN_FILE"))
     #: Path under the endpoint events are POSTed to (the client's default).
     endpoint_path: str = Field(default="api/v1/lineage", validation_alias=AliasChoices("RASK_LINEAGE_ENDPOINT_PATH", "OPENLINEAGE_ENDPOINT"))
-    #: Default job namespace stamped on runs when a caller does not name one.
-    namespace: str = Field(default="rask", validation_alias=AliasChoices("RASK_LINEAGE_NAMESPACE", "OPENLINEAGE_NAMESPACE"))
     #: HTTP transport timeout, seconds.
     timeout: float = Field(default=5.0, validation_alias=AliasChoices("RASK_LINEAGE_TIMEOUT"))
     #: ``auto`` = http when an endpoint is configured, else no-op. ``console`` logs events
@@ -62,21 +59,3 @@ class LineageSettings(BaseSettings):
     def _blank_presents_no_credential(cls, value: object) -> object:
         """``""`` is the explicit "no credential"; as a ``Path`` it would be ``.``, a directory, and every emit would fail."""
         return None if value == "" else value
-
-
-@lru_cache(maxsize=1)
-def lineage_settings() -> LineageSettings:
-    """The process's transport configuration, read from the environment ONCE.
-
-    Every run open used to construct `LineageSettings()` afresh — a full pydantic-settings
-    environment read and validation of every field — and a ``@stage`` callable is invoked per batch
-    inside a Ray Data pipeline, so that was per unit of work for a value that cannot change within a
-    process.
-
-    Cached, therefore, and deliberately not used by :func:`~lineage_kit.emitter.build_emitter`: that
-    runs once at wiring time and takes an explicit ``settings`` argument, and freezing it would make
-    a process that reconfigures its environment (every test that monkeypatches ``RASK_LINEAGE_*``)
-    silently build the wrong transport. Call ``lineage_settings.cache_clear()`` when the environment
-    legitimately changes under a live process.
-    """
-    return LineageSettings()

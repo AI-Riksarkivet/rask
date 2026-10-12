@@ -107,8 +107,6 @@ def test_the_service_never_provisions_an_fga_store(monkeypatch: pytest.MonkeyPat
     ``None`` and treated that as proof of not-provisioning, which conflated two different claims and
     pinned a real bug in place: see the sibling test for what unpinned must actually do.
     """
-    from pathlib import Path
-
     from maintenance import service
 
     async def _no_store(*_a: Any, **_kw: Any) -> Any:
@@ -120,15 +118,17 @@ def test_the_service_never_provisions_an_fga_store(monkeypatch: pytest.MonkeyPat
     # `provision` must never be CALLED.
     from service_kit.governed import fga
 
+    provisioned: list[object] = []
+
+    async def _provision(*a: Any, **kw: Any) -> Any:
+        provisioned.append((a, kw))
+        return None
+
     monkeypatch.setattr(fga, "resolve", _no_store)
+    monkeypatch.setattr(fga, "provision", _provision)
     assert asyncio.run(service._make_fga_client(_settings(fga_enabled=False))) is None
     assert asyncio.run(service._make_fga_client(_settings(fga_enabled=True))) is None, "no store to resolve → still None, never a new one"
-
-    # The CALL is what creates a store; prose about not provisioning is fine and is in fact the point.
-    # Matched as `fga.provision(` — the bare name matched documentation too, so a docstring explaining
-    # WHY the service must not provision failed the test asserting that it does not.
-    src = Path(service.__file__).read_text()
-    assert "fga.provision(" not in src, "the maintenance service must never provision an FGA store"
+    assert provisioned == [], "the maintenance service provisioned an FGA store"
 
 
 def test_an_UNPINNED_store_is_RESOLVED_by_name_rather_than_abandoned(monkeypatch: pytest.MonkeyPatch) -> None:

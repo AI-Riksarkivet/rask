@@ -8,8 +8,6 @@ Lineage is telemetry — the pipeline's correctness must not depend on it.
 from __future__ import annotations
 
 import logging
-from contextlib import contextmanager
-from contextvars import ContextVar
 from typing import TYPE_CHECKING, Protocol
 
 from openlineage.client import OpenLineageClient
@@ -22,8 +20,6 @@ from lineage_kit.metrics import DropReason, record_drop
 
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
-
     from lineage_kit.schemas import RunEvent
 
 log = logging.getLogger(__name__)
@@ -129,40 +125,3 @@ def build_emitter(settings: LineageSettings | None = None) -> Emitter:
         return ClientEmitter(OpenLineageClient(transport=HttpTransport(config)))
     log.debug("lineage_disabled (transport=%s, endpoint=%s)", s.transport, s.endpoint)
     return NoopEmitter()
-
-
-_default: Emitter | None = None
-
-
-def default_emitter() -> Emitter:
-    """The process-wide emitter, built lazily from the environment on first use."""
-    global _default  # deliberate process-wide singleton
-    if _default is None:
-        _default = build_emitter()
-    return _default
-
-
-def set_default_emitter(emitter: Emitter | None) -> None:
-    """Inject the process-wide emitter (tests, app wiring). ``None`` resets to lazy env build."""
-    global _default
-    _default = emitter
-
-
-#: The ambient emitter — how an emitter injected at the JOB level flows to the stage and
-#: actor runs opened inside it (in-process only; a process boundary re-resolves from env).
-_ambient: ContextVar[Emitter | None] = ContextVar("lineage_kit_ambient_emitter", default=None)
-
-
-def ambient_emitter() -> Emitter | None:
-    """The emitter of the enclosing run, if one is open in this context."""
-    return _ambient.get()
-
-
-@contextmanager
-def use_emitter(emitter: Emitter) -> Iterator[Emitter]:
-    """Make ``emitter`` ambient for the enclosed block (child runs inherit it)."""
-    token = _ambient.set(emitter)
-    try:
-        yield emitter
-    finally:
-        _ambient.reset(token)

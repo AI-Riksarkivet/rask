@@ -57,8 +57,8 @@ def server_request_hook(span: Span | None, scope: Mapping[str, Any]) -> None:
     hook is a Python callable passed to `FastAPIInstrumentor.instrument_app`, and
     `opentelemetry-instrument` builds the instrumentor from an entry point with no way to carry one —
     so the eight apps the chart launches under it (the lance five and the media three) carry the id in
-    their logs and on no span. `tests/unit/test_the_app_roster_has_no_fifth_shape.py` pins which family
-    takes which OTel path; closing the gap is a decision about that split, not a change to this hook.
+    their logs and on no span. Closing the gap is a decision about which family takes which OTel path,
+    not a change to this hook.
 
     Defensive on both counts the reference's own example is: a missing header is normal (the hook runs
     on every request in every app), and a non-recording span must cost nothing.

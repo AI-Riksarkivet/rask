@@ -28,13 +28,18 @@ def test_an_explicit_key_is_still_honoured() -> None:
 
 
 @pytest.mark.asyncio
-async def test_boot_refuses_a_missing_key_the_way_it_refuses_a_missing_secret() -> None:
+async def test_boot_refuses_a_missing_key_the_way_it_refuses_a_missing_secret(monkeypatch: pytest.MonkeyPatch) -> None:
     """Both halves or neither, checked where the secret half is already checked."""
-    import inspect
+    from fastapi import FastAPI
 
     from maintenance import service
 
-    source = inspect.getsource(service)
-    assert "MAINTENANCE_S3_ACCESS_KEY_ID is required" in source, (
-        "boot validates the secret and not the key — a deployment can start with a scoped secret and the root key id"
-    )
+    settings = MaintenanceSettings(MAINTENANCE_S3_BUCKET="b", MAINTENANCE_S3_SECRET_ACCESS_KEY="scoped-secret")
+    monkeypatch.setattr(service, "get_settings", lambda: settings)
+    # The refusal raises before the lifespan's teardown, so a drain armed here would stay armed for the
+    # rest of the process and refuse the next lifespan that arms it.
+    monkeypatch.setattr(service, "arm_drain_on_sigterm", lambda _app: lambda: None)
+
+    with pytest.raises(RuntimeError, match="MAINTENANCE_S3_ACCESS_KEY_ID is required"):
+        async with service.lifespan(FastAPI()):
+            pass

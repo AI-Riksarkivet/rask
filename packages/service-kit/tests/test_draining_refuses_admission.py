@@ -53,7 +53,7 @@ class TestThePredicate:
         assert draining(_request(shutting_down=True)) is True
 
     def test_an_app_that_never_set_the_flag_is_not_draining(self) -> None:
-        """Three services (ingest, compute, flows) set no lifecycle flags at all. They must read as
+        """An app that sets no lifecycle flags at all must read as
         SERVING — defaulting an unset flag to "draining" would take them permanently out of service
         the moment this dependency was applied."""
         app = FastAPI()

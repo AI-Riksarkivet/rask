@@ -17,45 +17,67 @@ rewritten the whole fleet from that manifest — the same harm the header descri
 other direction.
 
 OWNER RULING 2026-09-08: the SECRET store is authoritative and the SQL rows are residue. So the
-wrapper no longer refuses; it selects, and ANNOUNCES the divergence on every call. That announcement
-is the part under test. A wrapper that picks correctly and silently is one nobody can catch picking
-wrongly later — and the reprieve is finite, because the Secret store fits at 895.4 KB against a
-1,024 KB ceiling and grows ~6.7 KB per revision.
+wrapper selects the Secret store and ANNOUNCES the divergence on every call.
+
+The wrapper runs for real against a stub `kubectl` (it answers the AGE pod's IP) and a stub `helm` that
+answers `list -aq` per driver and records the driver the final call was made with.
 """
 
 from __future__ import annotations
 
-import re
+import os
+import subprocess
 from pathlib import Path
+
+import pytest
 
 
 WRAPPER = Path(__file__).resolve().parents[2] / "scripts" / "helm.sh"
 
-#: The subcommands that WRITE the release store. Named rather than inferred from a verb list, because
-#: a new mutating subcommand must be a deliberate addition here, not something a regex waves through.
-_MUTATING = ("upgrade", "install", "uninstall", "delete", "rollback")
+_KUBECTL = """#!/bin/sh
+echo 10.0.0.9
+"""
+
+#: `list -aq` answers from the store the driver names; anything else records the driver it ran under.
+_HELM = """#!/bin/sh
+if [ "$1" = "list" ]; then
+  if [ "${HELM_DRIVER:-}" = "sql" ]; then printf '%s' "$SQL_RELEASES"; else printf '%s' "$SECRET_RELEASES"; fi
+  exit 0
+fi
+echo "driver=${HELM_DRIVER:-secret}" >> "$CALLS"
+"""
 
 
-def _divergence_guard() -> str:
-    body = WRAPPER.read_text()
-    assert "SECRET_RELEASES=" in body, "the wrapper no longer probes the Secret store, so it cannot see a divergence"
-    guard = re.search(r"if \[\[ -n \"\$SECRET_RELEASES\" \]\]; then(.+?)\nfi\n", body, re.DOTALL)
-    assert guard, "the both-stores-populated guard is gone"
-    return guard.group(1)
+def _run(tmp_path: Path, *, sql: str, secret: str) -> tuple[str, str]:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    for name, body in (("kubectl", _KUBECTL), ("helm", _HELM)):
+        stub = bin_dir / name
+        stub.write_text(body)
+        stub.chmod(0o755)
+    calls = tmp_path / "calls"
+    env = {
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "HOME": str(tmp_path),
+        "KUBECONFIG": str(tmp_path / "kubeconfig"),
+        "PGPASSFILE": str(tmp_path / "pgpass"),
+        "SQL_RELEASES": sql,
+        "SECRET_RELEASES": secret,
+        "CALLS": str(calls),
+    }
+    done = subprocess.run(["bash", str(WRAPPER), "upgrade", "rask", "chart"], env=env, capture_output=True, text=True, timeout=30, check=True)  # noqa: S603, S607
+    return calls.read_text().strip(), done.stderr
 
 
-def test_a_divergence_selects_the_SECRET_store() -> None:
-    """The ruling, in the one place that acts on it."""
-    guard = _divergence_guard()
-    assert "unset HELM_DRIVER" in guard, (
-        "the wrapper still exports the SQL driver when both stores hold a release — that is the ten-day-stale upgrade the ruling exists to stop"
-    )
-    assert "exec helm" in guard, "the divergence branch no longer runs helm at all"
+@pytest.mark.parametrize(
+    ("sql", "secret", "driver", "announced"),
+    [
+        pytest.param("rask\n", "rask\n", "driver=secret", True, id="both-stores-use-the-secret-store"),
+        pytest.param("rask\n", "", "driver=sql", False, id="a-lone-sql-store-answers-from-sql"),
+    ],
+)
+def test_the_wrapper_picks_the_store_the_ruling_names(tmp_path: Path, sql: str, secret: str, driver: str, announced: bool) -> None:
+    called_with, stderr = _run(tmp_path, sql=sql, secret=secret)
 
-
-def test_a_lone_SQL_store_still_answers_from_SQL() -> None:
-    """The pre-ruling estate, and any restored from that history, must keep working: the ruling is
-    about which store wins a TIE, not about deleting the SQL path."""
-    body = WRAPPER.read_text()
-    tail = body.split("fi\n")[-1]
-    assert "HELM_DRIVER=sql" in tail, "an estate whose release lives only in Postgres can no longer reach it"
+    assert called_with == driver
+    assert ("both stores hold a release" in stderr) is announced, stderr

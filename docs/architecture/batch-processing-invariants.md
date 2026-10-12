@@ -19,7 +19,7 @@ settled, so unfinished work placed here would read as decided regardless of the 
 | **B1** | History and events carry identifiers and counts — never payloads | No test and no gate: the lakehouse hosts no batch workflow (ADR 0154, ADR 0155), so the rule binds the bring-your-own engine that runs one |
 | **B2** | Never pre-gate a Ray submission on capacity or resource labels | No test: the lakehouse submits nothing, so it is a rule for the pipeline owner's engine, and no linter rule expresses it |
 | **B6** | Refuse new work while draining | `service_kit.draining.retry_when_draining`, on every sidecar-delivered work door (notifications' subscriptions, maintenance's arrival, work and index routes): a draining process answers RETRY so the broker redelivers to a live replica. Pinned by `packages/service-kit/tests/test_draining_refuses_admission.py` |
-| **B12** | Randomise iteration order | `tests/unit/test_batch_invariants_are_actually_guarded.py` — both the maintenance sweep's dataset list and its failure-retry list |
+| **B12** | Randomise iteration order | `services/maintenance/tests/test_the_planner_does_not_hand_out_datasets_in_listing_order.py` (the sweep's dataset list) and `tests/unit/test_maintenance_lineage.py::test_emit_sweep_lineage_caps_fail_emits_and_logs_the_drop` (its capped failure list) |
 
 **B12 is the interesting class**: it WORKED, and nothing would have noticed losing it. Deleting
 `random.shuffle(uris)` passed every test, which would silently restore the starvation the shuffle was

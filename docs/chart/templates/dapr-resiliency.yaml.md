@@ -31,7 +31,7 @@ same 480s split into 30s steps would need 16 attempts and overrun ackWait on any
 ~90s, so the FIRST retry already lands after recovery.
 
 Measured 2026-09-14 by driving a poison delivery to `bronze-to-silver` and timing the park; pinned
-by tests/unit/test_the_cascade_retry_window_is_the_one_the_chart_states.py, which computes the
+by tests/unit/test_the_pubsub_retry_window_is_the_one_the_chart_states.py, which computes the
 window from the rendered policy under dapr/kit's semantics and checks BOTH edges.
 
 ## `policy: constant`

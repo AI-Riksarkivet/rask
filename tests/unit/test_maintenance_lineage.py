@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import random
 import time
 from typing import Any, cast
 
@@ -185,12 +186,17 @@ def test_emit_sweep_lineage_caps_fail_emits_and_logs_the_drop(caplog: pytest.Log
     # The per-tick FAIL fan-out is capped so a bucket where everything fails can't push the cron handler
     # past the 30s Dapr ack window — and the cap is LOGGED, never silent (dropped datasets converge onto
     # the same deterministic run ids next tick anyway).
+    # The capped subset is SHUFFLED, so a dataset late in listing order is not dropped on every tick of a
+    # mass incident.
     emitter = _RecordingEmitter()
     results = [_result(f"s3://b/u{i}_ns$t{i}", error="maintain: boom") for i in range(_MAX_FAIL_EMITS_PER_TICK + 5)]
+    random.seed(0)
     with caplog.at_level("WARNING"):
         asyncio.run(emit_sweep_lineage(cast(Any, emitter), results, delimiter="$"))
     assert len(emitter.failed_calls) == _MAX_FAIL_EMITS_PER_TICK
     assert any(r.message == "maintenance_fail_emits_capped" for r in caplog.records)
+    in_listing_order = {f"u{i}_ns$t{i}" for i in range(_MAX_FAIL_EMITS_PER_TICK)}
+    assert {table_id for table_id, _, _ in emitter.failed_calls} != in_listing_order, "the cap keeps the first datasets listed on every tick"
 
 
 def test_cap_counts_actual_emits_not_unparseable_slots(caplog: pytest.LogCaptureFixture) -> None:

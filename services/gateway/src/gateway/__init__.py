@@ -473,8 +473,7 @@ async def _problem_json(_request: Request, exc: StarletteHTTPException) -> JSONR
 # `FastAPIInstrumentor.instrument_app`, so only `setup_otel` can install it: the five
 # `make_service_app` services and this app. The eight the chart launches under
 # `opentelemetry-instrument` (the lance five, the media three) take their instrumentation from an
-# entry point that accepts no callable, and their spans carry no `request.id`. Which family is which
-# is pinned by `tests/unit/test_the_app_roster_has_no_fifth_shape.py`.
+# entry point that accepts no callable, and their spans carry no `request.id`.
 #
 # A caller-supplied id is PRESERVED rather than replaced, so a client correlating its own logs across
 # the boundary keeps the join.

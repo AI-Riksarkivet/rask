@@ -9,22 +9,18 @@ the wiring has to be asserted at render time rather than observed at runtime.
 **TWO independent lineage paths exist**, and both are asserted here because either one failing is
 invisible from outside:
 
-1. **Dapr pub/sub** — what the medallion producer/stage runners, compaction and the catalog use TODAY. Each
-   publishes to ``<APP>_LINEAGE_TOPIC`` through its own per-subscriber pubsub component
-   (``lance.subPubsub``); ``services/lineage`` subscribes on ``LINEAGE_DAPR_TOPIC``. Component names
-   differ per app on purpose (each carries its own queueGroupName); the TOPIC must match.
-   ``test_invariants._PINNED_TOPICS`` already pins each service's in-code DEFAULT, but it cannot see
-   the chart — and the chart overrides those defaults on every deployed pod, so a template that
-   stopped deriving from ``.Values.pubsub.topic`` would satisfy that pin while dropping every event.
+1. **Dapr pub/sub** — what maintenance and the catalog use. Each publishes to ``<APP>_LINEAGE_TOPIC``
+   through its own per-subscriber pubsub component (``lance.subPubsub``); ``services/lineage``
+   subscribes on ``LINEAGE_DAPR_TOPIC``. Component names differ per app on purpose (each carries its own
+   queueGroupName); the TOPIC must match. ``test_invariants._PINNED_TOPICS`` already pins each
+   service's in-code DEFAULT, but it cannot see the chart — and the chart overrides those defaults on
+   every deployed pod, so a template that stopped deriving from ``.Values.pubsub.topic`` would satisfy
+   that pin while dropping every event.
 
-2. **lineage-kit's HTTP transport** — ``LineageRun.emitter`` → ``default_emitter()`` →
-   ``build_emitter()``, reading ``RASK_LINEAGE_ENDPOINT``. This is the seam ``@stage`` and the actor
-   helpers use, i.e. what the Ray Data pipeline (P7b) will emit through. It has no callers *yet*,
-   which is exactly why the wiring must land first: with no endpoint ``build_emitter`` logs one
-   ``log.warning("lineage_http_without_endpoint …")`` at startup and returns ``NoopEmitter``, which
-   drops every subsequent event at DEBUG. The first real actor run must not be the moment anyone
-   discovers the wire was never connected — the same reason the ``parent`` facet is parsed before
-   anything emits one.
+2. **lineage-kit's HTTP transport** — ``build_emitter()``, reading ``RASK_LINEAGE_ENDPOINT``. With no
+   endpoint ``build_emitter`` logs one ``log.warning("lineage_http_without_endpoint …")`` at startup and
+   returns ``NoopEmitter``, which drops every subsequent event at DEBUG, so the wiring must land before
+   anything emits through it.
 
 Both are asserted against ``helm template`` output rather than values.yaml, because the rendered
 manifest is what actually runs.
@@ -62,7 +58,7 @@ _SUBSCRIBER_TOPIC = "LINEAGE_DAPR_TOPIC"
 
 #: Every env var that names the topic a service PUBLISHES lineage to. Each must equal the
 #: subscriber's. `LANCE_DAPR_TOPIC` is the catalog's (it emits its own table-lifecycle runs).
-_PUBLISHER_TOPICS = ("MEDALLION_LINEAGE_TOPIC", "MAINTENANCE_LINEAGE_TOPIC", "LANCE_DAPR_TOPIC")
+_PUBLISHER_TOPICS = ("MAINTENANCE_LINEAGE_TOPIC", "LANCE_DAPR_TOPIC")
 
 
 def _render(*set_values: str) -> str:
@@ -122,7 +118,7 @@ def test_rendered_config_does_not_degrade_to_a_noop_emitter(monkeypatch: pytest.
     """
     from lineage_kit.emitter import NoopEmitter, build_emitter
 
-    rendered = _render("ray.enabled=true", "singleTenant.enabled=true", "compaction.enabled=true", *OBSERVABILITY_SETS)
+    rendered = _render("singleTenant.enabled=true", "compaction.enabled=true", *OBSERVABILITY_SETS)
     endpoints = set(_env_values(rendered, "RASK_LINEAGE_ENDPOINT"))
     assert endpoints, "the chart renders RASK_LINEAGE_ENDPOINT nowhere — lineage-kit's HTTP transport degrades to NoopEmitter on every pod"
     assert len(endpoints) == 1, f"emitting services disagree on the lineage endpoint: {sorted(endpoints)}"
@@ -137,7 +133,7 @@ def test_rendered_config_does_not_degrade_to_a_noop_emitter(monkeypatch: pytest.
     emitter = build_emitter()
     assert not isinstance(emitter, NoopEmitter), (
         "build_emitter() degraded to NoopEmitter under the rendered production config — every event "
-        "lineage-kit's @stage/actor seam emits would be dropped, announced by one startup log.warning"
+        "lineage-kit's HTTP transport emits would be dropped, announced by one startup log.warning"
     )
 
 
@@ -154,7 +150,7 @@ def test_every_lineage_producer_renders_the_endpoint() -> None:
     Self-maintaining: a new producer is caught the moment it renders a lineage topic, which it must do
     to publish at all.
     """
-    rendered = _render("ray.enabled=true", "singleTenant.enabled=true", "compaction.enabled=true", *OBSERVABILITY_SETS)
+    rendered = _render("singleTenant.enabled=true", "compaction.enabled=true", *OBSERVABILITY_SETS)
 
     # Walk env in document order so each var is attributed to the container it sits in. OTEL_SERVICE_NAME
     # is the per-container marker; the topic/endpoint that follow belong to that service.
@@ -178,7 +174,7 @@ def test_every_lineage_producer_renders_the_endpoint() -> None:
     missing = sorted(name for name in emitting if not producers[name]["transport"])
     assert not missing, (
         f"these lineage producers render no RASK_LINEAGE_ENDPOINT: {missing} — anything they emit "
-        "through lineage-kit's @stage/actor seam is dropped by a NoopEmitter while their neighbours "
+        "through lineage-kit's HTTP transport is dropped by a NoopEmitter while their neighbours "
         "(and their Dapr path) keep reporting success"
     )
 

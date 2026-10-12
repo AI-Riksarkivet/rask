@@ -193,7 +193,7 @@ sidecar.
   spend it on FEW LONG steps: the handler's own time per attempt counts against the component's
   `ackWait`, so the same total split into many short steps overruns it and the broker redelivers
   underneath a retry still in flight. Gated by
-  `tests/unit/test_the_cascade_retry_window_is_the_one_the_chart_states.py`. **A Resiliency edit reaches
+  `tests/unit/test_the_pubsub_retry_window_is_the_one_the_chart_states.py`. **A Resiliency edit reaches
   a sidecar ONLY on restart**, exactly like a Component (`HotReload: false`): after `helm upgrade` the
   CR was correct in the API server while every running sidecar kept the old schedule, so rolling the
   chart is half the change — `kubectl rollout restart` every app-id in `targets.components`.

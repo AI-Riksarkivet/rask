@@ -392,6 +392,17 @@ def test_a_demo_identity_is_seeded_as_its_oidc_subject_and_a_persona_stays_liter
     assert seed_estate.remap_subject("team:eng", subs) == "team:eng"
 
 
+def test_the_demo_estate_grants_the_anonymous_principal_nothing() -> None:
+    """``service-web`` is the identity the zones' BFF sends when there is NO session, so it is the anonymous
+    principal: a grant to it is a grant to every logged-out visitor (Q17-8 / §F2-4). Fail closed is the
+    ruling (owner, 2026-09-07) — an operator grants it exactly what should be public, deliberately."""
+    steps = seed_estate.plan(seed_estate.DEMO_ESTATE, dict(seed_estate.DEX_SUBS))
+
+    granting = [step.label for step in steps if "service-web" in json.dumps(step.body)]
+
+    assert granting == [], f"the seed grants the anonymous principal: {granting}"
+
+
 # --------------------------------------------------------------------------- #
 # Adoption — the fourth meaning of 409
 # --------------------------------------------------------------------------- #

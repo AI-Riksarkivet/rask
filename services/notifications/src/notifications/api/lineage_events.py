@@ -244,8 +244,7 @@ def notifiable(event: LineageRunEvent) -> Notifiable | None:
     later loses their grant on a SECOND output keeps seeing a row that discloses only the first — the
     object they can still see. The subset test is about the AUDIENCE (should you be told at all); the
     render check is about THIS ROW'S OWN OBJECT, and neither is a weaker version of the other.
-    `outputs[0]` as "the run's output" is the estate's existing reading (`LineageDoc.from_run_event`
-    projects exactly that).
+    `outputs[0]` is read as "the run's output".
     """
     if not is_terminal(event.event_type):
         return None

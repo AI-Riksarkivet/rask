@@ -20,21 +20,16 @@ if TYPE_CHECKING:
 def test_rask_env_vars_configure_the_transport(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("RASK_LINEAGE_ENDPOINT", "http://marquez:5000")
     monkeypatch.setenv("RASK_LINEAGE_API_KEY", "sekrit")
-    monkeypatch.setenv("RASK_LINEAGE_NAMESPACE", "htr")
     monkeypatch.setenv("RASK_LINEAGE_TIMEOUT", "2.5")
     s = LineageSettings()
     assert s.endpoint == "http://marquez:5000"
     assert s.api_key == "sekrit"
-    assert s.namespace == "htr"
     assert s.timeout == 2.5
 
 
 def test_official_openlineage_names_are_accepted_aliases(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OPENLINEAGE_URL", "http://marquez:5000")
-    monkeypatch.setenv("OPENLINEAGE_NAMESPACE", "htr")
-    s = LineageSettings()
-    assert s.endpoint == "http://marquez:5000"
-    assert s.namespace == "htr"
+    assert LineageSettings().endpoint == "http://marquez:5000"
 
 
 def test_rask_name_wins_over_the_alias(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -15,10 +15,12 @@ pydantic-settings drops an unknown variable in silence, so the pod starts, the v
 and `kubectl describe` shows a setting that is not one.
 
 THE PREFIXES AND FIELDS ARE DISCOVERED, NOT LISTED. A hand-written list is the same failure one layer
-up: the next service is the one nobody adds. This reads `env_prefix` off each settings class and its
-fields off `model_fields`, so a new service is covered by existing here rather than by an edit.
+up: the next service is the one nobody adds. The packages are the ones the render runs (each Python
+container's uvicorn target names its package), their settings classes are the `BaseSettings` subclasses
+their config modules define once imported, and each class's `env_prefix` and `model_fields` are read off
+the class itself, so a new service is covered by existing here rather than by an edit.
 
-CHECKED AGAINST THE UNION OF EVERY CLASS SHARING A PREFIX, deliberately. `LANCE_` is the prefix of
+CHECKED AGAINST THE UNION OF EVERY CLASS, deliberately. `LANCE_` is the prefix of
 the catalog, flows and notifications alike; asking whether one particular class binds a name would
 accuse a variable that its own service reads perfectly well. The union under-reports and never
 falsely accuses, which is the right trade for a gate whose whole subject is "binds to NOTHING".
@@ -30,13 +32,12 @@ planes are checked by nothing here.
 
 from __future__ import annotations
 
-import ast
 import importlib
 import pathlib
-import re
+import pkgutil
 import sys
 
-import pytest
+from pydantic_settings import BaseSettings
 
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
@@ -44,52 +45,50 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from test_invariants import _rendered_docs  # noqa: E402
 
 
-REPO = pathlib.Path(__file__).resolve().parents[2]
-#: `model_config = SettingsConfigDict(..., env_prefix="X_", ...)` — the one spelling the estate uses.
-_PREFIX = re.compile(r"""env_prefix\s*=\s*["']([A-Z_]+)["']""")
 #: Deployments whose env belongs to the JS plane, which binds it in `bff.ts` rather than in pydantic.
 _JS_PLANE = "web-"
 
 
-def _settings_classes() -> list[tuple[str, str, str]]:
-    """`(prefix, module, class)` for every settings class that declares an `env_prefix`."""
-    found: list[tuple[str, str, str]] = []
-    for src in sorted((REPO / "services").glob("*/src")):
-        for path in sorted(src.rglob("*config*.py")):
-            text = path.read_text()
-            prefix = _PREFIX.search(text)
-            if not prefix:
+def _python_packages() -> set[str]:
+    """The top-level package of every uvicorn target the render runs (`catalog.main:app` -> `catalog`)."""
+    packages: set[str] = set()
+    for doc in _rendered_docs():
+        if doc.get("kind") not in {"Deployment", "StatefulSet"}:
+            continue
+        for container in doc["spec"]["template"]["spec"].get("containers", []):
+            for arg in container.get("args") or []:
+                if ":" in arg and not arg.startswith("-"):
+                    packages.add(arg.split(":", 1)[0].split(".", 1)[0])
+    return packages
+
+
+def _settings_classes() -> list[type[BaseSettings]]:
+    """Every `BaseSettings` subclass that a config module of a rendered package defines."""
+    found: list[type[BaseSettings]] = []
+    for package_name in sorted(_python_packages()):
+        package = importlib.import_module(package_name)
+        for info in pkgutil.walk_packages(getattr(package, "__path__", []), prefix=f"{package_name}."):
+            if "config" not in info.name.rsplit(".", 1)[-1]:
                 continue
-            module = ".".join(path.relative_to(src).with_suffix("").parts)
-            # PARSED, NOT PATTERN-MATCHED. The line-anchored form was `^class (\w+)\(.*BaseSettings`,
-            # which needs `BaseSettings` on the SAME line as the class name — so a signature wrapped by
-            # the formatter, which is what happens the moment a class composes more than two or three
-            # mixins, became invisible to this gate. Measured 2026-09-19: splitting the catalog's
-            # `Settings` into per-domain blocks ([[LH-113]]) wrapped its bases and dropped all sixteen of
-            # its remaining fields out of the accept-set, so thirteen `LANCE_*` vars the chart really does
-            # bind read as bound-to-nothing. The AST sees a base list however it is laid out.
-            for node in ast.walk(ast.parse(text)):
-                if isinstance(node, ast.ClassDef) and any(
-                    (isinstance(base, ast.Name) and base.id.endswith("Settings")) or (isinstance(base, ast.Attribute) and base.attr.endswith("Settings"))
-                    for base in node.bases
-                ):
-                    found.append((prefix.group(1), module, node.name))
+            module = importlib.import_module(info.name)
+            found.extend(
+                value for value in vars(module).values() if isinstance(value, type) and issubclass(value, BaseSettings) and value.__module__ == module.__name__
+            )
     return found
 
 
-def _accepted_names() -> dict[str, set[str]]:
-    """`{prefix: every env name a settings class with that prefix accepts}`, unioned across classes."""
-    accepted: dict[str, set[str]] = {}
-    for src in sorted((REPO / "services").glob("*/src")):
-        if str(src) not in sys.path:
-            sys.path.insert(0, str(src))
+def _accepted_names() -> tuple[set[str], set[str]]:
+    """`(the env prefixes the settings classes declare, every env name any of them accepts)`.
 
-    for prefix, module, cls in _settings_classes():
-        try:
-            settings_cls = getattr(importlib.import_module(module), cls)
-        except Exception as exc:  # a service whose config cannot import is its own test's problem
-            pytest.skip(f"{module}.{cls} did not import: {exc}")
-        names = accepted.setdefault(prefix, set())
+    A class with no `env_prefix` (lineage's `Signing`, whose fields carry their full env names as aliases)
+    declares no prefix and contributes its names to the union.
+    """
+    prefixes: set[str] = set()
+    names: set[str] = set()
+    for settings_cls in _settings_classes():
+        prefix = str(settings_cls.model_config.get("env_prefix") or "")
+        if prefix:
+            prefixes.add(prefix)
         for name, field in settings_cls.model_fields.items():
             names.add(f"{prefix}{name.upper()}")
             names.add(name.upper())
@@ -101,7 +100,8 @@ def _accepted_names() -> dict[str, set[str]]:
             for choice in choices:
                 names.add(str(choice).upper())
                 names.add(f"{prefix}{str(choice).upper()}")
-    return accepted
+    assert prefixes, "no settings class with an env_prefix was found in any rendered package, so the gate would pass vacuously"
+    return prefixes, names
 
 
 def _rendered_env() -> list[tuple[str, str]]:
@@ -123,12 +123,11 @@ def _rendered_env() -> list[tuple[str, str]]:
 def test_no_rendered_env_binds_to_nothing() -> None:
     """The gate. A `<PREFIX>_NAME` no settings class with that prefix accepts is read by nothing:
     `extra="ignore"` drops it in silence, so the pod is healthy and the setting is decoration."""
-    accepted = _accepted_names()
+    prefixes, names = _accepted_names()
     unbound: dict[str, set[str]] = {}
     for deployment, env in _rendered_env():
-        for prefix, names in accepted.items():
-            if env.startswith(prefix) and env not in names:
-                unbound.setdefault(env, set()).add(deployment)
+        if env.startswith(tuple(prefixes)) and env not in names:
+            unbound.setdefault(env, set()).add(deployment)
 
     assert not unbound, (
         "these rendered env vars bind to NO settings field, so nothing reads them and pydantic drops "
