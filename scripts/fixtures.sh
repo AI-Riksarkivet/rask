@@ -117,7 +117,9 @@ def selector(obj):
     return ",".join(f"{k}={v}" for k, v in sorted(labels.items())) or "-"
 
 with open(render) as f:
-    rendered = {(o["kind"], o["metadata"]["name"]): o for o in items(f.read())}
+    # A dry-run that cannot map a kind (a CRD this fixture installs, on a cluster that does not serve it yet) prints `{}`
+    # in its place: an object with no kind is one the cluster holds none of, so there is nothing to hand over.
+    rendered = {(o["kind"], o["metadata"]["name"]): o for o in items(f.read()) if "kind" in o}
 for item in items(sys.stdin.read()):
     meta = item["metadata"]
     owner = (meta.get("annotations") or {}).get("meta.helm.sh/release-name")
