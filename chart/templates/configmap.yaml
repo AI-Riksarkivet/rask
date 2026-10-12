@@ -10,6 +10,7 @@ data:
   {{- end }}
   RASK_DOCS: {{ .Values.docs.enabled | quote }}
   RASK_DAPR_ENABLED: {{ .Values.dapr.enabled | quote }}
+  RASK_COMPUTE_URL: {{ printf "http://%s-compute:8804" (include "rask.fullname" .) | quote }}
   RASK_FLOWS_URL: {{ printf "http://%s-flows:%v" (include "rask.fullname" .) .Values.services.flows.port | quote }}
   RASK_NOTIFICATIONS_URL: {{ printf "http://%s-notifications:%v" (include "rask.fullname" .) .Values.services.notifications.port | quote }}
   {{- if .Values.dapr.enabled }}

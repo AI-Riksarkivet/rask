@@ -20,6 +20,7 @@ _RENDERED = {
     "RASK_API_PREFIX": "/api",
     "RASK_DOCS": "false",
     "RASK_DAPR_ENABLED": "true",
+    "RASK_COMPUTE_URL": "http://rask-compute:8804",
     "RASK_FLOWS_URL": "http://rask-flows:8840",
     "RASK_NOTIFICATIONS_URL": "http://rask-notifications:8850",
     "RASK_CATALOG_API_URL": "http://rask-catalog:2333",
@@ -34,6 +35,7 @@ def test_the_rendered_configmap_binds() -> None:
     assert settings.api_prefix == "/api"
     assert settings.docs_enabled is False
     assert settings.dapr_enabled is True
+    assert settings.compute_url == "http://rask-compute:8804"
     assert settings.sidecar_only_routes == ("lineage-events", "lineage-reconcile-cron")
 
 

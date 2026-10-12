@@ -74,6 +74,7 @@ class GatewaySettings(BaseSettings):
     )
 
     # --- one field per upstream, in the order the route table lists them ---------------------
+    compute_url: str = Field(default="http://127.0.0.1:8804", alias="RASK_COMPUTE_URL")
     catalog_url: str = Field(default="http://127.0.0.1:2333", alias="RASK_CATALOG_API_URL")
     lineage_url: str = Field(default="http://127.0.0.1:8000", alias="RASK_LINEAGE_API_URL")
     explorer_viewer_url: str = Field(default="http://127.0.0.1:8101", alias="RASK_EXPLORER_VIEWER_URL")

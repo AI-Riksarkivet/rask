@@ -197,6 +197,11 @@ def _routes(settings: GatewaySettings | None = None) -> list[Route]:
     # The studio flow-builder's server half (open_studio_flows.md "Backend"): the node catalog, graph
     # validation, and run execution. A BARE app-id: the app-id names the service it reaches.
     flows = ("flows", settings.flows_url)
+    # The Ray-plane service is `compute` (R22): dapr app-id `compute`, upstream RASK_COMPUTE_URL. It ships as its own
+    # fixture release outside the product chart (ADR 0155), with its app-id and Service name unchanged, so these rows
+    # reach it as before. Its PUBLIC rows stay /api/ray + /api/serve: the URL namespace names the Ray cluster those
+    # endpoints introspect/proxy, not the service that serves them.
+    compute = ("compute", settings.compute_url)
     # The notification plane: the per-subject inbox behind the bell. Bare
     # app-id, like `flows`, and 8850 continues the 8840 fleet run.
     notifications = ("notifications", settings.notifications_url)
@@ -223,6 +228,8 @@ def _routes(settings: GatewaySettings | None = None) -> list[Route]:
         # read at the top of this function. A hardcoded "/api/notifications" pair would be correct only
         # while RASK_API_PREFIX happens to be "/api".
         Route(f"{prefix}/notifications", f"{prefix}/notifications", *notifications),
+        Route(f"{prefix}/ray", f"{prefix}/ray", *compute),
+        Route("/api/serve", "/api/serve", *compute),
     ]
 
 
