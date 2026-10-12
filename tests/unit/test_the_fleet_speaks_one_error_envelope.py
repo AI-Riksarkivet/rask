@@ -26,9 +26,9 @@ from fastapi.testclient import TestClient
 from pydantic import BaseModel
 
 
-#: Every app `make_service_app` builds. `flows` and `notifications` join ingest, compute and
-#: controlplane; the gateway builds its own `FastAPI` and is a proxy, not a fleet API surface.
-FLEET_APPS = ["ingest", "compute", "controlplane", "flows", "notifications"]
+#: Every app `make_service_app` builds; the gateway builds its own `FastAPI` and is a proxy, not a
+#: fleet API surface.
+FLEET_APPS = ["compute", "controlplane", "flows", "notifications"]
 
 
 class _Body(BaseModel):
@@ -54,10 +54,6 @@ def _probe_route(app: FastAPI) -> Iterator[None]:
 
 
 def _fleet_app(name: str) -> FastAPI:
-    if name == "ingest":
-        from ingest import create_app
-
-        return create_app()
     module = __import__(name)
     app = module.app
     assert isinstance(app, FastAPI)

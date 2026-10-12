@@ -52,11 +52,6 @@ chart/charts/
 
 /api/
 
-# Local ingest-lane run ids — written by scripts/ingest-lane.sh, consumed by the A20 e2e.
-# A run id from one operator's cluster means nothing in anyone else's, and it changes on
-# every lane run, so tracking it makes every verification show up as a source change.
-.a11-run-id
-.a5-run-id
 
 # SBOM exports (`make sbom NAME=…`). A generated inventory, ~326 KB per image, reproducible from the
 # image at any time — so it is an ARTEFACT to hand to a scanner or an auditor, never a tracked file.

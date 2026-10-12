@@ -42,7 +42,6 @@ from pydantic import BaseModel, ConfigDict
 
 from catalog.api import security as catalog_security
 from catalog.core.config import Settings as CatalogSettings
-from ingest import auth as ingest_auth
 from lineage.api import security as lineage_security
 from lineage.core.config import LineageSettings
 from medallion.api import produce_auth
@@ -89,17 +88,11 @@ async def _medallion_subject(request: Request, issuer: str, bearer: str) -> obje
     return await produce_auth.authenticate_subject(request, settings, authorization=f"Bearer {bearer}")
 
 
-async def _ingest(request: Request, issuer: str, bearer: str) -> object:
-    settings = ingest_auth.IngestAuthSettings.model_validate(_oidc_on(issuer))
-    return await ingest_auth.authorize_ingest(request, settings, project="demo", authorization=f"Bearer {bearer}")
-
-
 DOORS: dict[str, _Door] = {
     "catalog-authenticate": _catalog,
     "lineage-authenticate": _lineage,
     "medallion-authorize-produce": _medallion_produce,
     "medallion-authenticate-subject": _medallion_subject,
-    "ingest-authorize-ingest": _ingest,
 }
 
 

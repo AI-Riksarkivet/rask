@@ -156,43 +156,6 @@ func (m *Rask) Test(
 		//
 		// Not in `addopts`: that would put the same ceiling on `make test-slow`, whose tests load real
 		// models over the network and whose honest runtime is not established here.
-		// ── A BROKER, because seven ingest tests skip themselves without one ───────────────────────
-		// services/ingest/tests/test_worker_queue.py carries a MODULE-level
-		// `pytestmark = pytest.mark.skipif(not _reachable(), ...)` over a live TCP probe of
-		// RASK_NATS_URL, and test_run_chain.py carries the same. No lane bound a broker, so the only
-		// tests of "the stream IS the outstanding-work ledger", the exactly-once commit chain and the
-		// DLQ poison-park vanished from every CI run while the job printed green — taking
-		// ingest/worker.py from 82% to 35% coverage on a run that reported success.
-		//
-		// That DLQ test is the regression guard for a fix this repo already made: `park_poison` is
-		// awaited BEFORE `msg.ack()` and unwrapped, so a missing DLQ stream means the unit is never
-		// acked and the drain dies — the one mechanism meant to stop a poison unit stalling a run
-		// becomes the stall. The fix is real in the source and was fiction in the gate.
-		//
-		// `-js` is not optional: the suite provisions and reads JetStream streams, and a core-only
-		// server answers those calls with an error rather than a skip. Dagger, never docker — this is
-		// exactly the "ephemeral broker for a test repro" case CLAUDE.md names.
-		//
-		// `WithDefaultArgs`, NEVER `WithExec`, and this cost two and a half hours to learn. A
-		// `WithExec` is a BUILD STEP: Dagger runs it and waits for it to exit. `nats-server` is a
-		// server, so it never exits — the whole pipeline sat at "1 steps running" with ZERO output for
-		// 2h20m and had to be killed. `AsService()` runs the container's entrypoint plus its default
-		// args, which is the form a long-running process needs.
-		//
-		// Measured three ways against services/ingest/tests/test_worker_queue.py:
-		//
-		//	no binding at all (the pre-fix state):  exit 0, 6 SKIPPED   <- the defect
-		//	WithExec:                               exit 124, HUNG      <- the fix, broken
-		//	WithDefaultArgs:                        exit 0, 6 PASSED    <- this
-		//
-		// The middle row is the worse failure of the three: a suite that skips still reports the rest
-		// of the estate, while a hung lane reports nothing at all and looks like a slow machine.
-		WithServiceBinding("nats", dag.Container().
-			From(natsImage).
-			WithExposedPort(4222).
-			WithDefaultArgs([]string{"nats-server", "--jetstream", "--addr", "0.0.0.0", "--port", "4222"}).
-			AsService()).
-		WithEnvVariable("RASK_NATS_URL", "nats://nats:4222").
 		WithExec([]string{"uv", "run", "--no-sync", "pytest", "-q", "--timeout=300", "--timeout-method=thread", "-m", "not e2e and not slow"}).
 		Stdout(ctx)
 }

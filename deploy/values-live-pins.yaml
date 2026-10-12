@@ -7,7 +7,6 @@ image:
     controlplane: "lakehouse-9d578ec6"
     flows: "lakehouse-9d578ec6"
     gateway: "lakehouse-9d578ec6"
-    ingest: "lakehouse-9d578ec6"
     lance-rest-catalog: "lakehouse-9d578ec6"
     notifications: "lakehouse-9d578ec6"
     web-annotator: "main-90b8d0ed"

@@ -34,7 +34,7 @@ def run_node(ctx: WorkflowActivityContext, job: NodeJob) -> dict[str, object]:
     the owner waived back-compat for this estate (ruling 2026-08-25, "do what best practices"), and
     the SDK now COERCES an activity's input into whatever model its second parameter names
     (`workflow_runtime._coerce_activity_input` → `_model_protocol.coerce_to_model`), so the annotation
-    is enforced rather than decorative. `ingest` and `medallion` are typed the same way; leaving this
+    is enforced rather than decorative. `medallion` is typed the same way; leaving this
     paragraph standing would have left the estate carrying two contradictory rules for one seam.
 
     The OUTPUT stays a dict: it is written to history and then again as the input of every dependent

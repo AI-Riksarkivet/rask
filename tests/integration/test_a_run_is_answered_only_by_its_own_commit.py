@@ -1,17 +1,16 @@
 """[[LH-280]] A run is answered only by the commit that carried its own data, whoever else names its run id.
 
-A RUN ID IS THE CALLER'S WORD. Ingest mints it from a project and an idempotency key, ``GET /v1/ingests``
-lists it to every project member, and any writer of the table can put it on a commit through ``/commit``
-as itself. Measured on pylance 12.0.0 through this fixture before the fix: the run's own commit was
-answered with the claimer's version, so its rows never landed and its finalize reported another writer's
+A RUN ID IS THE CALLER'S WORD. A writer mints it, it is visible to whoever reads the run, and any writer
+of the table can put it on a commit through ``/commit`` as itself. Measured on pylance 12.0.0 through this fixture before the fix: the run's own commit was
+answered with the claimer's version, so its rows never landed and the run would report another writer's
 version as its own. A version's transaction record is likewise its committer's word: the catalog may
 recognize a run's commit only in what the version's manifest holds.
 
-ONE ESTATE, ON MOTO: the catalog app with OIDC on, mapping two service accounts to subjects: ``ingest``,
+ONE ESTATE, ON MOTO: the catalog app with OIDC on, mapping two service accounts to subjects: ``writer``,
 whose run it is, and ``mallory``, another writer of the same table, each presenting its projected token
 from the root conftest's loopback issuer. FGA is off: the claim is who wrote,
-not who may. The run speaks through ingest's own catalog client, making the calls ``finalize_run`` and its
-prior-commit probe make, so what the client is answered is what the run reports.
+not who may. The run makes the two calls a run makes at the door: its commit, and an empty commit carrying
+its run id that asks whether it already committed.
 """
 
 from __future__ import annotations
@@ -19,7 +18,6 @@ from __future__ import annotations
 import json
 import uuid
 from collections.abc import Iterator
-from pathlib import Path
 from typing import Any
 
 import boto3
@@ -28,7 +26,6 @@ import pyarrow as pa
 import pytest
 from fastapi.testclient import TestClient
 
-from ingest.catalog_service import CatalogError, CatalogServiceClient
 from service_kit.lakehouse.objectfs import lance_storage_options
 from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 
@@ -39,7 +36,7 @@ _SEED, _DOOR_CLAIM, _RUNS_OWN = [0], [666], [1, 2, 3]
 
 
 #: The service account each subject runs as.
-_ACCOUNTS = {"ingest": "rask-sa-ingest", "mallory": "rask-sa-mallory"}
+_ACCOUNTS = {"writer": "rask-sa-writer", "mallory": "rask-sa-mallory"}
 
 
 def _as(issuer: Any, subject: str) -> dict[str, str]:
@@ -52,17 +49,17 @@ def _rows(ids: list[int]) -> pa.Table:
 
 
 class _Table:
-    """``db$pages``, created through the door as ``ingest``, and the estate key a write vend stands in for."""
+    """``db$pages``, created through the door as ``writer``, and the estate key a write vend stands in for."""
 
     def __init__(self, url: str, client: TestClient, issuer: Any) -> None:
         self.client = client
         self.issuer = issuer
         self.key = lance_storage_options(url, "test", "test", "us-east-1")
-        assert client.post("/v1/namespace/db/create", json={}, headers=_as(issuer, "ingest")).status_code == 200
+        assert client.post("/v1/namespace/db/create", json={}, headers=_as(issuer, "writer")).status_code == 200
         created = client.post(
             "/v1/table/db$pages/create",
             content=encode_arrow_stream(_rows(_SEED)),
-            headers={"Content-Type": ARROW_STREAM_MEDIA_TYPE, **_as(issuer, "ingest")},
+            headers={"Content-Type": ARROW_STREAM_MEDIA_TYPE, **_as(issuer, "writer")},
         )
         assert created.status_code == 200, created.text
         self.location = str(created.json()["location"])
@@ -83,10 +80,8 @@ class _Table:
 
 
 @pytest.fixture
-def table(moto_url: str, sa_issuer: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[_Table]:
+def table(moto_url: str, sa_issuer: Any, monkeypatch: pytest.MonkeyPatch) -> Iterator[_Table]:
     bucket = f"lh280-{uuid.uuid4().hex[:10]}"
-    ingest_token = tmp_path / "rask-catalog-token"
-    ingest_token.write_text(sa_issuer.mint(_ACCOUNTS["ingest"], audience="rask-catalog"))
     boto3.client("s3", endpoint_url=moto_url, aws_access_key_id="test", aws_secret_access_key="test", region_name="us-east-1").create_bucket(Bucket=bucket)
     for key, value in {
         "LANCE_REST_IMPL": "dir",
@@ -104,9 +99,6 @@ def table(moto_url: str, sa_issuer: Any, tmp_path: Path, monkeypatch: pytest.Mon
         "RASK_SA_SUBJECTS": json.dumps({f"system:serviceaccount:default:{sa}": subject for subject, sa in _ACCOUNTS.items()}),
         "RASK_SA_FETCH_TOKEN_FILE": str(sa_issuer.fetch_token_file),
         "RASK_SA_CA_FILE": str(sa_issuer.ca_file),
-        # Ingest's catalog client: the door it calls and the projected token it presents there.
-        "RASK_CATALOG_URL": "http://testserver",
-        "RASK_CATALOG_IDENTITY_TOKEN_FILE": str(ingest_token),
     }.items():
         monkeypatch.setenv(key, value)
     from catalog.core.config import get_settings
@@ -115,8 +107,6 @@ def table(moto_url: str, sa_issuer: Any, tmp_path: Path, monkeypatch: pytest.Mon
     from catalog.main import app
 
     with TestClient(app) as client:
-        # The TestClient IS an httpx.Client, so ingest's pooled client reaches this app in-process.
-        monkeypatch.setattr("ingest.http.shared_client", lambda: client)
         yield _Table(moto_url, client, sa_issuer)
     get_settings.cache_clear()
 
@@ -157,25 +147,29 @@ def claimed(table: _Table, monkeypatch: pytest.MonkeyPatch) -> _Table:
     return table
 
 
-def _ingest() -> CatalogServiceClient:
-    return CatalogServiceClient(_SCHEMA, base_url="http://testserver")
+def _commit(table: _Table, fragments: list[dict[str, Any]], read_version: int) -> Any:  # noqa: ANN401 — the TestClient's response
+    """The run's own call at the door, as the writer whose run it is."""
+    return table.client.post(
+        "/management/v1/table/db$pages/commit",
+        json={"fragments": fragments, "read_version": read_version, "run_id": _RUN},
+        headers=_as(table.issuer, "writer"),
+    )
 
 
 def test_a_run_id_another_writer_claimed_does_not_answer_the_runs_commit(claimed: _Table) -> None:
     """Closes-when, the door: with the claim in place the run's commit lands its rows exactly once, at the version it is answered."""
-    fragments = [json.dumps(fragment.to_json()) for fragment in claimed.runs_own]
+    answered = _commit(claimed, [fragment.to_json() for fragment in claimed.runs_own], claimed.read_version)
 
-    version, _ = _ingest().commit("db", "pages", fragments, claimed.read_version, _RUN)
-
-    assert claimed.ids(version) == sorted(_SEED + _DOOR_CLAIM + _RUNS_OWN)
+    assert answered.status_code == 200, answered.text
+    assert claimed.ids(int(answered.json()["version"])) == sorted(_SEED + _DOOR_CLAIM + _RUNS_OWN)
 
 
 def test_a_run_that_committed_nothing_is_not_answered_by_a_claim(claimed: _Table) -> None:
-    """Closes-when, ingest: the prior-commit probe of a run with nothing left to commit names no version.
+    """Closes-when, the probe: an empty commit carrying the run id of a run with nothing committed names no version.
 
-    ``_prior_commit`` asks exactly this, an empty commit carrying the run id, and reads a refusal as "no
-    prior commit", so ``finalize_run`` reports "nothing to commit" instead of another writer's rows as the
-    run's own.
+    A run asks exactly this to learn whether it already committed, and reads a refusal as "no prior commit",
+    so it reports "nothing to commit" instead of another writer's rows as its own.
     """
-    with pytest.raises(CatalogError, match=r"refused the commit \(400\)"):
-        _ingest().commit("db", "pages", [], 0, _RUN)
+    answered = _commit(claimed, [], 0)
+
+    assert answered.status_code == 400, answered.text

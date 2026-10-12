@@ -57,7 +57,7 @@ for i in $(seq 1 30); do
   sleep 1
 done
 
-# Seed alice = admin on project:acme (same grant verify_produce_door.sh uses). Mint her Dex token, decode the
+# Seed alice = admin on project:acme. Mint her Dex token, decode the
 # sub, write the tuple, and wait until the check is readable (OpenFGA is eventually consistent).
 mint() { curl -s http://localhost:5556/dex/token -d grant_type=password -d client_id=lance-catalog \
   -d client_secret=lance-catalog-secret -d scope=openid -d username="$1" -d password=password | \

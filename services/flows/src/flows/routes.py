@@ -61,7 +61,7 @@ def run_id_for(subject: str, idempotency_key: str) -> str:
 
     Scoped by SUBJECT, because the run id IS the workflow instance id and it is also the URL of a
     readable resource: an unscoped key would let one caller's `Idempotency-Key: 1` land on another's
-    run. `ingest` scopes by project for the same reason; a flow has no project to scope to.
+    run. A flow has no project to scope to.
 
     The name is INJECTIVE, and a printable separator is not enough to make it so. `f"{subject}-flows-{key}"`
     lets the delimiter occur inside either field, so distinct pairs collide: subject `alice` with

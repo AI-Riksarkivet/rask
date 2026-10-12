@@ -41,8 +41,8 @@ CHART = REPO / "chart"
 #: through BOTH helpers, and matching only the first made this gate blind to every work-queue stream it
 #: creates. Measured 2026-09-22: with `maintenance.workTopic` set, the gate reported
 #: `maintenance.work.v1` as landing nowhere while `add_workqueue_if_missing MAINTENANCE_WORK
-#: "maintenance.work.>"` sat in the job three lines from an `assert_retention` for it — and INGEST was
-#: invisible the same way. A gate that cannot see half the declarations reports a hole where there is
+#: "maintenance.work.>"` sat in the job three lines from an `assert_retention` for it — and every other work
+#: queue was invisible the same way. A gate that cannot see half the declarations reports a hole where there is
 #: none and, worse, would miss a real one in the half it cannot read.
 #:
 #: Anchored past leading whitespace and REFUSING a `#`, because a commented-out declaration creates no

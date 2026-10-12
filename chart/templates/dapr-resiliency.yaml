@@ -104,7 +104,7 @@ spec:
 {{- end }}
 {{- end }}
 
-{{- $writeDoors := list .Values.medallion.producer.daprAppId "ingest" .Values.services.catalog.daprAppId }}
+{{- $writeDoors := list .Values.medallion.producer.daprAppId .Values.services.catalog.daprAppId }}
 {{- range $invoked }}
       {{ . }}:
         timeout: invokeTimeout

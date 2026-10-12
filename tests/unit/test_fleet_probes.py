@@ -51,7 +51,7 @@ def _app(module: str):
     return mod.create_app() if hasattr(mod, "create_app") else mod.app
 
 
-@pytest.mark.parametrize("module", [*FACTORY_APPS, "ingest"], ids=[*FACTORY_APPS, "ingest"])
+@pytest.mark.parametrize("module", FACTORY_APPS)
 def test_the_app_serves_both_probes(module: str) -> None:
     """One shared, drain-aware pair — not a per-service hand-roll, and not nothing.
 

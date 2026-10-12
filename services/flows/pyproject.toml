@@ -22,8 +22,7 @@ dependencies = [
     "uvicorn>=0.30",
     # The durable lane. A run is a topological fan-out over nodes that call models — exactly the
     # shape Dapr Workflow makes replayable — and it executes in the daprd sidecar the chart already
-    # injects, on the actor state store that already exists (the same argument that carried the
-    # adoption for `ingest`). Scaffolded here, load-bearing in-cluster.
+    # injects, on the actor state store that already exists. Scaffolded here, load-bearing in-cluster.
     "dapr-ext-workflow>=1.18",
 ]
 

@@ -26,8 +26,6 @@ medallion:
   # (transform.py), so 2 replicas can race concurrent overwrites of the same stage dataset.
   # Raise only after a cross-pod lock ships.
   stageRunnerReplicas: 1
-  producer:
-    expose: false # /produce is the unauthenticated demo entry — the prod head fires from real bronze ingests
 
 # --- HA (P3): multi-replica stateless services + a PodDisruptionBudget. Stateful HA (AGE) is the platform's
 # CloudNativePG operator's job (age.cnpgCluster; docs/architecture/deployment.md), not here. Optionally also set autoscaling.enabled. -----
@@ -62,8 +60,6 @@ services:
   # double the FGA and actor load, silently, exactly when lineage or the sidecar is already slow.
   # Nothing but this note holds it at 1. What would unblock it is a cross-pod guard that SKIPS (not
   # an actor — actors are turn-based, so ticks would queue instead).
-  ingest:
-    replicas: 2 # the run store is an explicitly NON-authoritative read-side index that falls back to the durable workflow engine on a miss
   compute:
     replicas: 2 # a stateless proxy over the Ray dashboard — it holds nothing
   # flows is DELIBERATELY ABSENT and must stay at 1: .docker/flows.dockerfile records that its run
@@ -195,7 +191,7 @@ rustfs:
 # --- Compaction/GC at a real cadence (not the 120s demo sweep) -------------------------------------
 maintenance:
   # HOURLY, because the event lane is the primary trigger and this is the backstop. It is not a
-  # tuning preference: the bus is provably incomplete (ingest, Ray TRAIN and external OpenLineage
+  # tuning preference: the bus is provably incomplete (Ray TRAIN and external OpenLineage
   # producers emit over HTTP only and never reach `lineage.events.v1`; the catalog's lineage lane has
   # no outbox, so a lost trigger is silent), and clock-due work — an old-version GC on a table nobody
   # has written since — has no write to react to at all. So this must keep running; it just stops

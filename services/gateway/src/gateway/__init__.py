@@ -58,7 +58,7 @@ _HOP_BY_HOP = frozenset(
 #: calling. A client that sets one is asserting an identity, and the edge is the only place that
 #: assertion can be refused — past here the value is indistinguishable from the sidecar's.
 #:
-#: MEASURED against the ingest door on the live cluster, AFTER it had already been fixed to refuse
+#: MEASURED against a write door on the live cluster, AFTER it had already been fixed to refuse
 #: public callers:
 #:
 #:     anonymous POST, no header                        -> 403
@@ -125,8 +125,8 @@ def _upstream_content(request: Request) -> AsyncIterator[bytes] | bytes:
     """The request body as it should be handed to httpx: an async STREAM, or nothing at all.
 
     `await request.body()` materialised the whole upload in this process before a byte reached the
-    upstream. The gateway fronts `/api/ingest`, `/api/explorer/annotations` (Arrow-IPC writes) and
-    `/api/produce` — the three least-bounded payload planes in the estate — so concurrent large POSTs
+    upstream. The gateway fronts `/api/catalog` (Arrow-IPC table writes) and `/api/explorer/annotations`
+    (Arrow-IPC writes) — the least-bounded payload planes in the estate — so concurrent large POSTs
     multiplied straight into the pod's memory limit, and every one of them also paid full-upload
     latency before the upstream saw anything. The RESPONSE half was streamed all along
     (`StreamingResponse(upstream_resp.aiter_raw())`), which is the asymmetry that gave it away.
@@ -171,7 +171,7 @@ class Route(NamedTuple):
 
     The upstream prefix REPLACES the public one when forwarding. rask rows keep it identical (the fleet
     services mount under RASK_API_PREFIX themselves); lance rows rewrite — catalog/lineage serve
-    `/v1/...`/`/runs` at root, the medallion producer serves `/produce`, `/train`, `/trains`,
+    `/v1/...`/`/runs` at root, the medallion producer serves `/train`, `/trains`,
     `/promotions`, `/stage-runners` and `/cascade` at root, and the media trio serves `/api/...` internally.
     """
 
@@ -205,15 +205,13 @@ def _routes(settings: GatewaySettings | None = None) -> list[Route]:
     viewer = ("viewer", settings.explorer_viewer_url)
     explorer_search = ("search", settings.explorer_search_url)
     annotator = ("annotator", settings.explorer_annotator_url)
-    # The ingest plane (open_ingest.md Phase 1) — a BARE app-id, deliberately: the medallion row
-    # below points at `medallion-producer`, a legacy app-id that no longer names anything about the service
-    # it reaches (audit m1). A new row does not inherit that mistake.
-    ingest = ("ingest", settings.ingest_url)
     # The studio flow-builder's server half (open_studio_flows.md "Backend"): the node catalog, graph
-    # validation, and run execution. Bare app-id, like `ingest` and for the same reason.
+    # validation, and run execution. A BARE app-id, deliberately: the medallion row above points at
+    # `medallion-producer`, a legacy app-id that no longer names anything about the service it reaches
+    # (audit m1). A new row does not inherit that mistake.
     flows = ("flows", settings.flows_url)
     # The notification plane: the per-subject inbox behind the bell. Bare
-    # app-id, like `ingest` and `flows`, and 8850 continues the 8830/8840 fleet run.
+    # app-id, like `flows`, and 8850 continues the 8840 fleet run.
     notifications = ("notifications", settings.notifications_url)
     # longest / most-specific prefixes first; the prefix itself is the catch-all.
     # The two deeper explorer rows MUST outrank /api/explorer. There is NO bare /api
@@ -225,14 +223,6 @@ def _routes(settings: GatewaySettings | None = None) -> list[Route]:
         Route("/api/explorer", "/api", *viewer),
         Route("/api/catalog", "", *catalog),
         Route("/api/lineage", "", *lineage),
-        Route("/api/produce", "/produce", *medallion),
-        # SIBLING PREFIXES, not nested. `_pick_route` requires `path == prefix or
-        # path.startswith(prefix + "/")`, so a row like "/api/ingest-iiif" could never have matched
-        # the "/api/ingest" row — the next character is "-", not "/". The deprecated `/api/ingest-iiif`
-        # row is GONE (A12 deleted the medallion route it pointed at, so it 502'd rather than 404'd,
-        # which is the worse failure: it names a backend as broken instead of the path as absent),
-        # but the ORDERING PROPERTY it demonstrated is still load-bearing and still tested.
-        Route("/api/ingest", "/api", *ingest),
         # The training head (`POST /train`): the producer serves it root-mounted, so the rewrite is a
         # literal rather than `prefix`-interpolated.
         Route("/api/train", "/train", *medallion),
@@ -242,7 +232,7 @@ def _routes(settings: GatewaySettings | None = None) -> list[Route]:
         # The APPROVE door for a held promotion. It is on the producer rather than on the stage runner whose
         # quality gate held it, because `raise_workflow_event` resolves a workflow instance through the
         # CALLING app's app-id: route and instance must share a process, and a stage runner is bus-only — no
-        # row here, no Ingress path. Root-mounted like /produce and /train (the producer does not use
+        # row here, no Ingress path. Root-mounted like /train (the producer does not use
         # `make_service_app`'s prefix), so the rewrite is a literal, not `prefix`-interpolated.
         Route("/api/promotions", "/promotions", *medallion),
         # The cascade's operator surface. Routed to the PRODUCER, which authorizes and forwards to the
@@ -255,8 +245,7 @@ def _routes(settings: GatewaySettings | None = None) -> list[Route]:
         Route("/api/cascade", "/cascade", *medallion),
         Route(f"{prefix}/ray", f"{prefix}/ray", *compute),
         Route(f"{prefix}/projects", f"{prefix}/projects", *controlplane),
-        # PREFIX-INTERPOLATED, not the literal "/api/flows", and that is the ingest row's lesson
-        # applied rather than restated: the flows service is composed by `make_service_app`, which
+        # PREFIX-INTERPOLATED, not the literal "/api/flows": the flows service is composed by `make_service_app`, which
         # mounts every router under `settings.api_prefix` — the SAME env var `_routes` reads at the top.
         # So public and upstream track the prefix together and cannot drift apart, which is exactly what
         # a hardcoded pair could do the moment RASK_API_PREFIX is not "/api". Under the chart's and

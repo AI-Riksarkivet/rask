@@ -10,7 +10,7 @@ port, `HTTP://127.0.0.1:1` with `allow_http=true` requests `http://127.0.0.1:1/�
 upper-case plaintext endpoint `false`, and the client is never built.
 
 The pyarrow half reads the same endpoint: `s3_filesystem`, and the builders that go through it —
-ingest's estate-default source, the training job's artifact writer and the janitor's filesystem.
+the training job's artifact writer and the janitor's filesystem.
 pyarrow accepts only a lowercase `http`/`https` scheme — measured on pyarrow 25.0.0, `scheme="HTTP"`
 raises `ArrowInvalid: Invalid S3 connection scheme 'HTTP'` — so an endpoint Lance opens must not be
 one every pyarrow consumer refuses. An empty endpoint is AWS proper on both halves, and its regional
@@ -41,7 +41,6 @@ import pyarrow.fs as pafs
 import pytest
 
 from catalog.core.config import Settings as CatalogSettings
-from ingest.objectstore import SourceConnection, source_filesystem
 from service_kit.lakehouse.objectfs import StorageOptions, lance_storage_options, s3_filesystem
 from service_kit.media.config import Settings as MediaSettings
 
@@ -139,18 +138,6 @@ def test_the_pyarrow_filesystem_reads_the_scheme_by_the_same_rule(endpoint: str,
 
     assert built == pafs.S3FileSystem(access_key="AK", secret_key="SK", endpoint_override=host, scheme=scheme, region="us-east-1")
     assert (scheme == "http") == (_lance(endpoint) == "true"), "pyarrow and Lance disagree on whether this endpoint is plaintext"
-
-
-@pytest.mark.parametrize(("endpoint", "scheme", "host"), [("http://rustfs:9000/tenant", "http", "rustfs:9000/tenant"), ("", "https", "")])
-def test_ingest_estate_default_source_reads_the_scheme_by_the_same_rule(monkeypatch: pytest.MonkeyPatch, endpoint: str, scheme: str, host: str) -> None:
-    monkeypatch.setenv("RASK_S3_ENDPOINT_URL", endpoint)  # an empty value reads as unset
-    monkeypatch.delenv("S3_ENDPOINT_URL", raising=False)
-    monkeypatch.delenv("HCP_ENDPOINT", raising=False)
-    # An unkeyed, region-less filesystem asks the AWS SDK's instance-metadata probe, which off EC2
-    # measured 14 s per construction; disabling it keeps the test local.
-    monkeypatch.setenv("AWS_EC2_METADATA_DISABLED", "true")
-
-    assert source_filesystem(SourceConnection()) == pafs.S3FileSystem(endpoint_override=host, scheme=scheme)
 
 
 @pytest.mark.parametrize(("endpoint", "scheme", "host"), [("http://rustfs:9000/tenant/", "http", "rustfs:9000/tenant")])

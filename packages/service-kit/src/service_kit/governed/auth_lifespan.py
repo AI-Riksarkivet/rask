@@ -21,7 +21,7 @@ them survived the first extraction:
     no `maintainer` rung at all.
     Pinned by `packages/service-kit/tests/test_attach_auth_postures.py::test_the_default_posture_RESOLVES_when_unpinned`,
     and the TID251 banned-api entry on `service_kit.governed.fga.provision` keeps the call at one site.
-    `ingest` and `maintenance` pass `False` explicitly: a data writer that mints a store and writes an
+    `maintenance` passes `False` explicitly: a data writer that mints a store and writes an
     authorization model becomes the source of truth for everyone else's permissions. They resolve read-only and fail closed against an estate
     that has not been bootstrapped. Reading which store exists is not authoring one, which is the
     distinction `fga.resolve` exists for.

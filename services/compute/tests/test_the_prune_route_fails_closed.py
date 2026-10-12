@@ -9,7 +9,7 @@ sidecar-delivered route calls it at boot (catalog, lineage, maintenance, both me
 
 Measured on the deployed estate, 2026-09-02: the compute pod's Dapr SIDECAR carried `APP_API_TOKEN`
 (so it stamps every delivery) while the APP container carried none — the chart renders the variable
-only for `daprIngest`/`lanceWriter` services and compute was neither — so `POST /compute-prune-jobs-cron`
+only for `daprIngest` services and compute was not one — so `POST /compute-prune-jobs-cron`
 was reachable, unsigned, from any pod in the namespace, and each call deletes terminal Ray jobs. The
 guard read as present and enforced nothing.
 

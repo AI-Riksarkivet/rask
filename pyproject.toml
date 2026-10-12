@@ -36,9 +36,11 @@ dev = [
     # respx — the prescribed way to test an outbound HTTPX boundary (writing-python's testing
     # reference). It intercepts at the TRANSPORT, so an assertion is about the request that would
     # actually reach the upstream, not about whether our own function was called with the arguments
-    # we then assert it was called with. First consumer: the ingest plane's catalog service client,
-    # whose whole contract is the shape of three POSTs.
+    # we then assert it was called with.
     "respx>=0.21",
+    # The bus client the operator-mode NATS rig drives (tests/e2e-py/nats_auth_rig.py): the suite publishes
+    # and subscribes as each bus user directly, because the claim is what the broker admits.
+    "nats-py>=2.15",
     "jsonschema>=4.26",
     "duckdb>=1.4",
     "requests>=2.32",
@@ -187,21 +189,19 @@ extend-select = ["TID251", "FAST001"]
 "packages/service-kit/src/service_kit/lancekit/reader.py" = ["TID251"]  # decode_arrow_response: the /query reader
 "services/annotator/src/annotator/projects/proxies.py" = ["TID251"]  # ActorProxy: the proxies module
 "services/notifications/src/notifications/proxies.py" = ["TID251"]  # ActorProxy + encode_subject: the proxies module
-"services/ingest/src/ingest/queue.py" = ["TID251"]  # nats: the queue seam
 
 # The code-shape bans. Each message names the seam a caller goes through instead; the sanctioned sites
 # are the per-file ignores above and the line-level `# noqa: TID251` at each call site.
 # Five `dataclasses.dataclass` noqa lines are DEBT against the Pydantic-only rule, not sanctioned uses:
 # service_kit/lakehouse/idempotency.py, catalog/api/idempotency.py, catalog/core/lineage_emit.py,
 # maintenance/services/credentials.py and maintenance/services/sweep.py.
-# services/ingest and services/viewer RESTATE this whole map in their own pyproject.toml: a nested
-# banned-api table replaces the root one rather than merging with it (measured, ruff 0.16.0), so a ban
-# added here is added to both of those too.
+# services/viewer RESTATES this whole map in its own pyproject.toml: a nested banned-api table replaces
+# the root one rather than merging with it (measured, ruff 0.16.0), so a ban added here is added there too.
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
 "dataclasses.dataclass".msg = "Structured values are pydantic BaseModel (CLAUDE.md, writing-python)."
 "boto3".msg = "Build S3/STS clients through storage.s3_client / storage.sts_client: a raw boto3 client carries no timeouts."
-"lance.write_dataset".msg = "Lance is written only at the registered write doors (catalog dataplane, ingest lander, the stage write service_kit.lakehouse.tier_write, medallion compute/ingest)."
-"lance.fragment.write_fragments".msg = "Lance is written only at the registered write doors (catalog dataplane, ingest lander, medallion compute/ingest)."
+"lance.write_dataset".msg = "Lance is written only at the registered write doors (catalog dataplane, the stage write service_kit.lakehouse.tier_write, medallion compute/ingest)."
+"lance.fragment.write_fragments".msg = "Lance is written only at the registered write doors (catalog dataplane, medallion compute/ingest)."
 "catalog.services.warehouses.put_warehouse".msg = "An unconditional registry put lifts a quarantine; write through the conditional (CAS) path."
 "catalog.services.projects.put_project".msg = "An unconditional registry put lifts a quarantine; write through the conditional (CAS) path."
 "service_kit.dapr_publish.publish_event".msg = "A publish site is registered deliberately (a line-level noqa): a direct publish skips the outbox or the bounded timeout."
@@ -229,7 +229,7 @@ extend-select = ["TID251", "FAST001"]
 "service_kit.governed.fga.hierarchy_edge_tuples".msg = "Hierarchy edges are seeded only by fga.py and medallion train."
 "torch".msg = "No model framework in a shared seam: models live in sealed runners/."
 "pyannote".msg = "No model framework in a shared seam: models live in sealed runners/."
-"nats".msg = "The broker appears only in ingest.queue (the queue seam)."
+"nats".msg = "No service talks to the broker directly: events ride Dapr pub/sub."
 "ray_kit.await_success".msg = "Poll a Ray job through the shared submit-or-reattach kernel."
 
 [tool.ruff.lint.mccabe]
@@ -243,11 +243,11 @@ indent-style = "space"
 lines-after-imports = 2
 # COMPLETE, and it is meant to stay that way: every first-party import name on disk is here — the
 # five code-shipping packages (lineage_kit, ray_kit, service_kit, storage, validate —
-# `ray-cluster-env` is deps-only and imports as nothing) and the thirteen services: eighteen names. A missing name is not a metadata gap: ruff sorts that module into
+# `ray-cluster-env` is deps-only and imports as nothing) and the twelve services: seventeen names. A missing name is not a metadata gap: ruff sorts that module into
 # the THIRD-PARTY block, so `from catalog.core.config import ...` sat beside `import httpx` in every
 # file that imported it.
 #
-# This list carried nine of the eighteen for a long time, and the comment here explained why: adding
+# This list carried nine of the names for a long time, and the comment here explained why: adding
 # the missing ten turns one I001 into hundreds, because a name changes which block ruff sorts it into
 # and every importer of it re-sorts. That was true — the pass measured 465 I001s across 391 files —
 # and it is why the fix was always "do it as a PASS": add every name, then
@@ -262,7 +262,6 @@ known-first-party = [
     "controlplane",
     "flows",
     "gateway",
-    "ingest",
     "lineage",
     "lineage_kit",
     "maintenance",

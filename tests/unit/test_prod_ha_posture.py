@@ -79,7 +79,7 @@ def test_flows_stays_single_replica_until_its_run_store_is_durable() -> None:
     """NOT an oversight, and this test exists so it does not get "fixed".
 
     `.docker/flows.dockerfile`: "the run store is a process-local dict (v0), so a second worker would
-    serve GET /flows/runs/{id} from a process that never saw the run". Unlike ingest's store, there is
+    serve GET /flows/runs/{id} from a process that never saw the run". There is
     no durable engine to fall back to on a miss — a second replica would answer 404 for live runs.
     """
     doc = next((d for d in _OURS if _component(d) == "flows"), None)

@@ -1197,14 +1197,6 @@
                         }
                     }
                 },
-                "mediaBronzeNamespace": {
-                    "description": "Bronze namespace of the media lane, where /ingest-media lands blobs (MEDALLION_MEDIA_BRONZE_URI). Default `bronze-media`.",
-                    "type": "string"
-                },
-                "mediaSeedSamples": {
-                    "description": "Have /ingest-media write two sample PNGs into the source prefix before ingesting (MEDALLION_MEDIA_SEED_SAMPLES); set false when the source is real media.",
-                    "type": "boolean"
-                },
                 "planSweep": {
                     "type": "object",
                     "properties": {
@@ -1223,22 +1215,18 @@
                     "type": "integer"
                 },
                 "produceAdminProject": {
-                    "description": "Project a signed-in user needs `can_administer` on to fire /produce or /train from the UI, and the default project a projectless produce is checked against.",
+                    "description": "Project a signed-in user needs `can_administer` on to fire /train from the UI, and the project a run with no tenant of its own is authorized on.",
                     "type": "string"
                 },
                 "producer": {
                     "type": "object",
                     "properties": {
-                        "author": {
-                            "description": "Author role the producer stamps on its bronze-write lineage (MEDALLION_PRODUCER_AUTHOR).",
-                            "type": "string"
-                        },
                         "bronzeDataset": {
                             "description": "Dataset name the producer stamps on the bronze trigger (MEDALLION_BRONZE_DATASET); must equal the first stage runner's `fromDataset` or every trigger is dropped.",
                             "type": "string"
                         },
                         "bronzeNamespace": {
-                            "description": "Bronze namespace the producer writes (MEDALLION_BRONZE_NAMESPACE), declared unqualified; on a projects estate it becomes `\u003cproject\u003e-bronze` at runtime.",
+                            "description": "Bronze namespace whose catalog write announcements fire the head (MEDALLION_BRONZE_NAMESPACE), declared unqualified; on a projects estate it becomes `\u003cproject\u003e-bronze` at runtime.",
                             "type": "string"
                         },
                         "bronzeTopic": {
@@ -1247,14 +1235,6 @@
                         },
                         "daprAppId": {
                             "description": "Dapr app-id of the medallion-producer; also names its derived pubsub components, durable consumers and state-store scope.",
-                            "type": "string"
-                        },
-                        "expose": {
-                            "description": "Intended to gate the gateway route to POST /produce (values-prod sets false). No chart template reads it.",
-                            "type": "boolean"
-                        },
-                        "operation": {
-                            "description": "Operation name the producer stamps on its bronze-write lineage (MEDALLION_PRODUCER_OPERATION).",
                             "type": "string"
                         },
                         "serviceIdentity": {
@@ -1529,7 +1509,7 @@
                             "type": "boolean"
                         },
                         "users": {
-                            "description": "The bus user table, one user per Dapr app-id plus admin, monitor and ingest, each with publish and subscribe subject lists (never empty).",
+                            "description": "The bus user table, one user per Dapr app-id plus admin and monitor, each with publish and subscribe subject lists (never empty).",
                             "type": "object",
                             "properties": {
                                 "admin": {
@@ -1567,23 +1547,6 @@
                                     }
                                 },
                                 "catalog": {
-                                    "type": "object",
-                                    "properties": {
-                                        "publish": {
-                                            "type": "array",
-                                            "items": {
-                                                "type": "string"
-                                            }
-                                        },
-                                        "subscribe": {
-                                            "type": "array",
-                                            "items": {
-                                                "type": "string"
-                                            }
-                                        }
-                                    }
-                                },
-                                "ingest": {
                                     "type": "object",
                                     "properties": {
                                         "publish": {
@@ -1732,7 +1695,7 @@
                     "type": "integer"
                 },
                 "url": {
-                    "description": "NATS JetStream address every pub/sub component, the stream Job and ingest connect to (e.g. nats://nats.internal:4222). Required: empty fails the render.",
+                    "description": "NATS JetStream address every pub/sub component and the stream Job connect to (e.g. nats://nats.internal:4222). Required: empty fails the render.",
                     "type": "string"
                 }
             }
@@ -2633,109 +2596,6 @@
                         },
                         "waitFor": {
                             "description": "List of dependencies the gateway waits for in an init container; only `minio` is honoured (when minio.enabled).",
-                            "type": "array"
-                        }
-                    }
-                },
-                "ingest": {
-                    "type": "object",
-                    "properties": {
-                        "cronBindingName": {
-                            "description": "Name of the Dapr cron binding for the incremental poll (templates/ingest-cron.yaml). Empty renders no binding and the poll is off.",
-                            "type": "string"
-                        },
-                        "cronDataset": {
-                            "description": "Dataset the incremental poll lands into. No template renders it; the app reads RASK_INGEST_CRON_DATASET, which this value does not reach.",
-                            "type": "string"
-                        },
-                        "cronKind": {
-                            "description": "Source kind the incremental poll ingests. No template renders it; the app reads RASK_INGEST_CRON_KIND, which this value does not reach.",
-                            "type": "string"
-                        },
-                        "cronOptions": {
-                            "description": "Source options for the incremental poll. No template renders it; the app reads RASK_INGEST_CRON_OPTIONS, which this value does not reach.",
-                            "type": "string"
-                        },
-                        "cronSchedule": {
-                            "description": "Schedule of the incremental-poll cron binding (Dapr cron syntax, e.g. `@every 1h`). Used only when cronBindingName is set.",
-                            "type": "string"
-                        },
-                        "daprIngest": {
-                            "description": "Renders APP_API_TOKEN for an app that refuses to start without it. False for ingest, which gets the token through lanceWriter instead.",
-                            "type": "boolean"
-                        },
-                        "env": {
-                            "description": "Env-var map rendered verbatim into the ingest container: lineage/catalog URLs and identities, the pinned service project, local-dir and lance-append roots (empty refuses the kind), unit and run-hour ceilings.",
-                            "type": "object",
-                            "properties": {
-                                "RASK_CATALOG_SERVICE_IDENTITY": {
-                                    "type": "string"
-                                },
-                                "RASK_CATALOG_URL": {
-                                    "type": "string"
-                                },
-                                "RASK_INGEST_LANCE_ROOT": {
-                                    "type": "string"
-                                },
-                                "RASK_INGEST_LOCAL_ROOT": {
-                                    "type": "string"
-                                },
-                                "RASK_INGEST_MAX_RUN_HOURS": {
-                                    "type": "string"
-                                },
-                                "RASK_INGEST_MAX_UNITS": {
-                                    "type": "string"
-                                },
-                                "RASK_INGEST_SECRETS_FROM_DAPR": {
-                                    "type": "string"
-                                },
-                                "RASK_INGEST_SERVICE_PROJECT": {
-                                    "type": "string"
-                                },
-                                "RASK_INGEST_USE_CATALOG": {
-                                    "type": "string"
-                                },
-                                "RASK_LINEAGE_ENDPOINT": {
-                                    "type": "string"
-                                },
-                                "RASK_LINEAGE_SERVICE_IDENTITY": {
-                                    "type": "string"
-                                },
-                                "RASK_LINEAGE_URL": {
-                                    "type": "string"
-                                }
-                            }
-                        },
-                        "frontDoor": {
-                            "description": "Renders ingest outside singleTenant, because the gateway routes /api/ingest to it.",
-                            "type": "boolean"
-                        },
-                        "governedAuth": {
-                            "description": "Gives ingest the OIDC/FGA env and FGA token mount when auth.enabled, feeding its user door.",
-                            "type": "boolean"
-                        },
-                        "incrementalMaxRows": {
-                            "description": "Ceiling on rows the poll's anti-join reads; 0 is unbounded, over it the run refuses. No template renders it; the app reads RASK_INGEST_INCREMENTAL_MAX_ROWS.",
-                            "type": "integer"
-                        },
-                        "lanceWriter": {
-                            "description": "Injects the S3 endpoint, warehouse, lineage outbox and LANCE_REST_ROOT env so ingest can write Lance to the warehouse.",
-                            "type": "boolean"
-                        },
-                        "module": {
-                            "description": "uvicorn import path (module:factory) the ingest Deployment runs.",
-                            "type": "string"
-                        },
-                        "port": {
-                            "description": "Container and Service port of the ingest app.",
-                            "type": "integer"
-                        },
-                        "replicas": {
-                            "description": "Replica count of the ingest Deployment; 0 scales it to zero.",
-                            "type": "integer"
-                        },
-                        "waitFor": {
-                            "description": "List of dependencies the pod waits for in an init container before starting; only `minio` is honoured (when minio.enabled).",
                             "type": "array"
                         }
                     }

@@ -29,7 +29,7 @@ _ROOT = Path(__file__).resolve().parents[2]
 _MIGRATE = _ROOT / "scripts" / "fga_estate_root_migrate.py"
 
 #: One principal on each carried rung of the old root; the migration grants each on `estate:rask`.
-_OLD_ROOT = {("user:alice", "owner", "warehouse:lance_catalog"), ("user:service-lineage", "event_stager", "warehouse:lance_catalog")}
+_OLD_ROOT = {("user:alice", "owner", "warehouse:lance_catalog")}
 
 _STORES = pytest.mark.parametrize(("stores", "pin"), [(BY_NAME, ""), (PINNED, STORE)], ids=["by-name", "pinned"])
 

@@ -223,7 +223,7 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end -}}
 
 {{- define "lance.natsUrl" -}}
-{{- required "NATS JetStream is a prerequisite: set nats.url to the bus every pub/sub component, the stream Job and ingest connect to (docs/architecture/deployment.md, Prerequisites); rask never installs it" .Values.nats.url -}}
+{{- required "NATS JetStream is a prerequisite: set nats.url to the bus every pub/sub component and the stream Job connect to (docs/architecture/deployment.md, Prerequisites); rask never installs it" .Values.nats.url -}}
 {{- end -}}
 
 {{- define "lance.subPubsub" -}}
@@ -578,7 +578,6 @@ securityContext:
 {{- $env := $svc.env | default dict -}}
 {{- if eq $door "catalog" }}{{- with get $env "RASK_CATALOG_SERVICE_IDENTITY" }}{{- $_ := set $m (printf "%s%s" $sa $name) . }}{{- end }}{{- end -}}
 {{- if eq $door "lineage" }}{{- with (get $env "RASK_LINEAGE_SERVICE_IDENTITY") | default (ternary "notifications" "" (eq $name "notifications")) }}{{- $_ := set $m (printf "%s%s" $sa $name) . }}{{- end }}{{- end -}}
-{{- if and (eq $door "producer") (eq $name "ingest") }}{{- with get $env "RASK_CATALOG_SERVICE_IDENTITY" }}{{- $_ := set $m (printf "%s%s" $sa $name) . }}{{- end }}{{- end -}}
 {{- end -}}
 {{- end -}}
 {{- toJson $m -}}
@@ -824,9 +823,7 @@ scoped_secret() {
         {{- end }}
 
         {{- range (include "lance.natsUsers" $cfgRoot | splitList " " | compact) }}
-        {{- if not (and (eq $app "ingest") (eq . "ingest")) }}
         {{- $denied = append $denied (printf "nats-user-%s" .) }}
-        {{- end }}
         {{- end }}
         {{- $denied = concat $denied (list "nats-root" "nats-route") }}
         {{- if $denied }}
@@ -847,9 +844,6 @@ scoped_secret() {
 {{- if $v.medallion.enabled }}
 {{- $s = append $s (dict "id" $v.medallion.producer.serviceIdentity "app" $v.medallion.producer.daprAppId "role" "medallion_producer") }}
 {{- range $v.medallion.stageRunners }}{{- $s = append $s (dict "id" .serviceIdentity "app" .daprAppId "role" (ternary "medallion_stage_runner" "" (and (not (not (include "lance.outOfProcessEngine" $))) $v.medallion.compute $v.catalog.controlEmit))) }}{{- end }}
-{{- end -}}
-{{- with (get (($v.services.ingest).env | default dict) "RASK_LINEAGE_SERVICE_IDENTITY") }}
-{{- if or ($v.services.ingest).frontDoor $v.singleTenant.enabled }}{{- $s = append $s (dict "id" . "app" "ingest") }}{{- end }}
 {{- end -}}
 {{- toJson $s -}}
 {{- end -}}

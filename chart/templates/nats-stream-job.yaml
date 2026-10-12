@@ -71,25 +71,19 @@ spec:
                     || { echo "!! FAILED to create stream $1 — a publisher would have nowhere to land"; exit 1; }
                 fi
               }
-              # INGEST is a WORK QUEUE, not a retained log, and it needs its own creation path.
+              # A WORK QUEUE is not a retained log, and it needs its own creation path: a message is
+              # REMOVED once acked, which is what makes the stream itself the outstanding-work ledger.
+              # Created with `limits`, acked messages are retained 168h and `messages` stops being
+              # outstanding work — measured 2026-08-06 on a live work-queue stream: retention=limits,
+              # deny_purge=true, deny_delete=true.
               #
-              # `services/ingest/src/ingest/queue.py` declares RetentionPolicy.WORK_QUEUE and BUILDS ON
-              # it: "a message is REMOVED once acked — that is what makes the stream itself the
-              # outstanding-work ledger, which is why this plane needs no side ledger". Creating it
-              # here with `limits` made that claim FALSE wherever it is deployed (acked messages were
-              # retained 168h, so `messages` was not outstanding work), and this file asserted the
-              # opposite of itself twenty-seven lines below — measured 2026-08-06 on the live stream:
-              # retention=limits, deny_purge=true, deny_delete=true.
-              #
-              # `--deny-purge --deny-delete` are deliberately ABSENT here rather than carried over.
-              # They protect a retained RECORD; a work queue has none — it reclaims by ack. Their only
-              # measured effect was to make the ingest plane's own `release_run -> purge_stream` return
-              # an inert 0 while the server refused it (err_code 10110, "stream purge not permitted").
+              # `--deny-purge --deny-delete` are deliberately ABSENT here. They protect a retained
+              # RECORD; a work queue has none — it reclaims by ack — and a purge refused by them answers
+              # err_code 10110, "stream purge not permitted".
               #
               # ONE-TIME MIGRATION on an existing cluster: this function is `if exists; then skip`, so a
-              # stream already created with `limits` KEEPS it. Run `nats stream rm INGEST` once (it is a
-              # work queue — draining it first is the whole point) and let this Job recreate it, or the
-              # chart is correct while the cluster is not, which is the drift being closed.
+              # stream already created with `limits` KEEPS it. Drain it, `nats stream rm` it once, and
+              # let this Job recreate it, or the chart is correct while the cluster is not.
               add_workqueue_if_missing() {
                 if nats --server "$S" stream info "$1" >/dev/null 2>&1; then
                   echo "stream $1 already exists"
@@ -117,7 +111,7 @@ spec:
               #
               # Neither shows up as an error anywhere: they present as "some events did not arrive". So it
               # is checked here and FAILS THE JOB, rather than logged — a warning in a Job nobody reads is
-              # how the INGEST drift survived to be measured live on 2026-08-06.
+              # how a work queue's retention drift survived to be measured live on 2026-08-06.
               assert_retention() {
                 local want="$2" got
                 # `sed`, not `jq` — the durable-drift loop below parses the same way, and this Job's
@@ -154,11 +148,6 @@ spec:
               for stream in LINEAGE MEDALLION TRAINING DLQ{{ if .Values.catalog.controlEmit }} CATALOG_CONTROL{{ end }}; do
                 assert_retention "$stream" limits
               done
-              # `workqueue`, NOT `work`: this is compared against the value nats-server SERIALIZES into
-              # `stream info --json`, whose vocabulary is limits|interest|workqueue. `work` mismatched
-              # unconditionally, so once INGEST existed the Job exited 1 on every run and took the whole
-              # `helm upgrade --wait-for-jobs` down with it (revision 34, 2026-08-15).
-              assert_retention INGEST workqueue
               assert_retention REFUSED limits
 
               add_if_missing LINEAGE "lineage.events.>"
@@ -177,24 +166,6 @@ spec:
               # declined on purpose, and an alert that cannot tell them apart pages on governance. Same
               # `limits`/168h shape as DLQ — a refusal is worth replaying for as long as a park is.
               add_if_missing REFUSED "refused.>"
-              # The ingest plane's own stream (open_ingest.md Phase 0): unit tasks on
-              # `ingest.tasks.<run>` and the last-worker drained signal on `ingest.run.<id>.drained`.
-              # Its OWN stream rather than a subject space on MEDALLION, because MEDALLION carries tier
-              # PUBLICATION events (medallion.<tier>.<dataset>) whose retention and consumer model are
-              # unrelated: ingest units are work-queue traffic consumed exactly once, tier events are a
-              # doorbell every stage runner may read. Dead-lettered units park on `dlq.ingest.tasks`, already
-              # covered by the DLQ stream above.
-              #
-              # DELIBERATELY NOT in the durable-drift reconcile loop below — the same structural reason
-              # CATALOG_CONTROL is absent, not an oversight. That loop deletes any durable whose
-              # max_deliver/backoff differ from the values Dapr's pubsub components are templated with.
-              # The ingest work queue is a raw nats-py pull consumer (WorkQueuePolicy retention, batch
-              # fetch, nak(delay), in_progress heartbeats — semantics the Dapr component cannot express;
-              # open_ingest.md "Client choices"), so its config would never match EXP_MAXD/EXP_BOFF and
-              # every run of this Job would delete the queue out from under in-flight ingest work.
-              # Revisit only if ingest moves onto a Dapr subscription (open decision §7.5), at which
-              # point it joins the loop like any other app.
-              add_workqueue_if_missing INGEST "ingest.>"
               {{- if .Values.catalog.controlEmit }}
               # Control-plane change-events (grants/warehouses/policies/tables) broadcast to EVERY catalog
               # replica's ring buffer (GET /v1/events). Its own stream so a parking-free broadcast publish
@@ -218,11 +189,15 @@ spec:
               # create one, and a publish with no stream fails, which would leave every tick reporting
               # units it planned and could not send.
               #
-              # WORK retention, for the reason the INGEST stream carries it: a unit is REMOVED once
+              # WORK retention: a unit is REMOVED once
               # acked, so the stream itself is the outstanding-work ledger and `messages` answers "how
               # much maintenance is still owed" without a side ledger to keep in step. A retained log
               # would answer that question wrongly by 168 hours.
               add_workqueue_if_missing MAINTENANCE_WORK "maintenance.work.>"
+              # `workqueue`, NOT `work`: this is compared against the value nats-server SERIALIZES into
+              # `stream info --json`, whose vocabulary is limits|interest|workqueue. `work` mismatched
+              # unconditionally, so the Job exited 1 on every run and took the whole
+              # `helm upgrade --wait-for-jobs` down with it (revision 34, 2026-08-15).
               assert_retention MAINTENANCE_WORK workqueue
               converge_max_ack_pending MAINTENANCE_WORK "{{ .Values.maintenance.daprAppId }}-work-durable" {{ include "lance.maintenanceMaxAckPending" . }}
               {{- end }}
@@ -278,8 +253,7 @@ spec:
               # CATALOG_CONTROL joins only when its stream exists, under the SAME conditional that
               # creates it — a loop over a stream the release does not own would just log noise.
               #
-              # MAINTENANCE_WORK and the index lane stay OUT, and the reason is the INGEST reason rather
-              # than an oversight: their backOff is sized by the WORK, not by the fleet convention
+              # MAINTENANCE_WORK and the index lane stay OUT, and not by oversight: their backOff is sized by the WORK, not by the fleet convention
               # (`maintenance-work-durable` renders 720s,720s,720s,720s with resiliency OFF against
               # EXP_BOFF's 30s,60s,120s,300s; the index lane's is `indexAckWait` repeated). Comparing
               # them to EXP would find a mismatch every run and delete the queue out from under

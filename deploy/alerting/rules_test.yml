@@ -1093,7 +1093,7 @@ tests:
   # exhausts its retries raises into the orchestrator, so the sidecar records a real failure.
   - interval: 1m
     input_series:
-      - series: 'dapr_runtime_workflow_activity_execution_count_total{app_id="ingest",activity_name="ensure_dataset",status="failed"}'
+      - series: 'dapr_runtime_workflow_activity_execution_count_total{app_id="flows",activity_name="run_node",status="failed"}'
         values: "0+1x70" # one failure a minute
     alert_rule_test:
       - eval_time: 65m
@@ -1109,7 +1109,7 @@ tests:
   # A lane where only SUCCEEDED activities run must not page.
   - interval: 1m
     input_series:
-      - series: 'dapr_runtime_workflow_activity_execution_count_total{app_id="ingest",activity_name="ensure_dataset",status="success"}'
+      - series: 'dapr_runtime_workflow_activity_execution_count_total{app_id="flows",activity_name="run_node",status="success"}'
         values: "0+1x70"
     alert_rule_test:
       - eval_time: 65m
@@ -1384,33 +1384,6 @@ tests:
     alert_rule_test:
       - eval_time: 20m
         alertname: HttpServerLatencyHigh
-        exp_alerts: []
-
-  # Ingest runs reaching FAILED.
-  - interval: 1m
-    input_series:
-      - series: 'ingest_runs_total{lance_ingest_status="FAILED"}'
-        values: "0+1x25"
-    alert_rule_test:
-      - eval_time: 20m
-        alertname: IngestRunsFailing
-        exp_alerts:
-          - exp_labels:
-              severity: warning
-              service: ingest
-            exp_annotations:
-              summary: "Ingest runs are failing"
-              description: "A run reached FAILED — the harvest did not land its data. Distinct from TERMINATED, which is an operator stopping a run deliberately and is not alerted on. Check the run's own errors on the ingest detail page. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled"
-
-  # TERMINATED is an operator pressing Terminate — an intended outcome. Paging on it would page on the
-  # operator's own action, which is why the rule filters on FAILED alone.
-  - interval: 1m
-    input_series:
-      - series: 'ingest_runs_total{lance_ingest_status="TERMINATED"}'
-        values: "0+1x25"
-    alert_rule_test:
-      - eval_time: 20m
-        alertname: IngestRunsFailing
         exp_alerts: []
 
   # Flow nodes ending failed — the plane's only failure signal, since Dapr reports these runs as

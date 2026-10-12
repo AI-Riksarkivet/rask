@@ -82,7 +82,6 @@ class GatewaySettings(BaseSettings):
     explorer_viewer_url: str = Field(default="http://127.0.0.1:8101", alias="RASK_EXPLORER_VIEWER_URL")
     explorer_search_url: str = Field(default="http://127.0.0.1:8102", alias="RASK_EXPLORER_SEARCH_URL")
     explorer_annotator_url: str = Field(default="http://127.0.0.1:8103", alias="RASK_EXPLORER_ANNOTATOR_URL")
-    ingest_url: str = Field(default="http://127.0.0.1:8830", alias="RASK_INGEST_URL")
     flows_url: str = Field(default="http://127.0.0.1:8840", alias="RASK_FLOWS_URL")
     notifications_url: str = Field(default="http://127.0.0.1:8850", alias="RASK_NOTIFICATIONS_URL")
 

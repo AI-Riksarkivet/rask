@@ -22,7 +22,6 @@ _RENDERED = {
     "RASK_DAPR_ENABLED": "true",
     "RASK_COMPUTE_URL": "http://rask-compute:8804",
     "RASK_CONTROLPLANE_URL": "http://rask-controlplane:8820",
-    "RASK_INGEST_URL": "http://rask-ingest:8830",
     "RASK_FLOWS_URL": "http://rask-flows:8840",
     "RASK_NOTIFICATIONS_URL": "http://rask-notifications:8850",
     "RASK_CATALOG_API_URL": "http://rask-catalog:2333",

@@ -57,8 +57,6 @@ _SETTINGS: list[tuple[str, str, str]] = [
     # is why grepping for the flag on a `class X(BaseSettings)` line misses them.
     ("services/notifications", "notifications.config", "NotificationsSettings"),
     ("services/flows", "flows.config", "FlowsSettings"),
-    # The ingest service's OPERATIONAL settings: every `RASK_INGEST_*` / upstream-address knob.
-    ("services/ingest", "ingest.config", "IngestSettings"),
     # The FRONT DOOR, which had no settings class at all until FLEET-ENV-SCATTER: sixteen raw
     # `os.environ.get` reads, several of them per request. Neither `populate_by_name` nor
     # `env_prefix` — every field carries the deployed variable's full name as an explicit alias.

@@ -26,7 +26,7 @@ nats:
       fileStore:
         pvc:
           size: 1Gi
-    # Three nodes, the raft quorum minimum: rask's ingest work queue is a JetStream stream, so a single node loses
+    # Three nodes, the raft quorum minimum: rask's work queues are JetStream streams, so a single node loses
     # in-flight work with it. The key is `config.cluster.*`; the nats chart has no `replicaCount`. rask's
     # `nats.streamReplicas` must not exceed it.
     cluster:

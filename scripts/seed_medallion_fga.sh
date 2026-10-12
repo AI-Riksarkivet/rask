@@ -2,7 +2,7 @@
 # Seed the medallion service-identity grants into OpenFGA, so the FGA-enforced stage runners
 # (chart value medallion.fgaEnabled=true) are authorized to produce their target stage (R23: the
 # governed tiers are bronze/silver/gold — raw is the external world and owns no namespace):
-#   - the bronze ingest head (medallion-producer, the producer) + the bronze→silver / media stage runners get `writer`
+#   - the medallion producer (which resumes approved promotions) + the bronze→silver / media stage runners get `writer`
 #     on the warehouse (→ can_create_table)
 #   - the silver→gold stage runner gets `validator` on the gold namespace (→ can_promote)
 # Revoke the last grant (`fga tuple delete ... validator namespace:gold`) to SEE the enforcement: the
@@ -105,16 +105,10 @@ link namespace:silver 'table:silver$features'
 link namespace:gold 'table:gold$catalog'
 link namespace:bronze-media 'table:bronze-media$objects'
 link namespace:silver-media 'table:silver-media$features'
-# writers → can_create_table on their stage; the promoter stage runner → can_promote on gold. The bronze
-# ingest head writes as the PRODUCER's identity (medallion-producer) — the retired raw→bronze stage runner's writer
-# rung moved here with the collapse (R23).
+# writers → can_create_table on their stage; the promoter stage runner → can_promote on gold. Bronze itself
+# is written by a client through the catalog (ADR 0154) under that client's own grant, so no cascade identity
+# needs a bronze rung; the producer's writer rung serves the promotions it resumes.
 w user:service-medallion-producer writer "$WAREHOUSE"
-# The INGEST plane writes bronze too, and it was never seeded. `services/ingest` is the P7a
-# acquisition head — it creates the bronze table and commits the fragments — so it needs the same rung
-# the producer has. Without it every run reached the catalog fully AUTHENTICATED and was refused on
-# authorization alone (`403 can_get_metadata required on table:…`), which reads like a broken door
-# rather than a missing grant.
-w user:service-ingest writer "$WAREHOUSE"
 w user:service-bronze-to-silver writer "$WAREHOUSE"
 w user:service-media-to-silver writer "$WAREHOUSE"
 # THREE RUNGS, AND EACH IS A MEASURED FINDING RATHER THAN A PREFERENCE. Granting any ONE of them
@@ -187,7 +181,6 @@ if [ -n "$PROJECT" ]; then
     link "warehouse:$ZONE_WH" "namespace:$PROJECT-$ns"
   done
   w user:service-medallion-producer writer "namespace:$PROJECT-bronze"
-  w user:service-ingest writer "namespace:$PROJECT-bronze"
   # THE SAME THREE RUNGS the estate-level block grants, never `owner` — see the reasoning there.
   # This block is per-TENANT and was missed on the first pass of that narrowing (2026-09-10); the
   # estate block alone would have left every project-qualified tenant over-granted while the change
@@ -206,16 +199,16 @@ if [ -n "$PROJECT" ]; then
   # PUBLIC those tiers. Four such grants were seeded here, and this script is a documented
   # production prerequisite (`values-prod.yaml`). A human reads with their own bearer.
   link "namespace:$PROJECT-bronze" "table:$PROJECT-bronze\$events"
-  # The ingest lane's table. `INGEST_TABLE` because the ETL form lets a user name it, unlike the
-  # producer's fixed `events` lane — pass it when seeding a tenant whose first ingest is not `pages`.
-  link "namespace:$PROJECT-bronze" "table:$PROJECT-bronze\$${INGEST_TABLE:-pages}"
+  # A second bronze lane's table. `BRONZE_TABLE` because a client writing bronze through the catalog
+  # names it, unlike the fixed `events` lane — pass it when seeding a tenant whose second lane is not `pages`.
+  link "namespace:$PROJECT-bronze" "table:$PROJECT-bronze\$${BRONZE_TABLE:-pages}"
   # SILVER'S TABLES ARE A LIST, not the single `features` this seeded. A silver namespace holds one
   # table per LANE, and the link is what makes the stage runner's warehouse-level writer rung reach the
   # table it writes — without it the lane fails with a message naming exactly the missing link.
   # Measured: the dummy lane's e2e could not reach its terminal-event assertion because
   # `namespace:<p>-silver -> table:<p>-silver$dummy` was never written.
   #
-  # A VARIABLE rather than another hard-coded row, for the reason `INGEST_TABLE` above is one, and a
+  # A VARIABLE rather than another hard-coded row, for the reason `BRONZE_TABLE` above is one, and a
   # sharper one here: `dummy` is a WORKLOAD name, and the platform is not supposed to know any. A new
   # lane is a value, not an edit to this script.
   for silver_table in ${SILVER_TABLES:-features dummy}; do

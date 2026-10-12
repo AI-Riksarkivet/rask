@@ -732,7 +732,7 @@ class RunEvent(BaseModel):
     def cascade_id(self) -> str | None:
         """The BATCH this run belongs to, from the ``lance`` run facet (``cascade_id``).
 
-        One ``/produce`` is one bronze write is one cascade, and `ingest_trigger` mints this id where
+        One bronze write is one cascade, and `ingest_trigger` mints this id where
         that cascade begins so every tier below carries the same value. Without it in the graph the
         hops of one batch are unrelated `Run` nodes sharing only a dataset name, and the question the
         id exists for — which runs belong to this batch — has no query.

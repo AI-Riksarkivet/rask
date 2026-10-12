@@ -1,7 +1,7 @@
 """Shared object-store plumbing for the services: pyarrow-filesystem resolution + Lance storage options.
 
 One home for the ``storage_options`` → ``pyarrow.fs`` translation that the outbox, the warehouse registry,
-the model registry, the dataset-relocation path, the compaction sweep, and the media head all need — and
+the model registry, the dataset-relocation path and the compaction sweep all need — and
 for building the lance-style ``storage_options`` dict itself, so the path-style/allow-http keys can never
 drift per-service (audit 2026-07-15: compaction's hand-rolled copy had already dropped
 ``virtual_hosted_style_request``). An ``s3://`` root builds an ``S3FileSystem`` from the lance-style

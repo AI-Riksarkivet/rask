@@ -539,8 +539,8 @@ def test_the_gateway_learns_where_the_inbox_lives_rather_than_proxying_to_itself
     The gateway's row defaults to `http://127.0.0.1:8850` — inside the gateway POD that address is the
     gateway, where no inbox route exists, so every call answers a 404 indistinguishable from an
     unrouted path while the service is up and healthy one Service name away. This is not a
-    hypothetical: `RASK_INGEST_URL` shipped missing and the configmap now carries a comment saying so
-    (`chart/templates/configmap.yaml`), which is a comment and not a gate.
+    hypothetical: a gateway upstream URL has shipped missing from the configmap once, and a comment
+    saying so is not a gate.
 
     The port is compared against the container's OWN port rather than a literal: the failure this
     catches second is the address being right and the port stale.
@@ -652,7 +652,7 @@ def test_every_ray_consumer_names_one_cluster_or_the_render_refuses(overlay: tup
 
 def test_every_bus_client_dials_the_bus_the_estate_names_and_the_render_runs_none() -> None:
     """[[XC-129]]: NATS JetStream is a prerequisite (ADR 0153). The platform runs the bus and rask names it in `nats.url`;
-    every pub/sub Component, the stream Job and ingest's raw client dial that one address, and no render holds a NATS
+    every pub/sub Component and the stream Job dial that one address, nothing else reads a NATS address, and no render holds a NATS
     server or its JetStream volumes (nats-box's CLI, which the stream Job and the dev mint run, is a client). That the
     render refuses with no bus named is the prerequisite gate in test_no_credential_is_carried_by_the_render.py."""
     docs = chart_render.render(*chart_render.DEFAULT_ARGS, "--set", "explorer.enabled=true", "--set", "networkPolicy.enabled=true")
@@ -667,7 +667,7 @@ def test_every_bus_client_dials_the_bus_the_estate_names_and_the_render_runs_non
             dialled.setdefault("stream Job", set()).update(re.findall(r'^\s*S="([^"]+)"', container["command"][-1], re.MULTILINE))
         if url := chart_render.env_of(container).get("RASK_NATS_URL"):
             dialled.setdefault("RASK_NATS_URL", set()).add(url)
-    assert dialled == {client: {chart_render.NATS_URL} for client in ("pubsub.jetstream", "stream Job", "RASK_NATS_URL")}, dialled
+    assert dialled == {client: {chart_render.NATS_URL} for client in ("pubsub.jetstream", "stream Job")}, dialled
 
     bus = sorted(
         f"{workload}/{name} ({container['image']})"
@@ -946,25 +946,6 @@ def test_what_the_producer_PUBLISHES_is_what_a_stage_runner_ACCEPTS() -> None:
         "neither."
     )
 
-    # The media chain is the same contract through a different pair of values, and it drifted the same
-    # way for the same reason: the URI was a literal in the template while the stage runner's had moved.
-    media_ns = medallion.get("mediaBronzeNamespace")
-    media_consumers = [m for m in stage_runners if m.get("operation") == "derive_media"]
-    for stage_runner in media_consumers:
-        assert media_ns == stage_runner.get("fromNamespace"), (
-            f"medallion.mediaBronzeNamespace={media_ns!r} but the media stage_runner reads "
-            f"{stage_runner.get('fromNamespace')!r} — the head lands blobs where nothing is listening, and the "
-            f"trigger is DROPped with a 200 OK."
-        )
-        # The DATASET is the half that actually gets compared, and it is the half the chart forgot:
-        # MEDALLION_MEDIA_BRONZE_DATASET was rendered nowhere, so the head fell back to the flat code
-        # default `bronze-media$objects` while the stage runner had moved. The template derives it as
-        # `<namespace>$objects`; assert the same derivation rather than trusting it.
-        assert f"{media_ns}$objects" == stage_runner.get("fromDataset"), (
-            f"the media head stamps dataset {media_ns}$objects but the stage runner accepts "
-            f"{stage_runner.get('fromDataset')!r} — a lane mismatch DROPs with a 200 OK and logs nothing."
-        )
-
 
 def test_a_medallion_NAMESPACE_can_actually_belong_to_a_warehouse() -> None:
     """With warehouses on, a flat tier belongs to nothing — and a PRE-qualified one gets qualified twice.
@@ -1187,47 +1168,6 @@ def test_a_read_only_rootfs_is_SURVIVABLE_on_every_first_party_pod() -> None:
                 naked.append(f"{doc['metadata']['name']}/{container['name']}")
 
     assert not naked, f"read-only rootfs with no writable /tmp: {sorted(naked)}"
-
-
-def test_the_media_head_can_register_the_bronze_it_lands() -> None:
-    """`/ingest-media` must be able to govern its own tier on every shipped configuration.
-
-    The catalog ADDRESS is the first half and the test above pins it — `/ingest-media` is served by the
-    same producer pod as `/produce`, so it inherits that fix. The second half is unique to this lane and
-    invisible from the template: `register_table` addresses only paths INSIDE the root the catalog is
-    connected to, so `MEDALLION_MEDIA_BRONZE_URI` must resolve under `MEDALLION_CATALOG_ROOT` or the
-    media head fails closed on every call. The two are rendered from DIFFERENT expressions —
-    `lance.stageBucket` honours the `medallion.buckets` zoning map for the media namespace, while the
-    catalog root is `minio.bucket` flat — so zoning `bronze-media` into its own bucket would make the
-    ingest door 503 with nothing in the chart looking wrong. `relative_location` is the exact seam the
-    producer uses, so this asserts registerability rather than a string resemblance.
-    """
-    import yaml
-
-    from medallion.services.catalog_register import RegisterError, relative_location
-
-    for review in ("false", "true"):
-        rendered = _helm_template(f"medallion.qualityReview={review}")
-        producer = next(
-            (
-                doc
-                for doc in yaml.load_all(rendered, Loader=FAST_LOADER)
-                if doc and doc.get("kind") == "Deployment" and "medallion-producer" in doc["metadata"]["name"]
-            ),
-            None,
-        )
-        assert producer is not None, f"the medallion producer did not render at qualityReview={review}"
-        env = {item["name"]: item.get("value", "") for item in producer["spec"]["template"]["spec"]["containers"][0].get("env", [])}
-        missing = {"MEDALLION_MEDIA_BRONZE_URI", "MEDALLION_CATALOG_ROOT", "MEDALLION_CATALOG_URL"} - set(env)
-        assert not missing, f"at medallion.qualityReview={review} the media head cannot register what it lands: {sorted(missing)} not rendered"
-        try:
-            location = relative_location(env["MEDALLION_MEDIA_BRONZE_URI"], env["MEDALLION_CATALOG_ROOT"])
-        except RegisterError as exc:  # noqa: PERF203 — one render per flag state, not a hot loop
-            pytest.fail(
-                f"at medallion.qualityReview={review} the shipped chart lands media bronze somewhere the catalog cannot name, "
-                f"so POST /ingest-media fails closed on every call: {exc}"
-            )
-        assert location, "the media bronze URI resolved to the catalog root itself — a tier must have its own location"
 
 
 def _env_by_component(docs: list[dict], component: str) -> dict[str, str]:

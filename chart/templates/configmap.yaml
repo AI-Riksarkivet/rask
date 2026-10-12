@@ -12,7 +12,6 @@ data:
   RASK_DAPR_ENABLED: {{ .Values.dapr.enabled | quote }}
   RASK_COMPUTE_URL: {{ printf "http://%s-compute:8804" (include "rask.fullname" .) | quote }}
   RASK_CONTROLPLANE_URL: {{ printf "http://%s-controlplane:8820" (include "rask.fullname" .) | quote }}
-  RASK_INGEST_URL: {{ printf "http://%s-ingest:%v" (include "rask.fullname" .) .Values.services.ingest.port | quote }}
   RASK_FLOWS_URL: {{ printf "http://%s-flows:%v" (include "rask.fullname" .) .Values.services.flows.port | quote }}
   RASK_NOTIFICATIONS_URL: {{ printf "http://%s-notifications:%v" (include "rask.fullname" .) .Values.services.notifications.port | quote }}
   {{- if .Values.dapr.enabled }}

@@ -1,6 +1,6 @@
 """The notifications reconciler's walk reaches a run in EVERY warehouse, across both services' real code ([[CTL-021]]).
 
-The walk is the only lane for runs the bus never carries (ingest, Ray TRAIN, external OpenLineage
+The walk is the only lane for runs the bus never carries (Ray TRAIN, external OpenLineage
 producers), and it reads lineage's durable feed as its own subject. On the per-dataset-governed `/events`
 that subject sees exactly the tables its grants reach, so a run whose output lives in a tenant warehouse it
 holds nothing on is filtered out before the walk sees it, while the tick answers 200 and logs

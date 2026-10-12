@@ -132,13 +132,6 @@ tuples:
   # root_admin: owner of the ROOT warehouse (fga_root_object). ONLY this estate/platform tier reads the
   # estate-wide control-plane event feed (can_observe_events, GET /v1/events) — a per-project admin cannot.
   - { user: user:root_admin, relation: owner, object: warehouse:lance_catalog }
-  # The services that STAGE lineage events to the estate's recovery outbox. On the ESTATE ROOT — the
-  # object `fga_root_object` names — and as their own role rather than as `owner`, because a service
-  # must never be an estate owner. `warehouse` does not define `can_stage_events` at all, which is what
-  # stops a tenant's warehouse owner from reaching the platform's recovery log.
-  - { user: user:service-medallion-producer, relation: event_stager, object: estate:rask }
-  - { user: user:service-maintenance, relation: event_stager, object: estate:rask }
-  - { user: user:service-ingest, relation: event_stager, object: estate:rask }
   # The estate's first owner, concentric with every rung on that type.
   - { user: user:root_admin, relation: owner, object: estate:rask }
 
@@ -1451,45 +1444,6 @@ tests:
           can_restore: false
           manage_grants: false
 
-  - name: staging a lineage event is its own estate privilege, held by services and never by owner alone
-    # Owner ruling 2026-09-10 (CP-007). The lineage outbox is the estate's crash-recovery seam: a
-    # producer stages the full RunEvent JSON before publishing, and the relay re-ingests whatever
-    # survives a crash. Ingest could not stage at all — it holds no S3 key by design (STS-only, the
-    # stronger posture) — so its recovery path was dead even after the drain was fixed (LH-086).
-    #
-    # The MECHANISM was decided by the standing rule ("STS for storage; a scoped static key is not a
-    # fix") and `build_session_policy` is already prefix-generic. What was open was WHO, and this is
-    # the answer: a narrow rung on the root object, granted to exactly the services that stage.
-    check:
-      # The three stagers reach it, and only through the role — none of them is an estate owner.
-      - user: user:service-medallion-producer
-        object: estate:rask
-        assertions: { can_stage_events: true, owner: false, can_observe_events: false }
-      - user: user:service-maintenance
-        object: estate:rask
-        assertions: { can_stage_events: true, owner: false }
-      - user: user:service-ingest
-        object: estate:rask
-        assertions: { can_stage_events: true, owner: false }
-      # The estate owner keeps it concentrically, as with every other rung here.
-      - user: user:root_admin
-        object: estate:rask
-        assertions: { can_stage_events: true }
-      # THE REFUSALS ARE THE POINT — this is why it is not `privileged_subjects`. The trainer presents
-      # a dedicated credential and is privileged at both doors, and it does not stage events; the web
-      # BFF is the ANONYMOUS read identity. Neither may append to the estate's recovery log.
-      - user: user:service-trainer
-        object: estate:rask
-        assertions: { can_stage_events: false }
-      - user: user:service-web
-        object: estate:rask
-        assertions: { can_stage_events: false }
-      # And it is ESTATE-scoped BY TYPE, not by convention: a tenant's warehouse owner cannot reach
-      # this rung, because `warehouse` no longer defines it anywhere. alice owns acme_bucket outright.
-      - user: user:alice
-        object: estate:rask
-        assertions: { can_stage_events: false }
-
   - name: a USERSET is a subject too — `role:validators#assignee` and `team:eng#member` asked directly
     # [[XC-018]]. Measured 2026-09-20 before writing this: of 169 `check` cases in this file, **zero**
     # named a userset as the subject — every one asked about a `user:`. That is a hole under exactly the
@@ -1597,9 +1551,6 @@ tests:
       - user: user:looker
         relation: reader
         object: estate:rask
-      - user: user:stager
-        relation: event_stager
-        object: estate:rask
       # The tuple the chart's bootstrap hook writes for the notifications reconciler ([[CTL-021]]).
       - user: user:notifications
         relation: event_reader
@@ -1621,7 +1572,6 @@ tests:
           can_create_project: true
           can_observe_events: true
           can_browse_storage: true
-          can_stage_events: true
           reader: true
           writer: true
       # THE TIER CASE. A bare `reader` is what compute and controlplane ask for, and it must NOT
@@ -1634,14 +1584,6 @@ tests:
           can_observe_events: false
           can_browse_storage: false
           can_create_project: false
-      # `can_stage_events` is `event_stager or owner`, not a computed userset over owner — so a
-      # stager holds it while holding no tier at all.
-      - user: user:stager
-        object: estate:rask
-        assertions:
-          can_stage_events: true
-          reader: false
-          can_observe_events: false
       # THE RECONCILER READS THE WHOLE RUN FEED AND NOTHING ELSE ON THE ROOT ([[CTL-021]]). The two
       # refusals that matter are the doors that mint a tenant (`POST /v1/projects` checks
       # `can_observe_events`; `can_create_project` is the model's own verb) and the raw tuple editor
@@ -1653,7 +1595,6 @@ tests:
           can_observe_events: false
           can_create_project: false
           can_browse_storage: false
-          can_stage_events: false
           reader: false
       # The estate owner keeps it concentrically, as with every other rung here.
       - user: user:root_admin
@@ -1680,7 +1621,6 @@ tests:
           can_create_project: false
           can_observe_events: false
           can_browse_storage: false
-          can_stage_events: false
           can_read_event_feed: false
       # THE SCOPE FIX, and it is what a separate TYPE buys over a second warehouse. The
       # `can_browse_storage` case above records the arrangement this replaces in its own words: the
@@ -1696,7 +1636,6 @@ tests:
           can_create_project: false
           can_observe_events: false
           can_browse_storage: false
-          can_stage_events: false
 
   # ------------------------------------------------------------------------------------------------
   # [[LH-055]] — the classification VOCABULARY is a tag type with per-tag `apply`

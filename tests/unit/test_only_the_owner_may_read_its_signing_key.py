@@ -9,8 +9,7 @@ lists are what this reads. Lineage verifies every signer's events and signs none
 [[XC-078]] puts the NATS credentials in the same store (values.yaml `nats.auth`): a `nats-user-<user>` per user of the
 permission table, the dev mint's trust root `nats-root`, and the cluster's route credential `nats-route`. A sidecar loads its
 own pub/sub Component's `nats-user-<app>` through the Component's secretKeyRef, which Dapr resolves without consulting the
-Configuration's scopes, so every app's deny list hides every one of them from the app process. Ingest alone reads its own
-user through the secret API, because its raw NATS client has no Component.
+Configuration's scopes, so every app's deny list hides every one of them from the app process.
 
 The residual the ruling names, and this gate cannot see: a pod that holds OpenBao's root token, or reaches :8200
 directly, reads the store without asking a sidecar (XC-079).
@@ -30,8 +29,6 @@ from tests.unit.chart_render import DEFAULT_ARGS, env_of, render
 
 
 STORE = "lance-secrets"
-#: The one app whose client reads its own NATS user through the secret API rather than through a Component.
-_READS_ITS_OWN_BUS_USER = "ingest"
 
 
 def _readable(scope: dict, names: set[str]) -> set[str]:
@@ -41,7 +38,7 @@ def _readable(scope: dict, names: set[str]) -> set[str]:
     return readable
 
 
-def test_each_sidecar_may_read_only_its_own_signing_key_and_no_bus_credential_but_ingest_its_own_user() -> None:
+def test_each_sidecar_may_read_only_its_own_signing_key_and_no_bus_credential() -> None:
     docs = render(*DEFAULT_ARGS, "--set", "explorer.enabled=true")
     configurations = {doc["metadata"]["name"]: doc for doc in docs if doc.get("kind") == "Configuration"}
     signs_as: dict[str, set[str]] = defaultdict(set)
@@ -81,11 +78,8 @@ def test_each_sidecar_may_read_only_its_own_signing_key_and_no_bus_credential_bu
                     problems[app_id] = {"may read": sorted(readable), "signs with": sorted(own)}
                 if hidden := public - _readable(scope, public):
                     problems[f"{app_id} (public lists)"] = sorted(hidden)
-                own_bus = {f"nats-user-{app_id}"} if app_id == _READS_ITS_OWN_BUS_USER else set()
-                if (readable := _readable(scope, bus)) != own_bus:
-                    problems[f"{app_id} (bus credentials)"] = {"may read": sorted(readable), "reads through the secret API": sorted(own_bus)}
+                if readable := _readable(scope, bus):
+                    problems[f"{app_id} (bus credentials)"] = {"may read": sorted(readable)}
 
-    assert {"lineage", _READS_ITS_OWN_BUS_USER} <= checked and set(signs_as) <= checked, (
-        f"apps whose sidecar no Configuration scopes: {sorted(({'lineage', _READS_ITS_OWN_BUS_USER} | set(signs_as)) - checked)}"
-    )
+    assert "lineage" in checked and set(signs_as) <= checked, f"apps whose sidecar no Configuration scopes: {sorted(({'lineage'} | set(signs_as)) - checked)}"
     assert not problems, f"a sidecar may read a private signing key it does not sign with, a bus credential, or not read a public list: {problems}"

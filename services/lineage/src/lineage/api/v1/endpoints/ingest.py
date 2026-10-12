@@ -14,8 +14,8 @@ The distinction is easy to miss and expensive: this is the one door an external 
 and the sentence above markets it to exactly the tools that would expect a write here to start a run.
 It does not. The result is a perfect graph, zero compute, every pod green, and nothing to grep for.
 An external producer that means to DRIVE the cascade writes its rows through the catalog's data-plane
-door (``POST /v1/table/{id}/insert``), whose own emitter announces the write onto the topic — which is
-what ``services/ingest`` does, and why it publishes no lineage event of its own.
+door (``POST /v1/table/{id}/insert``), whose own emitter announces the write onto the topic, and
+publishes no lineage event of its own for that write.
 """
 
 from __future__ import annotations

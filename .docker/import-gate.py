@@ -3,12 +3,12 @@
 Run as `python /tmp/import-gate.py <pkg> [<pkg> ...]` from a dockerfile, against the venv the runtime
 stage actually ships. A non-zero exit fails the build.
 
-**Why this exists.** `ingest.auth` began importing `service_kit.governed.fga` while `services/ingest`
-still declared a bare `"service-kit"` — openfga-sdk lives behind that library's `[governed]` extra. The
-whole suite stayed green, because the workspace venv resolves openfga-sdk through a SIBLING member
-that does declare the extra. The image's venv is `uv sync --package ingest` and nothing else, so the
-pod crash-looped on `ModuleNotFoundError: No module named 'openfga_sdk'` — found by watching a
-rollout, not by any test.
+**Why this exists.** A deployable's module can import `service_kit.governed.fga` while its member
+declares a bare `"service-kit"` — openfga-sdk lives behind that library's `[governed]` extra. The
+whole suite stays green, because the workspace venv resolves openfga-sdk through a SIBLING member
+that does declare the extra. The image's venv is `uv sync --package <pkg>` and nothing else, so the
+pod crash-loops on `ModuleNotFoundError: No module named 'openfga_sdk'` — measured 2026-08 on a fleet
+deployable, found by watching a rollout, not by any test.
 
 A declared-dependency gap is structurally invisible to tests that run in the workspace venv. This is
 the first place in the pipeline where the deployable's real dependency closure is the only one

@@ -358,7 +358,7 @@ async def publish_table(
                 cascade_id=body.cascade_id,
                 # WHO this publication is FOR, as opposed to `actor`, which is who performed it. They
                 # differ on exactly the path that matters: a cascade publish is performed by a stage runner
-                # and is for the person whose `/produce` started the batch.
+                # and is for the person whose bronze write started the batch.
                 originator=publication_originator(body.originator, token),
             ),
         )

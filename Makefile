@@ -656,19 +656,16 @@ medallion-demo: ## Live medallion walkthrough — watch the DAG build at http://
 	dagger call medallion-demo up --ports=8000:8000
 
 # ---- local k3s ------------------------------------------------------------
-# `ingest` was MISSING here until 2026-08-06, and its absence is why the plane could never be
-# verified in-cluster. `.docker/ingest.dockerfile` exists and the chart ships a `rask-ingest`
-# Deployment on :8830 — but a service that is in neither this list nor $(K3S_IMAGES) is never built
-# by `make k3s-build` and never side-loaded by `make k3s-import`, so a hand-built image lands in
-# DOCKER while k3s reads CONTAINERD and answers ErrImagePull. Measured: a Dagger build succeeded
-# (exit 0), `kubectl set image` -> ErrImagePull, rolled back. Four correct fixes sat unprovable
-# behind it.
+# A service that is in neither this list nor $(K3S_IMAGES) is never built by `make k3s-build` and never
+# side-loaded by `make k3s-import`, so a hand-built image lands outside CONTAINERD and k3s answers
+# ErrImagePull. Measured 2026-08-06: a Dagger build succeeded (exit 0), `kubectl set image` ->
+# ErrImagePull, rolled back.
 # `notifications` joins for exactly that reason, in the same commit as its dockerfile and its chart
 # Deployment — the three are one act, and any two of them without the third is the ErrImagePull above.
 # (`flows` is STILL absent and has been since it landed: `.docker/flows.dockerfile` and a `rask-flows`
 # Deployment both exist, so an in-cluster flows is unverifiable today for the identical reason. Named
 # rather than fixed here — it is another plane's diff.)
-COMPOSE_IMAGES = gateway compute controlplane ingest notifications
+COMPOSE_IMAGES = gateway compute controlplane notifications
 # SvelteKit SSR microfrontend zone images — one web-<zone> image per $(ZONES) entry,
 # all built from the one parametrized .docker/frontend.dockerfile via --build-arg
 # APP=<name>. (R22: the web- prefix keeps the zone image namespace disjoint from the
@@ -1147,11 +1144,13 @@ e2e-dummy-lane:     ## The GPU-free dummy medallion lane, end to end (needs LANC
 e2e-gateway:        ## Dapr service-invocation gateway routing proof (needs LANCE_E2E_GATEWAY_URL)
 	@test -n "$(LANCE_E2E_GATEWAY_URL)" || { echo "set LANCE_E2E_GATEWAY_URL, e.g. make e2e-gateway LANCE_E2E_GATEWAY_URL=http://localhost:8888"; exit 1; }
 	LANCE_E2E_GATEWAY_URL=$(LANCE_E2E_GATEWAY_URL) uv run pytest tests/e2e-py -m gateway -v
-e2e-governed-union: ## Full governed-union proof (the estate's widest authz path) (needs LANCE_E2E_LANCERAY_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_FGA)
-	@test -n "$(LANCE_E2E_LANCERAY_URL)" || { echo "  !! e2e-governed-union needs LANCE_E2E_LANCERAY_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_FGA — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
-	@test -n "$(LANCE_E2E_LINEAGE_URL)" || { echo "  !! e2e-governed-union needs LANCE_E2E_LANCERAY_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_FGA — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
-	@test -n "$(LANCE_E2E_FGA)" || { echo "  !! e2e-governed-union needs LANCE_E2E_LANCERAY_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_FGA — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
-	LANCE_E2E_LANCERAY_URL=$(LANCE_E2E_LANCERAY_URL) LANCE_E2E_LINEAGE_URL=$(LANCE_E2E_LINEAGE_URL) LANCE_E2E_FGA=$(LANCE_E2E_FGA) uv run pytest tests/e2e-py -m governed_union -v
+e2e-governed-union: ## Full governed-union proof (the estate's widest authz path) (needs LANCE_E2E_LANCERAY_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_FGA, LANCE_E2E_CATALOG_URL, LANCE_E2E_ADMIN_TOKEN)
+	@test -n "$(LANCE_E2E_LANCERAY_URL)" || { echo "  !! e2e-governed-union needs LANCE_E2E_LANCERAY_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_FGA, LANCE_E2E_CATALOG_URL, LANCE_E2E_ADMIN_TOKEN — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
+	@test -n "$(LANCE_E2E_LINEAGE_URL)" || { echo "  !! e2e-governed-union needs LANCE_E2E_LANCERAY_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_FGA, LANCE_E2E_CATALOG_URL, LANCE_E2E_ADMIN_TOKEN — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
+	@test -n "$(LANCE_E2E_FGA)" || { echo "  !! e2e-governed-union needs LANCE_E2E_LANCERAY_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_FGA, LANCE_E2E_CATALOG_URL, LANCE_E2E_ADMIN_TOKEN — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
+	@test -n "$(LANCE_E2E_CATALOG_URL)" || { echo "  !! e2e-governed-union needs LANCE_E2E_LANCERAY_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_FGA, LANCE_E2E_CATALOG_URL, LANCE_E2E_ADMIN_TOKEN — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
+	@test -n "$(LANCE_E2E_ADMIN_TOKEN)" || { echo "  !! e2e-governed-union needs LANCE_E2E_LANCERAY_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_FGA, LANCE_E2E_CATALOG_URL, LANCE_E2E_ADMIN_TOKEN — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
+	LANCE_E2E_LANCERAY_URL=$(LANCE_E2E_LANCERAY_URL) LANCE_E2E_LINEAGE_URL=$(LANCE_E2E_LINEAGE_URL) LANCE_E2E_FGA=$(LANCE_E2E_FGA) LANCE_E2E_CATALOG_URL=$(LANCE_E2E_CATALOG_URL) LANCE_E2E_ADMIN_TOKEN=$(LANCE_E2E_ADMIN_TOKEN) uv run pytest tests/e2e-py -m governed_union -v
 e2e-media-catalog:  ## Annotator/catalog live-mode proof (needs MEDIA_CATALOG_URL)
 	@test -n "$(MEDIA_CATALOG_URL)" || { echo "  !! e2e-media-catalog needs MEDIA_CATALOG_URL — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
 	MEDIA_CATALOG_URL=$(MEDIA_CATALOG_URL) uv run pytest tests/e2e-py -m media_catalog -v

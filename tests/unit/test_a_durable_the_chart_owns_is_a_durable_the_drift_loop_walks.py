@@ -21,7 +21,7 @@ THE RULE IS ABOUT CONFIG, NOT ABOUT LANES. A durable templated from the fleet's
 `dapr.resiliency.enabled` conditional is one the loop's EXP comparison understands, so it must be
 reconciled. A durable whose backoff is sized by its own WORK is one the comparison would find mismatched
 every single run — and deleting a work queue out from under in-flight units is the documented reason
-INGEST is excluded. So this asserts both directions: fleet-config durables are walked, bespoke-config
+the maintenance work queues are excluded. So this asserts both directions: fleet-config durables are walked, bespoke-config
 ones are not. Adding a stream to the loop because it "also has durables" is the defect, not the fix.
 """
 

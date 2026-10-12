@@ -55,15 +55,14 @@ def proxied(gw):
         # catalog/lineage serve /v1/... and /runs at ROOT — the /api/<svc> prefix is stripped whole
         ("/api/catalog/v1/namespace", "catalog", "http://127.0.0.1:2333/v1/namespace"),
         ("/api/lineage/runs", "lineage", "http://127.0.0.1:8000/runs"),
-        # the medallion producer serves /produce + /train at root (strip /api only)
-        ("/api/produce", "medallion-producer", "http://127.0.0.1:8002/produce"),
+        # the medallion producer serves /train at root (strip /api only)
         ("/api/train", "medallion-producer", "http://127.0.0.1:8002/train"),
         # the media trio serves /api/... internally — /media is dropped, /api kept
         # `/api/explorer/documents`, NOT `/api/explorer/transcripts`. The viewer serves 33 OpenAPI paths
         # and NONE of them is `/api/transcripts` — there is no transcript route at all. The row was
         # fabricated, and because the MockTransport below answers 200 for any request, the only thing
-        # checked was that the rewrite equalled a string this file made up. That is the exact assertion
-        # shape the ingest row passed with while every `/api/ingest/*` call 404'd in production.
+        # checked was that the rewrite equalled a string this file made up. A rewrite checked
+        # only against a string this file wrote cannot tell a route that exists from one that does not.
         ("/api/explorer/documents", "viewer", "http://127.0.0.1:8101/api/documents"),
         ("/api/explorer/search", "search", "http://127.0.0.1:8102/api/search"),
         ("/api/explorer/annotations/doc/sp/ch", "annotator", "http://127.0.0.1:8103/api/annotations/doc/sp/ch"),
@@ -121,10 +120,6 @@ _NOT_PUBLISHED_AT_THE_EDGE: dict[tuple[str, str], str] = {
     ("post", "/runs/{action_id}/outcome"): "a training job's outcome report, from the compute head over the producer's ClusterIP",
     ("post", "/medallion-plan-sweep-cron"): "the plan sweep's input binding, delivered by the sidecar at the pod root",
     ("options", "/medallion-plan-sweep-cron"): "the sidecar's probe of that binding before it delivers",
-    ("post", "/ingest-media"): (
-        "synchronous and capped; docs/adr/0022-ui-operability-boundaries-what-deliberately-has-no-browser.md keeps it a service seam,"
-        " and /api/ingest is the edge's ingest door"
-    ),
 }
 
 

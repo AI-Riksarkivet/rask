@@ -137,12 +137,10 @@ grep -q "name: rask-vmagent$" "$OUT" && fail "vmagent must NOT be shipped (the O
 
 # 8b. THE EDGE'S FORMERLY-UNAUTHENTICATED DOORS STAY SHUT IN PROD.
 #
-# Pre-fold, the nginx gateway exposed two unauthenticated locations: POST /produce (medallion cascade,
-# gated only by `medallion.producer.expose`) and /perses/ + /greptime/ (basic-auth'd via
+# The nginx gateway exposed unauthenticated locations, among them /perses/ + /greptime/ (basic-auth'd via
 # observability.edgeAuth). The gateway fold (docs/adr/0117-nginx-is-retired-and-the-fastapi-gateway-is-the-in-cluster.md) retired nginx:
-# the FastAPI gateway proxies /api/* only, /produce + /train enforce fail-closed dual-auth in the
-# service itself (#64, tests/unit/test_produce_auth.py), and the telemetry suite is cluster-internal
-# (port-forward only — no Ingress path routes it). Assert the doors stay CLOSED under the new topology,
+# the FastAPI gateway proxies /api/* only, /train enforces fail-closed dual-auth in the service itself
+# (#64), and the telemetry suite is cluster-internal (port-forward only — no Ingress path routes it). Assert the doors stay CLOSED under the new topology,
 # on the rendered OUTPUT: an Ingress path or a resurfaced nginx block reopens a door invisibly.
 grep -qE "location /(produce|perses|greptime)" "$OUT" \
   && fail "an nginx location block resurfaced — the nginx gateway is retired (docs/adr/0117-nginx-is-retired-and-the-fastapi-gateway-is-the-in-cluster.md)"

@@ -196,7 +196,7 @@ def seed(root: Path | str) -> str:
     # fail with "Received literal Int64(0) and could not convert to literal of type Utf8".
     # `lance.blob_field` rather than a hand-rolled struct + `ARROW:extension:name` metadata. This was
     # the ONLY site in the repo spelling blob-v2 by hand; every other writer uses the helpers
-    # (`medallion/services/ingest.py:20,48,86`, `ingest/runtime.py:24,128`). The two are not
+    # (`medallion/services/ingest.py`). The two are not
     # equivalent: the helper yields a real Arrow EXTENSION type (`extension<lance.blob.v2<BlobType>>`),
     # while the hand-rolled struct only carries the name as field metadata — which any process that
     # has imported lance will fail to reconstruct across an Arrow-IPC boundary. It reads the same

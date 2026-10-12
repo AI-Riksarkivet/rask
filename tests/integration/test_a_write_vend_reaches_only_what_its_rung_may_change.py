@@ -5,8 +5,7 @@ named directories: `data/` (data files, and blob sidecars under `data/<stem>/`),
 manifests, so every commit), `_transactions/`, `_deletions/`, `_indices/`, `_refs/` (branch and tag
 pointers), `tree/<branch>/` (each branch's own directories) and `_mem_wal/`. A `can_write_data` holder
 appends: its client writes data files and the catalog's `/commit` folds them into a version under the
-catalog's own credential. So the writer tier is read on the table plus `PutObject` on `data/` (and on
-rask's ingest ledger), and nothing that commits, deletes or moves a ref. Whole-prefix write and delete
+catalog's own credential. So the writer tier is read on the table plus `PutObject` on `data/`, and nothing that commits, deletes or moves a ref. Whole-prefix write and delete
 belong to `can_maintain`, whose compaction rewrites files and whose cleanup deletes versions.
 
 MEASURED ON PYLANCE 12.0.0 before choosing the allow-list (`LANCE_LOG=lance::events::file_audit` and a
@@ -138,8 +137,6 @@ _Tier = Literal["read", "write", "maintain"]
         pytest.param("write", "", "s3:PutObject", "data/f.lance", True, id="write-data-file"),
         pytest.param("write", "", "s3:PutObject", "data/f/1.blob", True, id="write-blob-sidecar"),
         pytest.param("write", "", "s3:AbortMultipartUpload", "data/f.lance", True, id="write-aborts-its-upload"),
-        pytest.param("write", "", "s3:PutObject", "_ingest_staging/run/m.json", True, id="write-ingest-ledger"),
-        pytest.param("write", "", "s3:DeleteObject", "_ingest_staging/run/m.json", True, id="write-purges-ingest-ledger"),
         pytest.param("write", "", "s3:DeleteObject", "data/f.lance", False, id="write-cannot-delete-data"),
         pytest.param("write", "", "s3:PutObject", "_versions/9.manifest", False, id="write-cannot-commit"),
         pytest.param("write", "", "s3:DeleteObject", "_versions/1.manifest", False, id="write-cannot-delete-a-version"),

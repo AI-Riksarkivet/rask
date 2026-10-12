@@ -108,7 +108,7 @@ def make_lifespan(settings: Settings) -> Callable[[FastAPI], AbstractAsyncContex
             try:
                 # start() spawns the worker's own threads; it does not block the event loop.
                 # NARROW, to the connection-shaped failures reaching a sidecar can actually produce.
-                # Deliberately non-fatal, and the reason is the same one `ingest` records: a service
+                # Deliberately non-fatal: a service
                 # that refuses to start because its sidecar is not up YET turns an ordering blip into
                 # a CrashLoopBackOff. Runs fall back to the inline lane, which works.
                 wfr.start()
@@ -288,8 +288,7 @@ class DaprFlowRunReader(FlowRunReader):
             return None
         if state is None:
             return None
-        # `to_json()` rather than the attributes, for the reason `ingest` documents against
-        # dapr-ext-workflow 1.18.3's source: the dict carries `runtime_status` flattened to the enum
+        # `to_json()` rather than the attributes, read against dapr-ext-workflow 1.18.3's source: the dict carries `runtime_status` flattened to the enum
         # NAME ("COMPLETED", "RUNNING", …), while the `runtime_status` PROPERTY re-maps to a different
         # enum. The two disagree on their vocabulary; one accessor keeps the mapping below honest.
         return dict(state.to_json())

@@ -9,8 +9,8 @@ writes before an append is committed. Measured on pylance 12.0.0 with
 ``data/<file>.lance`` and, for a blob v2 column, ``data/<file>/<n>.blob``, and on a branch handle the
 same under ``tree/<branch>/data/``; it writes nothing else.
 
-The catalog's vending door and ingest's staging ledger both read this module, so the directory a writer
-may write and the directory ingest writes cannot drift apart.
+The catalog's vending door reads this module, so the directory a writer-tier credential may write is
+named in one place.
 """
 
 from __future__ import annotations
@@ -20,7 +20,3 @@ from typing import Final
 
 #: Where a client writes data files (and blob sidecars beneath them) before ``/commit`` folds them into a version.
 DATA_DIR: Final = "data"
-
-#: Ingest's staging ledger: one manifest per staged batch plus the run's unit list, written, read and
-#: purged by the run that owns them. Not a Lance directory, so no Lance operation reads or rewrites it.
-INGEST_STAGING_DIR: Final = "_ingest_staging"

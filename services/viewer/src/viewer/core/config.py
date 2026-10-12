@@ -35,8 +35,7 @@ class ViewerSettings(Settings, GovernedAuthSettings):
     #: `RASK_SECRET_STORE` inside an endpoint module was the only such read in the service, and an undeclared
     #: setting has no type, no discoverable default and no place a reader looks. The env NAME is kept
     #: so no deployment moves. It names the same component as `s3_secret_store` (MEDIA_S3_SECRET_STORE)
-    #: does for the warehouse's own bundle; the two variables are a duplication this service inherited
-    #: from `services/ingest`, and collapsing them is a config-contract change, not a rename.
+    #: does for the warehouse's own bundle; collapsing the two variables is a config-contract change, not a rename.
     secret_store: str = Field(default="lance-secrets", alias="RASK_SECRET_STORE")
     #: Where the voiceprint runner's Ray Serve app answers. EMPTY DISABLES the upload form, and that
     #: is the honest default: the read plane no longer carries a speaker encoder, so an estate that

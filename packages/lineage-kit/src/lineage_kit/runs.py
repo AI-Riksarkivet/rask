@@ -106,9 +106,9 @@ class LineageRun:
         #: INJECTED rather than built in, because only the producer knows whether it already has
         #: durability: four of the five lakehouse producers stage through the shared object-store
         #: outbox themselves, and a recorder that staged on their behalf would double-stage and grow an
-        #: outbox no relay can tell from real backlog (§ E1). `ingest` is the one that emits bare, and
-        #: the gap it leaves is the one recorded twice on that lane — a 401 that "surfaces as a
-        #: permanent gap in the graph that looks exactly like a healthy estate".
+        #: outbox no relay can tell from real backlog (§ E1). A producer that emits bare leaves the gap
+        #: recorded twice on such a lane — a 401 that "surfaces as a permanent gap in the graph that
+        #: looks exactly like a healthy estate".
         self._on_undelivered = on_undelivered
         self._terminal: RunState | None = None
 

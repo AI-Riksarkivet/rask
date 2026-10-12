@@ -2,8 +2,8 @@
 # Write a values file pinning EVERY image to what the cluster is actually running (#135).
 #
 # The chart has one `image.tag`, and this fleet has never been one tag: a catalog tag across 11
-# services, a different tag on gateway/compute/controlplane, a third across the 7 zones, and an
-# ingest DIGEST. Rendering all of them from one value is what made `helm upgrade` destructive —
+# services, a different tag on gateway/compute/controlplane, a third across the 7 zones, and
+# a DIGEST on one more. Rendering all of them from one value is what made `helm upgrade` destructive —
 # every image rewritten to a tag the node does not hold, whole fleet ImagePullBackOff, recovered by
 # hand. Measured twice on 2026-08-06.
 #

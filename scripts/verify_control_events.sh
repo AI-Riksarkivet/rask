@@ -84,8 +84,8 @@ if [ "$SEED" = "1" ]; then
   fga tuple write --api-url http://localhost:8081 --api-token "$FGA_TOKEN" --store-id "$SID" "user:$ALICE_SUB" owner warehouse:lance_catalog >/dev/null 2>&1 || true
 fi
 # Bob's project is a THROWAWAY fixture project, deliberately NOT a real tenant: granting him admin on
-# acme polluted the tenants panel's admin list AND broke verify_produce_door.sh's negative case (bob
-# must NOT be an acme admin there — found when both scripts ran against one persisted store 2026-07-24).
+# acme polluted the tenants panel's admin list, and a project-admin check needs bob to be a real
+# non-admin of acme (found when two verify scripts ran against one persisted store 2026-07-24).
 fga tuple write --api-url http://localhost:8081 --api-token "$FGA_TOKEN" --store-id "$SID" "user:$BOB_SUB" admin project:ctlfixture >/dev/null 2>&1 || true
 # --seed polls longer (a fresh write can lag through OpenFGA); assert mode expects a pre-existing grant.
 TRIES=$([ "$SEED" = "1" ] && echo 20 || echo 5)

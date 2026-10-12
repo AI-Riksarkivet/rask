@@ -7,20 +7,19 @@ written, re-minted every field id, could not be opened, or lost its blobs, while
 INSERT carrying the false row count.
 
 ONE ESTATE, ON MOTO: the real catalog app over a fresh bucket, every table created through its create
-door, and each fragment written straight under the table's ``data/`` by ``write_fragments`` (ingest's own
-writer for the blob table) with the estate key a write vend stands in for, then forged the way the case
-names. Each forgery is sent to the door and must be refused 400 ``InvalidInput`` with the latest
+door, and each fragment written straight under the table's ``data/`` by ``write_fragments`` with the estate
+key a write vend stands in for, then forged the way the case names. Each forgery is sent to the door and must be refused 400 ``InvalidInput`` with the latest
 version unchanged and nothing left under ``_versions/`` that the version line does not hold.
 """
 
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import os
 import uuid
 from collections.abc import Callable, Iterator
-from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
@@ -29,11 +28,9 @@ import lance
 import pyarrow as pa
 import pytest
 from fastapi.testclient import TestClient
+from lance import blob_array, blob_field
+from lance.blob import Blob
 
-from ingest.catalog_service import CatalogServiceClient
-from ingest.lander import write_unit_fragments
-from ingest.runtime import BRONZE_SCHEMA
-from ingest.worker import units_to_table
 from service_kit.lakehouse.objectfs import lance_storage_options
 from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from storage import S3Client
@@ -42,8 +39,33 @@ from storage import S3Client
 _INVALID_INPUT = 13
 _ROWS = pa.table({"id": pa.array([1, 2], pa.int64()), "a": ["a1", "a2"], "b": ["b1", "b2"]})
 _STAGED = pa.table({"id": pa.array([3, 4], pa.int64()), "a": ["a3", "a4"], "b": ["b3", "b4"]})
-#: ingest's thresholds put these inline, in one packed sidecar, and in a dedicated sidecar.
+#: A blob-v2 bronze table, its placement thresholds named rather than inherited: a client writing bronze through the
+#: catalog's doors chooses them, and the guide stores them in the dataset schema and refuses an append naming others.
+_BLOB_SCHEMA = pa.schema(
+    [
+        pa.field("id", pa.int64(), nullable=False, metadata={"lance-schema:unenforced-primary-key": "true"}),
+        pa.field("source_uri", pa.string()),
+        blob_field("payload", nullable=False, inline_size_threshold=64 * 1024, dedicated_size_threshold=4 * 1024 * 1024),
+    ]
+)
+#: Those thresholds put these inline, in one packed sidecar, and in a dedicated sidecar.
 _PAYLOADS = (b"i" * 1024, b"p" * (100 * 1024), b"d" * (5 * 1024 * 1024))
+
+
+def _blob_rows(units: list[tuple[str, bytes]], external_base: str | None = None) -> pa.Table:
+    """Bronze rows for ``(source uri, bytes)`` units: an EXTERNAL descriptor of the uri when the table has a base, else the bytes."""
+    return pa.table(
+        {
+            "id": pa.array([int(hashlib.sha256(uri.encode()).hexdigest()[:15], 16) for uri, _ in units], pa.int64()),
+            "source_uri": pa.array([uri for uri, _ in units], pa.string()),
+            "payload": blob_array([Blob.from_uri(uri) for uri, _ in units] if external_base else [payload for _, payload in units]),
+        }
+    )
+
+
+def _write(location: str, rows: pa.Table, key: dict[str, str]) -> list[dict[str, Any]]:
+    """Fragments a vended writer puts under the table's ``data/``, as the JSON the commit door takes."""
+    return [json.loads(json.dumps(fragment.to_json())) for fragment in lance.fragment.write_fragments(rows, location, storage_options=key)]
 
 
 class _Estate:
@@ -60,7 +82,7 @@ class _Estate:
         assert client.post("/v1/namespace/db/create", json={}).status_code == 200
 
     def create(self, table: str, rows: pa.Table, external_blob_base: str | None = None) -> str:
-        """The create door, with the external blob base requested the way ingest's catalog client requests it."""
+        """The create door, with the external blob base requested as a query parameter."""
         resp = self.client.post(
             f"/v1/table/{quote(table, safe='$')}/create",
             content=encode_arrow_stream(rows),
@@ -151,12 +173,11 @@ def _plain(estate: _Estate, **write: Any) -> _Staged:  # noqa: ANN401 — write_
 
 
 def _bronze(estate: _Estate, *, external_base: str | None = None) -> _Staged:
-    """A bronze table, with the external base, when named, requested as ingest's catalog client requests it."""
+    """A bronze table created with the external base, when one is named, and one managed-blob fragment staged under it."""
     table = f"db$b{uuid.uuid4().hex[:8]}"
-    location = estate.create(table, BRONZE_SCHEMA.empty_table(), external_base)
-    batch = units_to_table([(f"file:///page-{i}.tif", payload) for i, payload in enumerate(_PAYLOADS)])
-    written = write_unit_fragments(location, batch, storage_options=estate.key)
-    return _Staged(estate, table, location, json.loads(written[0]))
+    location = estate.create(table, _BLOB_SCHEMA.empty_table(), external_base)
+    written = _write(location, _blob_rows([(f"file:///page-{i}.tif", payload) for i, payload in enumerate(_PAYLOADS)]), estate.key)
+    return _Staged(estate, table, location, written[0])
 
 
 def _bronze_with_a_base(estate: _Estate) -> _Staged:
@@ -196,7 +217,7 @@ def _external(uri: str) -> Callable[[_Staged], list[dict[str, Any]]]:
         target = uri.format(bucket=staged.estate.bucket, base=staged.estate.external_base)
         if "secret" in target:
             staged.estate.put_uri(target, b"SECRET")
-        batch = units_to_table([(target, b"")], external_base=staged.estate.external_base)
+        batch = _blob_rows([(target, b"")], external_base=staged.estate.external_base)
         written = lance.fragment.write_fragments(batch, staged.location, storage_options=staged.estate.key, allow_external_blob_outside_bases=True)
         return [json.loads(json.dumps(written[0].to_json()))]
 
@@ -317,37 +338,25 @@ def test_a_forged_fragment_is_refused_and_the_table_is_unchanged(
     assert estate.version_residue(staged.location) == []
 
 
-def test_ingests_own_blob_fragments_commit_through_every_check(estate: _Estate, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The real writer passes: a bronze table created by ingest's own catalog client with its approved external base, then
-    ingest's managed blobs (inline, packed, dedicated) and an external blob under that base, each written by ingest's own
-    writer and committed through the same client."""
-    token = tmp_path / "rask-catalog-token"
-    token.write_text("unauthenticated-estate")
-    monkeypatch.setenv("RASK_CATALOG_IDENTITY_TOKEN_FILE", str(token))
-    monkeypatch.setattr("ingest.http.shared_client", lambda: estate.client)
-    # mode_b vends nothing, so the client checks the new table's creation contract with the ambient chain.
-    for name, value in {
-        "AWS_ENDPOINT": estate.key["endpoint"],
-        "AWS_ACCESS_KEY_ID": "test",
-        "AWS_SECRET_ACCESS_KEY": "test",
-        "AWS_REGION": "us-east-1",
-        "AWS_ALLOW_HTTP": "true",
-    }.items():
-        monkeypatch.setenv(name, value)
-    ingest = CatalogServiceClient(BRONZE_SCHEMA, base_url="http://testserver")
-    namespace, table = "db", f"b{uuid.uuid4().hex[:8]}"
-    location = ingest.ensure(namespace, table, external_base=estate.external_base)
+def test_a_writers_own_blob_fragments_commit_through_every_check(estate: _Estate) -> None:
+    """The honest writer passes: a bronze table created through the door with its approved external base, then managed blobs
+    (inline, packed, dedicated) and an external blob under that base, each written under ``data/`` and committed through the
+    same door the forgeries are refused at."""
+    table = f"db$b{uuid.uuid4().hex[:8]}"
+    location = estate.create(table, _BLOB_SCHEMA.empty_table(), estate.external_base)
     source = f"{estate.external_base}page-external.tif"
     estate.put_uri(source, b"external-page")
-    managed = write_unit_fragments(
-        location, units_to_table([(f"file:///page-{i}.tif", payload) for i, payload in enumerate(_PAYLOADS)]), storage_options=estate.key
-    )
-    external = write_unit_fragments(location, units_to_table([(source, b"external-page")], external_base=estate.external_base), storage_options=estate.key)
+    managed = _write(location, _blob_rows([(f"file:///page-{i}.tif", payload) for i, payload in enumerate(_PAYLOADS)]), estate.key)
+    external = _write(location, _blob_rows([(source, b"external-page")], external_base=estate.external_base), estate.key)
     before = estate.open(location).version
 
-    version, rows = ingest.commit(namespace, table, [*managed, *external], before, "run-lh211")
+    resp = estate.client.post(
+        f"/management/v1/table/{quote(table, safe='$')}/commit", json={"fragments": [*managed, *external], "read_version": before, "run_id": "run-lh211"}
+    )
 
-    assert (version, rows) == (before + 1, len(_PAYLOADS) + 1)
+    assert resp.status_code == 200, resp.text
+    assert int(resp.json()["version"]) == before + 1
     landed = estate.open(location)
+    assert landed.count_rows() == len(_PAYLOADS) + 1
     assert [payload for _, payload in landed.read_blobs("payload", indices=list(range(len(_PAYLOADS) + 1)))] == [*_PAYLOADS, b"external-page"]
     assert estate.version_residue(location) == []

@@ -221,11 +221,9 @@ class IIIFVolumeSource:
     before doing anything ever since, taking step 3 of ``make seed-dev`` with it. It was the last
     ``ty`` diagnostic in the repo.
 
-    Repointed rather than deleted, and NOT at the ingest plane, because both of the obvious moves are
-    wrong: deleting it breaks ``scripts/seed_dev_estate.sh`` (which runs this file) and leaves the
-    estate with no bronze-page seed at all, while ``/api/ingest`` has no IIIF door to point at —
-    ``ingest.adapters`` registers local-dir and s3-prefix only, the ``iiif`` source kind having been
-    removed by explicit ruling. That ruling was about IIIF as a WATCHED SINK in a service; a one-shot
+    Kept, because deleting it breaks ``scripts/seed_dev_estate.sh`` (which runs this file) and leaves the
+    estate with no bronze-page seed at all, and the lakehouse runs no ingest of its own to point at
+    (ADR 0154). The ``iiif`` source kind was refused as a WATCHED SINK in a service; a one-shot
     developer seed is the explicit snapshot importer it left room for. So the acquisition lives HERE,
     where the one caller is, built on the surviving ``storage`` IIIF helpers — the same
     manifest → URL → fetch sequence ``scripts/download_iiif.py`` already performs.

@@ -28,7 +28,7 @@ from service_kit.governed.oidc import IDToken
 
 _GATEWAY = "gateway"
 _SUB = "CiQwOGE4Njg0Yi1kYjg4LTRiNzMtOTBhOS0zY2QxNjYxZjU0NjY"
-_INGEST = "system:serviceaccount:default:rask-sa-ingest"
+_PRODUCER = "system:serviceaccount:default:rask-sa-medallion-producer"
 
 
 def _request(*, oidc: object | None = None, sa_oidc: object | None = None) -> Request:
@@ -58,11 +58,11 @@ def test_gateway_proxied_human_with_a_valid_bearer_authenticates() -> None:
 
 
 def test_a_service_token_through_the_public_front_door_is_refused(sa_issuer: Any) -> None:
-    """A valid, mapped token for ingest, forwarded by the gateway, is refused."""
+    """A valid, mapped token for the producer, forwarded by the gateway, is refused."""
     verifier = ServiceAccountVerifier(
         sa_issuer.issuer,
         "rask-catalog",
-        {_INGEST: "service-ingest"},
+        {_PRODUCER: "service-medallion-producer"},
         cache_ttl=300,
         leeway=60,
         fetch_token_file=str(sa_issuer.fetch_token_file),
@@ -73,7 +73,7 @@ def test_a_service_token_through_the_public_front_door_is_refused(sa_issuer: Any
         security.authenticate(
             _request(oidc=_human_verifier(), sa_oidc=verifier),
             _settings(sa_issuer.issuer),
-            HTTPAuthorizationCredentials(scheme="Bearer", credentials=sa_issuer.mint("rask-sa-ingest", audience="rask-catalog")),
+            HTTPAuthorizationCredentials(scheme="Bearer", credentials=sa_issuer.mint("rask-sa-medallion-producer", audience="rask-catalog")),
             dapr_caller_app_id=_GATEWAY,
         )
 
@@ -82,7 +82,7 @@ def test_only_a_persons_bearer_is_forwarded_to_the_object_store() -> None:
     """`web_identity` vending re-presents the raw bearer, so a service's catalog-audience token must answer None."""
     credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials="a.real.jwt")
     person = IDToken(iss="https://dex.example/dex", sub=_SUB, aud="lance-catalog", iat=0, exp=1 << 31)
-    service = ServicePrincipal(subject="service-ingest", service_account=_INGEST)
+    service = ServicePrincipal(subject="service-medallion-producer", service_account=_PRODUCER)
 
     assert security.raw_bearer(credentials, person) == "a.real.jwt"
     assert security.raw_bearer(credentials, service) is None

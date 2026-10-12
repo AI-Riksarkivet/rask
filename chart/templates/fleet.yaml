@@ -99,26 +99,11 @@ spec:
             {{- include "rask.otelEnv" (list $root $name) | nindent 12 }}
             - { name: RASK_AUDIT_ENABLED, value: {{ hasKey $root.Values.auth "audit" | ternary $root.Values.auth.audit true | quote }} }
 
-            {{- with $root.Values.storage }}{{- if .stores }}
-            - { name: RASK_STORES, value: {{ toJson .stores | quote }} }
-            {{- end }}{{- end }}
             {{- if $svc.rayClient }}
 
             {{- include "rask.rayAuthEnv" $root | nindent 12 }}
             {{- end }}
-            {{- if $svc.lanceWriter }}
-            - { name: RASK_S3_ENDPOINT_URL, value: {{ include "lance.s3Endpoint" $root | quote }} }
-            - { name: AWS_ENDPOINT_URL, value: {{ include "lance.s3Endpoint" $root | quote }} }
-            - { name: AWS_ALLOW_HTTP, value: "true" }
-            - { name: RASK_INGEST_WAREHOUSE, value: "s3://{{ include "lance.stageBucket" (list $root $root.Values.medallion.producer.bronzeNamespace) }}/ingest" }
-            - { name: RASK_INGEST_LINEAGE_OUTBOX_URI, value: "s3://{{ $root.Values.minio.bucket }}/_lineage_outbox" }
-            - { name: LANCE_REST_ROOT, value: "s3://{{ $root.Values.minio.bucket }}" }
-            {{- end }}
-
-            {{- $needsAppToken := false }}
-            {{- if $svc.daprIngest }}{{- $needsAppToken = true }}{{- end }}
-            {{- if and $svc.lanceWriter (or (not $svc.governedAuth) $root.Values.auth.enabled) }}{{- $needsAppToken = true }}{{- end }}
-            {{- if and $root.Values.dapr.enabled $needsAppToken }}
+            {{- if and $root.Values.dapr.enabled $svc.daprIngest }}
 
 {{- include "lance.appTokenEnv" (list $root $name) | nindent 12 }}
             {{- end }}
@@ -145,11 +130,6 @@ spec:
             - { name: RASK_COMPUTE_ENGINE_OUTCOME_BASES, value: {{ toJson $bases | quote }} }
             {{- include "lance.saVerifier" (list $root "env" "compute") | nindent 12 }}
             {{- if not $root.Values.auth.enabled }}{{- include "lance.governedAuthAck" $root | nindent 12 }}{{- end }}
-            {{- end }}
-
-            {{- if eq $name "ingest" }}
-            - { name: LANCE_EXTERNAL_BLOB_BASES, value: {{ include "lance.externalBlobBases" $root | quote }} }
-            - { name: RASK_NATS_URL, value: {{ include "lance.natsUrl" $root | quote }} }
             {{- end }}
 
             {{- if $svc.channels }}

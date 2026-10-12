@@ -24,10 +24,6 @@ from tests.unit.chart_render import REPO, env_of, render, render_fixture, render
 #: `make k3s-up` installs beside it.
 DEPLOYED = ("--set", "image.localImages=true", "-f", str(REPO / "deploy/values-local.yaml"))
 
-#: The producer's door also admits ingest's account, which no pod presents: clause 5's live proof mints a
-#: 10-minute `rask-medallion` token for it to show a service caller is held to its own tenant's runs.
-OPERATOR_MINTED = {"Deployment/rask-medallion-producer": {"rask-sa-ingest"}}
-
 #: The identity a caller declares for each door it calls, where it declares one in its own env.
 DECLARED = {"rask-catalog": "RASK_CATALOG_SERVICE_IDENTITY", "rask-lineage": "RASK_LINEAGE_SERVICE_IDENTITY"}
 
@@ -64,7 +60,7 @@ def test_each_door_maps_exactly_the_service_accounts_that_project_its_audience()
     for door, env in doors.items():
         audience = env["RASK_SA_AUDIENCE"]
         callers = {spec["serviceAccountName"]: spec for workload, spec in pods.items() if workload != door and audience in _projected_audiences(spec)}
-        expected = set(callers) | OPERATOR_MINTED.get(door, set())
+        expected = set(callers)
         subjects: dict[str, str] = json.loads(env["RASK_SA_SUBJECTS"])
         admitted = {key.removeprefix(f"system:serviceaccount:{namespace}:") for key in subjects}
         if admitted != expected:

@@ -36,9 +36,8 @@ from chart_yaml import FAST_LOADER
 from tests.unit.test_invariants import _helm_template
 
 
-#: EMPTY, and it is meant to stay that way. This was `{"ingest"}` while ingest was the last holder;
-#: the mount moved off `lanceWriter` onto its own `ambientStorage` declaration, which nothing sets, so
-#: the estate's widest storage credential now reaches no pod at all through env.
+#: EMPTY, and it is meant to stay that way. The mount is its own `ambientStorage` declaration, which
+#: nothing sets, so the estate's widest storage credential reaches no pod at all through env.
 #:
 #: A NAME ADDED HERE IS A DECISION, not a convenience: it hands that service AWS_ACCESS_KEY_ID=<root>
 #: (measured: 106 buckets, the whole estate) through the mechanism the owner's rule forbids. The answer

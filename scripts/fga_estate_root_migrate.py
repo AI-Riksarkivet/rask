@@ -2,13 +2,13 @@
 
 `fga_root_object` moves from `warehouse:lance_catalog` to `estate:rask`, and every check aimed at it
 moves with it: `can_observe_events` (the admin console, the whole-estate lineage projection),
-`can_browse_storage` (the object browser), `can_stage_events` (the lineage outbox vend), and the bare
+`can_browse_storage` (the object browser), and the bare
 `reader` / `writer` that compute, controlplane and flows gate their whole routers on.
 
 THE TUPLES DO NOT MOVE THEMSELVES. A principal holding `owner` on the old root passes every one of
 those doors today and NONE of them the moment the setting flips, so the grants have to exist on the new
 object BEFORE the repoint is deployed — which is why this is a script that can run against a live store
-rather than a note in the row. The chart's bootstrap hook seeds `auth.bootstrapAdmin` and the stagers;
+rather than a note in the row. The chart's bootstrap hook seeds `auth.bootstrapAdmin` and the event reader;
 this covers everyone else, including the subjects a running estate acquired outside the chart.
 
 NOTHING IS REMOVED. The old tuples keep governing the WAREHOUSE, which is their other and still-correct
@@ -48,10 +48,8 @@ from service_kit.governed.auth.write_model import carried_model, fga_headers
 #:
 #: `owner` is not mapped to `admin`: `estate#admin` additionally carries `can_create_project` and the
 #: `operator` machine tier, so promoting on migration would hand every current warehouse owner two
-#: authorities nobody granted them. `event_stager` is the one SERVICE rung that follows the root, for
-#: the reason it was minted on the root to begin with — `can_stage_events` guards a platform control
-#: prefix, not anyone's data.
-RUNG_MAP: Final[dict[str, str]] = {"owner": "owner", "event_stager": "event_stager"}
+#: authorities nobody granted them.
+RUNG_MAP: Final[dict[str, str]] = {"owner": "owner"}
 
 #: Warehouse rungs that are DELIBERATELY not carried, and what carrying one would have granted.
 #:

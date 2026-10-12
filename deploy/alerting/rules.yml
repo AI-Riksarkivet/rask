@@ -603,7 +603,7 @@ groups:
             lost. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled
 
       # 3. The RECONCILER GONE QUIET — the one that catches a plane which looks healthy and is not.
-      #    The feed lane covers every producer that emits lineage over HTTP only (ingest, Ray TRAIN,
+      #    The feed lane covers every producer that emits lineage over HTTP only (Ray TRAIN,
       #    external OpenLineage), and its two silent failure modes both leave a Ready pod: the service
       #    identity is not in lineage's allowlist, or it is admitted without the `event_reader` rung on the
       #    estate root; either way every page answers 401/403, and a refusal is deliberately not retried.
@@ -1230,36 +1230,6 @@ groups:
             HttpServerLatencyHigh are both dead and their silence means nothing. Either
             `service_kit.setup_otel` stopped wiring the FastAPI instrumentor, or the OTLP path to
             GreptimeDB is broken. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled
-
-  # The ingest plane's own failure signal, which existed and was read by nothing. `ingest/metrics.py`
-  # states the gap in its OWN docstring — "deploy/alerting/rules.yml duly contains zero ingest rules: no
-  # page fires for a run that failed, a fan-out that stalled, or units that never landed" — and that
-  # sentence was true for as long as the file existed.
-  #
-  # WHY A FIRST-PARTY COUNTER RATHER THAN DAPR'S. `dapr_runtime_workflow_execution_count_total` carries
-  # a `status` label and for this codebase it is FALSE: the workflow converts failure into a RETURNED
-  # value, so the orchestrator completes normally and the sidecar records success. Measured across the
-  # live estate — every app_id holds `success` and nothing else. This counter exists precisely because
-  # that one lies.
-  - name: lance-ingest
-    rules:
-
-      # Status values verified against the live store: COMPLETE, COMPLETE_WITH_ERRORS, FAILED and
-      # TERMINATED. TERMINATED is EXCLUDED deliberately — it means a person pressed Terminate, which is
-      # an intended outcome and not a defect. Paging on it would page on the operator's own action.
-      - alert: IngestRunsFailing
-        expr: sum(rate(ingest_runs_total{lance_ingest_status="FAILED"}[15m])) > 0
-        for: 15m
-        labels:
-          severity: warning
-          service: ingest
-        annotations:
-          summary: "Ingest runs are failing"
-          description: >-
-            A run reached FAILED — the harvest did not land its data. Distinct from TERMINATED, which
-            is an operator stopping a run deliberately and is not alerted on. Check the run's own
-            errors on the ingest detail page. Runbook:
-            docs/runbooks/RUNBOOK-oncall.md#cascade-stalled
 
   # The flows plane, same argument. `flows/metrics.py:33` calls the node counter "the service's only
   # failure signal" and no rule read it.

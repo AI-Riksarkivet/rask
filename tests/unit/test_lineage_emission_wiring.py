@@ -195,6 +195,3 @@ def test_the_lineage_subscriber_is_actually_subscribing() -> None:
     assert set(enabled) == {"true"}, (
         f"the lineage subscriber is rendered disabled ({enabled}) — the graph would stay empty while every producer reports success"
     )
-
-
-# ── the INGEST plane's lineage identity — the second lane to lose all provenance ─────

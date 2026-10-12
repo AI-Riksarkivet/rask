@@ -139,148 +139,6 @@ services:
   # Its public gateway rows stay /api/ray + /api/serve: the URL namespace names the
   # Ray cluster, not the service. The zone image namespace is web-<zone>, so the bare
   # `compute` image name is this service's.)
-  # The ingest plane (open_ingest.md Phase 1): pre-bronze acquisition — control API + workers +
-  # the lander. frontDoor because the gateway routes /api/ingest to this app-id; a bare app-id,
-  # NOT the legacy `medallion-producer` shape the medallion still carries (audit m1).
-  ingest:
-    # -- uvicorn import path (module:factory) the ingest Deployment runs.
-    module: "ingest:create_app"
-    # -- Container and Service port of the ingest app.
-    port: 8830
-    # -- Replica count of the ingest Deployment; 0 scales it to zero.
-    replicas: 1
-    # -- Renders ingest outside singleTenant, because the gateway routes /api/ingest to it.
-    frontDoor: true
-    # -- List of dependencies the pod waits for in an init container before starting; only `minio` is honoured (when minio.enabled).
-    waitFor: []
-    # The incremental poll (TRIGGER-2). EMPTY = OFF, and that is the honest default: the anti-join
-    # reads every existing bronze id per tick — O(existing rows), not O(new rows) — so putting it on
-    # a clock is an opt-in with a real recurring cost, bounded by incrementalMaxRows below.
-    #
-    # It is a POLL at the outer boundary and event-driven from bronze inward. Bucket notification was
-    # rejected as the general mechanism: it covers one of three registered kinds and IIIF has no
-    # notification channel and never will.
-    #
-    # ONE PROJECT, by construction. A tick carries no user, so the run authorizes on the
-    # service-token branch, which is pinned to RASK_INGEST_SERVICE_PROJECT — a multi-tenant watch set
-    # cannot work through that door as it stands.
-    # -- Name of the Dapr cron binding for the incremental poll (templates/ingest-cron.yaml). Empty renders no binding and the poll is off.
-    cronBindingName: ""
-    # -- Schedule of the incremental-poll cron binding (Dapr cron syntax, e.g. `@every 1h`). Used only when cronBindingName is set.
-    cronSchedule: "@every 1h"
-    # -- Source kind the incremental poll ingests. No template renders it; the app reads RASK_INGEST_CRON_KIND, which this value does not reach.
-    cronKind: ""
-    # -- Dataset the incremental poll lands into. No template renders it; the app reads RASK_INGEST_CRON_DATASET, which this value does not reach.
-    cronDataset: ""
-    # -- Source options for the incremental poll. No template renders it; the app reads RASK_INGEST_CRON_OPTIONS, which this value does not reach.
-    cronOptions: ""
-    # The anti-join's ceiling. 0 = unbounded, matching maxUnits/maxRunHours. It REFUSES rather than
-    # sampling: a truncated anti-join inverts, making the run re-land rows bronze already holds.
-    # -- Ceiling on rows the poll's anti-join reads; 0 is unbounded, over it the run refuses. No template renders it; the app reads RASK_INGEST_INCREMENTAL_MAX_ROWS.
-    incrementalMaxRows: 0
-    # Where the plane lands bronze. WITHOUT this the code falls back to a temp dir, and the first
-    # in-cluster run resolved a RELATIVE path ("tmp/rask-ingest/...") inside the container — data
-    # would have landed in the pod's ephemeral filesystem and vanished with it, silently, because a
-    # relative Lance path is perfectly valid. Points at the warehouse bucket like every other tier.
-    # Writes Lance to the warehouse, so it needs the S3 endpoint injected (see fleet.yaml). Values
-    # files cannot carry Helm templates — a `{{ include ... }}` here renders as a LITERAL string — so
-    # the endpoint is a template concern and this is only the flag that asks for it.
-    # This service has a governed door (`ingest.auth.authorize_ingest`) with a USER path, so it
-    # needs the OIDC/FGA env. Declared per-service rather than derived from `frontDoor`: being
-    # routed by the gateway and having an auth door are different facts, and conflating them put
-    # seven inert variables on the gateway and compute.
-    # -- Gives ingest the OIDC/FGA env and FGA token mount when auth.enabled, feeding its user door.
-    governedAuth: true
-    # -- Injects the S3 endpoint, warehouse, lineage outbox and LANCE_REST_ROOT env so ingest can write Lance to the warehouse.
-    lanceWriter: true
-    # NOT a `daprIngest` service, and that distinction is the whole reason the flag exists. Here
-    # APP_API_TOKEN is read per request by `require_dapr_token`, which REFUSES when it is unset, so it
-    # is armed only alongside the user door — the fleet.yaml block states both arms. A `daprIngest`
-    # service instead refuses to START without it, which is the same answer given earlier and louder.
-    # Written out rather than left absent: absence is exactly what let this token ride `lanceWriter`,
-    # an unrelated storage flag, for a release.
-    # -- Renders APP_API_TOKEN for an app that refuses to start without it. False for ingest, which gets the token through lanceWriter instead.
-    daprIngest: false
-    # -- Env-var map rendered verbatim into the ingest container: lineage/catalog URLs and identities, the pinned service project, local-dir and lance-append roots (empty refuses the kind), unit and run-hour ceilings.
-    env:
-      # Lineage is both WRITTEN and READ here, and the two need different halves of one service.
-      # RASK_LINEAGE_ENDPOINT is lineage-kit's emitter target: unset, its transport degrades to a
-      # logged no-op, so every run would land its data and leave no provenance record while still
-      # reporting success — exactly the hole A8 exists to catch. RASK_LINEAGE_URL is the read side,
-      # which the status endpoint joins against so A8's verdict comes from the graph rather than from
-      # a flag nothing sets. Both point at the release's lineage Service.
-      # The ONE project this deployment's service token may ingest into. The Dapr app-api-token
-      # authenticates a SERVICE, not a tenant — honouring an arbitrary requested project would let
-      # any token holder write into every tenant — so it is pinned here and crossing tenants takes a
-      # user bearer with can_administer on the target. Mirrors MEDALLION_PRODUCE_ADMIN_PROJECT.
-      # Stated explicitly rather than left to the code default: which tenant a shared credential can
-      # write into is not a fact anyone should have to read Python to discover.
-      RASK_INGEST_SERVICE_PROJECT: demo
-      # The ONE directory tree the `local-dir` source may read. EMPTY means the kind is REFUSED,
-      # which is the right default: `options.root` is caller-supplied and reaches a recursive reader,
-      # so an unconfined local-dir is an arbitrary-file-read primitive aimed at this pod's own
-      # filesystem — {"root":"/proc/self","pattern":"environ"} would land the S3 credential as rows
-      # in a governed table the explorer then serves.
-      #
-      # Present-but-empty rather than absent, so the knob is discoverable: the first in-cluster run
-      # after the confinement landed failed every unit with "local-dir is not enabled here", and
-      # nothing in the chart hinted that such a setting existed. local-dir is a fixture source;
-      # s3-prefix and iiif are the production ones and need nothing here.
-      RASK_INGEST_LOCAL_ROOT: ""
-      # The ONE dataset root the `lance-append` source may read — same shape, same reasoning and the
-      # same empty default as RASK_INGEST_LOCAL_ROOT above: `options.uri` is caller-supplied and
-      # reaches a reader that scans whatever it is pointed at, so unset REFUSES the kind rather than
-      # leaving it unconfined. Present-but-empty so the knob is discoverable: the adapter shipped
-      # with no chart row at all, which made `lance-append` unreachable in-cluster — every call
-      # answered "lance-append is not enabled here" and nothing hinted the setting existed. That is
-      # the exact failure the local-dir comment above records, repeated.
-      RASK_INGEST_LANCE_ROOT: ""
-      RASK_LINEAGE_ENDPOINT: http://rask-lineage:8000
-      RASK_LINEAGE_URL: http://rask-lineage:8000
-      # The subject ingest's ServiceAccount maps to at lineage's door (`lance.saSubjects`), where
-      # the pod's projected `rask-lineage` token authenticates it. The subject must hold the grants
-      # its emits need: an admitted subject with none is refused on every emit, which the emitter
-      # swallows by design (a landed commit must not become a failed run), so the run reports
-      # COMPLETE while the graph stays empty. Measured on 2026-08-06: four `401 Unauthorized` in
-      # five minutes against a COMPLETE run.
-      RASK_LINEAGE_SERVICE_IDENTITY: service-ingest
-      # The subject ingest's ServiceAccount maps to at the catalog's door (`lance.saSubjects`), where
-      # its projected `rask-catalog` token authenticates it.
-      RASK_CATALOG_SERVICE_IDENTITY: service-ingest
-      # The signing gate: with RASK_SIGNING_IDENTITY (rendered from lance.signers) it makes ingest resolve
-      # `signing-key-<identity>` from the secret store and sign the event it stages for recovery. Off, ingest
-      # stages that event unsigned and an enforcing lineage refuses and acknowledges it.
-      RASK_INGEST_SECRETS_FROM_DAPR: "true"
-      # Route creation and commits through the CATALOG rather than writing the object store
-      # directly. Opt-in by an explicit flag, never inferred from a reachable URL: a catalog that is
-      # merely down must fail the run loudly, not silently downgrade to a local write that produces
-      # governed data the catalog has never heard of — and that nothing downstream will ever be told
-      # about, because the event a stage runner rides is the catalog's publication of a new version.
-      RASK_INGEST_USE_CATALOG: "true"
-      RASK_CATALOG_URL: http://rask-catalog:2333
-      # A15's other side of the relation. A run holds a read_version from enumeration until commit,
-      # so version GC's retention window (compaction.olderThanDays) must be at least this long — GC
-      # is otherwise free to delete the version a live run is about to commit against, and the run
-      # that hits it is the longest, most expensive harvest. Declared HERE, in the chart, so the two
-      # numbers can be compared before a deploy rather than discovered to disagree at 3am;
-      # tests/unit/test_gates_a15_a18.py asserts the relation, not either constant.
-      RASK_INGEST_MAX_RUN_HOURS: "24"
-      # The UNIT ceiling, and the reason it is a DEPLOYED value rather than a code default. Zero is
-      # unbounded, deliberately, because this plane advertises million-unit harvests and a live code
-      # default would kill the legitimate long run — but unset in the chart meant the CLUSTER ran
-      # unbounded, and the two ceilings that bound a run were half-deployed.
-      #
-      # It is not only a fan-out bound. `enumerate_chunks` returns every key and token in the run as
-      # ONE activity result, and the Dapr workflow worker's gRPC channel keeps grpc's 4 MiB default
-      # (it merges only DEFAULT_GRPC_KEEPALIVE_OPTIONS) — measured at ~83 bytes per serialized
-      # key+token, that wedges somewhere near 25,000 units. The activity refuses before building a
-      # payload it cannot deliver, and this is the number it refuses against; without it the only
-      # remaining guard is the transport budget, which reports a byte count rather than intent.
-      #
-      # 250,000 is well under the transport wedge and well above any harvest run here so far. Raise
-      # it for a genuinely larger source only alongside range-based chunking — the descriptors, not
-      # the ceiling, are what the 4 MiB limit actually binds.
-      RASK_INGEST_MAX_UNITS: "250000"
   compute:
     # -- uvicorn import path the compute Deployment runs.
     module: "compute:app"
@@ -380,7 +238,7 @@ services:
     # -- Renders notifications outside singleTenant, because the gateway routes /api/notifications to it.
     frontDoor: true
     # The inbox door verifies the bearer and re-derives visibility per recipient — NotificationsSettings
-    # extends GovernedAuthSettings, so the prefix is LANCE_ like ingest's and flows'.
+    # extends GovernedAuthSettings, so the prefix is LANCE_ like flows'.
     # -- Gives notifications the OIDC/FGA env and FGA token mount when auth.enabled.
     governedAuth: true
     # This service HOSTS a sidecar-delivered route (`POST /lineage-events`) and refuses to start
@@ -395,8 +253,8 @@ services:
     # the token had only ever been reachable through `lanceWriter`, which this service is not.
     # -- Renders APP_API_TOKEN for notifications, which refuses to start with Dapr on and no token.
     daprIngest: true
-    # The SECOND ingress (open_notifications.md §2). The bus carries run lifecycle; the ingest service,
-    # Ray TRAIN and every external OpenLineage producer emit over HTTP only and never reach the topic,
+    # The SECOND ingress (open_notifications.md §2). The bus carries run lifecycle; Ray TRAIN
+    # and every external OpenLineage producer emit over HTTP only and never reach the topic,
     # so a subscribe-and-stop plane silently never notifies a whole class of run. This cron ticks the
     # sidecar-only reconcile route, which walks lineage's durable `GET /events` down from a persisted
     # cursor. It is also the catch-up path after a notifications outage.
@@ -574,7 +432,7 @@ services:
     #
     # DAYS, BECAUSE THE CONSUMER OF THIS FEED REASONS IN DAYS. `services/notifications` walks it from a
     # persisted cursor as the estate's catch-up path after an outage — the bus alone provably misses
-    # ingest, Ray TRAIN and every external OpenLineage producer — so what an operator needs from this
+    # Ray TRAIN and every external OpenLineage producer — so what an operator needs from this
     # number is *how long an outage the feed survives*. A row- or seq-denominated bound cannot say:
     # measured 2026-09-08, a 20 000-seq window held 3 133 rows because every ON CONFLICT-rejected
     # redelivery consumes a sequence value without leaving a row, so the horizon contracted precisely
@@ -606,8 +464,8 @@ image:
   # PER-COMPONENT pins (#135) — the reason a `helm upgrade` stopped being destructive.
   #
   # One `tag` above cannot describe this fleet. A real estate runs a catalog tag across 11 services,
-  # a different tag on gateway/compute/controlplane, a third across the 7 zones, and an ingest
-  # DIGEST. Rendering all of them from one value overwrites every image with a tag that is not on
+  # a different tag on gateway/compute/controlplane, a third across the 7 zones, and a
+  # DIGEST on one more. Rendering all of them from one value overwrites every image with a tag that is not on
   # the node — observed twice on 2026-08-06, once taking the whole fleet to ImagePullBackOff.
   #
   # Keys are the COMPONENT name the template passes to `rask.image` (`gateway`, `compute`,
@@ -615,7 +473,7 @@ image:
   # reference. `digests` beats `tags`, exactly as the global `digest` beats the global `tag`.
   #
   #   tags:    { lance-rest-catalog: be-256ca0da, web-lakehouse: zone-14d8882d }
-  #   digests: { rask-ingest: "sha256:834d2e23…" }
+  #   digests: { gateway: "sha256:834d2e23…" }
   # -- Per-component tag map keyed by component name (gateway, lance-rest-catalog, web-<zone>, ...); beats the global tag.
   tags: {}
   # -- Per-component digest map keyed by component name; beats `tags` and the global tag.
@@ -791,7 +649,7 @@ lifecycle:
 
 # === Pod hardening (applied to every FIRST-PARTY app container via the lance.securityContext helper) --
 # This line used to say "every app container", and for six Deployments it was false: fleet.yaml and
-# controlplane.yaml called the helper nowhere, so gateway/compute/controlplane/flows/ingest/notifications
+# controlplane.yaml called the helper nowhere, so gateway/compute/controlplane/flows/notifications
 # rendered with no securityContext at all — including the pod the Ingress routes /api to. They call it
 # now, and tests/unit/test_every_first_party_workload_is_hardened.py derives its subject list from the
 # render, so a new first-party workload is covered by default rather than by memory.
@@ -1155,7 +1013,7 @@ vending:
   # surface). Overriding REPLACES that default — include the models base yourself or the train registry's
   # external pointers get rejected.
   # One value, rendered as LANCE_EXTERNAL_BLOB_BASES into every reader of it: the catalog's create and read
-  # doors, ingest, maintenance (planner and worker) and lineage. A base inside it needs no base-record
+  # doors, maintenance (planner and worker) and lineage. A base inside it needs no base-record
   # entry ([[LH-279]]), so a reader without it would treat each table's blob base as unrecorded.
   # -- Comma-separated allowlist of base URIs external blob pointers may live under (LANCE_EXTERNAL_BLOB_BASES). Empty = `s3://<minio.bucket>/models/`; a value replaces that default.
   externalBlobBases: ""
@@ -1317,11 +1175,11 @@ pubsub:
   controlName: catalog-control-pubsub
 
 # === Event-driven medallion pipeline (bronze → silver → gold; R23 — raw is the EXTERNAL world) =====
-# medallion-producer (dummy producer) is the HEAD: it ingests external raw straight into BRONZE (POST /produce
-# seeds bronze$events; /ingest-iiif harvests bronze$pages) and emits the bronze lineage; its OWN
-# /bronze-arrival subscription publishes the first trigger (medallion.bronze). Each stage runner subscribes to
-# its upstream stage's trigger, emits the transform's lineage (the DERIVED_FROM edge), and publishes the
-# next trigger — one ingest cascades the whole DAG, and Dapr propagates the trace context across every
+# medallion-producer is the HEAD: a client writes BRONZE through the catalog's namespace doors (ADR 0154), the
+# catalog announces the write on the lineage topic, and the producer's /bronze-arrival subscription publishes the
+# first trigger (medallion.bronze). Each stage runner subscribes to its upstream stage's trigger and emits the
+# transform's lineage (the DERIVED_FROM edge); the catalog's publication wakes the next tier — one bronze write
+# cascades the whole DAG, and Dapr propagates the trace context across every
 # hop. Dapr also EXPORTS a span for each of them as of 2026-08-22 — until then `lance-tracing` named
 # no exporter, so daprd's NullExporter discarded every sidecar span while the context still
 # propagated, which is exactly why this sentence read as true while the traces were not there.
@@ -1335,7 +1193,7 @@ medallion:
   # falls back to the shared `minio.bucket`, so the DEFAULT here is the single-bucket layout
   # (unchanged, e2e-safe). Override to zone gold (sink/output) into its OWN bucket/tenant, while
   # bronze/silver (the project's medallion internals) stay in the project bucket. External raw is NOT a
-  # zone (R23): the ingest sources (IIIF, external object storage) live outside the lakehouse entirely.
+  # zone (R23): source systems live outside the lakehouse entirely, and a client lands their bytes through the catalog.
   # Any non-default bucket listed here is auto-provisioned by minio-mkbucket. Same endpoint/creds
   # serve all buckets; a truly external S3 per zone (own endpoint) is future.
   # Per-zone bucket override, e.g. { gold: lance-sink } to land the serving tier outside the shared
@@ -1349,15 +1207,14 @@ medallion:
   buckets: {}
   # #84 per-tenant medallion routing (OPT-IN). When true, the producer + stage runners get
   # MEDALLION_CONTROL_ROOT (the catalog's warehouse-registry root — the same s3://<minio.bucket> the
-  # catalog's LANCE_REST_ROOT names), so a `project`-carrying POST /produce (or stage trigger) resolves
+  # catalog's LANCE_REST_ROOT names), so a `project`-carrying stage trigger resolves
   # that project's ACTIVE warehouse (`_warehouses/*.json`, provisioned via POST /v1/warehouses) and the
   # cascade reads/writes s3://<project-bucket>/medallion/<stage> with project-qualified lineage
   # (acme-bronze / acme-bronze$events). Project-less traffic is BYTE-IDENTICAL either way; with this
   # false (default — zero render diff), a project-carrying trigger is DROPPED fail-closed (never a
   # fallback into the shared zone URIs). Per-project FGA namespace tuples must be seeded separately.
   # OFF renders no MEDALLION_CONTROL_ROOT anywhere, and the resulting failure names neither this flag
-  # nor that variable — measured live 2026-08-23 on a seeded estate: `POST /produce?project=acme`
-  # answered `409 routing is disabled (MEDALLION_CONTROL_ROOT unset)`, and the silver->gold stage runner
+  # nor that variable — measured live 2026-08-23 on a seeded estate: the silver->gold stage runner
   # logged `medallion_stage_project_routing_disabled` and parked its trigger in the DLQ, so the run
   # reported nothing and gold never existed. Fail-closed is correct — a project trigger must never
   # fall back to the shared roots and transform the WRONG tenant's data — but an estate that HAS
@@ -1390,11 +1247,11 @@ medallion:
   # (scripts/seed_medallion_fga.sh) before flipping it on.
   # -- Each stage runner checks OpenFGA for its `requiredAction` on the target namespace before producing. Seed the stage-runner identity grants first.
   fgaEnabled: false
-  # #64 human trigger door: the project a signed-in user must hold `can_administer` on to fire /produce or
+  # #64 human trigger door: the project a signed-in user must hold `can_administer` on to fire
   # /train from the UI (the web BFF forwards ONLY the user's bearer — no service token leaves the web pod).
   # The service-to-service app-token path is unchanged; this is a SECOND, admin-only door, gated on
   # auth.enabled + fga. Matches the project the seed grants admin on (scripts/e2e_stack.sh → project:acme).
-  # -- Project a signed-in user needs `can_administer` on to fire /produce or /train from the UI, and the default project a projectless produce is checked against.
+  # -- Project a signed-in user needs `can_administer` on to fire /train from the UI, and the project a run with no tenant of its own is authorized on.
   produceAdminProject: acme
   # Replica counts — each stage runner's own pubsub component carries queueGroupName=<app-id>, so its replicas
   # form a competing-consumer group (single delivery per trigger; without the queue group every replica
@@ -1443,8 +1300,8 @@ medallion:
   # event-driven cascade produces actual versioned data in the object store, not just provenance — the lineage graph
   # then reflects what storage holds and outputStatistics carry real rows/bytes. Off by default (the demo
   # ships as a pure lineage-emit). Each stage's FROM_URI/TO_URI derive from minio.bucket + its namespace, so
-  # the chain lines up (producer bronze -> bronze->silver -> silver->gold). REQUIRES OpenBao off
-  # (`--set openbao.enabled=false`): the medallion is a dummy producer with no OpenBao secret-fetch (unlike
+  # the chain lines up (bronze -> silver -> gold). REQUIRES OpenBao off
+  # (`--set openbao.enabled=false`): the medallion has no OpenBao secret-fetch (unlike
   # the catalog), so with OpenBao on the plaintext S3 secret is withheld and it fails fast at boot. Real
   # compute is a Ray job at rask.
   # ON by default: rask is a RAY-FIRST platform (Ray batch is
@@ -1453,16 +1310,6 @@ medallion:
   # runs in anger.
   # -- Stages do a real Lance read, transform and write (MEDALLION_COMPUTE_ENABLED) rather than emitting lineage only; stage URIs derive from `minio.bucket` and each namespace.
   compute: true
-  # Media head demo seeding: /ingest-media writes two sample PNGs into the source prefix before
-  # ingesting (the stand-in for an external media drop). Prod points the source at real media and
-  # sets this false. Prefix/topic/dataset names use the code defaults.
-  # The media lane's BRONZE namespace, nested like every other tier. It was hardcoded twice in
-  # templates/medallion.yaml (`stageBucket "bronze-media"` and the path segment), so the media chain
-  # kept writing to the flat location after the tiers moved and its stage runner DROPped every trigger.
-  # -- Bronze namespace of the media lane, where /ingest-media lands blobs (MEDALLION_MEDIA_BRONZE_URI). Default `bronze-media`.
-  mediaBronzeNamespace: bronze-media
-  # -- Have /ingest-media write two sample PNGs into the source prefix before ingesting (MEDALLION_MEDIA_SEED_SAMPLES); set false when the source is real media.
-  mediaSeedSamples: true
   # WHICH ENGINE a stage runner that declares no transform runs on (CP-056): empty takes the first engine
   # `services.compute.engines` enables, and `inprocess` with none. The lakehouse names no engine of its own beyond the
   # in-process one: an out-of-process engine is an app it invokes (`service_kit.lakehouse.engine_door`), and every
@@ -1552,12 +1399,6 @@ medallion:
     # version a held promotion was taken on.
     # -- Subject the producer presents at the catalog's service door and signs lineage as; the identity the FGA seed grants. Must not be blank.
     serviceIdentity: service-medallion-producer
-    # Expose POST /produce through the gateway (the DEMO entry point for the cascade). It carries no
-    # auth — a caller could trigger cascades / forge medallion provenance — so values-prod sets it false;
-    # the EDGE head then fires only from real bronze ingests via /bronze-arrival. NB this gates only the
-    # gateway route — the in-cluster ClusterIP route stays reachable + unauthenticated.
-    # -- Intended to gate the gateway route to POST /produce (values-prod sets false). No chart template reads it.
-    expose: true
     # NESTED to match `bronzeNamespace` below. These two are a PAIR: the producer stamps this dataset
     # name on the trigger it publishes, and each stage runner compares it against its own
     # MEDALLION_FROM_DATASET. A mismatch is not an error anywhere — the stage runner returns DROP, daprd logs
@@ -1578,16 +1419,12 @@ medallion:
     #
     # A single-bucket estate (projects off, warehouses off) reads these verbatim and lands them in the
     # shared root, which is the mode `require_warehouse_scoped` documents as correct.
-    # -- Bronze namespace the producer writes (MEDALLION_BRONZE_NAMESPACE), declared unqualified; on a projects estate it becomes `<project>-bronze` at runtime.
+    # -- Bronze namespace whose catalog write announcements fire the head (MEDALLION_BRONZE_NAMESPACE), declared unqualified; on a projects estate it becomes `<project>-bronze` at runtime.
     bronzeNamespace: bronze
-    # -- Operation name the producer stamps on its bronze-write lineage (MEDALLION_PRODUCER_OPERATION).
-    operation: ingest_bronze
-    # -- Author role the producer stamps on its bronze-write lineage (MEDALLION_PRODUCER_AUTHOR).
-    author: data_eng
     # -- Topic the producer's /bronze-arrival publishes the first cascade trigger on (MEDALLION_BRONZE_TOPIC); the first stage runner's `subTopic`.
     bronzeTopic: medallion.bronze
   # The 3 stage runners run medallion.stage_runner:app, differing only by env. order = the DAG. (R23: there is
-  # no raw→bronze stage runner — its stage stamp/provenance logic merged into the producer's bronze ingest.)
+  # no raw→bronze stage runner — bronze is written by a client through the catalog's namespace doors, ADR 0154.)
   # requiredAction/serviceIdentity gate each hop when fgaEnabled: silver→gold needs `can_promote`
   # (validator-only); the others `can_create_table` (writer). Each stage runner checks as its own identity.
   # ⚠ Every requiredAction below MUST be a real relation on the `namespace` type in
@@ -1605,8 +1442,8 @@ medallion:
     # promotion that dropped/renamed a declared column is BLOCKED (the breaking-change detector).
     - { name: bronze-to-silver, daprAppId: bronze-to-silver, fromNamespace: bronze, fromDataset: bronze$events, toNamespace: silver, toDataset: silver$features, operation: embed_features, author: data_eng, subTopic: medallion.bronze, pubTopic: medallion.silver, requiredAction: can_create_table, serviceIdentity: "service-bronze-to-silver", requiredColumns: "id" }
     - { name: silver-to-gold, daprAppId: silver-to-gold, fromNamespace: silver, fromDataset: silver$features, toNamespace: gold, toDataset: gold$catalog, operation: aggregate_gold, author: analyst, subTopic: medallion.silver, pubTopic: "", requiredAction: can_promote, serviceIdentity: "service-silver-to-gold", requiredColumns: "id" }
-    # The MEDIA lane (multimodal §9): POST /ingest-media on medallion-producer lands bronze-media blobs and
-    # publishes medallion.media; this stage runner's generic compute then derives what the blob CONTENT
+    # The MEDIA lane (multimodal §9): the catalog's publication of a bronze-media table is routed to
+    # medallion.media by the producer's /publication-arrival; this stage runner's generic compute then derives what the blob CONTENT
     # supports (image → inline thumbnail + embedding; unrecognised media carries through untouched —
     # no media config anywhere, the same binary as every stage runner). Terminal (pubTopic ""). Own
     # namespaces: stage runner URIs derive from the namespace, so reusing bronze/silver would collide with
@@ -1647,7 +1484,7 @@ maintenance:
   #
   # With the event lane ON, the cron becomes a BACKSTOP and should be relaxed to hourly, but no slower than
   # 75 minutes: MaintenanceTableParked's 4h window must hold (workers + 1) periods plus ackWait, or it never
-  # fires. It still has to exist — the bus is provably incomplete (ingest, Ray TRAIN and external OpenLineage
+  # fires. It still has to exist — the bus is provably incomplete (Ray TRAIN and external OpenLineage
   # producers emit over HTTP only and never reach the topic; the catalog's lineage lane has no outbox,
   # so a lost trigger is silent) and clock-due work like old-version GC has no write to react to. What
   # it stops being is the thing that finds work first. Measured before the lane landed: every tick paid
@@ -2333,38 +2170,6 @@ stateStore:
     # catalog is the service that creates the published table, but nothing here provisions workflow
     # instances and none are expected.
     - catalog
-    # ── `ingest` needs BOTH halves. Removing it breaks the plane in two separate ways. ──────────────
-    # SECRETS: the ingest workers resolve their S3 credentials through `lance-secrets` — fail-closed,
-    # no env fallback — and dapr-component.yaml:180 derives the secret-store scope by concat'ing THIS
-    # list. `$secretScopes`'s other members are hardcoded template branches (catalog, lineage,
-    # compaction, medallion, media), so `stateStore.scopes` is the only values-level lever that grants
-    # secret access. Unscoped, the sidecar answers ERR_SECRET_STORES_NOT_CONFIGURED and every worker
-    # fail-closes at boot — the failure the medallion hit live 2026-07-24.
-    #
-    # STATE: Dapr Workflow orchestrates the ingest run (`services/ingest/src/ingest/workflow.py`), and
-    # the workflow engine runs on the ACTOR runtime, which requires an actorStateStore this app-id can
-    # load. This comment used to say the OPPOSITE — that the state grant merely "rides along" because
-    # state ⊆ secrets, citing a docs/adr/0036-ingest-orchestration-dapr-workflow-is-adopted-the-estate-is.md ruling that Dapr Workflow was un-adopted. That ruling was
-    # REVERSED on 2026-08-03 ("Ingest orchestration — Dapr Workflow IS adopted"); the comment was never
-    # updated, so it sat here inviting exactly the removal that stops the plane dead.
-    #
-    # Measured 2026-08-05 against a cluster whose deployed components predated this list: the sidecar
-    # logged "Actor state store not configured - actor hosting disabled" and EVERY `POST /v1/ingests`
-    # answered 500, "the state store is not configured to use the actor runtime". Not a degraded run —
-    # no run could start at all.
-    #
-    # THE TWO FAIL AS A CHAIN, and only the second symptom is visible: scoping the state store alone
-    # changed nothing, because the state store resolves its own DSN THROUGH `lance-secrets`, so an
-    # unscoped secret store means the state store never loads, which Dapr reports as "no actor state
-    # store". Chasing that message alone leads to the wrong component. Fix both, restart, re-POST.
-    #
-    # Declared AHEAD of the Deployment on purpose: a sidecar loads components at BOOT, and M7's
-    # hot-reload abort (dapr-statestore.yaml:62, actorStateStore: "true") means a LATER addition would
-    # not reach already-running pods without a rollout. Adding one while the app has no pod is the
-    # single safe case. Precedent: `annotator` is scoped with no pod at chart defaults
-    # (media.enabled: false) — DAPR-AUDIT.md:273. Removing an app-id from this list is NOT safe the
-    # same way; it needs `kubectl rollout restart` for every scoped app.
-    - ingest
     # ── `flows` is here for STATE, and it is the one entry that genuinely provisions workflows. ──────
     # The studio flow-builder's durable lane IS Dapr Workflow (`flows/workflow.py`), which stores its
     # orchestration state through the ACTOR runtime — so without this scope the sidecar cannot load the
@@ -2736,7 +2541,7 @@ nats:
   # NATS JetStream is a PREREQUISITE (ADR 0153): the platform runs the bus, and rask never installs a server. The chart
   # carries what is rask's: the address it dials, the stream definitions (the stream Job), and the bus users below.
   # Development gets a three-node bus from deploy/fixtures/nats, at `nats://rask-nats:4222` (deploy/values-local.yaml).
-  # -- NATS JetStream address every pub/sub component, the stream Job and ingest connect to (e.g. nats://nats.internal:4222). Required: empty fails the render.
+  # -- NATS JetStream address every pub/sub component and the stream Job connect to (e.g. nats://nats.internal:4222). Required: empty fails the render.
   url: ""
   # -- HTTP monitoring endpoint of the bus (varz/jsz) the lakehouse zone's ops view reads (e.g. http://rask-nats-headless:8222). Empty hides the panel.
   monitorUrl: ""
@@ -2752,9 +2557,8 @@ nats:
   # account key, so issuing or re-issuing a user never touches the server.
   #
   # THE TABLE (`users`) IS THE ONE DECLARATION: one user per Dapr app-id that holds a pubsub.jetstream Component, plus `admin`
-  # (the stream Job), `monitor` (nats-box, read-only) and `ingest` (its own nats-py client, which reads `nats-user-ingest`
-  # through its sidecar's secret API). The dev seed issues exactly these permissions, every app's deny list hides every user's
-  # secret but ingest's own from ingest, the components name them, and the attestation below lists them. The rules, from the
+  # (the stream Job) and `monitor` (nats-box, read-only). The dev seed issues exactly these permissions, every app's deny list
+  # hides every user's secret, the components name them, and the attestation below lists them. The rules, from the
   # components and the call sites, measured on nats-server 2.14.2 with protocol tracing on 2026-10-04:
   #   - a publisher may publish its topics and receive on _INBOX.>, where the publish acknowledgement arrives;
   #   - a subscriber on stream S through durable D also requests $JS.API.STREAM.NAMES (no component sets streamName),
@@ -2762,9 +2566,9 @@ nats:
   #     $JS.ACK.S.D.>. The server sends the v1 ack subject `$JS.ACK.<stream>.<consumer>.<delivered>.<sseq>.<cseq>.<ts>.<pending>`
   #     (measured, and FeatureFlagJsAckFormatV2 is false at v2.14.2), so a v2 pattern refuses every ack and every message
   #     redelivers to the DLQ; a server upgrade that flips the flag changes these rows. A consumer the server names (the
-  #     catalog's ephemeral broadcast, ingest's per-run durables) acknowledges on $JS.ACK.S.>;
+  #     catalog's ephemeral broadcast) acknowledges on $JS.ACK.S.>;
   #   - a sidecar parks a dead letter through the component the delivery came on, so a subscriber publishes its own dlq.<app>;
-  #   - only admin (the stream Job's own command set, measured) and ingest (on its own work queue) create a stream or delete
+  #   - only admin (the stream Job's own command set, measured) creates a stream or deletes
   #     a consumer, no app holds $JS.API.>, and monitor reads stream and consumer state but no message and publishes nothing.
   # catalog.control.v1 is published by the catalog, by the medallion PRODUCER (promotion_review's request_approval runs in the
   # workflow engine the producer hosts, and its training runs' plans, CP-029), by maintenance under maintenance.controlEmit, by the annotator under
@@ -2829,7 +2633,7 @@ nats:
           publish: [catalog.control.v1]
         media-to-silver:
           publish: [catalog.control.v1]
-    # -- The bus user table, one user per Dapr app-id plus admin, monitor and ingest, each with publish and subscribe subject lists (never empty).
+    # -- The bus user table, one user per Dapr app-id plus admin and monitor, each with publish and subscribe subject lists (never empty).
     users:
       admin:
         publish: [$JS.API.INFO, $JS.API.STREAM.LIST, $JS.API.STREAM.NAMES, $JS.API.STREAM.INFO.*, $JS.API.STREAM.CREATE.*, $JS.API.CONSUMER.NAMES.*, $JS.API.CONSUMER.INFO.*.*, $JS.API.CONSUMER.CREATE.*.>, $JS.API.CONSUMER.DELETE.*.*]
@@ -2859,21 +2663,6 @@ nats:
           - $JS.API.CONSUMER.CREATE.CATALOG_CONTROL # the ephemeral broadcast every replica holds
           - $JS.API.CONSUMER.INFO.CATALOG_CONTROL.*
           - $JS.ACK.CATALOG_CONTROL.>
-        subscribe: [_INBOX.>]
-      ingest:
-        publish:
-          - ingest.tasks.>
-          - dlq.ingest.tasks
-          - $JS.API.STREAM.CREATE.INGEST
-          - $JS.API.STREAM.CREATE.DLQ
-          - $JS.API.STREAM.INFO.INGEST
-          - $JS.API.STREAM.INFO.DLQ
-          - $JS.API.STREAM.PURGE.INGEST
-          - $JS.API.CONSUMER.INFO.INGEST.*
-          - $JS.API.CONSUMER.CREATE.INGEST.*.ingest.tasks.>
-          - $JS.API.CONSUMER.DELETE.INGEST.*
-          - $JS.API.CONSUMER.MSG.NEXT.INGEST.*
-          - $JS.ACK.INGEST.> # a unit's ack, in-progress and nak
         subscribe: [_INBOX.>]
       lineage:
         publish:
@@ -2994,11 +2783,10 @@ dapr:
   #
   # Dapr's own CRD: "If not set, workflow instances will not be automatically purged." Nothing else
   # in this estate purges them, and nothing can: `DaprWorkflowClient` has `purge_workflow(id)` but no
-  # list-instances API, and the only index that could name the instances — `InMemoryRunStore` — is
-  # documented as "deliberately NOT durable", so a sweep built on it would collect only what happened
-  # since the last pod start. Measured live 2026-08-10, before this landed: 1367 rows in `daprstate`
-  # for `dapr.internal.default.ingest.workflow`, `count(expiredate) = 0`, oldest 2026-08-03 — every
-  # instance since the plane's first deploy, on a store with no TTL, no sweep and no alert.
+  # list-instances API, so no sweep can name the instances to purge. Measured live 2026-08-10, before
+  # this landed: 1367 rows in `daprstate` for one app's workflows, `count(expiredate) = 0`, oldest
+  # 2026-08-03 — every instance since that app's first deploy, on a store with no TTL, no sweep and no
+  # alert.
   #
   # PER-TERMINAL-STATE, because the states are not worth the same:
   #   · `completed` — short. A successful run's history is a cache of a fact stored durably elsewhere:
@@ -3403,8 +3191,8 @@ openbao:
   externalAddr: "" # e.g. https://vault.internal:8200
 
 # === Event signing keys ([[LH-064]]) ======================================================================
-# Every identity in `lance.signingIdentities` (the catalog, maintenance, the medallion producer, each stage runner
-# and ingest) signs the lineage it emits with its own Ed25519 key, so lineage holds public keys only and cannot
+# Every identity in `lance.signingIdentities` (the catalog, maintenance, the medallion producer and each stage
+# runner) signs the lineage it emits with its own Ed25519 key, so lineage holds public keys only and cannot
 # forge what it verifies. The store holds two secrets per identity, never two fields of one, because Dapr scopes a
 # secret by NAME and a per-app deny list can only name a whole secret:
 #   signing-public-<identity>   field `keys`  comma-separated public NKEYs, current first, at most one previous
@@ -3484,10 +3272,9 @@ signing:
   # verify nothing, as lineage does.
   #
   # THE ONE NARROWER SET is the medallion producer's RASK_EVENT_SIGNERS, which it reads for /bronze-arrival and nothing else:
-  # the identities of the roles medallion_producer and catalog (lance.doorEnv's third argument). Only two kinds of event fire
-  # the bronze head: the producer's own /produce and /ingest-media bronze writes, and the catalog's announcement of a write
-  # through its doors. Ingest never publishes to the lineage topic (it emits over HTTP, ingest/lineage.py `_emitter`, and the
-  # catalog announces its writes), and the head ignores a maintenance pass (compaction, compact_table, create_index) before
+  # the identities of the roles medallion_producer and catalog (lance.doorEnv's third argument). Only the catalog's
+  # announcement of a write through its doors fires the bronze head; the medallion_producer role is still listed and
+  # signs no event the head acts on. The head ignores a maintenance pass (compaction, compact_table, create_index) before
   # verifying it, so a signature from any other identity on an event the head acts on is a forgery to this door. A stage
   # runner's own write reaches the head only when a declared lane names that table as its input: enforcing, the head
   # refuses it as a signer it does not list (counted); observing, it acts and counts it. Such a lane is meant to be woken

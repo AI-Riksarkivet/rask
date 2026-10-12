@@ -10,7 +10,7 @@ door are all refused, and none of them reaches authorization.
 The catalog app as deployed, on a real `dir` namespace, with authentication on: its lifespan builds the verifiers from
 these settings. Authorization is answered by a stand-in for OpenFGA's check that grants the namespace to
 `service-maintenance` alone, and records who it was asked about, so a request acting as maintenance would pass where
-one acting as ingest is refused.
+one acting as the producer is refused.
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ from lance_namespace_urllib3_client.models import CreateNamespaceRequest
 
 
 _SHARED = "the-estate-wide-app-token"
-_INGEST, _MAINTENANCE = "rask-sa-ingest", "rask-sa-maintenance"
+_PRODUCER, _MAINTENANCE = "rask-sa-medallion-producer", "rask-sa-maintenance"
 
 
 @pytest.fixture
@@ -44,13 +44,13 @@ def catalog(sa_issuer: Any, tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> I
         "RASK_SA_ISSUER": sa_issuer.issuer,
         "RASK_SA_AUDIENCE": "rask-catalog",
         "RASK_SA_SUBJECTS": json.dumps(
-            {f"system:serviceaccount:default:{_INGEST}": "service-ingest", f"system:serviceaccount:default:{_MAINTENANCE}": "service-maintenance"}
+            {f"system:serviceaccount:default:{_PRODUCER}": "service-medallion-producer", f"system:serviceaccount:default:{_MAINTENANCE}": "service-maintenance"}
         ),
         "RASK_SA_FETCH_TOKEN_FILE": str(sa_issuer.fetch_token_file),
         "RASK_SA_CA_FILE": str(sa_issuer.ca_file),
         # The deployment as it was: the shared token configured and both services on the service allowlist.
         "APP_API_TOKEN": _SHARED,
-        "LANCE_SERVICE_SUBJECTS": "service-ingest,service-maintenance",
+        "LANCE_SERVICE_SUBJECTS": "service-medallion-producer,service-maintenance",
     }
     for key, value in env.items():
         monkeypatch.setenv(key, value)
@@ -84,10 +84,10 @@ def catalog(sa_issuer: Any, tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> I
 @pytest.mark.parametrize(
     ("account", "namespace", "audience", "status", "asked_about"),
     [
-        pytest.param(_INGEST, "default", "rask-catalog", 403, "service-ingest", id="ingests-token-naming-maintenance-acts-as-ingest"),
-        pytest.param(_INGEST, "other", "rask-catalog", 401, None, id="the-same-account-name-in-another-namespace"),
+        pytest.param(_PRODUCER, "default", "rask-catalog", 403, "service-medallion-producer", id="the-producers-token-naming-maintenance-acts-as-the-producer"),
+        pytest.param(_PRODUCER, "other", "rask-catalog", 401, None, id="the-same-account-name-in-another-namespace"),
         pytest.param("rask-sa-unlisted", "default", "rask-catalog", 401, None, id="an-account-the-map-does-not-list"),
-        pytest.param(_INGEST, "default", "rask-lineage", 401, None, id="a-token-minted-for-another-door"),
+        pytest.param(_PRODUCER, "default", "rask-lineage", 401, None, id="a-token-minted-for-another-door"),
     ],
 )
 def test_the_catalog_takes_a_service_from_its_projected_token_alone(  # noqa: PLR0913 - parametrized

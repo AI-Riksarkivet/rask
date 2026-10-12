@@ -198,7 +198,6 @@ _NOBODY = (
     "--set", "catalog.serviceIdentity=",
     "--set", "maintenance.enabled=false",
     "--set", "medallion.enabled=false",
-    "--set", "services.ingest.env.RASK_LINEAGE_SERVICE_IDENTITY=",
 )  # fmt: skip
 
 

@@ -11,10 +11,9 @@ are not decoration. `code` is a REQUIRED, no-default field on the generated Lanc
 THE TWO HALVES ARE NOT THE SAME DEFECT, and the audit is right to separate them:
 
   * The CATALOG sites answer on `/v1/...` routes that generated clients parse. That is the real one.
-  * The MEDALLION sites are root-mounted non-spec doors (`/produce`, `/ingest-media`, `/train`) reached
+  * The MEDALLION sites are root-mounted non-spec doors (`/train` and the operator doors) reached
     by the frontend and operators, never by a generated client — envelope inconsistency only. Worth
-    fixing anyway, not least because `produce.py` claims "parity with catalog/lineage errors" in a
-    comment while emitting four keys.
+    fixing anyway, because a body that claims parity with the catalog's errors must carry the same keys.
 
 WHY THE SITES KEEP BUILDING A RESPONSE INSTEAD OF RAISING, which is where this deviates from the
 audit's suggested fix. Two of them are pure-ASGI middleware that sit outside `ExceptionMiddleware` and

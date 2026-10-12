@@ -39,7 +39,7 @@ CATALOG_DELIMITER = "$"
 #:
 #: **IT LIVES IN SERVICE-KIT BECAUSE TWO PLANES DECIDE WITH IT, AND THEY DISAGREED.** The catalog MINTS
 #: against this rule; the planes downstream — `catalog.core.lineage_emit`, the medallion's ingest
-#: trigger and transform, `ingest.naming` — CONSUME with `warehouse_registry.is_safe_project`, which
+#: trigger and transform — CONSUME with `warehouse_registry.is_safe_project`, which
 #: had its own looser copy admitting uppercase, underscores, single characters and a trailing hyphen.
 #: Anything in that gap is an id those planes would turn into an S3 key prefix, a Lance dataset URI and
 #: a lineage namespace qualifier, and that the control plane could never have issued. The rule a
@@ -51,7 +51,7 @@ CONTROL_ID_RE = re.compile(rf"^{CONTROL_ID_PATTERN}\Z")
 #: The lineage namespaces that denote a source OUTSIDE the governed estate.
 #:
 #: A convention two services must agree on cannot live inside one of them — the reason
-#: `project_namespace` moved here. INGEST mints these on a run's input dataset; LINEAGE decides from
+#: `project_namespace` moved here. A PRODUCER names these on a run's input dataset; LINEAGE decides from
 #: them whether to authorize that input at all. When the two disagree the failure is silent and
 #: one-sided: the START event is refused 403, the terminal event carries no inputs and is accepted, so
 #: the run reaches the graph missing exactly half of itself.

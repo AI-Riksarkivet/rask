@@ -12,7 +12,6 @@ root_packages =
     maintenance
     notifications
     annotator
-    ingest
     controlplane
     service_kit
     lineage_kit
@@ -53,7 +52,6 @@ source_modules =
     medallion
     maintenance
     notifications
-    ingest
     controlplane
     service_kit
     lineage_kit
@@ -71,7 +69,6 @@ source_modules =
     lineage
     medallion
     maintenance
-    ingest
     controlplane
     service_kit
 forbidden_modules =
@@ -81,8 +78,6 @@ ignore_imports =
     medallion.workflow -> dapr.ext.workflow
     medallion.services.dapr_saga -> dapr.ext.workflow
     medallion.services.dapr_saga -> dapr.ext.workflow.workflow_state
-    ingest.workflow -> dapr.ext.workflow
-    ingest.dapr_workflow -> dapr.ext.workflow
 allow_indirect_imports = True
 
 [importlinter:contract:settings-import-no-web-stack]

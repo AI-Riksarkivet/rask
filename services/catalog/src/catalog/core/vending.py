@@ -53,7 +53,7 @@ from service_kit.lakehouse.base_registry import BaseJudgement, BaseRole, BaseSta
 from service_kit.lakehouse.branch_layout import BRANCH_CONTAINER, BRANCH_FILE_DIRS
 from service_kit.lakehouse.features import BasePathRef
 from service_kit.lakehouse.objectfs import lance_storage_options
-from service_kit.lakehouse.table_layout import DATA_DIR, INGEST_STAGING_DIR
+from service_kit.lakehouse.table_layout import DATA_DIR
 
 
 log = logging.getLogger(__name__)
@@ -61,11 +61,11 @@ log = logging.getLogger(__name__)
 #: What a credential may do inside the prefix it is scoped to ([[LH-202]]):
 #:
 #: * ``read`` — list and get the table.
-#: * ``write`` — a ``can_write_data`` append: read the table, put data files under ``data/`` (and ingest's
-#:   staging ledger), nothing that commits, deletes or moves a ref. Commits go through ``/commit``.
+#: * ``write`` — a ``can_write_data`` append: read the table, put data files under ``data/``,
+#:   nothing that commits, deletes or moves a ref. Commits go through ``/commit``.
 #: * ``maintain`` — a ``can_maintain`` rewrite and reclaim: get, put and delete anywhere in the prefix,
 #:   because compaction commits versions and cleanup deletes them. Also the shape for a prefix with no
-#:   Lance layout to narrow by (the lineage outbox, the warehouse scope probe).
+#:   Lance layout to narrow by (the warehouse scope probe).
 Tier = Literal["read", "write", "maintain"]
 VendingMode = Literal["mode_b", "sts", "web_identity"]
 
@@ -139,8 +139,6 @@ def split_s3_location(location: str) -> tuple[str, str]:
 _READ_ACTIONS = ("s3:GetObject",)
 #: A writer lands new objects and may abandon its own multipart upload; it deletes nothing.
 _APPEND_ACTIONS = ("s3:PutObject", "s3:AbortMultipartUpload")
-#: Ingest's ledger is written, read back and purged by the run that owns it.
-_LEDGER_ACTIONS = ("s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload")
 _MAINTAIN_ACTIONS = (
     "s3:GetObject",
     "s3:PutObject",
@@ -488,8 +486,7 @@ def build_session_policy(
 
     * ``read``: nothing else.
     * ``write`` (``can_write_data``): put and abort-upload on ``<prefix>/data/*``, where ``write_fragments``
-      lands data files and blob sidecars (``service_kit.lakehouse.table_layout``), and put/delete on ingest's
-      staging ledger. Never ``_versions/``, ``_transactions/``, ``_deletions/``, ``_indices/``, ``_refs/``,
+      lands data files and blob sidecars (``service_kit.lakehouse.table_layout``). Never ``_versions/``, ``_transactions/``, ``_deletions/``, ``_indices/``, ``_refs/``,
       ``tree/`` or ``_mem_wal/``, and no delete of anything Lance reads: the append is committed by the
       catalog's ``/commit`` under its own credential, so a writer that could put a manifest could commit
       Overwrite, Restore, UpdateBases or a DataReplacement around the door, and one that could put under
@@ -588,10 +585,6 @@ def build_session_policy(
     if tier == "write":
         # The same rung on a branch as on main: a branch writer appends through `/commit?branch=`.
         statements.append({"Sid": "TableData", "Effect": "Allow", "Action": list(_APPEND_ACTIONS), "Resource": f"arn:aws:s3:::{ref_root}/{DATA_DIR}/*"})
-        if not branch:
-            statements.append(
-                {"Sid": "IngestLedger", "Effect": "Allow", "Action": list(_LEDGER_ACTIONS), "Resource": f"arn:aws:s3:::{root}/{INGEST_STAGING_DIR}/*"}
-            )
     elif tier == "maintain" and branch:
         statements.append(
             {

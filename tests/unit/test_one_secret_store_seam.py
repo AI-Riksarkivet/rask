@@ -24,7 +24,6 @@ import pytest
 def _settings_builders() -> list[tuple[str, Any, str]]:
     """(label, factory, attribute) for every settings object that names the one secret store."""
     from catalog.core.config import Settings as CatalogSettings
-    from ingest.config import IngestSettings
     from lineage.core.config import LineageSettings
     from maintenance.core.config import MaintenanceSettings
     from medallion.core.config import MedallionSettings
@@ -39,7 +38,6 @@ def _settings_builders() -> list[tuple[str, Any, str]]:
         ("media.s3", MediaSettings, "s3_secret_store"),
         ("media.publish", MediaSettings, "publish_secret_store"),
         ("viewer", ViewerSettings, "secret_store"),
-        ("ingest", IngestSettings, "secret_store"),
     ]
 
 

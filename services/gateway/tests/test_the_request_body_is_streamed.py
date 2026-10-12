@@ -1,9 +1,9 @@
 """The gateway PROXIES a request body; it does not collect one first (GW-BUFFERS-REQUEST-BODY).
 
 `content=await request.body()` materialised the whole upload in the gateway's memory before a single
-byte reached the upstream. The gateway fronts `/api/ingest` (the ingest control plane),
-`/api/explorer/annotations` (the annotator's Arrow-IPC writes) and `/api/produce` — the three planes
-whose payloads are the least bounded — so a handful of concurrent large POSTs multiply straight into
+byte reached the upstream. The gateway fronts `/api/catalog` (Arrow-IPC table writes) and
+`/api/explorer/annotations` (the annotator's Arrow-IPC writes) — the planes whose payloads are the
+least bounded — so a handful of concurrent large POSTs multiply straight into
 the pod's memory limit, and every one of them pays full-upload latency before the upstream sees
 anything. The response half was already streamed (`StreamingResponse(upstream_resp.aiter_raw())`),
 which is the asymmetry that showed the primitive was understood here.
@@ -98,7 +98,7 @@ async def test_the_upstream_is_reached_before_the_body_has_finished_arriving(gw)
         try:
             response = await asyncio.wait_for(
                 client.post(
-                    "/api/produce",
+                    "/api/train",
                     content=client_body(),
                     headers={"content-length": str(len(first) + len(second)), "content-type": "application/octet-stream"},
                 ),
@@ -120,7 +120,7 @@ async def test_the_forwarded_body_keeps_its_declared_length(gw) -> None:
     payload = b"C" * 2048
     transport = httpx.ASGITransport(app=gw.app)
     async with httpx.AsyncClient(transport=transport, base_url="http://gateway.test") as client:
-        response = await client.post("/api/produce", content=payload)
+        response = await client.post("/api/train", content=payload)
 
     assert response.status_code == 200
     assert upstream.body == payload
@@ -142,7 +142,7 @@ async def test_a_bodyless_get_is_not_re_framed_as_chunked(gw) -> None:
 
     transport = httpx.ASGITransport(app=gw.app)
     async with httpx.AsyncClient(transport=transport, base_url="http://gateway.test") as client:
-        response = await client.get("/api/produce")
+        response = await client.get("/api/train")
 
     assert response.status_code == 200
     assert upstream.body == b""

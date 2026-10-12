@@ -22,9 +22,8 @@ sidecar's metadata entirely, and one it can see advertises its capabilities. So 
 component with the ACTOR capability" answers precisely the question the log lines do not.
 
 NON-FATAL, deliberately, and for the same reason as :mod:`actor_warmup`: the services that host a
-runtime also serve doors that do not need one. The medallion producer's `/produce` and
-`/ingest-media` are the cascade's only ingress and work perfectly without actors — refusing to boot
-would turn one dead capability into a dead estate. The verdict is logged at ERROR and returned, so a
+runtime also serve doors that do not need one. The medallion producer's cascade head and `/train`
+work perfectly without actors — refusing to boot would turn one dead capability into a dead estate. The verdict is logged at ERROR and returned, so a
 caller may also surface it on a health detail.
 """
 

@@ -1,14 +1,13 @@
 """Each NATS client reaches exactly its own subjects, and a client with no credential reaches nothing ([[XC-078]]).
 
 Closes-when clause 1 ("a publish from a pod without its app's credential is refused on every cascade, control and
-lineage subject") and the ingest clause ("ingest drains a run through its own NATS user, and a pod without that
-user cannot publish on `ingest.tasks.>`"), proved offline: the nats-server the NATS fixture deploys (deploy/fixtures/nats,
+lineage subject"), proved offline: the nats-server the NATS fixture deploys (deploy/fixtures/nats,
 a prerequisite rask never installs) in operator mode with a MEMORY resolver and JetStream, test-only keys minted with nsc, and one user per row of the permission table the chart's dev
 seed issues (read off the render, so a values.yaml `nats.auth.flagged` grant counts only while its flag is on).
 
 The table is held to two declarations below, written independently of it, because a table checked only against
 itself can never be too broad. `PUBLISHERS` is who may publish each data subject, read off every Dapr publish call
-site, every `deadLetterTopic` (published by that app's own sidecar) and the raw ingest client. `DAPR_SUBSCRIPTIONS`
+site and every `deadLetterTopic` (published by that app's own sidecar). `DAPR_SUBSCRIPTIONS`
 is what each sidecar subscribes, read off every `dapr_app.subscribe`. A table that lets anyone else publish a
 subject fails, and so does one that withholds a subject or a JetStream API call a client makes.
 
@@ -46,7 +45,6 @@ from nats_auth_rig import (
     client_subjects,
     component_metadata,
     dapr_consumer_config,
-    ignore_refusal,
     mint,
     run_cli,
     run_stream_job,
@@ -54,10 +52,6 @@ from nats_auth_rig import (
     violations,
 )
 
-from ingest.lander import create_empty
-from ingest.queue import UnitTask, WorkQueue
-from ingest.runtime import BRONZE_SCHEMA
-from ingest.worker import Worker
 from tests.unit.chart_render import DEFAULT_ARGS, containers, nats_users, render, render_fixture
 
 
@@ -79,10 +73,10 @@ RIG = "rask-test-rig"
 #: and control_relay.py, medallion/workflow.py `request_approval`, which runs in the producer's promotion_review
 #: workflow, and each stage runner's plan announcement (stage_plans.py) while an engine is enabled. maintenance work:
 #: catalog/endpoints/maintenance.py and maintenance/services/work_queue.py; index: catalog only. medallion.<tier>: the
-#: producer (ingest_trigger, publication_trigger, rerun, media_produce) and each stage runner's hand-off to its own
+#: producer (ingest_trigger, publication_trigger, rerun) and each stage runner's hand-off to its own
 #: topic (stage_plans.py); a stage runner never publishes downstream, promotion goes through
 #: the catalog (transform.py). medallion.promotion: promotion_hold.py in the stage runners. refused.<app>:
-#: transform.py. dlq.<app>: the `deadLetterTopic` of that app's subscriptions. ingest: queue.py.
+#: transform.py. dlq.<app>: the `deadLetterTopic` of that app's subscriptions.
 def _values() -> Path:
     return Path(os.environ.get(VALUES_ENV) or REPO / "chart" / "values.yaml")
 
@@ -128,8 +122,6 @@ PUBLISHERS: dict[str, frozenset[str]] = {
     **{f"dlq.{runner}": frozenset({runner}) for runner in RUNNERS},
     "dlq.maintenance.work": frozenset({"maintenance"}),
     "dlq.maintenance.index": frozenset({"maintenance"}),
-    "dlq.ingest.tasks": frozenset({"ingest"}),
-    "ingest.tasks.probe": frozenset({"ingest"}),
 }
 
 #: What each sidecar subscribes, as (durableName, topic); None is the catalog's ephemeral broadcast consumer.
@@ -161,8 +153,8 @@ DAPR_SUBSCRIPTIONS: dict[str, tuple[tuple[str | None, str], ...]] = {
     ),
 }
 
-#: The non-Dapr clients the table must also name: the stream Job, nats-box, and ingest's raw client.
-NON_DAPR_USERS = frozenset({"admin", "monitor", "ingest"})
+#: The non-Dapr clients the table must also name: the stream Job and nats-box.
+NON_DAPR_USERS = frozenset({"admin", "monitor"})
 
 
 def _probe_of(subject: str) -> str:
@@ -430,46 +422,6 @@ async def _replay_subscriptions(url: str, mint_: Mint, components: list[dict[str
     return findings
 
 
-class _Source:
-    """The unit source a worker fetches from (`ingest.worker.Fetcher`): bytes per key, nothing for `empty` keys."""
-
-    def __init__(self, empty: frozenset[str]) -> None:
-        self._empty = empty
-
-    async def fetch(self, key: str, *, source_endpoint: str | None = None) -> bytes:
-        return b"" if key in self._empty else f"bytes-for-{key}".encode()
-
-
-async def _drain_ingest_run(url: str, mint_: Mint, rig: Client, workdir: Path) -> list[str]:
-    """Ingest's own client provisions, publishes, drains (parking one invalid unit) and releases a run as `ingest`."""
-    credential = mint_.credentials["ingest"]
-    run, uri = "nats-auth-run", str(workdir / "bronze.lance")
-    create_empty(uri, BRONZE_SCHEMA)
-    tasks = [UnitTask(run_id=run, chunk_id="c0", key=f"probe://unit/{i}", dataset_uri=uri) for i in range(3)]
-    findings: list[str] = []
-    queue = await WorkQueue.connect(url, name="ingest", error_cb=ignore_refusal, user_jwt_cb=credential.jwt_bytes, signature_cb=credential.sign_nonce)
-    try:
-        await queue.ensure_stream()
-        await queue.ensure_dlq_stream()
-        if (published := await queue.publish_units(tasks)) != len(tasks):
-            findings.append(f"ingest published {published} of {len(tasks)} units")
-        outcome = await Worker(queue, _Source(frozenset({tasks[1].key})), name="w1").drain_chunk(run, "c0", expected=len(tasks), dataset_uri=uri)
-        if (outcome.units_done, outcome.errors) != (2, {tasks[1].key: "empty payload"}):
-            findings.append(f"ingest drained {outcome.units_done} units with errors {outcome.errors}")
-        pending = await (await queue.subscribe(run)).consumer_info()
-        if (pending.num_pending, pending.num_ack_pending) != (0, 0):
-            findings.append(f"ingest left {pending.num_pending} pending and {pending.num_ack_pending} unacked")
-        await queue.release_run(run)
-    except Exception as exc:  # noqa: BLE001 — a refused provisioning call surfaces as whatever nats-py raises
-        findings.append(f"ingest failed to drain its run: {exc!r}")
-    finally:
-        await queue.close()
-    left = await rig.request(f"$JS.API.CONSUMER.INFO.INGEST.ingest-{run}") or {}
-    if (left.get("error") or {}).get("err_code") != 10014:
-        findings.append(f"release_run left the run's consumer behind: {left}")
-    return findings
-
-
 async def _stream_job_repairs(tools: Tools, docs: tuple[dict, ...], broker: Broker, mint_: Mint, rig: Client, home: Path) -> list[str]:
     """The Job's second run, over an orphan durable and a drifted bound it must delete and converge as `admin`."""
     work = component_metadata(_subscriber_component(_pubsub_components(docs), "maintenance", "maintenance-work-durable")[0])
@@ -552,7 +504,6 @@ async def test_nats_admits_each_client_only_to_its_own_subjects(tmp_path: Path) 
         findings += matrix
         findings += await _daprd_shapes(tools, broker, mint_, components, rig, tmp_path / "daprd")
         findings += await _replay_subscriptions(broker.url, mint_, components, probes)
-        findings += await _drain_ingest_run(broker.url, mint_, rig, tmp_path)
         findings += await _stream_job_repairs(tools, docs, broker, mint_, rig, tmp_path)
         findings += await asyncio.to_thread(_monitor_reads, tools, broker, mint_, tmp_path)
         for client in [rig, *probes.values()]:

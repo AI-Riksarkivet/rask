@@ -5,7 +5,7 @@ doors read them as proof of who is calling. daprd APPENDS its own stamp rather t
 client's, and FastAPI's `Header()` binds the FIRST occurrence — so a client that sets the header
 itself wins over the sidecar, and every caller-identity check downstream reads the caller's own claim.
 
-Measured on the live cluster against the ingest door, AFTER that door had been fixed to refuse public
+Measured on the live cluster against a write door, AFTER that door had been fixed to refuse public
 callers:
 
     anonymous POST, no header                        -> 403
@@ -72,7 +72,7 @@ def test_the_headers_the_estate_DOES_need_are_still_forwarded(proxied) -> None:
     `Authorization` is the whole user-bearer path — the fallback every door takes once the
     service-token path is refused for a public caller. Stripping it would close the bypass by making
     authenticated use impossible, which is not a fix. `Idempotency-Key` and `Content-Type` are
-    likewise load-bearing for the ingest control API.
+    likewise load-bearing for every write door.
     """
     client, captured = proxied
 
