@@ -1,0 +1,87 @@
+# The rask release this service sits beside. Every rask name below derives from it: the Deployment, Service and
+# ServiceAccount `<rask>-compute` / `<rask>-sa-compute` (the names rask's gateway and OpenFGA admit), and the objects rask
+# owns that this pod reads by reference: `<rask>-dapr-app-token`, `<rask>-ray-auth-token`, `<rask>-dex`, `<rask>-openfga`
+# and `<rask>-otel-collector`.
+rask:
+  release: rask
+
+image:
+  # A bare name is a side-loaded image on the node (make k3s-import); a registry path is pulled.
+  repository: compute
+  tag: dev
+  pullPolicy: IfNotPresent
+
+replicas: 1
+port: 8804
+# Mount prefix of the routers (RASK_API_PREFIX); rask's gateway forwards /api/ray and /api/serve unchanged.
+apiPrefix: /api
+# Interactive API docs (RASK_DOCS).
+docs: false
+# Peers whose x-forwarded-* headers uvicorn trusts (rask's `forwardedAllowIps`); `*` is refused.
+forwardedAllowIps: 127.0.0.1
+
+# The Ray dashboard compute reads and prunes (RAY_DASHBOARD_URL): the engine's, the same address rask's
+# `ray.dashboardUrl` names. Required.
+rayDashboardUrl: http://rask-ray-head-svc:8265
+# Present the token in `<rask>-ray-auth-token` (rask's `ray.auth`); the engine must enforce the same one.
+rayAuth:
+  enabled: false
+
+# The Dapr cron that ticks the job-history prune (route `/compute-prune-jobs-cron`, the Component's name).
+prune:
+  schedule: "@every 6h"
+
+dapr:
+  # A sidecar for the prune cron's delivery and the gateway's service invocation of app-id `compute`. Rendered only on a
+  # cluster that serves dapr.io/v1alpha1.
+  enabled: true
+  logLevel: info
+  maxBodySize: 32Mi
+  # The Dapr Configuration the sidecar loads: rask's tracing Configuration, which rask's chart renders in this namespace.
+  config: lance-tracing
+  sidecarResources:
+    cpuRequest: 50m
+    cpuLimit: 300m
+    memoryRequest: 64Mi
+    memoryLimit: 256Mi
+
+# rask's `lifecycle`: the pod's grace period, the preStop drain, the lifespan teardown after uvicorn's drain, and how
+# long the sidecar outlives the app.
+lifecycle:
+  terminationGracePeriodSeconds: 40
+  preStopSeconds: 5
+  teardownSeconds: 10
+  sidecarBlockShutdownSeconds: 20
+
+# Telemetry to rask's OTel Collector (`<rask>-otel-collector:4318` unless `endpoint` names another); off when rask runs
+# without observability. `environment` is rask's `observability.environment`.
+otel:
+  enabled: true
+  endpoint: ""
+  environment: rask
+
+# The user door: compute gates its routers on the estate reader tier. Off, it answers anonymously and says so
+# (RASK_INSECURE_ALLOW_UNAUTHENTICATED).
+auth:
+  enabled: true
+  # Emit the authn/authz audit stream (RASK_AUDIT_ENABLED).
+  audit: true
+  oidc:
+    # rask's `dex.issuer`; empty derives the dev issuer `http://<rask>-dex:5556/dex`.
+    issuer: ""
+    # Where discovery is fetched; empty derives `http://<rask>-dex:5556/dex`.
+    discoveryUrl: ""
+    # rask's `dex.clientId`.
+    audience: lance-catalog
+  fga:
+    # rask's OpenFGA; empty derives `http://<rask>-openfga:8080`. OpenFGA admits this pod's projected `rask-openfga`
+    # token only when rask's `auth.externalFgaClients` names its account.
+    apiUrl: ""
+    # rask's `auth.fgaStoreId`, when pinned.
+    storeId: ""
+
+# The Ray Job SDK this service imports pulls the whole Ray client library into the process; on a 512Mi limit it was
+# OOMKilled while answering (measured 2026-07-29).
+resources:
+  requests: { cpu: 100m, memory: 512Mi }
+  limits: { cpu: "1", memory: 1536Mi }

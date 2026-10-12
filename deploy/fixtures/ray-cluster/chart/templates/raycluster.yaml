@@ -65,12 +65,6 @@ spec:
               - {name: HF_HOME, value: /cache/hf}
               - name: HF_TOKEN
                 valueFrom: {secretKeyRef: {name: {{ $r }}-hf-token, key: token, optional: true}}
-              - {name: S3_ENDPOINT, value: "http://{{ $r }}-minio:{{ .Values.rask.s3Port }}"}
-              - {name: S3_REGION, value: {{ .Values.rask.s3Region | quote }}}
-              - name: S3_KEY
-                valueFrom: {secretKeyRef: {name: {{ $r }}-infra-credentials, key: ray-compute-access-key}}
-              - name: S3_SECRET
-                valueFrom: {secretKeyRef: {name: {{ $r }}-infra-credentials, key: ray-compute-secret-key}}
               - {name: RASK_LINEAGE_ENDPOINT, value: "http://{{ $r }}-lineage:8000"}
               - {name: RASK_LINEAGE_ENDPOINT_PATH, value: api/v1/lineage}
               {{- with .Values.env }}

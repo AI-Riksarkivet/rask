@@ -3,7 +3,6 @@
 image:
   tags:
     assist-runner: "main-31b161ec"
-    compute: "lakehouse-3e959931"
     controlplane: "lakehouse-3e959931"
     flows: "lakehouse-3e959931"
     gateway: "lakehouse-3e959931"

@@ -1,0 +1,8 @@
+apiVersion: v2
+name: compute
+description: >-
+  NOT FOR PRODUCTION as shipped. The compute service beside a rask release: Ray dashboard introspection, the Serve proxy
+  and the Ray job-history prune, for an estate whose Ray engine is its own. rask's product chart renders none of it.
+type: application
+version: 0.1.0
+appVersion: "0.3.0"

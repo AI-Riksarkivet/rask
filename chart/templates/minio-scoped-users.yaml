@@ -1,10 +1,9 @@
-{{- $ray := .Values.minio.rayComputeAccessKey }}
 {{- $maint := .Values.minio.maintenanceAccessKey }}
 {{- $lineage := .Values.minio.lineageAccessKey }}
 {{- $viewer := .Values.minio.viewerAccessKey }}
 {{- $catalog := .Values.minio.catalogAccessKey }}
 {{- $fixture := include "lance.baseFixture" . | fromJson }}
-{{- if and .Values.minio.enabled (or $ray $maint $lineage $viewer $fixture) }}
+{{- if and .Values.minio.enabled (or $maint $lineage $viewer $fixture) }}
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -56,7 +55,7 @@ spec:
               set -e
               root=$(cat "$ROOT_FILE")
               {{- include "lance.scopedSecretFn" . | nindent 14 }}
-              {{- range $id := list $ray $maint $lineage $catalog $viewer | compact | uniq }}
+              {{- range $id := list $maint $lineage $catalog $viewer | compact | uniq }}
               scoped_secret {{ $id }} "$KEYS/{{ $id }}"
               {{- end }}
               {{- range $ref, $_ := $fixture }}
@@ -126,8 +125,6 @@ spec:
                       "arn:aws:s3:::*/_projects/*",
                       "arn:aws:s3:::*/_protection/*",
                       "arn:aws:s3:::*/_warehouses/*",
-                      "arn:aws:s3:::*/_tasks/*",
-                      "arn:aws:s3:::*/_transforms/*",
                       "arn:aws:s3:::*/_gates/*",
                       "arn:aws:s3:::*/__manifest/*"
                     ]
@@ -150,80 +147,6 @@ spec:
               mc admin user add rfs {{ .Values.minio.maintenanceAccessKey }} "$(cat /keys/{{ .Values.minio.maintenanceAccessKey }})" || true
               mc admin policy attach rfs rask-maintenance --user {{ .Values.minio.maintenanceAccessKey }} || true
               echo "provisioned scoped user {{ .Values.minio.maintenanceAccessKey }} (rask-maintenance)"
-              {{- end }}
-
-              {{- if $ray }}
-              # --- RAY COMPUTE: the jobs the engine runs. ----------------------------------------------
-              cat >/tmp/ray-compute.json <<'POLICY'
-              {
-                "Version": "2012-10-17",
-                "Statement": [
-                  {
-                    "Sid": "CascadeDataInAnyWarehouse",
-                    "Effect": "Allow",
-                    "Action": [
-                      "s3:ListBucket",
-                      "s3:GetBucketLocation",
-                      "s3:GetObject",
-                      "s3:PutObject",
-                      "s3:DeleteObject",
-                      "s3:AbortMultipartUpload",
-                      "s3:ListMultipartUploadParts"
-                    ],
-                    "Resource": ["arn:aws:s3:::*", "arn:aws:s3:::*/*"]
-                  },
-                  {
-                    "Sid": "TheControlBucketOnlyUnderTheCascadePrefix",
-                    "Effect": "Deny",
-                    "Action": ["s3:ListBucket"],
-                    "Resource": ["arn:aws:s3:::{{ $control }}"],
-                    "Condition": { "StringNotLike": { "s3:prefix": "medallion*" } }
-                  },
-                  {
-                    "Sid": "NeverTheControlPlane",
-                    "Effect": "Deny",
-                    "Action": ["s3:*"],
-                    "Resource": [
-                      "arn:aws:s3:::*/_projects/*",
-                      "arn:aws:s3:::*/_protection/*",
-                      "arn:aws:s3:::*/_bases/*",
-                      "arn:aws:s3:::*/_policies/*",
-                      "arn:aws:s3:::*/_warehouses/*",
-                      "arn:aws:s3:::*/_tasks/*",
-                      "arn:aws:s3:::*/_transforms/*",
-                      "arn:aws:s3:::*/_gates/*",
-                      "arn:aws:s3:::*/_trash/*",
-                      "arn:aws:s3:::*/_plans/*"
-                    ]
-                  },
-                  {
-                    "Sid": "NeverTheNamespaceIndex",
-                    "Effect": "Deny",
-                    "Action": ["s3:PutObject", "s3:DeleteObject"],
-                    "Resource": ["arn:aws:s3:::*/__manifest/*"]
-                  }
-                ]
-              }
-              POLICY
-              # The Ray lane's deny is TOTAL where maintenance's is write-only: a job reads and writes table
-              # data and has no reason to read a governance record.
-              #
-              # THE DENY LISTS EVERY CONTROL PREFIX. `_gates/` decides which output is admitted. `_trash/` is the only thing making a dropped
-              # table restorable (#75/#96), so deleting a record strands live bytes behind an `undrop` that
-              # can no longer find them — silent, and unrecoverable.
-              #
-              # `__manifest/` is split out because the two credentials need it differently: it is the
-              # authoritative namespace->table mapping (a namespace is a ROW in it, not a directory), so
-              # neither may WRITE it, while the purge must READ it to re-check a trashed id's liveness
-              # before destroying bytes (`maintenance/services/purge.py`). Write-deny, not total.
-              #
-              # `medallion*` and not `medallion/*` —
-              # Lance lists with `prefix=medallion/` and `StringLike` does not match a trailing-slash
-              # pattern against it, a lesson that cost a cascade the first time this policy was written.
-              mc admin policy create rfs rask-ray-compute /tmp/ray-compute.json
-              mc admin user add rfs {{ .Values.minio.rayComputeAccessKey }} "$(cat /keys/{{ .Values.minio.rayComputeAccessKey }})" || true
-              mc admin policy attach rfs rask-ray-compute --user {{ .Values.minio.rayComputeAccessKey }} || true
-              echo "provisioned scoped user {{ .Values.minio.rayComputeAccessKey }} (rask-ray-compute)"
               {{- end }}
 
               {{- if $lineage }}

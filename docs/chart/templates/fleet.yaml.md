@@ -91,14 +91,6 @@ Sprig's default() treats boolean false as empty, and a bare reference renders ""
 `--reuse-values` upgrade from a release predating the key, which is a pydantic
 bool_parsing crash at boot. Same convention as LANCE_AUDIT_ENABLED.
 
-## `{{- include "rask.rayAuthEnv" $root | nindent 12 }}`
-
-Ray token auth (gate 7 / R3): only the services flagged rayClient in
-.Values.services (compute) get the pair — least
-privilege; the gateway never talks to Ray. No-op unless
-ray.auth.enabled (the include gates itself). JobSubmissionClient +
-ray-kit's httpx paths read RAY_AUTH_TOKEN and attach the Bearer header.
-
 ## `{{- if and $root.Values.dapr.enabled $svc.daprIngest }}`
 
 APP_API_TOKEN, rendered only for a service with `daprIngest`, independent of whether it writes Lance.
@@ -175,4 +167,3 @@ already drifted from this block twice.
 ## `{{- toYaml (index $root.Values.resources $name | default $root.Values.resources.fleet) | nindent 12 }}`
 
 A service may name its OWN tier (resources.<name>); otherwise the shared fleet one.
-compute needs it — see the values comment: the Ray SDK does not fit in 512Mi.

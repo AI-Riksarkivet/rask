@@ -90,47 +90,7 @@ Ray-container auth env is NOT set here: spec.authOptions above makes the
 kuberay 1.6+ operator inject RAY_AUTH_MODE/RAY_AUTH_TOKEN into every Ray
 container itself (SetContainerTokenAuthEnvVars, skip-if-already-set), head
 AND any future workerGroupSpecs entry — one wiring, zero drift.
-rask.rayAuthEnv remains the FLEET-consumer half (compute).
-
-## `- name: S3_ENDPOINT`
-
-THE JOB SECRETS LIVE ON THE POD, NOT IN THE SUBMISSION (docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit"
-P0, fixed 2026-08-28). They rode `runtime_env.env_vars`, and the Ray Jobs API
-echoes runtime_env back on `GET /api/jobs/<id>` — an unauthenticated dashboard,
-proxied by compute at /api/ray/*, published at the edge: one GET yielded the
-estate's service credential. Ray merges runtime_env OVER the process env, so
-holding them here keeps every job's `os.environ` contract byte-identical while
-the submission body carries nothing worth echoing.
-secretKeyRef onto Secrets the estate ALREADY owns — the same objects
-ExternalSecrets syncs from OpenBao on the prod path. A literal value: here would
-put the credential in `helm get manifest`, the exact class the infra-credentials
-header documents for the Dex secret. Any future workerGroupSpecs container needs
-these entries too (jobs run on workers).
-
-BOTH HALVES FROM ONE OBJECT, and that is the fix rather than tidiness: a pair with
-two owners gave every job `SignatureDoesNotMatch` when one owner was repointed
-alone (measured 2026-08-30).
-`ray-compute-*` defaults to the root credential, so this is inert until an
-operator provisions the scoped MinIO user. NOTHING credential-shaped rides the
-submission any more, so this pod is the single source and there is no second
-value to keep in agreement.
-
-THE ADDRESS THE CREDENTIAL ABOVE IS USED AGAINST, owned by the same pod for the
-same reason: a job that reads it and does not get it dies before reading a byte.
-
-An endpoint is NOT a secret — it is public routing information, and an inline
-value is the right delivery for it where a `secretKeyRef` would only hide it from
-the reader who needs it. That asymmetry is pinned by
-`tests/unit/test_the_ray_pod_owns_every_name_its_jobs_require.py`.
-
-## `- name: S3_REGION`
-
-The literal, matching `services.yaml:121` and both maintenance templates. A new
-`minio.region` value would be a fourth spelling of one constant that nothing in
-this estate varies, and a `| default` on it would keep an undeclared key from
-ever reaching the manifest as nil, so nothing would flag the new spelling.
-The convention is what keeps the spelling from multiplying, and it is here so the
-pod owns the whole pair rather than half of it.
+rask.rayAuthEnv remains the FLEET-consumer half (the compute fixture renders its own).
 
 ## `{{- include "lance.lineageEmitEnv" (list .) | nindent 16 }}`
 

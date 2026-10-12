@@ -1,12 +1,8 @@
 # The rask release this engine serves. Every rask name below derives from it: the cluster `<rask>-ray` (KubeRay
 # names its head Service `<rask>-ray-head-svc`, what rask's ray.dashboardUrl points at), the identity
-# `<rask>-sa-ray`, the lineage and OTel endpoints, the object store, and the Secrets
-# the head reads by reference.
+# `<rask>-sa-ray`, the lineage and OTel endpoints, and the Secrets the head reads by reference.
 rask:
   release: rask
-  # Port of rask's object-store Service (`<rask>-minio`).
-  s3Port: 9000
-  s3Region: us-east-1
 # Telemetry from the head and its jobs to rask's OTel Collector (`<rask>-otel-collector:4318`); off when rask runs
 # without observability. `environment` is rask's `observability.environment`, so Ray series sit beside the fleet's.
 otel:

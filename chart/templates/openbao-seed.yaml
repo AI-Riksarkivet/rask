@@ -144,7 +144,7 @@ data:
       done
       root=$(cat "$G/minio-secret-key")
       (umask 077; printf 'postgres://%s:%s@%s:%s/%s?sslmode=disable' {{ .Values.age.user | squote }} "$(cat "$G/postgres-password")" {{ include "lance.ageConnectHost" . | squote }} {{ .Values.age.port | squote }} {{ .Values.age.stateDb | squote }} > "$HOME/seed/dapr-state-dsn")
-      {{- range $id := list .Values.minio.rayComputeAccessKey .Values.minio.maintenanceAccessKey .Values.minio.catalogAccessKey .Values.minio.lineageAccessKey .Values.minio.viewerAccessKey | compact | uniq }}
+      {{- range $id := list .Values.minio.maintenanceAccessKey .Values.minio.catalogAccessKey .Values.minio.lineageAccessKey .Values.minio.viewerAccessKey | compact | uniq }}
       scoped_secret {{ $id }} "$HOME/seed/scoped-{{ $id }}"
       {{- end }}
       {{- range $ref, $_ := $baseFixture }}
@@ -161,8 +161,6 @@ data:
       dapr-state-connection-string=@"$HOME/seed/dapr-state-dsn" \
       dapr-app-token=@"$G/dapr-app-token" ray-auth-token=@"$G/ray-auth-token" \
       frontend-session-secret=@"$G/frontend-session-secret" \
-      ray-compute-access-key={{ .Values.minio.rayComputeAccessKey | default .Values.minio.accessKey }} \
-      ray-compute-secret-key=@"{{ ternary (printf "$HOME/seed/scoped-%s" .Values.minio.rayComputeAccessKey) "$G/minio-secret-key" (not (not .Values.minio.rayComputeAccessKey)) }}" \
 
       {{- if $.Values.minio.maintenanceAccessKey }}
       maintenance-s3-secret-key=@"$HOME/seed/scoped-{{ $.Values.minio.maintenanceAccessKey }}" \

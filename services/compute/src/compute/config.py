@@ -57,7 +57,7 @@ class ComputeSettings(GovernedAuthSettings, Settings):
         default="compute-prune-jobs-cron",
         alias="RASK_PRUNE_BINDING",
         description="The Dapr cron binding's name, which IS the route path it is delivered to. Must "
-        "match the Component's `metadata.name` (chart/templates/compute-prune-cron.yaml) — a value "
+        "match the Component's `metadata.name` (deploy/fixtures/compute/chart/templates/compute.yaml) — a value "
         "that does not is a route Dapr never posts to.",
     )
     prune_keep_jobs: int = Field(

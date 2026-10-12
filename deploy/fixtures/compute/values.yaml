@@ -1,0 +1,2 @@
+# The local estate's settings, the ones deploy/values-local.yaml gives rask: API docs on (rask's `docs.enabled`).
+docs: true

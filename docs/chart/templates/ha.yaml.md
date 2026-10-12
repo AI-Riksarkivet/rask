@@ -21,7 +21,7 @@ so enabling PDBs without scaling wrote exactly the budget this warning describes
 ## `{{- range $name, $svc := $.Values.services }}`
 
 EVERY service in `.Values.services`, gated on replicas > 1 — the lakehouse pair (catalog,
-lineage) and the fleet (gateway, compute, flows, notifications) alike. This was a literal
+lineage) and the fleet (gateway, flows, notifications) alike. This was a literal
 `list "catalog" "lineage" "gateway"`, ungated: with PDBs enabled and a service left at one
 replica it wrote a `minAvailable: 1` budget over a single pod, which blocks EVERY voluntary drain
 — a node cordon then hangs instead of proceeding. That is this file's own header warning, applied

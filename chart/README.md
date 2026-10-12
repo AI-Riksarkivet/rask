@@ -48,6 +48,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | auth.audit | bool | `true` | Emit the structured authn/authz/credential-vending audit stream (LANCE_AUDIT_ENABLED and siblings); takes effect only with auth on. false silences it. |
 | auth.bootstrapAdmin | string | `""` | Dex subject (id_token `sub`) the bootstrap-admin hook grants `owner` on the default warehouse and `admin` on estate:rask. Empty = human grants are made out of band. |
 | auth.enabled | bool | `true` | Govern the estate: authn on every door plus OpenFGA authz. On by default (fails closed); a bare install then needs frontend OIDC configured or it refuses to render. |
+| auth.externalFgaClients | list | `[]` | ServiceAccounts outside this release that OpenFGA admits, each `<namespace>:<name>` (e.g. `default:rask-sa-compute` for the compute fixture). Read only with auth on. |
 | auth.fgaApiUrl | string | `""` | The platform's OpenFGA HTTP API (e.g. `https://fga.internal:8080`), which every FGA client, the openfga-model hook and the bootstrap-admin Job dial when `openfga.enabled` is false; the render refuses it empty then. It must admit rask's projected `rask-openfga` tokens: OIDC against the cluster's ServiceAccount issuer, the subjects `lance.openfgaSubjects` lists. |
 | auth.fgaModelId | string | `""` | Pin the OpenFGA authorization model id every service checks against, whatever its image carries. Empty = the store's latest model. |
 | auth.fgaStoreId | string | `""` | Pin the OpenFGA store id used by every service, the openfga-model hook and the bootstrap-admin Job. Empty = the newest store named `lance-catalog`. |
@@ -245,7 +246,6 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | minio.maintenanceAccessKey | string | `"rask-maintenance"` | Access key of maintenance's scoped store identity, the fallback when vending degrades; secret derives in-cluster. |
 | minio.oidc.enabled | bool | `false` | The development store trusts Dex id_tokens for STS AssumeRoleWithWebIdentity (`vending.mode: web_identity`): ESO writes the Dex client secret it reads into `<release>-infra-credentials`. Turn on the fixture's `oidc.enabled` with it. |
 | minio.port | int | `9000` | S3 API port of the development store's Service. |
-| minio.rayComputeAccessKey | string | `"rask-ray-compute"` | Access key of the Ray compute plane's scoped store identity, kept off the tenant root; secret derives in-cluster. |
 | minio.viewerAccessKey | string | `"rask-viewer"` | Access key of the object browser's scoped identity (list and get only); secret derives in-cluster. |
 | nameOverride | string | `""` | Overrides the chart name used in `rask.name` labels when `fullnameOverride` is empty. Empty uses the chart name. |
 | nats.auth.flagged | object | `{"explorer.controlEmit":{"annotator":{"publish":["catalog.control.v1"],"subscribe":["_INBOX.>"]}},"maintenance.controlEmit":{"maintenance":{"publish":["catalog.control.v1"]}}}` | Extra user grants keyed by a values flag path, merged into `nats.auth.users` only while that flag is true (lance.natsTable). |
@@ -292,13 +292,12 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | pubsub.controlName | string | `"catalog-control-pubsub"` | Name of the broadcast (no queue group) Dapr pubsub component for catalog.control.v1; must match the catalog's LANCE_CONTROL_PUBSUB default. Used when `controlEmit` is on. |
 | pubsub.name | string | `"lineage-pubsub"` | Name of the shared lineage publish Dapr pubsub component; each subscriber app gets a derived `<name>-<app-id>` component with its own queue group. |
 | pubsub.topic | string | `"lineage.events.v1"` | Topic OpenLineage run events are published and subscribed on (LANCE_DAPR_TOPIC and siblings). |
-| ray.auth.enabled | bool | `false` | rask's Ray clients present the token in `<release>-ray-auth-token`; the engine must enforce the same one. Off for dev. |
+| ray.auth.enabled | bool | `false` | Renders `<release>-ray-auth-token` for the Ray engine and the compute fixture; the engine must enforce the same one. Off for dev. |
 | ray.dashboardUrl | string | `""` | Address of the engine's Ray dashboard, used verbatim by every Ray consumer; the ray-cluster fixture serves http://rask-ray-head-svc:8265. |
 | ray.enabled | bool | `true` | rask talks to a Ray engine: the NetworkPolicy admits the pods KubeRay marks `ray.io/is-ray-node`, and the Collector scrapes them. |
 | resources.age | object | `{"limits":{"cpu":"1","memory":"2Gi"},"requests":{"cpu":"250m","memory":"512Mi"}}` | CPU/memory requests and limits for the AGE Postgres StatefulSet (lineage and OpenFGA databases). |
 | resources.assist | object | `{"limits":{"cpu":"8","memory":"6Gi"},"requests":{"cpu":"1","memory":"2Gi"}}` | CPU/memory requests and limits for the assist model runner (two warm torch models). |
 | resources.catalog | object | `{"limits":{"cpu":"1","memory":"512Mi"},"requests":{"cpu":"250m","memory":"128Mi"}}` | CPU/memory requests and limits for the catalog; requests sized so the HPA CPU target is meaningful. |
-| resources.compute | object | `{"limits":{"cpu":"1","memory":"1536Mi"},"requests":{"cpu":"100m","memory":"512Mi"}}` | CPU/memory requests and limits for the compute service, sized for the Ray Job SDK it imports. |
 | resources.default | object | `{"limits":{"cpu":"1","memory":"512Mi"},"requests":{"cpu":"50m","memory":"128Mi"}}` | CPU/memory requests and limits for every lakehouse app container that names no tier of its own (lance.resources). |
 | resources.fleet | object | `{"limits":{"cpu":"1","memory":"512Mi"},"requests":{"cpu":"50m","memory":"128Mi"}}` | CPU/memory requests and limits for fleet services (templates/fleet.yaml) that name no tier of their own. |
 | resources.lineage | object | `{"limits":{"cpu":"1","memory":"512Mi"},"requests":{"cpu":"250m","memory":"128Mi"}}` | CPU/memory requests and limits for lineage; requests sized so the HPA CPU target is meaningful. |
@@ -318,14 +317,6 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | services.catalog.module | string | `"catalog.main:app"` | uvicorn import path the catalog Deployment runs (templates/services.yaml). |
 | services.catalog.port | int | `2333` | Container and Service port of the Lance catalog. |
 | services.catalog.replicas | int | `1` | Replica count of the catalog; above 1 requires catalog.controlEmit=true or the render fails. |
-| services.compute.daprIngest | bool | `true` | Renders APP_API_TOKEN for compute, whose boot refuses to start with Dapr on and no token (it hosts the prune cron route). |
-| services.compute.frontDoor | bool | `true` | Renders compute outside singleTenant, because the gateway routes /api/ray and /api/serve to it. |
-| services.compute.governedAuth | bool | `true` | Gives compute the OIDC/FGA env and FGA token mount when auth.enabled; without it its routes answer anonymously. |
-| services.compute.module | string | `"compute:app"` | uvicorn import path the compute Deployment runs. |
-| services.compute.port | int | `8804` | Container and Service port of the compute app (Ray introspection and the /api/serve proxy). |
-| services.compute.rayClient | bool | `true` | Gives compute the RAY_AUTH_* env when ray.auth.enabled, for dashboard introspection and the Serve proxy. |
-| services.compute.replicas | int | `1` | Replica count of the compute Deployment; 0 scales it to zero. |
-| services.compute.waitFor | list | `[]` | List of dependencies compute waits for in an init container; only `minio` is honoured (when minio.enabled). |
 | services.flows.frontDoor | bool | `true` | Renders flows outside singleTenant, because the gateway routes /api/flows to it. |
 | services.flows.governedAuth | bool | `true` | Gives flows the OIDC/FGA env and FGA token mount when auth.enabled; its run door checks the writer tier. |
 | services.flows.module | string | `"flows:app"` | uvicorn import path the flows (studio flow-builder server) Deployment runs. |

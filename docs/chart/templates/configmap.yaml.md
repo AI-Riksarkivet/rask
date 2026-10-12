@@ -8,7 +8,7 @@ every release revision, under a 1 MiB ceiling. Each section is headed by the tem
 Interactive API docs, off unless a deployment asks (see values.yaml `docs`). The gateway reads
 this one: its aggregated Swagger is served under the Ingress-published /api prefix.
 
-## `RASK_COMPUTE_URL: {{ printf "http://%s-compute:8804" (include "rask.fullname" .) | quote }}`
+## `RASK_CONTROLPLANE_URL: {{ printf "http://%s-controlplane:8820" (include "rask.fullname" .) | quote }}`
 
 Gateway upstreams (in-cluster DNS). The core/search/volumes rows died in the
 R6/R20 media wave — their capabilities serve from the media plane below.
@@ -87,8 +87,3 @@ use lance.fullname — that is what services.yaml/explorer.yaml name their Servi
 
 The sidecar-only lineage routes the gateway must 403 at the edge (the retired nginx blocklist,
 now Python middleware). ONE source: the lance.lineageSidecarOnlyRoutes helper.
-
-## `{{- with include "rask.rayDashboardUrl" . }}`
-
-The cluster `compute` prunes job history on is the one the cascade submits to, because both read
-`rask.rayDashboardUrl` ([[CP-041]]). Absent when the render names no Ray.

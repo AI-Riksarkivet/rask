@@ -51,8 +51,6 @@ services:
   # double the FGA and actor load, silently, exactly when lineage or the sidecar is already slow.
   # Nothing but this note holds it at 1. What would unblock it is a cross-pod guard that SKIPS (not
   # an actor — actors are turn-based, so ticks would queue instead).
-  compute:
-    replicas: 2 # a stateless proxy over the Ray dashboard — it holds nothing
   # flows is DELIBERATELY ABSENT and must stay at 1: .docker/flows.dockerfile records that its run
   # store is a process-local dict (v0) with no durable fallback, so a second worker would answer
   # GET /flows/runs/{id} with a 404 for a live run. Raise it when that store is durable, not before.
@@ -136,11 +134,10 @@ backups:
 openbao:
   devMode: false
 
-# --- Ray token auth ON (gate 7 / R3): rask's Ray clients present the store's `ray-auth-token`, which ESO
+# --- Ray token auth ON (gate 7 / R3): Ray clients present the store's `ray-auth-token`, which ESO
 # writes into `<release>-ray-auth-token`. Enforcing it is the engine's (KubeRay's spec.authOptions.secretName
 # on the same Secret): an engine serving an unauthenticated dashboard is remote code execution, and rask,
-# which installs no Ray (ADR 0153), cannot refuse that from its own render. rask's own route to Ray,
-# compute's /api/ray and /api/serve proxy, is gated by OIDC and FGA. ------------------------------------
+# which installs no Ray (ADR 0153), cannot refuse that from its own render. ---------------------------------
 ray:
   auth:
     enabled: true
@@ -232,8 +229,8 @@ observability:
 # nats (the platform's JetStream, REQUIRED):        # a prerequisite rask never installs (ADR 0153); bus down =
 #   url: nats://nats.internal:4222                   # no lineage ingest, no cascade. The stream Job provisions
 #   streamReplicas: 3                                # rask's streams on it (needs a 3+ node cluster)
-# ray (the one Ray plane, REQUIRED):                 # compute's submits and prune, and Serve discovery
-#   dashboardUrl: https://ray.internal:8265          # all read it; unset with no in-cluster head fails the render
+# ray (the one Ray plane):                           # Serve discovery and the zones' Serve origin read it
+#   dashboardUrl: https://ray.internal:8265
 # GPU metrics (NVIDIA DCGM operator): the engine's, beside its KubeRay and Kueue (ADR 0153) — the dcgm-exporter
 # is node-level infra (a DaemonSet the DCGM operator owns), scraped by the OTel Collector's prometheus receiver
 # (the same one that takes the Dapr sidecars). Nothing to flip in this chart until GPU Ray workers land.

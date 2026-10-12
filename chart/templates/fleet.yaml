@@ -98,10 +98,6 @@ spec:
             {{- include "rask.otelEnv" (list $root $name) | nindent 12 }}
             - { name: RASK_AUDIT_ENABLED, value: {{ hasKey $root.Values.auth "audit" | ternary $root.Values.auth.audit true | quote }} }
 
-            {{- if $svc.rayClient }}
-
-            {{- include "rask.rayAuthEnv" $root | nindent 12 }}
-            {{- end }}
             {{- if and $root.Values.dapr.enabled $svc.daprIngest }}
 
 {{- include "lance.appTokenEnv" (list $root $name) | nindent 12 }}
@@ -118,9 +114,6 @@ spec:
             {{- end }}
             {{- with include "lance.signingEnv" (list $root $name) }}{{ . | nindent 12 }}{{- end }}
             {{- if eq $name "notifications" }}{{- with include "lance.doorEnv" (list $root true) }}{{ . | nindent 12 }}{{- end }}{{- end }}
-            {{- if eq $name "compute" }}{{- with include "rask.rayDashboardUrl" $root }}
-            - { name: RAY_DASHBOARD_URL, value: {{ . | quote }} }
-            {{- end }}{{- end }}
 
             {{- if $svc.channels }}
             {{- $chans := list }}

@@ -316,7 +316,7 @@ def test_a_per_component_pin_beats_the_global_tag_and_a_digest_beats_the_pin() -
     """
     pinned = _helm_template(*_REAL_REGISTRY, "image.tags.gateway=PINNED")
     assert 'image: "reg.example/gateway:PINNED"' in pinned, "a per-component tag did not reach the render"
-    assert 'image: "reg.example/compute:dev"' in pinned, "the pin leaked onto a component that did not ask for it"
+    assert 'image: "reg.example/controlplane:dev"' in pinned, "the pin leaked onto a component that did not ask for it"
 
     # A digest is a CONTENT pin — a reconciler's, typically — so no tag may undo it.
     both = _helm_template(*_REAL_REGISTRY, "image.tags.gateway=IGNORED", "image.digests.gateway=sha256:abc")
@@ -608,11 +608,11 @@ def test_every_ray_consumer_names_one_cluster_or_the_render_refuses(overlay: tup
 
     A second key naming the Ray plane once split it: compute pruned job history on one head while other pods
     submitted to a head Service nothing rendered, and a head grown to 81,155 jobs OOMKilled compute that way.
-    Every consumer renders `rask.rayDashboardUrl` (compute's RAY_DASHBOARD_URL and the annotator's Serve
-    discovery), and a render that names no Ray hands no consumer an address.
+    Every consumer in the chart renders `rask.rayDashboardUrl` (the annotator's Serve discovery; compute is its
+    own release and is given the address as a value), and a render that names no Ray hands no consumer an address.
 
-    The address reaches compute alone, its one reader (CP-056): a shared ConfigMap would hand a Ray address to every
-    fleet pod that loads it, the lakehouse's controlplane and notifications among them, which never call Ray.
+    The address reaches its readers alone (CP-056): a shared ConfigMap would hand a Ray address to every fleet pod that
+    loads it, the lakehouse's controlplane and notifications among them, which never call Ray.
 
     The engine is bring-your-own ([[XC-125]], ADR 0153): no render holds a `ray.io` object or the KubeRay operator, so
     the address is always one the estate names (the local overlay names the ray-cluster fixture's head Service).
@@ -628,9 +628,7 @@ def test_every_ray_consumer_names_one_cluster_or_the_render_refuses(overlay: tup
             if name in ("RAY_DASHBOARD_URL", "MEDIA_SERVE_DISCOVERY_URL") or "RAY_ADDRESS" in name:
                 named.setdefault(f"{workload} {name}", set()).add(value)
 
-    expected = (
-        {} if address is None else {"Deployment/rask-compute RAY_DASHBOARD_URL": {address}, "Deployment/rask-annotator MEDIA_SERVE_DISCOVERY_URL": {address}}
-    )
+    expected = {} if address is None else {"Deployment/rask-annotator MEDIA_SERVE_DISCOVERY_URL": {address}}
     assert named == expected
     engine = sorted(
         f"{doc['kind']}/{doc['metadata']['name']}"

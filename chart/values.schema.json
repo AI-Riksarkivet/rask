@@ -88,6 +88,10 @@
                     "description": "Govern the estate: authn on every door plus OpenFGA authz. On by default (fails closed); a bare install then needs frontend OIDC configured or it refuses to render.",
                     "type": "boolean"
                 },
+                "externalFgaClients": {
+                    "description": "ServiceAccounts outside this release that OpenFGA admits, each `\u003cnamespace\u003e:\u003cname\u003e` (e.g. `default:rask-sa-compute` for the compute fixture). Read only with auth on.",
+                    "type": "array"
+                },
                 "fgaApiUrl": {
                     "description": "The platform's OpenFGA HTTP API (e.g. `https://fga.internal:8080`), which every FGA client, the openfga-model hook and the bootstrap-admin Job dial when `openfga.enabled` is false; the render refuses it empty then. It must admit rask's projected `rask-openfga` tokens: OIDC against the cluster's ServiceAccount issuer, the subjects `lance.openfgaSubjects` lists.",
                     "type": "string"
@@ -1194,10 +1198,6 @@
                     "description": "S3 API port of the development store's Service.",
                     "type": "integer"
                 },
-                "rayComputeAccessKey": {
-                    "description": "Access key of the Ray compute plane's scoped store identity, kept off the tenant root; secret derives in-cluster.",
-                    "type": "string"
-                },
                 "viewerAccessKey": {
                     "description": "Access key of the object browser's scoped identity (list and get only); secret derives in-cluster.",
                     "type": "string"
@@ -1736,7 +1736,7 @@
                     "type": "object",
                     "properties": {
                         "enabled": {
-                            "description": "rask's Ray clients present the token in `\u003crelease\u003e-ray-auth-token`; the engine must enforce the same one. Off for dev.",
+                            "description": "Renders `\u003crelease\u003e-ray-auth-token` for the Ray engine and the compute fixture; the engine must enforce the same one. Off for dev.",
                             "type": "boolean"
                         }
                     }
@@ -1812,34 +1812,6 @@
                 },
                 "catalog": {
                     "description": "CPU/memory requests and limits for the catalog; requests sized so the HPA CPU target is meaningful.",
-                    "type": "object",
-                    "properties": {
-                        "limits": {
-                            "type": "object",
-                            "properties": {
-                                "cpu": {
-                                    "type": "string"
-                                },
-                                "memory": {
-                                    "type": "string"
-                                }
-                            }
-                        },
-                        "requests": {
-                            "type": "object",
-                            "properties": {
-                                "cpu": {
-                                    "type": "string"
-                                },
-                                "memory": {
-                                    "type": "string"
-                                }
-                            }
-                        }
-                    }
-                },
-                "compute": {
-                    "description": "CPU/memory requests and limits for the compute service, sized for the Ray Job SDK it imports.",
                     "type": "object",
                     "properties": {
                         "limits": {
@@ -2118,43 +2090,6 @@
                         "replicas": {
                             "description": "Replica count of the catalog; above 1 requires catalog.controlEmit=true or the render fails.",
                             "type": "integer"
-                        }
-                    }
-                },
-                "compute": {
-                    "type": "object",
-                    "properties": {
-                        "daprIngest": {
-                            "description": "Renders APP_API_TOKEN for compute, whose boot refuses to start with Dapr on and no token (it hosts the prune cron route).",
-                            "type": "boolean"
-                        },
-                        "frontDoor": {
-                            "description": "Renders compute outside singleTenant, because the gateway routes /api/ray and /api/serve to it.",
-                            "type": "boolean"
-                        },
-                        "governedAuth": {
-                            "description": "Gives compute the OIDC/FGA env and FGA token mount when auth.enabled; without it its routes answer anonymously.",
-                            "type": "boolean"
-                        },
-                        "module": {
-                            "description": "uvicorn import path the compute Deployment runs.",
-                            "type": "string"
-                        },
-                        "port": {
-                            "description": "Container and Service port of the compute app (Ray introspection and the /api/serve proxy).",
-                            "type": "integer"
-                        },
-                        "rayClient": {
-                            "description": "Gives compute the RAY_AUTH_* env when ray.auth.enabled, for dashboard introspection and the Serve proxy.",
-                            "type": "boolean"
-                        },
-                        "replicas": {
-                            "description": "Replica count of the compute Deployment; 0 scales it to zero.",
-                            "type": "integer"
-                        },
-                        "waitFor": {
-                            "description": "List of dependencies compute waits for in an init container; only `minio` is honoured (when minio.enabled).",
-                            "type": "array"
                         }
                     }
                 },

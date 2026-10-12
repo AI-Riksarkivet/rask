@@ -1,7 +1,7 @@
 # rask umbrella chart values — the MERGED estate (rask 0.2.0 + lance-ns 0.1.0, one release named `rask`).
 #
 # Two systems now install from this one file:
-#   * the rask fleet (gateway/compute/controlplane),
+#   * the rask fleet (gateway/controlplane/flows/notifications),
 #     KubeRay Serve, the MinIO StatefulSet, the SvelteKit microfrontend zones;
 #   * the lance-ns lakehouse (catalog + lineage + maintenance + media), governance
 #     (Dex OIDC + OpenFGA), the Dapr/NATS event fabric, OpenBao, and the OTel-first observability tier.
@@ -105,7 +105,7 @@ config:
   HCP_INSECURE: "true"
 
 # Per-service definitions. TWO planes share this map, by design of the merge:
-#   * the rask FLEET (compute, gateway) — rendered by templates/fleet.yaml, which ranges over this
+#   * the rask FLEET (gateway, controlplane, flows, notifications) — rendered by templates/fleet.yaml, which ranges over this
 #     map but only emits the `gateway` entry unless singleTenant.enabled;
 #   * the lance-ns LAKEHOUSE apps (catalog, lineage) — rendered by templates/services.yaml, which
 #     reads .Values.services.catalog / .Values.services.lineage by NAME.
@@ -131,50 +131,8 @@ forwardedAllowIps: 127.0.0.1
 
 services:
   # ==== rask fleet (uvicorn modules, one Deployment each via templates/fleet.yaml) ====
-  # (core-api/search-api/volumes-api died in the R6/R20 media wave: the S3 object browser
-  # rides the media-plane viewer at /api/explorer/object*; lines/EAD FTS re-land as
-  # catalog-governed Lance tables behind /api/explorer/search. The Ray-plane service is
-  # `compute` on EVERY surface — uv member, import, k8s objects, dapr app-id, image —
-  # per R22, which supersedes R20's `ray` choice and its ray-api PyPI-shadow exception.
-  # Its public gateway rows stay /api/ray + /api/serve: the URL namespace names the
-  # Ray cluster, not the service. The zone image namespace is web-<zone>, so the bare
-  # `compute` image name is this service's.)
-  compute:
-    # -- uvicorn import path the compute Deployment runs.
-    module: "compute:app"
-    # -- Container and Service port of the compute app (Ray introspection and the /api/serve proxy).
-    port: 8804
-    # -- Replica count of the compute Deployment; 0 scales it to zero.
-    replicas: 1
-    # Part of the default install: the gateway routes /api/ray + /api/serve to this app-id
-    # unconditionally, so an install without it 500s on those routes.
-    # -- Renders compute outside singleTenant, because the gateway routes /api/ray and /api/serve to it.
-    frontDoor: true
-    # -- List of dependencies compute waits for in an init container; only `minio` is honoured (when minio.enabled).
-    waitFor: []
-    # -- Gives compute the RAY_AUTH_* env when ray.auth.enabled, for dashboard introspection and the Serve proxy.
-    rayClient: true # dashboard introspection + /api/serve proxy => gets the RAY_AUTH_* pair when ray.auth.enabled
-    # THE USER DOOR. `fleet.yaml`'s own comment used to give this service as the reason `frontDoor`
-    # is not the right key — "the gateway and compute read no auth settings at all, so keying on it
-    # emitted seven variables neither service reads". That was true and is not any more: `compute`
-    # now declares `ComputeSettings(GovernedAuthSettings, Settings)` and gates both its routers on
-    # the estate reader tier. Without this flag the door is built and never fed — the env it reads is
-    # simply absent, so `oidc_enabled` stays False and every route answers anonymously while the code
-    # reports authorization as configured. That is the `explorer.yaml` failure verbatim (the viewer
-    # streamed page images wide open because the auth env was emitted for the annotator alone).
-    # -- Gives compute the OIDC/FGA env and FGA token mount when auth.enabled; without it its routes answer anonymously.
-    governedAuth: true
-    # FAIL CLOSED ON THE APP TOKEN. This service hosts a sidecar-delivered route —
-    # `POST /compute-prune-jobs-cron`, which deletes terminal Ray jobs — and its boot refuses to start
-    # with Dapr on and no token. `daprIngest` is the chart's name for exactly that contract (fleet.yaml
-    # renders APP_API_TOKEN for it), and `tests/unit/test_invariants.py::
-    # test_every_pod_whose_app_fails_closed_on_the_app_token_is_given_one` fails the render if the
-    # code and this flag ever disagree. Measured on the live estate 2026-09-02 before it was set: the
-    # SIDECAR held the token and stamped every delivery, the app container held none, and the route's
-    # guard compared each delivery against an empty string — open to any pod in the namespace while
-    # reading as sidecar-only.
-    # -- Renders APP_API_TOKEN for compute, whose boot refuses to start with Dapr on and no token (it hosts the prune cron route).
-    daprIngest: true
+  # (compute, the Ray plane's service, is not here: it is a bring-your-own engine's companion and installs as its
+  # own release, deploy/fixtures/compute.)
   # The studio flow-builder's server half: the node catalog, graph validation, and runs on two lanes
   # (inline, or the Dapr Workflow orchestrator when a sidecar is injected). It needs NOTHING to boot —
   # no store, no cluster — so it is part of the default install: the builder's client-side lane works
@@ -448,7 +406,7 @@ image:
   # DIGEST on one more. Rendering all of them from one value overwrites every image with a tag that is not on
   # the node — observed twice on 2026-08-06, once taking the whole fleet to ImagePullBackOff.
   #
-  # Keys are the COMPONENT name the template passes to `rask.image` (`gateway`, `compute`,
+  # Keys are the COMPONENT name the template passes to `rask.image` (`gateway`, `controlplane`,
   # `lance-rest-catalog`, `web-lakehouse`, …) — the same string that appears in the rendered
   # reference. `digests` beats `tags`, exactly as the global `digest` beats the global `tag`.
   #
@@ -476,15 +434,6 @@ resources:
   fleet:
     requests: {cpu: "50m", memory: "128Mi"}
     limits: {cpu: "1", memory: "512Mi"}
-  # `compute` is the ONE fleet service that imports the Ray Job SDK (`ray.job_submission`), which pulls
-  # the whole Ray client library into the process — its siblings are thin FastAPI proxies. On the shared
-  # 512Mi fleet tier it served requests normally and was then OOMKilled (exit 137, measured 2026-07-29,
-  # 4 restarts in 7 minutes), so the symptom was not a crash but a service that answered and vanished:
-  # /api/ray/health succeeded while every heavier route hit a Dapr circuit breaker that kept re-opening.
-  # -- CPU/memory requests and limits for the compute service, sized for the Ray Job SDK it imports.
-  compute:
-    requests: { cpu: 100m, memory: 512Mi }
-    limits: { cpu: "1", memory: 1536Mi }
   # AGE is a DATABASE and was sized as a stateless app container, which is a different thing. It asks
   # `lance.resources` for a `comp="age"` tier (templates/age-postgres.yaml:155); with no such key it
   # silently fell through to `default` below — 128Mi request, 512Mi limit — and Postgres does not
@@ -506,7 +455,7 @@ resources:
   # bad-luck spike and no amount of load-shedding would have avoided them.
   #
   # The request is raised as well as the limit: a database's working set is resident, not burstable, so
-  # a 50m/128Mi request misdescribes it to the scheduler. Same shape as the `compute` tier above.
+  # a 50m/128Mi request misdescribes it to the scheduler.
   # -- CPU/memory requests and limits for the AGE Postgres StatefulSet (lineage and OpenFGA databases).
   age:
     requests: { cpu: 250m, memory: 512Mi }
@@ -903,6 +852,12 @@ auth:
   audit: true
   # -- The platform's OpenFGA HTTP API (e.g. `https://fga.internal:8080`), which every FGA client, the openfga-model hook and the bootstrap-admin Job dial when `openfga.enabled` is false; the render refuses it empty then. It must admit rask's projected `rask-openfga` tokens: OIDC against the cluster's ServiceAccount issuer, the subjects `lance.openfgaSubjects` lists.
   fgaApiUrl: ""
+  # OpenFGA admits only the ServiceAccounts `lance.openfgaSubjects` lists, and it lists this release's own clients. A
+  # first-party service installed as its own release (the compute fixture, deploy/fixtures/compute) presents a projected
+  # `rask-openfga` token from an account this chart does not render, so its name is listed here, `<namespace>:<name>`.
+  # OpenFGA reads the list at start, so a change needs an OpenFGA restart.
+  # -- ServiceAccounts outside this release that OpenFGA admits, each `<namespace>:<name>` (e.g. `default:rask-sa-compute` for the compute fixture). Read only with auth on.
+  externalFgaClients: []
   # Pin the OpenFGA store id. When set, EVERY FGA consumer (the services, the openfga-model hook and the
   # bootstrap-admin Job) uses that store; empty (default) = the newest store named `lance-catalog`. A
   # MODEL pin makes every service check against that one model whatever its image carries; no deployment
@@ -1998,34 +1953,6 @@ minio:
   # value: the secret half is the store's `minio-secret-key` (generated in-cluster for the dev OpenBao).
   # -- Access key id of the store's root account; its secret is the store's `minio-secret-key`. No service should present it.
   accessKey: minioadmin
-  # THE COMPUTE PLANE'S OWN CREDENTIAL, scoped away from the tenant root above.
-  #
-  # The Ray pods ran on `accessKey`/`secretKey` — the store's ROOT account — so anything able to run
-  # code there reached every tenant's bytes, the project registry, the protection records and the
-  # observability bucket. A prefix-conditioned MinIO user policy fixes that, and is ENFORCED
-  # (measured 2026-08-30: `medallion*` and `*-wh` allowed; `_projects/`, `_protection/`, `_policies/`
-  # and `rask-observability` all AccessDenied from the pod's own credential).
-  #
-  # NAMING THE IDENTITY IS ENOUGH: the secret is DERIVED in-cluster (`lance.scopedSecretFn` — sha256 of
-  # the identity plus the store's root secret), so declaring a scoped identity needs no secret anywhere.
-  # DERIVED rather than generated because the other half of this pair is created separately by
-  # `mc admin user add`: the dev OpenBao's seed and the `minio-scoped-users` Job agree only by computing
-  # the same function of the same inputs, and both read the root from a file, never from the render.
-  # A scoped access key beside any other secret is `SignatureDoesNotMatch` on every call (measured,
-  # twice) and looks correct in a diff.
-  #
-  # EMPTY = the root credential, i.e. today's behaviour, so this stays inert until an identity is
-  # named. `minio-scoped-users` then creates the policy and the user with the same `mc` image the
-  # bucket-init Job uses.
-  # NAMED 2026-09-10, as `maintenanceAccessKey` already was.
-  # While it was empty, the infra-credentials Secret's `| default .Values.minio.accessKey` made the
-  # ESO-delivered `ray-compute-secret-key` the tenant ROOT — measured on the live estate, both
-  # `ray-compute-access-key` and `ray-compute-secret-key` decoded to `rustfsadmin`. So the SANCTIONED
-  # delivery path was handing out root while a hand-applied Secret carried the scoped credential the
-  # head actually used: pointing the head at ESO to "fix the path" would have silently downgraded the
-  # Ray lane from scoped to root, which is the opposite of what that change looks like.
-  # -- Access key of the Ray compute plane's scoped store identity, kept off the tenant root; secret derives in-cluster.
-  rayComputeAccessKey: rask-ray-compute
   # THE MAINTENANCE PLANE'S OWN CREDENTIAL, scoped away from the tenant root above.
   #
   # `MAINTENANCE_S3_ACCESS_KEY_ID` renders from `accessKey` — the store's ROOT account — and maintenance
@@ -2135,16 +2062,16 @@ ray:
   # -- rask talks to a Ray engine: the NetworkPolicy admits the pods KubeRay marks `ray.io/is-ray-node`, and the Collector scrapes them.
   enabled: true
   # THE ONE RAY PLANE ([[CP-041]]): every Ray consumer renders its address from `rask.rayDashboardUrl`
-  # — compute's RAY_DASHBOARD_URL (job-history prune, jobs board, /api/serve), the annotator's Serve
-  # discovery and the zones' Serve origin.
+  # — the annotator's Serve discovery and the zones' Serve origin. The compute fixture (deploy/fixtures/compute) is
+  # given the same address as its own value.
   # -- Address of the engine's Ray dashboard, used verbatim by every Ray consumer; the ray-cluster fixture serves http://rask-ray-head-svc:8265.
   dashboardUrl: ""
   # Ray token auth (RAY_AUTH_MODE=token). The token is the store's `ray-auth-token`, written by ESO into
-  # `<release>-ray-auth-token` (the dev OpenBao generates it in-cluster), never a value. rask's Ray
-  # clients present it (rask.rayAuthEnv); the engine enforces the same Secret (the ray-cluster
-  # fixture's `authSecretName`, KubeRay's authOptions).
+  # `<release>-ray-auth-token` (the dev OpenBao generates it in-cluster), never a value. The compute fixture
+  # presents it (its `rayAuth`); the engine enforces the same Secret (the ray-cluster fixture's
+  # `authSecretName`, KubeRay's authOptions).
   auth:
-    # -- rask's Ray clients present the token in `<release>-ray-auth-token`; the engine must enforce the same one. Off for dev.
+    # -- Renders `<release>-ray-auth-token` for the Ray engine and the compute fixture; the engine must enforce the same one. Off for dev.
     enabled: false
 
 

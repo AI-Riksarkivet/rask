@@ -1,0 +1,197 @@
+{{- $r := .Values.rask.release -}}
+{{- $name := printf "%s-compute" $r -}}
+{{- $dapr := and .Values.dapr.enabled (.Capabilities.APIVersions.Has "dapr.io/v1alpha1") -}}
+{{- $l := .Values.lifecycle -}}
+{{- $drain := sub $l.terminationGracePeriodSeconds (add $l.preStopSeconds $l.teardownSeconds) -}}
+{{- if le (int $drain) 0 }}{{ fail "lifecycle: need teardownSeconds < terminationGracePeriodSeconds - preStopSeconds" }}{{ end -}}
+{{- if eq (toString .Values.forwardedAllowIps) "*" }}{{ fail "forwardedAllowIps must not be '*': any client could forge its own source IP" }}{{ end -}}
+{{- $selector := dict "app.kubernetes.io/name" "rask" "app.kubernetes.io/instance" $r "app.kubernetes.io/component" "compute" -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $r }}-sa-compute
+  labels:
+    {{- toYaml $selector | nindent 4 }}
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- toYaml $selector | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: {{ .Values.port }}
+      targetPort: http
+  selector:
+    {{- toYaml $selector | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- toYaml $selector | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicas }}
+  selector:
+    matchLabels:
+      {{- toYaml $selector | nindent 6 }}
+  template:
+    metadata:
+      {{- if $dapr }}
+      annotations:
+        dapr.io/enabled: "true"
+        dapr.io/app-id: "compute"
+        dapr.io/app-port: {{ .Values.port | quote }}
+        dapr.io/log-level: {{ .Values.dapr.logLevel | quote }}
+        dapr.io/log-as-json: "true"
+        dapr.io/max-body-size: {{ .Values.dapr.maxBodySize | quote }}
+        dapr.io/app-token-secret: {{ $r }}-dapr-app-token
+        dapr.io/block-shutdown-duration: {{ printf "%ds" (int $l.sidecarBlockShutdownSeconds) | quote }}
+        dapr.io/sidecar-cpu-request: {{ .Values.dapr.sidecarResources.cpuRequest | quote }}
+        dapr.io/sidecar-cpu-limit: {{ .Values.dapr.sidecarResources.cpuLimit | quote }}
+        dapr.io/sidecar-memory-request: {{ .Values.dapr.sidecarResources.memoryRequest | quote }}
+        dapr.io/sidecar-memory-limit: {{ .Values.dapr.sidecarResources.memoryLimit | quote }}
+        dapr.io/disable-builtin-k8s-secret-store: "true"
+        dapr.io/config: {{ .Values.dapr.config | quote }}
+      {{- end }}
+      labels:
+        {{- toYaml $selector | nindent 8 }}
+        {{- if $dapr }}
+        dapr.io/enabled: "true"
+        {{- end }}
+        lance.dev/logs: otlp
+    spec:
+      terminationGracePeriodSeconds: {{ $l.terminationGracePeriodSeconds }}
+      serviceAccountName: {{ $r }}-sa-compute
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/component: compute
+      containers:
+        - name: compute
+          image: "{{ .Values.image.repository }}:{{ required "image.tag must be set" .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["uvicorn"]
+          args:
+            - "compute:app"
+            - "--host=0.0.0.0"
+            - "--port={{ .Values.port }}"
+            - "--timeout-graceful-shutdown={{ $drain }}"
+            - "--proxy-headers"
+            - "--forwarded-allow-ips={{ .Values.forwardedAllowIps }}"
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "-c", "sleep {{ $l.preStopSeconds }}"]
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+            {{- if .Values.auth.enabled }}
+            - { name: identity-rask-openfga, mountPath: /var/run/secrets/rask/identity/rask-openfga, readOnly: true }
+            {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.port }}
+          env:
+            - { name: RASK_API_PREFIX, value: {{ .Values.apiPrefix | quote }} }
+            - { name: RASK_DOCS, value: {{ .Values.docs | quote }} }
+            - { name: RASK_DAPR_ENABLED, value: {{ $dapr | quote }} }
+            - { name: RAY_DASHBOARD_URL, value: {{ required "rayDashboardUrl must name the engine's Ray dashboard" .Values.rayDashboardUrl | quote }} }
+            - { name: RASK_PRUNE_BINDING, value: "compute-prune-jobs-cron" }
+            {{- if .Values.rayAuth.enabled }}
+            - { name: RAY_AUTH_MODE, value: "token" }
+            - name: RAY_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef: { name: {{ $r }}-ray-auth-token, key: auth_token }
+            {{- end }}
+            {{- if $dapr }}
+            - name: APP_API_TOKEN
+              valueFrom:
+                secretKeyRef: { name: {{ $r }}-dapr-app-token, key: token }
+            {{- end }}
+            {{- if .Values.otel.enabled }}
+            - { name: RASK_OTEL_ENABLED, value: "true" }
+            - { name: OTEL_EXPORTER_OTLP_ENDPOINT, value: {{ .Values.otel.endpoint | default (printf "http://%s-otel-collector:4318" $r) | quote }} }
+            - { name: OTEL_EXPORTER_OTLP_PROTOCOL, value: "http/protobuf" }
+            - { name: OTEL_METRIC_EXPORT_INTERVAL, value: "5000" }
+            - { name: OTEL_PYTHON_FASTAPI_EXCLUDED_URLS, value: "/livez,/readyz,/healthz,/api/health,/metrics" }
+            - { name: OTEL_SERVICE_NAME, value: "compute" }
+            - { name: OTEL_RESOURCE_ATTRIBUTES, value: "service.namespace=rask,deployment.environment.name={{ .Values.otel.environment }},service.version={{ .Chart.AppVersion }}" }
+            {{- end }}
+            {{- if .Values.auth.enabled }}
+            {{- $issuer := .Values.auth.oidc.issuer | default (printf "http://%s-dex:5556/dex" $r) }}
+            - { name: RASK_AUDIT_ENABLED, value: {{ .Values.auth.audit | quote }} }
+            - { name: RASK_OIDC_ENABLED, value: "true" }
+            - { name: RASK_OIDC_ISSUER, value: {{ $issuer | quote }} }
+            - { name: RASK_OIDC_DISCOVERY_URL, value: {{ .Values.auth.oidc.discoveryUrl | default (printf "http://%s-dex:5556/dex" $r) | quote }} }
+            - { name: RASK_OIDC_AUDIENCE, value: {{ .Values.auth.oidc.audience | quote }} }
+            - { name: RASK_OIDC_ALLOW_INSECURE, value: {{ ternary "false" "true" (hasPrefix "https://" $issuer) | quote }} }
+            - { name: RASK_FGA_ENABLED, value: "true" }
+            - { name: RASK_FGA_API_URL, value: {{ .Values.auth.fga.apiUrl | default (printf "http://%s-openfga:8080" $r) | quote }} }
+            - { name: RASK_FGA_TOKEN_FILE, value: /var/run/secrets/rask/identity/rask-openfga/token }
+            {{- with .Values.auth.fga.storeId }}
+            - { name: RASK_FGA_STORE_ID, value: {{ . | quote }} }
+            {{- end }}
+            {{- else }}
+            - { name: RASK_INSECURE_ALLOW_UNAUTHENTICATED, value: "true" }
+            {{- end }}
+          startupProbe:
+            httpGet: { path: /livez, port: http }
+            periodSeconds: 10
+            failureThreshold: 30
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet: { path: /livez, port: http }
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            timeoutSeconds: 5
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - { name: tmp, emptyDir: { sizeLimit: "2Gi" } }
+        {{- if .Values.auth.enabled }}
+        - name: identity-rask-openfga
+          projected:
+            sources:
+              - serviceAccountToken: { path: token, audience: rask-openfga, expirationSeconds: 600 }
+        {{- end }}
+{{- if $dapr }}
+---
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: compute-prune-jobs-cron
+  labels:
+    {{- toYaml $selector | nindent 4 }}
+spec:
+  type: bindings.cron
+  version: v1
+  metadata:
+    - { name: schedule, value: {{ .Values.prune.schedule | quote }} }
+scopes:
+  - compute
+{{- end }}

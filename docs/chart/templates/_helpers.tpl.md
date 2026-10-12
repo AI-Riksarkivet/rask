@@ -34,21 +34,13 @@ guarantee a rask selector can never adopt a lance pod inside the shared release.
 =====================================================================================================
 
 ---------------------------------------------------------------------------------------------------
-rask — the base chart's helpers (fleet: gateway, compute, controlplane, frontends —
+rask — the base chart's helpers (fleet: gateway, controlplane, frontends —
 the orchestrator died at P7a; core-api/search-api/volumes-api died in the R6/R20 wave).
 ---------------------------------------------------------------------------------------------------
 
 ## `{{- define "rask.componentLabels" -}}`
 
 Component labels: pass (list . "<component>")
-
-## `{{- define "rask.rayAuthEnv" -}}`
-
-The RAY_AUTH_MODE/RAY_AUTH_TOKEN env pair for FLEET consumers that talk to a token-authed
-Ray (the `rayClient` services — compute). The engine enforces the same token itself (KubeRay's
-spec.authOptions.secretName; the ray-cluster fixture's `authSecretName`). No-op unless ray.auth.enabled — so every
-consumer flips with the ONE toggle and the secretKeyRef can never dangle (ESO writes the Secret
-under the same gate in external-secrets.yaml, data key `auth_token`, the KubeRay operator-Secret convention). Usage: {{- include "rask.rayAuthEnv" . | nindent 16 }}
 
 ## `{{- define "rask.daprPodLabels" -}}`
 
@@ -1230,9 +1222,9 @@ list is how the first one drifted.
 
 ## `{{- define "rask.rayDashboardUrl" -}}`
 
-THE ONE RAY PLANE ([[CP-041]]): the dashboard every consumer names (compute's prune and jobs board, the
-cascade's submits, Serve discovery). `ray.dashboardUrl` when set, else the head Service a rendered
-RayService or RayCluster creates, else empty; a cascade with Ray on and no head fails the render.
+THE ONE RAY PLANE ([[CP-041]]): the dashboard every consumer names (the annotator's Serve discovery and
+the zones' Serve origin; the compute fixture is given the same address as its own value). `ray.dashboardUrl`
+when set, else empty.
 
 ## `{{- define "rask.rayServeOrigin" -}}`
 

@@ -2,10 +2,9 @@
 
 THE BUCKET SET IS NOT KNOWABLE AT RENDER TIME, which is why neither policy enumerates one.
 `catalog.warehouses.enabled` (on by default) provisions one physically separate bucket per warehouse at
-`POST /v1/warehouses`, with an operator-chosen name, so no value in the chart can name it. Both
-credentials open those buckets: the Ray stage/train jobs read `FROM_URI` and write `TO_URI`, which
-`_resolve_roots` sets to ``<the project's warehouse root>/medallion/<tier>`` for any tenant trigger,
-and `sweep.py::_buckets_to_sweep` extends its configured list from the warehouse registry itself.
+`POST /v1/warehouses`, with an operator-chosen name, so no value in the chart can name it. The sweep's
+credential opens those buckets: `sweep.py::_buckets_to_sweep` extends its configured list from the warehouse
+registry itself.
 
 So the policies ALLOW the data planes on every bucket and DENY the control plane precisely — every
 `*_PREFIX` under a control root plus the `__manifest` namespace index — and the control bucket keeps
@@ -46,20 +45,10 @@ CONTROL_BUCKET = "lance-catalog"
 
 _BUCKET_ACTIONS = frozenset({"s3:ListBucket", "s3:GetBucketLocation", "s3:ListAllMyBuckets"})
 
-#: EVERY control-plane prefix under a control root, read off the constants that define them rather than
-#: retyped: `_protection`, `_gates`, `_trash`, `_transforms`, `_warehouses`, `_tasks`, `_policies` (the
-#: `*_PREFIX` finals in `service_kit/lakehouse/`) plus `_projects` (`catalog/services/projects.py`).
-#: The first policy pass denied four of the eight and the omissions were not equivalent: `_tasks/<hash>.json`
-#: names an ENGINE AND A COMMAND (`task_registry.py`), so a credential that writes one changes what the
-#: compute plane executes; `_transforms/` and `_gates/` steer which transform runs and which quality gate
-#: admits it; and deleting a `_trash/` record makes `undrop` unreachable for bytes that still exist.
-CONTROL_PREFIXES = ("_trash",)
-
 
 def _render() -> str:
     return _helm_template(
         "minio.maintenanceAccessKey=rask-maintenance",
-        "minio.rayComputeAccessKey=rask-ray-compute",
     )
 
 
@@ -128,26 +117,8 @@ def allowed(policy: dict, *, action: str, bucket: str, key: str = "", prefix: st
 
 
 @pytest.fixture(scope="module")
-def ray() -> dict:
-    return _policy(_render(), "ray-compute")
-
-
-@pytest.fixture(scope="module")
 def maintenance() -> dict:
     return _policy(_render(), "maintenance")
-
-
-# ---- the Ray compute lane -----------------------------------------------------------------------
-
-
-@pytest.mark.parametrize("guarded", CONTROL_PREFIXES)
-def test_the_ray_lane_cannot_touch_control_records_in_ANY_bucket(ray: dict, guarded: str) -> None:
-    """Widening the allow to every bucket widens the deny with it, or a tenant warehouse's own control
-    records become reachable — which the static policy never had to think about because it reached no
-    tenant bucket at all."""
-    for bucket in (CONTROL_BUCKET, RUNTIME_BUCKET):
-        assert not allowed(ray, action="s3:GetObject", bucket=bucket, key=f"{guarded}/x.json"), f"{bucket}/{guarded} is readable"
-        assert not allowed(ray, action="s3:PutObject", bucket=bucket, key=f"{guarded}/x.json"), f"{bucket}/{guarded} is writable"
 
 
 # ---- the maintenance sweep ----------------------------------------------------------------------

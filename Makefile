@@ -761,7 +761,7 @@ DEV_ORIGIN          ?= http://localhost:8080
 # and `null` is how Helm removes a key a values file supplies. The two lists name the same keys.
 DROP_CREDENTIAL_VALUES := --set dapr.appToken=null --set frontend.oidc.sessionSecret=null \
   --set secrets.hfToken=null --set ray.auth.token=null --set age.password=null --set minio.secretKey=null \
-  --set minio.rayComputeSecretKey=null --set minio.maintenanceSecretKey=null \
+  --set minio.maintenanceSecretKey=null \
   --set minio.catalogSecretKey=null --set minio.lineageSecretKey=null --set minio.viewerSecretKey=null
 
 # THE ONE BOOTSTRAP SECRET a dev estate is given by hand: the operator-supplied third-party credentials
@@ -773,10 +773,11 @@ DROP_CREDENTIAL_VALUES := --set dapr.appToken=null --set frontend.oidc.sessionSe
 # Ready before any pod that wants a sidecar exists; the NATS bus every pub/sub component dials follows. The CloudNativePG
 # operator serves the AGE-on-CNPG Cluster; its CRDs come from k3s-crds, which runs first. Dex is the dev OIDC issuer,
 # given the issuer and origin rask is given; minio and openbao are the dev object and secret stores, which start once
-# rask is installed: the object store's root credential and the secret store's seed scripts are rask's. The Ray engine compute
-# reads is two of them, the operator first; observability is the store, dashboards and alerting rask's Collector
+# rask is installed: the object store's root credential and the secret store's seed scripts are rask's. The Ray engine is
+# two of them, the operator first, and compute (the Ray dashboard and Serve companion) follows it, starting once rask's
+# app token and Dapr Configuration exist; observability is the store, dashboards and alerting rask's Collector
 # exports to. A GPU node with no device plugin yet adds nvidia-device-plugin.
-FIXTURES ?= external-secrets dapr nats cloudnative-pg dex minio openbao kuberay-operator ray-cluster observability
+FIXTURES ?= external-secrets dapr nats cloudnative-pg dex minio openbao kuberay-operator ray-cluster compute observability
 
 k3s-fixtures: ## Install the development fixtures (FIXTURES) as their own releases, before the rask chart
 	$(if $(filter-out dex,$(FIXTURES)),KUBECONFIG=$(KUBECONFIG) ./scripts/fixtures.sh $(filter-out dex,$(FIXTURES)))

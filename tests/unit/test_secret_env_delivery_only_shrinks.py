@@ -42,8 +42,9 @@ from tests.unit.test_invariants import _helm_template
 #: a running pod without the watcher that row's other option would have needed.
 #: 23 -> 22 when the minio-scoped-users Job took the store root as a mounted file ([[XC-004]]).
 #: 22 -> 20 when the store's server, whose two root-credential env vars these were, became the minio fixture ([[XC-131]]).
+#: 20 -> 19 when compute, whose APP_API_TOKEN this was, became its own release (deploy/fixtures/compute, ADR 0155).
 #: Lowering it is the point; raising it means a workload took the banned path and the rule lost ground.
-SECRET_ENV_BASELINE = 20
+SECRET_ENV_BASELINE = 19
 
 
 def _secret_env_entries() -> list[tuple[str, str, bool]]:

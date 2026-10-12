@@ -17,7 +17,7 @@ minio-access-key, minio-secret-key, postgres-password, publisher-oidc-password,
 publisher-oidc-client-secret (the Dex client secret), dapr-state-connection-string, dapr-app-token (the
 app-API token: ESO writes it into the `dapr-app-token` Secret daprd stamps the header from, and the doors
 compare against this field), frontend-session-secret (the zones' cookie sealing key), ray-auth-token,
-ray-compute-access-key, ray-compute-secret-key, and `<plane>-s3-secret-key` for each scoped identity
+and `<plane>-s3-secret-key` for each scoped identity
 named in values.yaml `minio` (sha256("<identity>-s3-<minio-secret-key>")[:40], `lance.scopedSecretFn`, which
 `minio-scoped-users` derives too). With `secrets.hfTokenInStore`, `hf-token` (field `token`). Beside the bundle, for every identity in
 lance.signingIdentities, two secrets: signing-public-<identity> (field `keys`) and then signing-key-<identity>
@@ -108,14 +108,6 @@ replacement without a surge would re-mint the signing pairs and the NATS root (O
 THE APP-API-TOKEN, so a pod can authenticate its Dapr doors without the value passing
 through its environment (`RASK_APP_TOKEN_FROM_STORE`). ESO writes the same field into the
 `dapr-app-token` Secret daprd stamps the header from, so the two agree by construction.
-
-## `ray-compute-access-key={{ .Values.minio.rayComputeAccessKey | default .Values.minio.accessKey }} \`
-
-THE COMPUTE PLANE'S SCOPED PAIR, which `external-secrets.yaml` READS into
-`infra-credentials`. ESO syncs a Secret whole or not at all, so a property it reads and
-nothing writes takes every pod mounting that Secret down (measured 2026-09-09: the
-AGE consumers, the OpenFGA migrate Job, the bucket-init Job, the OTel Collector and
-all seven web zones in CreateContainerConfigError).
 
 ## `{{- if $.Values.minio.maintenanceAccessKey }}`
 

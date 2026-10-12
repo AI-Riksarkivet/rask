@@ -47,5 +47,5 @@ def test_a_502_body_names_no_internal_address(unreachable) -> None:
     assert response.status_code == 502
     body = response.text
     assert "127.0.0.1" not in body, f"the 502 leaked the internal upstream address to the caller: {body!r}"
-    assert "8804" not in body and ":8" not in body, f"the 502 leaked an internal port: {body!r}"
+    assert "2333" not in body and ":2" not in body, f"the 502 leaked an internal port: {body!r}"
     assert "/v1.0/invoke/" not in body, f"the 502 leaked the Dapr invoke URL: {body!r}"

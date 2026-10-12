@@ -36,7 +36,8 @@ from chart_yaml import FAST_LOADER
 
 
 #: Services the gateway carries to the public edge. Each must be able to authenticate.
-#: `compute` serves `{prefix}/ray` + `/api/serve`; `controlplane` serves `{prefix}/projects`.
+#: `compute` serves `{prefix}/ray` + `/api/serve` from its own release (deploy/fixtures/compute);
+#: `controlplane` serves `{prefix}/projects` from the rask chart.
 PUBLICLY_PROXIED = ("compute", "controlplane")
 
 
@@ -51,14 +52,16 @@ def test_the_chart_FEEDS_the_door_it_now_has() -> None:
     auth-enabled estate while every surface reported authorization as ON. The vars change behaviour
     only where a route declares a dependency — so the two halves are independently silent.
 
-    Rendered, not grepped: `compute` gets its env through `fleet.yaml`'s `governedAuth` flag and
+    Rendered, not grepped: `compute` gets its env from its fixture chart's `auth` values and
     `controlplane` through its own template, so a text match would pass on the wrong mechanism.
     """
     import yaml
 
+    from tests.unit.chart_render import render_fixture
     from tests.unit.test_invariants import _helm_template  # the shared renderer, so flags stay in one place
 
     docs = [d for d in yaml.load_all(_helm_template("auth.enabled=true"), Loader=FAST_LOADER) if isinstance(d, dict)]
+    docs += render_fixture("compute")
     missing: list[str] = []
     for service in PUBLICLY_PROXIED:
         deployment = next(
