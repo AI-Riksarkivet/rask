@@ -17,6 +17,10 @@ that is actually about telemetry, and the annotation in `rask.daprAnnotations` i
 match. That direction is safe: the guard the old comment protected was against a DANGLING
 `dapr.io/config` reference, and a Configuration that always exists cannot dangle.
 
+NO EDGE-AUTH SECRET FOR THE TELEMETRY UIs: no gateway row or Ingress path routes them, so they are
+cluster-internal (port-forward) and the store, its dashboards and their auth are the platform's (ADR 0153).
+An edge that re-exposes them carries the auth itself, wired to that edge's own machinery.
+
 WORKFLOW STATE RETENTION — the thing nothing collected. Workflow history is append-only and
 `stateRetentionPolicy` is the only lever that removes it: the CRD says "If not set, workflow
 instances will not be automatically purged", and nothing else in this estate purges them. Measured
@@ -36,8 +40,7 @@ There is deliberately NO application-side purge to go with this. `DaprWorkflowCl
 name the instances that need collecting while their history persists. A sweep built on it would
 collect only what happened since the last pod start. The built-in policy needs no such index.
 
-WHAT ENFORCES IT, measured rather than assumed — an earlier version of this comment said "the
-scheduler", and that was a guess. All four upstream sources are silent on the question, but the
+WHAT ENFORCES IT, measured rather than assumed. All four upstream sources are silent on the question, but the
 sidecar answers it directly: every workflow-hosting app registers THREE actor types, not two.
 
 $ curl -s 127.0.0.1:3500/v1.0/metadata      # from inside the ingest pod, 2026-08-26
@@ -74,11 +77,3 @@ and workflow retention are each a measured decision made once above; a per-app c
 the estate's shared material (app API token, S3 root secret, the state-store DSN) and no identity
 credentials at all, so granting it discloses nothing about who a producer is. The scoped S3 fields
 still on that bundle are a narrower question than this row and are not addressed here.
-
-## `(end of file)`
-
-RETIRED (gateway fold): the observability edge-auth Secret backed the nginx gateway's public
-/perses/ + /greptime/ auth_basic locations. The nginx gateway is deleted (rask's FastAPI gateway
-carries no telemetry routes) and no Ingress path routes them, so the telemetry UIs are
-cluster-internal (port-forward) and the Secret guarded nothing. If a future edge (kgateway/Envoy)
-re-exposes them, re-introduce auth THERE, wired to that edge's own auth machinery.

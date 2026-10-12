@@ -31,8 +31,8 @@ The tree is split by **language first**, then by layer. Each globbed directory i
 | ↳ JS libraries       | `frontend/packages/<name>`          | reusable TS/Svelte libraries                               | **No**                             |
 | **scripts**          | `scripts/`                          | ALL dev/ops scripts, shell **and** python, flat            | one-shot, **not** a workspace member |
 
-Current Python packages: `lineage-kit`, `ray-cluster-env` (deps-only), `ray-kit`, `service-kit`, `storage`, `validate`. (`ratch` was DISSOLVED 2026-08-28 — `open_ray-kernel.md`; `tracker` was DELETED 2026-08-30 — a per-file transfer ledger that never found a consumer here, its job done by JetStream `WORK_QUEUE` retention plus Dapr Workflow's durable state; `htr` is **not** a package — it is `runners/htr`, sealed and outside every glob.)
-Current Python services (10): `gateway`, `compute`, `flows`, `notifications` — plus the lance plane (`catalog`, `lineage`, `maintenance`, `viewer`, `search`, `annotator`). (`notifications` is the per-subject inbox behind the bell, `:8850`, app-id `notifications` — see `rask-services-fleet`.) (`compaction` was renamed `maintenance` in 06cc7579 — it compacts, optimizes indices, cleans up old versions *and* reconciles cross-store drift, so it is named for all four, not one. `core`/`core_api`/`search_api`/`volumes_api` died in the R6/R20 media wave.)
+Current Python packages: `lineage-kit`, `ray-cluster-env` (deps-only), `ray-kit`, `service-kit`, `storage`, `validate`. (`htr` is **not** a package — it is `runners/htr`, sealed and outside every glob.)
+Current Python services (10): `gateway`, `compute`, `flows`, `notifications` — plus the lance plane (`catalog`, `lineage`, `maintenance`, `viewer`, `search`, `annotator`). (`notifications` is the per-subject inbox behind the bell, `:8850`, app-id `notifications` — see `rask-services-fleet`.) Decided changes to this list, not yet built: the Python `gateway` retires for cluster routing straight to each service (ADR 0156, XC-150 #602); `lineage` shrinks to provenance — an OpenLineage intake, a Lance-stored commit feed and edge list, and a forwarder — and the Postgres+AGE graph becomes bring-your-own (ADR 0158, LH-468 #592); `maintenance` stops rewriting and only decides (ADR 0155/0156, LH-467 #587).
 Current sealed runners (9): `asr`, `assist`, `diarize`, `dummy`, `htr`, `insid3`, `kg`, `topics`, `voiceprint`. (`dummy` is the GPU-free lane prover — real CDF read → merge_insert → fragment commit, no model download; `insid3` is pinned to python 3.10.)
 Current JS packages: `api`, `config`, `dockview`, `engine`, `explorer-api`, `flow`, `labeling`, `ui`, `zone-contract` — see `rask-frontend`.
 Current zones (7, verified against `frontend/microfrontends/` 2026-08-09): `home` (catch-all, base `''`), `annotator`, `compute`, `lakehouse`, `explorer`, `studio`, `models` — each based at a bare `/<zone>`. **`models` REPLACED `train`** (on train's port 5178); a leftover `microfrontends/train/` on a dev host is untracked build residue, not a zone. `overview`/`discover`/`storage` are **retired**; `/storage` and `/data` are routes *inside* `lakehouse`.
@@ -49,10 +49,8 @@ Deployment; a new piece of infrastructure is a fixture, never a subchart (`rask-
 
 `service_kit.make_service_app(*, title, routers, proxy_router=None, lifespan=None)` builds the FastAPI app with shared config/handlers/middleware. The **lifespan is injectable**: stateless services get the minimal `default_lifespan` (settings only); stateful ones pass a `LifespanFactory` (Lance/Ray/S3). Routers mount under `settings.api_prefix`; `proxy_router` mounts at root.
 
-⚠️ **THREE FACTORIES ARE SANCTIONED — know which plane you are in.** This section used to say two
-layouts, and that the seven non-fleet services "construct `FastAPI(...)` directly with bespoke
-lifespans"; that was true and is not any more. Ten of the eleven services come out of a
-factory, and which one is decided by the plane, not by taste:
+⚠️ **THREE FACTORIES ARE SANCTIONED — know which plane you are in.** Nine of the ten services come out
+of a factory, and which one is decided by the plane, not by taste:
 
 | Plane | Factory | Services | Routers mount |
 | --- | --- | --- | --- |
@@ -65,9 +63,8 @@ host. The media three also share ONE lifespan (`service_kit.media.lifespan.make_
 with `setup`/`teardown` hooks for what is genuinely per-service (the annotator's actor plane).
 
 The non-fleet services keep the `fastapi` skill's `api/v1/endpoints/` + `core/` + `services/` layout
-rather than the fleet's flat-module layout — that half of the old paragraph still holds. What changed
-is the ENTRYPOINT: a `main.py` that opens its own `app = FastAPI(...)` is now the exception to
-justify, not the norm (docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit" DUP-12 counted eight of them repeating one boot, and the
+rather than the fleet's flat-module layout. The ENTRYPOINT is the factory's: a `main.py` that opens its
+own `app = FastAPI(...)` is the exception to justify, not the norm (docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit" DUP-12 counted eight of them repeating one boot, and the
 copies had drifted — one service had lost its request-id layer entirely).
 
 A thin fleet-layout entrypoint is **~20 lines** — import routers + a lifespan from the domain package, call the factory. `compute/__init__.py`:

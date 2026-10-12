@@ -23,7 +23,10 @@ Two contracts stack here, and confusing them is how bugs happen:
   `backfill_column`, `alter_transaction` and BOTH materialized-view ops — and the three version-TRACKING
   ops because the catalog refuses them while it never advertises `managed_versioning` —
   `create_table_version`, `batch_create_table_versions`, `batch_commit_tables`
-  (`versions.py::_versions_are_unmanaged`, `docs/COVERAGE.md`). Spelling matters when grepping: the spec op and
+  (`versions.py::_versions_are_unmanaged`, `docs/COVERAGE.md`). ADR 0157 decides the opposite: the catalog
+  serves `CreateTableVersion` under `managed_versioning=true`, judging each staged manifest before its own
+  put-if-not-exists, and the bespoke `/commit` door is deleted. That is LH-471 (#597), gated on the
+  object-store policy measurement LH-469 (#594); until it lands, the 406 above is the code. Spelling matters when grepping: the spec op and
   the served route are SINGULAR — `POST /v1/table/{id}/backfill_column` (`spec.yaml:1570`,
   `endpoints/columns.py:146`) — while `alter_table_backfill_columns` is the native method it wraps.
   **`rename_table` is NOT one of them.** It is backed in-process and answers 200; `docs/COVERAGE.md:15-17`
@@ -99,9 +102,17 @@ Check order at every create door: **identity (401) → shape (`InvalidInput` 400
 (404) → authz (403) → conflict (409) → native write → tuples (`seed_ownership`) → events.** Guards
 run BEFORE `native.call` — rejecting after leaves a real Lance object with no authz parent.
 
-`project` and `warehouse` are **control-plane objects, not spec objects** — their endpoints
-(`/v1/projects`, `/v1/warehouses`) are ours. Keep their errors in the same problem-body format so
-one client error path serves the whole API.
+`project` and `warehouse` are **rask's objects, not spec objects** — their endpoints
+(`/v1/projects`, `/v1/warehouses`, `/v1/project/{id}/gate/*`, …) are ours, and the catalog's registry and
+FGA are the only project store (there is no controlplane service, ADR 0157). Keep their errors in the
+same problem-body format so one client error path serves the whole API. Some rask-only routes already
+sit under `/management/v1` (protection, policies, access, publish, erasure, `/commit`); ADR 0156 moves
+every rask-only route still under the spec's `/v1` there, with projects on `/management/v1/projects`
+(LH-476, #596).
+
+**The tier is read from the namespace name today.** ADR 0156 C8 makes it the reserved namespace property
+`rask.tier`, set only by a project admin, with every write door asking one `tier_policy.judge(op, table,
+caller, run)` (LH-470, #595). Neither exists at HEAD; do not write code that assumes them.
 
 ## Storage — what state lives where (and why there is NO app database)
 
@@ -110,7 +121,7 @@ one client error path serves the whole API.
 | table data + versions | Lance datasets on object storage (rustfs) |
 | project registry (`_projects/<id>.json`), warehouse registry + namespace bindings | JSON records on the control root. **Id-MINTING creates are conditional** (`If-None-Match: *` via `service_kit.lakehouse.records.create_json`): project mint, warehouse mint and the write-once bindings are store-arbitrated, a lost race surfaces as 409, never last-writer-wins. **Mutable-field read-modify-writes are CONDITIONAL too** as of 2026-08-15 — `warehouses.upsert_warehouse` / `set_warehouse_status` / `projects.upsert_project` go through `records.mutate_json` (read + ETag-guarded replace, bounded retry), so an idempotent re-POST can no longer silently revert a concurrent quarantine or protection change. `put_warehouse` / `put_project` remain as SEEDING primitives with no production caller, pinned by `tests/unit/test_registry_writes_are_conditional.py`. Protection and trash records are still plain overwrites and correctly so: they carry no read-modify-write, so there is no carried-forward field to lose. |
 | authz | OpenFGA on its chart-managed Postgres |
-| lineage | AGE (Postgres), chart-managed |
+| lineage | AGE (Postgres), chart-managed. ADR 0158 moves the commit feed and a table-level edge list into Lance tables and makes the graph bring-your-own (LH-468, #592, after the erasure/protection measurement LH-475, #601) |
 
 A relational app-DB was removed at P7a and must not creep back for the catalog: registry writes are
 admin-frequency, the conditional creates arbitrate the id-mint races, and deletes are bottom-up
@@ -126,10 +137,9 @@ Reclamation, scheduling and the GC design live in `services/maintenance` itself 
 `services/maintenance/services/{sweep,optimize,purge,reconcile,index_health,tiers}.py` — plus
 `packages/service-kit/src/service_kit/lakehouse/base_refs.py`, the shallow-clone-source pre-pass, which
 lives in service-kit rather than the service because the catalog's on-demand maintenance doors
-(`catalog/services/maintenance.py`) must apply the same refusal and cannot import the sweep
-before changing anything the sweep, the reconciler or the orphan scan touches. This used to point at
-a root `open_*.md`, which is ephemeral by design: the plan was deleted when its work landed and the
-pointer dangled. The per-table/namespace/project POLICY that governs a sweep is
+(`catalog/services/maintenance.py`) must apply the same refusal and cannot import the sweep. Read
+them before changing anything the sweep, the reconciler or the orphan scan touches. The
+per-table/namespace/project POLICY that governs a sweep is
 `catalog.schemas.PolicyRequest` (retention, retain_versions, compact_enabled, interval, target rows),
 resolved **winner-takes-all** — an exact table match shadows the namespace record which shadows the
 project record, and the winner supplies EVERY field. Any surface showing an effective policy must say
@@ -203,7 +213,14 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   binding you cannot read is a namespace you cannot see.
 - `deactivate` = offboarding step one (quarantine; resolver 403s bound namespaces).
 - Maintenance (compaction + `optimize_indices` + `cleanup_old_versions` with tags EXEMPT) lives in
-  **`services/maintenance`** (renamed from `compaction` — it does FIVE things, not one: compact, `optimize_indices`, `cleanup_old_versions`, reconcile cross-store drift, and since 2026-09-04 BUILD INDICES off the catalog's request path — `api/index_work.py` + `services/index_build.py`, its own Dapr topic because `ackWait` is per-component and an index build outlasts a sweep unit) —
+  **`services/maintenance`** (it does FIVE things, not one: compact, `optimize_indices`, `cleanup_old_versions`, reconcile cross-store drift, and BUILD INDICES off the catalog's request path — `api/index_work.py` + `services/index_build.py`, its own Dapr topic because `ackWait` is per-component and an index build outlasts a sweep unit).
+  **That is the code, not the decided shape.** ADR 0155 and ADR 0156 C4/C6: maintenance DECIDES (expiry,
+  trash purge, orphan scan, reconcile, protection, the policy of what needs compacting or reindexing) and
+  does not rewrite; compaction and index rewrites become a bring-your-own job that commits through the
+  catalog's compaction and index commit doors, which judge the result (LH-467, #587). `CreateTableIndex`
+  stays a bounded asynchronous build in the catalog and erasure stays a named exception; `compact_now`,
+  `rebuild_index_now` and the write-path index build leave. The maintain vend tier goes to the
+  maintenance identity only (LH-473, #599).
   `catalog/api/maintenance_mode.py` is read-only maintenance MODE (503 + Retry-After), not this. The
   operations are ONE ordered pass per dataset — **compact → optimize_indices → cleanup**
   (`maintenance/services/optimize.py::compact_one`): compaction obsoletes files, the index optimize
@@ -225,7 +242,8 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   cannot serve all three). Reading the tier from the wrong segment does not error, it returns `None`
   and silently falls back to Lance's own sizing:
   `<bucket>/<project>-<tier>/<table>` (nested — tier TRAILS, reduce from the right);
-  `<bucket>/medallion/<tier>[-<lane>]` (a tier dataset under the `medallion/` parent — the child IS the namespace, and lanes are
+  `<bucket>/medallion/<tier>[-<lane>]` (a tier dataset under a `medallion/` parent directory — a path
+  layout `tiers.py` reads; no lakehouse service writes it, a user's pipeline may; the child IS the namespace, and lanes are
   `<tier>-<lane>` like `bronze-<lane>` / `gold-<lane>`, so the tier LEADS, reduce from the left);
   `<bucket>/<uuid8>_<namespace>$<table>` (the `dir` backend's FLAT layout — namespace and table share
   ONE directory name, so the tier is in `parts[-1]`, not a parent directory; a NESTED namespace makes
@@ -236,9 +254,9 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   layout carrying the `<tier>-<lane>` order rather than the catalog's);
   `<bucket>/medallion/<namespace>/<table>` (a TABLE under a `medallion/` namespace — e.g.
   `medallion/models/<model>`, or a table beneath a lane).
-  Until 2026-08-16 only the first was handled, so measured live, EVERY governed tier read as untiered
-  and the per-tier defaults had never once applied. Layouts 4 and 5 landed later still and are the
-  reason the branch ORDER is load-bearing: `medallion` has to be asked before the delimiter test, or a
+  A sizer that handles only the first layout reads every other governed tier as untiered (measured live
+  2026-08-16: the per-tier defaults had never once applied). The branch ORDER is load-bearing:
+  `medallion` has to be asked before the delimiter test, or a
   project's `acme$bronze` reads as the flat layout, reduces to the namespace `acme`, and the widest
   rows in the estate get Lance's default row count. Only `medallion` may promote its child; widening
   that would let a table NAMED `gold` size itself as gold.
@@ -264,6 +282,8 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   `medallion/models/gold` stay untiered — a model named `gold` is not gold-sized),
   `test_a_segment_that_IS_a_tier_outranks_one_that_only_derives_one`,
   `test_namespace_segments_that_DISAGREE_on_the_tier_name_none` and `test_each_BRANCH_boundary_of_tier_of`.
+  All six readings are guesses from a name, which is why ADR 0156 C8 replaces them with the `rask.tier`
+  namespace property (LH-470, #595); whether per-tier fragment sizing survives that is an open owner question.
 - The reconciler reports cross-store drift and deletes nothing until its report runs clean. It runs on
   its OWN Dapr cron binding (`maintenance-reconcile-cron`), separate from the sweep's — a read-only
   drift report must not inherit the data-rewriting sweep's cadence.
@@ -346,8 +366,13 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   adds put on `data/*` and nothing that commits, deletes or
   moves a ref, so a writer appends through `/commit` (`?branch=` for a branch); `maintain`
   (`can_maintain`) gets put/delete on the whole prefix for compaction and cleanup, and is also the shape
-  for the outbox and the warehouse scope probe. The door checks the one rung its tier names, never
+  for the warehouse scope probe. The door checks the one rung its tier names, never
   either. A put over an existing data file is the residue no session policy can refuse.
+  **Which spec door vends what, today:** `DescribeTable` with `vend_credentials` vends the READ tier only,
+  and `DeclareTable` vends nothing. ADR 0156 C3 makes both vend the highest tier FGA grants the caller,
+  with write credentials that never reach `_refs/` or a final `_versions/*.manifest` (LH-229, #149), and
+  C4 confines the maintain tier, which any `can_maintain` holder can be vended now, to the maintenance
+  identity (LH-473, #599).
 - **Three doors commit client-produced data, and all three judge its file versions.** `/commit`
   (`dataplane.commit_appended_fragments`), `/compaction_commit` (`commit_compaction`) and `register`
   refuse data files at another version than the table's
@@ -358,8 +383,12 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   first ([[LH-211]]). The spec's version-TRACKING
   doors (`version/create`, `version/batch-create`, `batch-commit`) would move a client-staged manifest
   into the version slot unjudged, so they answer 406 while `managed_versioning` is never advertised
-  ([[LH-206]]). Advertising it is a design change, not a flag: those doors would first need the
-  judgement, protection and lineage the four above carry.
+  ([[LH-206]]). Advertising it is a design change, not a flag: `version/create` must first carry the
+  judgement, protection and lineage the doors above carry, which is LH-471 (#597, ADR 0157).
+  **Provenance rides ad hoc channels today** (`source`/`source_version`, `X-Lance-Run-Facets`, the
+  `/commit` `run_id`). ADR 0156 C2 and ADR 0157 replace them with the spec `Context` (`header.*`): the
+  catalog stamps or verifies reserved `rask.run_id` / `rask.inputs` transaction properties, requires
+  `can_read_data` on each input and refuses an anonymous silver/gold commit (LH-225, #180).
 - **A write's lineage event names the commit that write made, never a reopen** ([[LH-214]]).
   `lineage_deps.emit_measured_write` takes `pin_version` and `branch` with no default: a new write door
   passes its handle's `version` after the commit, its response's `version`, or
@@ -394,10 +423,9 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   orphans — but partially-failed writes and unpurged buckets do, and nothing reclaims those yet.
   `services/maintenance`'s orphan pass REPORTS them (`MAINTENANCE_ORPHAN_SCAN_ENABLED` — it opens
   every dataset, unlike the rest of the drift report which compares three stores). **It is ON in the
-  deployed estate**, which is the opposite of what this line said: `maintenance/core/config.py:196`
-  defaults it `False`, but `chart/values.yaml:1356` ships `orphanScan: true`, and the chart is the
-  single deploy artefact — so "off by default" describes a configuration nothing runs. Read the chart
-  for what an estate does; read `config.py` only for what an unconfigured process does.
+  deployed estate**: `maintenance/core/config.py` defaults it `False`, but `chart/values.yaml` ships
+  `orphanScan: true`, and the chart is the single deploy artefact. Read the chart for what an estate
+  does; read `config.py` only for what an unconfigured process does.
 - **Three Lance file classes look like orphans and are not.** A scan that names any of them would
   drive a reclaimer into live data, and all three were found by running against a real estate, not by
   reading the layout doc: `_refs/tags/*.json` are TAGS, which PIN versions (`cleanup_old_versions`
@@ -445,9 +473,8 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   lance-index/src/scalar/json.rs:95:9: not yet implemented`, twice, once per Json index. The
   reproducing call is `ds.stats.index_stats("lineage_run_id_idx")` against a table carrying a JSON
   index built as `IndexConfig(index_type="json", parameters={"target_index_type": "btree", "path": ...})`
-  — on the estate, the silver and gold tiers under `s3://lance-catalog/medallion/`. It is a PROVENANCE index, not a search one — the indexed path is
-  `lineage -> run_id` on the R26 consume-layer document, so a governed row can be filtered back to the
-  run that wrote it; nothing in it serves text or vector search. `not yet implemented` is Lance's own `todo!()` — stats for the JSON scalar
+  — such as a provenance index on `lineage -> run_id`, which lets a governed row be filtered back to
+  the run that wrote it; no lakehouse service builds one, a pipeline may. `not yet implemented` is Lance's own `todo!()` — stats for the JSON scalar
   index simply do not exist yet — so there is nothing to fix on our side and nothing to file beyond
   upstream. It is CONTAINED, and deliberately: `index_health._stats` catches **`BaseException`**, not
   `Exception`, because a Rust panic surfaces as pyo3's `PanicException`, which derives from
@@ -457,18 +484,17 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   UNMONITORED, not proven fine. Do not "fix" the noise by narrowing that except clause. Note also that a
   JSON index can only be built on a Binary/LargeBinary column holding real **JSONB** — raw JSON text
   bytes fail `InvalidJsonb` at `json.rs:456`, and a string column is refused outright at `json.rs:726`.
-- **`lance_ray.compact_files` DOES NOT COMPACT — upstream, and only the distributed path.** lance-ray
-  0.5.0 + pylance 10.0.0: `scripts/ray_lance_job.py` stage 4 reports `compaction did not reduce
-  fragments: 4->4` and exits 1, which is the sole red in `make test`. Stages 1–3 pass on the real
-  cluster (distributed WRITE → 4 fragments, distributed INDEX via lance_ray, EVOLVE v3→v4), so the Ray
-  integration itself works. MEASURED 2026-08-16 against the identical shape — 64 rows in 4 fragments of
+- **`lance_ray.compact_files` DOES NOT COMPACT — upstream, and only the distributed path.** Relevant to
+  the bring-your-own rewrite job of LH-467: measured on lance-ray 0.5.0 + pylance 10.0.0, a distributed
+  compaction of 4 fragments reports `compaction did not reduce fragments: 4->4`, while a distributed
+  WRITE, INDEX and EVOLVE on the same cluster pass. MEASURED 2026-08-16 against the identical shape — 64 rows in 4 fragments of
   16, `data_storage_version="2.2"`, `enable_stable_row_ids=True`, evolved with `add_columns`, then
   `target_rows_per_fragment=32` — NATIVE `dataset.optimize.compact_files` reduces **4 → 2**. Same
   dataset shape, same option, opposite result, so Lance is not the defect. The job's call matches
   lance-ray 0.5.0's signature (`compact_files(uri, *, compaction_options, num_workers,
   storage_options, ...)`), so it is not misuse either. The upgrade study of 2026-10-12 reports the same result on lance-ray 0.5.0 + pylance
-  13.0.0. Nothing tracks the upstream fix: no suite drives
-  this demo job, which exercises lance-ray itself; the lakehouse runs no Ray job of its own (ADR 0155).
+  13.0.0. Nothing tracks the upstream fix, and the lakehouse runs no Ray job of its own (ADR 0155), so
+  no rask suite exercises it.
 - **CHECK THE TRASH RECORD BEFORE TOUCHING BYTES — including when you are "only looking".** The sweep
   reports `versions_removed: 0` on datasets holding versions far older than the retention, and the
   reason is almost always the F6(d) exclusion: a recoverably-dropped dataset (`_trash/` record) is
@@ -479,14 +505,13 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   was still restorable. The latest version, row count, `published` tag and undrop all survived, so
   cleanup was working correctly — the sweep was right to decline and the operator was wrong to
   override it. Tags are not the check; the trash record is.
-- **A medallion tier's maintenance run is emitted only when the sweep does MATERIAL work.**
+- **A governed tier's maintenance run is emitted only when the sweep does MATERIAL work.**
   `sweep.py::_did_material_work` gates the emit on `fragments_removed or old_versions_removed`, so a
   correctly-idle estate records nothing — deliberately, since a 120s cron would otherwise flood the
-  graph with no-op compaction runs. Consequence for verification: a stamped medallion dataset does NOT
+  graph with no-op compaction runs. Consequence for verification: a stamped tier dataset does NOT
   produce a `(:Run)-[:WROTE]->(:Dataset)` node just by being written and swept. The read half is
-  witnessed in AGE for `silver$emitproof` — but no medallion tier has yet been observed emitting,
-  because every sweep since has measured `fragments_removed: 0, versions_removed: 0`. That is the gate
-  behaving correctly, not a defect.
+  witnessed in AGE for `silver$emitproof`; a tier sweep whose result is `fragments_removed: 0,
+  versions_removed: 0` emits nothing, which is the gate behaving correctly, not a defect.
 
   **A DERIVED TIER INHERITS ITS UPSTREAM'S `lineage.dataset_id` UNLESS THE STAMP DROPS IT.** The sweep
   names a dataset by its PATH first and by the stamp only where the path is silent ([[LH-208]]), and
@@ -494,14 +519,21 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   `drop_columns` — so a silver table derived from bronze declares bronze's id unless something
   re-declares it (measured 2026-09-09: silver's compactions and FAIL events were filed against bronze's
   node). `service_kit.lakehouse.stage_stamp.stamp_stage(..., dataset_id=...)` re-declares the destination
-  and DROPS an inherited id when none is given, the same rule it applies to the `lineage` document. When
+  and DROPS an inherited id when none is given, the same rule it applies to the `lineage` document. No
+  lakehouse service calls it; it is the helper a pipeline writing a derived tier uses. When
   you check a declared-id chain, ask not "is a name stamped" but "whose name, on the tier that derived it".
 
   **EVERY TIER IS A CATALOG TABLE, and the writer is the user's pipeline** (ADR 0154, ADR 0155). Bronze,
   silver and gold are written only through the namespace doors, so each tier is a `table:` object with a
   record and ownership tuples from its first row, and the catalog announces every committed write on
   lineage. Moving rows between tiers runs on the user's own compute and orchestrator; the lakehouse runs
-  no stage.
+  no stage. The promotion gate today is `POST /management/v1/table/{id}/publish`: the project's quality
+  gate (`/v1/project/{id}/gate/*`) runs against the committed version and only a pass advances the
+  `published` tag. ADR 0156 C1 makes that tag THE gate: readers of a governed tier read `@published`,
+  approval moves it (`UpdateTableTag`), rejection restores main to it (`RestoreTable`), and moving it
+  notifies the project's watchers (LH-466, #586). The provenance columns `stage`, `lineage` and
+  `source_rowid` are reserved by name today; C9 drops the requirement for `stage` and `lineage` and makes
+  `source_rowid` an opt-in (LH-477, #603).
 
   **`register_table` is the door for bytes written outside the catalog's own doors.** It turns written
   bytes into a `table:` object, seeds ownership tuples, and every governed path (protection, trash,
@@ -550,14 +582,12 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   `packages/service-kit/src/service_kit/lakehouse/features.py` reads
   `reader_feature_flags`/`writer_feature_flags` as varints at
   protobuf fields 9/10 of `LanceDataset._ds.serialized_manifest()` — pylance exposes neither field
-  but its own pickle path uses that blob. (This bullet cited a `maintenance/core/features.py` that has
-  never existed; the masks live in service-kit because `services/maintenance` and
-  `catalog/services/maintenance.py` both consume them, and a mask widened for one must not silently
-  widen for the other.) Measured on pylance 9.0.0: plain `(0,0)`,
+  but its own pickle path uses that blob. The masks live in service-kit because `services/maintenance`
+  and `catalog/services/maintenance.py` both consume them, and a mask widened for one must not silently
+  widen for the other. Measured on pylance 9.0.0: plain `(0,0)`,
   `delete()` `(1,1)`, `enable_stable_row_ids` `(2,2)`, `add_bases`/`shallow_clone` set 16, a committed
   `LanceOperation.DataOverlay` sets 64.
-  **TWO GATES, NOT ONE — and this bullet used to say one blanket refusal, which contradicted its own
-  `SUPPORTED_FOR_GC` paragraph further up.** `compact_one` runs both in order, before touching a byte
+  **TWO GATES, NOT ONE.** `compact_one` runs both in order, before touching a byte
   (`optimize.py::compact_one` — that seam is under active edit, so read it rather than trusting a line
   number): `describe_gc_unsupported_flags` against **`SUPPORTED_FOR_GC` (= `SUPPORTED` | 16)** refuses
   the whole dataset, and then `describe_compaction_unsupported_flags` refuses only the COMPACTION
