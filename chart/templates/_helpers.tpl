@@ -943,15 +943,10 @@ keys_shaped() { case "$1" in *,) return 1 ;; *,*) pub_shaped "${1%%,*}" && pub_s
 {{- end -}}
 {{- end -}}
 
-{{/* CP-056: "an out-of-process engine is configured" — non-empty iff some `services.compute.engines.*` is enabled. The
-one predicate every lakehouse site gates the planned-run lane on (the plan, its outcome door, its sweep, its announcement). */}}
 {{- define "lance.outOfProcessEngine" -}}
 {{- range $n, $e := ((.Values.services.compute).engines | default dict) }}{{ if $e.enabled }}{{ $n }}{{ end }}{{ end -}}
 {{- end -}}
 
-{{/* MEDALLION_ENGINES: each enabled engine as the planners invoke it (app-id `compute`, the `rask-compute` token), with
-its tasks minus their commands when the caller registers them. A Ray engine's build is the Ray image.
-Call: include "lance.medallionEngines" (list $root <with-tasks>). */}}
 {{- define "lance.medallionEngines" -}}
 {{- $root := index . 0 -}}{{- $out := dict -}}
 {{- range $n, $e := (($root.Values.services.compute).engines | default dict) }}{{- if $e.enabled }}

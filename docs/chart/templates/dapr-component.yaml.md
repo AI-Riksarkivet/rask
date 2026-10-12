@@ -31,9 +31,10 @@ governance events into a fresh in-memory buffer — the buffer is a live-refresh
 The control topic's other publishers, each on its own component and so as its own NATS user: maintenance's #79 purge
 announcements and the annotator's assignments. A publisher a component does not scope is refused by its sidecar, silently.
 
-## `{{- if and .Values.medallion.enabled .Values.medallion.ray .Values.medallion.compute }}`
+## `{{- if and .Values.medallion.enabled (include "lance.outOfProcessEngine" .) .Values.medallion.compute }}`
 
-Each stage runner announces the plans of its Ray stage runs (CP-029 D-2).
+Each stage runner announces the plans of its out-of-process stage runs (CP-029 D-2), whichever engine
+`services.compute.engines` enables.
 
 ## `apiVersion: dapr.io/v1alpha1`
 

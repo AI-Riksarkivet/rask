@@ -1253,3 +1253,16 @@ RayService or RayCluster creates, else empty; a cascade with Ray on and no head 
 
 Ray Serve's HTTP ingress on the same plane: `frontend.serveUrl` when Serve lives elsewhere; a RayService's
 load-balanced serve Service; else the dashboard itself, whose external host serves the apps too.
+
+## `{{- define "lance.outOfProcessEngine" -}}`
+
+An out-of-process engine is configured (CP-056): non-empty iff some `services.compute.engines.*` is enabled. It is the
+one predicate every lakehouse site gates the planned-run lane on: the plan, its outcome door, its sweep, its
+announcement. The lakehouse names no engine; an engine is an app it invokes by Dapr (`compute`, ADR 0140).
+
+## `{{- define "lance.medallionEngines" -}}`
+
+`MEDALLION_ENGINES`: each enabled engine as the planners invoke it (app-id `compute`, the `rask-compute` token), with
+its tasks minus their commands when the caller registers them (`include "lance.medallionEngines" (list $root
+<with-tasks>)`). An engine's `code_version` is its `codeVersion` value: the engine is bring-your-own (ADR 0153), so its
+owner names the build, and a rolled image is then a new run rather than a re-attach to the old build's.

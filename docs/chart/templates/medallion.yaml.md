@@ -61,22 +61,18 @@ unreachable from the deployed chart.
 
 ## `- { name: MEDALLION_TRAIN_TOPIC, value: {{ .Values.medallion.train.topic | quote }} }`
 
-Ray TRAIN head (#115): values-wired passthrough (docs/RAY-TRAIN.md; defaults mirror
-core/config.py). lineageUrl defaults to the release's own lineage service.
+Ray TRAIN head (#115): values-wired passthrough (docs/RAY-TRAIN.md; defaults mirror core/config.py).
 
-## `- { name: MEDALLION_RAY_ENABLED, value: "true" }`
+## `- { name: MEDALLION_LINEAGE_URL, value: {{ printf "http://%s-lineage:%v" (include "lance.fullname" .) .Va...`
 
-The producer app ALSO needs the Ray Jobs seam when ray is on: the TRAIN head (#115) gates on
-ray_enabled and submits training jobs to the same cluster the stage runners use for stage jobs.
-Found live 2026-07-13: this flag was wired only in the stage runners loop below, so /train could
-never be configured through the chart (409 "train head not configured" on every POST).
+The release's own lineage Service, which a training run's job emits its RunEvents to.
 
-## `- { name: MEDALLION_RAY_TASKS, value: {{ .Values.medallion.rayTasks | toJson | quote }} }`
+## `- { name: MEDALLION_ENGINES, value: {{ include "lance.medallionEngines" (list . true) | quote }} }`
 
-WHAT THIS RAY PLANE CAN RUN, registered into `<control_root>/_tasks/` at this app's boot.
-Declared HERE because the chart is what deploys the image these commands run in — and read
-by the catalog's transform door, which learns no engine's vocabulary doing it (the engine
-is stamped by the registering plane, not by this list).
+CP-056: the engines the producer invokes (`lance.medallionEngines`), with the tasks it registers into
+`<control_root>/_tasks/` at boot, so the catalog's transform door refuses a declaration naming a task no engine runs.
+The training head is enabled when an engine registers task `train` (ADR 0139). The producer names no engine: each is
+an app it invokes by Dapr (`compute`, ADR 0140).
 
 ## `- { name: MEDALLION_OUTCOME_URL_BASE, value: "http://{{ include "lance.fullname" . }}-medallion-producer:{{...`
 
@@ -328,9 +324,9 @@ Until 2026-08-24 this variable was rendered by NO template, so `settings.transfo
 "" in-cluster, every stage runner took the env branch, and `/compute/lanes` wrote records that
 nothing read. The door was live and its property was not obtained.
 
-## `{{- if or $root.Values.medallion.projectsEnabled .transform $root.Values.medallion.ray }}`
+## `{{- if or $root.Values.medallion.projectsEnabled .transform $engine }}`
 
-Also for the Ray lane: its runs' plans live in this root (CP-029).
+Also for an out-of-process engine: its runs' plans live in this root (CP-029).
 
 ## `- { name: MEDALLION_CONTROL_ROOT, value: "s3://{{ $root.Values.minio.bucket }}" }`
 
@@ -389,41 +385,23 @@ The store is the sole source at boot (see the producer block above). Fails close
 The pair's other half — see the producer block. A scoped key on the default field signs
 with the root's secret and fails `SignatureDoesNotMatch` on every call.
 
-## `- { name: MEDALLION_RAY_ENABLED, value: "true" }`
+## `- { name: MEDALLION_ENGINES, value: {{ include "lance.medallionEngines" (list $root false) | quote }} }`
 
-Event-driven real-Ray: the stage runner submits its stage transform as a `ray job submit` to the
-ray-lance cluster (Ray Jobs REST API, httpx-only) IN RESPONSE TO its Dapr trigger, instead of
-the in-process write. Requires medallion.compute (from/to URIs + S3 creds) + a running Ray
-cluster (deploy/ray-lance-demo.yaml). Default off — fake-Ray in-process stays the default path.
-
-## `- { name: MEDALLION_RAY_ENTRYPOINT, value: {{ .stageJob | quote }} }`
-
-P7b seam: this stage runner's stage-job entrypoint (stageRunners[].stageJob) — how the HTR lanes select
-the layout/lines + transcribe jobs on the unified cluster; unset = ray_stage_job.py default.
+CP-056: the engines this stage runner may plan a run on, and `MEDALLION_DEFAULT_ENGINE` the one a runner that declares
+no transform runs on (`medallion.defaultEngine`, else the first enabled engine). `MEDALLION_STAGE_TASK` names the task
+its order asks the engine for. A planned run is a work order sent to `compute` by Dapr invocation; its job reports
+back through this runner's outcome door.
 
 ## `- { name: MEDALLION_OUTCOME_URL_BASE, value: "http://{{ include "lance.fullname" $root }}-{{ .name }}:{{ $p...`
 
 CP-029: a planned run's job reports to this runner's Service; its plan is announced on the control
 lane; the sweep's cron is one string with the Component's name and the route.
 
-## `- { name: MEDALLION_RAY_CODE_VERSION, value: {{ include "lance.catalogImage" $root | quote }} }`
+## `- { name: MEDALLION_CODE_VERSION, value: {{ include "lance.catalogImage" $root | quote }} }`
 
-WHERE THIS STAGE RUNNER REGISTERS ITS OUTPUT — on EVERY stage runner, not just the HTR lane.
-
-These two used to sit behind a per-workload conditional, so only ONE lane could reach
-the catalog and every other stage runner wrote bytes the catalog never heard of: no table
-record, therefore no FGA object, therefore no grant, retention policy or
-deletion-protection could ever name them. Measured on the live estate 2026-08-17,
-`describe gold$catalog` answered 403 — not permission denied, but no such object.
-
-Worse, that conditional was itself unset, so NO stage runner had it — not even the lane the
-gate was written for. Governance belongs to the cascade, so the catalog's address does
-too: unconditional, on every stage runner.
-B3 — WHICH BUILD submits. Re-attach is only correct while the program is the same one:
-during a rolling deploy a redelivered trigger landing on the NEW pod re-attached to a job
-the OLD pod submitted (old entrypoint, old runtime_env, old transform) and reported
-success, so the run carried the new build's provenance over the old build's output.
-Sourced from the image this pod actually runs, so it cannot drift from the code.
+The catalog's address on EVERY stage runner: governance belongs to the cascade, and a runner without it writes bytes no
+table record, grant or retention policy can name (measured 2026-08-17: `describe gold$catalog` answered 403). The
+lakehouse image is the build an in-process run names in its key.
 
 ## `- { name: MEDALLION_QUALITY_ENABLED, value: "true" }`
 
