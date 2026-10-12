@@ -1,9 +1,8 @@
 # Lance Namespace Catalog — Interactive System Diagram
 
-> ℹ️ **Point-in-time companion** (markers refreshed 2026-07-11 — insert/delete/compaction emit,
-> read-side lineage authz, the OpenBao/Dapr secret store, and credential vending are all built +
-> deployed). For authoritative current state defer to [`ARCHITECTURE.md`](ARCHITECTURE.md),
-> [`DEPLOY.md`](DEPLOY.md), and [`COVERAGE.md`](COVERAGE.md).
+> ℹ️ **Point-in-time companion.** For authoritative current state defer to
+> [`ARCHITECTURE.md`](ARCHITECTURE.md), [`TIER-GOVERNANCE.md`](TIER-GOVERNANCE.md),
+> [`architecture/deployment.md`](architecture/deployment.md) and [`COVERAGE.md`](COVERAGE.md).
 
 Companion to **[`system-diagram.html`](./system-diagram.html)** — a single-file, click-through
 diagram of the catalog. Open it in a browser:
@@ -38,10 +37,11 @@ graph node (how/who). The diagram is built around that single identity threading
 > ✅ **Provenance records the verified principal (audit `w8u4rc2tg` P0 #2/#3).** The catalog emits
 > OpenLineage on table **create** with `author` = the verified token sub — a
 > `(:User)-[:CREATED]->(:Dataset)` edge, so "who created the table" is an audit fact queryable at
-> `GET /datasets/{id}/creator`. Job-emitted lineage (promote/compaction) binds the author
-> server-side on ingest, so it can't be forged. Emit now covers the full write surface — create,
-> insert, merge_insert, update, delete, and the compaction sweeper — with the Lance-version facet
-> on every measured write. (Emission is opt-in: `LANCE_LINEAGE_EMIT_ENABLED`.)
+> `GET /datasets/{id}/creator`. A pipeline's own lineage binds the author server-side on ingest, so it
+> can't be forged. Emit covers the full write surface — create, insert, merge_insert, update, delete, and
+> maintenance's runs — with the Lance-version facet on every measured write. The catalog's emitter is off
+> unless `LANCE_LINEAGE_EMIT_ENABLED` is set (the chart sets it); ADR 0156 makes it mandatory on governed
+> tiers (LH-472, #598).
 
 ---
 
@@ -52,24 +52,22 @@ flow runs in both — only the credential/byte-path changes.
 
 | | **Mode B** *(server-mediated, default)* | **STS vending** *(S3 direct, recommended)* |
 |---|---|---|
-| Object store | MinIO / S3-compatible (AWS, Ceph RGW, RustFS) | same — any STS-capable S3 (MinIO / Ceph / AWS) |
+| Object store | MinIO / S3-compatible (AWS, Ceph RGW) | same — any STS-capable S3 (MinIO / Ceph / AWS) |
 | Credential | **none leaves the catalog** | short-TTL, table-scoped **STS token** (`AssumeRole`) |
 | Byte path | **server-mediated** (catalog reads on the client's behalf) | client reads storage **directly** with the vended token |
 | OpenBao | not consulted per-request | catalog reads its base/role credential (Dapr secret store — built) to mint STS |
 
-The target is **S3-compatible storage** — MinIO is the default test backend; AWS S3, Ceph RGW,
-RustFS, GCS-via-interop all work the same way. The design is **vending-first** with a pluggable
-`CredentialVendor` (`services/catalog/core/vending.py`, four modes: `StsVendor` /
-`WebIdentityVendor` / `StaticPrefixVendor` / `ModeBVendor`).
+The target is **S3-compatible storage** — MinIO is the default test backend; AWS S3, Ceph RGW and
+GCS-via-interop work the same way. The design is **vending-first** with a pluggable
+`CredentialVendor` (`services/catalog/core/vending.py`, three modes: `StsVendor` (`sts`),
+`WebIdentityVendor` (`web_identity`) and `ModeBVendor` (`mode_b`)).
 The toggle is the *credential-delivery* shape — both modes run on the **same** S3 storage.
 
 > ℹ️ **STS works on MinIO** (and Ceph RGW, AWS): `StsVendor` points boto3's STS client at the S3
 > endpoint and calls `AssumeRole` with an inline session policy scoped to the table's bucket/prefix
-> → a short-TTL `{access_key, secret_key, session_token}`. **RustFS** rejects plain `AssumeRole`
-> but supports `AssumeRoleWithWebIdentity` — that's `WebIdentityVendor`
-> (`vending.mode=web_identity`), the RustFS-native scoped-STS path, live-verified
-> (`docs/DEPLOY.md`). For a backend with neither, `StaticPrefixVendor`/`ModeBVendor` remain.
-> That's the point of pluggable vending. *(RustFS lifecycle e2e: `make rustfs-lifecycle`.)*
+> → a short-TTL `{access_key, secret_key, session_token}`. `WebIdentityVendor`
+> (`vending.mode=web_identity`) exchanges the caller's OIDC token through `AssumeRoleWithWebIdentity`
+> instead. For a backend with neither, `ModeBVendor` keeps every credential inside the catalog.
 
 > 🔑 **Who holds secrets (least-privilege).** Only the **catalog** and **lineage svc** consume OpenBao.
 > A pipeline job (the user's, on their own compute) **never** reads OpenBao — it gets short-TTL scoped creds
@@ -83,7 +81,7 @@ The toggle is the *credential-delivery* shape — both modes run on the **same**
 | Node | Role (color) | What it is |
 |---|---|---|
 | **Client** | user (mint) | LanceDB SDK / `lance-ray` / app — speaks the REST + Arrow API |
-| **lance-ray job** | compute (magenta) | the user's pipeline moving data between tiers on their own compute (a catalog *client*, not an endpoint) |
+| **Pipeline job** | compute (magenta) | the user's pipeline moving data between tiers on their own compute (a catalog *client*, not an endpoint) |
 | **OIDC IdP** | embed (amber) | Dex — issues JWTs; catalog verifies against JWKS (fail-closed) |
 | **OpenBao** | seed (orange) | secrets · KV v2 — **catalog + lineage only**; jobs use workload identity (planned) |
 | **Catalog** | orch (sky) | FastAPI over native `pylance` `DirectoryNamespace`; the control plane |
@@ -102,11 +100,11 @@ The toggle is the *credential-delivery* shape — both modes run on the **same**
 3. **Catalog → OpenFGA** — `check can_create_table` on the **parent** namespace.
 4. **Catalog → Object store** — create the Lance dataset location + record the table (version 1).
 5. **Catalog → OpenFGA** — `grant_on_create`: seed `owner` grant + `parent` edge (inherits cascade).
-6. **Catalog → Lineage** *(P0 #3, default OFF)* — emit OpenLineage with `author` = the **verified** sub → a `(:User)-[:CREATED]->(:Dataset)` edge (the audit fact behind `GET /datasets/{id}/creator`). **Awaited inline, best-effort** — errors are swallowed so a lineage outage never fails the 201, and the shipped B4 reconcile back-fills anything lost.
+6. **Catalog → Lineage** — emit OpenLineage with `author` = the **verified** sub → a `(:User)-[:CREATED]->(:Dataset)` edge (the audit fact behind `GET /datasets/{id}/creator`). **Awaited inline, best-effort** — errors are swallowed so a lineage outage never fails the 201, and the shipped B4 reconcile back-fills anything lost.
 7. **Catalog → Client** — `201`; caller is the table's **owner** (⇒ writer ⇒ reader).
 
 ### 2. Read / query — `GET describe_table` (+ read)
-1. **Client → Catalog** — describe; creds via the dedicated **`POST /management/v1/table/{id}/credentials?tier=read|write`** (vending is its own endpoint, not a describe param).
+1. **Client → Catalog** — `DescribeTable` with `vend_credentials=true` (the spec's own parameter, `lance_docs/ns_catalog/spec.yaml`) returns table-scoped `storage_options`; the rask extension `POST /management/v1/table/{id}/credentials?tier=read|write` vends a named tier. Which tier the spec doors vend is LH-229 (#149).
 2. **Catalog → OIDC** — verify token.
 3. **Catalog → OpenFGA** — `check can_read_data` (reader rung; cascades).
 4. **Catalog → OpenBao** *(vending modes on S3)* — read the catalog's **own base key** (Dapr secret store) to mint the scoped token; **Mode B fetches nothing** (compute jobs never read OpenBao — see the Secrets note above).
@@ -115,8 +113,10 @@ The toggle is the *credential-delivery* shape — both modes run on the **same**
 
 ### 3. Promote (medallion) — the user's pipeline, bronze → silver → gold
 *The lakehouse runs no stage ([ADR 0155](adr/0155-the-medallion-is-tier-governance-in-the-catalog.md)): the pipeline is
-the user's, on their own compute and orchestrator. The catalog announces every committed write on lineage; how a
-pipeline outside the estate consumes those announcements is a separate decision.*
+the user's, on their own compute and orchestrator. The catalog announces every committed write on lineage, and a
+pipeline reads those announcements from lineage's `GET /events` with its own token. Publishing a gold version is the
+catalog's publish door, which runs the project's gate and moves the `published` tag
+([TIER-GOVERNANCE.md](TIER-GOVERNANCE.md)).*
 1. **Job → Catalog** — describe bronze (the job is a catalog client; it authenticates with **workload identity**, never OpenBao).
 2. **Catalog → OpenFGA** — `check can_read_data` for `role:data_engineer#assignee` (role-as-subject).
 3. **Job → Object store** — read only the **new bronze versions** — the version range *is* the change feed.
@@ -127,8 +127,8 @@ pipeline outside the estate consumes those announcements is a separate decision.
 
 ### 4. Lineage query — `GET /datasets/{id}/upstream`
 1. **Client → Lineage** — ask "where did gold come from?"
-2. **Lineage → OIDC** *(implemented, default off)* — verify JWT (`RASK_OIDC_ENABLED`); no/invalid token → 401.
-3. **Lineage → OpenFGA** *(implemented, default off)* — `check can_get_metadata` (same right as describe-table); reuses the shared store, read-only.
+2. **Lineage → OIDC** — verify JWT (`RASK_OIDC_ENABLED`); no/invalid token → 401.
+3. **Lineage → OpenFGA** — `check can_get_metadata` (same right as describe-table); reuses the shared store, read-only.
 4. **Lineage → AGE** — openCypher `DERIVED_FROM*1..` traversal; the dataset name is an **agtype bind param**, never interpolated (injection-safe).
 5. **Lineage → Client** — `200` with the transitive upstream set.
 
@@ -138,8 +138,8 @@ pipeline outside the estate consumes those announcements is a separate decision.
 > 2. ✅ Lineage **ingest** requires a verified token and **binds the author** to it — provenance is no
 >    longer forgeable (P0 #2); the catalog forwards the caller's bearer on emit.
 > 3. ✅ The catalog **emits create-lineage** with the verified author — "who created the table" is an
->    audit fact at `GET /datasets/{id}/creator` (P0 #3). Insert/delete/merge-insert/update and the
->    compaction sweeper all emit too — the write surface is fully covered.
+>    audit fact at `GET /datasets/{id}/creator` (P0 #3). Insert/delete/merge-insert/update and
+>    maintenance's runs all emit too — the write surface is fully covered.
 >
 > Tracked in [`docs/adr/`](adr/README.md). Run the whole loop: `make governance-chain` (or
 > `dagger call governance-chain --demo` for the narrated [`governance_demo.py`](../scripts/governance_demo.py)).
@@ -150,7 +150,7 @@ pipeline outside the estate consumes those announcements is a separate decision.
 
 - **"Show me security end-to-end"** — run *Create table*; pause on steps 2→3→5 (verify → authorize → seed-ownership). The cascade is why one create grants exactly the right future access.
 - **"Two credential modes"** — open *Read / query*, step through once in **Mode B** (server-mediated), then flip to **STS vending** and step again. Same flow, same S3 storage, two credential paths.
-- **"Where does lineage come from?"** — run *Promote*; the last two steps (emit → MERGE) show provenance is a **byproduct of the job**. Ingest **binds the verified author** (P0 #2), and the catalog announces every write the job commits.
+- **"Where does lineage come from?"** — run *Promote*; the last two steps (emit → MERGE) show the pipeline reporting its own run. Ingest **binds the verified author** (P0 #2), and the catalog announces every write the job commits.
 - **"What's still open?"** — *Lineage query*, steps 2–3 are now the SHIPPED authz gate
   (`RASK_OIDC_ENABLED` + `RASK_FGA_ENABLED`, on in the chart); the remaining opens live in
   [`docs/adr/0007-7a-live-verification-residuals.md`](adr/0007-7a-live-verification-residuals.md) §7a (live-verification residuals) and

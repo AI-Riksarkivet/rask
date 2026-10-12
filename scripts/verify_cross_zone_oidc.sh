@@ -13,7 +13,7 @@ export RASK_EXPECT_CONTEXT
 # authz through the zones' BFF (alice, project-admin → the produce door 2xx; bob, no grant → 403). Drives
 # the LIVE kind `lance` cluster with the P5 micro-frontend zones deployed OIDC-on behind ingress-nginx.
 #
-# Prereq (see docs/DEPLOY.md "the cross-zone drive"): the 5 zone images built + kind-loaded, ingress-nginx
+# Prereq (see docs/architecture/deployment.md "Per-user login across the zones"): the 5 zone images built + kind-loaded, ingress-nginx
 # installed, and `helm upgrade … --set auth.enabled=true
 # --set ingress.enabled=true --set frontend.oidc.enabled=true
 # --set frontend.oidc.publicIssuer=http://lance-ns-dex:5556/dex

@@ -52,7 +52,7 @@ _MODELS_NAMESPACE = "models"
 _MODEL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 # Promotion moves a KNOWN lifecycle tag, never an arbitrary caller-named ref — this endpoint is "promote",
 # not "create any tag" (the owner-tier /v1/table/.../tags/* routes are the general tag API). blessed = the
-# served pointer; staging/prod are the promotion ladder (RAY-TRAIN D4.3).
+# served pointer; staging/prod are the promotion ladder.
 _PROMOTION_TAGS = frozenset({registry.BLESSED_TAG, "staging", "prod"})
 
 

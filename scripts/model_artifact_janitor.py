@@ -1,6 +1,6 @@
 """Orphan-artifact janitor for the model lane (§9 blob-pointer lifecycle, Batch 4 2026-07-11).
 
-The D4 registration order (bytes FIRST, then the atomic registry commit — docs/RAY-TRAIN.md) means
+The registration order (bytes FIRST, then the atomic registry commit) means
 a training run that crashes between the two steps leaves plain artifact objects under
 ``<artifact_base>/<token>/`` that NO registry row points at — by design (never a half-registered
 model). This janitor is the cleanup half of that contract:

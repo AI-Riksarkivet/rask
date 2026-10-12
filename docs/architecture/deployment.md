@@ -110,8 +110,8 @@ Development runs stand-ins from `deploy/fixtures` (ADR 0153), and the chart rend
 
 ```bash
 make k3s-install      # one-time: k3s + helm (sudo)
-make k3s-build        # build fleet + frontend + ray images as :dev
-make k3s-import       # side-load images into k3s
+make k3s-build        # build the fleet, the zones, the lakehouse image and the dev images as :dev, through Dagger
+make k3s-import       # side-load the :dev images into k3s containerd
 make k3s-up           # the fixtures (FIXTURES), each its own release, then helm upgrade --install rask ./chart --wait
 # UI: http://rask.local/   API: http://rask.local/api/health
 # (add "127.0.0.1 rask.local" to /etc/hosts)
@@ -119,84 +119,58 @@ make e2e              # verify MFE hydration + API round-trip end-to-end (run af
 make k3s-down         # uninstall   |   make k3s-purge  # + delete PVCs
 ```
 
-`k3s-build` builds the fleet (gateway, compute, notifications) plus the frontend zone
-images, the `ray-cluster` image, and the `lance-rest-catalog` lakehouse image as
-`:dev` tags.
-`k3s-import` side-loads them into k3s containerd via `docker save | ctr images
-import`, so no registry is needed.
+`k3s-build` builds every image through `scripts/dagger-image.sh`: `gateway`, `compute` and `notifications`, the seven
+zone images (`web-<zone>:dev`), `lance-rest-catalog` (the lakehouse image that serves catalog, lineage, maintenance and
+the media trio), `minio` and the `ray-cluster` image the development engine fixture runs. `k3s-import` side-loads
+them into k3s containerd with `docker save | k3s ctr images import` (Makefile `k3s-import`), which conflicts with the
+house rule that no docker command runs; the Dagger path that avoids it is to publish to the dev registry
+(`make dev-registry`, then `dagger call image --name=<stem> publish --address=172.17.0.1:5000/<stem>:<tag>`), as the
+in-cluster loop in `CLAUDE.md` describes.
 
 ## Container images (`.docker/`)
 
-Production-shaped image definitions live at `.docker/`, built with `docker buildx`
-(repo root as context). Current:
+Every image is built by Dagger (`.dagger/images.go`, reached through `scripts/dagger-image.sh`) from a dockerfile in
+`.docker/`, with the repo root as context; the dockerfile is the single source of truth, so a build behaves the same
+locally and in CI.
 
-| Image | Base | Notes |
+| Image | Dockerfile | Notes |
 |---|---|---|
-| `rask-runner` | `nvidia/cuda:12.4.0-runtime-ubuntu22.04` | GPU. uv-managed Python + venv; `CMD ["runner"]`. Needs `--shm-size`, `--ulimit nofile=65535`, GPU via nvidia-container-toolkit. |
-| `home` / `<domain>` (7 images) | build + serve on `oven/bun:1-debian` | All built from **one parametrized** `.docker/frontend.dockerfile` via `--build-arg APP=<dir>`. **SSR via `svelte-adapter-bun`** (no longer an nginx SPA). `APP=home` is the catch-all (owns `/`); the six domain apps (lakehouse/media/annotator/compute/train/studio) each pin a bare base `/<zone>` — **not** `/default/<zone>` — and the Ingress routes there with `pathType: Prefix` and **no** `rewrite-target`, so the pod receives the based path. Probes are **TCP, not httpGet**, because a zone's `/` 404s under its own base. Images are tagged `web-<zone>:<tag>`. Pre-builds `@rask/ui`, then `bun build`; the final stage ships the Bun runtime + `node_modules` and runs `bun build/index.js` on `:3000`. tini as PID 1, non-root UID 10001. |
-| backend services (per-workload) | uv-managed Python | One dockerfile each: `gateway`, `ray` (plus `ray-cluster.dockerfile` for the Ray head/Serve image and `rest-catalog.dockerfile` for the lakehouse+media image). |
+| `lance-rest-catalog` | `rest-catalog.dockerfile` | One image, several deployments: `catalog`, `lineage`, `maintenance`, `viewer`, `search` and `annotator`. |
+| `gateway`, `flows`, `notifications`, `compute` | `<name>.dockerfile` | One per service, `uv sync --frozen --package <name>` against the root `uv.lock`. `compute` ships in its own chart (`deploy/fixtures/compute`). |
+| `web-<zone>` (7 images) | `frontend.dockerfile` | One parametrized dockerfile, `--build-arg APP=<zone>`. SSR via `svelte-adapter-bun`; `home` is the catch-all (owns `/`), the six domain zones (lakehouse, explorer, annotator, compute, models, studio) each pin a bare base `/<zone>`, and the Ingress routes there with `pathType: Prefix` and no `rewrite-target`. Probes are TCP, because a zone's `/` 404s under its own base. tini as PID 1, non-root UID 10001. |
+| `ray-cluster`, `ray-<runner>` | `ray-cluster.dockerfile`, `ray-runner.dockerfile` | The development engine's head image and one image per sealed runner (`--runner <runner>`); neither is part of the product chart. |
+| `minio` | `minio.dockerfile` | The `mc` the chart's scoped-users hook drives, and the dev store's server, built from pinned upstream tags. |
 
-The one frontend dockerfile encodes a non-obvious build contract (documented in its
-header): `svelte-adapter-bun` externalizes `@sveltejs/kit`, so the final
-image must ship `node_modules` — `build/` is not standalone. And bun 1.3's **isolated
-linker** keeps real packages in `node_modules/.bun/` with per-member symlinks, so the
-final stage copies both the root store **and** the app dir (with its symlinks) and
-runs from the app dir. The build `COPY`s the full JS workspace (all of
-`frontend/microfrontends` wholesale + `packages/{api,ui}`) so `bun install` resolves — siblings
-are build-stage only, never shipped.
+The one frontend dockerfile encodes a non-obvious build contract (documented in its header): `svelte-adapter-bun`
+externalizes `@sveltejs/kit`, so the final image must ship `node_modules` (`build/` is not standalone). And bun 1.3's
+**isolated linker** keeps real packages in `node_modules/.bun/` with per-member symlinks, so the final stage copies
+both the root store **and** the app dir (with its symlinks) and runs from the app dir.
 
-!!! note "Frontend images aren't built by `.dagger`"
-    The Dagger module covers Python CI only (`migrate-up`, `test-pg` — see
-    [CI](#ci) below); it does **not** build or publish the `.docker/*.dockerfile`
-    images. Those are built directly with `docker buildx`. Wiring the frontend (and
-    service) image builds into Dagger or a GitHub Actions matrix is a
-    deployment-cycle follow-up.
+The frontend topology those images serve (the Turborepo vertical-microfrontend proxy, the shared `@rask/ui` shell,
+and per-app `kit.paths.base`) is documented in the `rask-frontend` project skill (`.claude/skills/rask-frontend`).
 
-The dissolved `viewer` monolith no longer has a dockerfile; the surviving fleet
-services ship their own (`gateway`, `ray`) — core-api/search-api/volumes-api's
-dockerfiles died with their services in the R6/R20 wave.
+## The engine is the user's
 
-The frontend topology those images serve — the Turborepo vertical-microfrontend
-proxy, the shared `@rask/ui` shell, and per-app `kit.paths.base` — is documented in
-the `rask-frontend` project skill (`.claude/skills/rask-frontend`).
+The lakehouse submits no job and runs no stage, training or engine
+([ADR 0155](../adr/0155-the-medallion-is-tier-governance-in-the-catalog.md)): a pipeline is the user's, on the engine
+they run, and it writes through the catalog's namespace doors. The chart installs no Ray (ADR 0153): no KubeRay
+operator, no RayCluster or RayService, no GPU reservation and no Serve application.
 
-## Ray cluster & Serve (local)
+The **`compute` service** (`:8804`, over `ray-kit`) is the companion of a bring-your-own Ray engine, not part of the
+lakehouse. It reads that engine's Ray dashboard REST API at `RAY_DASHBOARD_URL` for the jobs board and job-history
+prune, and proxies `/api/serve/*`. It ships in its own chart, `deploy/fixtures/compute` (release `compute` in rask's
+namespace, installed by `make k3s-fixtures`), which reads the rask release's Dapr app token, `lance-tracing`
+Configuration, Dex, OpenFGA, OTel Collector and Ray auth token by reference; rask's OpenFGA admits its service account
+only when the product chart's `auth.externalFgaClients` names it. The gateway keeps its `/api/ray` and `/api/serve`
+rows, which reach it by its Dapr app-id `compute`. The address of the engine's dashboard is `ray.dashboardUrl`
+(`rask.rayDashboardUrl`), shared by the annotator's Serve discovery and the zones' Serve origin.
 
-```mermaid
-flowchart LR
-    rayup["make ray-up<br/><sub>head :6379 · dash :8265</sub>"] --> serveup["make serve-up / serve-up-both<br/><sub>deploy_serve.py</sub>"]
-    serveup --> t["/transcribe · TrOCR"]
-    serveup --> h["/htrflow · full pipeline"]
-```
-
-- `make ray-up` / `ray-down` / `ray-status` — local Ray head.
-- `make ray-up-htr` — a **2-GPU pool pinned to GPUs 0,1** (`CUDA_VISIBLE_DEVICES=0,1
-  --num-gpus=2`); exports `RAY_ENABLE_UV_RUN_RUNTIME_ENV=0` and uses
-  `uv run --no-sync` (the documented Ray/uv gotcha).
-- `make serve-up` / `serve-down` / `serve-status` — deploy the Serve apps via
-  `scripts/deploy_serve.py`.
-- `make serve-up-both` — deploy `transcribe` + `htrflow` with fractional GPU
-  reservations (`RASK_SERVE_REPLICAS=2`, `RASK_SERVE_GPU_FRAC=0.49` → ≈1.96 GPU
-  on the 2-GPU pool).
-- `make qwen-serve` — an external vLLM LLM backend on GPU 2 (isolated venv,
-  OpenAI-compatible API on `:8001`), separate from the HTR workspace.
-
-## Remote KubeRay
-
-The runner accepts `--address ray://…:10001`. The lakehouse submits no Ray job ([ADR 0155](../adr/0155-the-medallion-is-tier-governance-in-the-catalog.md)):
-a pipeline on Ray is the user's, on the engine they run. The **`compute` service** (`:8804`, over `ray-kit`) reads
-that engine's Ray dashboard REST API at `RAY_DASHBOARD_URL` for the jobs board and job-history prune, and proxies
-`/api/serve/*`. That address, the annotator's Serve discovery and the zones' Serve origin come from one helper,
-`rask.rayDashboardUrl`, so every Ray consumer names the same engine: `ray.dashboardUrl`. The chart installs no Ray (ADR 0153): no KubeRay operator, no
-RayCluster or RayService. The engine owner runs Ray; in development `make k3s-up` installs the
-`kuberay-operator` and `ray-cluster` fixtures (`deploy/fixtures`, not for production), whose head Service is
-`rask-ray-head-svc`, and `deploy/values-local.yaml` names it. The `compute` service is the engine's companion and
-ships with it: its own chart, `deploy/fixtures/compute` (release `compute` in rask's namespace, installed by
-`make k3s-fixtures`), reads the rask release's Dapr app token, `lance-tracing` Configuration, Dex, OpenFGA, OTel
-Collector and Ray auth token by reference, and rask's OpenFGA admits its service account only when the product
-chart's `auth.externalFgaClients` names it. The gateway has no `/api/ray` or `/api/serve` row, so the `compute`
-zone cannot reach it through the gateway. rask's side of the seam is the address and the
-token its Ray clients present (`ray.auth.enabled`, `<release>-ray-auth-token`).
+In development `make k3s-up` installs the `kuberay-operator`, `ray-cluster` and `compute` fixtures
+(`deploy/fixtures`, not for production); the head Service is `rask-ray-head-svc`, and `deploy/values-local.yaml`
+names it. GPUs, a device plugin, the `nvidia` RuntimeClass and each Serve replica's GPU fraction belong to the
+engine: the `ray-cluster` fixture's `gpuCount` sizes its head, and the `nvidia-device-plugin` fixture advertises
+`nvidia.com/gpu` on a node where nothing does yet (`deploy/fixtures/README.md`). A runner reaches a remote cluster
+with `--address ray://…:10001`.
 
 ## Helm chart (`chart/`)
 
@@ -204,8 +178,8 @@ token its Ray clients present (`ray.auth.enabled`, `<release>-ray-auth-token`).
 
 - **gateway** — reverse proxy on `:8888` (path-routes `/api/*`, no catch-all).
 - **flows** and **notifications** — the studio flow-builder's server half and the per-subject inbox.
-- **the lance planes** — catalog/lineage/maintenance/notifications + the media trio
-  (viewer/search/annotator; the viewer carries the S3 object browser).
+- **the lakehouse** — catalog, lineage and maintenance, plus the media trio (viewer/search/annotator; the viewer
+  carries the S3 object browser).
 - **frontend zones** — SvelteKit SSR apps on `:3000` each.
 - **Ingress** (Traefik) — `/api` → gateway:8888, `/` → the zone services.
 - **Optional, in-chart for development and the platform's in production** ([[XC-132]]): `openfga.enabled` (the
@@ -216,19 +190,27 @@ token its Ray clients present (`ray.auth.enabled`, `<release>-ray-auth-token`).
 
 Everything else is a separate release ([[XC-085]], ADR 0153). `make k3s-up` installs the development set from
 `deploy/fixtures` first (`make k3s-fixtures`): the External Secrets Operator, Dapr, NATS, the CloudNativePG operator,
-Dex, MinIO, OpenBao, the KubeRay operator and a Ray cluster, and the telemetry chain. A platform brings its own.
+Dex, MinIO, OpenBao, the telemetry chain, and the development engine (the KubeRay operator, a Ray cluster and the
+`compute` chart). A platform brings its own.
 
-### GPUs are the engine's
+### Per-user login across the zones
 
-The chart reserves no GPU and renders no Serve application: GPUs, a device plugin, the `nvidia` RuntimeClass and
-each Serve replica's GPU fraction belong to the engine. In development the `ray-cluster` fixture's `gpuCount`
-sizes its head, the `nvidia-device-plugin` fixture advertises `nvidia.com/gpu` on a node where nothing does yet,
-and k3s creates the `nvidia` RuntimeClass itself (`deploy/fixtures/README.md`).
+`frontend.oidc.enabled` moves in lockstep with `auth.enabled` (the chart refuses the half-governed pair,
+`templates/auth-consistency.yaml`) and needs a browser-reachable IdP: `frontend.oidc.publicIssuer` and
+`frontend.oidc.publicOrigin`, which forms the home zone's `…/auth/callback` redirect. The `home` zone owns
+`/auth/{login,callback,logout}` and sets one sealed session cookie at path `/`; because the Ingress routes every zone
+under one origin, a login on one zone is a login on all of them, and every zone's BFF forwards the signed-in user's
+own bearer to the governed backends. The BFF is a confidential OIDC client; its client secret and the cookie's
+sealing key are the store's (`frontend-session-secret`), written by ESO into `<release>-frontend-session`, never a
+value. `scripts/verify_cross_zone_oidc.sh` drives a real headless Dex login through the Ingress origin and checks
+that the cookie carries across a zone boundary and that per-user authorization holds.
+
+`auth.bootstrapAdmin` names the first estate admin by Dex subject: a post-install/upgrade hook Job grants that subject
+`owner` on the FGA root object, the grant the estate-wide surfaces gate on. Empty renders no Job.
 
 ### StorageClasses: omit, don't guess
 
-No template names a StorageClass. `rustfs.storageClass`, `ray.hfCacheStorageClass` and
-`explorer.corpus.storageClass` all default to `""`, which omits `storageClassName` so the **cluster's
+No template names a StorageClass. `explorer.corpus.storageClass` defaults to `""`, which omits `storageClassName` so the **cluster's
 default** class provisions — the only portable answer (`local-path` is k3s's provisioner name and does not
 exist on kind, whose default is `standard`). Note `storageClassName: ""` is *not* the same as omitting it:
 the empty string disables dynamic provisioning, which is why the templates use `with`. No test pins it.
@@ -237,7 +219,7 @@ the empty string disables dynamic provisioning, which is why the templates use `
 
 rask's telemetry seam is one **OTel Collector** (`chart/templates/otel-collector.yaml`, `rask-otel-collector`),
 the **single log shipper** (Vector retired, owner ruling 2026-07-27). It receives the fleet's OTLP, tails
-infra-pod logs (filelog), scrapes the Dapr sidecars, the Dapr control plane, Ray and OpenFGA, and exports
+infra-pod logs (filelog), scrapes the Dapr sidecars, the Dapr control plane and OpenFGA, and exports
 everything over OTLP/HTTP to **`observability.export.endpoint`**, with the backend's ingestion headers from
 `observability.export.{headers,traceHeaders,auditHeaders}` and HTTP basic auth from the store's
 `otel-collector-export` secret (via ESO, as mounted files).
@@ -277,18 +259,17 @@ Sensitive config comes from an operator-created Secret (`existingSecret`, defaul
 
 ## CI
 
-- **GitHub Actions** runs only `.github/workflows/docs.yml`: builds this Zensical
-  site (`zensical build --clean`, with mkdocstrings API reference), builds
-  Storybook, and deploys both to GitHub Pages on push to `main`/`master`.
-- **Tests & migrations** run through **Dagger**, not GitHub Actions:
-  `dagger call migrate-up` (alembic against an ephemeral Postgres — proof of a
-  clean from-zero migration) and `dagger call test-pg` (migrate + core pytest).
+- **`.github/workflows/ci.yml`** calls the Dagger module's functions (`lint`, `typecheck`, `openapi`, `test`,
+  `test-pg`, `charts`, `frontend`, `test-lineage`, `scan-*`, `zone-smoke`) plus the kind-backed live jobs
+  (`make e2e-ci`) and the per-zone Playwright suites; `dagger call <fn>` locally is the CI step.
+- **`.github/workflows/docs.yml`** builds this Zensical site (`zensical build --clean`) and Storybook, and deploys
+  both to GitHub Pages.
 
 ## State stores
 
-- **Postgres** (prod) via `DATABASE_URL=postgresql+asyncpg://…`; **SQLite** (dev)
-  at `.cache/batches.db`. Schema changes go through **Alembic** — never
-  `create_all` at startup. Local Postgres: `make pg-up` / `pg-migrate`.
-- **S3** (backend-agnostic: MinIO / rustfs / AWS; HCP only as a legacy env-alias
-  bridge) two-bucket setup (`images-batch` input, `images-batch-alto` output) plus
-  the `images-batch-search` Lance tables.
+- **The object store** (MinIO in development, the platform's S3 in production): every Lance table the catalog
+  governs, the outbox, the trash and the registries. Lance puts its commit CAS in the store, so the catalog needs no
+  relational database.
+- **Postgres**: the lineage graph (Apache AGE) and OpenFGA's datastore, plus the Dapr state store, served by the
+  `rask-age` StatefulSet in development and by the platform in production. ADR 0158 moves the lineage graph out of
+  rask (LH-468, #592), leaving OpenFGA's database as the estate's only Postgres.

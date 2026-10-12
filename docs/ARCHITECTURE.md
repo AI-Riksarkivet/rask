@@ -1,4 +1,4 @@
-# lance-ns — Architecture & Status
+# Catalog architecture & status
 
 The doc to read first. Plain-language map of **what we're building, how the pieces fit,
 where we are right now, and what's next**. Skim the diagrams; read the section you need.
@@ -6,15 +6,12 @@ where we are right now, and what's next**. Skim the diagrams; read the section y
 > 🧭 **Want what happens to a write, in order — a client writes through the catalog → the catalog announces it →
 > lineage records it → the user's pipeline moves it on → maintenance?** Read **[`FLOW.md`](FLOW.md)**.
 >
-> 🔬 **Are we correct, and what do we lack vs the other catalogs?** See **[`BENCH-2026-07-22.md`](BENCH-2026-07-22.md)** —
-> the current feature bench (Lakekeeper / Polaris / Unity / Gravitino / Nessie) — and the recorded
-> spec deviations in **[`docs/adr/0020-feature-gap-minor-deviations-1-7-the-spec-deviation-register.md`](adr/0020-feature-gap-minor-deviations-1-7-the-spec-deviation-register.md)** ("FEATURE-GAP minor deviations").
+> 🔬 **Are we correct against the spec?** See [`COVERAGE.md`](COVERAGE.md) and the recorded spec deviations in
+> **[`docs/adr/0020-feature-gap-minor-deviations-1-7-the-spec-deviation-register.md`](adr/0020-feature-gap-minor-deviations-1-7-the-spec-deviation-register.md)**.
 >
 > 📜 **What contract do producers and consumers actually rely on?** See **[`DATA-CONTRACT.md`](DATA-CONTRACT.md)** —
 > "the Lance manifest is the schema, the version is the handshake": the storage/bus/identity
-> contract, its three enforcement points (quality gate / FGA / reconcile), what Dapr+NATS do and
-> don't enforce, the honest prod-readiness split (breaking changes are the known gap), and the
-> Lakekeeper comparison.
+> contract, its enforcement points, what Dapr+NATS do and don't enforce, and the Lakekeeper comparison.
 
 > 🖱️ **Prefer to click through it?** Open [`system-diagram.html`](system-diagram.html) — an
 > interactive walk-through of the four core flows (create / read / promote / lineage), with the
@@ -25,7 +22,7 @@ where we are right now, and what's next**. Skim the diagrams; read the section y
 
 ## 1. What this is (one paragraph)
 
-`lance-ns` is a **REST catalog for Lance datasets** — a thin HTTP service (FastAPI) that
+rask's catalog is a **REST catalog for Lance datasets** — a thin HTTP service (FastAPI) that
 lets clients create/list/describe namespaces & tables, read/write table data (Arrow-IPC),
 and does it with **authentication** (OIDC) and **fine-grained authorization** (OpenFGA,
 Zanzibar-style). The actual table bytes live in object storage (MinIO/S3) as **Lance
@@ -44,7 +41,7 @@ Lakekeeper, but for Lance (multimodal: vectors + blobs + columns)."
    │  FastAPI REST catalog                │   │  lance-ray / pylance / a job │
    │  - namespaces & tables CRUD          │   │  - read_lance / write_lance  │
    │  - describe -> location + creds      │──▶│  - add_columns (ETL)    │
-   │  - OIDC authn + OpenFGA authz        │   │  - compaction / vector search│
+   │  - OIDC authn + OpenFGA authz        │   │  - transforms / vector search│
    │  - seeds ownership tuples on create  │   │  - commits new Lance versions│
    └─────────────────────────────────────┘   └──────────────────────────────┘
                     │                                        │
@@ -53,15 +50,17 @@ Lakekeeper, but for Lance (multimodal: vectors + blobs + columns)."
                                                       Lance dataset dirs (*.lance)
 ```
 
-The catalog **never moves data itself** (no heavy ETL inside the API process). It
-authorizes, locates, and records. Compute is a **client** of the catalog. This is why
-"promotion between layers" (below) is a *job*, not a catalog endpoint.
+The catalog **moves no data between tiers itself** (no ETL inside the API process). It authorizes, locates, records
+and announces, and it governs every write in its own write path: compute is a **client** of the catalog. So moving
+data between tiers is the user's job, while the rules a tier write must satisfy are the catalog's (§6).
 
 ### Credential vending & STS — how, and why it matters for the lakehouse
 
-A client opens a table, then calls `POST /management/v1/table/{id}/credentials?tier=read|write` to get a
-**credential** to reach object storage directly. Four pluggable modes (`chart` `vending.mode`;
-`services/catalog/core/vending.py`), strongest first:
+A client asks for a **credential** to reach object storage directly through the spec's own parameter,
+`DescribeTable` / `DeclareTable` with `vend_credentials` (`lance_docs/ns_catalog/spec.yaml`), or through rask's
+extension `POST /management/v1/table/{id}/credentials?tier=read|write`, which names a tier. Which tier the spec doors
+vend, and that write credentials never reach `_refs/` or a final manifest, is LH-229 (#149). Three pluggable modes
+(`chart` `vending.mode`; `services/catalog/core/vending.py`, `VendingMode`), strongest first:
 
 1. **STS vending (`StsVendor`) — recommended.** The catalog calls the S3 backend's STS
    `AssumeRole` with an **inline session policy** scoped to *just this table's bucket/prefix and
@@ -69,11 +68,8 @@ A client opens a table, then calls `POST /management/v1/table/{id}/credentials?t
    client reads/writes the bytes directly with that token. Works on **MinIO, Ceph RGW, AWS**.
 2. **Mode B (`ModeBVendor`) — safe default.** No credential is vended; the client uses the
    catalog's server-mediated Arrow-IPC endpoints. Backend-agnostic; nothing is delegated.
-3. **Web-identity (`web_identity`) — the RustFS-native path.** RustFS rejects plain `AssumeRole`, so
-   the caller's Dex id_token is exchanged via `AssumeRoleWithWebIdentity` for creds bound to a role
-   policy, narrowed per-table by an inline session policy. This is what makes scoped STS work on RustFS.
-4. **Static (`StaticPrefixVendor`).** A long-lived per-bucket key — for S3 backends without STS
-   *policy scoping* (e.g. GCS interop).
+3. **Web-identity (`WebIdentityVendor`, `web_identity`).** The caller's OIDC token is exchanged via
+   `AssumeRoleWithWebIdentity` for creds bound to a role policy, narrowed per table by an inline session policy.
 
 **Why STS is the right default for a *governed* lakehouse:**
 
@@ -193,62 +189,41 @@ actions: can_get_metadata, can_read_data, can_write_data, can_drop, can_deregist
 
 The model is in three kept-in-sync files: `model.fga` (human DSL, source of truth),
 `model.json` (what the app loads into OpenFGA), `model.fga.yaml` (model tests with a
-medallion scenario: bronze/silver/gold + ingestion/data_engineer/analyst roles).
+tier scenario: bronze/silver/gold + ingestion/data_engineer/analyst roles).
 
-### Planned (P1 — the 3-axis model you asked for)
+### The hierarchy as built
 
-Three separations — **teams × projects × layers**:
-
-```
-catalog
-  └── project            (NEW: membership boundary; per-project admin)
-        └── namespace     (= layer: project$bronze / project$silver / project$gold)
-              └── table
-
-teams/roles  = role:<x>#assignee  granted a rung per (project, layer)
-projects     = a `project` type; project membership cascades to its layers
-layers       = namespaces; a person's can_* is restricted per layer
-```
-
-A person is in a **team**; the team is granted a **rung per layer** of a **project**
-(e.g. `data_eng#assignee` → reader on `alpha$bronze`, writer on `alpha$silver`). Optional
-hard isolation: gate every layer grant on project membership (intersection). This is a
-*superset* of P0 — add a `project` type, keep everything else. See §8.
+The model now carries `estate`, `project`, `warehouse`, `team`, `classification` and the `validator` and `publisher`
+rungs beside the types above (`model.fga`). A table lives in `project > warehouse > namespace > table`; a team is
+granted a rung on a project or a namespace, and `can_promote` / `can_update_tag` gate publication. See
+[`AUTHZ.md`](AUTHZ.md) and the `openfga` skill.
 
 ---
 
-## 6. The medallion data flow (bronze → silver → gold)
+## 6. The medallion: tier governance (bronze → silver → gold)
 
-Layers are **namespaces**; datasets are **Lance tables** (each a `*.lance` directory).
-Default storage: **one bucket per project, layers = prefixes** (a layer is *not* its own
-bucket unless you deliberately configure per-layer storage — authz and physical storage
-are independent axes).
+Tiers are **namespaces**; datasets are **Lance tables** (each a `*.lance` directory). Default storage: **one bucket
+per warehouse, tiers = prefixes** (authz and physical storage are independent axes).
 
 ```mermaid
 flowchart LR
-  EVT[events] -->|NATS JetStream| ING[ingest job]
-  IMG[images] --> ING
-  ING -->|write_lance append, via catalog| B[bronze tables — raw, append-only]
-  B -->|read version-range = Change Data Feed| ETL1[the user's pipeline: transform]
-  ETL1 -->|append + add_columns, via catalog| S[silver tables — cleaned + features]
-  S --> ETL2[the user's pipeline: aggregate] -->|via catalog| G[gold tables — curated, read-mostly]
-  ROLES[per-layer OpenFGA roles] -. gate .- B & S & G
+  SRC[an external source] --> P0[the user's ingest job]
+  P0 -->|namespace doors, via catalog| B[bronze tables]
+  B -->|read new versions| P1[the user's pipeline: transform]
+  P1 -->|namespace doors, via catalog| S[silver tables]
+  S --> P2[the user's pipeline: aggregate] -->|namespace doors, via catalog| G[gold tables]
+  CAT[catalog write path: tier permission, provenance, gate] -. governs .- B & S & G
 ```
 
-- **Bronze** = raw (images/events) appended as-is. Lance is blob/vector-native.
-- **Silver** = cleaned + enriched via `lance-ray` (`write_lance(mode="append")`,
-  `add_columns` for distributed backfill like embeddings). Read only the **new
-  bronze versions** since last run — Lance's version history *is* the Change Data Feed.
-- **Gold** = curated/aggregated, analysts get reader.
-
-**"Promotion" is a compute job (a client), not a catalog feature.** It: authenticates →
-`describe`(bronze) [authz `can_read_data` + get location/creds] → read → transform →
-`create`/`insert`(silver) [authz `can_create_table`/`can_write_data`] → commit a new
-Lance version. The catalog authorizes + locates + records + announces; the engine moves bytes. The job is the
-user's pipeline on its own compute; the catalog announces every committed write on lineage, and how a pipeline
-outside the estate consumes those announcements is a separate decision. The medallion itself is tier governance in
-the catalog's write path ([ADR 0155](adr/0155-the-medallion-is-tier-governance-in-the-catalog.md),
-[`MEDALLION.md`](MEDALLION.md)).
+**Moving data between tiers is the user's pipeline, on its own compute; the rules a tier write must satisfy are the
+catalog's**, applied in its write path so no writer can bypass them
+([ADR 0155](adr/0155-the-medallion-is-tier-governance-in-the-catalog.md),
+[ADR 0156](adr/0156-the-audit-grilling-amends-0155.md)). A pipeline authenticates → `describe`s its input
+[authz `can_read_data` + location/creds] → reads → transforms → `create`/`insert`s the next tier
+[authz `can_create_table`/`can_write_data`] → a new Lance version is committed and the catalog announces it on
+lineage. Publishing a version runs the project's quality gate and moves the table's `published` tag. What the catalog
+enforces today, and the ADR 0156 rules still to land (the `rask.tier` judge, provenance in the spec Context, the tag
+gate for readers), are in [`TIER-GOVERNANCE.md`](TIER-GOVERNANCE.md).
 
 ---
 
@@ -263,8 +238,8 @@ the catalog's write path ([ADR 0155](adr/0155-the-medallion-is-tier-governance-i
 | Post-create ownership seeding (single `seed_ownership` helper) | ✅ done |
 | Resilience (retry + fail-closed incl. transport errors; one retry layer; bounded) | ✅ done |
 | Medallion model + tests (bronze/silver/gold + persona roles) | ✅ done (model + `model.fga.yaml`) |
-| Tier movement (bronze→silver→gold) | the user's pipeline, on its own compute ([ADR 0155](adr/0155-the-medallion-is-tier-governance-in-the-catalog.md)); the catalog runs the publish-time quality gate |
-| `project` type + 3-axis governance (teams × projects × layers) | ✅ modeled (`model.fga`: project/warehouse/team/validator) + fga-tested; app-side auto-seed of the full hierarchy is partial (see `DEPLOY.md`) |
+| Tier movement (bronze→silver→gold) | the user's pipeline, on its own compute ([ADR 0155](adr/0155-the-medallion-is-tier-governance-in-the-catalog.md)); the catalog runs the publish-time quality gate, and the ADR 0156 tier rules are tracked in [`TIER-GOVERNANCE.md`](TIER-GOVERNANCE.md) |
+| `project` type + 3-axis governance (teams × projects × tiers) | ✅ modeled (`model.fga`: project/warehouse/team/validator) + fga-tested |
 | Orchestration | the lakehouse runs none ([ADR 0154](adr/0154-the-lakehouse-runs-no-ingest-and-no-workflow-engine.md)); Dapr cron bindings drive maintenance and lineage's reconcile, and NATS/Dapr pub-sub carries the internal events |
 | Lineage (OpenLineage ingest + graph queries over Apache AGE; producer-side emitter) | ✅ service built & deployed; read-side authz implemented + SvelteKit UI (see §9, `docs/LINEAGE.md`) |
 | OTel observability (OTel Collector + GreptimeDB + Perses) | ✅ built, deployed, `make e2e-obs`-verified |
@@ -283,14 +258,12 @@ fragment commit through `/commit`). In a governed catalog you want a commit to b
 | **(b) Audit trail** | "What versions exist; what changed?" | **Lance versioning** — every commit is an immutable, time-travelable version | ✅ free from the format |
 | **(c) Lineage** | "Where did this data come from?" | **OpenLineage** (emit on commit) → the in-service Apache AGE graph | ✅ built & deployed (see §9 + `docs/LINEAGE.md`) |
 
-So **commit auth already exists**: committing goes through the same `authorize` dependency
-that gates every write, checking `can_write_data` on `table:<id>`. **It does NOT need
-OpenLineage or a graph database.**
-
-If you want **commit as a *distinct* permission** (e.g. a "reviewer" who can stage writes
-but not commit an official version), the model already has a `can_commit` relation — we'd
-route the commit/version endpoints to `can_commit` instead of `can_write_data`. That's a
-small, contained change in `fga_deps._action_relation`, no new infrastructure.
+So **commit auth already exists**: committing goes through the same `authorize` dependency that gates every write,
+checking `can_write_data` on `table:<id>`. Tier governance adds to it on silver and gold: a commit there must name its
+run and its inputs, carried in the spec `Context` headers, which the catalog stamps as `rask.*` transaction
+properties, checking `can_read_data` on each input, and from which it emits the lineage edge itself (ADR 0156 C2,
+LH-225 #180). Stock clients commit through the spec's `CreateTableVersion` under `managed_versioning`, which replaces
+the bespoke `/commit` door (ADR 0157, LH-471 #597).
 
 ---
 
@@ -299,19 +272,15 @@ small, contained change in `fga_deps._action_relation`, no new infrastructure.
 This is what your "OpenLineage + graph database + dummies in between" intuition is really
 about — and it's **provenance/observability, not access control**:
 
-- **OpenLineage** = an open standard for emitting "a job *run* read inputs X, wrote outputs
-  Y" events. The **promotion job emits** these (it's instrumentation in the compute layer,
-  not the catalog).
-- **Backend** = where events land and become a queryable graph: **Marquez** (the reference
-  server, Postgres-backed) or a **graph database** (Neo4j) if you want rich graph traversal
-  ("what gold tables derive from this bronze image set?").
-- **"Dummies in between"** = the dev stubs we already use elsewhere (Dex for OIDC, moto for
-  S3) — for lineage you'd run a local/dummy collector or Marquez until the real one exists.
+- **OpenLineage** = an open standard for emitting "a job *run* read inputs X, wrote outputs Y" events. A user's
+  pipeline emits its own runs; the catalog emits an event for every write it commits, and on governed tiers ADR 0156
+  makes that emission mandatory.
+- **Backend** = where events land and become a queryable graph. Today that is rask's lineage service over Apache AGE;
+  ADR 0158 keeps provenance (an authenticated intake, the durable commit feed and table-level edges) as a rask service
+  and makes the full lineage graph bring-your-own, fed by a forwarder (LH-468, #592).
 
-How it relates to commit auth: **complementary, not the same.** On a governed commit:
-OpenFGA says *may you* (authz), Lance records *a new version* (audit), OpenLineage records
-*derived-from bronze@v3* (lineage). You can ship commit auth **without any of this**;
-lineage is a later governance/observability layer.
+How it relates to commit auth: **complementary, not the same.** On a governed commit: OpenFGA says *may you*
+(authz), Lance records *a new version* (audit), OpenLineage records *derived-from bronze@v3* (lineage).
 
 ```
 commit  ──▶  OpenFGA check (may you?)        ← access control      [done]
@@ -323,7 +292,7 @@ commit  ──▶  OpenFGA check (may you?)        ← access control      [done
 Postgres) or Neo4j, the `services/lineage/` service is a small FastAPI app that ingests OpenLineage
 events at the standard `POST /api/v1/lineage` path and stores them in **Apache AGE** (a
 Postgres graph extension), so lineage traversal is native openCypher. Producers emit via the
-official `openlineage-python` client (see `services/lineage/seed.py` for the mock medallion emitter).
+official `openlineage-python` client (`services/lineage/src/lineage/seed.py` emits a synthetic set for development).
 Full design + API in [`docs/LINEAGE.md`](LINEAGE.md).
 
 ---
@@ -335,9 +304,8 @@ Full design + API in [`docs/LINEAGE.md`](LINEAGE.md).
 uv run pytest -q
 uvx ruff check . && uvx ty check
 
-# full auth stack end-to-end (Docker: catalog + Dex + OpenFGA + Postgres + MinIO)
-make auth-chain                 # anon 401 → alice create/read/write 200 → bob 403
-dagger call auth-chain          # the same, standing Dex + OpenFGA up as Dagger services
+# full auth stack end-to-end (Dagger services: catalog + Dex + OpenFGA + Postgres + MinIO)
+make auth-chain                 # = dagger call auth-chain: anon 401 → alice create/read/write 200 → bob 403
 ```
 
 Config is env-driven and estate-wide — ONE name per setting, declared once in
@@ -350,12 +318,12 @@ Config is env-driven and estate-wide — ONE name per setting, declared once in
 ## 11. Glossary
 
 - **Control plane / data plane** — decide+locate (this service) vs move bytes (engines).
-- **Namespace** — a logical container (a path prefix); a medallion *layer* is a namespace.
+- **Namespace** — a logical container (a path prefix); a medallion *tier* is a namespace.
 - **Table / dataset** — a Lance dataset; physically a `*.lance` **directory** (versioned).
 - **Tuple** — an OpenFGA fact, e.g. `user:alice owner table:db1$users`.
 - **`can_*` relation** — an action permission the app checks (model maps it to a rung).
 - **Concentric** — owner ⊇ writer ⊇ reader.
 - **Cascade** — a grant flows down the `parent` edge (catalog → namespace → table).
 - **Create-on-parent** — creating a child is authorized against its parent.
-- **Credential vending** — the catalog returns scoped storage creds per table (`describe`).
-- **Medallion** — bronze (raw) → silver (cleaned) → gold (curated) data tiers.
+- **Credential vending** — the catalog returns scoped storage creds per table (`describe` with `vend_credentials`).
+- **Medallion** — bronze → silver → gold tiers, governed in the catalog's write path.

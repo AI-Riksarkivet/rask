@@ -1,64 +1,58 @@
 # Configuration
 
 rask is configured through environment variables, read by each service's
-`Settings` (pydantic-settings, via `service-kit`) from the process environment
-and a local `.env` file. The `.env` is git-ignored — it holds storage
-credentials and is never committed.
+`Settings` (pydantic-settings, via `service-kit`) from the process environment.
+In-cluster, the chart renders them from `chart/values.yaml` into a ConfigMap, and every
+credential reaches a pod from the secret store (the Dapr secret store, or an
+ExternalSecret), never as a chart value. A local `.env` is git-ignored and never committed.
 
-## Storage (HCP / S3)
+## Identity and authorization (every governed service)
 
-Production storage is a Hitachi Content Platform (HCP) S3 endpoint; local dev can
-point at MinIO instead.
+Declared once in `packages/service-kit/src/service_kit/governed/settings.py`, one name per setting:
 
 | Variable | Purpose |
 |---|---|
-| `HCP_ENDPOINT` | S3 endpoint URL (e.g. `https://dev-ai.hcp.ra-dev.int`). |
-| `HCP_USERNAME` / `HCP_PASSWORD` | Credentials; the `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` pair is **derived** from these. |
-| `HCP_INSECURE` | Skip TLS verification (HCP serves a self-signed cert). |
-| `AWS_REGION` | S3 region (default `us-east-1`). |
+| `RASK_OIDC_ENABLED` | Verify an OIDC bearer token on every request (on in the chart). |
+| `RASK_OIDC_ISSUER` / `RASK_OIDC_AUDIENCE` | The issuer (Dex in development) and audience the token must carry. |
+| `RASK_FGA_ENABLED` | Authorize every request on OpenFGA (on in the chart). |
+| `RASK_FGA_API_URL` / `RASK_FGA_STORE_ID` | The OpenFGA server and store. |
+| `RASK_FGA_ROOT_OBJECT` | The estate's root object (default `warehouse:lance_catalog`). |
+| `RASK_SA_ISSUER` / `RASK_SA_AUDIENCE` | The cluster's service-account issuer a service token is verified against. |
 
-!!! warning "Self-signed certificates"
-    HCP presents a self-signed certificate. boto3 honours `HCP_INSECURE` with
-    `verify=False`; LanceDB's Rust S3 client needs `allow_invalid_certificates`
-    in its storage options. Both are wired up from `HCP_INSECURE` — without them
-    you get `SSLError` (boto3) or `error sending request` (Lance).
+## The catalog
 
-## Buckets & search
+The catalog's own settings carry the `LANCE_` prefix (`services/catalog/src/catalog/core/config.py`), for example:
 
-| Variable | Default | Purpose |
-|---|---|---|
-| `RASK_CACHE_BUCKET` | `images-batch` | Input image cache. |
-| `RASK_OUTPUT_BUCKET` | `images-batch-alto` | ALTO XML output. |
-| `RASK_SEARCH_BUCKET` | `images-batch-search` | Lance search/catalog tables. |
-| `RASK_LINES_TABLE` | `lines` | Full-text line index. |
-| `RASK_CATALOG_TABLE` | `archive_catalog` | Archival catalog index. |
+| Variable | Purpose |
+|---|---|
+| `LANCE_REST_IMPL` / `LANCE_REST_ROOT` | The namespace implementation and the object-store root it serves. |
+| `LANCE_NS_DELIMITER` | The table-id delimiter (`$`). |
+| `LANCE_LINEAGE_EMIT_ENABLED` | Announce every committed write on lineage (off in the code default, on in the chart). |
+| `LANCE_LINEAGE_OUTBOX_URI` | Stage each lineage event in the object store before publishing it. |
+| `LANCE_CONTROL_EMIT_ENABLED` | Broadcast the catalog's control-plane mutations on `catalog.control.v1`. |
 
 ## Gateway
 
-The gateway (`:8888`) is the frontend's single proxy target. Its upstream
+The gateway (`:8888`) is the frontend's single proxy target (`services/gateway/src/gateway/config.py`). Its upstream
 service URLs are overridable via:
 
 | Variable | Default | Upstream |
 |---|---|---|
-| `RASK_CATALOG_API_URL` | `http://127.0.0.1:2333` | lance catalog (`/api/catalog`) |
+| `RASK_CATALOG_API_URL` | `http://127.0.0.1:2333` | catalog (`/api/catalog`) |
 | `RASK_LINEAGE_API_URL` | `http://127.0.0.1:8000` | lineage (`/api/lineage`) |
 | `RASK_EXPLORER_VIEWER_URL` | `http://127.0.0.1:8101` | media viewer (`/api/explorer`, incl. the objects browser) |
 | `RASK_EXPLORER_SEARCH_URL` | `http://127.0.0.1:8102` | media search (`/api/explorer/search`) |
 | `RASK_EXPLORER_ANNOTATOR_URL` | `http://127.0.0.1:8103` | annotator (`/api/explorer/annotations`) |
 | `RASK_FLOWS_URL` | `http://127.0.0.1:8840` | flows (`/api/flows`) |
 | `RASK_NOTIFICATIONS_URL` | `http://127.0.0.1:8850` | notifications (`/api/notifications`) |
+| `RASK_COMPUTE_URL` | `http://127.0.0.1:8804` | compute (`/api/ray`, `/api/serve`) |
 
-There is **no `/api` catch-all** since the R6/R20 wave — an unmatched `/api/*`
-404s at the gateway. (The core-api/search-api/volumes-api upstream vars died
-with their services.)
+There is **no `/api` catch-all** — an unmatched `/api/*` 404s at the gateway.
 
-## The ray service
+## Storage
 
-| Variable | Default | Purpose |
-|---|---|---|
-| `RASK_API_PREFIX` | `/api/v1` | Route prefix; the Vite proxy assumes `/api`. |
-| `RASK_CORS_ORIGINS` | `[]` | Allowed CORS origins. |
-| `RAY_DASHBOARD_URL` | `http://localhost:8265` | The Ray dashboard the service introspects/proxies. |
+The object store is S3-compatible: the MinIO fixture in development, the platform's S3 in production
+(`minio.externalEndpoint`). Services reach it through `packages/storage` and the catalog's vended credentials; the
+store's root key is held by the store alone, and each service presents a scoped identity.
 
-Changes to `.env` are read once at service startup — restart the relevant
-service to pick them up.
+Changes to the environment are read once at service startup — restart the relevant service to pick them up.

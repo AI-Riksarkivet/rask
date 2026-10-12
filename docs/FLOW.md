@@ -27,7 +27,7 @@ pipeline moving data between tiers, or in development and the e2e lanes `tests/e
 (`seed_bronze_events`: create `<project>-bronze$events` if absent, then insert). Each door authorizes the caller on
 OpenFGA before it commits.
 
-→ [`MEDALLION.md`](MEDALLION.md) · code: `services/catalog`
+→ [`TIER-GOVERNANCE.md`](TIER-GOVERNANCE.md) · code: `services/catalog`
 
 ## 2. The catalog announces the commit
 
@@ -55,15 +55,20 @@ Queries: `upstream`/`downstream`/`producers`/`graph`/`reconcile` + column-level 
 
 The user's pipeline reads the tier, transforms on its own compute, writes the next tier through the catalog's doors
 (step 1 again) and emits its own OpenLineage run for the transform (`POST /api/lineage/api/v1/lineage`), naming its
-inputs so the graph carries the `DERIVED_FROM` edge. How a pipeline outside the estate learns of a committed write is a
-separate decision; the NATS topics are internal.
+inputs so the graph carries the `DERIVED_FROM` edge. A pipeline outside the estate learns of a committed write from
+lineage's durable `GET /events` feed, read with its own token; the NATS topics are internal. ADR 0156 moves the run
+and inputs into the write itself (the spec `Context` headers, stamped by the catalog: LH-225, #180) and gives the
+feed a forward cursor (LH-472, #598).
+
+→ [`LINEAGE.md`](LINEAGE.md#the-commit-feed-get-events-is-a-pipelines-contract)
 
 ## 5. Maintenance — data lifecycle
 
 The maintenance service (`services/maintenance`) runs version expiry, trash purge, the orphan scan, cross-store
 reconcile and protection, and compacts tables by policy; each materially-changed dataset gets a versionless
-`compaction` maintenance run so the work shows up in `producers()`. ADR 0155 decides that maintenance keeps the policy
-of what needs compacting or reindexing while the rewrites leave for a bring-your-own job.
+`compaction` maintenance run so the work shows up in `producers()`. ADR 0155 and ADR 0156 decide that maintenance
+keeps the policy of what needs compacting or reindexing while the rewrites leave for a bring-your-own job that commits
+through catalog doors (LH-467, #587).
 
 → [`DURABILITY.md`](DURABILITY.md) · code: `services/maintenance`
 

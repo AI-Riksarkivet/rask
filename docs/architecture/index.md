@@ -1,65 +1,59 @@
 # Architecture Overview
 
-rask is a data-type-agnostic multimodal AI platform: a governed Lance lakehouse plus batch
-processing, with a viewer/search front end. This section describes the system as it runs today.
+rask is a data-type-agnostic, multimodal lakehouse: Lance tables governed by a catalog, with lineage, authorization,
+events and annotation across them. This section describes the system as it runs today.
 
 ## One-paragraph summary
 
-A Python CLI **runner** submits one **Ray Data** job per invocation and blocks on
-materialization; it fans HTR work across a Ray cluster with model weights kept
-resident in **Ray Serve** (TrOCR on `/transcribe` and the full HTRflow pipeline
-on `/htrflow`). Images come from **IIIF** or
-pre-staged **S3** buckets; ALTO XML output lands back in S3. The HTTP backend is
-a fleet of FastAPI services behind a **gateway** on port 8888: flows, notifications and the
-lance lakehouse/media planes (`/api/catalog`, `/api/lineage`, `/api/explorer/*`). The **compute**
-service (Ray dashboard introspection + Serve proxy) ships in its own chart beside the Ray engine and has no
-gateway row.
-A set of **SvelteKit 2 + Svelte 5 SSR** apps (svelte-adapter-bun, served behind the
-gateway) composed as routing-based microfrontend zones — a catch-all `home`
-owning `/` plus per-domain apps (lakehouse/media/annotator/compute/studio/train) —
-consumes all of these via the gateway. State lives in the governed Lance
-lakehouse on S3; the batches DB died at P7a and the lines/EAD Lance tables
-re-land catalog-governed behind `/api/explorer/search` (R6).
+The **catalog** serves the Lance Namespace REST specification (`lance_docs/ns_catalog/spec.yaml`) over Lance datasets
+on S3, organised as `project > warehouse > namespace > table`. Every write enters through its namespace doors, is
+authorized on **OpenFGA**, and is governed in the catalog's write path, which is where the bronze → silver → gold
+tiers live ([ADR 0155](../adr/0155-the-medallion-is-tier-governance-in-the-catalog.md)). The catalog announces each
+committed write as an OpenLineage event over Dapr pub/sub on **NATS JetStream**; **lineage** records it in an Apache
+AGE graph and a durable event feed (`GET /events`), and **notifications** turns the events into a per-person inbox.
+**Maintenance** expires versions, purges trash, scans for orphans and reconciles stores. Moving data between tiers,
+ingest and training are the user's pipeline, on the user's own compute and orchestrator
+([ADR 0154](../adr/0154-the-lakehouse-runs-no-ingest-and-no-workflow-engine.md)). The HTTP backend sits behind a
+**gateway** on `:8888`; seven **SvelteKit 2 + Svelte 5 SSR** zones (svelte-adapter-bun) consume it: a catch-all
+`home` owning `/` plus `lakehouse`, `explorer`, `annotator`, `compute`, `models` and `studio`.
 
 ## Component map
 
 ```mermaid
 flowchart TB
-    browser["Browser"] --> spa["Frontend · SvelteKit SSR (Bun)<br/><sub>frontend/microfrontends/home</sub>"]
-    spa -->|"/api/*"| gw["Gateway · :8888<br/><sub>services/gateway</sub>"]
-    cli["Runner · Python CLI<br/><sub>runners/htr</sub>"] --> head
-    rayapi["compute · :8804<br/><sub>own chart, no gateway row</sub>"]
-    gw --> lake["lance lakehouse<br/>catalog · lineage · maintenance"]
-    gw --> media["lance media<br/>viewer · search · annotator"]
-    media --> s3[("S3")]
-    rayapi -.->|proxy| head["Ray head :6379 · dashboard :8265"]
-    head --> serve["Ray Serve<br/><sub>/transcribe · /htrflow</sub>"]
-    head --> workers["Worker actors<br/><sub>PageLoader · Layout · Lines · TranscribeViaServe</sub>"]
-    workers -->|read · IIIF on miss| s3
-    workers -->|write ALTO| s3
+    browser["Browser"] --> zones["Zones · SvelteKit SSR (Bun)<br/><sub>frontend/microfrontends/*</sub>"]
+    zones -->|"/api/*"| gw["Gateway · :8888<br/><sub>services/gateway</sub>"]
+    client["A user's pipeline<br/><sub>its own compute</sub>"] -->|"namespace doors"| cat
+    gw --> cat["catalog<br/><sub>tier governance</sub>"]
+    gw --> lin["lineage<br/><sub>GET /events · AGE</sub>"]
+    gw --> notif["notifications"]
+    gw --> media["media<br/>viewer · search · annotator"]
+    cat --> fga[("OpenFGA")]
+    cat --> s3[("S3 · Lance tables")]
+    cat -->|"lineage.events.v1"| lin
+    lin --> notif
+    maint["maintenance"] --> s3
+    media --> s3
 ```
 
 ## Key facts
 
-- **The runner is the engine.** Each CLI invocation builds one `ray.data.Dataset`
-  pipeline, triggers execution, prints `Done — ok=N, skipped=M`, and exits. It is
-  not a long-lived service; the orchestrator service submits it as a Ray Job,
-  one job per chunk.
-- **Ray Serve persists across jobs.** TrOCR weights stay warm in `/transcribe`.
-  The pipeline's transcribe step is a CPU-only actor that calls Serve over a
-  handle — and shards each task three ways so all GPU replicas run concurrently.
-- **Two pipeline shapes** — *actor-per-stage* (`htr`) and *single Serve
-  deployment* (`htrflow`).
-- **No auth anywhere.** Only optional CORS plus request-id/timing headers; the
-  fleet assumes a trusted/localhost network. The frontend hits `/api/*` on the
-  gateway (SSR `load` uses the absolute gateway URL server-side); the gateway
-  has no row for the compute service's `/api/ray/*` and `/api/serve/*`.
-- **State** lives in the governed Lance lakehouse on S3 (the batches DB and the
-  orchestrator died at P7a; core-api/search-api/volumes-api died in the R6/R20
-  wave). A Helm chart in `chart/` deploys everything to Kubernetes, while the
-  `Makefile` is the local/dev runbook.
+- **The catalog is the only way in.** No lakehouse service fetches source bytes or writes a governed table except
+  through the catalog's namespace doors, so tier governance cannot be bypassed. What it enforces today, and the
+  ADR 0156 rules still to land, are in [Tier Governance](../TIER-GOVERNANCE.md).
+- **The estate is authenticated.** Every service verifies an OIDC token (Dex in development) and authorizes on OpenFGA;
+  the chart turns auth on by default and refuses a half-governed render. The frontend hits `/api/*` on the gateway
+  (SSR `load` uses the absolute gateway URL server-side).
+- **Compute is bring-your-own.** The lakehouse imports no `ray`, `ray_kit` or `compute` (the import contract
+  `the-lakehouse-knows-no-engine`). The `compute` service (Ray dashboard introspection and the Serve proxy) is the
+  companion of a bring-your-own Ray engine and ships in its own chart; the gateway's `/api/ray` and `/api/serve` rows
+  reach it. A workload's model environment is a sealed `runners/<workload>` project.
+- **State** is the Lance tables on S3 (MinIO in development), plus Postgres for the lineage graph and OpenFGA. The
+  Helm chart in `chart/` deploys rask's own services; Dapr, NATS, the object store, the secret store and the
+  observability store are prerequisites the platform runs.
 
 ## In this section
 
 - **[Monorepo Layout](layout.md)** — the two language-pure workspace planes and what lives where.
-- **[Deployment](deployment.md)** — clusters, container images, CI, and how it ships.
+- **[Deployment](deployment.md)** — prerequisites, clusters, container images, CI, and how it ships.
+- **[Ingest and Tier Movement](ingest-and-tier-movement.md)** — where data enters and who moves it between tiers.

@@ -1,71 +1,42 @@
-# Operators & the submit-seam boundary — what we adopt, what rask supplies, what we never build
+# Operators: what the platform runs, and what rask never builds
 
-**Status: DECIDED 2026-07-11** (user question: "what is the most logical operator for this platform,
-and can rask help"). Grounded in [`RASK-INTEGRATION.md`](RASK-INTEGRATION.md) (rask's actual chart).
-One-line answer: **KubeRay first — and
-rask helps with everything, because rask already operates every operator on the list.** The merge
-is "flip values at rask's operators", never "deploy operators ourselves".
+Which Kubernetes operators sit around rask, who installs them, and the operational procedures rask itself owns
+(secrets, signing keys, NATS users, credentials, § 5 onward).
 
-## 1 · Adoption order (most logical first)
+## 1 · Prerequisites are the platform's
 
-| # | Operator | Replaces (ours, hand-rolled) | Why this rank |
-|---|---|---|---|
-| 1 | **KubeRay + Kueue** | nothing in the lakehouse | Not the lakehouse's: the lakehouse submits no Ray job ([ADR 0155](adr/0155-the-medallion-is-tier-governance-in-the-catalog.md)). A user's pipeline that runs on Ray brings its own KubeRay `RayJob`/`RayService` and Kueue quota; rask's compute service reads that engine's dashboard and Serve proxy through `ray.dashboardUrl`. |
-| 2 | **CloudNativePG** | hand-rolled AGE StatefulSet + OpenFGA datastore | Managed Postgres `Cluster` (HA, backups, failover) for the ONLY relational state of record (AGE + OpenFGA). The AGE-extension question is **SOLVED + PROVEN**: AGE reached PG18 (v1.7.0), so it mounts as a CNPG **ImageVolume extension** on a STOCK Postgres image — verified locally (`CREATE EXTENSION age`/`create_graph`/cypher all work via `extension_control_path`). Full how-to + the custom-full-image bridge for pre-1.33 clusters: **`docs/CNPG-AGE.md`** (`.docker/cnpg-age-ext.dockerfile`, `chart/templates/age-cluster.yaml`). |
-| 3 | **rustfs-operator** | hand-rolled RustFS Deployment | S3 `Tenant` CR with a declarative `buckets:` list — our lakehouse + observability buckets become list entries. |
-| 4 | **NACK** (NATS operator) — *optional* | the imperative `nats-stream-job.yaml` provision Job | Declarative `Stream` CRDs would replace the shell Job that today creates `LINEAGE` / `DLQ` / `CATALOG_CONTROL` / `MAINTENANCE_WORK` / `MAINTENANCE_INDEX` (Dapr's jetstream component does not auto-create streams). Nice-to-have: the Job works and is idempotent; NACK removes a boot-ordering foot-gun, nothing more. |
-| 5 | **Secrets operator** (External Secrets Operator, the Vault/OpenBao operator, or bank-vaults) — *interim: no operator, just a values flip* | the `server -dev` in-memory OpenBao + the `openbao-seed` post-upgrade hook | Dev-mode OpenBao (`server -dev`) holds secrets **in memory**: any pod restart wipes `secret/lance`, and the ONLY re-seed path is the helm post-upgrade hook — so an *out-of-band* restart leaves every app's `apply_dapr_secrets` retrying a Dapr `500` on the missing key **forever** (lifespan never completes → pod stuck `0/2` → daprd waits on the app that never listens). **Observed live 2026-07-14** (§5) when an interrupted helm upgrade restarted OpenBao mid-churn. The **acute fix is NOT an operator** — it is `openbao.devMode=false` → `server -config` on the existing PVC, which the chart already supports and which makes secrets survive restarts. The operator earns its place only at prod tier: **auto-unseal** (retire manual `bao operator init`/unseal), **declarative secret sync** (retire the seed Job entirely), plus rotation/PKI. |
-| 6 | **NVIDIA DCGM operator** — *belongs to the engine owner* | nothing (no GPU in-chart) | GPU telemetry (`dcgm-exporter` DaemonSet + driver/toolkit) for GPU-backed Ray workers. The lakehouse runs no GPU work, so DCGM arrives with whoever runs the GPU engine; its `/metrics` is node-level infra the **OTel Collector's `prometheus` receiver** can scrape beside the Dapr sidecars (one more scrape target). |
-| 7 | **OpenTelemetry Collector** (OTel operator) | **Vector (removed)** + the redundant vmagent (removed) | rask's telemetry seam is a **single in-chart OTel Collector** (`observability.enabled`, templates/otel-collector.yaml) — `otlp` receiver ← apps, `filelog` ← no-SDK infra-pod logs (**replaced Vector**, which was deleted: the subchart, its config, and the vendored tarball), `prometheus` receiver + k8s SD ← Dapr `:9090` (and DCGM later). It exports OTLP to **`observability.export.endpoint`**, the platform's backend, adding the backend's headers from `observability.export.*`; apps are backend-agnostic (plain OTLP, no vendor headers). The store, dashboards and alerting (GreptimeDB, Perses, vmalert, Alertmanager) are the platform's, not the chart's (ADR 0153); development gets them from `deploy/fixtures/observability`. The Collector is a single Deployment; `filelog` persists its read offsets via a `file_storage` extension (emptyDir at `/var/lib/otelcol/file_storage`, writable through fsGroup 65534), so a Collector *container* restart resumes where it left off instead of jumping to the tail. **Why OTel and not keep Vector?** dev must run the *same* log pipeline prod runs — Vector-in-dev would mean testing a component you never ship. |
+The product chart installs rask and nothing else ([ADR 0153](adr/0153-the-app-chart-is-the-product.md)). Every
+operator and control plane rask relies on is a prerequisite the platform runs, named by reference; development
+installs each from `deploy/fixtures`, its own Helm release, before rask's (`make k3s-up`;
+[architecture/deployment.md](architecture/deployment.md)):
 
-### Handoff wiring status (audited 2026-07-17 — what actually renders vs. what was documented)
+| Prerequisite | What rask renders against it |
+|---|---|
+| **External Secrets Operator** | the ExternalSecrets and SecretStore every pod without a sidecar takes its credentials from (§ 8) |
+| **Dapr control plane** | the Components, Configurations, Resiliency and Subscriptions, and the sidecar annotations |
+| **NATS JetStream** | the stream Job that creates rask's streams, and one bus user per app (§ 7) |
+| **CloudNativePG operator** | a `Cluster` only with `age.cnpgCluster.enabled`; see [`CNPG-AGE.md`](CNPG-AGE.md) |
+| **The OTel backend** | the Collector's export endpoint and headers; the store, dashboards and alerting are the platform's |
 
-An 8-operator handoff audit found the *architecture* documented but three externalize paths claimed "wired"
-that weren't. Fixed:
-- **OTel** — the app OTel SDK wiring and the `lance-tracing` Dapr config render on one predicate,
-  `lance.otelEnabled` (= `observability.enabled`), so no `dapr.io/config` dangles; every plane exports to
-  the in-chart Collector, which exports to `observability.export.endpoint`.
-- **rustfs-operator (#3)** — externalizing the object store leaves no in-cluster store DNS in the render;
-  `prod-render-check` leg 10 proves it.
-- **External Secrets Operator (#5)** — a prerequisite since [[XC-004]]: the render fails without
-  `external-secrets.io/v1`, every pod without a sidecar takes its credentials from an ESO-written Secret, and
-  `prod-render-check` leg 11 proves the prod render takes them all from the store (§ 8).
-- **CloudNativePG (#2)** — the AGE-extension blocker is **solved + proven** (`docs/CNPG-AGE.md`): AGE now
-  ships for PG18 (v1.7.0), so it mounts as a CNPG **ImageVolume extension** on a stock Postgres image (no
-  fork). Proven locally end-to-end (`.docker/cnpg-age-ext.dockerfile` builds it; a stock PG18 loads it via
-  `extension_control_path` and runs `create_graph`/cypher). Needs K8s 1.33+/containerd 2.1/CNPG 1.27; for
-  older clusters the custom-full-image (PG16) bridge is documented. Physical PITR replaces the pg_dump path
-  (safer for AGE). OpenFGA (plain SQL) is unaffected.
-- **KubeRay (#1)** — not rask's (ADR 0153). compute's dashboard and Serve proxies read one key,
-  `ray.dashboardUrl`, the engine's address. In development the `kuberay-operator` and `ray-cluster` fixtures run the engine.
+The lakehouse runs no compute and submits no job ([ADR 0155](adr/0155-the-medallion-is-tier-governance-in-the-catalog.md)):
+KubeRay, Kueue, GPU operators and whatever orchestrates a pipeline belong to the user who runs that pipeline, and no
+lakehouse service imports `ray` or `ray_kit` (the import contract `the-lakehouse-knows-no-engine`). The development
+estate runs a Ray engine from the `kuberay-operator`, `ray-cluster` and `compute` fixtures, outside the product chart.
 
-**What we never build: a custom lance-ns operator.** An operator earns its complexity when state of
-record lives in CRDs and needs reconciling. Ours does not: catalog/lakehouse state lives in **Lance
-manifests on S3**, authz + lineage in **Postgres** (OpenFGA, AGE), and every control loop we need is
-either an existing service (compaction sweeper), an existing Job (stream/bucket/seed provisioning),
-or one of the operators above. A "lance operator" would be a second reconciler over state that
+## 2 · What we never build: a custom lakehouse operator
+
+An operator earns its complexity when state of record lives in CRDs and needs reconciling. Ours does not: catalog and
+lakehouse state lives in **Lance manifests on S3**, authz and lineage in **Postgres** (OpenFGA, AGE), and every
+control loop we need is either an existing service (the maintenance sweep), an existing Job (stream, bucket and seed
+provisioning), or one of the operators above. A lakehouse operator would be a second reconciler over state that
 already has an owner.
 
-## 2 · How rask helps (short version: with all of it)
+## 3 · Optional: NACK for the streams
 
-KubeRay and Kueue are not rask's: they are the engine owner's (ADR 0153; in development the kuberay-operator
-fixture, and Kueue the cluster's own). Neither are the CloudNativePG operator, NATS, the Dapr control plane or the
-observability store: they are prerequisites the platform runs (in development, `deploy/fixtures`). rask's chart
-operates OpenFGA-server and the stores it bundles (`RASK-INTEGRATION.md` §Pre-flight). So the adoption plan is NOT "install operators here"; it is the
-merge itself: flip `age.enabled`/`rustfs.enabled` off and point the externalization values at
-`<release>-postgres-rw` / the rustfs `Tenant`. In exchange we contribute what rask lacks entirely: lineage,
-actual OpenFGA *enforcement* (rask provisions the server but wires nothing to it), and tier governance in
-the catalog.
-Interim posture in THIS repo: keep the hand-rolled infra — it is demo-tier scaffolding that the
-merge deletes (`RASK-INTEGRATION.md` §5), so operator-izing it here would be double work.
-
-## 3 · The Ray seam: the lakehouse submits nothing
-
-The lakehouse submits no Ray job and holds no engine adapter ([ADR 0155](adr/0155-the-medallion-is-tier-governance-in-the-catalog.md)).
-Moving data between tiers, and training, are the user's pipeline on their own compute and orchestrator: it reads
-and writes through the catalog's namespace doors, and the catalog announces every committed write on lineage. What a Ray
-operator owns (job lifecycle, retry, TTL, quota) is therefore the pipeline owner's, and no lakehouse service
-imports `ray` or `ray_kit` (the import contract `the-lakehouse-knows-no-engine`).
+The NATS operator's declarative `Stream` CRDs could replace the imperative stream Job that creates `LINEAGE`, `DLQ`,
+`CATALOG_CONTROL`, `MAINTENANCE_WORK` and `MAINTENANCE_INDEX` (Dapr's jetstream component does not auto-create
+streams). The Job works and is idempotent; NACK would remove a boot-ordering foot-gun, nothing more, and it would be
+the platform's operator, not rask's.
 
 ## 4 · Do Dapr or Lance need an operator story? (asked 2026-07-11)
 
@@ -113,7 +84,7 @@ DOES have are already owned elsewhere:
 
 | Concern | Owner today | Status |
 |---|---|---|
-| background maintenance (compact/optimize) | `services/maintenance` sweep (cron-driven, FAIL-visible) | shipped |
+| background maintenance (version expiry, trash purge, orphan scan, reconcile) | `services/maintenance` sweep (cron-driven, FAIL-visible) | shipped; its compaction and index rewrites leave for a bring-your-own job under LH-467 (#587) |
 | orphan-artifact GC (`models/<m>/<token>/` from crashed runs; blob-pointer lifecycle) | `scripts/model_artifact_janitor.py` — dry-run default, referenced⇒never-collected unit-pinned | shipped 2026-07-11 (models lane); live drive + the broader pointer-aware-GC posture remain §9 |
 | stream/bucket/grant provisioning | chart Jobs + seed scripts (idempotent) | shipped; NACK could absorb the stream half |
 | version/feature pinning (`pylance`, `lance-ray`, data_storage_version) | image pins + probe-before-callsite (§0) + `lance_docs/` | process, not software |

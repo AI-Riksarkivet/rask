@@ -1,7 +1,7 @@
 [project]
 site_name = "rask"
 site_url = "https://ai-riksarkivet.github.io/rask/"
-site_description = "An agnostic multimodal AI platform: a governed Lance lakehouse and batch processing over any modality (Python + Svelte, managed with uv and Bun)."
+site_description = "An agnostic multimodal lakehouse: Lance tables governed by a catalog, with lineage and authorization over any modality (Python + Svelte, managed with uv and Bun)."
 site_author = "AI-Riksarkivet"
 copyright = "Copyright &copy; 2026 AI-Riksarkivet"
 repo_url = "https://github.com/AI-Riksarkivet/rask"
@@ -19,7 +19,8 @@ nav = [
     { "Overview" = "architecture/index.md" },
     { "Monorepo Layout" = "architecture/layout.md" },
     { "Deployment" = "architecture/deployment.md" },
-    { "Lance-NS Merge" = "architecture/lance-ns-merge.md" },
+    { "Ingest and Tier Movement" = "architecture/ingest-and-tier-movement.md" },
+    { "Lance Blob v2 Findings" = "architecture/lance-blob-v2-findings.md" },
   ]},
   { "Packages" = [
     { "Overview" = "packages/index.md" },
@@ -170,16 +171,36 @@ nav = [
         "adr/0135-a-dock-lives-inside-its-zone-2026-08-03.md",
         "adr/0136-bulk-labeling-is-a-mode-of-the-task-and-columns-carry-recipes.md",
         "adr/0137-model-endpoints-are-ray-serve-discovered-by-the-labeling.md",
+        "adr/0138-an-erasure-rebases-a-pinning-branch-after-a-seven-day-notice.md",
+        "adr/0139-training-stays-in-the-producer-and-names-no-engine.md",
+        "adr/0140-the-engine-adapter-runs-in-the-compute-service.md",
+        "adr/0141-the-orphan-scan-reports-and-does-not-gate-the-purge.md",
+        "adr/0142-no-observability-backend-receives-the-object-store-root-key.md",
+        "adr/0143-a-project-is-created-by-an-estate-admin-or-an-operator.md",
+        "adr/0144-storage-credentials-are-vended-to-any-authenticated-client.md",
+        "adr/0145-the-unused-project-admin-relations-are-deleted.md",
+        "adr/0146-an-expired-drop-releases-its-grants-and-its-name.md",
+        "adr/0147-produce-asks-the-catalog-where-bronze-lives.md",
+        "adr/0148-classification-governs-delivery-not-column-reads.md",
+        "adr/0149-one-token-grammar-for-every-door.md",
+        "adr/0150-protection-guards-deletion-not-history-reclaim.md",
+        "adr/0151-a-boot-bound-secret-rotates-only-for-consumers-rask-owns.md",
+        "adr/0152-service-kit-ships-py-typed-and-skips-report-zeros.md",
+        "adr/0153-the-app-chart-is-the-product.md",
+        "adr/0154-the-lakehouse-runs-no-ingest-and-no-workflow-engine.md",
+        "adr/0155-the-medallion-is-tier-governance-in-the-catalog.md",
+        "adr/0156-the-audit-grilling-amends-0155.md",
+        "adr/0157-stock-clients-commit-through-managed-versioning.md",
+        "adr/0158-provenance-is-a-service-the-lineage-graph-is-bring-your-own.md",
       ]},
-      { "Medallion" = "MEDALLION.md" },
+      { "Tier Governance" = "TIER-GOVERNANCE.md" },
       { "Lineage" = "LINEAGE.md" },
       { "Authorization" = "AUTHZ.md" },
       { "DuckDB Access" = "DUCKDB.md" },
-      { "Operators & Submit Seam" = "OPERATORS.md" },
+      { "Operators" = "OPERATORS.md" },
       { "API Surface" = "API.md" },
     ]},
     { "Operations" = [
-      { "Deploy" = "DEPLOY.md" },
       { "Durability" = "DURABILITY.md" },
       { "Resilience" = "RESILIENCE.md" },
       { "CNPG + AGE" = "CNPG-AGE.md" },
@@ -197,16 +218,15 @@ nav = [
     { "Overview" = "lance/index.md" },
     { "File Format" = "lance/file-format.md" },
     { "Format Guide" = "lance/guide.md" },
-    { "Python SDK" = "lance/sdk.md" },
-    { "Namespace & Catalog Spec" = "lance/namespace.md" },
+    { "LanceDB Python API" = "lance/sdk.md" },
+    { "Namespace OpenAPI Spec" = "lance/spec.md" },
+    { "Namespace & Catalog (prose)" = "lance/namespace.md" },
+    { "Provenance" = "lance/provenance.md" },
     { "Partitioning Spec" = "lance/partitioning-spec.md" },
     { "Ray Integration" = "lance/ray.md" },
   ]},
   { "Reference" = [
     { "Storage" = "reference/storage.md" },
-  ]},
-  { "Runbooks" = [
-    { "LLM Cluster" = "runbooks/llm-cluster.md" },
   ]},
   { "Contributing" = "contributions/CONTRIBUTING.md" },
 ]

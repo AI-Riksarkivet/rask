@@ -290,7 +290,7 @@ def _lineage_sidecar_only_routes(settings: GatewaySettings | None = None) -> tup
     binding) that must never be reachable through the public edge — proxying them
     would ride the gateway's own sidecar and stamp the trusted app-api-token.
     Ported from the retired nginx gateway's `lance.lineageSidecarOnlyRoutes` helm
-    helper (lance-ns-merge.md P1); the chart renders the same one-source list into
+    helper (ADR 0117); the chart renders the same one-source list into
     RASK_LINEAGE_SIDECAR_ONLY_ROUTES (comma-separated route-name prefixes)."""
     return (settings or build_gateway_settings()).sidecar_only_routes
 
@@ -483,7 +483,7 @@ app.add_middleware(RequestIDMiddleware)
 
 @app.middleware("http")
 async def lineage_sidecar_guard(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
-    """403 the sidecar-only lineage routes at the edge (lance-ns-merge.md P1: the
+    """403 the sidecar-only lineage routes at the edge (ADR 0117: the
     nginx `lance.lineageSidecarOnlyRoutes` blocklist, become Python). Prefix match
     on the NORMALIZED, case-folded path — so trailing-slash, sub-path, casing, and
     `..`-normalization variants can't fall through to the /api/lineage proxy, the

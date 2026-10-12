@@ -1,9 +1,15 @@
 # Lineage service — OpenLineage → Apache AGE
 
 The **provenance axis** from [`ARCHITECTURE.md`](ARCHITECTURE.md) §9. A *separate*
-microservice (`services/lineage/`) that ingests OpenLineage events emitted by compute/ETL jobs and
-answers "where did this data come from / where does it flow / who produced it" over a
-graph. It is **not** part of the catalog control plane.
+microservice (`services/lineage/`) that ingests OpenLineage events, from the catalog for every write it commits,
+from maintenance, and from users' pipelines, and answers "where did this data come from / where does it flow / who
+produced it" over a graph. It is **not** part of the catalog control plane.
+
+> **Where this is going (ADR 0158).** Provenance stays a rask service: the authenticated OpenLineage intake, the
+> durable commit feed (`GET /events`) and a table-level edge list, stored as Lance tables, plus a forwarder that
+> streams every event as standard OpenLineage to a configured graph backend. The full lineage graph (Postgres + AGE,
+> the graph queries and their UI) becomes bring-your-own. That is LH-468 (#592), measured first by LH-475 (#601);
+> this page describes the service as it runs today.
 
 Think of it as a **lightweight Marquez** (the OpenLineage reference server): same OpenLineage
 ingest contract, but a few hundred lines of FastAPI over a native graph store instead of a
@@ -24,8 +30,8 @@ So the lineage service owns **both** the write path (ingest) and the read path (
 SSR is a rendering layer on top, not a substitute.
 
 ```
-compute/ETL jobs ─POST /api/v1/lineage─▶ lineage svc ──owns──▶ Apache AGE (Postgres)
-   (openlineage-python emitter)          │  ingest: event → MERGE Run/Job/Dataset + edges
+catalog, maintenance ─lineage.events.v1─▶ lineage svc ──owns──▶ Apache AGE (Postgres)
+a user's pipeline ─POST /api/v1/lineage─▶     │  ingest: event → MERGE Run/Job/Dataset + edges
    SSR UI ◀─via gateway─ GET upstream/downstream/producers/graph ◀┘  query: openCypher
 ```
 
@@ -42,11 +48,11 @@ object is governed by OpenFGA, versioned by Lance, and traced here — one ident
 three axes. Read-side authz — gating lineage views by `can_get_metadata` on `table:<id>`
 via the shared OpenFGA store — is now **implemented** (see the next section).
 
-## Read-side authz (implemented — in-service, default OFF)
+## Read-side authz (implemented — in-service)
 
 > ✅ **Implemented** (audit `w8u4rc2tg` P0; reviewed by `wi2l437mq`). The query + ingest
-> endpoints are gated in-service (`services/lineage/api/{security,fga_deps}.py`), **default OFF** like the catalog — set
-> `RASK_OIDC_ENABLED` + `RASK_FGA_ENABLED` (+ `RASK_FGA_STORE_ID` to pin the store; the model is the one
+> endpoints are gated in-service (`services/lineage/api/{security,fga_deps}.py`), off in the code defaults and on in
+> the chart, like the catalog — `RASK_OIDC_ENABLED` + `RASK_FGA_ENABLED` (+ `RASK_FGA_STORE_ID` to pin the store; the model is the one
 > the image carries). Ingest also requires a verified token and binds the run
 > author to it (no forged provenance), and related/graph datasets the caller can't see are
 > filtered out (`DatasetFilter`, via `fga.batch_check`).
@@ -145,7 +151,7 @@ mutation that does **not** emit synchronously is `backfill_column` — it return
 runs asynchronously), so its produced version isn't known at request time; reconcile recovers it. The
 **maintenance service** emits a versionless `operation=compaction` maintenance run per materially-compacted dataset
 (`services/maintenance/src/maintenance/core/lineage_emit.py`), so a GC/compaction shows up in `producers()` next to the
-data writes. All of these are awaited **inline** on the durable Dapr/JetStream transport (not FastAPI
+data writes; the rewrites themselves leave maintenance under LH-467 (#587). All of these are awaited **inline** on the durable Dapr/JetStream transport (not FastAPI
 `BackgroundTasks` — no retry, dies with the worker), so a lineage outage never loses provenance.
 
 **Read-audit (`#6`, default OFF — `LINEAGE_READ_AUDIT_ENABLED`).** Complementing the write provenance,
@@ -322,7 +328,7 @@ Layered like the catalog (`api/` · `core/` · `services/` + a thin entrypoint),
 | `GET /datasets/{name}/columns/{field}/downstream` | **Column-level impact** — the columns transitively derived from `name.field` |
 | `GET /datasets/{name}/columns` | The **column-lineage subgraph** around `name` (typed column nodes + field-to-field edges with transformation kind + `masking`) — the column analogue of `/graph` |
 | `GET /runs` | Live run-status board (state folded onto each `(:Run)` node; durable, governed) |
-| `GET /events` | Recent ingested OpenLineage events, newest first (durable, governed) |
+| `GET /events` | The durable commit feed: every ingested OpenLineage event, newest first, keyset-paged by `after`, governed per dataset. It is the contract a pipeline polls with its own token to learn a tier changed (see below) |
 | `GET /events/projection` | The same feed with no per-dataset filter, cut to the fields that decide whom to notify; gated on `can_read_event_feed`, for the notifications reconciler |
 | `GET /livez` | Liveness |
 
@@ -330,8 +336,8 @@ Layered like the catalog (`api/` · `core/` · `services/` + a thin entrypoint),
 OpenLineage default, any OpenLineage-instrumented producer (our emitter, Airflow, Spark, dbt)
 pointed here with `OPENLINEAGE_URL` ingests with no glue.
 
-> ✅ The query + ingest endpoints are **gated in-service** (default OFF; enable in prod) — see
-> [Read-side authz](#read-side-authz-implemented--in-service-default-off).
+> ✅ The query + ingest endpoints are **gated in-service** (on in the chart) — see
+> [Read-side authz](#read-side-authz-implemented--in-service).
 >
 > The two **Dapr-delivered** routes (`/lineage-events` pub/sub ingest + the cron reconcile binding) are
 > sidecar-only: they verify the Dapr app-api-token (constant-time), the gateway 403-blocks both from one
@@ -340,9 +346,20 @@ pointed here with `OPENLINEAGE_URL` ingests with no glue.
 > can't diverge into an open graph-mutating route. The `/demo` data-peek router (no OIDC/FGA guard) is
 > values-gated (`services.lineage.demoData`) and off in `values-prod.yaml`.
 
+## The commit feed: `GET /events` is a pipeline's contract
+
+The catalog announces every committed write as an OpenLineage event (a `RunEvent` for a data write, a `DatasetEvent`
+for a definition change) naming the table, the Lance version it produced, its branch, the project and the verified
+author. A pipeline outside the estate learns a tier changed by reading those events from `GET /events` with its own
+token; the NATS topics they travel on are internal. Today the feed pages newest-first with an `after` keyset cursor
+(`next_cursor`, plus `oldest_seq` so a caller can tell a page went missing) and filters each event by
+`can_get_metadata` on every dataset it names. ADR 0156 C7 adds a forward cursor (`since=<seq>`, oldest first,
+filterable by table or namespace), a documented commit-event shape, and makes the catalog's emission mandatory on
+governed tiers: LH-472 (#598).
+
 ## Mock medallion data (a real OpenLineage producer)
 
-`services/lineage/seed.py` is the **producer** — compute-layer instrumentation that uses the official
+`services/lineage/src/lineage/seed.py` is a **producer** — a development fixture that uses the official
 `openlineage-python` client to build spec-correct events for the medallion flow (dataset names =
 catalog ids, authors = OIDC subs, Ray = the compute job, Lance = the data; each output carries
 `schema` + `dataSource` + `tags` + `version` facets):
@@ -403,8 +420,12 @@ See `frontend/README.md` for developing the UI on the host (`bun run dev`).
 ## Run / verify (dev)
 
 ```bash
-# Apache AGE Postgres (the lineage graph store)
-docker compose -f .docker/docker-compose.yml -f .docker/docker-compose.lineage.yml up -d lineage-postgres
+# Apache AGE Postgres (the lineage graph store), as a Dagger service on :5433
+dagger core container from --address=apache/age:release_PG16_1.6.0 \
+  with-env-variable --name=POSTGRES_USER --value=lineage \
+  with-env-variable --name=POSTGRES_PASSWORD --value=lineage \
+  with-env-variable --name=POSTGRES_DB --value=lineage \
+  with-exposed-port --port=5432 as-service up --ports=5433:5432
 
 # the service
 LINEAGE_DATABASE_URL=postgresql://lineage:lineage@localhost:5433/lineage \
@@ -420,18 +441,17 @@ uv run python -m lineage.seed --write services/lineage/sample_events.json
 
 # tests
 uv run pytest tests/unit/test_lineage.py -q                                   # our logic, no DB
-LINEAGE_DATABASE_URL=postgresql://lineage:lineage@localhost:5433/lineage \
-  uv run pytest tests/e2e/test_lineage_e2e.py -q                              # ingest + query vs live AGE
+dagger call test-lineage                                                      # ingest + query vs a real AGE (== make e2e-lineage == CI)
 ```
 
-> pylance has no macOS wheel, so the lockfile is Linux-only — run the tests in the
-> `ghcr.io/astral-sh/uv:python3.13-trixie-slim` container (joined to the compose network),
-> as the catalog tests already are.
+> pylance has no macOS wheel, so the lockfile is Linux-only. `dagger call test-lineage` runs the AGE-backed suite
+> hermetically, with the graph's init script (`.docker/lineage-init.sql`) applied; a hand-started AGE container as above
+> needs that script run against it before the service's first boot.
 
 ## Next
 
 - ✅ **Read-side authz** — done (in-service OIDC + OpenFGA `can_get_metadata`, ingest author
-  binding, transitive-disclosure filtering). Default OFF; enable in prod. See **Read-side authz** above.
+  binding, transitive-disclosure filtering). On in the chart. See **Read-side authz** above.
 - **Output-scoped ingest authz** — additionally check the producer may write the named output
   tables (`can_write_data`), not just that it is authenticated. Attributable today, not yet scoped.
 - ✅ **Deployed** — `lineage-api` service (`.docker/docker-compose.governance.yml`, same image) +

@@ -135,7 +135,7 @@ Related `lance-ray` version facts measured in the same pass:
   parameters**, contrary to what `ray_lance_job.py` recorded. The conclusion (fall back to the native
   build) held; the stated reason did not.
 - `lance_ray.read_lance(uri, scanner_options={"with_row_id": True})` **does** surface `_rowid` (verified at
-  both 0.4.2 and 0.5.0) — see the R27 record in `lance-ns-merge.md`.
+  both 0.4.2 and 0.5.0) — see [ADR 0122](../adr/0122-the-ray-plane-gets-a-standing-audit-r27-2026-07-28.md).
 
 ## Sizing note for rask's page images
 
