@@ -6,9 +6,9 @@ edge of the DAG (from-dataset → to-dataset, subscribe-topic → publish-topic)
 the shared Dapr ``pubsub.jetstream`` component the catalog/lineage already use.
 
 R23: raw is NOT a governed tier — it is the external world (image APIs, external object
-storage). The governed medallion is exactly bronze → silver → gold; the producer harvests external raw
-and writes BRONZE directly (the bronze ingest head), so there is no raw dataset, raw topic, or
-raw-to-bronze stage runner anywhere in this config.
+storage). The governed medallion is exactly bronze → silver → gold. A client writes BRONZE through the
+catalog's namespace doors (ADR 0154) and the producer's head reacts to the catalog's announcement of
+that write, so there is no raw dataset, raw topic, or raw-to-bronze stage runner anywhere in this config.
 """
 
 from __future__ import annotations
@@ -32,8 +32,8 @@ from service_kit.lakehouse.engine_door import EngineBinding
 from service_kit.lakehouse.naming import CATALOG_DELIMITER
 from service_kit.lakehouse.objectfs import lance_storage_options
 
-# Re-exported, NOT redefined. The bronze naming convention is shared with the ingest plane, so its one
-# definition lives in service-kit beside `is_safe_project`; every existing `from medallion.core.config
+# Re-exported, NOT redefined. The bronze naming convention is shared with the catalog's project resolution, so its
+# one definition lives in service-kit beside `is_safe_project`; every existing `from medallion.core.config
 # import project_namespace` keeps working.
 from service_kit.lakehouse.warehouse_registry import project_namespace as project_namespace
 
@@ -148,7 +148,7 @@ class MedallionSettings(OidcSettings, FgaSettings, SignatureDoorSettings, BaseSe
     job_namespace: str = Field(default="lance-medallion", alias="MEDALLION_JOB_NAMESPACE")
     # Behind a Dapr sidecar? — when true, a stage runner fails closed at boot if the app-token is unset (its
     # /medallion-event route would otherwise be an open forged-trigger path). Symmetric with the lineage
-    # service. Off in dev (no sidecar); the producer's plain-HTTP /produce carries no such route.
+    # service. Off in dev (no sidecar).
     dapr_enabled: bool = Field(default=False, alias="MEDALLION_DAPR_ENABLED")
     # Serve /docs + /openapi.json (default on for dev; prod sets false, like the catalog's LANCE_REST_DOCS).
     #: OFF by default. It defaulted to True and NO deployment path ever set it — `grep -rn DOCS
@@ -156,14 +156,14 @@ class MedallionSettings(OidcSettings, FgaSettings, SignatureDoorSettings, BaseSe
     #: and the schemas shipped openly. A security default every deployment must remember to disable is
     #: one nobody disables. Turn it on per-environment (the chart's dev values do).
     docs_enabled: bool = Field(default=False, alias="MEDALLION_DOCS")
-    # Compliance audit trail (#41): gate the dedicated `lance.audit` stream (the /produce + /train admin-door
+    # Compliance audit trail (#41): gate the dedicated `lance.audit` stream (the /train and operator admin-door
     # decisions) exactly like the catalog — the SHARED LANCE_AUDIT_ENABLED env (not a MEDALLION_* twin), so
     # one flag governs the estate's compliance posture. Default on; without the producer lifespan's
     # configure_audit call the stream is silently OFF (the logger inherits root WARNING).
     audit_enabled: bool = Field(default=True, alias="LANCE_AUDIT_ENABLED")
     # #84 per-tenant medallion routing (opt-in): the catalog's warehouse-registry/control root (the
     # LANCE_CONTROL_ROOT / LANCE_REST_ROOT value, e.g. ``s3://<bucket>``). When set, a ``project``-carrying
-    # /produce request or stage trigger resolves that project's ACTIVE warehouse root off the registry
+    # stage trigger resolves that project's ACTIVE warehouse root off the registry
     # (``service_kit.lakehouse.warehouse_registry``) and the stage reads/writes ``<root>/medallion/<namespace>`` instead of
     # the env URIs. Empty (default) = resolution DISABLED: a project-carrying trigger is DROPPED (fail
     # closed — never a fallback to the shared roots), and every project-less path stays byte-identical.
@@ -272,7 +272,7 @@ class MedallionSettings(OidcSettings, FgaSettings, SignatureDoorSettings, BaseSe
     #: re-running a missed hop has the published table, whose namespace IS the source. The stage runner's own
     #: name is an implementation detail of the deployment.
     #:
-    #: The RUNG IS THE STAGE RUNNER'S OWN, not `/produce`'s. `promotions.py` records why: `authorize_produce`'s
+    #: The RUNG IS THE STAGE RUNNER'S OWN, not the admin door's. `promotions.py` records why: `authorize_produce`'s
     #: `can_administer` is "coarser AND different, and would lock out exactly the non-admin validator
     #: the rung exists for". So a silver->gold re-run asks `can_promote`, exactly as the stage runner does
     #: when it runs the hop itself. The sibling verb `terminate` asks `can_administer` on the project the
@@ -282,17 +282,6 @@ class MedallionSettings(OidcSettings, FgaSettings, SignatureDoorSettings, BaseSe
     stage_runner_gates: dict[str, StageRunnerGate] = Field(
         default_factory=dict, validation_alias=AliasChoices("stage_runner_gates", "MEDALLION_STAGE_RUNNER_GATES")
     )
-
-    # Ingest ceilings (audit 2026-07-12): the media ingest refuses (400) rather than OOM when a
-    # source prefix exceeds these. Defaults generous for the demo; tune per deployment.
-    ingest_max_objects: int = Field(default=10_000, alias="MEDALLION_INGEST_MAX_OBJECTS")
-    ingest_max_total_bytes: int = Field(default=1 << 30, alias="MEDALLION_INGEST_MAX_TOTAL_BYTES")
-    # Streaming chunk size (objects per Lance commit): memory high-water ≈ one chunk + URI strings.
-    ingest_chunk_objects: int = Field(default=64, alias="MEDALLION_INGEST_CHUNK_OBJECTS")
-    # The BYTE bound is the real memory guarantee (a chunk flushes on count OR bytes, whichever
-    # first); the count bound is fragment hygiene for many tiny objects. Not a Dapr/NATS number —
-    # the bus never carries payload bytes.
-    ingest_chunk_bytes: int = Field(default=64 << 20, alias="MEDALLION_INGEST_CHUNK_BYTES")
 
     # --- Optional FGA gate (ReBAC enforcement) — the stage runner checks it is AUTHORIZED to produce the target
     # stage before emitting. The silver→gold stage runner checks `can_promote` (validator-only); the others check
@@ -307,9 +296,9 @@ class MedallionSettings(OidcSettings, FgaSettings, SignatureDoorSettings, BaseSe
     fga_service_identity: str = Field(default="service-stage-runner", alias="MEDALLION_FGA_SERVICE_IDENTITY")
     fga_required_action: str = Field(default="can_create_table", alias="MEDALLION_FGA_REQUIRED_ACTION")
 
-    # --- Produce-trigger admin auth (#64): ``/produce`` admits a service by its projected service-account
+    # --- Admin-door auth (#64): ``/train`` and the operator doors admit a service by its projected service-account
     # token (`RASK_SA_*`) or a signed-in OIDC user (`RASK_OIDC_*`), and either one must hold
-    # ``can_administer`` on the project. The OIDC path lets the web UI trigger produce with the user's own
+    # ``can_administer`` on the project. The OIDC path lets the web UI call them with the user's own
     # bearer, so the web pod holds no credential of its own for it. -------------------------------------
     # The project a caller that names none must administer — the gate is ``can_administer`` on ``project:<this>``.
     produce_admin_project: str = Field(default="acme", alias="MEDALLION_PRODUCE_ADMIN_PROJECT")
@@ -324,7 +313,7 @@ class MedallionSettings(OidcSettings, FgaSettings, SignatureDoorSettings, BaseSe
         return f"namespace:{to_namespace or self.to_namespace}"
 
     # --- Fake-Ray in-process compute (the medallion-producer SEAM) — OFF by default (stage runners stay dummy-emitters).
-    # When on, each stage does a REAL Lance write: the producer seeds bronze$events; each stage runner reads its
+    # When on, each stage does a REAL Lance write: each stage runner reads its
     # upstream Lance dataset, applies a stage transform, and writes the downstream one — so the emitted
     # lineage carries the REAL version and the whole event-driven loop produces actual versioned data, not
     # just provenance. Same read→transform→write→version contract a distributed Ray Data job fills at rask;
@@ -406,21 +395,6 @@ class MedallionSettings(OidcSettings, FgaSettings, SignatureDoorSettings, BaseSe
     #: lineage run needs the full table id, because a namespace is a substring of every tenant's and
     #: every fan-out lane's output name.
     lane_destination_datasets: dict[str, str] = Field(default_factory=dict, alias="MEDALLION_LANE_DESTINATION_DATASETS")
-    #: The catalog's own CONNECTION ROOT — read by the producer, which registers rather than asks.
-    #:
-    #: A stage runner needs no root: `ensure_stage_output` takes the location the catalog vends. The PRODUCER
-    #: cannot, because where it writes is a deployment contract — `chart/templates/medallion.yaml`
-    #: renders `MEDALLION_BRONZE_URI` and the bronze->silver stage runner's `MEDALLION_FROM_URI` from one
-    #: expression, so the location is stated by the chart rather than asked for. The head therefore
-    #: keeps its URI and ATTACHES it through `register_table`, which on the dir backend refuses
-    #: an absolute location and accepts only a path RELATIVE to this root (the #75 lesson, re-measured
-    #: 2026-08-29: `"Absolute URIs are not allowed for register_table"`).
-    #:
-    #: This setting was deleted once, correctly, when its last reader went — and the chart kept
-    #: rendering it (producer and both stage runners). It has a reader again, and only the producer's.
-    #: Empty with a catalog URL set is a REFUSAL, not a guess: an unaddressable registration means an
-    #: ungoverned bronze tier, which is the defect this closes.
-    catalog_root: str = Field(default="", alias="MEDALLION_CATALOG_ROOT")
     #: This pod's projected service-account token for each door it calls, one audience per file ([[LH-220]], D1).
     #: Every call reads its file afresh, because the kubelet replaces the token at 80% of its 600 s lifetime
     #: (measured 2026-10-02: rotated at age 515 s); nothing else names the caller. The producer calls all
@@ -545,18 +519,18 @@ class MedallionSettings(OidcSettings, FgaSettings, SignatureDoorSettings, BaseSe
             raise ValueError(f"MEDALLION_DEFAULT_ENGINE={self.default_engine!r} names no engine in MEDALLION_ENGINES {sorted(self.engines)}")
         return self
 
-    # --- producer (medallion-producer) config — the BRONZE ingest head (R23: writes the first governed tier
-    # directly; raw is the external world it harvests FROM) --------------------------------------
+    # --- producer (medallion-producer) config — the cascade head, which matches a catalog write to the BRONZE
+    # table (R23: the first governed tier; raw is the external world) --------------------------------------
     bronze_dataset: str = Field(default="bronze$events", alias="MEDALLION_BRONZE_DATASET")
     bronze_namespace: str = Field(default="bronze", alias="MEDALLION_BRONZE_NAMESPACE")
-    bronze_uri: str = Field(default="", alias="MEDALLION_BRONZE_URI")  # where the producer seeds bronze$events (compute)
+    #: The deployment's bronze location: the trainer derives the medallion bucket base from it when
+    #: ``stage_base_uri`` is unset (`services/train.py`).
+    bronze_uri: str = Field(default="", alias="MEDALLION_BRONZE_URI")
     stage_base_uri: str = Field(default="", alias="MEDALLION_STAGE_BASE_URI")
     """The medallion (project) bucket base ``s3://<bucket>/medallion`` where the STAGE datasets (bronze/
     silver) and the model registry live. The trainer resolves feature + model URIs from HERE, not from
     ``bronze_uri`` — so it stays correct when gold (sink) is zoned into its OWN bucket. Empty → derive
     from ``bronze_uri`` (the single-bucket default, unchanged)."""
-    producer_operation: str = Field(default="ingest_bronze", alias="MEDALLION_PRODUCER_OPERATION")
-    producer_author: str = Field(default="data_eng", alias="MEDALLION_PRODUCER_AUTHOR")
     bronze_topic: str = Field(default="medallion.bronze", alias="MEDALLION_BRONZE_TOPIC")
 
     # The catalog's control channel, where `table_published` lands (§ D2 B8). Empty DISABLES the
@@ -581,25 +555,6 @@ class MedallionSettings(OidcSettings, FgaSettings, SignatureDoorSettings, BaseSe
     # (`cascade_lag_readers`). No job is sent it: a job emits to the lineage ingest its own pod names, because a
     # submitted endpoint would outvote the pod's. Default = the chart's in-cluster service for the `lance-ns` release.
     lineage_url: str = Field(default="http://lance-ns-lineage:8000", alias="MEDALLION_LINEAGE_URL")
-
-    # --- media ingest head (multimodal §9) — POST /ingest-media lands external media as bronze blobs and
-    # triggers the media chain. The head reads an external S3 source prefix through the provider-agnostic
-    # SourceAdapter seam (a real deployment points bucket/prefix at an image API / GCS / HF export; the demo seeds
-    # sample PNGs there first). Requires compute (there is no dummy media): media_bronze_uri is where the
-    # bronze blob-v2 table lands; the trigger on media_topic drives the media stage runner (bronze -> silver
-    # derive). Empty media_bronze_uri = the media head is off (POST /ingest-media -> 409). ----------------
-    # The media lane gets its OWN namespaces (bronze-media → silver-media): the chart derives each
-    # stage runner's from/to URI from the NAMESPACE (s3://<bucket>/medallion/<namespace>), so reusing the events
-    # chain's bronze/silver would collide with bronze$events / silver$features on the same paths.
-    media_source_bucket: str = Field(default="", alias="MEDALLION_MEDIA_SOURCE_BUCKET")
-    media_source_prefix: str = Field(default="media-src/batch", alias="MEDALLION_MEDIA_SOURCE_PREFIX")
-    media_bronze_uri: str = Field(default="", alias="MEDALLION_MEDIA_BRONZE_URI")
-    media_bronze_dataset: str = Field(default="bronze-media$objects", alias="MEDALLION_MEDIA_BRONZE_DATASET")
-    media_bronze_namespace: str = Field(default="bronze-media", alias="MEDALLION_MEDIA_BRONZE_NAMESPACE")
-    media_topic: str = Field(default="medallion.media", alias="MEDALLION_MEDIA_TOPIC")
-    # Seed two deterministic sample PNGs into the source prefix before ingesting (the demo's stand-in for
-    # an external media drop). Prod points the bucket/prefix at real media and turns this off.
-    media_seed_samples: bool = Field(default=True, alias="MEDALLION_MEDIA_SEED_SAMPLES")
 
 
 @lru_cache

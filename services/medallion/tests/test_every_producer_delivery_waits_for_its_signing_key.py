@@ -59,7 +59,7 @@ from service_kit.lakehouse.transform_specs import TransformSpec
 PRODUCER: Final = "service-medallion-producer"
 CATALOG: Final = "service-catalog"
 #: A listed lineage signer whose published key list the store does not serve.
-INGEST: Final = "service-ingest"
+LOADER: Final = "service-loader"
 #: An identity no signer set lists.
 UNLISTED: Final = "service-notifications"
 #: Who the catalog stamps as the actor of a stage runner's publish: the runner, authenticated as itself.
@@ -97,7 +97,7 @@ class _Case(BaseModel):
 
 
 def _bronze_write(*, author: str = PRODUCER, operation: str = "ingest_bronze", tier: str = "bronze", tables: tuple[str, ...] = ("events",)) -> dict[str, Any]:
-    """A batch landed in tenant `acme`'s tier, for alice: the COMPLETE run `/produce` emits for a bronze write."""
+    """A batch landed in tenant `acme`'s tier, for alice: the COMPLETE run a bronze write is announced with."""
     namespace = f"acme-{tier}"
     return {
         "eventType": "COMPLETE",
@@ -192,7 +192,7 @@ CASES = [
         id="a-persons-bronze-write-the-delegator-signed-for-wakes-the-cascade",
     ),
     pytest.param(
-        _Case(route="/bronze-arrival", deliver=lambda s: s[INGEST].sign(_bronze_write(author=INGEST, operation="ingest")), answer="RETRY"),
+        _Case(route="/bronze-arrival", deliver=lambda s: s[LOADER].sign(_bronze_write(author=LOADER, operation="append")), answer="RETRY"),
         id="a-bronze-write-whose-signers-keys-cannot-be-read-is-retried",
     ),
     pytest.param(
@@ -360,7 +360,7 @@ def _producer(monkeypatch: pytest.MonkeyPatch, case: _Case, sidecar: _Sidecar) -
         "MEDALLION_CONTROL_PUBSUB": "catalog-control-pubsub",
         "MEDALLION_TRANSFORM_ROUTES": json.dumps({"silver": "medallion.silver"}),
         "RASK_SIGNATURE_DOORS": case.mode,
-        "RASK_EVENT_SIGNERS": json.dumps([PRODUCER, CATALOG, INGEST]),
+        "RASK_EVENT_SIGNERS": json.dumps([PRODUCER, CATALOG, LOADER]),
         "RASK_EVENT_DELEGATORS": json.dumps([CATALOG]),
         "RASK_CONTROL_SIGNER_ROLES": json.dumps(case.roles),
     }.items():
@@ -385,10 +385,10 @@ def test_every_producer_delivery_is_decided_before_its_handler_reads_it(
     respx_allows_unused_routes: None,
     case: _Case,
 ) -> None:
-    signers: Signers = {identity: event_signer(identity) for identity in (PRODUCER, CATALOG, INGEST, UNLISTED)}
+    signers: Signers = {identity: event_signer(identity) for identity in (PRODUCER, CATALOG, LOADER, UNLISTED)}
     for identity in (PRODUCER, CATALOG):
         respx.get(f"{SECRETS}/signing-public-{identity}").mock(return_value=httpx.Response(200, json={"keys": signers[identity].public}))
-    respx.get(f"{SECRETS}/signing-public-{INGEST}").mock(return_value=httpx.Response(500))
+    respx.get(f"{SECRETS}/signing-public-{LOADER}").mock(return_value=httpx.Response(500))
     registry = _Registry()
     monkeypatch.setattr(transform_specs, "list_specs", registry.list_specs)
     sidecar = _Sidecar()

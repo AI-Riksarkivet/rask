@@ -38,7 +38,7 @@ def _imports_engine(module: str) -> bool:
 
 
 def test_importing_the_cascade_head_does_not_pull_in_dapr_workflow() -> None:
-    """THE GATE. `medallion.producer` is the cascade head — `/produce`, `/ingest-media`, `/train`."""
+    """THE GATE. `medallion.producer` is the cascade head — `/bronze-arrival`, `/publication-arrival`, `/train`."""
     assert not _imports_engine("medallion.producer"), (
         "importing the cascade head pulled in dapr.ext.workflow — the lakehouse now DEPENDS ON a workflow engine rather than being driven by one (condition 3)"
     )

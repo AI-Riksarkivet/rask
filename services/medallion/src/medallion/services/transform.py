@@ -452,7 +452,7 @@ async def _preflight(
     """
     # VALIDATE-OR-DROP, before a single field is read. Every value on this payload becomes an S3 key
     # prefix, a Lance read URI, a Ray submission id or a lineage graph value, and the BUS is a wider
-    # trust surface than the token-guarded HTTP heads that also produce these triggers — so the shape
+    # trust surface than the token-guarded HTTP re-run door that also produces these triggers — so the shape
     # is checked once, here, by `trigger_guards` — the same validate-or-DROP rule the TRAINING trigger's
     # consumer already applies to its own payload (`services/train.py`) and that this handler simply had
     # no counterpart for. It lives in a module neither handler owns so the two cannot silently diverge.
@@ -677,8 +677,7 @@ def _confine_from_uri(
     upstream: ``publication_trigger`` always carries the project (the stage runner cannot resolve its tiers
     without one), but ``ingest_trigger`` fires for a single-tenant estate too. There the vended
     ``<catalog root>/<hash>_<ns>$<name>`` is OUTSIDE ``MEDALLION_FROM_URI`` unless the two happen to
-    coincide — which they do for a produce-first estate, where the chart renders the head's write URI
-    and this one from a single expression. When they do not, the answer is this refusal: a visible
+    coincide. When they do not, the answer is this refusal: a visible
     DROP with the ``unconfined_uri`` counter, rather than the silent transform of whatever sits at the
     composed path. Making it WORK single-tenant means resolving a real storage root here — the
     catalog's connection root is the candidate, and it is not free, because ``lance.stageBucket`` can

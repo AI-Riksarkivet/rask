@@ -1,11 +1,12 @@
-"""Event-driven medallion pipeline — a ``medallion-producer`` producer + 3 stage runners.
+"""Event-driven medallion pipeline — the ``medallion-producer`` head + the stage runners.
 
 The medallion lakehouse pattern (bronze → silver → gold; R23 — raw is the external world, not a tier) as
-**event-driven microservices** on Dapr pub/sub. ``medallion-producer`` is the **head of the pipeline**: it ingests
-external raw straight into the ``bronze$events`` / ``bronze$pages`` datasets and its ``/bronze-arrival``
-subscription publishes the first trigger (``medallion.bronze``). Each stage runner subscribes to its upstream stage's trigger,
-emits a standard OpenLineage transform event (so the lineage graph grows the ``DERIVED_FROM`` edge), and
-publishes the next stage's trigger — so one source event cascades the whole chain, and Dapr propagates the
+**event-driven microservices** on Dapr pub/sub. ``medallion-producer`` is the **head of the pipeline**: a client
+writes bronze through the catalog's namespace doors (ADR 0154), the catalog announces the write, and the
+producer's ``/bronze-arrival`` subscription publishes the first trigger (``medallion.bronze``). Each stage runner
+subscribes to its upstream stage's trigger and emits a standard OpenLineage transform event (so the lineage graph
+grows the ``DERIVED_FROM`` edge); the catalog's publication wakes the next tier — so one bronze write cascades the
+whole chain, and Dapr propagates the
 W3C trace context across every hop (one distributed trace, bronze → gold).
 
 The **fake-Ray compute** (``services/compute.py``, gated ``MEDALLION_COMPUTE_ENABLED``, default off) gives

@@ -383,8 +383,8 @@ spec:
       ports:
         - { protocol: TCP, port: 4222 }
 ---
-# The original medallion-producer ingress restriction (pre-Batch-9, kept): /produce is a direct operator
-# trigger — in-release pods only, defense-in-depth on top of require_dapr_token.
+# The medallion-producer ingress restriction: /train and the operator doors are direct operator
+# triggers — in-release pods only, defense-in-depth on top of require_dapr_token.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:

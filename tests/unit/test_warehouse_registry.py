@@ -239,8 +239,8 @@ def test_gold_and_work_caches_are_independent(tmp_path: Path) -> None:
 def test_an_ambiguous_project_is_an_unresolvable_one() -> None:
     """The subclass IS the mechanism, not a convenience.
 
-    Two live handlers already fail closed on `UnresolvableProjectError` — `medallion/api/produce.py`
-    and `medallion/services/transform.py`. Adding a sibling exception would have sailed past both and
+    A live handler already fails closed on `UnresolvableProjectError` — `medallion/services/transform.py`.
+    Adding a sibling exception would have sailed past it and
     surfaced as a 500 on the cascade head, which is the shape this whole change exists to stop: a
     routing decision the estate cannot make, reported as a server fault.
     """

@@ -1,20 +1,15 @@
-"""The ingest-first ordering hazard: `/bronze-arrival` must name the location the CATALOG vends.
+"""`/bronze-arrival` must name the location the CATALOG vends.
 
 `/publication-arrival` carries `from_uri` (I2) — it reads the catalog's vended `location` off the
 control event and puts it on the stage trigger, so the stage runner opens the table that was actually written.
 Without the same field on `/bronze-arrival`, the bronze->silver stage runner falls through to `_resolve_roots`'
-composed `{root}/medallion/{namespace}` — a DEPLOYMENT CONTRACT between `produce.py` and the chart's
-`MEDALLION_FROM_URI`, and a path no catalog-vended table occupies.
+composed `{root}/medallion/{namespace}`, a path no catalog-vended table occupies.
 
-That makes the first leg of the cascade depend on WHICH SERVICE CREATED THE TABLE FIRST:
+A client creates bronze through the catalog's own door (ADR 0154) and takes the vended
+`{root}/{hash}_{ns}${name}`. Its rows land there; a stage runner that opened the composed path would fire
+correctly, wake, find none of those rows, and ACK 200.
 
-* producer first — `register_written_dataset` attaches `bronze$events` to the composed path, `ingest`'s
-  `ensure` adopts that registration, and both writers and the stage runner agree.
-* ingest first — `ensure` creates through the catalog's own door and takes the vended
-  `{root}/{hash}_{ns}${name}`. Ingest writes its rows there, the stage runner opens the composed path, and the
-  cascade fires correctly, wakes, finds none of those rows, and ACKS 200.
-
-The second ordering is what this suite pins. It is deliberately asserted on the SILVER OUTPUT rather
+This suite is deliberately asserted on the SILVER OUTPUT rather
 than on the trigger payload alone: the payload is the mechanism, but the damage is a tier that
 transformed the wrong bytes under real-looking lineage without a single red signal.
 """
@@ -144,35 +139,11 @@ def test_an_ingest_first_bronze_cascades_from_the_location_the_catalog_vends(tmp
 
 
 @respx.mock
-def test_a_produce_first_bronze_still_cascades_from_the_composed_path(tmp_path: Path) -> None:
-    """THE OTHER ORDERING, unchanged. `POST /produce` attaches its deployment-contract URI through
-    `register_table`, so the catalog vends the composed `{root}/medallion/{ns}` — the head names it, the
-    stage_runner's confinement accepts it (it IS the resolved root's own tier path), and the cascade reads
-    exactly what it read before the trigger carried a location at all."""
-    control, wh = tmp_path / "control", tmp_path / "acme-wh"
-    _provision(control, "acme", wh)
-    composed = str(wh / "medallion" / "bronze")
-    seed_bronze(composed, {}, rows=3)
-    _describe(composed)
-    dapr = _FakeDapr()
-    decoys = {ns: str(tmp_path / f"default-{ns}") for ns in ("bronze", "silver")}
-
-    head = _head_settings(control, tmp_path / "default-bronze")
-    assert asyncio.run(handle_bronze_arrival(cast("DaprClient", dapr), head, {"data": _bronze_event()})) == {"status": "SUCCESS"}
-    trigger = next(p["data"] for p in dapr.published if p["topic"] == head.bronze_topic)
-    assert trigger["from_uri"] == composed
-
-    stage_runner = _stage_runner_settings(control, decoys)
-    assert asyncio.run(handle_stage(cast("DaprClient", dapr), stage_runner, {"data": trigger})) == {"status": "SUCCESS"}
-    assert lance.dataset(str(wh / "medallion" / "silver")).to_table().num_rows == 3
-
-
-@respx.mock
 def test_a_head_that_cannot_reach_the_catalog_still_fires_the_cascade(tmp_path: Path) -> None:
     """BACKWARD COMPATIBLE IN THE RIGHT DIRECTION. The composed-path fallback stays reachable — it stops
     being the ONLY path. A catalog that cannot answer must degrade to today's behaviour (a trigger with
-    no `from_uri`), never to a head that stops firing: for the produce-first estate the composed path is
-    the correct one, and a describe outage there would otherwise halt a cascade that works."""
+    no `from_uri`), never to a head that stops firing: a describe outage would otherwise halt a cascade
+    whose upstream sits at the composed path."""
     control, wh = tmp_path / "control", tmp_path / "acme-wh"
     _provision(control, "acme", wh)
     _describe("", status=503)

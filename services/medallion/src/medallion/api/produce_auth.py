@@ -1,7 +1,7 @@
 """Dual-auth for the producer's doors: a service by its projected service-account token, or a signed-in person.
 
-The cascade head must never be forgeable (a bronze-write event fabricates provenance). Two kinds of caller
-pass this door, and both are AUTHORIZED the same way:
+A door that starts work in a tenant's name must never be forgeable. Two kinds of caller pass this door, and
+both are AUTHORIZED the same way:
   * a SERVICE presents the token the kubelet projects for its own service account with audience
     `rask-medallion`; the door verifies it offline against the cluster issuer and maps the account to its
     subject (`service_door`, [[LH-220]], D1);
@@ -11,7 +11,7 @@ Either subject must then hold ``can_administer`` on the project the call acts on
 own tenant's runs by FGA exactly like a person; nothing here admits a caller tenant-blind.
 
 WHICH PROJECT THE ADMIN CHECK NAMES depends on the door (owner ruling 2026-09-25, "Authorize on the
-resource"). A door whose ``?project=`` is its WRITE TARGET checks that project (`authorize_produce`). A door
+resource"). A door whose write target is the configured project checks that project (`authorize_produce`). A door
 acting on an EXISTING resource authenticates only (`admit_caller`) and checks the project the resource
 records (`require_project_admin`, `administered_projects`), so no caller-chosen value can move its gate.
 A read of DEPLOYMENT config, the same for every tenant, admits any authenticated caller and checks no
@@ -32,7 +32,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Annotated
 
-from fastapi import Depends, Header, Query, Request
+from fastapi import Depends, Header, Request
 from lance_namespace import PermissionDeniedError, ServiceUnavailableError, UnauthenticatedError
 from openfga_sdk import OpenFgaClient
 from pydantic import BaseModel, ConfigDict
@@ -43,25 +43,14 @@ from medallion.core.config import MedallionSettings
 from service_kit.governed import fga
 from service_kit.governed.audit import ALLOW, DENY, FAILURE, SUCCESS, audit
 from service_kit.governed.oidc import OIDCVerifier, ProviderUnavailableError, verify_off_loop
-from service_kit.lakehouse.warehouse_registry import PROJECT_PATTERN
-
-
-#: The optional per-tenant project (#84) — shared by the auth gate and the /produce route (FastAPI
-#: deduplicates the identically-declared query param). Pattern-bound so an unsafe id 422s at the edge.
-#:
-#: The bounds MATCH the pattern rather than sitting outside it. ``PROJECT_PATTERN`` is the catalog's
-#: mint rule, which fixes the length at 3-63; a schema advertising 1-64 documents a project id no
-#: control plane can issue and the pattern then refuses, so a generated client's own validation and
-#: this door's disagree about which ids are worth sending.
-ProjectParam = Annotated[str | None, Query(min_length=3, max_length=63, pattern=PROJECT_PATTERN)]
 
 
 async def _require_admin(fga_client: OpenFgaClient, *, user: str, obj: str) -> None:
     """Check ``can_administer`` on ``obj``, audit the decision, and raise 403 on denial / 503 on outage.
 
-    Mirrors the catalog's ``fga_deps._require`` (#41 audit every authz decision): the cascade-head trigger
-    is exactly the operation the admin audit viewer (#77) reviews, so its allow/deny/outage outcomes must
-    land on the ``lance.audit`` stream like every other ``can_administer`` decision in the estate.
+    Mirrors the catalog's ``fga_deps._require`` (#41 audit every authz decision): a producer door's
+    allow/deny/outage outcomes land on the ``lance.audit`` stream the admin audit viewer (#77) reviews, like
+    every other ``can_administer`` decision in the estate.
     """
     try:
         allowed = await fga.check(fga_client, user=user, relation="can_administer", obj=obj)
@@ -158,8 +147,7 @@ async def require_project_admin(fga_client: OpenFgaClient | None, caller: Produc
 async def administered_projects(fga_client: OpenFgaClient | None, caller: ProducerCaller, projects: Iterable[str]) -> frozenset[str]:
     """WHICH of ``projects`` the caller may see: one ``batch_check``, one audit line per project.
 
-    The filtering twin of `require_project_admin`, shaped like ingest's `authorize_ingest_projects`: a
-    per-project verdict filters rather than refuses, so a caller who administers none gets nothing back
+    The filtering twin of `require_project_admin`: a per-project verdict filters rather than refuses, so a caller who administers none gets nothing back
     — a 403 for the whole call would say that some tenant has something to show. An authz outage is
     true of the whole call and raises 503, so it never reads as "you administer nothing".
     """
@@ -224,27 +212,23 @@ async def authorize_produce(
     settings: SettingsDep,
     fga_client: FgaClientDep,
     authorization: Annotated[str | None, Header()] = None,
-    project: ProjectParam = None,
     # The INVOKING Dapr app-id — what separates "a service called me" from "the public front door
     # called me for a stranger". See `service_kit.governed.dapr_auth.is_public_caller`.
     dapr_caller_app_id: Annotated[str | None, Header()] = None,
 ) -> str | None:
-    """Allow a service or a signed-in person who holds ``can_administer`` on the project produced into.
+    """Allow a service or a signed-in person who holds ``can_administer`` on the configured ``produce_admin_project``.
 
-    For a door whose ``?project=`` names the WRITE TARGET. A door acting on an existing resource takes
-    `admit_caller` and authorizes on the project that resource records.
-
-    ``project`` (#84) puts the admin gate on the REQUESTED project — the caller must administer the
-    project it produces into; absent → ``produce_admin_project``. A service is checked on it exactly like
-    a person, so it produces only into a tenant its own subject administers.
+    For a door whose write target is the configured project. A door acting on an existing resource takes
+    `admit_caller` and authorizes on the project that resource records. A service is checked exactly like
+    a person, so it writes only into a tenant its own subject administers.
 
     RETURNS the verified person's subject, or ``None`` when the caller is a service (or the
-    acknowledged-open door). This door is the LAST place a cascade's requester exists — by the time a
-    silver or gold stage fails, the request is gone and the stage runner authors as a role. The value
+    acknowledged-open door). This door is the LAST place a run's requester exists — by the time the
+    submitted job fails, the request is gone and the job authors as a role. The value
     is only ever a TARGETING hint (it rides ``lance.originator`` into the notifications plane, which
     re-derives visibility per recipient at delivery); it authorizes nothing, and a service's subject
     addresses no inbox, so it is never one."""
-    target = project or settings.produce_admin_project
+    target = settings.produce_admin_project
     obj = f"project:{target}"
     caller = await _admit(request, settings, authorization=authorization, dapr_caller_app_id=dapr_caller_app_id, resource=obj)
     await require_project_admin(fga_client, caller, project=target, resource=obj)
@@ -259,17 +243,17 @@ async def authenticate_subject(
     """Verify WHO is calling and return their sub. Authorization is somebody else's job.
 
     `authorize_produce` fuses the two — it authenticates AND checks `can_administer` on a
-    chart-configured project. That is right for the cascade head, whose whole permission question is
-    "may you trigger this tenant's pipeline", and wrong for any door with a FINER rung. The medallion's
+    chart-configured project. That is right for a door whose whole permission question is
+    "may you start work in this tenant", and wrong for any door with a FINER rung. The medallion's
     promotion review is the case: `can_promote: validator` exists in the model precisely so that a
-    validator who is NOT a project admin can approve a promotion, and reusing the produce gate makes
+    validator who is NOT a project admin can approve a promotion, and reusing that gate makes
     the effective check admin AND validator — locking out the one person the rung was invented for
     (`docs/adr/0131-annotations-are-derived-and-readiness-is-the-published-tag.md`: the promotion decision
     is authorized on the object it lands in, not on a project-admin gate).
 
     Declares NO FGA client, deliberately: a dependency that carries one invites the same fusion back.
 
-    There is no dev-open path. `authorize_produce` has one because a produce trigger needs no
+    There is no dev-open path. `authorize_produce` has one because starting a run needs no
     principal — the sub it returns is a targeting hint. A DECISION is the opposite: the subject is the
     record of who made it, and an anonymous approval is not an approval. A caller with no verified
     identity gets `None` and the door refuses.
@@ -288,7 +272,7 @@ async def authenticate_subject(
         raise UnauthenticatedError("malformed bearer")
     try:
         # Off the loop, for the same reason as `authorize_produce` above: this is the promotion
-        # review's door, and it is a SECOND copy of the verify call — fixing only the produce door
+        # review's door, and it is a SECOND copy of the verify call — fixing only `authorize_produce`
         # would leave approve/reject stalling the worker.
         return (await verify_off_loop(verifier, raw)).sub
     except UnauthenticatedError:
@@ -303,16 +287,14 @@ async def authorize_train(
     fga_client: FgaClientDep,
     authorization: Annotated[str | None, Header()] = None,
     # Forwarded, not re-derived: `/train` delegates its whole decision to `authorize_produce`, so an
-    # unforwarded caller id would silently restore the bypass on exactly this route while `/produce`
-    # looked fixed — the delegation is what makes the two doors one door.
+    # unforwarded caller id would silently restore the bypass on exactly this route.
     dapr_caller_app_id: Annotated[str | None, Header()] = None,
 ) -> str | None:
-    """The ``/train`` door: the same dual-auth as produce, PINNED to the configured project.
+    """The ``/train`` door: the dual-auth of `authorize_produce`, PINNED to the configured project.
 
     Training writes SINGLE-TENANT state (the model registry under the configured
-    ``produce_admin_project``), so unlike ``/produce`` there is no per-tenant routing for a requested
-    project to select — honoring a caller-supplied ``?project=`` here would let an admin of any OTHER
-    project pass the gate while the run still lands in the configured tenant's registry (authorization
+    ``produce_admin_project``), so there is no per-tenant routing for a requested project to select —
+    honoring a caller-supplied ``?project=`` here would let an admin of any OTHER project pass the gate while the run still lands in the configured tenant's registry (authorization
     scope must equal write scope). This dependency declares NO ``project`` query param, so a stray
     ``?project=`` is ignored and the admin check always targets ``produce_admin_project``.
 
@@ -326,36 +308,5 @@ async def authorize_train(
         settings,
         fga_client,
         authorization=authorization,
-        project=None,  # the explicit pin: always the configured produce_admin_project
-        dapr_caller_app_id=dapr_caller_app_id,
-    )
-
-
-async def authorize_ingest_media(
-    request: Request,
-    settings: SettingsDep,
-    fga_client: FgaClientDep,
-    authorization: Annotated[str | None, Header()] = None,
-    dapr_caller_app_id: Annotated[str | None, Header()] = None,
-) -> str | None:
-    """The ``/ingest-media`` door: the same dual-auth as produce, PINNED like ``/train``.
-
-    The media head's target is CONFIGURED (``media_head_enabled`` reads the source prefix and bronze
-    table off settings), so there is no per-tenant routing for a caller-supplied project to select —
-    declaring one would let an admin of any other project pass the gate while the bytes still land in
-    the configured tenant's bronze. Authorization scope must equal write scope.
-
-    RETURNS the verified subject. That is the whole point of replacing the token-only guard: media
-    ingest is a fire-and-ack that hands the run to the cascade, so the door is the LAST place the
-    requester's identity exists. Without it the media chain's events name a chart role literal, which
-    addresses an inbox actor named after the role and reaches nobody — and ``notifiable()`` acks an
-    untargetable event with a SUCCESS, so nothing reports the silence.
-    """
-    return await authorize_produce(
-        request,
-        settings,
-        fga_client,
-        authorization=authorization,
-        project=None,  # the explicit pin: the media head's target is configured, not requested
         dapr_caller_app_id=dapr_caller_app_id,
     )

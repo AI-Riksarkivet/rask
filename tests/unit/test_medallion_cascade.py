@@ -1,8 +1,9 @@
 """End-to-end test of the fake-Ray medallion CASCADE (#25) — bronze → silver → gold, in-process.
 
-R23: bronze is the FIRST governed tier — the producer ingests straight into it (raw is the external
-world and owns no dataset). This is the regression guard for "the event-driven loop produces real DATA +
-a correct lineage CHAIN". It runs the producer + both stage runners in sequence with the fake-Ray compute
+R23: bronze is the FIRST governed tier — a client writes it through the catalog (raw is the external
+world and owns no dataset; ADR 0154). This is the regression guard for "the event-driven loop produces real DATA +
+a correct lineage CHAIN". It writes bronze with the catalog's announcement (`catalog_bronze_write`) and runs both
+stage runners in sequence with the fake-Ray compute
 ON, against a temp directory (real Lance, no S3/Dapr/AGE), capturing every emitted OpenLineage event, and
 asserts BOTH halves:
 
@@ -26,16 +27,15 @@ from typing import Any, cast
 
 import lance
 import pytest
+from catalog_bronze_write import write_bronze
 from dapr.aio.clients import DaprClient
 
 from lineage.models import Dataset, RunEvent
 from medallion.core.config import MedallionSettings
 from medallion.services.compute import seed_bronze
 from medallion.services.ingest_trigger import handle_bronze_arrival
-from medallion.services.produce import produce
 from medallion.services.transform import handle_stage
 from service_kit.lakehouse import warehouse_registry
-from service_kit.lakehouse.warehouse_registry import UnresolvableProjectError
 
 
 class _FakeDapr:
@@ -46,6 +46,10 @@ class _FakeDapr:
 
     async def publish_event(self, *, pubsub_name: str, topic_name: str, data: str, data_content_type: str) -> None:
         self.published.append({"topic": topic_name, "data": json.loads(data)})
+
+    def announce(self, settings: MedallionSettings, event: dict[str, Any]) -> None:
+        """The catalog's announcement of a bronze write, on the lineage topic the stage runners also emit to."""
+        self.published.append({"topic": settings.lineage_topic, "data": event})
 
 
 # The medallion DAG as (operation, from_ns, from_ds, to_ns, to_ds) — the same shape the chart wires per stage runner.
@@ -59,13 +63,12 @@ def test_cascade_produces_real_data_and_a_correct_lineage_chain(tmp_path: Any) -
     uris = {ns: str(tmp_path / ns) for ns in ("bronze", "silver", "gold")}
     dapr = _FakeDapr()
 
-    # Head of the pipeline: medallion-producer seeds bronze$events DIRECTLY (real Lance write — R23).
-    producer = MedallionSettings.model_validate({"compute_enabled": True, "bronze_uri": uris["bronze"]})
-    asyncio.run(produce(cast(DaprClient, dapr), producer, token="idem-test"))
+    # Head of the pipeline: a client writes bronze$events through the catalog, which announces it (R23).
+    producer = MedallionSettings()
+    dapr.announce(producer, write_bronze(uris["bronze"], token="idem-test"))
     bronze_tbl = lance.dataset(uris["bronze"]).to_table()
     bronze_rows = bronze_tbl.num_rows
     assert bronze_rows > 0
-    # The retired raw→bronze stage runner's stage stamp merged into the bronze ingest head (R23).
     assert set(bronze_tbl.column("stage").to_pylist()) == {"bronze"}
 
     # The 2 stage runners, each reading its upstream Lance dataset and writing the downstream one.
@@ -95,7 +98,7 @@ def test_cascade_produces_real_data_and_a_correct_lineage_chain(tmp_path: Any) -
     events = [RunEvent.model_validate(p["data"]) for p in dapr.published if p["topic"] == producer.lineage_topic]
     by_output = {e.outputs[0].name: e for e in events}
     assert set(by_output) == {"bronze$events", "silver$features", "gold$catalog"}
-    assert by_output["bronze$events"].inputs == []  # the dummy seed has no external source
+    assert by_output["bronze$events"].inputs == []  # a bronze insert derives from no governed table
     assert by_output["silver$features"].inputs[0].name == "bronze$events"
     assert by_output["gold$catalog"].inputs[0].name == "silver$features"
     # Every successful hop carries the version its DATA landed at on its output (the WROTE edge the graph
@@ -108,8 +111,7 @@ def test_cascade_produces_real_data_and_a_correct_lineage_chain(tmp_path: Any) -
     # T6: every tier DECLARES its canonical name on the dataset itself, equal to the name the event
     # emitted. The URI is composed from the NAMESPACE alone (`medallion/bronze` is both `bronze$events`
     # and `bronze$pages`), so the maintenance sweep cannot derive this — unstamped, that tier gets no
-    # maintenance provenance and no per-dataset FAIL event. The HEAD was unstamped until 2026-08-16
-    # while both stage runners already declared theirs.
+    # maintenance provenance and no per-dataset FAIL event.
     for name, ns in (("bronze$events", "bronze"), ("silver$features", "silver"), ("gold$catalog", "gold")):
         declared = (lance.dataset(uris[ns]).schema.metadata or {}).get(b"lineage.dataset_id")
         assert declared == name.encode(), f"{ns} did not declare its canonical id: {declared!r}"
@@ -127,8 +129,8 @@ def test_source_rowid_traces_every_derived_row_back_to_its_exact_bronze_source_r
     """
     uris = {ns: str(tmp_path / ns) for ns in ("bronze", "silver", "gold")}
     dapr = _FakeDapr()
-    producer = MedallionSettings.model_validate({"compute_enabled": True, "bronze_uri": uris["bronze"]})
-    asyncio.run(produce(cast(DaprClient, dapr), producer, token="idem-test"))
+    producer = MedallionSettings()
+    write_bronze(uris["bronze"], token="idem-test")
 
     # The bronze row identities the whole cascade must be able to name — captured AT seed time
     # (id → _rowid), because _rowid advances on any later overwrite, so only a snapshot taken now is
@@ -238,8 +240,8 @@ def _next_trigger_from_publication(hop: tuple[str, str, str, str, str], previous
 
 
 def test_project_cascade_routes_into_the_project_warehouse_and_qualifies_lineage(tmp_path: Any) -> None:
-    """#84 happy path, head→gold: /produce {project} seeds the PROJECT warehouse, /bronze-arrival copies
-    the project onto the stage trigger, every stage runner resolves its URIs off the registry (the env decoy URIs
+    """#84 happy path, head→gold: a bronze write in the PROJECT warehouse, announced for that project, makes
+    /bronze-arrival copy the project onto the stage trigger, every stage runner resolves its URIs off the registry (the env decoy URIs
     are never touched), each next-trigger PROPAGATES the project, and the lineage chain is
     project-qualified end to end (distinct graph nodes per tenant)."""
     control, wh = tmp_path / "control", tmp_path / "acme-wh"
@@ -248,16 +250,9 @@ def test_project_cascade_routes_into_the_project_warehouse_and_qualifies_lineage
     decoys = {ns: str(tmp_path / f"default-{ns}") for ns in ("bronze", "silver", "gold")}
     dapr = _FakeDapr()
 
-    producer = MedallionSettings.model_validate({"compute_enabled": True, "bronze_uri": decoys["bronze"], "control_root": str(control)})
-    result = asyncio.run(produce(cast(DaprClient, dapr), producer, token="idem-test", project="acme"))
-    assert result["status"] == "produced" and result["dataset"] == "acme-bronze$events"
-    assert lance.dataset(str(wh / "medallion" / "bronze")).to_table().num_rows > 0
-    assert not Path(decoys["bronze"]).exists()  # fail-closed routing: the shared root was never written
-
-    bronze_event = next(p["data"] for p in dapr.published if p["topic"] == producer.lineage_topic)
-    assert bronze_event["outputs"][0]["namespace"] == "acme-bronze"
-    assert bronze_event["outputs"][0]["name"] == "acme-bronze$events"
-    assert bronze_event["run"]["facets"]["lance"]["project"] == "acme"
+    producer = MedallionSettings.model_validate({"compute_enabled": True, "control_root": str(control)})
+    bronze_event = write_bronze(str(wh / "medallion" / "bronze"), token="idem-test", project="acme")
+    dapr.announce(producer, bronze_event)
 
     # The cascade HEAD: the bronze-arrival subscription matches the QUALIFIED pair + propagates the project.
     assert asyncio.run(handle_bronze_arrival(cast(DaprClient, dapr), producer, {"data": bronze_event})) == {"status": "SUCCESS"}
@@ -329,38 +324,6 @@ def test_unsafe_project_in_trigger_is_dropped_without_any_emit(tmp_path: Any) ->
     assert status["status"] == "DROP" and dapr.published == []
 
 
-def test_the_default_config_still_cascades_with_compute_off(tmp_path: Any) -> None:
-    """The regression guard for the synthetic-emit change, on the CHART'S DEFAULT config.
-
-    `chart/values.yaml` defaults `compute.enabled: false`, so the provenance-only path is what most
-    deployments actually run. Marking those events synthetic made their output BARE — no version,
-    stats, dataSource or schema facet — and `/bronze-arrival` decides whether to fire the cascade by
-    matching `_bronze_write_dataset` against the event's outputs. Had that matcher depended on any
-    facet rather than on namespace+name, this change would have silently stopped the entire default
-    pipeline at its head: producer reports success, no trigger, no stage runner, empty graph, nothing logged
-    above DEBUG anywhere in the chain.
-
-    Asserted end to end (produce → arrival → trigger) rather than by reading the matcher, because the
-    question is whether the two halves still agree, not what either one says in isolation.
-    """
-    dapr = _FakeDapr()
-    producer = MedallionSettings.model_validate({"compute_enabled": False, "bronze_uri": str(tmp_path / "bronze")})
-
-    assert asyncio.run(produce(cast(DaprClient, dapr), producer, token="t1"))["status"] != "publish_failed"
-    bronze_event = next(p for p in dapr.published if p["topic"] == producer.lineage_topic)["data"]
-
-    # The head event is synthetic and describes no data — and is still a COMPLETE naming its output.
-    assert bronze_event["run"]["facets"]["lance"]["synthetic"] is True
-    assert bronze_event["outputs"][0].get("facets", {}) == {}
-    assert bronze_event["eventType"] == "COMPLETE"
-
-    # …and the arrival handler still recognises it and fires the cascade.
-    assert asyncio.run(handle_bronze_arrival(cast(DaprClient, dapr), producer, {"data": bronze_event})) == {"status": "SUCCESS"}
-    trigger = next(p for p in dapr.published if p["topic"] == producer.bronze_topic)
-    assert trigger["data"]["dataset"] == producer.bronze_dataset
-    assert trigger["data"]["token"] == "t1"
-
-
 def test_page_lane_arrival_does_not_fire_the_events_lane_stage_runner(tmp_path: Any) -> None:
     """P7a lane isolation: a ``bronze$pages`` arrival must not drive the ``bronze$events`` stage runner.
 
@@ -422,36 +385,19 @@ def test_trigger_without_a_dataset_is_still_accepted(tmp_path: Any) -> None:
     assert status == {"status": "SUCCESS"}
 
 
-def test_produce_with_project_fails_closed_when_unresolvable(tmp_path: Any) -> None:
-    dapr = _FakeDapr()
-    # Routing disabled (no control_root) → refused before any write or publish.
-    producer = MedallionSettings.model_validate({"compute_enabled": True, "bronze_uri": str(tmp_path / "bronze")})
-    with pytest.raises(UnresolvableProjectError):
-        asyncio.run(produce(cast(DaprClient, dapr), producer, token="idem-test", project="acme"))
-    # Routing enabled but the project has no active warehouse → equally refused.
-    (tmp_path / "control" / "_warehouses").mkdir(parents=True)
-    configured = MedallionSettings.model_validate({"compute_enabled": True, "bronze_uri": str(tmp_path / "bronze"), "control_root": str(tmp_path / "control")})
-    with pytest.raises(UnresolvableProjectError):
-        asyncio.run(produce(cast(DaprClient, dapr), configured, token="idem-test", project="acme"))
-    assert dapr.published == [] and not (tmp_path / "bronze").exists()
-
-
 def test_projectless_cascade_is_byte_identical_even_with_routing_configured(tmp_path: Any) -> None:
     """The default-path regression: with MEDALLION_CONTROL_ROOT configured AND a warehouse provisioned, a
-    project-LESS produce/trigger must behave exactly as today — env URIs, unqualified lineage, no project
+    project-LESS bronze write and trigger must behave exactly as the single-tenant path does — env URIs, unqualified lineage, no project
     facet, and trigger payloads EXACTLY equal to the pre-#84 three-field shape."""
     control, wh = tmp_path / "control", tmp_path / "acme-wh"
     _provision(control, "acme", wh)
     uris = {ns: str(tmp_path / ns) for ns in ("bronze", "silver")}
     dapr = _FakeDapr()
 
-    producer = MedallionSettings.model_validate({"compute_enabled": True, "bronze_uri": uris["bronze"], "control_root": str(control)})
-    asyncio.run(produce(cast(DaprClient, dapr), producer, token="idem-test"))
-    bronze_event = next(p["data"] for p in dapr.published if p["topic"] == producer.lineage_topic)
-    assert bronze_event["outputs"][0]["namespace"] == "bronze"
-    assert bronze_event["outputs"][0]["name"] == "bronze$events"
+    producer = MedallionSettings.model_validate({"compute_enabled": True, "control_root": str(control)})
+    bronze_event = write_bronze(uris["bronze"], token="idem-test")
     assert "project" not in bronze_event["run"]["facets"]["lance"]
-    token = bronze_event["run"]["facets"]["lance"]["token"]
+    token = "idem-test"
 
     assert asyncio.run(handle_bronze_arrival(cast(DaprClient, dapr), producer, {"data": bronze_event})) == {"status": "SUCCESS"}
     # EXACT equality — no PROJECT key, which is what this test is about. The head also mints the

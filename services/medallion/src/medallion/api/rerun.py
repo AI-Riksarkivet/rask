@@ -30,7 +30,7 @@ request handler is the pattern this estate has just spent a release removing. Th
 fresh-token re-run reaches a correct final state and wastes only compute. The response SAYS SO
 rather than implying a guarantee the listing could not make.
 
-**The rung is the STAGE RUNNER's own (R4).** Not `/produce`'s `can_administer`, which `promotions.py` records
+**The rung is the STAGE RUNNER's own (R4).** Not the admin doors' `can_administer`, which `promotions.py` records
 as "coarser AND different, and would lock out exactly the non-admin validator the rung exists for".
 A silver->gold re-run asks `can_promote` on `namespace:<project>-gold`, exactly as the stage runner asks when
 it runs the hop itself. Its sibling `terminate` asks `can_administer` on the project the run records —
@@ -206,7 +206,7 @@ async def _vended_location(settings: MedallionSettings, object_id: str) -> str |
 # B6: a draining pod must not START work. The re-run publishes a trigger that a stage runner then executes,
 # so what is at risk is not the stage runner's work but this publish — the sidecar goes down with the pod, and
 # a trigger lost mid-flight is a repair an operator believes happened. 503 + Retry-After, exactly as
-# `/produce` and `/train` answer, rather than a 202 for a hop nothing will run.
+# `/train` answers, rather than a 202 for a hop nothing will run.
 @router.post("/stages/rerun", status_code=202, dependencies=[Depends(refuse_when_draining)])
 async def rerun_stage(
     body: RerunRequest,
@@ -218,7 +218,7 @@ async def rerun_stage(
     """Re-drive one cascade edge. 202, because the hop runs on the bus like every other one.
 
     `authenticate_subject` rather than `authorize_produce`, because the rung is the stage runner's (R4) and
-    the produce gate would fuse the two into "admin AND validator" — locking out the validator the
+    the admin gate would fuse the two into "admin AND validator" — locking out the validator the
     rung exists for. There is NO dev-open path here for the same reason the promotion decision has
     none: a re-run is an act with a responsible party, and an anonymous one is not an act anyone made.
     """

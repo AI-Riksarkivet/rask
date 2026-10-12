@@ -10,7 +10,7 @@ Three properties carry it, and each is a decision the spec argued for rather tha
   drops on ack and no store retains, so a verb that required one could not be built. Supplied, the
   trigger is verbatim and the stage runner's deterministic instance id reattaches; absent, a fresh one and a
   full recompute;
-* **the rung is the STAGE RUNNER's (R4)**, not `/produce`'s `can_administer` — which is coarser AND
+* **the rung is the STAGE RUNNER's (R4)**, not the admin doors' `can_administer` — which is coarser AND
   different, and would lock out exactly the non-admin validator `can_promote` exists for;
 * **no 409 (R2a)** — the check R2 prescribed needs a Ray job listing, and Ray's `GET /api/jobs/` takes
   no parameters at all: measured at 81,155 jobs / 164.7 MB in one response, 1179 MiB RSS against a
@@ -168,7 +168,7 @@ def test_a_DENIED_caller_publishes_NOTHING(bus: _Bus, checks: list[dict[str, str
 
 def test_an_ANONYMOUS_caller_is_REFUSED_even_with_auth_off(bus: _Bus, checks: list[dict[str, str]], monkeypatch: pytest.MonkeyPatch) -> None:
     """No dev-open path, for the reason the promotion decision has none: a re-run is an act with a
-    responsible party, and an anonymous one is not an act anyone made. `/produce` may be open because
+    responsible party, and an anonymous one is not an act anyone made. `/train` may be open because
     the sub it returns is a targeting hint; this is a decision."""
     with TestClient(_app(bus, checks, monkeypatch, subject=None)) as client:
         assert client.post(_RERUN, json=_BODY).status_code == 403

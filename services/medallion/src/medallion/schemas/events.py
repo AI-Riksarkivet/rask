@@ -212,8 +212,8 @@ def build_run_event(
 ) -> dict[str, Any]:
     """Build the OpenLineage ``RunEvent`` (wire JSON) for one medallion transform — via ``lineage_kit``.
 
-    ``inputs`` is a list of ``(namespace, name)`` upstream datasets (external source URIs
-    sources at the bronze ingest head, R23; empty for the dummy seed). The single output carries the standard version facet so the ``WROTE`` edge records the
+    ``inputs`` is a list of ``(namespace, name)`` upstream datasets (empty when the run derives from no
+    dataset). The single output carries the standard version facet so the ``WROTE`` edge records the
     Lance version, plus — when the compute measured the write (``row_count`` / ``size_bytes`` set) — the
     standard ``outputStatistics`` facet, when the compute knows the URI (``source_uri``) the standard
     ``dataSource`` facet, and when the quality gate validated the write (``assertions`` set) the standard

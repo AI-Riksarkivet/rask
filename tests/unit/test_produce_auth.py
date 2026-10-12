@@ -1,6 +1,6 @@
-"""Fail-closed dual-auth for the /produce + /train triggers (#64): a service account or a project-admin OIDC person.
+"""Fail-closed dual-auth for the /train trigger (#64): a service account or a project-admin OIDC person.
 
-The cascade head is provenance-fabricatable, so the admin door added for the UI must not be bypassable:
+A training run spends compute and writes the model registry, so the admin door added for the UI must not be bypassable:
 an invalid bearer 401s, a non-admin 403s, an FGA outage 503s (never a silent allow), and a request carrying
 no credential 403s. A door with nothing to authenticate a caller refuses unless the deployment sets
 `RASK_INSECURE_ALLOW_UNAUTHENTICATED`. A SERVICE is admitted by its projected service-account token and
@@ -9,7 +9,7 @@ authorized on FGA exactly like a person ([[LH-220]]); its behaviour against a re
 
 Two layers: direct-function tests pin every fail-closed branch of :func:`authorize_produce` (sync via
 ``asyncio.run`` — no async-plugin dependency); the TestClient tests pin that it is actually WIRED onto the
-``/produce`` route (a direct, non-sidecar POST is gated end-to-end), which the function tests can't prove.
+``/train`` route (a direct, non-sidecar POST is gated end-to-end), which the function tests can't prove.
 """
 
 from __future__ import annotations
@@ -29,7 +29,6 @@ from openfga_sdk import OpenFgaClient
 
 from medallion.api import produce_auth
 from medallion.api.dependencies import get_dapr, get_settings
-from medallion.api.produce import router
 from medallion.api.train import router as train_router
 from medallion.core.config import MedallionSettings
 from service_kit.governed.audit import AUDIT_LOGGER, configure_audit
@@ -57,7 +56,7 @@ class _ServiceVerifier:
         return token.startswith("sa.")
 
     def verify(self, _token: str) -> ServicePrincipal:
-        return ServicePrincipal(subject="service-ingest", service_account="system:serviceaccount:rask:rask-sa-ingest")
+        return ServicePrincipal(subject="service-trainer", service_account="system:serviceaccount:rask:rask-sa-trainer")
 
 
 def _run(
@@ -69,7 +68,6 @@ def _run(
     oidc_enabled: bool = True,
     fga_result: bool = True,
     fga_raises: bool = False,
-    project: str | None = None,
     caller_app_id: str | None = None,
     captured: dict[str, object] | None = None,
     wired: bool = True,
@@ -91,7 +89,6 @@ def _run(
             settings,
             cast(OpenFgaClient, object()) if wired else None,
             authorization=authz,
-            project=project,
             dapr_caller_app_id=caller_app_id,
         )
     )
@@ -106,7 +103,6 @@ class _RunArgs(TypedDict, total=False):
     oidc_enabled: bool
     fga_result: bool
     fga_raises: bool
-    project: str | None
     caller_app_id: str | None
     captured: dict[str, object] | None
     wired: bool
@@ -185,13 +181,12 @@ class _ThreadRecordingVerifier:
         return SimpleNamespace(sub="alice")
 
 
-def test_the_produce_door_verifies_the_bearer_OFF_the_event_loop(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_admin_door_verifies_the_bearer_OFF_the_event_loop(monkeypatch: pytest.MonkeyPatch) -> None:
     """``OIDCVerifier.verify`` does synchronous discovery + JWKS fetches — never on the loop.
 
-    The cascade head's write doors all funnel through this dependency, and ``service_kit.probes`` is
-    mounted on the same app, so an inline verify on a cold cache or a key rotation stalls every
-    in-flight request in the pod AND its own liveness probe. The identical defect was filed and fixed
-    on the sibling ingest door (ING-02); it did not travel here because the two doors are copies.
+    The producer's admin doors funnel through this dependency, and ``service_kit.probes`` is mounted on
+    the same app, so an inline verify on a cold cache or a key rotation stalls every in-flight request in
+    the pod AND its own liveness probe (ING-02).
     """
     verifier = _ThreadRecordingVerifier()
     assert _run(monkeypatch, authz="Bearer good", verifier=verifier) == "alice"
@@ -232,7 +227,7 @@ def test_bearer_but_unwired_verifier_is_503(monkeypatch: pytest.MonkeyPatch) -> 
     _expect(monkeypatch, 503, authz="Bearer good", verifier=None)
 
 
-# ── route-wiring tests: authorize_produce is actually mounted on POST /produce ────────────────────
+# ── route-wiring tests: the admin door is actually mounted on POST /train ─────────────────────────
 
 
 def _client() -> TestClient:
@@ -241,7 +236,7 @@ def _client() -> TestClient:
     # domain errors map to their HTTP statuses here exactly as in production (they are lance_namespace
     # errors, not HTTPExceptions — a bare FastAPI() would surface them as 500).
     install_problem_handlers(app, logging.getLogger(__name__))
-    app.include_router(router)
+    app.include_router(train_router)
     # Fakes so only the guard is exercised — a rejected request never reaches the handler anyway. Settings
     # carries oidc_enabled=False (no verifier wired on app.state) so the human door stays shut in the test.
     app.dependency_overrides[get_dapr] = lambda: None
@@ -253,43 +248,7 @@ def _client() -> TestClient:
 
 def test_route_rejects_a_request_with_no_service_account_and_no_person() -> None:
     # The `dapr-api-token` a sidecar stamps names nobody, so it is no credential at this door.
-    assert _client().post("/produce", headers={"dapr-api-token": "nope"}).status_code == 403
-
-
-# ── #84 per-tenant produce: the admin gate follows the REQUESTED project ───────────────────────────
-
-
-def test_oidc_admin_gate_targets_the_requested_project(monkeypatch: pytest.MonkeyPatch) -> None:
-    # A caller producing into project X must administer X — not the fixed configured project.
-    captured: dict[str, object] = {}
-    _run(
-        monkeypatch,
-        authz="Bearer good",
-        verifier=_Verifier(),
-        project="globex",
-        captured=captured,
-    )
-    assert captured["obj"] == "project:globex"
-
-
-def test_route_rejects_a_malformed_project_with_422() -> None:
-    # The project becomes an S3 prefix + lineage qualifier — a path-shaped value is refused at the edge.
-    res = _client().post("/produce", params={"project": "../evil"}, headers={"Idempotency-Key": "idem-test"})
-    assert res.status_code == 422
-    assert {e["field"] for e in res.json()["errors"]} == {"query.project"}, res.text
-
-
-def test_produce_route_409s_when_project_routing_is_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Dev-open door + real settings (control_root unset): a project-carrying produce is REFUSED (409,
-    # problem+json), never silently seeded into the shared root.
-    monkeypatch.setenv("RASK_INSECURE_ALLOW_UNAUTHENTICATED", "true")
-    app = FastAPI()
-    app.include_router(router)
-    app.dependency_overrides[get_dapr] = lambda: None
-    app.dependency_overrides[get_settings] = lambda: MedallionSettings.model_validate({})
-    res = TestClient(app, raise_server_exceptions=False).post("/produce", params={"project": "acme"}, headers={"Idempotency-Key": "idem-test"})
-    assert res.status_code == 409
-    assert res.headers["content-type"].startswith("application/problem+json")
+    assert _client().post("/train", json=_TRAIN_BODY, headers={"dapr-api-token": "nope", "Idempotency-Key": "idem-test"}).status_code == 403
 
 
 # ── /train gate: pinned to the CONFIGURED project — a caller-supplied ?project= is ignored ─────────
@@ -321,7 +280,6 @@ def _train_client() -> TestClient:
     app = FastAPI()
     install_problem_handlers(app, logging.getLogger(__name__))
     app.include_router(train_router)
-    app.include_router(router)  # /produce mounted alongside, to contrast the per-project behavior
     app.dependency_overrides[get_dapr] = lambda: None
     # No training engine → a request PASSING the guard hits the disabled-head 409 (a crisp "guard passed"
     # signal distinct from the guard's own 403); the acknowledged-open door admits the request with no subject.
@@ -373,7 +331,7 @@ def _audit_fields(record: logging.LogRecord) -> dict[str, object]:
 
 
 def test_admin_allow_is_audited(monkeypatch: pytest.MonkeyPatch, audit_records: list[logging.LogRecord]) -> None:
-    # The cascade-head trigger is exactly what the #77 audit viewer reviews — the allowed decision must
+    # An admin-door trigger is exactly what the #77 audit viewer reviews — the allowed decision must
     # land with who/what/resource, like every catalog can_administer decision (fga_deps._require parity).
     _run(monkeypatch, authz="Bearer good", verifier=_Verifier(), fga_result=True)
     assert len(audit_records) == 1
@@ -400,13 +358,19 @@ def test_fga_outage_is_audited_as_failure(monkeypatch: pytest.MonkeyPatch, audit
 # ── the gateway must not launder anonymous traffic into a governed write ──────
 
 
-def test_a_PUBLIC_callers_refusal_is_audited_on_the_REQUESTED_project(monkeypatch: pytest.MonkeyPatch, audit_records: list[logging.LogRecord]) -> None:
+def test_a_PUBLIC_callers_refusal_is_audited_on_the_project_the_door_writes(monkeypatch: pytest.MonkeyPatch, audit_records: list[logging.LogRecord]) -> None:
     """A service never arrives through a public front door, so one that does is refused before anything is
-    authorized. `?project=` is this door's write target, so the refusal names it rather than the configured one."""
-    _expect(monkeypatch, 403, authz="Bearer sa.token", service_verifier=_ServiceVerifier(), caller_app_id="gateway", project="beta")
+    authorized, and the refusal names the project this door writes into."""
+    _expect(monkeypatch, 403, authz="Bearer sa.token", service_verifier=_ServiceVerifier(), caller_app_id="gateway")
 
     assert [_audit_fields(record) for record in audit_records] == [
-        {"audit.action": "authn", "audit.outcome": "deny", "audit.subject": "service-ingest", "audit.resource": "project:beta", "audit.reason": "public_caller"}
+        {
+            "audit.action": "authn",
+            "audit.outcome": "deny",
+            "audit.subject": "service-trainer",
+            "audit.resource": "project:acme",
+            "audit.reason": "public_caller",
+        }
     ]
 
 
@@ -414,7 +378,7 @@ def test_the_TRAIN_door_inherits_the_refusal() -> None:
     """`authorize_train` delegates its whole decision to `authorize_produce`.
 
     An unforwarded caller id would leave `/train` — which spends GPU and writes the model registry —
-    open while `/produce` looked fixed, and the delegation is precisely what makes that invisible.
+    open while `authorize_produce` looked fixed, and the delegation is precisely what makes that invisible.
     """
     ns = SimpleNamespace(oidc_enabled=True, produce_admin_project="acme", sa_issuer=None, insecure_allow_unauthenticated=False)
     request = cast(Request, SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(oidc=None, sa_oidc=_ServiceVerifier()))))
@@ -440,4 +404,4 @@ def test_a_service_is_authorized_on_FGA_like_a_person_and_is_never_an_originator
     originator = _run(monkeypatch, authz="Bearer sa.token", service_verifier=_ServiceVerifier(), captured=captured)
 
     assert originator is None
-    assert (captured["user"], captured["obj"]) == ("service-ingest", "project:acme")
+    assert (captured["user"], captured["obj"]) == ("service-trainer", "project:acme")

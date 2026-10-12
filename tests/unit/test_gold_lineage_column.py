@@ -1,6 +1,6 @@
 """R26 — gold carries its lineage as a JSONB column, and the column is QUERYABLE, not just present.
 
-Drives the real in-process cascade (producer → bronze→silver stage runner → silver→gold stage runner) against a temp
+Drives the real in-process cascade (a catalog bronze write → bronze→silver stage runner → silver→gold stage runner) against a temp
 directory with real Lance, capturing every emitted OpenLineage event, then asserts the three things that
 make the consume layer (R25b) real:
 
@@ -21,13 +21,13 @@ import json
 from typing import Any, cast
 
 import lance
+from catalog_bronze_write import write_bronze
 from dapr.aio.clients import DaprClient
 
 from lineage_kit.consume import LineageDoc
 from lineage_kit.schemas import RunEvent
 from medallion.core.config import MedallionSettings
 from medallion.schemas.tier import LINEAGE_COLUMN
-from medallion.services.produce import produce
 from medallion.services.transform import handle_stage
 
 
@@ -48,11 +48,10 @@ class _FakeDapr:
 
 
 def _run_cascade(tmp_path: Any) -> tuple[dict[str, str], _FakeDapr]:
-    """Producer + both stage runners, compute ON — the same code path the deployed pods run."""
+    """A catalog bronze write + both stage runners, compute ON — the same code path the deployed pods run."""
     uris = {ns: str(tmp_path / ns) for ns in ("bronze", "silver", "gold")}
     dapr = _FakeDapr()
-    producer = MedallionSettings.model_validate({"compute_enabled": True, "bronze_uri": uris["bronze"]})
-    asyncio.run(produce(cast(DaprClient, dapr), producer, token="lineage-col"))
+    dapr.published.append({"topic": "lineage.events.v1", "data": write_bronze(uris["bronze"], token="lineage-col")})
     for op, from_ns, from_ds, to_ns, to_ds, pub in _HOPS:
         settings = MedallionSettings.model_validate(
             {

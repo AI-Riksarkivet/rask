@@ -1,8 +1,10 @@
-"""Land external source objects into a bronze Lance blob table — the ingest head of the cascade.
+"""Land external source objects into a bronze Lance blob table — the writer the development seed scripts use.
 
 Reads a provider-agnostic ``SourceAdapter`` (:mod:`service_kit.lakehouse.sources`) and writes each object's bytes as a
 managed blob-v2 column at file format 2.2, keeping the object's source URI as a column so provenance
 survives in the data itself (the caller emits the ``source -> bronze`` lineage edge from ``source_uris``).
+Its callers are `scripts/seed_bronze_pages.py` and `scripts/media_pipeline_e2e.py`; no lakehouse service
+writes bronze (ADR 0154), so the writer is a development tool, not a door.
 Bronze is the FIRST governed tier (R23 — raw is the external world): the ``stage`` provenance stamp the
 retired raw→bronze stage runner used to apply is written here at ingest, and ``source_rowid`` roots at these
 bronze rows (minted by the first downstream derive from bronze's stable ``_rowid``). The per-stage ML
@@ -67,13 +69,8 @@ _INGEST_SCHEMA = pa.schema(
 type ExtraColumns = Mapping[str, Callable[[SourceObject], str]]
 
 
-def ingest_schema_for(extra_columns: ExtraColumns | None) -> pa.Schema:
-    """The bronze ingest schema, with any lane-specific extra string columns appended.
-
-    PUBLIC because it has consumers outside this module: the media head creates its bronze table
-    through the catalog and hands it this, and `test_bronze_writers_compat` compares the writers
-    against the writer's real schema rather than a copy of it.
-    """
+def _ingest_schema_for(extra_columns: ExtraColumns | None) -> pa.Schema:
+    """The bronze ingest schema, with any lane-specific extra string columns appended."""
     fields = list(_INGEST_SCHEMA)
     for name in extra_columns or {}:
         fields.append(pa.field(name, pa.string()))
@@ -108,7 +105,7 @@ def _chunk_batch(chunk: list[SourceObject], first_id: int, extra_columns: ExtraC
     for name, extract in (extra_columns or {}).items():
         columns[name] = pa.array([extract(obj) for obj in chunk], pa.string())
     columns[_STAGE_COLUMN] = pa.array([_BRONZE_STAGE] * len(chunk), pa.string())
-    return pa.record_batch(columns, schema=ingest_schema_for(extra_columns))
+    return pa.record_batch(columns, schema=_ingest_schema_for(extra_columns))
 
 
 def ingest_to_bronze(
@@ -146,8 +143,7 @@ def ingest_to_bronze(
     chunk had already overwritten). Orphaned data files from an abort carry no manifest and the next
     successful overwrite supersedes them.
 
-    The CEILINGS remain the refusal guard (clear ``ValueError`` naming the env knob, mapped to 400 at the
-    route) against a mis-pointed prefix: bounded memory does not make a million-object ingest a good idea.
+    The CEILINGS remain the refusal guard (clear ``ValueError`` naming the bound) against a mis-pointed prefix: bounded memory does not make a million-object ingest a good idea.
     They are enforced INSIDE the batch generator, and Lance's FFI wraps a generator's exception in
     ``OSError`` — so the recorded ValueError is re-raised at the boundary to keep the contract.
 
@@ -177,13 +173,12 @@ def ingest_to_bronze(
             total_bytes += len(obj.data)
             if len(source_uris) > max_objects:
                 ceiling_error = ValueError(
-                    f"source exceeds the ingest ceiling of {max_objects} objects (MEDALLION_INGEST_MAX_OBJECTS); narrow the source prefix or raise the ceiling"
+                    f"source exceeds the ingest ceiling of {max_objects} objects (max_objects); narrow the source prefix or raise the ceiling"
                 )
                 raise ceiling_error
             if total_bytes > max_total_bytes:
                 ceiling_error = ValueError(
-                    f"source exceeds the ingest ceiling of {max_total_bytes} total bytes "
-                    f"(MEDALLION_INGEST_MAX_TOTAL_BYTES); narrow the source prefix or raise the ceiling"
+                    f"source exceeds the ingest ceiling of {max_total_bytes} total bytes (max_total_bytes); narrow the source prefix or raise the ceiling"
                 )
                 raise ceiling_error
             chunk_size += len(obj.data)
@@ -202,7 +197,7 @@ def ingest_to_bronze(
         dataset = lance.write_dataset(  # noqa: TID251
             batches(),
             bronze_uri,
-            schema=ingest_schema_for(extra_columns),
+            schema=_ingest_schema_for(extra_columns),
             mode="overwrite",
             storage_options=storage_options,
             data_storage_version="2.2",

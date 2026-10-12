@@ -1,8 +1,8 @@
 """The event-driven cascade head — react to a 'bronze batch written' lineage event by firing the pipeline.
 
-medallion-producer subscribes to the shared lineage topic (the same events the catalog + producer already emit on a
-write) and, **only** for a write to the bronze namespace/dataset (R23: bronze is the FIRST governed tier —
-raw is the external world the producer harvests from), publishes the bronze stage trigger
+medallion-producer subscribes to the shared lineage topic (the events the catalog emits on every write it commits)
+and, **only** for a write to the bronze namespace/dataset (R23: bronze is the FIRST governed tier — raw is the
+external world; a client writes bronze through the catalog's namespace doors, ADR 0154), publishes the bronze stage trigger
 (``medallion.bronze``) that the bronze->silver stage runners consume. So the cascade HEAD is driven by the
 arrival of external raw INTO bronze — every stage, the head included, reacts to an event on the bus we
 already run.
@@ -18,10 +18,9 @@ Best-effort with ``RETRY`` so a sidecar/broker outage is redelivered rather than
 
 **The trigger NAMES the upstream** (I2), resolved through the catalog rather than composed — see
 :func:`_vended_upstream`. The arrived table's location is a question only the catalog can answer,
-because more than one writer creates bronze: ``POST /produce`` attaches its deployment-contract URI
-through ``register_table``, while ``ingest`` creates through the catalog's own door and takes the
-vended ``{root}/{hash}_{ns}${name}``. Without the field the stage runner composed ``{root}/medallion/{ns}``
-and the cascade's first leg read whatever the OTHER writer's layout left there.
+because a client creates bronze through the catalog's own door and takes the vended
+``{root}/{hash}_{ns}${name}`` (ADR 0154). Without the field the stage runner composes ``{root}/medallion/{ns}``,
+where no writer put the rows.
 """
 
 from __future__ import annotations
@@ -53,9 +52,8 @@ _RETRY = {"status": "RETRY"}
 #:
 #: The catalog emits its markers on this very topic, as ``COMPLETE`` events whose single output is the
 #: table's own ``(namespace, name)`` — indistinguishable, on the fields above, from a batch landing. So
-#: the moment the cascade HEAD began registering the bronze it seeds, one ``/produce`` published TWO
-#: matching events and would have driven two unrelated bronze->gold runs over one batch, the second with
-#: a token nothing else in the cascade carries. Registering is a governance act, not an arrival.
+#: a registration of a bronze table would fire a cascade over bytes no write moved, with a token nothing
+#: else in the cascade carries. Registering is a governance act, not an arrival.
 #:
 #: A DENYLIST, not an allowlist of write ops: an external OpenLineage producer names its own operations
 #: (or none), and it must keep firing the head exactly as before. Only the ops the catalog itself stamps
@@ -242,15 +240,14 @@ async def _vended_upstream(settings: MedallionSettings, table_id: str) -> str:
 
     I2 ON THE HEAD, and it is what makes the cascade's first leg independent of WHICH SERVICE CREATED
     THE TABLE. Without it the stage runner falls through to `_resolve_roots`' `{root}/medallion/{namespace}`,
-    a path only `produce.py` writes — so a bronze table that `ingest` created through the catalog's own
-    door lives at the vended `{root}/{hash}_{ns}${name}`, the stage runner opens the composed path, and the
-    cascade fires correctly, wakes, finds none of those rows, and acks 200. `/publication-arrival` has
+    while a bronze table created through the catalog's own door lives at the vended `{root}/{hash}_{ns}${name}`:
+    the stage runner opens the composed path, and the cascade fires correctly, wakes, finds none of those rows,
+    and acks 200. `/publication-arrival` has
     carried the vended location since I2; this is the same field on the other head.
 
     THE ANSWER IS ADVISORY, and every way of not getting one degrades to ``""`` — the composed-path
-    fallback, which is the CORRECT upstream for a produce-first estate (the chart renders
-    `MEDALLION_BRONZE_URI` and the stage runner's `MEDALLION_FROM_URI` from one expression, so the composed
-    path is where those bytes are). The same shape and the same reasoning as `_declared_inputs`
+    fallback, which is the correct upstream only where a table was written at the composed path (the
+    in-process tests seed it there). The same shape and the same reasoning as `_declared_inputs`
     above: a catalog that cannot be read must not stop the head from firing, and a head that answered
     RETRY to a describe outage would halt a cascade that works. Logged, because an unreachable catalog
     is a real fault.
@@ -259,7 +256,7 @@ async def _vended_upstream(settings: MedallionSettings, table_id: str) -> str:
     so this is a claim on an untrusted-by-default field, not a read primitive.
     """
     if not settings.catalog_url:
-        return ""  # the ungoverned dev shape — the same escape hatch `produce.py` and the stage runners keep
+        return ""  # the ungoverned dev shape — the same escape hatch the stage runners keep
     try:
         location = await run_in_threadpool(
             partial(
@@ -329,7 +326,7 @@ async def fire_bronze_arrival(dapr: DaprClient, settings: MedallionSettings, arr
     dataset = arrival.write.lane
     token = _cascade_token(data)
     # THE BATCH IDENTITY IS MINTED HERE (§8 change 9), because this is where a batch begins: one
-    # `/produce`, one bronze write, one cascade. Every tier below carries this same id, so the runs of
+    # bronze write, one cascade. Every tier below carries this same id, so the runs of
     # one batch are joinable in the graph instead of three unrelated hops sharing only a dataset name.
     #
     # SEEDED FROM the bronze-write token rather than a fresh uuid: that token already identifies this

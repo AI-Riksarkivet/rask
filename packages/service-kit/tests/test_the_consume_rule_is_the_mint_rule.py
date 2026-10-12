@@ -15,9 +15,8 @@ the mint rule, and none of them exercises the difference. The row was parked on 
 "adopt or revoke the pre-registry ghost ids"; the measurement is what dissolved it — there are none.
 
 THE ANCHOR DIFFERS BETWEEN THE TWO USES AND THAT IS DELIBERATE, not drift. The compiled guard anchors
-with ``\\Z`` and matches with ``fullmatch``; the pattern string ``PROJECT_PATTERN`` is published on the
-wire as an OpenAPI ``pattern`` (``medallion.api.produce_auth.ProjectParam``), where the consumer is
-pydantic's Rust regex and a JSON Schema reader, neither of which knows ``\\Z``. So the wire string is
+with ``\\Z`` and matches with ``fullmatch``; the pattern string ``PROJECT_PATTERN`` is the form for
+pydantic's Rust regex and a JSON Schema reader, neither of which knows ``\\Z``. So the string is
 ``$``-anchored and the enforcement never relies on it.
 """
 

@@ -8,8 +8,7 @@ deterministic garbage and a raising handler poisons the subscription (DATA-CONTR
 
 Two rules, and they are different kinds of thing:
 
-* :func:`safe_token` is a SHAPE rule, and it is the ONE definition of the cascade token: ``/produce``
-  and ``/ingest-media`` declare their ``Idempotency-Key``, and the re-run verb its ``token``, from
+* :func:`safe_token` is a SHAPE rule, and it is the ONE definition of the cascade token: the re-run verb declares its ``token`` from
   :data:`SAFE_TOKEN_PATTERN` and :data:`SAFE_TOKEN_MAX_LENGTH`, so no door can 202 a token this lane
   DROPs. The training lane is fed by ``/train`` alone and reads a narrower token
   (``services/train.py``'s ``TOKEN_PATTERN``), which that door applies to its own key.

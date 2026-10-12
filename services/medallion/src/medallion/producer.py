@@ -1,17 +1,15 @@
-"""medallion-producer — the dummy Ray ingest job that is the HEAD of the medallion pipeline (FastAPI entry).
+"""medallion-producer — the cascade head and the training and control doors (FastAPI entry).
 
-Event-driven head (GOAL 4 B2, reshaped by R23 — bronze is the FIRST governed tier; raw is the external
-world): ``POST /produce`` (with ``compute_enabled``) seeds a real ``bronze$events`` Lance dataset and
-emits ONE OpenLineage event for it. It does NOT itself publish ``medallion.bronze`` — this app also
-*subscribes* to the shared lineage topic (``/bronze-arrival``), reacts to a bronze-dataset write event,
-and publishes the trigger the ``bronze→silver`` stage runner consumes. So the cascade is driven by the
-*arrival of external raw INTO bronze*, not the call: every stage, the head included, reacts to an event
-on the bus. What drives it is specifically a COMPLETE write whose output matches
-``bronze_namespace``/``bronze_dataset`` (``bronze`` / ``bronze$events``, or a page lane's
-``bronze$pages``) — this dummy today, or a real Ray ingest job that writes that same dataset. (An
-ordinary catalog table write does NOT: its output namespace/name won't match the bronze filter — the
-head reacts to the *bronze* dataset, not to any write.) In production the head is a real Ray Data job
-emitting the same event; here it is a dummy emitter, which is all the event-driven demo needs.
+The head reacts to the catalog: every write the catalog commits is announced on the shared lineage
+topic, and ``/bronze-arrival`` publishes the ``medallion.bronze`` trigger the ``bronze→silver`` stage
+runner consumes when the announcement is a COMPLETE write to the project's bronze table
+(``<project>-bronze$events``) or to a table a lane declares. ``/publication-arrival`` does the same for
+the catalog's ``table_published`` control event, routed per source namespace. The lakehouse writes no
+bronze itself: data enters through the catalog's namespace doors (ADR 0154), and a write to any other
+table does not match the bronze filter.
+
+Beside the head it serves ``POST /train``, the promotion review doors, the stage-runner operator doors,
+the re-run verb and the cascade-lag read.
 
 Run: ``uvicorn medallion.producer:app``. Publishes/subscribes through the local Dapr sidecar (best-effort).
 """
@@ -30,8 +28,6 @@ from fastapi.concurrency import run_in_threadpool
 from medallion.api.bronze_arrival import register_bronze_arrival_route
 from medallion.api.cascade_lag_cron import mount_lag_cron
 from medallion.api.cascade_lag_read import router as cascade_lag_read_router
-from medallion.api.ingest_media import router as ingest_media_router
-from medallion.api.produce import router as produce_router
 from medallion.api.promotions import register_promotion_route
 from medallion.api.promotions import router as promotions_router
 from medallion.api.rerun import router as rerun_router
@@ -95,7 +91,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # `attach_auth` sets `fga`, `oidc` and `sa_oidc`, None when unconfigured: this app's dependencies read the attributes
     # directly rather than through `getattr`. The trainer consumer (#115a) gates as its own identity and the client MUST
     # exist here or the gate is silently off with RASK_FGA_ENABLED=true (review 2026-07-10 caught exactly that bypass),
-    # #64's OIDC verifier is the /produce human door, and `sa_oidc` the service-account verifier a service is admitted by.
+    # #64's OIDC verifier is the human door of /train and the control doors, and `sa_oidc` the service-account verifier a
+    # service is admitted by.
     #
     # `fatal=True` KEEPS THIS APP'S POSTURE: it wrapped neither construction in a `try`, so a failed
     # build has always crashed the pod. That is the loud failure, and the cascade head is not a place
@@ -113,7 +110,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # A signal to the review resolves the instance through the CALLING app's app-id, so the approve
     # route and the instance must share a process. The gate that holds a promotion runs in a stage runner,
     # but a stage runner is bus-only: no gateway row, no Ingress, nothing a person can POST to. Hosting the
-    # workflow here (beside the door, behind the same dual-auth as /produce) is what makes the ask
+    # workflow here (beside the door, behind the same dual-auth as /train) is what makes the ask
     # answerable; the stage runner reaches it by publishing, like every other cascade hop.
     #
     # Without this the door 404s honestly — which is the correct failure, not a working one.
@@ -185,10 +182,6 @@ app = build_lance_service_app(
     log=log,
     ready_check=signing_ready_check(),
 )
-app.include_router(produce_router)
-# The multimodal head (§9): POST /ingest-media lands external media as bronze blobs + triggers the
-# media chain (bronze→silver derive) — the deployed twin of the manual media pipeline scripts.
-app.include_router(ingest_media_router)
 # The event-driven cascade head: subscribe to the lineage topic; a bronze write fires medallion.bronze.
 _dapr_app = register_bronze_arrival_route(app)
 # The Ray TRAIN head (#115a): POST /train + the training-trigger subscription (own topic; submit-and-ack).

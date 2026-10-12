@@ -83,9 +83,9 @@ def test_ingest_ceilings_refuse_without_committing(tmp_path: Path) -> None:
     _write_png(source_dir / "c.png", (0, 0, 10))
     bronze = str(tmp_path / "bronze")
 
-    with pytest.raises(ValueError, match="MEDALLION_INGEST_MAX_OBJECTS"):
+    with pytest.raises(ValueError, match="max_objects"):
         ingest_to_bronze(LocalDirSource(source_dir, "*.png"), bronze, {}, max_objects=2)
-    with pytest.raises(ValueError, match="MEDALLION_INGEST_MAX_TOTAL_BYTES"):
+    with pytest.raises(ValueError, match="max_total_bytes"):
         ingest_to_bronze(LocalDirSource(source_dir, "*.png"), bronze, {}, max_total_bytes=100)
     with pytest.raises(ValueError):  # aborted writes leave orphan files at most — never a manifest
         lance.dataset(bronze)
@@ -94,7 +94,7 @@ def test_ingest_ceilings_refuse_without_committing(tmp_path: Path) -> None:
     assert result.row_count == 3  # under both ceilings → byte-identical behavior
 
     # the ATOMICITY upgrade: a ceiling-tripped RE-ingest leaves the previous bronze fully readable
-    with pytest.raises(ValueError, match="MEDALLION_INGEST_MAX_OBJECTS"):
+    with pytest.raises(ValueError, match="max_objects"):
         ingest_to_bronze(LocalDirSource(source_dir, "*.png"), bronze, {}, max_objects=2)
     survivor = lance.dataset(bronze)
     assert survivor.version == result.version and survivor.count_rows() == 3

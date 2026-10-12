@@ -93,8 +93,8 @@ async def stalled_tiers(settings: SettingsDep, fga_client: FgaClientDep, caller:
 
     edges = await run_in_threadpool(declared_edges, settings)
 
-    # The single-tenant row is project `""`: the unqualified lanes `/produce` writes with no `?project=`,
-    # gated there on the configured project, so it is authorized on that project here.
+    # The single-tenant row is project `""`: the unqualified lanes a write with no tenant drives, so it is
+    # authorized on the configured project, as the admin doors authorize a caller that names none.
     def tenant(project: str) -> str:
         return project or settings.produce_admin_project
 

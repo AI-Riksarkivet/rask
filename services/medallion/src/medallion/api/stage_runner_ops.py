@@ -5,7 +5,7 @@ runner stops its job through the compute engine and closes the plan. But a stage
 row, no Ingress, nothing a person can POST to, so a route hosted only there would be a lever nobody can pull.
 
 So: the producer authenticates and AUTHORIZES (it has the gateway row and already runs the dual-auth door for
-`/produce` and `/train`), then forwards to the stage runner's ClusterIP with its own projected `rask-medallion`
+`/train`), then forwards to the stage runner's ClusterIP with its own projected `rask-medallion`
 token. The stage runner admits that account alone on these routes and does the work under its own identity.
 
 AUTHORIZED ON THE RUN, not on a caller-chosen project (owner ruling 2026-09-25). The producer asks the hosting stage
@@ -89,8 +89,8 @@ async def list_stage_runners(settings: SettingsDep, _caller: ConfigReader) -> St
 def _run_project(settings: MedallionSettings, state: Any) -> str | None:
     """The project a stage run belongs to, as its hosting stage runner read it off the run's plan, or ``None`` if unknowable.
 
-    ``""`` is a single-tenant run: its plan records no project, which is the cascade `/produce` starts
-    with none, gated there on the configured project. A missing key is a stage runner that cannot say,
+    ``""`` is a single-tenant run: its plan records no project, which is a cascade whose bronze write named
+    no tenant, gated on the configured project. A missing key is a stage runner that cannot say,
     and is never read as single-tenant.
     """
     project = state.get("project") if isinstance(state, dict) else None

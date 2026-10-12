@@ -67,8 +67,6 @@ spec:
             {{- end }}
             - { name: MEDALLION_BRONZE_DATASET, value: {{ .Values.medallion.producer.bronzeDataset | quote }} }
             - { name: MEDALLION_BRONZE_NAMESPACE, value: {{ .Values.medallion.producer.bronzeNamespace | quote }} }
-            - { name: MEDALLION_PRODUCER_OPERATION, value: {{ .Values.medallion.producer.operation | quote }} }
-            - { name: MEDALLION_PRODUCER_AUTHOR, value: {{ .Values.medallion.producer.author | quote }} }
             - { name: MEDALLION_BRONZE_TOPIC, value: {{ .Values.medallion.producer.bronzeTopic | quote }} }
             {{- if .Values.catalog.controlEmit }}
             - { name: MEDALLION_CONTROL_PUBSUB, value: "{{ required "pubsub.controlName must be set when catalog.controlEmit is on — an empty value silently disables the medallion publication head" .Values.pubsub.controlName }}-{{ .Values.medallion.producer.daprAppId }}" }
@@ -150,7 +148,6 @@ spec:
             - { name: MEDALLION_LANE_DESTINATION_DATASETS, value: {{ toJson $laneOutputs | quote }} }
             - { name: MEDALLION_CASCADE_LAG_BINDING_NAME, value: {{ $.Values.medallion.cascadeLag.bindingName | quote }} }
             {{- end }}
-            - { name: MEDALLION_CATALOG_ROOT, value: {{ printf "s3://%s" .Values.minio.bucket | quote }} }
             - { name: MEDALLION_FGA_SERVICE_IDENTITY, value: {{ .Values.medallion.producer.serviceIdentity | quote }} }
             {{- with include "lance.signingEnv" (list $root .Values.medallion.producer.daprAppId) }}{{ . | nindent 12 }}{{- end }}
             {{- with include "lance.doorEnv" (list $root true (list "medallion_producer" "catalog")) }}{{ . | nindent 12 }}{{- end }}
@@ -164,13 +161,7 @@ spec:
             - { name: MEDALLION_COMPUTE_ENABLED, value: "true" }
             - { name: MEDALLION_BRONZE_URI, value: "s3://{{ include "lance.stageBucket" (list . .Values.medallion.producer.bronzeNamespace) }}/medallion/{{ .Values.medallion.producer.bronzeNamespace }}" }
             - { name: MEDALLION_STAGE_BASE_URI, value: "s3://{{ include "lance.stageBucket" (list . "silver") }}/medallion" }
-            - { name: MEDALLION_MEDIA_SOURCE_BUCKET, value: {{ .Values.minio.bucket | quote }} }
-            - { name: MEDALLION_MEDIA_SEED_SAMPLES, value: {{ hasKey .Values.medallion "mediaSeedSamples" | ternary .Values.medallion.mediaSeedSamples true | quote }} }
 
-            {{- $mediaBronzeNs := .Values.medallion.mediaBronzeNamespace | default "bronze-media" }}
-            - { name: MEDALLION_MEDIA_BRONZE_URI, value: "s3://{{ include "lance.stageBucket" (list . $mediaBronzeNs) }}/medallion/{{ $mediaBronzeNs }}" }
-            - { name: MEDALLION_MEDIA_BRONZE_NAMESPACE, value: {{ $mediaBronzeNs | quote }} }
-            - { name: MEDALLION_MEDIA_BRONZE_DATASET, value: "{{ $mediaBronzeNs }}$objects" }
             - { name: MEDALLION_S3_ENDPOINT, value: "{{ include "lance.s3Endpoint" . }}" }
 
 
@@ -328,7 +319,6 @@ spec:
             {{- end }}
             - { name: MEDALLION_CODE_VERSION, value: {{ include "lance.catalogImage" $root | quote }} }
             - { name: MEDALLION_CATALOG_URL, value: {{ printf "http://%s-catalog:%v" (include "lance.fullname" $root) $root.Values.services.catalog.port | quote }} }
-            - { name: MEDALLION_CATALOG_ROOT, value: {{ printf "s3://%s" $root.Values.minio.bucket | quote }} }
             {{- if $root.Values.medallion.quality }}
             - { name: MEDALLION_QUALITY_ENABLED, value: "true" }
             - { name: MEDALLION_QUALITY_KEY_COLUMN, value: {{ $root.Values.medallion.qualityKeyColumn | quote }} }

@@ -18,7 +18,7 @@ exceeded` and 7 of the LIVENESS probe in 22 minutes. Two consequences, and the s
     nearly spent, and the restart would land mid-cascade on a service whose whole job is durable work.
 
 The tick is not too slow — it is in the wrong place. `run_in_threadpool` is what the rest of this
-service already does with blocking work (`media_produce.py` wraps `register_written_dataset` in it).
+service already does with blocking work (`ingest_trigger.py` wraps `describe_table_location` in it).
 
 THE ASSERTION IS THE THREAD, AND A PROBE-RESPONSIVENESS TEST WAS TRIED AND DISCARDED. The obvious
 shape — hold the tick, ask `/livez`, fail on a timeout — cannot detect this defect: a blocked loop

@@ -4,7 +4,7 @@
 The quality gate runs in the `silver-to-gold` stage runner, so the obvious design hosts `promotion_review`
 there — and then the approve route has to be there too, on a bus-only worker with no gateway row and
 no Ingress path. Putting only the ROUTE on `medallion-producer` (which has both, and already runs the
-dual-auth door for `/produce` and `/train`) does not work either: the producer's sidecar looks for the
+dual-auth door for `/train`) does not work either: the producer's sidecar looks for the
 instance under its own app-id, does not find it, and **accepts the call anyway**. Not an error — a
 success, for an approval that will never be delivered, with the promotion left to expire on its timer.
 

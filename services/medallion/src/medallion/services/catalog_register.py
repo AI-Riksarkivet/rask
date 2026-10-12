@@ -21,31 +21,13 @@ through the catalog's OWN door (`POST /v1/table/{id}/create` when `describe` 404
 location from that response, and `transform.py` calls it BEFORE the write. Registration is still the
 goal; asking first is how the goal is reached.
 
-TWO DOORS, AND WHICH ONE A WRITER USES IS DECIDED BY WHO OWNS ITS LOCATION. A STAGE RUNNER asks
-(`ensure_stage_output`): nothing else names where its output lives, so the catalog's answer is the
-only answer. The CASCADE HEAD tells (`register_written_dataset`): `POST /produce` writes to
-`MEDALLION_BRONZE_URI`, which `chart/templates/medallion.yaml` renders from the same expression as the
-bronze->silver stage runner's `MEDALLION_FROM_URI` — the head's location is a DEPLOYMENT CONTRACT the chart
-already states, not something the catalog has to be asked for. `register_table` is the door built for
-exactly that case (bytes written outside the catalog's own doors), and it needs no WAREHOUSE, which is
-why it reaches the medallion path in the reserved platform bucket that no warehouse may ever claim.
-
-A THIRD, READ-ONLY DOOR sits beside them: `describe_table_location`, which asks where a table that
+A SECOND, READ-ONLY DOOR sits beside it: `describe_table_location`, which asks where a table that
 ALREADY EXISTS lives and creates nothing. It is what lets a consumer — the cascade head, which writes
-no table of its own — name the upstream a stage runner should open instead of leaving it to compose a path,
-and it is what keeps the ingest/produce creation ORDER from deciding whether the cascade's first leg
-reads anything.
+no table of its own — name the upstream a stage runner should open instead of leaving it to compose a path.
+The bronze tier is written by a client through the catalog's own namespace doors (ADR 0154), so the
+catalog vends its location and only the catalog can say where it is.
 
-This paragraph used to say the telling form was GONE, and for a while it was: `register_stage_output`
-outlived its last caller when the stage runners' ordering was fixed, and three suites went on stubbing a door
-nothing opened. What was actually wrong with it was never the direction — it was that a STAGE RUNNER used it.
-The form is back, once, for the one writer whose location is a deployment contract rather than a guess,
-and the two lessons it paid for are kept: it mints no namespace (a top-level parent belongs to the
-warehouse, and `require_warehouse_scoped` refuses one outright — measured in-cluster, every hop
-dead-lettered on that 400), and a 409 is convergence only after the catalog CONFIRMS it governs the
-location the caller wrote.
-
-Ordering is unchanged either way: registration strictly precedes the first row, so there is no window
+Registration strictly precedes the first row, so there is no window
 in which rows exist that the catalog has no record of.
 """
 
@@ -54,7 +36,6 @@ from __future__ import annotations
 import logging
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
-from enum import StrEnum
 
 import httpx
 import pyarrow as pa
@@ -76,35 +57,6 @@ class RegisterError(RuntimeError):
     catalog outage is rarer than a Serve one; splitting the stage into resumable halves is P7b's
     re-cut, not a quiet retry layer here.
     """
-
-
-class LocationConflictError(RegisterError):
-    """The catalog governs this table at a DIFFERENT location than this writer writes — permanent.
-
-    A SUBCLASS BECAUSE THE DIFFERENCE IS THE STATUS CODE, not the severity. Every caller that catches
-    `RegisterError` keeps catching this; the produce route is the one place that has to tell them apart,
-    because it answers a transient failure `503` + `Retry-After: 5` on the reasoning that "nothing
-    happened and the caller's retry converges". That reasoning is true of an unreachable catalog and
-    FALSE here: no retry re-points a registration, and the remedy this error already names — deregister,
-    then register at the written location — is an operator action, not a wait.
-
-    § Q9-4's words for the old behaviour are exact: "promising a convergence no retry can produce. The
-    next tenant whose catalog and head disagree is 503 again." It is the shape § H10 already cost the
-    estate once — a refusal answered with advice the caller cannot act on.
-    """
-
-
-class Registration(StrEnum):
-    """Which of the two successes :func:`register_written_dataset` had: whether THIS call made the record.
-
-    The difference decides who may take the record back. A writer that registers before it writes unwinds a failed
-    write by deregistering, and that is only its to do when the register created the record: the catalog answers a
-    register of an id it already governs with 409, and that record is another call's, governing bytes another call
-    wrote ([[LH-194]]).
-    """
-
-    CREATED = "created"
-    EXISTING = "existing"
 
 
 def credential(identity_token_file: str) -> dict[str, str]:
@@ -410,148 +362,3 @@ def describe_table_location(
         if described.status_code >= 400:
             return None
         return _stated_location(described) or None
-
-
-def relative_location(dataset_uri: str, catalog_root: str) -> str:
-    """``dataset_uri`` expressed relative to the catalog's connection root, or raise naming both.
-
-    `register_table` addresses a location INSIDE the root it is connected to and nowhere else —
-    measured against the real door: an absolute path answers *"Absolute paths are not allowed for
-    register_table"* (400) and an absolute URI the same. So a dataset zoned into its own bucket is
-    unregisterable through this door, and that is a refusal rather than a fallback: writing bytes the
-    catalog cannot name is precisely the ungoverned state the caller is trying to leave.
-    """
-    root = catalog_root.rstrip("/")
-    if not root:
-        raise RegisterError(
-            f"cannot register {dataset_uri!r}: MEDALLION_CATALOG_ROOT is unset, so no location relative to the catalog's connection root can be formed"
-        )
-    if not dataset_uri.startswith(root + "/"):
-        raise RegisterError(
-            f"cannot register {dataset_uri!r}: it is not under the catalog root {catalog_root!r} "
-            "(register_table addresses only paths inside the root it is connected to — a dataset zoned into "
-            "another bucket cannot be governed through this door)"
-        )
-    return dataset_uri[len(root) + 1 :]
-
-
-def register_written_dataset(
-    *,
-    catalog_url: str,
-    catalog_root: str,
-    table_id: str,
-    dataset_uri: str,
-    delimiter: str = CATALOG_DELIMITER,
-    identity_token_file: str,
-    timeout_seconds: float = 30.0,
-    client: httpx.Client | None = None,
-) -> Registration:
-    """Attach the dataset at ``dataset_uri`` to the catalog as ``table_id``; 409 means already governed.
-
-    THE DOOR FOR A WRITER THAT OWNS ITS OWN LOCATION — see this module's header for why the cascade
-    head is one and a stage runner is not. Registering is what turns written bytes into a ``table:`` object:
-    it seeds the caller's FGA ownership through the catalog's own door, and every governed path —
-    the maintenance policy, the protection record, trash/undrop, credential vending, the FGA doors —
-    keys off that object rather than off the bytes.
-
-    Workload-neutral by construction, like everything else here: an id and a URI. It creates no
-    namespace — a top-level parent is the WAREHOUSE's to make, and asking for one is refused 400 by
-    `require_warehouse_scoped` before the existence check ever runs, so a lane that tried it
-    dead-lettered every hop.
-
-    Returns :attr:`Registration.CREATED` when this call made the record and :attr:`Registration.EXISTING` when the
-    catalog already governed this location, so a caller unwinds only what it made.
-
-    Raises :class:`RegisterError` on anything short of success, ``catalog_url`` unset included: a tier
-    the catalog cannot govern must not report success.
-    """
-    if not catalog_url:
-        raise RegisterError("MEDALLION_CATALOG_URL is not set — this writer cannot register the dataset it lands")
-    location = relative_location(dataset_uri, catalog_root)
-    segments = table_id.split(delimiter)
-    headers = credential(identity_token_file)
-    with _catalog_client(catalog_url, timeout_seconds, client) as client:
-        try:
-            response = client.post(f"/v1/table/{table_id}/register", json={"id": segments, "location": location}, headers=headers)
-        except httpx.HTTPError as exc:
-            raise RegisterError(f"catalog unreachable registering {table_id!r}: {exc}") from exc
-        if response.status_code == 409:
-            # Already registered — every call after the first lands here. But "already registered" is
-            # not "registered WHERE I write", and the difference is invisible from this side. Measured
-            # live once: a table was registered against a leftover warehouse while its writer wrote
-            # elsewhere; the 409 read as convergence, and the publish that followed opened the stale
-            # location and found nothing. Inside the `with`, so the check reuses this client.
-            _require_same_location(client, table_id, location, catalog_root, headers)
-            log.info("written_dataset_already_registered", extra={"table_id": table_id, "location": location})
-            return Registration.EXISTING
-        if response.status_code >= 400:
-            raise RegisterError(f"catalog refused to register {table_id!r}: HTTP {response.status_code} — {response.text[:300]}")
-    log.info("written_dataset_registered", extra={"table_id": table_id, "location": location})
-    return Registration.CREATED
-
-
-def deregister_dataset(
-    *,
-    catalog_url: str,
-    table_id: str,
-    delimiter: str = CATALOG_DELIMITER,
-    identity_token_file: str,
-    timeout_seconds: float = 30.0,
-    client: httpx.Client | None = None,
-) -> None:
-    """Detach ``table_id`` from the catalog, leaving whatever bytes exist where they are.
-
-    THE UNWIND FOR A REGISTRATION WHOSE WRITE NEVER LANDED. `produce` registers the cascade head
-    before seeding it — "governance precedes the first row", because the head was the one tier the
-    catalog had never heard of — and an unguarded seed failure used to leave the record behind
-    governing a location that holds nothing. Measured on the live estate 2026-09-23: `bronze$events`
-    registered at `s3://lance-catalog/medallion/bronze`, reported by the drift report's
-    `absent_datasets`, with no bytes at that path.
-
-    DEREGISTER AND NOT DROP: the two doors answer different questions. A drop destroys, and destroying
-    is exactly wrong here — the seed may have written some bytes before it raised, and this call must
-    never be the thing that removes them. Deregister detaches the record and is the reverse of the
-    `register` that created it.
-
-    A 404 IS SUCCESS. The unwind runs on a failure path, so it must converge whether or not the
-    registration ever landed: the state it is asked to produce is "no record", and a table the catalog
-    does not know is already in that state.
-    """
-    if not catalog_url:
-        raise RegisterError("MEDALLION_CATALOG_URL is not set — this writer cannot deregister the dataset it registered")
-    segments = table_id.split(delimiter)
-    headers = credential(identity_token_file)
-    with _catalog_client(catalog_url, timeout_seconds, client) as client:
-        try:
-            response = client.post(f"/v1/table/{table_id}/deregister", json={"id": segments}, headers=headers)
-        except httpx.HTTPError as exc:
-            raise RegisterError(f"catalog unreachable deregistering {table_id!r}: {exc}") from exc
-        if response.status_code == 404:
-            log.info("written_dataset_already_absent", extra={"table_id": table_id})
-            return
-        if response.status_code >= 400:
-            raise RegisterError(f"catalog refused to deregister {table_id!r}: HTTP {response.status_code} — {response.text[:300]}")
-    log.info("written_dataset_deregistered", extra={"table_id": table_id})
-
-
-def _require_same_location(client: httpx.Client, table_id: str, location: str, catalog_root: str, headers: dict[str, str]) -> None:
-    """Refuse a 409 whose registration points somewhere other than where this writer writes.
-
-    An unreadable describe is NOT agreement: a check that cannot be made has not passed, and treating
-    it as one restores the exact silence this closes.
-    """
-    try:
-        described = client.post(f"/v1/table/{table_id}/describe", json={}, headers=headers)
-    except httpx.HTTPError as exc:
-        raise RegisterError(f"catalog unreachable verifying where {table_id!r} is registered: {exc}") from exc
-    if described.status_code >= 400:
-        raise RegisterError(
-            f"{table_id!r} is already registered but the catalog would not say where (HTTP {described.status_code}) — refusing to assume it matches {location!r}"
-        )
-    registered = str((described.json() or {}).get("location") or "")
-    expected = f"{catalog_root.rstrip('/')}/{location.lstrip('/')}"
-    if registered.rstrip("/") != expected.rstrip("/"):
-        raise LocationConflictError(
-            f"{table_id!r} is registered at {registered!r} but this writer writes {expected!r} — the catalog governs a different copy of this table. "
-            "Re-point the registration (deregister, then register at the written location) rather than letting the two drift."
-        )

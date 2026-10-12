@@ -1,30 +1,22 @@
-"""A cascade head must not accept an unkeyed write while its sidecar replays 5xx.
+"""A write door must not accept an unkeyed write while its sidecar replays 5xx.
 
 open_fastapi-audit — "The Dapr sidecar's automatic 5xx retry is aimed at write doors whose
-idempotency key is optional, so one operator click can start four unrelated bronze→gold cascades".
+idempotency key is optional, so one operator click can start four unrelated runs".
 
 THE MECHANISM. `dapr-resiliency.yaml` gives the invoked app-ids `invokeRetry` — constant, 2s, 3
-retries, matching `408,429,500-599`. The write doors then do `token = token or uuid.uuid4().hex[:12]`
-per attempt (`produce.py:75`, `train.py:144`, `media_produce.py:109`, and `ingest/api.py:221`). A
-replayed 500 therefore does not converge on the first run: it mints a NEW token and starts a second,
-third and fourth unrelated cascade from bronze.
+retries, matching `408,429,500-599`. A write door that mints `token = token or uuid4()` per attempt
+does not converge on a replayed 500: each attempt starts another unrelated run.
 
 `python-infrastructure`'s rule is explicit and offers exactly two outs: "Always pair retry with an
-idempotency key OR mark the operation non-retryable." This closes BOTH — the key becomes required,
-and 500 leaves the retry matcher for these app-ids, so the only statuses replayed are the ones whose
-door has an explicit `Retry-After` contract.
+idempotency key OR mark the operation non-retryable." This closes BOTH — the key is required, and 500
+leaves the retry matcher for these app-ids, so the only statuses replayed are the ones whose door has
+an explicit `Retry-After` contract.
 
 WHY REQUIRED RATHER THAN DEFAULTED. `token = token or uuid4()` is not a safe default: it is the
 platform layer inventing the one value only the CALLER can hold stable across attempts. The estate
 already asserts this elsewhere — `tests/unit/test_publish_saga.py` refuses a minted token because
 "inventing a token here would defeat the entire idempotency argument". A 422 naming the missing
-header is a better answer than a silently duplicated cascade.
-
-`/api/ingests` IS included, against the finding's own analysis half. That analysis says the door
-"converges correctly" and should be struck — true only when the caller sends a key. `ingest/api.py`
-does `key = idempotency_key or uuid.uuid4().hex` exactly like its three siblings, so an unkeyed
-caller double-fires there too. The compute zone happens to send a deterministic key; curl and
-`scripts/` do not, and those are the callers least likely to.
+header is a better answer than a silently duplicated run.
 """
 
 from __future__ import annotations
@@ -34,7 +26,7 @@ import pathlib
 import pytest
 
 
-#: Doors whose key is REQUIRED. Each is a cascade head with no spec above it, so the estate is free to
+#: Doors whose key is REQUIRED. Each starts a run and has no spec above it, so the estate is free to
 #: demand the one value only the caller can hold stable across attempts.
 #:
 #: THE CATALOG IS DELIBERATELY ABSENT, and it is on `_WRITE_APP_IDS` below, which reads like a
@@ -45,10 +37,7 @@ import pytest
 #: matcher) and offers the key as OPTIONAL convergence for the replays that remain. Adding it here
 #: would be asserting the wrong thing about the wrong plane.
 DOORS = [
-    ("medallion.api.produce", "/produce"),
-    ("medallion.api.ingest_media", "/ingest-media"),
     ("medallion.api.train", "/train"),
-    ("ingest.api", "/ingests"),
 ]
 
 
@@ -83,12 +72,12 @@ def test_the_write_door_REQUIRES_an_idempotency_key(module: str, path: str) -> N
 
 #: App-ids whose routes include a cascade head. A 500 from one of these is NOT safe to replay
 #: blindly: the run either started or did not, and only the caller's key can tell the difference.
-#: App-ids taken OFF the 500-retry. The first two are the cascade heads, which pair the narrow policy
-#: with a required `Idempotency-Key`. `catalog` joined 2026-09-09 on the rule's OTHER branch — "pair
+#: App-ids taken OFF the 500-retry. `medallion-producer` pairs the narrow policy with a required
+#: `Idempotency-Key` on `/train`. `catalog` joined 2026-09-09 on the rule's OTHER branch — "pair
 #: retry with an idempotency key OR mark the operation non-retryable" — because it has 91 write routes
 #: and no key on any of them (§ Q17-32). When the key lands there, it keeps this policy AND gains the
 #: pairing; the two halves cover what the other misses, which is why the rule says do both.
-_WRITE_APP_IDS = ("medallion-producer", "ingest", "catalog")
+_WRITE_APP_IDS = ("medallion-producer", "catalog")
 
 
 def test_a_cascade_head_is_not_replayed_on_a_bare_500() -> None:

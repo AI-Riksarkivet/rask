@@ -1,13 +1,11 @@
 """A stage runner opens the upstream the CATALOG vends, not the path its chart composed.
 
-The other half of rule I2, and the half without which the media head's fix strands the lane. The head
-now asks the catalog where `bronze-media$objects` lives and writes there
-(`test_the_media_head_asks_where_its_bronze_lives`), and names that location on the
-`medallion.media` trigger. `_confine_from_uri` honours a trigger-supplied upstream only INSIDE
+The other half of rule I2. A head names the location the catalog vends for the arrived table on the
+stage trigger. `_confine_from_uri` honours a trigger-supplied upstream only INSIDE
 `read_root`, and for a project-less trigger `read_root` was `MEDALLION_FROM_URI` — a composed
 `{root}/medallion/{namespace}` in the reserved platform bucket. The vended location lives in the
 warehouse the namespace is BOUND to, i.e. a different bucket, so the stage runner would have refused the
-head's own answer as unconfined and DROPped every media arrival.
+head's own answer as unconfined and DROPped every arrival.
 
 `_confine_from_uri` names this limit outright — "Making it WORK single-tenant means resolving a real
 storage root here — the catalog's connection root is the candidate, and it is not free". This takes
@@ -98,7 +96,7 @@ async def test_a_table_the_catalog_does_not_govern_keeps_the_composed_path() -> 
 async def test_a_catalog_that_cannot_be_ASKED_raises_rather_than_composing() -> None:
     """A 5xx is not "no such table". Collapsing the two would let an outage read as a governance
     answer and send this stage runner at a path that may not be the governed copy — the exact class of
-    silent divergence that made `/ingest-media` 503 for days."""
+    silent divergence this seam exists to close."""
     _describe("", status=503)
 
     with pytest.raises(catalog_register.RegisterError):

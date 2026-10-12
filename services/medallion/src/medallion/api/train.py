@@ -104,7 +104,7 @@ async def train(
     idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=1, max_length=64, pattern=TOKEN_PATTERN)],
 ) -> dict[str, Any] | JSONResponse:
     """Request a training run: pin feature versions (omitted → LATEST, resolved HERE) and publish the
-    training trigger — 202 with the correlation ``token`` and the run's ``instance_id``. Token-guarded like ``/produce``; a disabled
+    training trigger — 202 with the correlation ``token`` and the run's ``instance_id``. Token-guarded; a disabled
     head (no training engine / S3 / bronze URI) is an explicit 409, a lost trigger an explicit 503 — never a 202
     that silently trains nothing."""
     if not train_head_enabled(settings):

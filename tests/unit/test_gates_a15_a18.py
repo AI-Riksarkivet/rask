@@ -24,7 +24,7 @@ from dapr.aio.clients import DaprClient
 from medallion.core.config import MedallionSettings
 from medallion.services import transform
 from medallion.services.catalog_register import PublishOutcome
-from medallion.services.produce import produce
+from medallion.services.compute import seed_bronze
 from medallion.services.transform import handle_stage
 
 
@@ -44,8 +44,7 @@ class _FakeDapr:
 
 def _bronze(tmp_path: Path) -> str:
     uri = str(tmp_path / "bronze")
-    settings = MedallionSettings.model_validate({"compute_enabled": True, "bronze_uri": uri})
-    asyncio.run(produce(cast(DaprClient, _FakeDapr()), settings, token="idem-test"))
+    seed_bronze(uri, {}, dataset_id="bronze$events")
     return uri
 
 

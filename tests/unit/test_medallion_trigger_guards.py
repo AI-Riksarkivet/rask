@@ -4,8 +4,8 @@
 Two of its fields used to be read straight off the wire with no shape check at all:
 
 * **`token`** — which seeds the deterministic lineage run id, rides the `lance` run facet into the
-  graph, and names the stage's workflow instance. It is also the key a cascade head accepted, so the
-  lane and the doors that feed it read ONE grammar: a door wider than the lane answers 202 for a
+  graph, and names the stage's workflow instance. It is also the token the re-run door accepts, so the
+  lane and the door that feeds it read ONE grammar: a door wider than the lane answers 202 for a
   cascade the lane then DROPs;
 * **`from_uri`** — which becomes the URI the stage runner OPENS with its own object-store credentials
   (`compute.read_upstream` → `lance.dataset(uri, storage_options=settings.storage_options())`), and
@@ -35,16 +35,11 @@ from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
 
 import medallion.services.transform as stage_runner
-from medallion.api import ingest_media as ingest_media_api
-from medallion.api import produce as produce_api
 from medallion.api import rerun as rerun_api
 from medallion.api.dependencies import get_dapr, get_fga_client, get_settings
-from medallion.api.produce_auth import authorize_ingest_media, authorize_produce
 from medallion.core.config import MedallionSettings
-from medallion.services import inprocess_executor, media_produce, trigger_guards
+from medallion.services import inprocess_executor, trigger_guards
 from medallion.services.compute import UpstreamFacts, WriteResult
-from medallion.services.ingest import IngestResult
-from medallion.services.ingest_trigger import handle_bronze_arrival
 from medallion.services.transform import handle_stage
 from medallion.services.trigger_guards import safe_token, uri_within
 from service_kit.lakehouse import warehouse_registry
@@ -213,75 +208,6 @@ def _stage_run_token(bus: _FakeDapr, settings: MedallionSettings, since: int) ->
     """The token on the COMPLETE the stage emitted — proof the lane RAN the key, not merely parsed it."""
     run = next(p for p in bus.published[since:] if p["topic"] == settings.lineage_topic)
     return run["data"]["run"]["facets"]["lance"]["token"]
-
-
-@pytest.mark.parametrize(("key", "runs"), _CASCADE_KEYS)
-def test_produce_202s_exactly_the_keys_its_stage_lane_runs(tmp_path: Path, reads: _Reads, key: str, runs: bool) -> None:
-    """`POST /produce` -> `/bronze-arrival` -> the bronze->silver stage, on ONE bus.
-
-    The key reaches the stage as the bronze write's `lance.token`, and each hop is fed exactly what the
-    hop before it published — so a door wider than the lane, a door that rewrites its key, or a head
-    that drops it fails here. A refused key publishes nothing.
-    """
-    bus = _FakeDapr()
-    head = MedallionSettings.model_validate({})  # compute off: the head emits its bronze write without seeding one
-
-    door = _door(produce_api.router, head, bus, {authorize_produce: lambda: None}).post("/produce", headers={"Idempotency-Key": key})
-
-    assert door.status_code == (202 if runs else 422), door.text
-    if not runs:
-        assert bus.published == [], "a refused key published a cascade head"
-        return
-    assert door.json()["token"] == key
-    (bronze_write,) = bus.published
-    assert asyncio.run(handle_bronze_arrival(cast(DaprClient, bus), head, {"data": bronze_write["data"]})) == _SUCCESS
-    trigger = bus.published[-1]
-    assert trigger["topic"] == head.bronze_topic
-    stage = _stage_runner(from_uri=str(tmp_path / "bronze"), to_uri=str(tmp_path / "silver"))
-    since = len(bus.published)
-    assert asyncio.run(handle_stage(cast(DaprClient, bus), stage, {"data": trigger["data"]})) == _SUCCESS
-    assert _stage_run_token(bus, stage, since) == key
-
-
-_MEDIA_BRONZE = "s3://lake/medallion/bronze-media"
-
-
-@pytest.mark.parametrize(("key", "runs"), _CASCADE_KEYS)
-def test_ingest_media_202s_exactly_the_keys_its_stage_lane_runs(tmp_path: Path, reads: _Reads, monkeypatch: pytest.MonkeyPatch, key: str, runs: bool) -> None:
-    """`POST /ingest-media` -> the bronze-media->silver-media stage, on ONE bus. The media head publishes
-    its own trigger, so the key reaches the lane in one hop."""
-    bus = _FakeDapr()
-    head = MedallionSettings.model_validate(
-        {
-            "compute_enabled": True,
-            "s3_endpoint": "http://rustfs:9000",
-            "s3_secret_access_key": "k",
-            "media_bronze_uri": _MEDIA_BRONZE,
-            "media_source_bucket": "media-src",
-        }
-    )
-    landed = IngestResult(version=1, row_count=1, source_uris=["s3://media-src/batch/a.png"], fields=[])
-    monkeypatch.setattr(media_produce, "_seed_and_ingest", lambda *_a: landed)
-
-    door = _door(ingest_media_api.router, head, bus, {authorize_ingest_media: lambda: None}).post("/ingest-media", headers={"Idempotency-Key": key})
-
-    assert door.status_code == (202 if runs else 422), door.text
-    if not runs:
-        assert bus.published == [], "a refused key published a media head"
-        return
-    assert door.json()["token"] == key
-    trigger = next(p for p in bus.published if p["topic"] == head.media_topic)
-    stage = _stage_runner(
-        from_namespace=head.media_bronze_namespace,
-        from_dataset=head.media_bronze_dataset,
-        to_namespace="silver-media",
-        to_dataset="silver-media$objects",
-        from_uri=_MEDIA_BRONZE,
-        to_uri=str(tmp_path / "silver-media"),
-    )
-    since = len(bus.published)
-    assert asyncio.run(handle_stage(cast(DaprClient, bus), stage, {"data": trigger["data"]})) == _SUCCESS
-    assert _stage_run_token(bus, stage, since) == key
 
 
 @pytest.mark.parametrize(("key", "runs"), _CASCADE_KEYS)

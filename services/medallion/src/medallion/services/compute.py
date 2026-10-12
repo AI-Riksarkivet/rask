@@ -1,8 +1,7 @@
 """The fake-Ray in-process Lance compute for the medallion cascade (the medallion-producer seam, #25 / P1 #6).
 
-Default OFF (``MEDALLION_COMPUTE_ENABLED``): the stage runners/producer stay dummy-emitters (lineage, no data).
-When on, each stage does a **real** Lance write — the producer seeds ``bronze$events`` (the first governed
-tier, R23); each stage runner reads its upstream Lance dataset, applies a stage transform, and writes the
+Default OFF (``MEDALLION_COMPUTE_ENABLED``): the stage runners stay dummy-emitters (lineage, no data).
+When on, each stage does a **real** Lance write — each stage runner reads its upstream Lance dataset, applies a stage transform, and writes the
 downstream one — so the emitted lineage carries the **real** Lance version and the whole event-driven loop
 produces actual versioned data, not just provenance.
 
@@ -93,7 +92,7 @@ class WriteResult(BaseModel):
     #: the standard ``columnLineage`` facet so the LIVE cascade populates the field-to-field graph (#1), not
     #: just ``seed.py``. Populated by :func:`transform_stage` (in-process, from the table it just built) and
     #: by :func:`measure_stage` (distributed, RECONSTRUCTED from the on-disk schemas of a write this process
-    #: never saw). Empty only where there is genuinely nothing to declare: the bronze ingest head (no governed upstream), the
+    #: never saw). Empty only where there is genuinely nothing to declare: a bronze seed (no governed upstream), the
     #: dummy compute-off emit, and a bare :func:`measure` — which is why a stage the Ray job wrote MUST be
     #: read back with ``measure_stage``, or its columnLineage facet silently disappears.
     column_map: list[tuple[str, str, str]] = Field(default_factory=list)
@@ -204,11 +203,10 @@ def measure_stage(from_uri: str, to_uri: str, storage_options: dict[str, str], *
 
 
 def seed_bronze(uri: str, storage_options: dict[str, str], *, rows: int = 8, dataset_id: str | None = None) -> WriteResult:
-    """Seed a small synthetic ``bronze$events`` dataset — the fake medallion-producer ingest at the head of the
-    cascade (R23: the producer writes the first governed tier directly; there is no raw dataset).
+    """Seed a small synthetic ``bronze$events`` dataset in the shape a governed bronze tier holds.
 
-    Carries the ``stage`` stamp the retired raw→bronze stage runner used to apply (merged into the bronze ingest
-    head). Overwrites any existing dataset (idempotent re-seed) and returns the resulting Lance version +
+    The lakehouse writes no bronze itself (ADR 0154); the in-process suites and the dev tooling seed one with
+    this to drive the stage runners. Carries the ``stage`` stamp every governed tier carries. Overwrites any existing dataset (idempotent re-seed) and returns the resulting Lance version +
     the measured output statistics (rows + on-disk bytes) the emit records as an ``outputStatistics`` facet.
     """
     table = pa.table(

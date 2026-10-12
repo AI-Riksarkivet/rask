@@ -45,7 +45,7 @@ def register_tasks(settings: MedallionSettings) -> int:
     NON-FATAL, and the failure is legible rather than silent: a registration that cannot be written
     leaves the catalog's declaration door answering 422 naming the exact task that is missing, which
     is a better answer than a cascade head that refuses to start. Crashing here would take down
-    ``/produce`` — the whole ingest surface — over a capability nothing has asked for yet.
+    the cascade head and ``/train`` over a capability nothing has asked for yet.
     """
     declared = [(task, IN_PROCESS_ENGINE) for task in settings.inprocess_tasks]
     declared += [(task, name) for name, engine in settings.engines.items() for task in engine.tasks]

@@ -1,7 +1,7 @@
 """Unit tests for the fake-Ray medallion compute (#25 / P1 #6 seam) — real Lance, no S3/Dapr.
 
 Drives the in-process Lance read→transform→write against a temp directory (Lance writes local paths with
-empty ``storage_options``), then proves the stage runner/producer WIRING carries the REAL Lance version into the
+empty ``storage_options``), then proves the stage runner's WIRING carries the REAL Lance version into the
 emitted OpenLineage event — i.e. with compute on, the event-driven cascade produces actual versioned data,
 not just provenance. The async handlers are driven with stdlib ``asyncio.run`` (the project convention).
 """
@@ -18,7 +18,6 @@ from dapr.aio.clients import DaprClient
 
 from medallion.core.config import MedallionSettings
 from medallion.services.compute import seed_bronze
-from medallion.services.produce import produce
 from medallion.services.transform import handle_stage
 from service_kit.lakehouse.quality import assert_quality, passed
 
@@ -125,8 +124,8 @@ def test_compute_off_emits_no_phantom_complete(tmp_path: Any) -> None:
     lineage = next(p for p in dapr.published if p["topic"] == settings.lineage_topic and p["data"]["eventType"] != "START")
     output = lineage["data"]["outputs"][0]
 
-    # The run is still recorded — the producer's emit IS the cascade head, so suppression is not an
-    # option — but it is marked, and the mark is machine-readable rather than a naming convention.
+    # The run is still recorded — suppressing it would leave the graph without the run — but it is
+    # marked, and the mark is machine-readable rather than a naming convention.
     assert lineage["data"]["run"]["facets"]["lance"]["synthetic"] is True
     # …and it claims NOTHING measured about a dataset it never wrote.
     assert "version" not in output.get("facets", {}), (
@@ -134,39 +133,6 @@ def test_compute_off_emits_no_phantom_complete(tmp_path: Any) -> None:
     )
     assert "outputStatistics" not in output.get("facets", {})
     assert "dataSource" not in output.get("facets", {})
-
-
-def test_produce_seeds_real_bronze_and_emits_its_version(tmp_path: Any) -> None:
-    bronze = str(tmp_path / "bronze")
-    settings = MedallionSettings.model_validate({"compute_enabled": True, "bronze_uri": bronze})
-    dapr = _FakeDapr()
-
-    result = asyncio.run(produce(cast(DaprClient, dapr), settings, token="idem-test"))
-    assert result["status"] == "produced"
-    # bronze$events really exists, and the emitted lineage records its real version.
-    assert lance.dataset(bronze).to_table().num_rows > 0
-    lineage = next(p for p in dapr.published if p["topic"] == settings.lineage_topic and p["data"]["eventType"] != "START")
-    assert lineage["data"]["outputs"][0]["facets"]["version"]["datasetVersion"] == str(lance.dataset(bronze).version)
-
-
-def test_produce_idempotency_token_converges_retries(tmp_path: Any) -> None:
-    """Skill rule pinned (retry needs an idempotency key): two produces REUSING the caller's token
-    emit head events with the SAME runId — the graph MERGEs the duplicate instead of forking two
-    unrelated cascades; without a token each call mints a fresh one (distinct runIds)."""
-    bronze = str(tmp_path / "bronze")
-    settings = MedallionSettings.model_validate({"compute_enabled": True, "bronze_uri": bronze})
-    dapr = _FakeDapr()
-
-    first = asyncio.run(produce(cast(DaprClient, dapr), settings, token="retry-key-1"))
-    second = asyncio.run(produce(cast(DaprClient, dapr), settings, token="retry-key-1"))
-    assert first["token"] == second["token"] == "retry-key-1"  # the response echoes the caller's key
-    events = [p for p in dapr.published if p["topic"] == settings.lineage_topic]
-    assert events[0]["data"]["run"]["runId"] == events[1]["data"]["run"]["runId"]
-
-    fresh = asyncio.run(produce(cast(DaprClient, dapr), settings, token="idem-test"))
-    assert fresh["token"] not in ("retry-key-1", "")  # no key → fresh random token, distinct run
-    third = [p for p in dapr.published if p["topic"] == settings.lineage_topic][2]
-    assert third["data"]["run"]["runId"] != events[0]["data"]["run"]["runId"]
 
 
 # --------------------------------------------------------------------------- #

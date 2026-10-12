@@ -1,8 +1,7 @@
 """A producer door that acts on an EXISTING resource authorizes on THAT resource's project.
 
-Owner ruling 2026-09-25, "Authorize on the resource". `/produce` names its WRITE TARGET in `?project=`,
-so gating `can_administer` on the caller-chosen project is right there. A door that reads or stops
-something that already exists has no such choice to offer: the tenant is a fact recorded on the
+Owner ruling 2026-09-25, "Authorize on the resource". A door that reads or stops
+something that already exists has no choice of tenant to offer: the tenant is a fact recorded on the
 resource. Gating those doors on `?project=` let an admin of one project read or stop another's —
 measured 2026-09-25 on e4e60b60 (the orchestrator's `probe_cross_tenant.py`): alice, admin of
 `project:mine` only, got 200 on `GET /cascade/stalled?project=mine` listing acme's and other's cells.
@@ -57,14 +56,14 @@ RUNNER = "silver-to-gold"
 #: Where the planned runs read and write: a local path nothing is at, so resolving a stopped run reads its commit
 #: marker as absent. A fake bucket would be a store that cannot answer, which the marker read refuses to read as absent.
 _NOWHERE = "/nonexistent/rask-operator-doors"
-#: alice administers `mine` only, bob the configured `acme` only, carol nothing; the ingest service's
+#: alice administers `mine` only, bob the configured `acme` only, carol nothing; an operator service's
 #: subject administers `mine` only. `other` is a tenant none of them administers.
-GRANTS = frozenset({("alice", "project:mine"), ("bob", "project:acme"), ("service-ingest", "project:mine")})
+GRANTS = frozenset({("alice", "project:mine"), ("bob", "project:acme"), ("service-ops", "project:mine")})
 
 #: The service accounts, as `security-sa.yaml` names them, and the audience of the medallion's own doors.
 NAMESPACE = "rask"
 PRODUCER_SA = "rask-sa-medallion-producer"
-INGEST_SA = "rask-sa-ingest"
+OPS_SA = "rask-sa-ops"
 #: The compute head's one account, which a stage runner's door also maps, for the outcome route alone.
 HEAD_SA = "rask-sa-ray"
 MEDALLION_AUDIENCE = "rask-medallion"
@@ -233,7 +232,7 @@ class _Ticks:
 class _Identities:
     """The two medallion doors' service accounts on the loopback issuer, as the chart maps them.
 
-    The producer's door maps the ingest service's account and a stage runner's door maps the producer's
+    The producer's door maps an operator service's account and a stage runner's door maps the producer's
     alone. The producer's own token sits in the file the kubelet would project.
     """
 
@@ -253,8 +252,8 @@ class _Identities:
         return _bearer(self._mint(PRODUCER_SA))
 
     def service_bearer(self) -> dict[str, str]:
-        """The ingest service's token, whose subject administers `mine` only."""
-        return _bearer(self._mint(INGEST_SA))
+        """An operator service's token, whose subject administers `mine` only."""
+        return _bearer(self._mint(OPS_SA))
 
 
 @pytest.fixture
@@ -348,7 +347,7 @@ def _producer(
     app.dependency_overrides[get_settings] = lambda: settings
     app.state.oidc = _Verifier()
     if identities is not None:
-        app.state.sa_oidc = identities.verifier(INGEST_SA, "service-ingest")
+        app.state.sa_oidc = identities.verifier(OPS_SA, "service-ops")
     app.state.fga = fga_client
     app.state.http = httpx.AsyncClient(transport=httpx.ASGITransport(app=stage_runner))
     app.state.dapr = _Bus()
@@ -465,8 +464,8 @@ def test_an_admin_CAN_stop_their_own_projects_stage(producer: TestClient, stage_
 
 
 def test_a_SINGLE_TENANT_stage_belongs_to_the_configured_project(producer: TestClient) -> None:
-    """A trigger with no project is the single-tenant cascade `/produce` starts with none — gated on
-    the configured project there, so on the same project here."""
+    """A trigger with no project is the single-tenant cascade a tenant-less bronze write starts — gated
+    on the configured project."""
     assert producer.get(_show("stage-single"), headers=_bearer("bob")).status_code == 200
     assert producer.get(_show("stage-single"), headers=_bearer("alice")).status_code == 403
 
@@ -571,7 +570,7 @@ def _sa_verifier(issuer: Any, subjects: dict[str, str]) -> ServiceAccountVerifie
 
 @pytest.fixture
 def held(sa_issuer: Any, fga: _Fga, ticks: _Ticks, tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[TestClient, TestClient, FastAPI]]:
-    """The producer admitting the ingest service, and a stage runner whose door maps the producer and the compute head.
+    """The producer admitting an operator service, and a stage runner whose door maps the producer and the compute head.
 
     Each door maps only the accounts the chart names for it, and the producer forwards with its own
     projected `rask-medallion` token, read from the file the kubelet would project.
@@ -582,7 +581,7 @@ def held(sa_issuer: Any, fga: _Fga, ticks: _Ticks, tmp_path: Any, monkeypatch: p
     token_file = tmp_path / "rask-medallion-token"
     token_file.write_text(sa_issuer.mint(PRODUCER_SA, audience=MEDALLION_AUDIENCE, namespace=NAMESPACE))
     producer = _producer(runner, settings_update={"medallion_identity_token_file": str(token_file)})
-    producer.state.sa_oidc = _sa_verifier(sa_issuer, {_account(INGEST_SA): "service-ingest"})
+    producer.state.sa_oidc = _sa_verifier(sa_issuer, {_account(OPS_SA): "service-ops"})
     with TestClient(producer, raise_server_exceptions=False) as producer_client, TestClient(runner, raise_server_exceptions=False) as runner_client:
         yield producer_client, runner_client, runner
 
@@ -590,9 +589,9 @@ def held(sa_issuer: Any, fga: _Fga, ticks: _Ticks, tmp_path: Any, monkeypatch: p
 @pytest.mark.parametrize(
     ("door", "caller", "path", "status", "terminated"),
     [
-        pytest.param("producer", INGEST_SA, _stop("stage-mine"), 202, ["stage-mine"], id="producer-stops-a-run-of-a-project-it-administers"),
-        pytest.param("producer", INGEST_SA, _stop("stage-other"), 403, [], id="producer-refuses-a-run-of-another-project"),
-        pytest.param("stage-runner", INGEST_SA, "/stages/stage-other/terminate", 401, [], id="stage-runner-refuses-a-caller-that-is-not-the-producer"),
+        pytest.param("producer", OPS_SA, _stop("stage-mine"), 202, ["stage-mine"], id="producer-stops-a-run-of-a-project-it-administers"),
+        pytest.param("producer", OPS_SA, _stop("stage-other"), 403, [], id="producer-refuses-a-run-of-another-project"),
+        pytest.param("stage-runner", OPS_SA, "/stages/stage-other/terminate", 401, [], id="stage-runner-refuses-a-caller-that-is-not-the-producer"),
         pytest.param("stage-runner", HEAD_SA, "/stages/stage-other/terminate", 403, [], id="stage-runner-refuses-the-compute-head-it-maps-for-outcomes"),
     ],
 )
@@ -602,7 +601,7 @@ def test_a_service_token_stops_only_its_own_tenants_stage(
     """A service is authorized as the subject its account maps to, exactly like a person ([[LH-220]] clause 5).
 
     The request carries what a service invocation carries: the app token daprd stamps, which names
-    nobody, beside the service's own projected token. The ingest service's subject administers `mine`
+    nobody, beside the service's own projected token. An operator service's subject administers `mine`
     only. Going round the producer to the stage runner's ClusterIP does not escape the check, because
     the stage runner's operator routes admit the producer's account and no other: the compute head, which
     its door maps for the outcome route, verifies and is refused here.
@@ -679,7 +678,7 @@ def test_an_admin_sees_ONLY_the_stalled_cells_of_projects_they_administer(produc
 
 
 def test_a_caller_administering_NONE_gets_an_empty_answer(producer: TestClient) -> None:
-    """Empty rather than 403, like ingest's cross-tenant listing: a 403 for the whole call says that
+    """Empty rather than 403: a 403 for the whole call says that
     somebody's cascade has stalled."""
     response = producer.get("/cascade/stalled", headers=_bearer("carol"))
 
@@ -700,7 +699,7 @@ def test_an_UNWIRED_authorization_service_is_503_and_measures_nothing(unwired: T
 
 def test_the_SINGLE_TENANT_row_belongs_to_the_configured_project(producer: TestClient, fga: _Fga, monkeypatch: pytest.MonkeyPatch) -> None:
     """A registry with no tenants, or one that cannot be read, declares the unqualified lanes as project
-    `""`: the tables `/produce` writes with no `?project=`, gated there on the configured project.
+    `""`: the unqualified tables a tenant-less bronze write lands in, gated on the configured project.
     `project:` names no object at all."""
     monkeypatch.setattr("medallion.services.cascade_lag_readers.declared_edges", lambda _settings: [("silver->gold", "")])
 
@@ -827,7 +826,7 @@ def test_a_SERVICE_read_of_a_training_run_is_audited_on_the_RUNS_project(
     """Recorded as a person's is: the decision on the watch's project, under the subject the account maps to."""
     producer.get("/trains/train-other", headers=identities.service_bearer())
 
-    assert _all_decisions(audited) == [("can_administer", "deny", "service-ingest", "project:other", None)]
+    assert _all_decisions(audited) == [("can_administer", "deny", "service-ops", "project:other", None)]
 
 
 def test_a_runner_list_read_is_AUDITED_as_the_admission_it_is(producer: TestClient, identities: _Identities, audited: list[logging.LogRecord]) -> None:
@@ -835,7 +834,7 @@ def test_a_runner_list_read_is_AUDITED_as_the_admission_it_is(producer: TestClie
     read: a service's under the subject its account maps to, against the path the door's refusal names."""
     assert producer.get("/stage-runners", headers=identities.service_bearer()).status_code == 200
 
-    assert _all_decisions(audited) == [("authn", "success", "service-ingest", "/stage-runners", None)]
+    assert _all_decisions(audited) == [("authn", "success", "service-ops", "/stage-runners", None)]
 
 
 def test_a_PUBLIC_callers_refusal_names_what_it_asked_for(
@@ -847,17 +846,16 @@ def test_a_PUBLIC_callers_refusal_names_what_it_asked_for(
 
     assert response.status_code == 403, response.text
     assert _terminated(stage_runner) == []
-    assert _all_decisions(audited) == [("authn", "deny", "service-ingest", _stop("stage-other"), "public_caller")]
+    assert _all_decisions(audited) == [("authn", "deny", "service-ops", _stop("stage-other"), "public_caller")]
 
 
 # ── which doors may take `?project=` at all ─────────────────────────────────────────────────────────
 
-#: The producer operations whose `?project=` names what the call WRITES. Every other door acts on
-#: something that already exists and reads the tenant off it, or reads deployment config no tenant owns,
-#: so a new door that declares the parameter fails here until someone decides which kind it is.
-_PROJECT_PARAM_ALLOWED = {
-    ("post", "/produce"): "the write target: the cascade head seeds THIS project's bronze",
-}
+#: The producer operations whose `?project=` names what the call WRITES: none, since the producer writes no
+#: tier (ADR 0154). Every door acts on something that already exists and reads the tenant off it, or reads
+#: deployment config no tenant owns, so a new door that declares the parameter fails here until someone decides
+#: which kind it is.
+_PROJECT_PARAM_ALLOWED: dict[tuple[str, str], str] = {}
 
 
 def _declares_project(operation: dict[str, Any]) -> bool:

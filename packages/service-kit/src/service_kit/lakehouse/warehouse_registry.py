@@ -41,9 +41,8 @@ _REGISTRY_PREFIX = "_warehouses"
 #: consumers below accepted ids the control plane could never have issued. Measured before narrowing:
 #: all 93 projects registered on the deployed estate (2026-09-19) already satisfy the mint rule.
 #:
-#: **``$``, not ``\Z``, and the guard below does not rely on it.** This string is published as an
-#: OpenAPI ``pattern`` (``medallion.api.produce_auth.ProjectParam``), where it is read by pydantic's
-#: Rust regex and by JSON Schema consumers — neither knows ``\Z``. Python's ``$`` matches before a
+#: **``$``, not ``\Z``, and the guard below does not rely on it.** This is the string form for a reader
+#: that knows no ``\Z`` — pydantic's Rust regex, a JSON Schema ``pattern``. Python's ``$`` matches before a
 #: trailing newline, which is why :func:`is_safe_project` matches with ``fullmatch`` against the
 #: ``\Z``-anchored :data:`~service_kit.lakehouse.naming.CONTROL_ID_RE` instead of against this string.
 PROJECT_PATTERN = rf"^{CONTROL_ID_PATTERN}$"
@@ -141,9 +140,9 @@ class AmbiguousProjectWarehouseError(UnresolvableProjectError):
 
     A SUBCLASS, deliberately: an ambiguous project is an unresolvable one — the resolver does not know
     the answer — so every path already written to fail closed on :class:`UnresolvableProjectError`
-    covers this the day it is added, rather than depending on someone finding all of them. Both live
-    handlers (`medallion/api/produce.py`, `medallion/services/transform.py`) catch it unchanged, and a
-    caller that wants to tell the two apart still can.
+    covers this the day it is added, rather than depending on someone finding all of them. The live
+    handler (`medallion/services/transform.py`) catches it unchanged, and a caller that wants to tell the
+    two apart still can.
 
     The refusal NAMES the candidates and the fix (``"primary": true`` on exactly one record, or
     deactivate the rest): an operator who is told only "ambiguous" has to go and read the registry to

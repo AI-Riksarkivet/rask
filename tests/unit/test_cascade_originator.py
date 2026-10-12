@@ -10,8 +10,8 @@ the stage runner either — `enforce_author` would overwrite a human there anywa
 the ORIGINATOR riding beside the author, exactly as the `/train` chain carries it
 (`tests/unit/test_train_originator.py`).
 
-WHERE THE MEDALLION CHAIN BROKE. Links 1-2 already held: `/produce` keeps the verified sub, stamps it
-as `lance.originator` on the bronze-write event, and `/bronze-arrival` copies it onto the
+WHERE THE MEDALLION CHAIN BROKE. Links 1-2 already held: a bronze-write event that names its human as
+`lance.originator` reaches the head, and `/bronze-arrival` copies it onto the
 `medallion.bronze` trigger. The bronze→silver stage runner then threads `trigger.originator` onto every one
 of its four FAIL emits. The break is the TIER BOUNDARY. Under one door a stage runner does not publish the
 next stage's trigger — it publishes its output to the catalog, whose `table_published` control event
@@ -97,7 +97,7 @@ class _FakeDapr:
 
 
 def test_the_cascade_head_copies_the_human_off_the_bronze_write_event() -> None:
-    """`/produce` stamps `lance.originator`; `/bronze-arrival` is the last place the batch's human
+    """A bronze write's `lance.originator` reaches the head; `/bronze-arrival` is the last place the batch's human
     exists before every later actor is a service. Green before this change; a regression here would
     make every link below unreachable."""
     dapr = _FakeDapr()

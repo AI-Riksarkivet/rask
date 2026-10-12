@@ -46,8 +46,8 @@ def test_declaring_no_tasks_writes_NOTHING(tmp_path: Path) -> None:
 
 
 def test_an_unwritable_control_root_is_LOGGED_and_not_FATAL(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
-    """Registration runs in the cascade head's boot. Crashing there would take `/produce` — the whole
-    ingest surface — down over a capability nothing has asked for yet, and the consequence is already
+    """Registration runs in the cascade head's boot. Crashing there would take the head and `/train`
+    down over a capability nothing has asked for yet, and the consequence is already
     legible: the door answers 422 naming the exact task that is missing.
     """
     with caplog.at_level("ERROR"):

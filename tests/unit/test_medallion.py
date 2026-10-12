@@ -1,10 +1,9 @@
-"""Unit tests for the event-driven medallion stage runners + medallion-producer producer.
+"""Unit tests for the event-driven medallion stage runners + the medallion-producer's cascade head.
 
 Infra-free: no sidecar, no broker. A fake Dapr client records publishes; we pin the contract each
-service must honor — the stage_runner emits the transform's lineage (inputs→outputs) AND the next stage's
-trigger, returns SUCCESS (RETRY on a publish outage), the producer emits ONLY the bronze-write event
-(R23: bronze is the first governed tier — never a direct cascade publish), and the event-driven head
-(/bronze-arrival) fires the medallion.bronze trigger for a bronze ingest while ignoring others.
+service must honor — the stage_runner emits the transform's lineage (inputs→outputs), returns SUCCESS
+(RETRY on a publish outage), and the event-driven head (/bronze-arrival) fires the medallion.bronze
+trigger for a bronze write while ignoring others.
 """
 
 from __future__ import annotations
@@ -24,7 +23,6 @@ from medallion.schemas.events import build_run_event
 from medallion.services import inprocess_executor, stage_plans, stage_submit
 from medallion.services.compute import UpstreamFacts, WriteResult
 from medallion.services.ingest_trigger import handle_bronze_arrival
-from medallion.services.produce import produce
 from service_kit.lakehouse.task_registry import TaskRegistration
 from service_kit.lakehouse.work_order import WorkOrder
 from service_kit.openlineage import run_id_for
@@ -281,29 +279,12 @@ def test_medallion_apps_build_their_openapi() -> None:
 
     A route whose return annotation isn't a valid Pydantic response model (e.g. ``dict | JSONResponse``)
     passes every service-level test but crashes the app at startup/`openapi()` — this pins that the
-    producer + stage_runner apps actually stand up. (Caught live when /produce's RFC-9457 union broke medallion-producer.)"""
+    producer + stage_runner apps actually stand up. (Caught live when a producer route's RFC-9457 union broke medallion-producer.)"""
     import medallion.producer as producer_app
     import medallion.stage_runner as stage_runner_app
 
     assert producer_app.app.openapi()["openapi"]  # the crash path — must not raise
     assert stage_runner_app.app.openapi()["openapi"]
-
-
-def test_producer_emits_only_the_bronze_write_event() -> None:
-    # Event-driven head (B2, re-tiered by R23): produce() emits ONLY the bronze-write lineage event — it
-    # never publishes the medallion.bronze trigger. /bronze-arrival reacts to this event and fires it.
-    dapr = _FakeDapr()
-
-    result = asyncio.run(produce(cast(Any, dapr), MedallionSettings(), token="idem-test"))
-
-    assert result["status"] == "produced"
-    assert len(dapr.calls) == 1
-    (bronze_lineage,) = dapr.calls
-    assert bronze_lineage["topic"] == "lineage.events.v1"
-    assert bronze_lineage["data"]["outputs"][0]["name"] == "bronze$events"
-    assert bronze_lineage["data"]["outputs"][0]["namespace"] == "bronze"
-    assert bronze_lineage["data"]["inputs"] == []  # the dummy seed has no external source
-    assert all(c["topic"] != "medallion.bronze" for c in dapr.calls)  # the trigger is the subscription's job
 
 
 def _bronze_write_cloudevent(token: str = "tok123") -> dict[str, Any]:
