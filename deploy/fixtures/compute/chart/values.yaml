@@ -67,7 +67,8 @@ auth:
   # Emit the authn/authz audit stream (RASK_AUDIT_ENABLED).
   audit: true
   oidc:
-    # rask's `dex.issuer`; empty derives the dev issuer `http://<rask>-dex:5556/dex`.
+    # rask's `dex.issuer`, exactly: a token is accepted only when its `iss` equals it. Required; `make k3s-fixtures` passes
+    # the DEV_ISSUER it gives Dex and rask.
     issuer: ""
     # Where discovery is fetched; empty derives `http://<rask>-dex:5556/dex`.
     discoveryUrl: ""
