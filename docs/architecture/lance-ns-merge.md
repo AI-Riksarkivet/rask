@@ -452,7 +452,7 @@ they are accepted and that no row gates on them.
 | R19: `common` merges into `service-kit` | [ADR 0118](../adr/0118-common-merges-into-service-kit-r19-2026-07-27.md) |
 | R20, R22: the Ray-plane service is `compute` | [ADR 0119](../adr/0119-the-ray-plane-service-is-compute-and-no-deployable-carries.md) |
 | R21: one compute-lineage layer, `lineage-kit` | [ADR 0120](../adr/0120-one-compute-lineage-layer-lineage-kit-r21-2026-07-27.md) |
-| R23, R24: raw is not a catalog tier; ingest is its own service | [ADR 0121](../adr/0121-raw-is-not-a-catalog-tier-and-ingest-is-its-own-service-r23.md) |
+| R23, R24: raw is not a catalog tier; ingest is its own service (R24 superseded: the lakehouse runs no ingest) | [ADR 0121](../adr/0121-raw-is-not-a-catalog-tier-and-ingest-is-its-own-service-r23.md), [ADR 0154](../adr/0154-the-lakehouse-runs-no-ingest-and-no-workflow-engine.md) |
 | R26: gold carries its lineage as a JSONB column | [ADR 0111](../adr/0111-gold-carries-its-lineage-as-a-jsonb-column-r26-2026-07-28.md) |
 | R27: the Ray plane's standing audit, and its findings | [ADR 0122](../adr/0122-the-ray-plane-gets-a-standing-audit-r27-2026-07-28.md) |
 | R28: storage is registered with a role | [ADR 0123](../adr/0123-storage-is-registered-with-a-role-r28-2026-07-28.md) |

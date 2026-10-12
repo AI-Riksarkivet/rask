@@ -615,7 +615,7 @@ pre-bind second is a connection REFUSED rather than a slow 200 — liveness alon
 exactly when a dependency is already slow. The fleet's lifespans are not faster than the
 lakehouse plane's: notifications does an OIDC discovery fetch, two OpenFGA provision round-trips
 (at first-install time, while OpenFGA is itself starting), actor registration and a 10s proxy
-warm-up; ingest resolves FGA and starts a Dapr WorkflowRuntime. 30 x 10s = the same 300s budget
+warm-up. 30 x 10s = the same 300s budget
 the lakehouse plane gets, deliberately not a second number to keep in step.
 
 `timeoutSeconds: 5` on ALL THREE. k8s defaults it to 1, measured racing the OOM killer on compute
@@ -1165,8 +1165,8 @@ One app-id's Dapr Configuration spec: the Configuration object and its name (`la
 ## `defaultAccess: allow`
 
 A DENY-LIST, NOT DENY-BY-DEFAULT, and the reason is measured rather than preferred.
-Two readers fetch a secret by a name only known at RUNTIME: `viewer/api/v1/endpoints/
-objects.py:102` and `ingest/objectstore.py:183` both resolve a per-STORE credential whose
+A reader fetches a secret by a name only known at RUNTIME: `viewer/api/v1/endpoints/
+objects.py:102` resolves a per-STORE credential whose
 name comes from the store registry, so a store added after deploy names a secret no
 rendered allowlist can contain. `defaultAccess: deny` would refuse it and the object
 browser would 503 on exactly the external stores the mechanism exists for.
@@ -1189,7 +1189,7 @@ parses.
 
 ## `{{- range (include "lance.natsUsers" $cfgRoot | splitList " " | compact) }}`
 
-Every bus credential (values.yaml `nats.auth`): a Component's secretKeyRef is resolved without these scopes, and ingest reads its own user.
+Every bus credential (values.yaml `nats.auth`): a Component's secretKeyRef is resolved without these scopes.
 
 ## `{{- define "lance.daprAppConfigName" -}}`
 

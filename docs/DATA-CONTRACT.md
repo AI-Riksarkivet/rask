@@ -168,8 +168,7 @@ garbage), and a handler never raises on malformed input — a crash would poison
   `services/medallion/services/train.py` keeps its own segment/int-version/8 KiB guards for the
   TRAINING trigger, while the STAGE trigger validates through
   `services/medallion/services/trigger_guards.py` (`parse_stage_trigger` + `uri_within`). Each lane
-  owns its token grammar and every door that feeds it declares that grammar: `/produce` and
-  `/ingest-media` take their `Idempotency-Key`, and the re-run verb its `token`, from
+  owns its token grammar and every door that feeds it declares that grammar: the re-run verb takes its `token` from
   `SAFE_TOKEN_PATTERN` + `SAFE_TOKEN_MAX_LENGTH` (no `..`), and `POST /train` applies the training
   lane's narrower `TOKEN_PATTERN` (one path-safe segment: the token names the run's artifact
   directory) to its own `Idempotency-Key` — so each door refuses with a 422 every key its consumer

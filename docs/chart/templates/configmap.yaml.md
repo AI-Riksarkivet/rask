@@ -13,13 +13,6 @@ this one: its aggregated Swagger is served under the Ingress-published /api pref
 Gateway upstreams (in-cluster DNS). The core/search/volumes rows died in the
 R6/R20 media wave — their capabilities serve from the media plane below.
 
-## `RASK_INGEST_URL: {{ printf "http://%s-ingest:%v" (include "rask.fullname" .) .Values.services.ingest.port |...`
-
-The ingest plane. WITHOUT this the gateway's ingest row falls back to its own 127.0.0.1:8830 —
-the gateway proxying to ITSELF, where no such route exists — so every /api/ingest/* call 404s with
-a body indistinguishable from an unrouted path. The row was in the code and the service was up;
-only the address was missing, and nothing in either component could tell you so.
-
 ## `RASK_FLOWS_URL: {{ printf "http://%s-flows:%v" (include "rask.fullname" .) .Values.services.flows.port | qu...`
 
 The studio flow-builder's server half. Without this the gateway's /api/flows row falls back to its

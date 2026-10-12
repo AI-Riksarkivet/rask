@@ -318,7 +318,7 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   versions, sticky; the message names the recreate remedy) or a declared base nothing sanctions is a 400
   `InvalidInput`; an open that fails is a 503; both deregister what the call attached. An absent location
   still registers.
-  Never gate this on `unsupported_features()`: ingest's `initial_bases` sets flag 16 and would be
+  Never gate this on `unsupported_features()`: a stage runner's `initial_bases` sets flag 16 and would be
   refused. The catalog's own re-registers (table and namespace undrop) log `restored_mixed_file_versions`
   instead of refusing, so a governed table is never stranded in the trash. A re-register that lands on
   the 409 converge path never seeds governance onto a flag-256 dataset or one declaring a base nothing
@@ -327,8 +327,8 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   (flag 256) and `tests/integration/test_a_planted_base_is_refused_and_freezes_nothing.py` (spelling,
   overlaps and bases).
 - **An external blob base is per table, on request, and never vended** ([[LH-209]]). A create registers
-  one only when the request names it in the door's `external_blob_base` query parameter (ingest's
-  catalog client sends it; never a schema or property key, which LH-208 refuses), inside a `LANCE_EXTERNAL_BLOB_BASES` entry and outside every governed root and bucket (catalog,
+  one only when the request names it in the door's `external_blob_base` query parameter (never a
+  schema or property key, which LH-208 refuses), inside a `LANCE_EXTERNAL_BLOB_BASES` entry and outside every governed root and bucket (catalog,
   control, model registry and artifact roots, reserved and warehouse-claimed buckets:
   `table_bases.requested_external_blob_base`); a plain create registers none, so Lance refuses its
   `Blob.from_uri` rows. `/commit` accepts a kind-3 descriptor only through a base the table's RECORD holds
@@ -344,14 +344,14 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   `test_a_forged_fragment_is_refused_and_the_table_is_unchanged.py`.
 - **A vend's tier is one FGA rung's allow-list over the Lance layout** ([[LH-202]],
   `vending.build_session_policy`). Every tier lists and gets `<prefix>/*`; `write` (`can_write_data`)
-  adds put on `data/*` and ingest's `_ingest_staging/*` ledger and nothing that commits, deletes or
+  adds put on `data/*` and nothing that commits, deletes or
   moves a ref, so a writer appends through `/commit` (`?branch=` for a branch); `maintain`
   (`can_maintain`) gets put/delete on the whole prefix for compaction and cleanup, and is also the shape
   for the outbox and the warehouse scope probe. The door checks the one rung its tier names, never
   either. A put over an existing data file is the residue no session policy can refuse.
-- **Four doors commit client-produced data, and all four judge its file versions.** `/commit`
-  (`dataplane.commit_appended_fragments`), `/compaction_commit` (`commit_compaction`), `register`, and
-  ingest's own `Lander.commit_fragments` refuse data files at another version than the table's
+- **Three doors commit client-produced data, and all three judge its file versions.** `/commit`
+  (`dataplane.commit_appended_fragments`), `/compaction_commit` (`commit_compaction`) and `register`
+  refuse data files at another version than the table's
   (`service_kit.lakehouse.features.describe_foreign_data_file_versions`). `/commit` judges the FOOTER
   too, because the declared version is the writer's word: `catalog.services.client_fragments` holds
   each fragment to its data files (sizes, footer row and column counts, version, the field ids the
@@ -500,10 +500,8 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   now reads the `RASK_DEST_TABLE` the work order always shipped. When you check a declared-id chain,
   check the third party: not "is a name stamped" but "whose name, on the tier that derived it".
 
-  **THE CASCADE'S TIERS ARE GOVERNED — ALL BUT ONE. This bullet said the opposite, and it was the most
-  misleading sentence in the file.** It read *"the medallion tiers are DATA WITHOUT GOVERNANCE"* and
-  concluded *"those tiers simply were never registered"*. At HEAD that is false for silver and gold
-  and true only of the PRODUCER's bronze seed. Split them:
+  **THE CASCADE'S TIERS ARE GOVERNED, every one of them.** Bronze and the stage runners' outputs alike
+  are catalog tables with a record and ownership tuples:
 
   - **Every STAGE RUNNER output is a catalog table.** `transform.py` calls
     `catalog_register.ensure_stage_output` BEFORE the write — describe, create-if-absent, then take
@@ -516,34 +514,20 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
     so the ungoverned branch — `if settings.catalog_url and to_dataset` — is the dev shape, not the
     deployed one. Symbols rather than line numbers throughout this sub-bullet on purpose: the stage runner is
     edited often enough that a cited line goes wrong within the week.
-  - **The producer's bronze seed WAS the one that was not, and is governed as of 2026-08-29.**
-    `medallion/services/produce.py` composed `bronze_uri` from settings (or from the project's
-    warehouse root), called `seed_bronze`, and imported nothing from `catalog_register` at all — so
-    `bronze$events` had no table record and a `policy/set` on it could not succeed from either end: the
-    router-level authorize denies `can_drop` on an object no tuple names (403), and a principal that
-    passed the gate fell out at `policies.py`'s `describe_table` → **404 "table has no storage location
-    to police"**. The head now calls `catalog_register.register_written_dataset` BEFORE it seeds — the
-    `register_table` door described further down, which needs no warehouse and therefore reaches the
-    reserved bucket. It TELLS rather than asks, and that is the one place it departs from a stage runner: its
-    write location is a deployment contract (`chart/templates/medallion.yaml` renders
-    `MEDALLION_BRONZE_URI` and the bronze→silver stage runner's `MEDALLION_FROM_URI` from one expression, and
-    the `medallion.bronze` trigger carries no `from_uri`), so a vended location would leave that stage runner
-    opening a path nothing writes to. The location is sent RELATIVE to `MEDALLION_CATALOG_ROOT` — the
-    dir backend answers *"Absolute URIs are not allowed for register_table"* — and a catalog refusal
-    fails the request **503** before any byte is written, rather than seeding an ungoverned tier
-    quietly. (Bronze written by the INGEST plane was governed all along —
-    `ingest.catalog_service.ensure` creates namespace and table first.)
+  - **Bronze is written only through the catalog** (ADR 0154). A client creates or inserts into
+    `<project>-bronze$events` through the namespace doors, so the head's tier is a `table:` object with
+    ownership tuples from its first row, and `/bronze-arrival` names the location the catalog vended on
+    the `medallion.bronze` trigger (`ingest_trigger._vended_upstream`), so the bronze→silver stage runner
+    reads where the rows are rather than a path composed from settings.
   - **A registration is not an arrival, and the cascade head has to know that.** The catalog's own
     `register_table` marker is a `COMPLETE` lineage event whose single output is `bronze` /
     `bronze$events` — indistinguishable, on the fields `/bronze-arrival` matched, from a batch landing.
-    Measured: without a filter, one `/produce` fired TWO cascades. `ingest_trigger.py` now drops the
+    Measured: without a filter, a register followed by a write fired TWO cascades. `ingest_trigger.py` now drops the
     byte-free catalog operations (`register_table`, `deregister_table`, `declare_table`) as a denylist,
     so an external OpenLineage producer naming its own operation still fires the head.
 
-  What follows below is the state that closure ENDED for the seed, kept because the mechanism it
-  measures is still exactly how the sweep and the namespace lever behave, and because it is what any
-  fix had to satisfy. It remains the live description of any dataset written by something that does
-  NOT register. A policy
+  What follows below describes a dataset written by something that does NOT register, kept because the
+  mechanism it measures is exactly how the sweep and the namespace lever behave. A policy
   door does reach the bytes — `set_namespace_policy` builds its path from `settings.root` and
   `resolve_policy` matches a namespace record by directory prefix (`rel.startswith(path + "/")`), so a
   record on `medallion` governs `medallion/bronze`; and `retain_versions` alone sets
@@ -660,7 +644,7 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   /v1/table/{id}/maintenance/compact`, `require_reclaimable` (the root-scoped gate) in front of
   `…/maintenance/run`, plus the `base_refs` guard in front of both. They kept the flags-only mask
   until the maintenance-door audit (2026-09-02), which made the BUTTON stricter than the CRON — it
-  refused every `initial_bases` table (i.e. every ingest bronze table and every medallion tier) while
+  refused every `initial_bases` table (i.e. every medallion tier) while
   telling the operator "the sweep refuses it for the same reason", and the sweep was compacting them
   on the next tick. Strictness there protected nothing: the cron performs these same operations
   unattended on the same datasets, so the button only withheld the operator's remedy. The cost of the old blanket refusal was measured: 17 of the estate's datasets were refused
@@ -668,7 +652,7 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   all.
   **The COMPACTION gate asks about the BASES, not about the flag — it is the one gate here that is not
   flags-only.** Refusing every flag-16 dataset was still over-broad by exactly the shape the cascade
-  writes: `ingest/lander.py::create_empty` and `medallion/services/compute.py` register ONE external
+  writes: `medallion/services/compute.py` registers ONE external
   blob prefix via `initial_bases`, which sets 16 while every data file stays under the dataset's own
   root — measured on pylance 10.0.0, compacting that is a merge and nothing more (4 fragments -> 1,
   9,445 -> 14,366 bytes locally, base byte-identical, 20/20 payloads still resolving). Refused anyway,

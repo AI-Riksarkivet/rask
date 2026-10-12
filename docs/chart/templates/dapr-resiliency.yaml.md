@@ -132,16 +132,16 @@ Retrying a 403 is also pointless on its own terms: the answer will not change.
 
 ## `writeRetry:`
 
-THE CASCADE HEADS GET A NARROWER MATCHER, and the difference is exactly 500.
-`medallion-producer` and `ingest` serve POST /produce, /ingest-media, /train and /ingests —
-each of which STARTS a bronze->gold run. Those doors now require an `Idempotency-Key`, so a
-replay converges rather than duplicating; this is the other half of the same rule
+THE WRITE DOORS GET A NARROWER MATCHER, and the difference is exactly 500.
+`medallion-producer` serves POST /train, which STARTS a training run, and the catalog's writes
+are what start a cascade (`/bronze-arrival` fires on their announcement). /train requires an
+`Idempotency-Key`, so a replay converges rather than duplicating; this is the other half of the same rule
 ("pair retry with an idempotency key OR mark the operation non-retryable" — do both, because
 each covers what the other misses).
 502/503/504 mean the request never reached a working app, and these doors answer 503 with an
 explicit `Retry-After: 5` — a retry is what they ASK for. A bare 500 means the app WAS reached
-and something failed inside it, possibly after the head had already published the trigger.
-Replaying that three times at 2s is how one operator click became four unrelated cascades.
+and something failed inside it, possibly after the door had already published its trigger.
+Replaying that three times at 2s is how one operator click became four unrelated runs.
 THE CATALOG IS ON THIS LIST TOO, since 2026-09-09, and the sentence that kept it off was the
 defect. It read "retrying a read after a 500 is harmless" — true, and the catalog is not a
 read plane: 77 POST plus 14 DELETE/PUT/PATCH routes across `api/v1/endpoints/`, none
@@ -190,7 +190,7 @@ front-door service the two drifted: compute rendered a pod the gateway invokes w
 target it, leaving it with no timeout, no retry and no circuit breaker — the identical call to
 catalog had all three. gateway is excluded because it is the CALLER, not a target.
 
-## `{{- $writeDoors := list .Values.medallion.producer.daprAppId "ingest" .Values.services.catalog.daprAppId }}`
+## `{{- $writeDoors := list .Values.medallion.producer.daprAppId .Values.services.catalog.daprAppId }}`
 
-The cascade heads take `writeRetry` (no 500); everything else keeps `invokeRetry`. Derived from
+The write doors take `writeRetry` (no 500); everything else keeps `invokeRetry`. Derived from
 the app-id rather than listed twice, so a rename cannot leave a head on the wide policy.

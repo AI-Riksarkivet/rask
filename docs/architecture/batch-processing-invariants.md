@@ -15,10 +15,10 @@ reads as decided regardless of what the prose around it says.
 
 | | Invariant | Where it is pinned |
 | --- | --- | --- |
-| **B1** | History and events carry identifiers and counts — never payloads | No test. Ingest's runtime budgets (`_refuse_oversized_dispatch`, `FANIN_RETURN_BUDGET_BYTES`) refuse a dispatch or fan-in large enough for a payload to matter |
+| **B1** | History and events carry identifiers and counts — never payloads | No test and no gate: the lakehouse hosts no batch workflow (ADR 0154), so the rule binds the bring-your-own engine that runs one |
 | **B2** | Never pre-gate a Ray submission on capacity or resource labels | No test: it is a rule about code not yet written, and no linter rule expresses it |
 | **B3** | The submission id carries the full work identity | `packages/ray-kit/tests/test_submission_id.py` (both axes) **plus** a rendered-chart test — the deploy axis is fed by ONE chart line, and `test_an_unset_code_version_reproduces_the_previous_id_exactly` blesses an empty code on purpose, so deleting that line was indistinguishable from the compatibility path |
-| **B6** | Refuse new runs while draining | `service_kit.draining`. No test pins a run door's gate: its behavioural home is a `TestClient` on the producer with `app.state.shutting_down = True` asserting 503 on `POST /produce`, and that test does not exist yet |
+| **B6** | Refuse new runs while draining | `service_kit.draining`. No test pins a run door's gate: its behavioural home is a `TestClient` on the producer with `app.state.shutting_down = True` asserting 503 on `POST /train`, and that test does not exist yet |
 | **B10** | Monotonic clocks; the same number lands in the lineage facet | No test. Its behavioural home is a `handle_stage` test on the Ray wake-up trigger that asserts the emitted COMPLETE's duration, and that test does not exist yet |
 | **B12** | Randomise iteration order | `tests/unit/test_batch_invariants_are_actually_guarded.py` — both the dataset list and the failure-retry list |
 | **B13** | Single-flight claims get chart gates | No test: `stageRunnerReplicas: 1` in both values files is the only guard of the stage runner's process-local `asyncio.Lock`. Its home is a `maximum: 1` in a chart values schema, and the chart ships no schema yet |
@@ -60,14 +60,11 @@ on, or that two pods executing one run could disagree about.
 
 * the target table, namespace and tier
 * batch size, fragment sizing, actor sizing and concurrency
-* every ceiling: `max_units`, `max_run_hours`, `incremental_max_rows`
+* every ceiling a run enforces
 * enablement flags a run's shape depends on (`quality_review_enabled`, `cascade_via_publish`)
 * the promotion review band and the approver
 * `code_version` — the deploy axis of the submission id
 
 **The test.** If two pods could execute the same run and read different values, it is LIVE-SPEC and
-must be resolved in an activity and pinned in history. `resolve_limits` is the worked example; the
-gate that keeps the workflow bodies honest is
-`services/ingest/tests/test_workflow_bodies_read_no_env.py`, which refuses an env read inside a
-registered workflow body while leaving activities free to read — an activity's result is recorded, so
-every replay sees what the first execution saw.
+must be resolved in an activity and pinned in history — an activity's result is recorded, so every
+replay sees what the first execution saw. No gate in the estate checks it.

@@ -38,7 +38,7 @@ Only `@rask/ui` has a build (`svelte-package` → `dist/`); the rest are consume
 | package | what it is |
 |---|---|
 | `@rask/ui` | Design system + `@rask/ui/shell`. → **`rask-styling`** |
-| `@rask/api` | Gateway client (`ray`, `ingest`, `projects`, `me`) **plus** the OIDC/BFF plane (`bff.ts`, `oidc.ts`), the lineage client, and `@rask/api/dock-layout` + `dock-views` |
+| `@rask/api` | Gateway client (`ray`, `ingest`, `projects`, `me` — `ingest` targets `/api/ingest`, which has no gateway row and no backend since ADR 0154, so its calls 404) **plus** the OIDC/BFF plane (`bff.ts`, `oidc.ts`), the lineage client, and `@rask/api/dock-layout` + `dock-views` |
 | `@rask/dockview` | Svelte 5 binding over **dockview 7** — the docked workbenches. → **§ Workbenches** |
 | `@rask/flow` | Generic Svelte Flow binding: `GraphCanvas`, `StaticFlow`, `FlowAutoFit`, `depths`/`layout`. **Mechanism only — domain graphs (LineageGraph, FGA) stay in their zones** |
 | `@rask/explorer-api` | Arrow-backed explorer/viewer client (media bytes, Arrow batches) |

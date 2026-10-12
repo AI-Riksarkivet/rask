@@ -222,7 +222,7 @@ signer (`identity`), its key (`kid`) and, for a delegation, `onBehalfOf`. Lineag
 or refuse an event and cannot forge one (`packages/lineage-kit/src/lineage_kit/signing.py` owns the format).
 
 - **Who signs.** The identities the chart lists in `LINEAGE_SIGNERS` (`lance.signingIdentities`): the catalog,
-  maintenance, the medallion producer, each stage runner and ingest. A signer is its own author. The one exception is
+  maintenance, the medallion producer and each stage runner. A signer is its own author. The one exception is
   the catalog, the sole entry in `LINEAGE_DELEGATORS`, which signs for the person it authenticated.
 - **Control events.** A `CatalogControlEvent` on `catalog.control.v1` is a flat envelope with no facet bag, so the same
   facet rides as its top-level `rask_signature` member, and the signed bytes are canon-1 of the whole envelope with only
@@ -260,9 +260,8 @@ or refuse an event and cannot forge one (`packages/lineage-kit/src/lineage_kit/s
   (`/lineage-events`, `/control-events`) and maintenance's `/maintenance-arrival` verify the same signatures before they
   act, in the mode `RASK_SIGNATURE_DOORS` names (chart `signing.doors`: off, observe or enforce). A lineage event verifies
   against `RASK_EVENT_SIGNERS` and `RASK_EVENT_DELEGATORS`: lineage's own sets at notifications and maintenance, and at
-  the bronze head the producer and the catalog alone, the only identities that sign an event it acts on (the producer's
-  own `/produce` and `/ingest-media` writes and the catalog's write announcements; ingest emits over HTTP, and the head
-  ignores a maintenance pass, `compaction`, `compact_table` or `create_index`, before verifying anything). A control
+  the bronze head the producer and the catalog (`lance.doorEnv` lists both; the events it acts on are the catalog's
+  write announcements, and the head ignores a maintenance pass, `compaction`, `compact_table` or `create_index`, before verifying anything). A control
   event verifies against the identities `RASK_CONTROL_SIGNER_ROLES` lists for the role its action names. Only an event
   the door would act on is verified. Enforcing, a refusal is acknowledged and drives nothing, counted in
   `<service>_signature_refused_total` by door and reason; every one of those series exists at 0 from the door's

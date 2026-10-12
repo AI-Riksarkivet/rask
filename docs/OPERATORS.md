@@ -123,25 +123,10 @@ dependency for crash-recovery semantics we already get from idempotency keys.
 > the argument above stops applying and a workflow engine earns its dependency. That is a real
 > possibility for silver→gold quality promotion, whose assertions may need per-attempt run identity.
 >
-> **SUPERSEDED for the ingest lane 2026-08-03 (owner ruling) — Dapr Workflow IS adopted there.**
-> The criterion below was written in the orchestrator-and-polling era; the estate has since gone
-> event-driven with Dapr Workflow, so "can we avoid an engine?" is no longer the question asked of a
-> durable multi-step path. The ingest run is orchestrated by Dapr Workflow — see docs/adr/0036-ingest-orchestration-dapr-workflow-is-adopted-the-estate-is.md
-> § "Ingest orchestration — Dapr Workflow IS adopted". This pin still describes the ANNOTATION publish
-> saga accurately (it is token-keyed idempotent and needs no engine); it is no longer an estate-wide
-> prohibition. The analysis that follows is kept because its idempotency reasoning remains true and
-> useful — it simply is not the deciding question any more.
->
-> **Superseded — tested against the ingest run 2026-08-03 and upheld, then overridden:** `open_ingest.md` proposed
-> Dapr Workflow as the pre-bronze ingest run's orchestrator and recorded it as a settled decision; it
-> was not settled, and the criterion above is what decided it. Every step of that run is idempotent by
-> a key the caller chose or the source supplied — the run id from the caller's `Idempotency-Key`, the
-> unit and fragment writes from the unit key, the commit from `id = hash(source_uri)`, publication
-> from a tag advance — so nothing is minted mid-run and the honest signal never fires. The one real
-> gap, a run whose enumeration dies half-published, is closed by making enumeration itself chunked
-> work-queue messages rather than by adopting an engine. Full reasoning, including the strongest
-> argument for adopting anyway and why it loses: `docs/adr/0036-ingest-orchestration-dapr-workflow-is-adopted-the-estate-is.md` § "Ingest orchestration — Dapr
-> Workflow stays un-adopted".
+> **The lakehouse runs no ingest, and hosts no workflow engine once LH-462 lands** ([ADR 0154](adr/0154-the-lakehouse-runs-no-ingest-and-no-workflow-engine.md),
+> superseding ADR 0036 for ingest): ingest is a bring-your-own client job that commits through the catalog, and the
+> medallion's promotion review becomes a durable record answered on `/promotions/*` (LH-462). The criterion above
+> is the question any new multi-step path is asked.
 
 **Lance — no operator exists, none is missing.** Lance is a format + libraries; its "control
 plane" is the manifest on S3, and CAS commits are the reconciler. The operator-shaped concerns it
@@ -193,7 +178,7 @@ operator wave and not in the "never build" bucket.
 ## 6 · Event signing keys: provisioning, rotation and loss (LH-064)
 
 Every signing identity (`lance.signingIdentities` in `chart/templates/_helpers.tpl`: the catalog, maintenance, the
-medallion producer, each stage runner and ingest) signs the lineage it emits with its own Ed25519 key. The store
+medallion producer and each stage runner) signs the lineage it emits with its own Ed25519 key. The store
 holds two secrets per identity: `signing-public-<identity>` (field `keys`: comma-separated public NKEYs, current
 first, at most one previous) and `signing-key-<identity>` (field `seed`: the NKEY user seed). A signer is Ready only
 while the kid of its own seed is in its list, so the list is always written before the seed it belongs to. Lineage
@@ -259,11 +244,10 @@ The NATS bus is a prerequisite rask never installs (ADR 0153, XC-129); developme
 (release `nats`, Service `rask-nats`). With the bus in operator mode (the fixture's `nats.auth.server`), a client connects
 only with a user JWT signed under the operator's account, and each user may publish and subscribe only what its row of `nats.auth.users` (values.yaml)
 grants. There is one user per Dapr app-id with a pub/sub component, plus `admin` (the stream Job), `monitor` (nats-box,
-read-only: stream and consumer state, no messages) and `ingest` (its raw work-queue client). A grant only a flag's
+read-only: stream and consumer state, no messages). A grant only a flag's
 component uses sits under `nats.auth.flagged` and is issued only while that flag is on. Each user's credential is
 `nats-user-<user>` in the store (fields `jwt`, `seed`); every pub/sub Component names its own app's user by
-`secretKeyRef` through `lance-secrets`, every app's Dapr Configuration denies every `nats-user-*` (ingest reads only its
-own, through its sidecar), and the stream Job (rask's release) and nats-box (the fixture's) take theirs as files written
+`secretKeyRef` through `lance-secrets`, every app's Dapr Configuration denies every `nats-user-*`, and the stream Job (rask's release) and nats-box (the fixture's) take theirs as files written
 by ExternalSecrets.
 
 **Production (owner ruling R1): the platform runs NATS and its store; rask owns no trust root.** Name the bus in
@@ -280,10 +264,10 @@ the stream Job and restart every credentialed client after any non-surge OpenBao
 
 **Switching it on (or after a trust-root change)** takes the bus down for a few minutes, because a reload cannot change
 the operator or the system account and a pod restarted alone into operator mode cannot join the others: quiesce (no
-Ray job, outboxes at depth 0, ingest idle); `kubectl scale statefulset/rask-nats --replicas=0` and wait until no NATS
+Ray job, outboxes at depth 0); `kubectl scale statefulset/rask-nats --replicas=0` and wait until no NATS
 pod exists; run `scripts/fixtures.sh nats -- --set nats.auth.server=true`, which restores the three replicas together
-(each waits for ESO's `rask-nats-auth`); then `make k3s-up`, whose stream Job runs as `admin` and recreates the nine
-streams empty; then `kubectl rollout restart` every Deployment with a credentialed pub/sub component and `rask-ingest`.
+(each waits for ESO's `rask-nats-auth`); then `make k3s-up`, whose stream Job runs as `admin` and recreates the eight
+streams empty; then `kubectl rollout restart` every Deployment with a credentialed pub/sub component.
 The fixture release keeps the setting (`--reset-then-reuse-values`), so a later `make k3s-up` leaves operator mode on.
 
 **A consumer removal** (RESILIENCE.md gaps #7 and the lineage rebuild) needs `admin`, because nats-box runs as `monitor`.
@@ -299,7 +283,7 @@ kubectl exec deploy/rask-nats-box -- rm -f /tmp/admin.creds
 ```
 
 **Reading it back.** On each node's monitoring port, `/connz?auth=true` lists every client connection with an
-authorized user and none anonymous; `/connz?state=closed&auth=true` keeps short-lived ones (an ingest run). A publish
+authorized user and none anonymous; `/connz?state=closed&auth=true` keeps short-lived ones. A publish
 with no credential is refused ("Authorization Violation") and one with another app's credential on a subject that app
 does not own is refused ("Permissions Violation"), each leaving the stream's last sequence unchanged.
 

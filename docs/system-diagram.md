@@ -113,7 +113,7 @@ The toggle is the *credential-delivery* shape — both modes run on the **same**
 5. **Catalog → Object store** — return location; **STS vending** also returns a short-TTL STS token, **Mode B** returns the location only.
 6. **Client → Object store** — **S3:** read directly with the vended token. **Mode B:** the read instead goes through the catalog's Arrow-IPC query endpoint (no creds on the client).
 
-### 3. Promote (medallion) — `medallion-producer` producer + Dapr stage runners, bronze → silver → gold  *(built & deployed: the `medallion-producer` producer fires the cascade and the event-driven stage runners promote each stage, emitting OpenLineage at every hop — see [`FLOW.md`](FLOW.md). The **distributed** lance-ray Ray Data job is the rask future; the in-process fake-Ray compute fills the same contract today.)*
+### 3. Promote (medallion) — `medallion-producer` producer + Dapr stage runners, bronze → silver → gold  *(built & deployed: the `medallion-producer`'s `/bronze-arrival` fires the cascade on the catalog's announcement of a bronze write, and the event-driven stage runners promote each stage, emitting OpenLineage at every hop — see [`FLOW.md`](FLOW.md). The **distributed** lance-ray Ray Data job is the rask future; the in-process fake-Ray compute fills the same contract today.)*
 1. **Job → Catalog** — describe bronze (the job is a catalog client; it authenticates with **workload identity**, never OpenBao).
 2. **Catalog → OpenFGA** — `check can_read_data` for `role:data_engineer#assignee` (role-as-subject).
 3. **Job → Object store** — read only the **new bronze versions** — the version range *is* the change feed.

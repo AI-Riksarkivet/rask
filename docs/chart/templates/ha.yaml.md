@@ -10,7 +10,7 @@ HA for the stateless request-serving services — the lakehouse pair AND the fle
 (single-node kind); the prod overlay enables the PDB after bumping replicas. The stateful stores
 (AGE/MinIO) get HA from their operators in rask (CNPG), NOT from here. The
 event-driven stage runners/producer are intentionally excluded — eviction is safe there (Dapr redelivers, and
-the medallion ingest path is idempotent).
+every hop converges on its idempotency key).
 
 ONE RULE THROUGHOUT, and it is why every block below is gated: a `minAvailable: 1` PDB over a SINGLE
 replica blocks every voluntary drain, so a node cordon hangs instead of proceeding. Scale first, bound
@@ -21,7 +21,7 @@ so enabling PDBs without scaling wrote exactly the budget this warning describes
 ## `{{- range $name, $svc := $.Values.services }}`
 
 EVERY service in `.Values.services`, gated on replicas > 1 — the lakehouse pair (catalog,
-lineage) and the fleet (gateway, compute, flows, ingest, notifications) alike. This was a literal
+lineage) and the fleet (gateway, compute, flows, notifications) alike. This was a literal
 `list "catalog" "lineage" "gateway"`, ungated: with PDBs enabled and a service left at one
 replica it wrote a `minAvailable: 1` budget over a single pod, which blocks EVERY voluntary drain
 — a node cordon then hangs instead of proceeding. That is this file's own header warning, applied

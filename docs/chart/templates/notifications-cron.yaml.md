@@ -6,8 +6,8 @@ every release revision, under a 1 MiB ceiling. Each section is headed by the tem
 ## `{{- if and .Values.dapr.enabled .Values.services.notifications }}`
 
 The notification plane's SECOND ingress (open_notifications.md §2/S2). The bus subscription
-alone is provably incomplete: the ingest service emits lineage over HTTP only and refuses the
-topic, as do Ray TRAIN and every external OpenLineage producer — those lanes reach lineage's
+alone is provably incomplete: Ray TRAIN and every external OpenLineage producer emit lineage
+over HTTP only — those lanes reach lineage's
 durable feed and never `lineage.events.v1`. This cron ticks the notifications service's
 sidecar-only reconcile route (POST /<bindingName>, guarded by require_dapr_token), which walks
 `GET /events` down from a persisted cursor and closes the HTTP-only lanes at <= one tick.

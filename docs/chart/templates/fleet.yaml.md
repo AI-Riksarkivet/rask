@@ -73,28 +73,12 @@ in them can make the call the credential authorises.
 
 IT IS ALSO THE FORBIDDEN MECHANISM. Owner ruling 2026-09-08: "Never secret through
 envs. Either from ESO, secret store dapr and STS for zero trust" — the rule CLAUDE.md
-already states. Withholding it here does not FIX that for the services that do need a
-credential (ingest is § H8's remaining half, and its answer is STS, which
-`vending.build_session_policy` already implements by bucket + prefix); it removes the
-blast radius that no code was using.
+already states. A service that writes Lance takes a table-scoped vend from the catalog
+(`vending.build_session_policy`, by bucket + prefix) and needs no ambient credential.
 
-THE MOUNT FOLLOWS "NEEDS THE AMBIENT CREDENTIAL", NOT "WRITES LANCE", and those two
-have now diverged for the only service that still held the secret. `lanceWriter` rode
-both meanings, and this file has recorded the conflation biting twice already — values
-calls it "an unrelated storage flag" at one service and "which this service is not" at
-another. Ingest IS a Lance writer and no longer needs the ambient credential to be one:
-its fragment writes take a table-scoped 900 s vend (`runtime.write_options_for`) and its
-staging ledger takes the same one (`runtime.ledger_options`), both measured. What the
-root pair still served was the SOURCE READ, and that path has a scoped answer waiting —
-`objectstore._own_store_for` supplies a store's own credential from the Dapr secret
-store, and stays inert until an operator registers a store that declares a `secret`.
-
-DEFAULT OFF, which is the posture rather than the convenience. An unregistered source
-now fails CLOSED instead of being read with the widest credential in the estate; the
-fix an operator needs is naming the store, and the goal's rule is that a scoped static
-key is not a fix and a fallback chain is not either. Measured before flipping it:
-`rask-ingest` had made ZERO source reads in 72 hours and the deployment registers no
-stores at all, so nothing on this estate reaches for it.
+DEFAULT OFF, and no fleet service declares it: the declaration exists so that a service
+which genuinely needs the root pair says so in values, where a review sees it, rather
+than receiving it by default.
 
 ## `- { name: RASK_AUDIT_ENABLED, value: {{ hasKey $root.Values.auth "audit" | ternary $root.Values.auth.audit ...`
 
@@ -107,16 +91,6 @@ Sprig's default() treats boolean false as empty, and a bare reference renders ""
 `--reuse-values` upgrade from a release predating the key, which is a pydantic
 bool_parsing crash at boot. Same convention as LANCE_AUDIT_ENABLED.
 
-## `{{- with $root.Values.storage }}{{- if .stores }}`
-
-The storage registry, when a deployment declares one — the same rows explorer.yaml
-renders, and for a second consumer: `ingest` resolves a run's declared source
-`endpoint` against it (`ingest/objectstore.py`). Without it the fleet sees only the
-built-in defaults, so every per-run endpoint override is refused as unregistered —
-fail-closed, but a form field that can never be filled in. An unregistered endpoint
-is refused rather than read from the deployment's own store, because a bucket of the
-same name here would answer and the run would ingest the wrong bytes in silence.
-
 ## `{{- include "rask.rayAuthEnv" $root | nindent 12 }}`
 
 Ray token auth (gate 7 / R3): only the services flagged rayClient in
@@ -125,86 +99,26 @@ privilege; the gateway never talks to Ray. No-op unless
 ray.auth.enabled (the include gates itself). JobSubmissionClient +
 ray-kit's httpx paths read RAY_AUTH_TOKEN and attach the Bearer header.
 
-## `- { name: RASK_S3_ENDPOINT_URL, value: {{ include "lance.s3Endpoint" $root | quote }} }`
+## `{{- if and $root.Values.dapr.enabled $svc.daprIngest }}`
 
-The S3 endpoint for services that write Lance. NOT optional: the pod already
-receives AWS_* credentials from the fleet secret, so with no endpoint lance's
-object_store silently resolves s3.us-east-1.amazonaws.com — the first in-cluster
-ingest write got 403 InvalidAccessKeyId FROM REAL AWS, with the in-cluster store's key echoed in
-Amazon's error body. Credentials-present + endpoint-absent is the worst combination:
-it fails far away, slowly, and names Amazon rather than the missing config.
+APP_API_TOKEN, rendered only for a service with `daprIngest`, independent of whether it writes Lance.
+`notifications` is why: it writes no Lance and its bus handler calls `assert_app_token_configured`, so
+it rendered with `RASK_DAPR_ENABLED=true` and NO token and raised at import, a chart that renders green
+and a pod that never starts.
 
-## `- { name: RASK_INGEST_WAREHOUSE, value: "s3://{{ include "lance.stageBucket" (list $root $root.Values.medal...`
-
-The warehouse root, from the chart's OWN bucket helper rather than a literal. The
-first attempt hardcoded "rask-lakehouse" in values.yaml and the store answered
-NoSuchBucket — the estate's bucket is `minio.bucket` (lance-catalog), and a values
-file cannot call the helper because it cannot template at all. Deriving it here means
-the ingest plane follows the bucket every other tier follows, including a rename.
-
-## `- { name: RASK_INGEST_LINEAGE_OUTBOX_URI, value: "s3://{{ $root.Values.minio.bucket }}/_lineage_outbox" }`
-
-WHERE A REFUSED LINEAGE EVENT IS SAVED, and it is a template concern for the reason
-the warehouse above is: a values file cannot carry `{{ include }}`. The SAME prefix
-every other producer stages to, because lineage's reconcile cron drains exactly one.
-§ E1 — this lane emitted BARE while the other four staged durably, so a refused door
-lost the event outright: recorded twice here, most recently a day of 403s while the
-data landed, where "a 401 surfaces as a permanent gap in the graph that looks exactly
-like a healthy estate".
-
-## `- { name: LANCE_REST_ROOT, value: "s3://{{ $root.Values.minio.bucket }}" }`
-
-The CATALOG's own root, so the `lance-append` source can refuse a governed dataset.
-`confine_to_lance_root` reads it as `if governed and _under(...)` — so when it is UNSET
-the governed check does not fail closed, it is SKIPPED, and an operator who points
-RASK_INGEST_LANCE_ROOT at the lakehouse bucket gets a second, unlineaged copy path
-between governed tiers with no error. Measured unset on the deployed ingest pod
-2026-08-23. Same expression as services.yaml's catalog row, deliberately.
-
-## `{{- $needsAppToken := false }}`
-
-APP_API_TOKEN — ONE render site, TWO reasons a fleet service needs it, and they are
-not the same reason. This block used to sit NESTED inside `if $svc.lanceWriter` above,
-which tied the estate's service credential to whether a service writes Lance — two
-unrelated facts. `notifications` is what exposed it: it writes no Lance and its bus
-handler calls `assert_app_token_configured`, so it rendered with `RASK_DAPR_ENABLED=true`
-and NO token and raised at import — a chart that renders green and a pod that never
-starts. Un-nesting is the root fix; `ingest`'s render is unchanged (it now carries
-`daprIngest: false` and reaches this block by the lanceWriter arm, on its original
-condition).
-
-The two arms, and why one condition cannot serve both:
-
-`daprIngest` — the service HOSTS a sidecar-delivered route and FAILS CLOSED without the
-token (`service_kit.governed.dapr_auth.assert_app_token_configured` raises whenever
-RASK_DAPR_ENABLED is true and APP_API_TOKEN is unset). So it is gated on
-`dapr.enabled` ALONE: that key sets RASK_DAPR_ENABLED in the configmap AND renders the
-Secret this reference reads, so the three move together and the pod cannot come up armed
-without a key. Adding `auth.enabled` here would crash-loop the pod on an ungoverned dev
-stack, which is the estate's DEFAULT combination.
-
-`lanceWriter` — ingest's control door, where the token is a POLICY input rather than a
-startup precondition: `authorize_ingest` reads an unset token as dev-open, so setting it
-with no user door wired 403s every caller (measured live: every POST /api/ingests, from
-the UI and a shell alike). Hence the extra `governedAuth => auth.enabled` arm — the
-lock is armed only if there is also a key.
-
-Setting BOTH flags on one service would render APP_API_TOKEN twice;
-tests/unit/test_invariants.py::test_no_env_var_is_rendered_TWICE_on_any_workload is the
-guard, so the interaction fails a gate rather than shipping a duplicate-key pod spec.
+A `daprIngest` service HOSTS a sidecar-delivered route and FAILS CLOSED without the token
+(`service_kit.governed.dapr_auth.assert_app_token_configured` raises whenever RASK_DAPR_ENABLED is true
+and APP_API_TOKEN is unset). So it is gated on `dapr.enabled` ALONE: that key sets RASK_DAPR_ENABLED in
+the configmap AND renders the Secret this reference reads, so the three move together and the pod
+cannot come up armed without a key. Adding `auth.enabled` here would crash-loop the pod on an
+ungoverned dev stack, which is the estate's DEFAULT combination.
 
 ## `{{- include "lance.appTokenEnv" (list $root $name) | nindent 12 }}`
 
-One secret for both arms, so the whole plane presents ONE service identity — the same
+One secret, so the whole plane presents ONE service identity — the same
 `{{ .Release.Name }}-dapr-app-token` the medallion producer, the stage runners and the
 maintenance cron read. It cannot dangle: `dapr.enabled` is what renders that Secret's
 ExternalSecret (external-secrets.yaml) and it also gates this reference.
-
-Worth keeping from the ingest incident, because it recurred here in mirror image: the
-comment on the USER door below PREDICTED the 403 outcome in as many words, and the two
-conditions still drifted apart — because nothing RENDERED them together. Prose next to a
-condition does not hold two conditions in agreement; only one expression does. That is
-why `$needsAppToken` is computed once above rather than repeated per arm.
 
 ## `{{- include "lance.governedOidcEnv" $root | nindent 12 }}`
 
@@ -213,12 +127,8 @@ service. `frontDoor` means "the gateway routes to it", which is a different
 question: the GATEWAY reads no auth settings at all, so keying on it emits
 variables that service never reads. (`compute` was the second example here until
 2026-08-26; it now declares GovernedAuthSettings and gates both routers, so it
-carries `governedAuth: true` and this env is exactly what feeds its door.) `ingest.auth.authorize_ingest` refuses
-the service-token path when the caller is the public gateway, and then has nowhere
-to fall through to unless OIDC is wired — so closing that bypass without this left
-a signed-in project admin with NO way in and the UI path dead rather than merely
-ungoverned. IngestAuthSettings extends GovernedAuthSettings, so the prefix is
-LANCE_ — verified, not assumed: emitting the wrong prefix produces variables the
+carries `governedAuth: true` and this env is exactly what feeds its door.) A governed service's settings carry their own prefix, so
+the prefix this env uses is verified per service, not assumed: emitting the wrong prefix produces variables the
 service never reads, which looks wired and does nothing.
 
 ## `{{- range $k, $v := $svc.env }}`
@@ -231,25 +141,6 @@ it, silently, since a relative Lance path is perfectly valid.
 Deliberately opt-in and per-service rather than a global map: config that applies to
 everything belongs in the configmap this pod already mounts via envFrom, and a
 catch-all here would become the place config goes to avoid a decision.
-
-## `{{- if eq $name "ingest" }}`
-
-THE EXTERNAL-BLOB DECISION HOLDS AT BOTH DOORS, from ONE value.
-`services.yaml` renders this onto the catalog; without it here the ingest pod's
-`approved_external_base()` returned None on every shipped chart, so every ingest
-COPIED the corpus into the lakehouse instead of referencing it — measured in
-`ingest/adapters.py` as 3,232 bytes external against 4,002,901 managed on a 4 MB
-corpus, with one warning log and a green run as the only signal.
-
-Rendered from `.Values.vending.externalBlobBases`, never duplicated into the
-service's `env:` map: two literals is how the ingest side approves a write under a
-base the catalog's manifest never registered, and `initial_bases` is create-mode
-only — so that divergence cannot be repaired on the tables it lands on. The default
-mirrors services.yaml's for the same reason.
-
-## `- { name: RASK_NATS_URL, value: {{ include "lance.natsUrl" $root | quote }} }`
-
-The work queue's broker: the bus `nats.url` names, the one every NATS client in the release dials.
 
 ## `{{- if $svc.channels }}`
 

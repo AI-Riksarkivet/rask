@@ -12,40 +12,41 @@ are aspirational and clearly marked, **not** the current mechanism.
 > (a real Ray Data job); its in-process stand-in fills the identical contract so the loop is testable.
 
 ```
-            POST /produce                    medallion.bronze          medallion.silver
- (you/cron) ───────────▶ medallion-producer ──pub────────────▶ bronze→silver ──pub────────▶ silver→gold
-                         (producer)                    (stage runner)                     (stage runner, terminal)
-                            │ ingest bronze$events        │ transform                 │ transform
-                            │ + emit lineage              │ + emit + GATE             │ + emit + GATE
-                            ▼                             ▼                           ▼
-   every stage emits an OpenLineage RunEvent ─pub(lineage.events)─▶ lineage consumer ─▶ Apache AGE graph
+     catalog insert into           lineage.events.v1        medallion.bronze          medallion.silver
+     <project>-bronze$events ─────▶ /bronze-arrival ──pub─────────▶ bronze→silver ──pub────────▶ silver→gold
+ (a client, through the catalog)   (medallion-producer)              (stage runner)                (stage runner, terminal)
+                                                                      │ transform                 │ transform
+                                                                      │ + emit + GATE             │ + emit + GATE
+                                                                      ▼                           ▼
+   the catalog and every stage emit an OpenLineage event ─pub(lineage.events)─▶ lineage consumer ─▶ Apache AGE graph
                                                                                          (Run/Job/Dataset + edges)
    resulting lineage DAG:   bronze$events ─▶ silver$features ─▶ gold$catalog
    compaction cron ──every N──▶ discover every dataset ─▶ compact + GC old versions ─▶ emit maintenance lineage
 ```
 
-## 1. Ingest — the `medallion-producer` producer registers the run and fires the cascade head
+## 1. Ingest — a client writes bronze through the catalog, and the catalog's announcement fires the head
 
-`medallion-producer` is the **head** (a dummy Ray ingest job; `services/medallion/producer.py`, deployed as the
-`lance-ns-medallion-producer` pod running `medallion.producer:app`) — the **bronze ingest head** (R23: raw is the
-external world; bronze is the first governed tier, written directly). On **`POST /produce`** it:
+The lakehouse runs no ingest of its own ([ADR 0154](adr/0154-the-lakehouse-runs-no-ingest-and-no-workflow-engine.md)).
+Data enters only through the catalog's Lance Namespace doors (`CreateTable`, `InsertIntoTable`,
+`MergeInsertIntoTable`, `DeclareTable` + vended credentials, `RegisterTable`; `lance_docs/ns_catalog/spec.yaml`).
+A client — the deployer's ingest job on its own compute, or in development and the e2e lanes
+`tests/e2e-py/bronze_seed.py` (`seed_bronze_events`: create `<project>-bronze$events` if absent, then insert) —
+writes rows into `<project>-bronze$events`, and the catalog announces the committed write as an OpenLineage
+`COMPLETE` event on `lineage.events.v1`. A CREATE is announced as a DDL `DatasetEvent` and does not start the
+cascade; a data write (`insert`, `merge_insert`, an overwrite) does. The catalog stamps no `lance.token`, so the
+cascade token is the write run's `runId`.
 
-1. (compute on) seeds a real `bronze$events` Lance dataset (stage-stamped at ingest) — the fake-Ray ingest;
-2. emits an OpenLineage `RunEvent` for `bronze$events` (external sources ride the IIIF/S3 heads' inputs;
-   the dummy seed has none).
+`medallion-producer` *subscribes* to the lineage topic (`/bronze-arrival`) and — only for a `COMPLETE` write
+to the bronze dataset, or to a table a lane declares as its input — publishes the first trigger
+`medallion.bronze`, naming the location the catalog vended for the table. So the cascade is driven by the
+**arrival of data INTO bronze**, whoever wrote it (GOAL 4 B2), and the head is a subscriber like every
+other stage. It is loop-guarded so the stage runners' own downstream events cannot re-fire it, and a
+byte-free catalog marker (register, deregister, declare) or a maintenance pass does not fire it either.
 
-It does **not** itself publish `medallion.bronze`. `medallion-producer` also *subscribes* to the lineage topic
-(`/bronze-arrival`) and — only for a bronze-dataset write — publishes the first trigger
-`medallion.bronze`. So the cascade is driven by the **arrival of external raw INTO bronze**, not the call
-(GOAL 4 B2); any bronze ingester (this dummy, the IIIF head, or the catalog) that emits a bronze-write
-event drives it, and the head is a subscriber like every other stage. Loop-guarded so the stage runners' own
-downstream events can't re-fire it.
+A trigger publish that fails answers `RETRY`, so Dapr redelivers the bronze-write event rather than
+dropping the cascade.
 
-A failed bronze-write emit is the cascade head failing, so `/produce` returns **503** (the caller
-retries) — not a silent 202. The bronze-write event *is* the registered run; `/bronze-arrival` turns it
-into `medallion.bronze`, and each stage runner downstream picks that up.
-
-→ [`MEDALLION.md`](MEDALLION.md) · code: `services/medallion/{producer.py,services/produce.py}`
+→ [`MEDALLION.md`](MEDALLION.md) · code: `services/medallion/{producer.py,services/ingest_trigger.py}`
 
 ## 2. Transform — the stage runners (one Dapr subscriber per DAG edge)
 

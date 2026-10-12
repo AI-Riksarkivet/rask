@@ -41,8 +41,8 @@ Two language-pure planes: Python at the repo root, all JS/TS under `frontend/`.
     `maintenance` (compaction, index optimize, version reclamation, drift + orphan reporting)
   - **media**: `viewer`, `search`, `annotator`
   - **fleet**: `gateway` (reverse proxy `:8888`), `compute` (Ray introspection + Serve proxy),
-    `controlplane`, `flows` (the studio flow-builder's server half), `ingest` (the pre-bronze
-    acquisition plane)
+    `controlplane`, `flows` (the studio flow-builder's server half), `notifications` (the
+    per-subject inbox)
 - `runners/` — **sealed model environments, not workspace members** (each owns its `pyproject.toml`
   and `uv.lock`, so torch/model pins never enter the fleet's resolution): `htr`, `asr`, `diarize`,
   `voiceprint`, `topics`, `kg`, `assist`, `insid3`, `dummy`

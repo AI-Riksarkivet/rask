@@ -135,7 +135,7 @@ The binding name IS the route this app serves it on — one string with the Comp
 Explicit APP_API_TOKEN so require_dapr_token can verify the `dapr-api-token` header the sidecar
 stamps on /control-events delivery → a forged direct in-cluster POST is 403'd. Without it the
 guard silently no-ops and any pod could inject fabricated change-events into every replica's
-buffer. Same secret + pattern as the lineage/medallion/compaction ingest apps; the catalog
+buffer. Same secret + pattern as the lineage/medallion/compaction apps; the catalog
 lifespan also asserts it is set when control eventing is on (fail-closed, not silently open).
 
 ## `{{- include "lance.appTokenEnv" (list $root $root.Values.services.catalog.daprAppId) | nindent 12 }}`
@@ -155,7 +155,7 @@ this catalog creates — never `owner` (owner ruling 2026-09-10, zero trust). Th
 live in `catalog/api/fga_deps.py::_CASCADE_RUNGS`; this list is only WHO.
 Admission and authorization are different questions and this is deliberately NOT
 RASK_SA_SUBJECTS: that map says who may SPEAK to the catalog and includes identities
-such as ingest's and maintenance's, which must never hold a cascade rung on a
+such as maintenance's, which must never hold a cascade rung on a
 tenant's data. Only the identities that actually move data between tiers appear here —
 the producer (which resumes a human-approved promotion, so it publishes too) and the
 stage runners.
@@ -287,7 +287,7 @@ must match the Component name in dapr-component.yaml (both render lance.subPubsu
 
 ## `- { name: LINEAGE_DLQ_TOPIC, value: "dlq.lineage.events" }`
 
-Dapr-native DLQ (ships with the Resiliency CRD): ingest deliveries that exhaust the
+Dapr-native DLQ (ships with the Resiliency CRD): lineage deliveries that exhaust the
 sidecar retry schedule park here (visibility only — replay-from-stream stays the recovery).
 
 ## `- { name: LINEAGE_DLQ_PUBSUB, value: "{{ include "lance.subPubsub" (list $root .Values.services.lineage.dap...`

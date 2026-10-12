@@ -26,8 +26,8 @@ authz model, and ONE storage substrate.
 
 ## D1 — Head shape: a separate `POST /train` endpoint + its OWN topic (not a field on the stage trigger)
 
-- **`POST /train`** on medallion-producer (the compute-adjacent head service, same `require_dapr_token`
-  guard as `/produce` and `/ingest-media`). Body:
+- **`POST /train`** on medallion-producer (the compute-adjacent head service, the producer's only write
+  door). Body:
   `{"model": "<name>", "features": [{"dataset": "...", "version": <int|null>}], "config": {...}}`
   → `202 {"token": ...}`. An omitted `version` pins to the LATEST at submit time — the pin is
   resolved at the head and threaded through, never left floating (reproducibility).

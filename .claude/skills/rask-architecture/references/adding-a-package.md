@@ -12,7 +12,7 @@ The tree is language-first:
 
 - **Reusable Python library, no entrypoint** → `packages/<name>`. If it grows an
   `app` or a CLI, it's in the wrong layer.
-- **Runnable Python** (an HTTP service, or a Dapr-workflow plane like `ingest`) →
+- **Runnable Python** (an HTTP service, or a Dapr-subscription plane like `notifications`) →
   `services/<name>`. A model runtime does **not** go here — it goes in the sealed
   `runners/<name>`, outside every workspace glob, where the runner CLI lives.
 - **A SvelteKit zone** → `frontend/microfrontends/<zone>`.

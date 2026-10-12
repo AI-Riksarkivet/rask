@@ -44,10 +44,11 @@ Lance blob v2 has four placements. Three are size-driven and one is a reference.
 | dedicated (`kind=2`) | one payload, its own `.blob` | ≥ 4 MiB |
 | **external (`kind=3`)** | the URI is stored; Lance owns no bytes | whenever a base is registered |
 
-The thresholds are **pinned, not inherited** (`ingest/runtime.py`), because the guide stores them in
-the dataset SCHEMA and rejects an append naming different ones — an inherited default that shifts
-under a library upgrade would split an existing table's writes from its reads with no code change to
-point at. `tests/test_blob_placement_thresholds.py` asserts them against Lance itself.
+The thresholds belong **pinned, not inherited**, in the writer that creates a blob column (the ingest
+runner, CP-061), because the guide stores them in the dataset SCHEMA and rejects an append naming
+different ones — an inherited default that shifts under a library upgrade would split an existing
+table's writes from its reads with no code change to point at. A stage carries its upstream's blob
+field forward, so the pin is made once, at bronze.
 
 The `kind` numbering is measured, not documented. An earlier comment had the boundaries as
 16 KiB / 2 MiB and concluded "a scanned archival page lands in dedicated"; both numbers were wrong
@@ -55,12 +56,10 @@ and so was the conclusion — a 3 MB page lands **packed**.
 
 ### External placement is operator-gated
 
-A source root is CLIENT-SUPPLIED (`options.bucket` comes off the ingest request), so an adapter's
-declared base is untrusted. Ingest reads the same `LANCE_EXTERNAL_BLOB_BASES` allowlist the catalog
-enforces. Without that gate the cascade's own `read_blobs` becomes a server-side read primitive for
-any URI a caller can name. An unapproved base **degrades to managed, loudly**; it is never silently
-honoured, and never silently dropped. An approved one is sent as the catalog create door's
-`external_blob_base` parameter, and the catalog judges it again (inside the allowlist, outside every
+A source root is CLIENT-SUPPLIED, so a writer's declared base is untrusted. The catalog judges it
+against the `LANCE_EXTERNAL_BLOB_BASES` allowlist. Without that gate the cascade's own `read_blobs` becomes a server-side read primitive for
+any URI a caller can name. A writer asks for a base through the catalog create door's
+`external_blob_base` parameter, and the catalog judges it (inside the allowlist, outside every
 governed root and bucket), registers that one base and records it; `/commit` accepts an external
 descriptor only through a recorded base (LH-209).
 
@@ -93,18 +92,12 @@ field label set upstream onto the tier when the tier's field lacks it, and never
 
 ## 3. The write path
 
-```
-POST /v1/ingests
-  → ingest_run (Dapr Workflow)
-      → when_all(chunk_run × N)        fan-out; the parent survives a worker's death
-          → JetStream                  units, batched per fragment
-              → worker: fetch, validate, sha256
-                  → lander              THE one Lance writer (invariant I4)
-                      → catalog: create + register the external base   (create-mode only)
-```
-
-The bytes are **fetched** — validation and the `sha256` fixity column both read them — and then not
-stored. Fetching to hash is not copying into the lakehouse.
+The lakehouse runs no ingest ([ADR 0154](../adr/0154-the-lakehouse-runs-no-ingest-and-no-workflow-engine.md)).
+A client writes bronze through the catalog's Lance Namespace doors: small tabular sources through
+`InsertIntoTable` / `MergeInsertIntoTable`, and bulk or blob sources by writing Lance files with
+credentials the catalog vends (`DeclareTable` + `vend_credentials`) and committing them through the
+catalog's `/commit`, which judges each fragment's file version and footer. The ingest runner (CP-061) is that
+client for external sources; the e2e lanes seed through `tests/e2e-py/bronze_seed.py`.
 
 ## 4. The control path
 
@@ -150,7 +143,8 @@ of 0.25 and the chart's default of 0.25 are otherwise indistinguishable.
 
 `token` identifies a HOP and is re-minted at every tier boundary from the publication event id —
 correct for an idempotency key, useless as a batch identity. `cascade_id` is minted once at the head
-(seeded from the ingest token, so a redelivered head does not fork the batch) and rides
+(seeded from the bronze write's token, or its run id when the writer stamps none, so a redelivered head
+does not fork the batch) and rides
 `publish → table_published.extra → the next trigger`. It is stamped on every run event including FAIL
 and the quality HOLD, because the batch someone most needs to find is the one that broke.
 

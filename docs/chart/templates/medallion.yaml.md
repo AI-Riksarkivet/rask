@@ -6,10 +6,10 @@ every release revision, under a 1 MiB ceiling. Each section is headed by the tem
 ## `apiVersion: apps/v1`
 
 ─────────────────────────────────────────────────────────────────────────────────────────────────
-medallion-producer — the dummy producer / HEAD of the medallion pipeline (R23: bronze is the FIRST governed
-tier; raw is the external world). POST /produce emits ONLY the bronze$events OpenLineage event;
-medallion-producer's OWN /bronze-arrival subscription reacts to that event and publishes the first trigger
-(medallion.bronze) the bronze→silver stage runner consumes — the event-driven head (B2), not a direct publish.
+medallion-producer — the HEAD of the medallion pipeline, and it writes no tier (ADR 0154: data enters only
+through the catalog's namespace doors). Its /bronze-arrival subscription reacts to the catalog's COMPLETE
+announcement of a write to `<project>-bronze$events` and publishes the first trigger (medallion.bronze) the
+bronze→silver stage runner consumes. Its one write door is POST /train.
 ─────────────────────────────────────────────────────────────────────────────────────────────────
 
 ## `- { name: LANCE_AUDIT_ENABLED, value: {{ hasKey $root.Values.auth "audit" | ternary $root.Values.auth.audit...`
@@ -48,9 +48,8 @@ emitter must register no route rather than subscribe to a topic nothing publishe
 
 ## `- { name: MEDALLION_CONTROL_ROOT, value: "s3://{{ .Values.minio.bucket }}" }`
 
-#84 per-tenant routing (opt-in): the catalog's warehouse-registry root. A `project`-carrying
-/produce resolves that project's ACTIVE warehouse and seeds <root>/medallion/bronze there;
-project-less requests keep the shared URIs below byte-identically.
+#84 per-tenant routing (opt-in): the catalog's warehouse-registry root, through which a
+project's ACTIVE warehouse is resolved; project-less work keeps the shared URIs below.
 
 ALSO required whenever ANY stage runner declares a `lane`, which is why `$transformsDeclared` widens the
 condition. The cascade HEAD consults declarations to decide whether an unrecognised table is
@@ -107,7 +106,7 @@ Job use (see the catalog twin, services.yaml). Unset = provision-by-name at boot
 ## `{{- include "lance.governedOidcEnv" . | nindent 12 }}`
 
 #64 human trigger door: a signed-in project admin (OIDC bearer + can_administer) may fire
-/produce or /train WITHOUT the service token. The web BFF forwards the user's bearer here; the
+/train WITHOUT the service token. The web BFF forwards the user's bearer here; the
 service-to-service app-token path (APP_API_TOKEN, above) is unchanged. Same OIDC construction
 shape as catalog/lineage; the admin gate resolves against project:<produceAdminProject>.
 
@@ -135,7 +134,7 @@ renders the stage runners, so a deployment that adds one gets its routes with no
 
 Each edge's AUTHORIZATION, keyed by its SOURCE namespace — what the re-run verb gates
 on. Built from the SAME stage runner list, so an added stage runner gets its gate with no second
-edit, and the rung is the stage runner's OWN `requiredAction` rather than /produce's
+edit, and the rung is the stage runner's OWN `requiredAction` rather than /train's
 `can_administer` (which is coarser AND different, and would lock out exactly the
 non-admin validator `can_promote` exists for).
 
@@ -151,19 +150,10 @@ silently dropped rather than refused. So on the DEFAULT chart the producer had n
 catalog URL at all, and `publish_promotion` — which no longer skips terminal tiers —
 would fail its resume with nothing having asked for it.
 
-UNCONDITIONAL, and it must stay that way. These three used to sit inside the
-`qualityReview` conditional above, which defaults FALSE in values.yaml and is unset in
-values-local, values-prod and values-live-pins — so on every shipped configuration the
-producer had no catalog address, and `POST /produce` wrote its bronze dataset with no
-`table:` object: no FGA ownership tuple, so `policy/set` 404s, no `_protection/` record
-is reachable, and no grant can name it. The registration code reads
-`settings.catalog_url` and skips silently when it is empty, so nothing went red.
-
-This is the SECOND time this exact shape has bitten, and the first is recorded three
-hundred lines below on the stage runner env: "Governance belongs to the cascade, so the
-catalog's address does too: unconditional, on every stage runner." The producer is part of
-the cascade — it is its HEAD — and was left behind. Gating a service's ability to
-register what it writes on an unrelated feature flag is how a tier becomes
+UNCONDITIONAL, and it must stay that way: `/bronze-arrival` asks this catalog where an
+arrived bronze table lives (`ingest_trigger._vended_upstream`) and names that location on the
+trigger, and the stage runners carry the same address unconditionally for the same reason.
+Gating a service's governance calls on an unrelated feature flag is how a tier becomes
 ungovernable without anything failing.
 
 ## `{{- $lanes := dict }}`
@@ -193,8 +183,8 @@ three agreeing while the third does not is a cron firing into a 404 forever.
 
 WHO THIS APP IS WHEN IT AUTHORS A RUN, which lineage authorizes. Absent, the app claims a
 code default (`service-stage-runner`) that holds no tuple, and lineage refuses the run while
-the request answers 202: measured 2026-09-10, every `/produce` emitted `sub='ray'`, every one
-was refused, and the provenance of every cascade head was discarded with nothing red.
+the request answers 202: measured 2026-09-10, every run this app authored emitted `sub='ray'`,
+every one was refused, and its provenance was discarded with nothing red.
 
 ## `- { name: MEDALLION_QUALITY_REVIEW_ENABLED, value: "true" }`
 
@@ -204,9 +194,8 @@ and only this app has a gateway row. The flag is what starts the workflow runtim
 
 ## `- { name: MEDALLION_COMPUTE_ENABLED, value: "true" }`
 
-Real fake-Ray compute: the producer seeds the BRONZE Lance dataset directly (R23 — so the
-cascade writes actual versioned data in the object store). The URI derives from the bronze namespace,
-exactly where the bronze→silver stage runner's FROM_URI points. S3 secret follows the catalog's
+Real compute for the producer's training door: `MEDALLION_BRONZE_URI` and the stage base below are where
+`/train` resolves a feature dataset by convention (`services/train.py`). S3 secret follows the catalog's
 two-tier rule (plaintext only when OpenBao is off — compute + OpenBao is not a shipped combo).
 
 ## `- { name: MEDALLION_STAGE_BASE_URI, value: "s3://{{ include "lance.stageBucket" (list . "silver") }}/medall...`
@@ -216,53 +205,10 @@ trainer resolves feature + model URIs from HERE (via silver's zone), so it stays
 bucket even when gold (sink) is zoned out. `silver` is unmapped by default →
 minio.bucket, so this is s3://<project-bucket>/medallion, unchanged on the single-bucket path.
 
-## `- { name: MEDALLION_MEDIA_SOURCE_BUCKET, value: {{ .Values.minio.bucket | quote }} }`
-
-The media ingest head (multimodal §9): /ingest-media seeds/reads the source prefix in the
-lake bucket (demo stand-in for an external media store), lands bronze-media blobs at the
-namespace-derived URI (MUST match the media stage runner's fromNamespace-derived FROM_URI), and
-triggers the media lane. Dataset/namespace/topic/prefix use the code defaults.
-
-## `- { name: MEDALLION_MEDIA_SEED_SAMPLES, value: {{ hasKey .Values.medallion "mediaSeedSamples" | ternary .Va...`
-
-hasKey+ternary (the LANCE_AUDIT_ENABLED convention, services.yaml): a key missing under
---reuse-values (a stored release predating §9) must render the default, not "" (pydantic
-bool_parsing boot crash on this producer).
-
-## `{{- $mediaBronzeNs := .Values.medallion.mediaBronzeNamespace | default "bronze-media" }}`
-
-The media bronze namespace comes from values, not a literal. It was written twice
-here as "bronze-media" — once as the stageBucket key and once as the path segment —
-so when the tiers were nested this URI stayed flat and the media stage runner DROPped every
-trigger (its MEDALLION_FROM_URI had moved and this had not). One value, one place.
-
-## `- { name: MEDALLION_MEDIA_BRONZE_NAMESPACE, value: {{ $mediaBronzeNs | quote }} }`
-
-The NAMESPACE and DATASET the media head stamps on its trigger. Both were left to
-their code defaults (`bronze-media` / `bronze-media$objects`, core/config.py) and the
-chart rendered NEITHER — so when the tiers were nested the head kept publishing a flat
-lane claim while the media stage runner had moved to `lakehouse$bronze-media$objects`, and
-every media trigger was DROPped with a 200 OK. The URI alone is not the contract: the
-stage runner compares the DATASET name.
-
 ## `- { name: MEDALLION_S3_ENDPOINT, value: "{{ include "lance.s3Endpoint" . }}" }`
 
-The IIIF page head (P7a): /ingest-iiif lands the BRONZE page-image blob dataset beside the
-events lane's bronze URI (same namespace root, its own dataset directory).
-Which IIIF Image API the head harvests from. WIRED, not left to the code default: that
-default is RA-INTERNAL and resolves only inside the archives' network, so every deploy
-elsewhere needed a `kubectl set env` to ingest a single page (live-proof 2026-07-28,
-defect 1). One knob feeds both harvest paths — the in-process httpx client AND the
-
-`| default` on both, for the same `--reuse-values` reason the `encoders` block above
-documents: these are NEW keys, and a stored release whose user values carry
-`medallion: {compute: true}` leaves `medallion.producer` sub-keys nil. The fallbacks are
-the code defaults (services/medallion/core/config.py), so an un-migrated release renders
-exactly what it ran before rather than an empty base URL.
-
-The IIIF Image API derivative path appended per page. Travels with baseUrl: a different
-server may not serve `full/max` (some cap at `full/2000,`), and a wrong derivative is a
-per-page 404 rather than a boot failure.
+The one S3 endpoint the estate names (`lance.s3Endpoint`), so the producer opens the same store the
+catalog governs when `/train` resolves a feature dataset and when the task registry is written at boot.
 
 ## `{{- $medScoped := .Values.minio.medallionAccessKey }}`
 

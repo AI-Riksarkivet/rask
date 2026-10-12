@@ -17,8 +17,7 @@ itself for the current code; this reference does not restate it. The generic mec
 
 ## A service app, with its lifespan
 
-Every service builds `app` at module import except ingest, whose `ingest.create_app()` is called per
-test (`services/ingest/tests/test_ingest_api.py`). Pick the fixture by how settings reach the app.
+Every service builds `app` at module import. Pick the fixture by how settings reach the app.
 
 **Settings through an `lru_cache`d getter**: `get_settings()` in catalog, lineage, maintenance and
 medallion; `get_<service>_settings()` in annotator, search and viewer. Copy
@@ -97,31 +96,23 @@ serves S3 over HTTP, and the catalog is pointed at it with `LANCE_REST_ROOT=s3:/
 ## A live uvicorn socket
 
 Use one when the claim is about the wire. The rask example is
-`tests/unit/test_bronze_is_governed_end_to_end.py` (`uvicorn.Config(app, port=0, lifespan="on")` on a
+`tests/integration/test_a_catalog_insert_into_bronze_starts_the_cascade.py` (`uvicorn.Config(app, port=0, lifespan="on")` on a
 thread, with a bounded wait for `server.started`). Why it matters here:
 `tests/unit/test_search_spec_binding.py`'s docstring records a query-model binding that `TestClient`
 accepted and a live uvicorn on fastapi 0.140.13 answered with 422 on every call.
 
 ## NATS, locally, through Dagger
 
-CI binds a real NATS to the pytest container (`.dagger/test.go`). The ingest queue suites
-(`services/ingest/tests/test_worker_queue.py`, `test_run_chain.py`) read `RASK_NATS_URL` and **skip**
-when nothing answers there, so a local run with no broker reports skips, not failures. Bring one up as
-a Dagger service at the image `.dagger/test.go` pins. `up` holds the foreground, so run it in the
-background or in a second shell:
+No offline suite needs a broker: the bus contract is proved by the `nats-auth` lane
+(`tests/e2e-py/test_nats_admits_each_client_only_to_its_own_subjects.py`), which brings its own
+nats-server. For an ad-hoc broker, bring one up as a Dagger service, never a docker container.
+`up` holds the foreground, so run it in the background or in a second shell:
 
 ```bash
-IMG=$(grep -oP 'natsImage = "\K[^"]+' .dagger/test.go)
+IMG=$(grep -ohP 'natsImage = "\K[^"]+' .dagger/*.go)
 dagger core container from --address="$IMG" with-exposed-port --port=4222 \
   with-default-args --args=nats-server,--jetstream as-service up --ports=14222:4222
 ```
-
-```bash
-RASK_NATS_URL=nats://127.0.0.1:14222 uv run pytest services/ingest/tests/test_worker_queue.py services/ingest/tests/test_run_chain.py -rs
-```
-
-Verified 2026-09-29 against `nats:2.14.2-alpine`: 10 passed, no skips (without the broker,
-`test_worker_queue.py` alone reports 4 skipped).
 
 ## The Ray job client
 

@@ -44,7 +44,7 @@ service URLs are overridable via:
 | `RASK_CONTROLPLANE_URL` | `http://127.0.0.1:8820` | controlplane (`/api/projects`) |
 | `RASK_CATALOG_API_URL` | `http://127.0.0.1:2333` | lance catalog (`/api/catalog`) |
 | `RASK_LINEAGE_API_URL` | `http://127.0.0.1:8000` | lineage (`/api/lineage`) |
-| `RASK_MEDALLION_API_URL` | `http://127.0.0.1:8002` | medallion producer (`/api/produce`, `/api/ingest-iiif`, `/api/train`) |
+| `RASK_MEDALLION_API_URL` | `http://127.0.0.1:8002` | medallion producer (`/api/train`, `/api/trains`, `/api/promotions`, `/api/stage-runners`, `/api/cascade`) |
 | `RASK_EXPLORER_VIEWER_URL` | `http://127.0.0.1:8101` | media viewer (`/api/explorer`, incl. the objects browser) |
 | `RASK_EXPLORER_SEARCH_URL` | `http://127.0.0.1:8102` | media search (`/api/explorer/search`) |
 | `RASK_EXPLORER_ANNOTATOR_URL` | `http://127.0.0.1:8103` | annotator (`/api/explorer/annotations`) |

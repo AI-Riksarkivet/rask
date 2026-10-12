@@ -227,7 +227,7 @@ so it must read as a reason a person would accept; and `notification-center.stor
    reachable is the ORIGINATOR riding beside it, which is why every trigger payload in the chain
    re-carries it.
    **The hop that lost it was the TIER BOUNDARY, and the lesson generalises past this cascade.**
-   `/produce` → `/bronze-arrival` → the stage runner's four FAIL emits all carried the human; the stage runner then
+   `/bronze-arrival` → the stage runner's four FAIL emits all carried the human; the stage runner then
    publishes its output to the CATALOG (the tag move is what wakes the next tier), and that call
    carried `cascade_id` and dropped the person. The publication head filled the gap by deriving an
    originator from the control event's `actor` — but a stage runner authenticates to the catalog AS ITSELF,
@@ -324,10 +324,9 @@ survives is the shape of what remains, because these classes recur every time a 
 notify somebody.
 
 1. **No identity at the door.** A producer that never captured a verified sub can never name a person,
-   and nothing downstream can repair it. Closed for `/produce`, `/train`, ingest and — since
-   2026-08-22 — `/ingest-media`, which was token-only and so could resolve no principal at all; it now
-   shares the pinned dual-auth door (`authorize_ingest_media`, no `?project=`, because the media head's
-   target is configured and authorization scope must equal write scope). Still open for
+   and nothing downstream can repair it. Closed for `/train`, the producer's only write door, and
+   for every write through the catalog's namespace doors, whose event the catalog authors as the
+   verified caller (data enters the lakehouse only there, ADR 0154). Still open for
    `services/compute` (`RayJob` has no author field) and the controlplane (the Project CR carries
    `spec.team`, a literal, not a requester). See `docs/adr/0042-the-compute-service-gets-no-emitter-yet-and-the-blocker-is.md` — an emitter without an identity
    produces events the plane is *designed* to discard, which reads as coverage and is not.
@@ -335,8 +334,7 @@ notify somebody.
    `lease_expired` fires from an actor reminder with no request and no emitter in scope. The audience
    exists (the task's holder) but the emit site does not.
 3. **A fact that only exists while somebody is looking.** Several failures are composed at read time
-   inside an HTTP handler and never persisted or published — flows' unparsable result, ingest's
-   provenance-verification defect. Nothing can notify what was never recorded.
+   inside an HTTP handler and never persisted or published — flows' unparsable result. Nothing can notify what was never recorded.
 4. **An audience that is real but unmodelled.** `services/flows` has no project and no lakehouse
    output, so even a perfect emit dies on `notifiable()`'s output rule; the controlplane keys watches
    by CR name while fan-out matches the FGA tenant id, and nothing joins the two namespaces.

@@ -10,7 +10,7 @@ these are found by watching the Perses dashboards (`make dashboards`) or a user 
 
 - **Services** (FastAPI): `catalog` (REST catalog + model registry), `lineage` (OpenLineage → Apache AGE
   graph), the medallion **stage runners** (`bronze-to-silver`, `silver-to-gold`, `media-to-silver`),
-  `medallion-producer` (the `/produce` + `/train` head), `compaction`, `gateway`, `web`.
+  `medallion-producer` (the cascade head `/bronze-arrival` + `/train`), `compaction`, `gateway`, `web`.
 - **Stores**: `age-postgres` (the lineage graph **AND** OpenFGA's datastore — one pod, dual-purpose),
   `rustfs` (the Lance object store — all medallion + registry data), `openfga` (authz), `openbao` (secrets,
   prod = sealed file backend), `greptimedb` (metrics), `dex` (OIDC).
@@ -99,7 +99,7 @@ restart the pod. If the pool is down, see [AGE down](#age-postgres-down--lineage
 
 ## Cascade stalled
 
-**Symptom.** `/produce` ran but the cascade stops mid-way — e.g. `bronze$events` exists but `silver$features`
+**Symptom.** A bronze write landed through the catalog but the cascade stops mid-way — e.g. `bronze$events` exists but `silver$features`
 never lands. `medallion_stage_transitions_total` flat for the missing stage.
 
 **Cause (in order of likelihood).** (1) The stage runner was **FGA-denied** — it lacks the grant to write its
@@ -326,12 +326,12 @@ otherwise. Purge through the sidecar, never with a direct `DELETE` on `daprstate
 actor runtime that owns those keys:
 
 ```bash
-POD=$(kubectl get pod --no-headers -o name | grep rask-ingest | head -1)
+POD=$(kubectl get pod --no-headers -o name | grep rask-medallion-producer | head -1)
 IDS=$(kubectl exec rask-age-0 -- bash -lc "psql -U lance -d daprstate -tAc \
   \"select distinct split_part(key,'||',3) from state \
     where key like '%workflow%' and insertdate < '<cutoff-date>'\"")
 for id in $IDS; do
-  kubectl exec ${POD#pod/} -c ingest -- \
+  kubectl exec ${POD#pod/} -c medallion-producer -- \
     curl -s -X POST "http://127.0.0.1:3500/v1.0-beta1/workflows/dapr/$id/purge"
 done
 ```

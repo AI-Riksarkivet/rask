@@ -77,8 +77,8 @@ consequences it does not spell out.
 - **Async is strict.** No `asyncio_mode` is set, so pytest-asyncio runs in strict mode. The `anyio`
   plugin is loaded too; most async tests use `@pytest.mark.asyncio`, so write new ones that way.
 - **Code-shape rules live in ruff and import-linter.** A banned name is a `TID251` entry in the root
-  `[tool.ruff.lint.flake8-tidy-imports.banned-api]`, restated in `services/ingest` and
-  `services/viewer`, whose nested maps replace the root one. A sanctioned use takes a line-level
+  `[tool.ruff.lint.flake8-tidy-imports.banned-api]`, restated in `services/viewer`,
+  whose nested map replaces the root one. A sanctioned use takes a line-level
   `# noqa: TID251`, and only a module that IS the seam takes a per-file ignore. A layer rule is a
   contract in `.importlinter`, run by `make lint-imports` (part of `make check`).
 
@@ -90,9 +90,9 @@ consequences it does not spell out.
 | `make check-fast`                                 | `tests/unit tests/integration` at `-n 16`, with no marker filter. `--dist loadfile`, because three suites are parallel-unsafe at the file level (the `lance.audit` process-global logger, `configure_audit`'s level, the registry CAS markers) |
 | `make test-slow`                                  | `-m "not e2e"`, then every runner suite unfiltered                                                                |
 | `make coverage`                                   | `-m "not e2e and not slow" --cov`, on request only                                                                |
-| CI: `dagger call test` (`.dagger/test.go`)        | the `make test` marker filter, serially, with `--timeout=300 --timeout-method=thread`, helm installed and a real NATS bound at `RASK_NATS_URL`. **No runner suite** |
+| CI: `dagger call test` (`.dagger/test.go`)        | the `make test` marker filter, serially, with `--timeout=300 --timeout-method=thread`, helm installed. **No runner suite** |
 | CI: `dagger call auth-chain`, `dagger call governance-chain` | a real Dex, OpenFGA and catalog as Dagger services (plus lineage for `governance-chain`), asserting through `scripts/auth_chain.sh` and `tests/e2e-py/test_governance_e2e.py` respectively |
-| CI: `dagger call nats-auth` (= `make nats-auth`, ms-gates leg `nats-auth`) | `tests/e2e-py/test_nats_admits_each_client_only_to_its_own_subjects.py` (marker `nats_auth`): the NATS fixture's nats-server in operator mode with test-only nsc keys, the permission table read off the render's dev seed, every user's call set, foreign and credential-less publishes refused, ingest's drain, and one real daprd 1.18.1 per component shape, judged by the broker's log ([[XC-078]]) |
+| CI: `dagger call nats-auth` (= `make nats-auth`, ms-gates leg `nats-auth`) | `tests/e2e-py/test_nats_admits_each_client_only_to_its_own_subjects.py` (marker `nats_auth`): the NATS fixture's nats-server in operator mode with test-only nsc keys, the permission table read off the render's dev seed, every user's call set, foreign and credential-less publishes refused, and one real daprd 1.18.1 per component shape, judged by the broker's log ([[XC-078]]) |
 | CI: `e2e-stack` (= `make e2e-ci`), `e2e-ray` (= `make e2e-ray-ci`), `dagger call test-lineage` | the `tests/e2e-py` files named in `scripts/e2e_stack.sh`, `scripts/ray_e2e_stack.sh` and `.dagger/e2e.go`, against a stack the lane brings up |
 | `make fga-test` (part of `make check`)            | the OpenFGA model's own `.fga.yaml` suite                                                                         |
 | `make e2e-<suite>`, `make e2e-live`               | `tests/e2e-py` against a stack already deployed: one marker at the addresses you pass, or `-m e2e` against the k3s release |
@@ -124,7 +124,7 @@ process-global actor-proxy factory, and closes medallion's pooled Ray client.
 | S3 through boto3 / `storage`  | moto `mock_aws()`                                                                                           |
 | S3 read by pylance or pyarrow | a moto server, `tests/integration/test_moto_s3.py::moto_endpoint`: `mock_aws()` patches botocore, which the native Lance and Arrow clients never go through |
 | Outbound HTTPX                | `respx` (`services/flows/tests/test_routes.py`)                                                             |
-| NATS JetStream                | a real broker: CI binds one; locally `references/fixtures.md` § NATS                                        |
+| NATS JetStream                | a real broker through Dagger (`references/fixtures.md` § NATS); the `nats-auth` lane brings its own         |
 | Ray job client                | a structural fake `cast` to `JobSubmissionClient`: `packages/ray-kit/tests/test_dashboard_bounds.py`        |
 | OpenFGA, authz not the claim  | `RASK_FGA_ENABLED` / `RASK_OIDC_ENABLED` left at their default, off; with FGA off the checker allows everything. Where a route needs a named subject or a decision, override that service's `current_subject` / `get_checker` |
 | OpenFGA, authz is the claim   | the model's `.fga.yaml` suite (`make fga-test`), or a real Dex and OpenFGA via `dagger call auth-chain` / `governance-chain`. The offline suite has no OpenFGA server |
@@ -133,8 +133,8 @@ process-global actor-proxy factory, and closes medallion's pooled Ray client.
 ## Skips and prose
 
 - **Skips not to copy**: `pytest.skip("helm not available")` in `chart_render.render_text` and every
-  file `git grep -l 'helm not available'` lists, and the ingest suites' `skipif` when no NATS answers.
-  CI provides both, so the skip only hides the test on a developer box.
+  file `git grep -l 'helm not available'` lists. CI provides helm,
+  so the skip only hides the test on a developer box.
 - **Shapes not to copy**: some `tests/unit` files still read the Makefile, `pyproject.toml`, source or
   prose instead of running code (4 of 371 parse an AST, measured 2026-09-29). Don't write a new test in
   their shape: a code-shape rule goes to ruff or an import-linter contract, and a behaviour claim
