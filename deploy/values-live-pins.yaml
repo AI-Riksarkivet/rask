@@ -3,10 +3,10 @@
 image:
   tags:
     assist-runner: "main-31b161ec"
-    flows: "lakehouse-3e959931"
-    gateway: "lakehouse-3e959931"
-    lance-rest-catalog: "lakehouse-3e959931"
-    notifications: "lakehouse-3e959931"
+    flows: "lakehouse-8abebbb3"
+    gateway: "lakehouse-4d4e5cba"
+    lance-rest-catalog: "lakehouse-8abebbb3"
+    notifications: "lakehouse-8abebbb3"
     web-annotator: "main-90b8d0ed"
     web-compute: "main-90b8d0ed"
     web-explorer: "main-90b8d0ed"
