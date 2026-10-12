@@ -66,6 +66,32 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   the owner, or before anything destructive. Every delegated agent's report marks what it could not
   confirm and where it looked; a reviewer lists only problems it would block the merge for, each with
   the file and line, why it is wrong, and how to show it fails.
+- **Three facts judge every design (owner, 2026-10-12): zero trust, cloud native, Lance-idiomatic.** Put them in
+  every agent brief and test every option against them before offering it. A change whose purpose is closing a
+  zero-trust gap (an unsigned writer admitted, a credential that never rotates, an identity trusted by position) is
+  pre-approved: do it and report it. Still ask before anything destructive on shared live state, and still ask a
+  real trade-off between two zero-trust-correct designs.
+- **Platform services are external in production** (owner, 2026-10-04). OpenBao, Dex, S3, the OTel backend, ESO, the
+  operators, NATS and OpenFGA's Postgres are the platform's; the bundled copies are development fixtures. rask
+  references them by name, mints no production trust root, and does not engineer a fixture's durability. The app
+  chart is the product (ADR 0153): operators, CRDs and compute go in their own releases.
+- **Research before asking** (owner, 2026-09-26). A question `lance_docs/`, a measurement or rask's own callers can
+  answer is researched and decided, with the evidence reported; only product scope, risk appetite, priority, facts
+  outside the repo and outward-facing actions go to the owner. Justify a design from `lance_docs/`, never from what
+  Lakekeeper chose (owner, 2026-10-10). When the owner asks how or whether, answer in plain prose with one
+  recommendation and the next command, not a menu. `/implement`, `/to-spec`, `/to-tickets`, `/grill-with-docs` and
+  `/wayfinder` are started by the owner only.
+- **Delegation** (owner, 2026-10-05): implementer, reviewer and workflow agents run Opus at medium effort
+  (`subagent_type: opus-medium`); read-only sweeps may use Sonnet. A review round fixes HIGH and MEDIUM findings only,
+  LOWs are parked, and one round is the default. A worktree agent starts from `origin/main`, so pin its base with
+  `git switch -c <branch> <sha>` when local `main` is ahead.
+- **Live estate** (owner, 2026-10-02/2026-09-26). An unplanned write to a shared live object (patch, delete, scale) is
+  asked first through the multi-question tool, naming the object, the change and the effect, even under a standing
+  kubectl permission. Squash a row's review rounds into one commit before building its images (tags name a sha), and
+  deploy the chart from the worktree at the image's sha. The owner's measure is closed rows and shipped code: surface
+  a blocking decision early instead of auditing around it.
+- **Lessons the estate taught** (traps that recur, each measured once) are listed in `docs/agents/lessons.md`. Read
+  it before live work on the estate.
 
 ## Toolchain rules
 
