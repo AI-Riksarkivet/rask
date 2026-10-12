@@ -5,17 +5,14 @@ quality gate ON**, against the real kind stack (Dapr/NATS/AGE/RustFS/Dex/OpenFGA
 class here is the never-driven union — each feature green in isolation while the composition breaks —
 so this suite asserts, live:
 
-  1. the governed ALLOW path: one ``/produce`` cascades bronze→silver→gold (R23: the producer ingests
-     straight into bronze) with the seeded service
-     grants, correlated by the deterministic per-stage run ids; quality verdicts recorded; and the same
+  1. the governed ALLOW path: one bronze seed, inserted through the catalog's namespace door
+     (``bronze_seed.py``), cascades bronze→silver→gold with the seeded service grants, correlated by the deterministic per-stage run ids; quality verdicts recorded; and the same
      stack really enforces (anon → 401, ungranted user → 403);
   2. FGA-deny → DROP: with the gold validator tuple revoked, the SAME drive stops at silver — gold's
      run never lands — and re-granting makes the next drive cascade again (the tuple is the only delta);
   3. quality-block: a bad batch (null ids) written to bronze is derived into silver, the gate records
      ``quality_passed=false`` + the failed ``not_null`` assertion in lineage, and gold is NOT triggered;
-  4. the MEDIA lane under governance: ``/ingest-media`` lands blobs + derives thumbnail/embedding with
-     the seeded ``service-media-to-silver`` grant, all read back through the GOVERNED lineage API.
-  5. the TRAIN lane under governance (#115): ``/train`` drives a Ray training job that self-emits its
+  4. the TRAIN lane under governance (#115): ``/train`` drives a Ray training job that self-emits its
      OpenLineage lifecycle to the HTTP ingest — which under auth 401'd EVERY event (all training
      provenance silently lost) until the service-door credential. The run must land COMPLETE
      **attributed to ``service-trainer``** (a bare FGA subject, not a Dex sub), with the model node
@@ -44,6 +41,7 @@ from typing import Any
 
 import pytest
 import requests
+from bronze_seed import cascade_token, seed_bronze_events
 from promotion_review import approve_if_held
 from topology import OUTSIDER
 
@@ -216,8 +214,8 @@ def _owner_tuples(user: str, namespace: str, table: str) -> list[dict[str, str]]
 #: JetStream first-redelivery window: backOff[0] == ackWait, pinned to chart/templates/dapr-component.yaml
 #: (backOff: 30s,…). Test 2 must observe a denied run stay absent PAST this, measured — not choreographed.
 REDELIVERY_WINDOW = 30.0
-#: Stage operations this drive can NAME BY RUN ID — bronze and silver only, and `aggregate_gold` is
-#: deliberately absent.
+#: Stage operations this drive can NAME BY RUN ID — silver only. Bronze is the seed's own insert, whose run id IS the
+#: cascade token (`bronze_seed.cascade_token`), and `aggregate_gold` is deliberately absent.
 #:
 #: Under `medallion.cascadeViaPublish` the silver→gold hop is driven by the catalog's table_published
 #: event, and `publication_trigger.py:138` mints that trigger's token from the publication `event_id`.
@@ -228,7 +226,7 @@ REDELIVERY_WINDOW = 30.0
 #:
 #: Gold is asserted the way the medallion suite asserts it instead: by its UPSTREAM CHAIN, which is
 #: identity-free and true however the token was minted.
-OPERATIONS = ("ingest_bronze", "embed_features")
+OPERATIONS = ("embed_features",)
 
 pytestmark = [pytest.mark.e2e, pytest.mark.governed_union]
 
@@ -251,9 +249,9 @@ def _idem(prefix: str) -> str:
 
 @pytest.fixture(scope="module")
 def stack() -> tuple[str, str]:
-    if not (LANCERAY and LINEAGE and FGA):
-        pytest.skip("set LANCE_E2E_LANCERAY_URL / LANCE_E2E_LINEAGE_URL / LANCE_E2E_FGA (see docstring)")
-    for name, url in (("medallion-producer", LANCERAY), ("lineage", LINEAGE)):
+    if not (LANCERAY and LINEAGE and FGA and CATALOG):
+        pytest.skip("set LANCE_E2E_LANCERAY_URL / LANCE_E2E_LINEAGE_URL / LANCE_E2E_FGA / LANCE_E2E_CATALOG_URL (see docstring)")
+    for name, url in (("medallion-producer", LANCERAY), ("lineage", LINEAGE), ("catalog", CATALOG)):
         try:
             requests.get(f"{url.rstrip('/')}/livez", timeout=5).raise_for_status()
         except Exception:
@@ -474,13 +472,12 @@ def _producer_for(lineage: str, headers: dict[str, str], dataset: str, run_id: s
 #: `medallion.cascadeViaPublish` on, the cascade is driven by `publication_trigger`, which ALWAYS
 #: carries a project because the stage runner cannot resolve its tiers without one. A PROJECTLESS produce
 #: therefore publishes silver and GOLD NEVER FIRES — measured here 2026-08-25 as
-#: {'ingest_bronze': 'COMPLETE', 'embed_features': 'COMPLETE', 'aggregate_gold': None}, which the
+#: {'bronze': 'COMPLETE', 'embed_features': 'COMPLETE', 'aggregate_gold': None}, which the
 #: bare message reported as a broken cascade against a cascade working perfectly for a tenant. The
 #: medallion suite names the same signature in `_projectless_diagnosis`.
 PROJECT = os.environ.get("LANCE_E2E_PROJECT", "")
-#: Producing INTO a named project is a human-authorized act: `produce_auth` takes the service-token
-#: branch as soon as a valid dapr-api-token is present and refuses the cross-project case THERE, before
-#: any bearer is read — so the bearer must go INSTEAD of the token, not alongside it.
+#: The project admin the seed inserts as: writing a project's bronze is a write on that project's table, which the
+#: catalog authorizes like any other.
 ADMIN_TOKEN = os.environ.get("LANCE_E2E_ADMIN_TOKEN", "")
 
 
@@ -530,23 +527,10 @@ def _poll(
     pytest.fail(message if isinstance(message, str) else message())
 
 
-def _produce(lance_ray: str) -> str:
-    headers: dict[str, str] = {"dapr-api-token": DAPR_TOKEN, "Idempotency-Key": _idem("gu-produce")}
-    params: dict[str, str] = {}
-    if PROJECT:
-        # Bearer INSTEAD of the service token — see ADMIN_TOKEN.
-        params["project"] = PROJECT
-        if ADMIN_TOKEN:
-            # SWAP THE CREDENTIAL, KEEP THE KEY. This replaced the whole dict, which silently dropped
-            # `Idempotency-Key` — required with no default since `2da0164c` — so on a project estate
-            # (which this one is: the runner discovers `acme`) every produce answered 422 at header
-            # validation. Only the credential differs between the two shapes; nothing else about the
-            # request does.
-            del headers["dapr-api-token"]
-            headers["Authorization"] = f"Bearer {ADMIN_TOKEN}"
-    resp = requests.post(f"{lance_ray}/produce", headers=headers, params=params, timeout=30)
-    assert resp.status_code == 202, resp.text
-    return resp.json()["token"]
+def _seed(reader: dict[str, str]) -> str:
+    """Insert one bronze batch through the catalog and return its cascade token, read back as ``reader``."""
+    version = seed_bronze_events(CATALOG, project=PROJECT, headers={"Authorization": f"Bearer {ADMIN_TOKEN}"} if ADMIN_TOKEN else {})
+    return cascade_token(LINEAGE, project=PROJECT, version=version, headers=reader)
 
 
 # --------------------------------------------------------------------------- #
@@ -557,8 +541,8 @@ def _produce(lance_ray: str) -> str:
 @requires_quality
 def test_governed_allow_full_cascade_with_quality_verdicts(stack: tuple[str, str], alice: dict[str, str]) -> None:
     lance_ray, lineage = stack
-    token = _produce(lance_ray)
-    rids = {op: _run_id_for(op, token) for op in OPERATIONS}
+    token = _seed(alice)
+    rids = {"bronze": token, **{op: _run_id_for(op, token) for op in OPERATIONS}}
 
     # Bronze and silver land COMPLETE under the seeded service grants — correlated to THIS drive by the
     # deterministic run ids (not by counts), so a stale graph can't false-pass. The diagnostic is a
@@ -630,7 +614,7 @@ def test_fga_deny_drops_promotion_and_regrant_restores(stack: tuple[str, str], a
     lance_ray, lineage = stack
 
     # -- sub-phase A: WRITER-gate deny — revoke the bronze→silver stage runner's writer rung. The cascade must
-    # land bronze (the producer's own ingest, ungated by the stage runner rung — R23) and stop there: silver's
+    # land bronze (the seed's own insert, ungated by the stage runner rung) and stop there: silver's
     # run never lands. This was the audit's untested half — only the validator (can_promote) deny was
     # ever proven.
     # PRECONDITION: never against the platform's own warehouse — see `refuse_shared_warehouse`.
@@ -651,8 +635,8 @@ def test_fga_deny_drops_promotion_and_regrant_restores(stack: tuple[str, str], a
             "the writer revoke did not take: service-bronze-to-silver still holds can_create_table on "
             f"namespace:{_ds('silver')}, so anything below would be measuring an ungated cascade"
         )
-        w_token = _produce(lance_ray)
-        bronze_rid = _run_id_for("ingest_bronze", w_token)
+        w_token = _seed(alice)
+        bronze_rid = w_token
         denied_silver_rid = _run_id_for("embed_features", w_token)
         _poll(
             lambda: _run_states(lineage, alice).get(bronze_rid) == "COMPLETE",
@@ -683,7 +667,7 @@ def test_fga_deny_drops_promotion_and_regrant_restores(stack: tuple[str, str], a
             f"the validator revoke did not take: service-silver-to-gold still holds can_promote on namespace:{_ds('gold')}"
         )
         gold_before = _quiesced_gold(lineage, alice)
-        token = _produce(lance_ray)
+        token = _seed(alice)
         silver_rid = _run_id_for("embed_features", token)
 
         # The cascade reaches silver (writers restored/granted) …
@@ -705,7 +689,7 @@ def test_fga_deny_drops_promotion_and_regrant_restores(stack: tuple[str, str], a
     # Positive control: with both tuples back, the next drive cascades to gold — the tuple was the only
     # delta each time.
     gold_before_regrant = _gold_runs(lineage, alice)
-    token2 = _produce(lance_ray)
+    token2 = _seed(alice)
     _poll(
         lambda: _gold_runs(lineage, alice) - gold_before_regrant != set(),
         message=f"no new gold run after re-granting the writer + validator (token {token2})",
@@ -766,8 +750,8 @@ def test_quality_gate_blocks_bad_batch_and_records_verdict(stack: tuple[str, str
     bronze_uri = described.json()["location"]
 
     # Order-independence: this test corrupts bronze IN PLACE, so bronze must exist first. Earlier tests
-    # usually leave one behind, but don't depend on execution order (or on -k selections) — drive a
-    # produce and wait for bronze if it isn't there. One open serves both the guard and the read.
+    # usually leave one behind, but don't depend on execution order (or on -k selections) — seed one
+    # and wait for bronze if it isn't there. One open serves both the guard and the read.
     def _open_bronze() -> Any:
         try:
             return lance.dataset(bronze_uri, storage_options=opts)
@@ -776,7 +760,7 @@ def test_quality_gate_blocks_bad_batch_and_records_verdict(stack: tuple[str, str
 
     dataset = _open_bronze()
     if dataset is None:
-        _produce(lance_ray)
+        _seed(alice)
         _poll(
             lambda: _open_bronze() is not None,
             message=f"bronze never materialized at {bronze_uri} for the quality-block test",
@@ -857,11 +841,10 @@ def test_quality_gate_blocks_bad_batch_and_records_verdict(stack: tuple[str, str
     )
 
     # RESTORE WHAT THIS LEG CORRUPTED, at the URI it corrupted, from the rows it read before nulling
-    # them. `/produce` writes the location the HEAD owns, which is not necessarily the one the catalog
-    # vends and this leg overwrote — so leaning on a fresh produce to repair it left the governed
-    # bronze permanently poisoned and every later drive blocked by the gate, correctly.
+    # them: a fresh seed APPENDS, so without the restore the nulled rows stay in bronze and every later
+    # drive is blocked by the gate, correctly.
     lance.write_dataset(table, bronze_uri, mode="overwrite", storage_options=opts)
-    token2 = _produce(lance_ray)
+    token2 = _seed(alice)
     _poll(
         lambda: _gold_runs(lineage, alice) - gold_before_recovery != set(),
         message=f"cascade did not recover after the quality-block drive (token {token2})",
@@ -870,67 +853,7 @@ def test_quality_gate_blocks_bad_batch_and_records_verdict(stack: tuple[str, str
 
 
 # --------------------------------------------------------------------------- #
-# 4. MEDIA lane under governance — blobs land + artifacts derive with the seeded grants
-# --------------------------------------------------------------------------- #
-
-
-def test_media_lane_derives_under_governance(stack: tuple[str, str], alice: dict[str, str]) -> None:
-    lance_ray, lineage = stack
-    resp = requests.post(
-        f"{lance_ray}/ingest-media",
-        headers={"dapr-api-token": DAPR_TOKEN, "Idempotency-Key": _idem("gu-media")},
-        timeout=60,
-    )
-    if resp.status_code == 409:
-        pytest.skip("media head not configured (medallion.compute off on this stack)")
-    assert resp.status_code == 202, resp.text
-    token = resp.json()["token"]
-
-    # project="" — the media lane is estate-only, not project-qualified. `seed_medallion_fga.sh` says
-    # so outright ("media lanes stay estate-only — #84 scope") and the deployed stage runner targets
-    # `silver-media$features` verbatim, so its runs carry no project to seed with.
-    ingest_rid = _run_id_for("ingest_media", token, project="")
-    derive_rid = _run_id_for("derive_media", token, project="")
-    _poll(
-        lambda: _run_states(lineage, alice).get(ingest_rid) == "COMPLETE" and _run_states(lineage, alice).get(derive_rid) == "COMPLETE",
-        message=f"governed media lane did not flow for token {token}",
-    )
-
-    # Derived artifacts, read back through the GOVERNED schema endpoint (alice's grant, not an open route).
-    schema = requests.get(f"{lineage}/datasets/silver-media$features/schema", headers=alice, timeout=8)
-    schema.raise_for_status()
-    fields = {f["name"]: f["type"] for f in schema.json().get("fields", [])}
-    assert "thumbnail" in fields and "embedding" in fields, fields
-    assert fields["payload"] == "blob"
-
-    # Provenance under governance: silver-media ← bronze-media (both granted via the seeded parent links).
-    upstream = requests.get(f"{lineage}/datasets/silver-media$features/upstream", headers=alice, timeout=8)
-    upstream.raise_for_status()
-    assert "bronze-media$objects" in {d["name"] for d in upstream.json().get("related", [])}
-    # The external s3:// SOURCE objects are the ingest event's inputs — one per source object, pinned by
-    # tests/unit/test_media_ingest.py::test_ingest_emits_lineage_then_publishes_media_trigger — but alice
-    # holds no grant on them, so the transitive-disclosure filter must DROP them from her governed view
-    # rather than leak external-source names through a related-datasets side channel. That pin stops at
-    # the emitted event: nothing here reads them back from the graph, so an empty answer below cannot by
-    # itself tell the filter from a graph that never recorded them.
-    #
-    # NO per-object positive control is possible here, BY CONSTRUCTION (2026-07-10 review, verified
-    # against OpenFGA's tuple validation): an OpenFGA object id must contain exactly one ':', so
-    # `table:s3://…` can never be written as a tuple — s3:// source datasets are structurally
-    # ungovernable-per-object and therefore invisible to EVERY governed principal. That is the
-    # contract; making sources governable would need an id-encoding scheme or a `namespace:source`
-    # parent with encoded ids (logged in docs/GOAL-prove-it.md as the open design decision).
-    sources = requests.get(f"{lineage}/datasets/bronze-media$objects/upstream", headers=alice, timeout=8)
-    sources.raise_for_status()
-    assert not any(d["name"].startswith("s3://") for d in sources.json().get("related", []))
-
-    # An ungranted user cannot see any of it — the media estate is governed like the rest.
-    outsider = {"Authorization": f"Bearer {_token(OUTSIDER)}"}
-    assert requests.get(f"{lineage}/datasets/silver-media$features/schema", headers=outsider, timeout=8).status_code == 403
-
-
-# --------------------------------------------------------------------------- #
-# 5. the TRAIN lane under governance (#115) — the credential regression guard
+# 4. the TRAIN lane under governance (#115) — the credential regression guard
 # --------------------------------------------------------------------------- #
 
 

@@ -24,6 +24,7 @@ from collections.abc import Iterator
 
 import pytest
 import requests
+from bronze_seed import seed_bronze_events
 
 from service_kit.governed.auth.write_model import carried_model, fga_headers
 
@@ -39,7 +40,7 @@ FGA = os.environ.get("LANCE_E2E_FGA", "")
 STORE = os.environ.get("LANCE_E2E_FGA_STORE_ID", "")
 #: The `rask-openfga` token file the runner minted (`scripts/e2e_live.sh`); OpenFGA refuses a call without it ([[XC-077]]).
 FGA_TOKEN_FILE = os.environ.get("LANCE_E2E_FGA_TOKEN_FILE") or None
-#: The project admin who asks for the seed `/produce` and the `/train` run, as the models zone forwards a person's bearer.
+#: The project admin who seeds bronze through the catalog and asks for the `/train` run, as the models zone forwards a person's bearer.
 ADMIN_TOKEN = os.environ.get("LANCE_E2E_ADMIN_TOKEN", "")
 WAREHOUSE = "warehouse:lance_catalog"
 
@@ -149,14 +150,15 @@ def _poll(fn, timeout: float, label: str):
 def standing_features(stack: tuple[str, str, str], alice: dict[str, str]) -> None:
     """Ensure ``silver$features`` exists before any train — the head resolves the feature at its LATEST
     version by opening the Lance dataset, so on a FRESH cluster (nothing lingering) a train would 422
-    (resolve_failed), not skip. Drive one ``/produce`` and wait for the cascade to write silver. Idempotent:
+    (resolve_failed), not skip. Seed one bronze batch through the catalog (``bronze_seed``) and wait for the cascade
+    to write silver. Idempotent:
     returns immediately when silver already exists (the long-lived local cluster). Reads as ``alice`` (a
     granted warehouse reader) — an ungranted human 403s here, so the grant is the fixture's whole point."""
-    lance_ray, _catalog, lineage = stack
+    _lance_ray, catalog, lineage = stack
 
     # silver$features is trainable iff a run actually COMPLETED writing it. A bare 200 on /upstream is NOT
     # proof: the FGA object table:silver$features is a SEEDED parent link, so an authorized reader (alice)
-    # gets 200 with EMPTY edges for a not-yet-written dataset — which silently skipped /produce and made the
+    # gets 200 with EMPTY edges for a not-yet-written dataset — which silently skipped the seed and made the
     # train 422 "cannot resolve feature dataset". The COMPLETE producer run is the true "data committed"
     # signal (the stage runner emits it AFTER the Lance write lands), so it implies the head-opened dataset exists.
     def _silver_written() -> bool:
@@ -165,14 +167,8 @@ def standing_features(stack: tuple[str, str, str], alice: dict[str, str]) -> Non
 
     if _silver_written():
         return
-    # `Idempotency-Key` is REQUIRED by both write doors and has no default, so FastAPI 422s at header
-    # validation before auth, before the lane, before anything this suite means to exercise.
-    resp = requests.post(
-        f"{lance_ray}/produce",
-        headers={"Authorization": f"Bearer {ADMIN_TOKEN}", "Idempotency-Key": f"e2e-{uuid.uuid4().hex[:16]}"},
-        timeout=30,
-    )
-    assert resp.status_code == 202, f"/produce to seed silver$features failed: {resp.status_code} {resp.text}"
+    # The single-tenant pair (`bronze` / `bronze$events`): this suite trains on the unqualified `silver$features`.
+    seed_bronze_events(catalog, project="", headers={"Authorization": f"Bearer {ADMIN_TOKEN}"} if ADMIN_TOKEN else {})
     # Generous window: on a FRESH kind cluster the cascade is bronze→silver via sequential Ray jobs,
     # and the first Ray job cold-starts its runtime env (~2 min) before any stage completes.
     _poll(lambda: _silver_written() or None, timeout=480.0, label="a COMPLETE silver$features producer run")
