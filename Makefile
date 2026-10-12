@@ -28,6 +28,9 @@ install:
 	@# the trailer the second one exists to refuse. A gate that cannot fire is worse than no gate — it
 	@# reads as enforcement in the config while the rule goes unheld.
 	@command -v prek >/dev/null 2>&1 && prek install --hook-type pre-commit --hook-type commit-msg || echo "  (prek not on PATH — git hooks NOT installed)"
+	@# The Claude Code plugins (ra-skills, the mattpocock skills) and the svelte MCP server install here too,
+	@# so a new machine does not depend on someone remembering a second command.
+	@command -v claude >/dev/null 2>&1 && $(MAKE) --no-print-directory claude-bootstrap || echo "  (claude CLI not on PATH — Claude Code plugins NOT installed; run make claude-bootstrap after installing it)"
 
 build:
 	uv sync --all-packages

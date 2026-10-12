@@ -74,7 +74,7 @@ On a new computer, `scripts/new-machine.sh` walks through all of it: the toolcha
 from the old machine (memory, `.env`, local branches), and the k3s estate installed from empty.
 
 ```bash
-make install     # bun --cwd=frontend install + uv sync --all-packages
+make install     # bun --cwd=frontend install + uv sync --all-packages + git hooks + make claude-bootstrap
 make build
 make test        # offline suites (deselects the live `e2e` + model-bound `slow` marks)
 make check       # fmt + lint + typecheck + knip
