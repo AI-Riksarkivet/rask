@@ -58,17 +58,19 @@ routing `lance.audit` to an independently-retained table is a known open enhance
 ## Lineage service
 
 Read gates on `can_get_metadata` for the addressed dataset; the ingest accepts either an OIDC human or the
-service-door principal (app token + allowlisted subject — how the Ray trainer's self-emitted events land).
+service-door principal (app token + allowlisted subject — how a service's self-emitted events land).
 
 | Capability | Endpoints | Notes |
 |---|---|---|
 | **Ingest** | `POST /api/v1/lineage`, `GET /dapr/subscribe` | HTTP + Dapr-subscription transports into the AGE graph |
 | **Dataset graph** | `GET /datasets`, `GET /datasets/{name}/{upstream,downstream,graph,creator,producers,schema,reconcile}` | dataset-level DERIVED_FROM lineage |
-| **Column lineage** | `GET /datasets/{name}/columns`, `.../columns/{field}/{upstream,downstream}` | field-to-field `columnLineage` (incl. `source_rowid ← _rowid` at the cascade head) |
-| **Runs & events** | `GET /runs`, `GET /runs/{run_id}/inputs`, `GET /events`, `GET /jobs`, `GET /namespaces` | a run's pinned input dataset versions (which feature versions trained a model) |
+| **Column lineage** | `GET /datasets/{name}/columns`, `.../columns/{field}/{upstream,downstream}` | field-to-field `columnLineage` |
+| **Runs & events** | `GET /runs`, `GET /runs/{run_id}/inputs`, `GET /events`, `GET /events/projection`, `GET /jobs`, `GET /namespaces` | a run's pinned input dataset versions (which feature versions trained a model) |
 | ★ **Governance metadata (#49)** | `GET /datasets/{name}/governance`, `PUT,DELETE /datasets/{name}/tags/{tag}`, `PUT /datasets/{name}/description` | human-curated tags + description; reads on the reader rung, writes on `can_write_data` (fail-closed), every change attributable (who/when on the node); producer facet tags UNION with curated ones |
 | **Search** | `GET /search` | |
 | **Health** | `GET /livez`, `GET /readyz` | |
 
-Medallion stage runners, the compaction sweep, and the Ray train job are Dapr/queue-driven (no public REST surface),
-so they are not in these specs; their contract is the OpenLineage events they publish, consumed here.
+The maintenance sweep is Dapr/queue-driven (no public REST surface), so it is not in these specs; its contract is
+the OpenLineage events it publishes, consumed here. A user's pipeline that moves data between tiers is not a rask
+service: it writes through the catalog's doors above
+([ADR 0155](adr/0155-the-medallion-is-tier-governance-in-the-catalog.md)).

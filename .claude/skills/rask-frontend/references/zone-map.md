@@ -37,7 +37,7 @@ Six areas that used to be separate apps, merged under one router: `catalog`, `li
 
 **`lineage`** — Svelte Flow DAG explorer (depth layout with longest-path + iteration cap, theme-live via `useColorMode()`), datasets, dataset detail (governance, grants, read audit, upstream/downstream), jobs, job detail (a **two-read split**: 200 events with `summary:true` ≈46 kB, plus one raw event for facets), runs, column-level lineage.
 
-**`models`** is an area here, not a zone; **storage is not even an area** — it is `catalog/storage`. **`governance`** (access, audit) split out of `admin` (events, streams, dlq, tenants) so the breadcrumb stops contradicting the rail, but both sit behind the same estate-admin door (`PRIVILEGED_AREAS` in `+layout.svelte:32`). The model registry (list/describe/**promote**) rides `lib/models/remote/models.remote.ts` — the `capi/v1/model/[model]/promote` route is gone. (`/pipeline`'s medallion triggers rode `lib/models/remote/medallion.remote.ts`; route, component, remote module, `MEDALLION_API` env and chart row were all **deleted 2026-08-07** — the cascade is event-driven and the button was a second manual writer.)
+**`models`** is an area here, not a zone; **storage is not even an area** — it is `catalog/storage`. **`governance`** (access, audit) split out of `admin` (events, streams, dlq, tenants) so the breadcrumb stops contradicting the rail, but both sit behind the same estate-admin door (`PRIVILEGED_AREAS` in `+layout.svelte:32`). The model registry (list/describe/**promote**) rides `lib/models/remote/models.remote.ts` — the `capi/v1/model/[model]/promote` route is gone.
 
 7 `+server.ts` routes — 4 keep-bytes (`capi/v1/table/[id]/query` + `/insert` Arrow, `capi/v1/table/[id]/[...rest]` for blob bytes and the #113 commit log, and `api/explorer/[...rest]`, the R18 storage-browser seam that rides to the GATEWAY with its path unchanged), 1 keep-flow (`capi/v1/me`), 2 catch-alls (`api/[...path]` → lineage, `capi/[...path]` → catalog). The `/api/audit` shim is **gone**; its logic survives in `lib/server/audit-core.ts`, consumed only by `admin/remote/audit.remote.ts`.
 
@@ -73,9 +73,16 @@ The reference implementation of dialect (a): 10 queries in `lib/remote/compute.r
 
 Endpoints (`packages/api/src/ray.ts`): `/api/ray/{health,jobs,cluster,actors,tasks,overview}`, `/api/ray/jobs/{id}/logs?tail=`, `/api/ray/logs?node_id=`, `/api/serve/applications/`.
 
-## `train` — base `/train`, port 5178
+## Doors with no backend (ADR 0155)
 
-**100% hardcoded arrays.** Every page carries a "Placeholder data" badge, and there is no network I/O beyond the notification bell. Despite the gateway defining a `/api/train` row, **nothing in the frontend calls it** — a grep for `api/train` across `frontend/` returns zero hits. Treat this zone as a scaffold awaiting a backend.
+The lakehouse runs no stage, no training and no engine, so three frontend callers name routes no service
+serves: the `models` zone's `train.remote.ts` (`POST /api/train`) and the `lakehouse` zone's
+`promotions.remote.ts` (`/api/promotions`) have no gateway row and 404 `no upstream`; the `compute` zone's
+`/transforms` page reaches the catalog through `/api/catalog`, and the catalog serves no transforms door, so
+it 404s there. The compute service ships in its own fixture chart beside the Ray engine, and the gateway has no
+`/api/ray` or `/api/serve` row, so the `compute` zone's `packages/api/src/ray.ts` calls above and `studio`'s
+Serve-app discovery over `/api/serve` also 404 `no upstream` through the gateway. The frontend is outside LH-464; these are listed so a 404 there is not read as a routing
+fault.
 
 ## `studio` — base `/studio`, port 5176
 

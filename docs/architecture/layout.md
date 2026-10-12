@@ -14,7 +14,7 @@ into `services/`, `frontend/`, and `scripts/`.)
 flowchart TD
     subgraph py["Python plane · repo root · uv workspace"]
         subgraph services["services/ · runnable code"]
-            cs["gateway · compute · controlplane<br/>catalog · lineage · medallion · compaction<br/>viewer · search · annotator"]
+            cs["gateway · compute · flows<br/>catalog · lineage · maintenance · notifications<br/>viewer · search · annotator"]
         end
         subgraph packages["packages/ · reusable libraries (no entrypoints)"]
             pst["storage"]
@@ -63,9 +63,8 @@ plane, and language purity is what lets both workspaces glob their members.
 | `frontend/microfrontends/home` | SvelteKit 2 + Svelte 5 (SSR) | Catch-all app (package `home`, `:5273`) on `svelte-adapter-bun` — owns `/` (the platform home) behind the gateway. |
 | `frontend/microfrontends/{lakehouse,media,annotator,compute,train,studio}` | SvelteKit 2 + Svelte 5 (SSR) | The six domain microfrontend zones (`svelte-adapter-bun`), each pinned to a bare base `/<zone>` — **not** `/default/<zone>` — on its own dev port (`media` 5173, `lakehouse` 5174, `compute` 5175, `studio` 5176, `annotator` 5177, `train` 5178) and rendering the shared `@rask/ui/shell`. Composed by Turborepo's built-in microfrontends proxy on `:3024` in dev / the k3s Ingress in prod. `overview`, `discover` and `storage` are **retired** — `/storage` and `/data` are routes *inside* `lakehouse`. |
 | `services/gateway` | FastAPI | Reverse proxy on `:8888` — path-routes `/api/*` to per-domain services (longest-prefix-first, no catch-all). |
-| `services/compute` | FastAPI | The `compute` service: Ray dashboard introspection + `/api/serve/*` proxy on `:8804`; no DB. Deps: `service-kit` + `ray-kit` + httpx. (`compute` on every surface — R22; public paths stay `/api/ray` + `/api/serve`.) |
-| `services/controlplane` | FastAPI | Project provisioning on `:8820` (`/api/projects`). |
-| `services/{catalog,lineage,medallion,compaction}` | FastAPI | The lance lakehouse plane (governed REST catalog, OpenLineage → AGE, the medallion stage runners, compaction). |
+| `services/compute` | FastAPI | The `compute` service: Ray dashboard introspection + `/api/serve/*` proxy on `:8804`; no DB. Deps: `service-kit` + `ray-kit` + httpx. (`compute` on every surface — R22; its paths are `/api/ray` + `/api/serve`.) Deployed by its own chart, `deploy/fixtures/compute`, not the product chart; the gateway has no row for it. |
+| `services/{catalog,lineage,maintenance,notifications}` | FastAPI | The lance lakehouse plane (governed REST catalog with tier governance, OpenLineage → AGE, maintenance, the targeted inbox). |
 | `services/{viewer,search,annotator}` | FastAPI | The lance media plane (`:8101`–`:8103`, public `/api/explorer/*`). The viewer also serves the S3 object browser ported from the retired volumes-api. |
 | `scripts/` | Python + shell | Every dev/ops one-shot tool in one place: `harvest_ead`, `deploy_serve`, `dev-micro.sh`, `k3s-install.sh`, the e2e stack drivers, … No production-state-changing CLIs — mutations run through the HTTP services. |
 
@@ -95,7 +94,7 @@ Consequences that follow from the seal, all deliberate:
 ## Deployables — workspace members with a dockerfile
 
 There is **no `projects/` layer**. The fleet deployables are `runner` plus
-`gateway`, `compute`, and `controlplane`; each is an ordinary
+`gateway`, `compute`, `flows` and `notifications`; each is an ordinary
 workspace member built by its `.docker/<name>.dockerfile` via
 `uv sync --frozen --package <name>` against the **root** `uv.lock` (one lock for
 dev, tests, and every image). The lakehouse + media services build from the one

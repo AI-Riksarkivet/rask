@@ -4,32 +4,25 @@ What happens when a service goes down, can we get corrupted state, and how do we
 
 > **Honesty note on "chaos-tested".** The chaos table below was a **point-in-time** verification — each row
 > was run once by pulling a live service on the kind cluster and observing recovery. It is **not** a standing
-> regression suite, and the **§2 bus fixes changed the delivery semantics after those runs** (see the ⚠️
-> callout below the table) — rows 1 and 3 must be **re-verified on the next deploy**. Treat this as "recovery
-> was demonstrated once under the pre-§2 config", not "continuously chaos-tested".
+> regression suite, and the subscriptions now run on durable cursors (see the delivery-semantics callout below
+> the table), so the lineage replay row stands for the `all` policy only. Treat this as "recovery was
+> demonstrated once", not "continuously chaos-tested".
 >
-> **What IS a repeatable regression suite:** `make e2e` runs the core end-to-end suites (observability,
-> medallion cascade, gateway, compaction, CAS) against the deployed stack, and `make e2e-governance` the
-> **boundary cases** (malformed-bearer→401, non-owner rename/overwrite→403, verified create-lineage) on an
-> auth-on stack (`make e2e-all` runs both). `make e2e-governed-union` drives the FULL flag union
-> (auth + FGA + compute + quality ON, OpenBao off): the governed cascade allow-path, a live FGA-deny→DROP
-> (gold validator tuple revoked → gold's run never lands → re-grant restores), a live quality-block (bad
-> batch recorded `quality_passed=false` in lineage, never promoted), and the media lane under governance —
-> deploy flags in `tests/e2e/test_governed_union_e2e.py`. The **chaos rows below** (pull-a-service →
-> recover) are **not yet encoded as automated tests** — they still need a mutating harness that scales a
-> pod and asserts recovery (a documented follow-up; they mutate shared infra, so they're kept out of the
-> default `make e2e`).
+> **What IS a repeatable regression suite:** the `make e2e-*` targets run the live suites under
+> `tests/e2e-py/` (observability, gateway, maintenance/compaction, CAS, governance boundary cases) against a
+> deployed stack, and `make e2e-chaos` encodes the first chaos row below (scale lineage to 0, write, assert
+> the replay). The other chaos rows are **not encoded as automated tests** — they mutate shared infra, so
+> they stay out of the default lanes.
 
 ## The core guarantee: at-least-once + idempotent → no corruption, no loss (within bounds)
 
-The event-driven path is `catalog --Dapr publish--> JetStream (LINEAGE/MEDALLION streams) --> subscriber`.
+The event-driven path is `catalog --Dapr publish--> JetStream (LINEAGE / CATALOG_CONTROL streams) --> subscriber`.
 Two properties make it safe:
 
 1. **Durable buffer.** Both streams use **Limits retention** (messages persist after ack, up to `max-age`
    168h), so an event survives the subscriber being down.
-2. **Idempotent ingest.** The graph **MERGEs on `run_id`**; the medallion run_id is derived from the
-   trigger token. So redelivery / replay of the same event is a **no-op** — never a duplicate, never
-   corruption. The worst failure mode is *under-reporting* (a lost event), never a corrupt or doubled one.
+2. **Idempotent ingest.** The graph **MERGEs on `run_id`**. So redelivery / replay of the same event is a
+   **no-op** — never a duplicate, never corruption. The worst failure mode is *under-reporting* (a lost event), never a corrupt or doubled one.
 
 ## Chaos experiments (all recovered with zero loss)
 
@@ -37,33 +30,25 @@ Two properties make it safe:
 | ---------- | ------------- | ------ |
 | **Pull `lineage` (scale 0), publish 3 events, restart** | events buffered in JetStream (70→73); on restart the **ephemeral consumer replayed** them | **3/3 ingested** — no loss |
 | **Kill `AGE` (Postgres) mid-ingest, restart** | ingest returned `RETRY`; Dapr redelivered per `backOff` until the DB was back | **ingested on redelivery** — no loss |
-| **Pull `bronze-to-silver` stage runner, fire `/produce`, restart** | cascade **stalled at bronze** (trigger buffered in the MEDALLION stream); restart replayed it | **cascade resumed to gold** |
 | **Idempotency** (replays re-deliver old events) | fixed `run_id`s re-MERGE | `gaptest1` has **exactly 1** producer run — no duplication |
-| **Poison-inject 2026-09-14: a trigger naming a nonexistent source** | every delivery answered `RETRY`; the sidecar exhausted its schedule and published the original to `dlq.bronze-to-silver` | **parked + ERROR-logged** by `/dlq-event` — the retry → dead-letter → parking chain observed end to end, and the run that measured the schedule: 4 steps of 120.2/120.1/120.1/120.6s, **481.1s** against a designed 480s, no jitter |
-| **Poison-inject 2026-09-14: a NON-CloudEvent body** (`rawPayload`) | the sidecar could not deserialize the envelope, dead-lettered it in **21ms with ZERO retries** (ahead of any retry policy), and the dead letter reached the DLQ topic as the same unreadable bytes | **parked INVISIBLY** — `/dlq-event` never ran, so no ERROR log, no `medallion_dlq_parked_total`, nothing for `MedallionCascadeDeadLettering` to fire on. Tracked as LH-151 |
+| **Poison-inject 2026-09-14: a NON-CloudEvent body** (`rawPayload`) | the sidecar could not deserialize the envelope, dead-lettered it in **21ms with ZERO retries** (ahead of any retry policy), and the dead letter reached the DLQ topic as the same unreadable bytes | **parked INVISIBLY** — `/dlq-event` never ran, so no ERROR log and nothing for a dead-lettering alert to fire on. Tracked as LH-151 |
 
 So: **a service going down delays the pipeline; it does not lose or corrupt data.** Transient dependency
 failures recover via Dapr `RETRY`. With the DEFAULT `dapr.resiliency.enabled=true` the sidecar's Resiliency
-policy owns the schedule — **constant 120s x 4 retries = 480s (8 min) over 5 attempts, no jitter** — and the broker ackWait is
+policy owns the schedule — **constant 120s x 4 retries = 480s (8 min) over 5 attempts, no jitter**; a poison event
+driven live 2026-09-14 measured 4 steps of 120.2/120.1/120.1/120.6s, **481.1s** end to end — and the broker ackWait is
 720s crash-recovery only, so the two never race. The policy must be `constant`: the Resiliency CRD exposes no
 `initialInterval`, so an `exponential` policy is pinned to cenkalti/backoff's 500ms default and gives ~4s however
 long a `duration` sits beside it. With `resiliency=false` the broker owns it instead: ackWait 30s, maxDeliver 5,
 backOff `30s,60s,120s,300s` — there the first backOff step IS the effective ack window per NATS consumer
 semantics, so it must not undercut the slowest handler. Either way the window covers a realistic dependency blip.
 
-> ⚠️ **Semantics changed by the §2 bus fixes (re-verify live on next deploy).** Each subscriber now has
-> its **own** pubsub component with `queueGroupName=<app-id>` (replicas = competing consumers → single
-> delivery per app; scaling stage runners past 1 is now safe) and a split `deliverPolicy`: **`all` for lineage**
-> (the restart-replay row above still holds — replay into the idempotent MERGE is the durability story)
-> but **`new` for the cascade head + stage runners** — a full-stream replay there would *re-fire every cascade
-> in the retention window* on each restart. Consequence: the third row changes — a trigger published
-> while a stage runner is down **beyond the ephemeral consumer's inactivity window** is no longer replayed on
-> restart (quick restarts rejoin the surviving queue-group consumer and keep its pending messages).
-> **CLOSED 2026-07-06:** the `new` subscribers (cascade head + stage runners) now carry a `durableName`, so the
-> consumer cursor survives pod death AND redeploys — chaos-verified live: a trigger published while the
-> stage runner was scaled to 0 sat as `Unprocessed: 1` on the durable and was delivered on recovery, and a
-> rollout restart re-attached with zero `consumer name already in use` errors (that orphan mode applies
-> to durables *without* a queue group). See gap #3 for what remains.
+> **Delivery semantics per subscriber.** Each subscriber has its **own** pubsub component with
+> `queueGroupName=<app-id>` (replicas = competing consumers → single delivery per app) and a `durableName`, so
+> the consumer cursor survives pod death and redeploys. `deliverPolicy` is **`all` for lineage** (replay into the
+> idempotent MERGE is the durability story, and the first chaos row holds) and **`new`** for notifications and
+> maintenance, whose durable cursor delivers an event published while they were down on recovery
+> (`chart/templates/dapr-component.yaml`).
 
 ## Where it CAN bite — the real gaps (honest)
 
@@ -81,8 +66,7 @@ semantics, so it must not undercut the slowest handler. Either way the window co
    backlog is now viewable + replayable on demand — `GET /admin/dlq` (the saturation snapshot + the governed
    at-risk events) and `POST /admin/dlq/{run_id}/replay` (re-ingest one event, re-publish it, then drop; same `can_write_data`
    authz as a fresh ingest, audited), surfaced in the frontend at `/dlq`. This is the manual twin of the
-   reconcile relay's drain — an operator no longer waits for the next tick. *Full fix:* make the **Ray job the
-   durable producer** (it owns the write + the emit) — the documented direction ([`FLOW.md`](FLOW.md) §7, [`RASK-INTEGRATION.md`](RASK-INTEGRATION.md)).
+   reconcile relay's drain — an operator no longer waits for the next tick.
 
 2. **No dead-letter queue; `maxDeliver=5` — FIXED 2026-07-12 (`dapr.resiliency.enabled`, DEFAULT ON;
    `false` = the exact pre-existing broker-only behavior).** The gap as it stood: a genuinely poison
@@ -100,21 +84,19 @@ semantics, so it must not undercut the slowest handler. Either way the window co
    route, acked, never blind-requeued — and the broker `backOff` moves to a 720s crash-recovery
    window so it can't race the sidecar's retries. The durable-consumer question was ANSWERED FROM
    SOURCE (components-contrib `jetstream.go` applies `durableName` as-is per subscription; NATS
-   scopes consumer names PER STREAM; the dlq topics live on their own stream — and the producer
-   already runs two same-durable subscriptions across two streams live). CI render-asserts the set
+   scopes consumer names PER STREAM; the dlq topics live on their own stream). CI render-asserts the set
    ships together and the escape hatch restores the chaos-verified schedule. **DRIVEN LIVE 2026-09-14**
    (see the chaos table above, and [RUNBOOK-oncall § DLQ parking](runbooks/RUNBOOK-oncall.md#dlq-parking--a-delivery-gave-up)):
-   a poison trigger published to `medallion.bronze` retried, exhausted the schedule and parked on
-   `dlq.bronze-to-silver`, ERROR-logged by `/dlq-event` — measured at **481.1s** end to end on helm
-   revision 156, against the 480s the policy specifies. **A policy change reaches a sidecar only on
-   restart** (`HotReload: false`), so rolling the chart is not enough: all six subscriber app-ids were
+   a poison event retried, exhausted the schedule and parked on its `dlq.*` topic, ERROR-logged by
+   `/dlq-event` — measured at **481.1s** end to end on helm revision 156, against the 480s the policy
+   specifies. **A policy change reaches a sidecar only on
+   restart** (`HotReload: false`), so rolling the chart is not enough: every subscriber app-id was
    rollout-restarted before this was re-measured. The once-planned **durable PULL consumer** is RETIRED (2026-07-12): PULL means consuming NATS directly (nats-py), i.e. leaving Dapr pub/sub — which contradicts the pinned Dapr-first rule — and its target gaps (cursor loss, silent exhaustion) are since covered by durable push cursors + sidecar Resiliency retries + this DLQ. Revisit only if a live delivery-semantics gap appears that Dapr's model cannot express.
 
-3. **Trigger loss on stage runner death: FIXED (durable cursors, 2026-07-06); lineage full-stream-replay
-   remains by design.** The cascade head + stage runners now pair `deliverPolicy: new` with a `durableName`
-   (`chart/templates/dapr-component.yaml`): the consumer cursor survives pod death and redeploys, so a
-   trigger published while a stage runner is down is **delivered on recovery** instead of skipped —
-   chaos-verified live (publish-while-scaled-to-0 → `Unprocessed: 1` retained → processed on scale-up;
+3. **Durable cursors; lineage full-stream-replay by design.** The `new` subscribers pair `deliverPolicy: new`
+   with a `durableName` (`chart/templates/dapr-component.yaml`): the consumer cursor survives pod death and
+   redeploys, so an event published while a subscriber is down is **delivered on recovery** instead of skipped —
+   chaos-verified live 2026-07-06 (publish-while-scaled-to-0 → `Unprocessed: 1` retained → processed on scale-up;
    post-redeploy consumption clean). Lineage is durable too, with `deliverPolicy: all` ([[LH-303]]):
    an ephemeral consumer dies with a NATS restart and the sidecar does not re-create it (measured
    2026-09-26: lineage heard nothing from the bus until its pod restarted). Its first attach replays the
@@ -133,7 +115,7 @@ semantics, so it must not undercut the slowest handler. Either way the window co
    - **AGE / Postgres** — one StatefulSet pod; the whole lineage graph + the durable `/events` + `/runs` fold
      live here. Down → all ingest returns `RETRY` (buffered) and every lineage read fails.
    - **NATS / JetStream** — one node, `streamReplicas=1`; the Dapr pub/sub backbone. Down → no event flows at
-     all (catalog emits swallow, the cascade halts).
+     all (catalog emits swallow, notifications and maintenance hear nothing).
    - **RustFS** — one pod (now on a keep-PVC, not emptyDir); the S3 data plane. Down → no Lance read/write.
    - **OpenBao / OpenFGA / Dex** — one pod each; down → (respectively) app-tier secrets fail-closed at boot,
      authz checks fail, OIDC login fails.
@@ -154,12 +136,12 @@ semantics, so it must not undercut the slowest handler. Either way the window co
    while the pods stay **Ready** and **nothing is delivered** (a silent outage — the probes are
    process-level, not delivery-level). Concrete trigger: the resiliency+DLQ default-ON change
    (maxDeliver 5→3, backOff `30s,60s,120s,300s` → `720s,720s`) — durables created 2026-07-06 under
-   the old config blocked all 4 stage runners + medallion-producer after the image roll. It **self-heals**:
+   the old config blocked every `new` subscriber after the image roll. It **self-heals**:
    JetStream reaps the old unbound durables at their `inactive_threshold` (~20–25 min observed —
    rollout 06:53–07:00 UTC → reaped + recreated 07:19–07:20), the sidecars recreate them with the
    new config, and delivery resumes with **no manual intervention**. *Fast cutover (operators):*
    right after the rollout, `nats consumer rm` the `<app>-durable` consumers on
-   LINEAGE/MEDALLION/TRAINING/DLQ — the sidecars recreate them within seconds. With NATS auth on, run it as `admin` ([OPERATORS.md](OPERATORS.md) § 7): nats-box itself runs as the read-only `monitor`. Fresh installs and
+   LINEAGE/CATALOG_CONTROL/MAINTENANCE_WORK/MAINTENANCE_INDEX/DLQ — the sidecars recreate them within seconds. With NATS auth on, run it as `admin` ([OPERATORS.md](OPERATORS.md) § 7): nats-box itself runs as the read-only `monitor`. Fresh installs and
    CI never hit this (the consumers are created right the first time); only config-changing
    upgrades of an already-deployed stack do. **Shipped mitigation:** the stream-provision Job now
    reconciles drift on every `helm upgrade` — it deletes any `*-durable` whose
@@ -188,9 +170,7 @@ chart and live-verified on kind.
   `USER` — uid 10001 catalog, 1000 web — so the kubelet can verify non-root at admission), drop **ALL**
   capabilities, no privilege escalation, `seccompProfile: RuntimeDefault`, and `readOnlyRootFilesystem`
   with a writable `/tmp` emptyDir for scratch (`lance.securityContext`, `security.readOnlyRootFilesystem`).
-- **Single-flight writes + reconcile.** The cascade stage write is serialized by a process-wide lock so a
-  redelivered trigger can't race a second `mode="overwrite"` onto the same target
-  (`transform.py:_write_lock`, stageRunnerReplicas=1). The B4 reconcile sweep runs under a Postgres
+- **Single-flight reconcile.** The B4 reconcile sweep runs under a Postgres
   advisory lock (`repository.reconcile_lock`) so the per-replica cron can't double-drive a back-fill. And a
   **UNIQUE index on every AGE vertex label's MERGE key** (`ensure_graph_constraints` at boot + the age-init
   SQL) makes AGE's MATCH-then-CREATE safe under concurrency — a racing duplicate `CREATE` is rejected by the
@@ -216,7 +196,5 @@ PSA would reject `lineage`/`openfga-migrate` until their root init containers ar
   the stage, or a stage that fails AND a publish that fails). Everything staged or successfully published is
   durable + replayed.
 - **Recovery:** automatic — `RETRY` for transient faults, JetStream buffer + replay for downed services.
-- **Hardening roadmap (for prod):** ~~durable PULL consumer~~ (RETIRED — contradicts the Dapr-first
-  rule; superseded by durable push cursors + Resiliency retries) · ~~Dapr `deadLetterTopic`~~
-  (SHIPPED, default on) · transactional outbox / Ray durable producer (the remaining item —
-  belongs to the rask merge, where the Ray job becomes the durable producer).
+- **Hardening roadmap (for prod):** durable push cursors + Resiliency retries + Dapr `deadLetterTopic`
+  (shipped, default on) · a transactional outbox that closes the commit→stage window (the remaining item).

@@ -20,26 +20,24 @@ of three properties the storage and bus already have, plus three enforcement poi
 | Layer | The contract | Where it lives |
 |---|---|---|
 | **Storage** | **The Lance manifest IS the schema; the version IS the handshake.** Every write commits an immutable, numbered version whose manifest embeds the full schema — data is self-describing, so there is nothing separate to register or drift from. A consumer that pins `(dataset, version)` gets bit-identical data + schema forever (time travel). | Lance format itself; CAS commit (put-if-not-exists) validated live against RustFS — `tests/e2e/test_object_store_cas_e2e.py`, verdict in `docs/DURABILITY.md` |
-| **Bus** | **Events carry POINTERS, never data** (claim-check): a stage trigger is `{token, dataset, namespace}`, a train trigger is `{token, model, features:[{dataset, version}], config}`. The OpenLineage facets' `_schemaURL`s ARE the event-shape contract — official spec URLs, pinned in code and drift-tripwired in tests. | `services/medallion/services/{transform,train}.py`; facet pins in `services/medallion/schemas/events.py` + `scripts/ray_train_job.py` (equality-pinned by `tests/unit/test_train_job.py`) |
+| **Bus** | **Events carry POINTERS, never data** (claim-check): a catalog write announcement names the table, its Lance version, its branch and its author; a control event names an object and an action. The OpenLineage facets' `_schemaURL`s ARE the event-shape contract — official spec URLs, pinned in code. | `catalog/core/lineage_emit.py`; facet URLs in `packages/service-kit/src/service_kit/openlineage.py` |
 | **Identity** | One string threads all planes: `table:<id>` is the catalog id, the OpenFGA object, and the lineage graph node — so the contract's subject is never ambiguous. | catalog + `model.fga` + AGE ingest |
 
-The **handshake in practice**: a stage runner reads its upstream at the version the trigger's lineage
-event recorded, writes downstream producing a NEW version, and emits that version in the
-`DatasetVersionDatasetFacet`. Training sharpens it further — `POST /train` resolves omitted
-versions to LATEST **at the head** and the job reads ONLY pinned versions (`docs/RAY-TRAIN.md`
-D1; unit-proven: pinned-v1 means ≠ LATEST means in `tests/unit/test_train_job.py`).
+The **handshake in practice**: the catalog announces every committed write on lineage, naming the table and the
+version it produced; a user's pipeline reads the upstream at a version, writes downstream through the catalog
+producing a NEW version, and names its inputs at their versions in its own OpenLineage run. How a pipeline outside the
+estate consumes the announcements is a separate decision.
 
 ## 3 · The three enforcement points (who checks the contract, when)
 
 | When | Gate | What it enforces | Code |
 |---|---|---|---|
-| **Promotion-time** | Quality gate (`MEDALLION_QUALITY_ENABLED`) | the DATA is good enough to promote: `row_count_positive` + `not_null(key_column)` + `blob_resolves` per blob column (2026-07-12: one real byte read from the first+last rows' payloads — catches a dangling external pointer/bucket wipe AT promotion instead of at first downstream read); a failure still emits the run + its `dataQualityAssertions` facet (auditable) but BLOCKS the next stage trigger — a bad batch cannot cascade | `services/medallion/services/quality.py` |
-| **Access-time** | OpenFGA (fail-closed) | WHO may read/write/promote: concentric owner⊇writer⊇reader rungs + the separate `validator` rung for promotion; stage runners/trainer check as their OWN service identities before spending compute (deny → DROP) | `packages/service-kit/src/service_kit/governed/fga.py`, `handle_train_trigger`, stage runner gates |
-| **Drift-time** | B4 reconcile (cron) | the GRAPH matches STORAGE: back-fills Lance writes whose lineage event was lost; flags `missing_on_storage`; and probes blob-POINTER health (2026-07-12: `dangling_blob_columns` — an external payload deleted after promotion changes no Lance version, so only the 1-byte probe sees it; same shared probe as the quality gate) | `services/lineage/api/v1/endpoints/reconcile.py` |
+| **Publish-time** | The project's quality gate, declared on the catalog's gates door and run by the publish door | the DATA is good enough to publish: `row_count_positive` + `not_null(key_column)` + `blob_resolves` per blob column (one real byte read from the first and last rows' payloads, so a dangling external pointer is caught at publish rather than at first read) + `column_declared` per column the gate declares a consumer depends on | `catalog/services/publication.py`, `packages/service-kit/src/service_kit/lakehouse/quality.py` |
+| **Access-time** | OpenFGA (fail-closed) | WHO may read/write/promote: concentric owner⊇writer⊇reader rungs + the separate `validator` rung for promotion, checked at every catalog door | `packages/service-kit/src/service_kit/governed/fga.py`, `catalog/api/fga_deps.py` |
+| **Drift-time** | B4 reconcile (cron) | the GRAPH matches STORAGE: back-fills Lance writes whose lineage event was lost; flags `missing_on_storage`; and probes blob-POINTER health (`dangling_blob_columns` — an external payload deleted after publication changes no Lance version, so only the 1-byte probe sees it; the same shared probe as the quality gate) | `services/lineage/api/v1/endpoints/reconcile.py` |
 
-Plus edge validation where the bus meets code: consumers treat the bus as a wider trust surface
-than token-guarded heads and DROP malformed triggers rather than repair them (version-less
-features, path-unsafe names, oversized/non-dict config — `services/medallion/services/train.py`).
+Plus the provenance guard: a writer cannot drop, rename or rewrite the provenance columns (`stage`, `lineage`,
+`source_rowid`) or the `lineage.*` / `rask.*` schema-metadata keys (`catalog/core/provenance_guard.py`).
 
 ## 4 · Is it prod-ready? The honest split
 
@@ -47,57 +45,44 @@ features, path-unsafe names, oversized/non-dict config — `services/medallion/s
 - Immutable versions + CAS commits — the storage half of the contract rests on
   put-if-not-exists, and that was VALIDATED against RustFS (3-tier contended-write harness, all
   green — `docs/DURABILITY.md`). This is the strongest link.
-- Pinned-version consumption for training (D1), quality-gated promotion, FGA gates, reconcile
-  back-fill, strict consumer-edge validation — all shipped with tests.
+- The publish-time quality gate, FGA gates, the provenance guard, reconcile back-fill — all shipped with tests.
 - **Additive** schema evolution is safe *by construction*: `add_columns` makes a new version;
   old versions stay readable; per-version schemas ride the lineage `WROTE` edge.
 
 **NOT yet prod-grade (tracked, deliberate):**
-- **Freshness — CLOSED 2026-07-12 (same day it was named).** Arrival cadence is now an ASSERTED
-  clause: set `services.lineage.freshnessBudgetHours` (>0) and the reconcile sweep + per-dataset
-  GET flag `stale: true` for any dataset whose newest version commit (storage truth — the version
-  manifests, so a write that bypassed lineage still counts as fresh) is older than the budget,
-  WARN-logged `lineage_reconcile_stale` per tick. 0 (default) = the axis is off, zero extra reads.
-- **Breaking changes — gate AND patrol CLOSED 2026-07-12.** The reconcile sweep now re-checks the
-  same declarations estate-wide (`missing_declared_columns` on the status, WARN
-  `lineage_reconcile_contract_violation`): a write that BYPASSED the stage runner skipped the gate — the
-  patrol doesn't. One declaration source (the stage runners' `requiredColumns` in values, chart-derived
-  into `LINEAGE_DECLARED_COLUMNS`), two enforcement points, so they can never disagree.
-- **Breaking changes — the GATE half CLOSED 2026-07-12.** Declare consumer dependencies per stage runner
-  (`requiredColumns: "id,embedding"` in the chart → `MEDALLION_REQUIRED_COLUMNS`) and the quality
-  gate adds a `column_declared` assertion per name: a promotion whose written schema dropped or
-  renamed a declared column is BLOCKED (write still commits; audited FAIL run) — the runtime
-  breakage becomes a pre-promotion contract violation. Additive evolution is never blocked; no
-  declaration (default) = byte-identical gate. Original framing kept below for the record:
-- **Breaking changes were the known gap.** A producer renaming/dropping a column a downstream
-  reads is caught only at RUNTIME (the stage runner's transform fails → RETRY → stall) — not at
-  promotion time. The fix is the §9 per-project **schema declaration** item (declare expected
-  columns; the quality gate asserts they landed; reconcile flags undeclared writes) — that turns
-  a runtime stall into a pre-promotion contract violation. Un-built by decision, tracked in
+- **Freshness** is an opt-in clause: set `services.lineage.freshnessBudgetHours` (>0) and the reconcile sweep +
+  per-dataset GET flag `stale: true` for any dataset whose newest version commit (storage truth — the version
+  manifests, so a write that bypassed lineage still counts as fresh) is older than the budget, WARN-logged
+  `lineage_reconcile_stale` per tick. 0 (default) = the axis is off, zero extra reads.
+- **Breaking changes.** A gate's declared columns turn a dropped or renamed column into a publish-time
+  `column_declared` failure. The estate-wide patrol of the same declarations (`missing_declared_columns`, WARN
+  `lineage_reconcile_contract_violation`) reads `LINEAGE_DECLARED_COLUMNS`, which the chart does not render, so the
+  patrol is off. Additive evolution is never blocked. The wider schema-declaration item is tracked in
   `docs/adr/0012-schema-declaration-claim-check-hardening.md`.
-- **The claim-check rule is convention + spot-enforcement, not a universal guard.** The train
-  path caps config at 8 KiB (head AND consumer); but there is no payload-size guard at EVERY
-  publish site yet (§9 P1, open), and no cap on facet metadata bloat for thousand-column tables
-  (§9 P2, open). NATS's ~1 MB message limit is the physical backstop.
-- **Quality gate is demo-tier**: two assertions (row count, key non-null). Real deployments add
-  domain assertions (and the §9 P2 "blob pointer resolves" check).
+- **Inputs are declared by the writer.** A silver or gold write is authorized like any write, and its inputs are
+  named only in the writer's own OpenLineage run.
+- **The claim-check rule is convention + spot-enforcement, not a universal guard.** There is no payload-size guard
+  at EVERY publish site yet, and no cap on facet metadata bloat for thousand-column tables. NATS's ~1 MB message limit
+  is the physical backstop.
+- **The quality gate is a floor**: row count, key non-null, blob resolution, declared columns. Real deployments add
+  domain assertions in their own pipelines.
 
 ## 5 · What Dapr and NATS actually enforce (and what they don't)
 
 Dapr and NATS do **not** enforce the data contract — they enforce the **delivery contract** that
 makes the data contract *checkable*:
 
-- **NATS JetStream** guarantees at-least-once delivery on durable streams (`LINEAGE` /
-  `MEDALLION` / `TRAINING`), `maxDeliver=5` with backoff, 168h Limits retention. Its ~1 MB
+- **NATS JetStream** guarantees at-least-once delivery on durable streams (`LINEAGE`, `CATALOG_CONTROL`, `DLQ`,
+  and maintenance's work queues), `maxDeliver=5` with backoff, 168h Limits retention. Its ~1 MB
   message bound is *why* the claim-check rule exists: the bus physically cannot carry data, so
   events must be pointers — a contract enforced by constraint.
 - **Dapr** supplies the pub/sub abstraction, the SUCCESS/RETRY/DROP ack semantics, the
-  app-api-token on subscription routes (a forged trigger can't spend compute), and the 30s ack
-  window that shapes every handler (work fast or submit-and-ack).
+  app-api-token on subscription routes (a forged event cannot reach a subscriber), and the 30s ack
+  window that shapes every handler.
 - The **data** contract itself is enforced by Lance (manifest schema + CAS commit) and by the
-  services at the three gates above. The bus's job is narrower: the trigger arrives at least
-  once, and because every handler is idempotent (deterministic tokens/run-ids/submission-ids),
-  at-least-once is as good as exactly-once.
+  catalog at the gates above. The bus's job is narrower: an event arrives at least once, and because every
+  handler is idempotent (deterministic run ids, feed dedup), at-least-once is as good as exactly-once. The bus is
+  internal: a user's pipeline reads the durable feed, not the topic.
 
 ## 6 · Is this the same as Lakekeeper?
 
@@ -105,11 +90,11 @@ No — related species, different format and bigger scope on our side:
 
 | | **Lakekeeper** | **this platform** |
 |---|---|---|
-| What it is | Apache **Iceberg** REST catalog (Rust) | **Lance** REST catalog + lineage + governance + medallion orchestration |
+| What it is | Apache **Iceberg** REST catalog (Rust) | **Lance** REST catalog + lineage + governance, with the medallion as tier governance in the catalog |
 | The "contract" | the Iceberg spec: snapshots, schema evolution via column IDs, hidden partitioning — metadata JSON managed by the catalog | the Lance manifest + immutable versions (§2) — self-describing storage, catalog is a thin adapter |
 | AuthZ | OpenFGA (same choice — we studied theirs) | OpenFGA, threaded through the SAME `table:<id>` identity as lineage |
 | Lineage | none | OpenLineage → AGE graph, column-level, reconcile back-fill |
-| Data movement | none (catalog only) | the event-driven medallion cascade + Ray compute + training are IN scope |
+| Data movement | none (catalog only) | none either: moving data between tiers is the user's pipeline (ADR 0155) |
 | Data contracts as a product | no — like us, the table format IS the contract | no registry either; adds the quality/FGA/reconcile gates on top |
 
 We deliberately mined Lakekeeper for patterns: vended
@@ -132,25 +117,21 @@ Every publish goes through the one bounded wrapper `packages/service-kit/src/ser
 with `data_content_type="application/json"`; the Dapr **sidecar** wraps the payload in a CloudEvents
 envelope (id, source, type, traceparent) — application code never builds an envelope. Consumers
 receive the envelope as a dict and read `body["data"]`: `handle_cloud_event` in
-`services/lineage/services/consumer.py`, `on_control_event` in `services/catalog/api/dapr.py`, and
-`handle_stage` / `handle_train_trigger` in `services/medallion/services/{transform,train}.py` all
-treat `body` as an untrusted `Any` and guard with `isinstance` before touching `data`.
+`services/lineage/services/consumer.py` and `on_control_event` in `services/catalog/api/dapr.py` treat `body` as an
+untrusted `Any` and guard with `isinstance` before touching `data`.
 
 ### 7.2 The topic is the compatibility unit
 
 | Topic | Producer → consumer | Schema (the pydantic model) | Where the name lives |
 |---|---|---|---|
-| `lineage.events.v1` | catalog (`catalog/core/lineage_emit.py`), stage runners/trainer (via the `packages/service-kit/src/service_kit/lakehouse/outbox.py` stage→publish→drop path), compaction (`compaction/core/lineage_emit.py`) → lineage **and notifications** subscribers, one per-app component each | `lineage.models.RunEvent` (OpenLineage) | defaults on `LINEAGE_DAPR_TOPIC` / `LANCE_DAPR_TOPIC` / `COMPACTION_LINEAGE_TOPIC` / `MEDALLION_LINEAGE_TOPIC` in each service's `core/config.py`; `RASK_NOTIFICATIONS_LINEAGE_TOPIC` in `notifications/api/settings.py`, rendered from `pubsub.topic` by the chart configmap |
-| `catalog.control.v1` | the catalog, maintenance and the annotator through `packages/service-kit/src/service_kit/control_emit.py`, and the medallion producer's promotion review, each signed as `control_signer_role` names (the annotator's actions are exempt) → every catalog replica (broadcast, no `queueGroupName`), notifications' `/control-events`, the medallion's `/publication-arrival` | `service_kit.control_events.CatalogControlEvent`, whose model ignores the top-level `rask_signature` member | `CONTROL_TOPIC` in `packages/service-kit/src/service_kit/control_events.py`, imported by every producer and by the catalog and medallion subscribers; notifications re-types it as the default of `RASK_NOTIFICATIONS_CONTROL_TOPIC` |
-| `medallion.bronze` / `medallion.silver` / `medallion.media` | producer head (bronze arrival) + each stage runner → the next stage runner | pointer trigger `{token, dataset, namespace[, project]}` (claim-check §5) | `MEDALLION_BRONZE_TOPIC` / `MEDALLION_MEDIA_TOPIC` defaults in `medallion/core/config.py`; per-stage runner `subTopic`/`pubTopic` in `chart/values.yaml` `medallion.stageRunners` |
-| `training.jobs` | `POST /train` head (`medallion/services/train.py`) → the trainer consumer | pointer trigger `{token, model, features:[{dataset, version}], config}` | `MEDALLION_TRAIN_TOPIC` default in `medallion/core/config.py` (`medallion.train.topic` in values) |
-| `dlq.*` | the Dapr sidecar on retry exhaustion → each app's parking route | the original delivery, parked | `dlq.lineage.events` (chart `services.yaml`), `dlq.<subTopic>` + `dlq.medallion-producer` (chart `medallion.yaml`), `dlq.notifications` (chart `configmap.yaml`); the `DLQ` stream binds `dlq.>` in `nats-stream-job.yaml` |
+| `lineage.events.v1` | catalog (`catalog/core/lineage_emit.py`), maintenance (`maintenance/core/lineage_emit.py`) → lineage **and notifications** subscribers, one per-app component each | `lineage.models.RunEvent` (OpenLineage) | defaults on `LINEAGE_DAPR_TOPIC` / `LANCE_DAPR_TOPIC` / `MAINTENANCE_LINEAGE_TOPIC` in each service's `core/config.py`; `RASK_NOTIFICATIONS_LINEAGE_TOPIC` in `notifications/api/settings.py`, rendered from `pubsub.topic` by the chart configmap |
+| `catalog.control.v1` | the catalog, maintenance and the annotator through `packages/service-kit/src/service_kit/control_emit.py`, each signed as `control_signer_role` names (the annotator's actions are exempt) → every catalog replica (broadcast, no `queueGroupName`) and notifications' `/control-events` | `service_kit.control_events.CatalogControlEvent`, whose model ignores the top-level `rask_signature` member | `CONTROL_TOPIC` in `packages/service-kit/src/service_kit/control_events.py`, imported by every producer and by the catalog subscriber; notifications re-types it as the default of `RASK_NOTIFICATIONS_CONTROL_TOPIC` |
+| `dlq.*` | the Dapr sidecar on retry exhaustion → each app's parking route | the original delivery, parked | `dlq.lineage.events` (chart `services.yaml`), `dlq.notifications` (chart `configmap.yaml`); the `DLQ` stream binds `dlq.>` in `nats-stream-job.yaml` |
 
 The two **cross-plane** topics carry an explicit `.v1`: the version in the NAME is the compatibility
 unit — a consumer subscribed to `lineage.events.v1` is entitled to `RunEvent`-shaped payloads
-forever. The medallion/training **trigger** topics are intra-cascade wiring: both ends deploy from
-the same chart values atomically, so retargeting one is a config change, not a schema break — they
-carry no `.vN`. `dlq.*` names derive mechanically from the subscription they park for.
+forever. `dlq.*` names derive mechanically from the subscription they park for. All of these are internal to the
+estate.
 
 ### 7.3 Schema = the pydantic model, validated on consume; invalid → DROP, never crash
 
@@ -162,22 +143,6 @@ garbage), and a handler never raises on malformed input — a crash would poison
   return `{"status": "DROP"}` (`services/lineage/services/consumer.py`).
 - catalog control: `CatalogControlEvent.model_validate(data)` → on failure log + ack `SUCCESS`
   (events are refresh hints; the audit trail is the durable record — `services/catalog/api/dapr.py`).
-- medallion triggers: strict field guards (`_safe_name` / `_safe_dataset` / int-version / the 8 KiB
-  config cap) → `_DROP`; deny-by-FGA is also `DROP` (redelivery won't grant the rung), only
-  transient outages `RETRY`. The guards live in **two** places and the split is deliberate:
-  `services/medallion/services/train.py` keeps its own segment/int-version/8 KiB guards for the
-  TRAINING trigger, while the STAGE trigger validates through
-  `services/medallion/services/trigger_guards.py` (`parse_stage_trigger` + `uri_within`). Each lane
-  owns its token grammar and every door that feeds it declares that grammar: the re-run verb takes its `token` from
-  `SAFE_TOKEN_PATTERN` + `SAFE_TOKEN_MAX_LENGTH` (no `..`), and `POST /train` applies the training
-  lane's narrower `TOKEN_PATTERN` (one path-safe segment: the token names the run's artifact
-  directory) to its own `Idempotency-Key` — so each door refuses with a 422 every key its consumer
-  would drop.
-  `uri_within` is the half that is a security boundary rather than a shape rule: a trigger may NAME
-  the upstream it wants read, but the stage runner reads that location with its OWN object-store
-  credentials, so the name is honoured only inside the storage root the stage already resolved.
-  Both refusals are counted (`medallion.stage.refused`) — a `DROP` is an ack, so an uncounted drop
-  makes the event simply cease to exist.
 
 ### 7.4 Evolution: additive-only within a topic; breaking = a new `.vN` topic
 
@@ -194,7 +159,7 @@ already support (subjects `lineage.events.*` style bindings cost nothing).
 
 A registry earns its keep when producers and consumers ship independently. Here they cannot drift:
 **one repo, one CI** — producers and consumers import the same model classes
-(`common.control_events`, `lineage.models.RunEvent`), so `ty` type-checks both sides of every topic
+(`service_kit.control_events`, `lineage.models.RunEvent`), so `ty` type-checks both sides of every topic
 in the same run. A registry would add an operand and a failure mode to re-prove a property CI already
 proves. **Revisit trigger:** the moment a consumer is deployed from OUTSIDE
 this repo's CI — an independently-released service, or tenant-authored consumers on the bus — the
@@ -224,6 +189,6 @@ data.
 
 ## Related docs
 [`ARCHITECTURE.md`](ARCHITECTURE.md) · [`DURABILITY.md`](DURABILITY.md) (CAS validation) ·
-[`RAY-TRAIN.md`](RAY-TRAIN.md) (D1 pins, D4 registry) · [`RESILIENCE.md`](RESILIENCE.md)
+[`LINEAGE.md`](LINEAGE.md) · [`RESILIENCE.md`](RESILIENCE.md)
 (delivery semantics) ·
 [`docs/adr/0012-schema-declaration-claim-check-hardening.md`](adr/0012-schema-declaration-claim-check-hardening.md) (schema declaration + claim-check hardening, the tracked gaps)

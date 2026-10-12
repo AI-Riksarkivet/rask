@@ -941,7 +941,7 @@ Authorization: Bearer <JWT>`, chips:["describe","credentials endpoint"] },
   },
 
   promote: {
-    name:"Promote (medallion)", note:"lance-ray bronze → silver → gold, then emit lineage",
+    name:"Promote (medallion)", note:"the user's pipeline moves bronze → silver → gold through the catalog, then emits lineage",
     steps:[
       { from:"ray", to:"catalog", color:"--c-compute", title:"Describe bronze", route:"GET describe_table",
         desc:"The promotion job is a <em>catalog client</em>, not an endpoint. It authenticates with <em>workload identity</em> (KubeRay SA / OIDC token) — <em>not</em> a vault secret — gets short-TTL scoped creds from the catalog, and <em>never touches OpenBao</em>.",
@@ -966,7 +966,7 @@ Idempotency-Key: <run-uuid>      // check can_write_data`, chips:["can_write_dat
         desc:"The engine writes the new silver dataset version (immutable; old versions remain for time-travel).",
         payload:`write_lance("silver$features", mode="append")`, chips:["new version"] },
       { from:"ray", to:"lineage", color:"--c-orch", title:"Emit OpenLineage", route:"POST /api/v1/lineage",
-        desc:"The job (not the catalog) emits a run event. <em>Ingest now binds the author</em> to the verified token sub (P0 #2) — provenance is no longer forgeable. The lance-ray promote job itself is still TODO (P1 #6).",
+        desc:"The job (not the catalog) emits a run event. <em>Ingest now binds the author</em> to the verified token sub (P0 #2) — provenance is no longer forgeable. The job is the user's pipeline on their own compute; the lakehouse runs no stage (ADR 0155).",
         payload:`{ "eventType":"COMPLETE",
   "job":{ "name":"lanceray_embed" },
   "run":{ "facets":{ "author":{ "name":"dee" } } },

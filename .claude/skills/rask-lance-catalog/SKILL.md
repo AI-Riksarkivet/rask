@@ -217,8 +217,7 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   owner, this pass: Lance's commit-path auto-cleanup (`lance.auto_cleanup.*`) deletes inside whichever
   writer commits, past a hold and a protected base. No door arms it (the property guard refuses the keys),
   every committing catalog door disarms the ref first (`core/namespace.disarm_commit_path_cleanup`; erasure
-  every ref), the static-key writers (medallion's in-process lane, `scripts/ray_stage_job.py`) disarm before
-  their first commit, the restore door refuses an armed version, and `compact_one` deletes every such key before its refusal gates
+  every ref), the restore door refuses an armed version, and `compact_one` deletes every such key before its refusal gates
   as the backstop for a table nobody commits on (LH-245).
 - **A dataset URI encodes its TIER in SIX different places, and they do not agree on which end it
   sits.** `maintenance/services/tiers.py` sizes fragments per tier (bronze 512 / silver 262 144 / gold
@@ -226,16 +225,16 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   cannot serve all three). Reading the tier from the wrong segment does not error, it returns `None`
   and silently falls back to Lance's own sizing:
   `<bucket>/<project>-<tier>/<table>` (nested — tier TRAILS, reduce from the right);
-  `<bucket>/medallion/<tier>[-<lane>]` (the cascade — the child IS the namespace, and lanes are
+  `<bucket>/medallion/<tier>[-<lane>]` (a tier dataset under the `medallion/` parent — the child IS the namespace, and lanes are
   `<tier>-<lane>` like `bronze-<lane>` / `gold-<lane>`, so the tier LEADS, reduce from the left);
   `<bucket>/<uuid8>_<namespace>$<table>` (the `dir` backend's FLAT layout — namespace and table share
   ONE directory name, so the tier is in `parts[-1]`, not a parent directory; a NESTED namespace makes
   it `<uuid8>_<parent>$<ns>$<table>`);
-  `<bucket>/medallion/<project>$<tier>` (the cascade under a PROJECT — `project_root` reroutes the
+  `<bucket>/medallion/<project>$<tier>` (a tier under a PROJECT — `project_root` reroutes the
   medallion base per tenant, so the promoted child is project-qualified);
-  `<bucket>/<uuid8>_<tier>-<lane>$<table>` (a cascade LANE vended through the catalog — the flat
-  layout carrying the cascade's order rather than the catalog's);
-  `<bucket>/medallion/<namespace>/<table>` (a TABLE under a cascade namespace — the trainer's
+  `<bucket>/<uuid8>_<tier>-<lane>$<table>` (a tier LANE vended through the catalog — the flat
+  layout carrying the `<tier>-<lane>` order rather than the catalog's);
+  `<bucket>/medallion/<namespace>/<table>` (a TABLE under a `medallion/` namespace — e.g.
   `medallion/models/<model>`, or a table beneath a lane).
   Until 2026-08-16 only the first was handled, so measured live, EVERY governed tier read as untiered
   and the per-tier defaults had never once applied. Layouts 4 and 5 landed later still and are the
@@ -294,8 +293,8 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   its type and is written with the table's own fields and reserved metadata
   (`provenance_guard.keep_provenance`, [[LH-242]]: the Overwrite is a new version of the same table, its
   grants and history intact, recorded as `overwrite_table` with lifecycle state `OVERWRITE`); the
-  platform writes them with pylance directly, and a producer creating from an upstream's schema strips its
-  schema metadata first (`medallion.services.catalog_register.ensure_stage_output`). `description` is the one user-facing reserved key (the
+  platform writes them with pylance directly, and a client creating from an upstream's schema strips its
+  schema metadata first. `description` is the one user-facing reserved key (the
   lakehouse renders it under the table name); everything else in that map is opaque user data.
 - **`drop_columns` / `alter_columns` refuse to drop, rename or re-type provenance** ([[LH-208]]): the
   columns `stage`, `lineage`, `source_rowid` by name, and every field carrying
@@ -318,7 +317,7 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   versions, sticky; the message names the recreate remedy) or a declared base nothing sanctions is a 400
   `InvalidInput`; an open that fails is a 503; both deregister what the call attached. An absent location
   still registers.
-  Never gate this on `unsupported_features()`: a stage runner's `initial_bases` sets flag 16 and would be
+  Never gate this on `unsupported_features()`: a table created with one external blob prefix in `initial_bases` sets flag 16 and would be
   refused. The catalog's own re-registers (table and namespace undrop) log `restored_mixed_file_versions`
   instead of refusing, so a governed table is never stranded in the trash. A re-register that lands on
   the 409 converge path never seeds governance onto a flag-256 dataset or one declaring a base nothing
@@ -337,8 +336,8 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   are served by the blob door. A plain base inside a configured entry is CONFIGURED at the read/vend/blob doors
   and the register door only when it covers no governed storage (`BaseJudge.judge`, `GovernedStorage`), so a
   planted `models/<victim>/` base is sanctioned by the record or by nothing; maintenance and lineage keep the
-  unnarrowed standing for protection. A stage runner's `ensure_stage_output` forwards its upstream's base as
-  `external_blob_base`. `vend_sanctioned_bases` is gone: the vendor's allowlist is
+  unnarrowed standing for protection. A pipeline deriving a tier from one names its upstream's base as
+  `external_blob_base` on the create. `vend_sanctioned_bases` is gone: the vendor's allowlist is
   `LANCE_MULTIBASE_DATA_BASES` alone. Pinned by
   `tests/integration/test_an_external_blob_base_is_authorized_per_table.py` and the planted-base case of
   `test_a_forged_fragment_is_refused_and_the_table_is_unchanged.py`.
@@ -438,14 +437,11 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
 - **A JSON index has NO stats, and Lance says so with a PANIC — upstream, already contained.** On
   pylance 10.0.0 every maintenance sweep prints `thread '<unnamed>' panicked at
   lance-index/src/scalar/json.rs:95:9: not yet implemented`, twice, once per Json index. The
-  reproducing call is `ds.stats.index_stats("lineage_run_id_idx")` against either cascade tier
-  (`s3://lance-catalog/medallion/{silver,gold}`), whose index `service_kit/lakehouse/tier_write.py::
-  index_lineage` (the stage write both engines land through) creates as `IndexConfig(index_type="json", parameters={"target_index_type":
-  "btree", "path": ...})`. It is a PROVENANCE index, not a search one — the indexed path is
+  reproducing call is `ds.stats.index_stats("lineage_run_id_idx")` against a table carrying a JSON
+  index built as `IndexConfig(index_type="json", parameters={"target_index_type": "btree", "path": ...})`
+  — on the estate, the silver and gold tiers under `s3://lance-catalog/medallion/`. It is a PROVENANCE index, not a search one — the indexed path is
   `lineage -> run_id` on the R26 consume-layer document, so a governed row can be filtered back to the
-  run that wrote it; nothing in it serves text or vector search. (The name here was
-  `_ensure_lineage_index`, which has never existed; grepping for it finds nothing and reads as though
-  the index were built somewhere this file does not know about.) `not yet implemented` is Lance's own `todo!()` — stats for the JSON scalar
+  run that wrote it; nothing in it serves text or vector search. `not yet implemented` is Lance's own `todo!()` — stats for the JSON scalar
   index simply do not exist yet — so there is nothing to fix on our side and nothing to file beyond
   upstream. It is CONTAINED, and deliberately: `index_health._stats` catches **`BaseException`**, not
   `Exception`, because a Rust panic surfaces as pyo3's `PanicException`, which derives from
@@ -465,8 +461,7 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   dataset shape, same option, opposite result, so Lance is not the defect. The job's call matches
   lance-ray 0.5.0's signature (`compact_files(uri, *, compaction_options, num_workers,
   storage_options, ...)`), so it is not misuse either. Nothing tracks the upstream fix: no suite drives
-  this demo job, which exercises lance-ray itself and not rask's production Ray path
-  (`scripts/ray_stage_job.py`).
+  this demo job, which exercises lance-ray itself; the lakehouse runs no Ray job of its own (ADR 0155).
 - **CHECK THE TRASH RECORD BEFORE TOUCHING BYTES — including when you are "only looking".** The sweep
   reports `versions_removed: 0` on datasets holding versions far older than the retention, and the
   reason is almost always the F6(d) exclusion: a recoverably-dropped dataset (`_trash/` record) is
@@ -486,112 +481,36 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   because every sweep since has measured `fragments_removed: 0, versions_removed: 0`. That is the gate
   behaving correctly, not a defect.
 
-  **THE CHAIN HAS THREE PARTIES, NOT TWO, AND THE THIRD IS WHERE IT BROKE.** A producer stamping
-  `lineage.dataset_id` and a sweep reading it are necessary and not sufficient (the sweep names a dataset by
-  its PATH first and by the stamp only where the path is silent, [[LH-208]]): `lineage.dataset_id`
-  is schema METADATA, and metadata survives `set_column` / `append_column` / `drop_columns`, so every
-  DERIVED tier silently inherited its upstream's name (measured 2026-09-09: bronze declaring
-  `acme$bronze` produced a stamped silver table, and the empty schema the distributed lane creates its
-  destination with, both declaring `acme$bronze`). Silver's compactions and silver's per-dataset FAIL
-  events were therefore filed against bronze's node, and attestation O12 passed the whole time — it
-  asks whether a name is stamped, never whose. Closed by making the STAMP own the question:
-  `stamp_stage(..., dataset_id=...)` re-declares the destination and DROPS an inherited id when
-  unwired, the same rule it already applied to the `lineage` document, and `scripts/ray_stage_job.py`
-  now reads the `RASK_DEST_TABLE` the work order always shipped. When you check a declared-id chain,
-  check the third party: not "is a name stamped" but "whose name, on the tier that derived it".
+  **A DERIVED TIER INHERITS ITS UPSTREAM'S `lineage.dataset_id` UNLESS THE STAMP DROPS IT.** The sweep
+  names a dataset by its PATH first and by the stamp only where the path is silent ([[LH-208]]), and
+  `lineage.dataset_id` is schema METADATA, which survives `set_column` / `append_column` /
+  `drop_columns` — so a silver table derived from bronze declares bronze's id unless something
+  re-declares it (measured 2026-09-09: silver's compactions and FAIL events were filed against bronze's
+  node). `service_kit.lakehouse.stage_stamp.stamp_stage(..., dataset_id=...)` re-declares the destination
+  and DROPS an inherited id when none is given, the same rule it applies to the `lineage` document. When
+  you check a declared-id chain, ask not "is a name stamped" but "whose name, on the tier that derived it".
 
-  **THE CASCADE'S TIERS ARE GOVERNED, every one of them.** Bronze and the stage runners' outputs alike
-  are catalog tables with a record and ownership tuples:
+  **EVERY TIER IS A CATALOG TABLE, and the writer is the user's pipeline** (ADR 0154, ADR 0155). Bronze,
+  silver and gold are written only through the namespace doors, so each tier is a `table:` object with a
+  record and ownership tuples from its first row, and the catalog announces every committed write on
+  lineage. Moving rows between tiers runs on the user's own compute and orchestrator; the lakehouse runs
+  no stage.
 
-  - **Every STAGE RUNNER output is a catalog table.** `transform.py` calls
-    `catalog_register.ensure_stage_output` BEFORE the write — describe, create-if-absent, then take
-    the location from the catalog's own answer — so the tier is a `table:` object with ownership
-    tuples before a byte lands, and it then publishes the written version through
-    `catalog_register.publish_stage_output` (the catalog's quality gate; `workflow.py::_resume_publish`
-    is the approval resume of the same call). That is bronze→silver, silver→gold and the media lane —
-    i.e. silver, gold and silver-media. The chart always supplies the URL
-    (`chart/templates/medallion.yaml` renders `MEDALLION_CATALOG_URL` for producer and stage runners alike),
-    so the ungoverned branch — `if settings.catalog_url and to_dataset` — is the dev shape, not the
-    deployed one. Symbols rather than line numbers throughout this sub-bullet on purpose: the stage runner is
-    edited often enough that a cited line goes wrong within the week.
-  - **Bronze is written only through the catalog** (ADR 0154). A client creates or inserts into
-    `<project>-bronze$events` through the namespace doors, so the head's tier is a `table:` object with
-    ownership tuples from its first row, and `/bronze-arrival` names the location the catalog vended on
-    the `medallion.bronze` trigger (`ingest_trigger._vended_upstream`), so the bronze→silver stage runner
-    reads where the rows are rather than a path composed from settings.
-  - **A registration is not an arrival, and the cascade head has to know that.** The catalog's own
-    `register_table` marker is a `COMPLETE` lineage event whose single output is `bronze` /
-    `bronze$events` — indistinguishable, on the fields `/bronze-arrival` matched, from a batch landing.
-    Measured: without a filter, a register followed by a write fired TWO cascades. `ingest_trigger.py` now drops the
-    byte-free catalog operations (`register_table`, `deregister_table`, `declare_table`) as a denylist,
-    so an external OpenLineage producer naming its own operation still fires the head.
-
-  What follows below describes a dataset written by something that does NOT register, kept because the
-  mechanism it measures is exactly how the sweep and the namespace lever behave. A policy
-  door does reach the bytes — `set_namespace_policy` builds its path from `settings.root` and
-  `resolve_policy` matches a namespace record by directory prefix (`rel.startswith(path + "/")`), so a
-  record on `medallion` governs `medallion/bronze`; and `retain_versions` alone sets
-  `effective_older_than = None`, which is keep-last-N with no age bound and would sidestep the 7-day
-  `MAINTENANCE_OLDER_THAN_DAYS` wall entirely. What blocks it is AUTHORIZATION, measured live
-  2026-08-16 with a real dex bearer: `POST /v1/namespace/medallion/policy/set` → 403 *"can_delete
-  required on namespace:medallion"*, and `POST /v1/table/bronze$events/policy/set` → 403 *"can_drop
-  required on table:bronze$events"*. Both 403 rather than 404 because the gate runs before existence
-  resolution — and neither object exists: `medallion` is not a catalog namespace (it is absent even
-  from the reconciler's `unbound_namespaces`, which lists `bronze`, `transcripts_v2` and the three
-  `acme-*`), and `bronze$events` is not a registered table. With no namespace record, no table record
-  and no parent tuple, NO principal can hold `can_delete`/`can_drop` on the seed's dataset, so no
-  policy, protection or grant can be applied to it. **Read that precisely, and note how the scope of this
-  sentence has moved twice: it said "the datasets the cascade writes", which over-claimed once the
-  stage runner outputs were registered, and it then said "the seed", which over-claims now that the head
-  registers too. The seed was never UNMAINTAINED, only un-OVERRIDABLE, and it is neither today.** The sweep covers them like everything else under the
-  platform's own settings — `MAINTENANCE_OLDER_THAN_DAYS` (7), `tiers.py`'s per-tier fragment sizing,
-  `optimize_indices` — which is why every live summary counts them among its 27 datasets and reports
-  `index_findings` for `medallion/{silver,gold}`. What was unavailable is the TENANT-facing layer — a
-  per-dataset policy override, a `_protection/` record, an FGA grant — which is precisely the trio
-  registration restores, and precisely what any unregistered dataset still lacks.
-  **"No table record" is a STATE, not a law — and the door that fixes it is already wired.**
-  `register_table` is precisely for data written outside the catalog's own doors: it turns written
+  **`register_table` is the door for bytes written outside the catalog's own doors.** It turns written
   bytes into a `table:` object, seeds ownership tuples, and every governed path (protection, trash,
-  credential vending, the FGA doors) keys off that object. It needs no warehouse, which is why it works
-  in the RESERVED bucket — proven by shipped code (`#88`), not theory: a gold tier was registered there
-  and its lane ran live end-to-end. So the reserved bucket blocks the WAREHOUSE route (a tenant claiming
-  platform storage) while leaving the REGISTRATION route open (naming an individual dataset) — two
-  different mechanisms, and conflating them is how you conclude the cascade can never be governed.
-  **THERE ARE TWO SEAMS IN `catalog_register.py`, and which one a writer uses is decided by who owns
-  its location.** A STAGE RUNNER asks: `ensure_stage_output` describes the table, CREATES it through the
-  catalog's own door when absent, and returns the location the catalog vends, which the stage runner then
-  writes to (rule I2 applied to the write side) — correct because nothing else names where a stage runner's
-  output lives. The CASCADE HEAD tells: `register_written_dataset` attaches the URI the producer
-  already owns, relative to `MEDALLION_CATALOG_ROOT`, treating 409 as convergence only after a
-  `describe` CONFIRMS the catalog governs that same location. The telling form was deleted once, when
-  its only caller was a stage runner that should have been asking (and `relative_location` and
-  `MEDALLION_CATALOG_ROOT` went with it); the direction was never the defect, the CALLER was.
-  Registration belongs to the CASCADE, which is why the module is workload-neutral and takes only an
-  id and a URI or schema: every lane gets it, or the first workload built is the only governed one.
-  Neither seam mints a namespace — a top-level parent belongs to the warehouse, and
-  `require_warehouse_scoped` refuses one outright BEFORE the existence check, so a lane that tried it
-  dead-lettered every hop.
-  **And that is DELIBERATE — the platform refuses to let it be fixed that way.** Driven live 2026-08-16:
-  `POST /v1/projects` for a `platform` tenant succeeded 200, and the very next call was refused —
-  `POST /v1/warehouses {bucket: lance-catalog}` → **400 "bucket 'lance-catalog' is reserved platform
-  storage (catalog root/registry or a medallion zone bucket) and cannot back a warehouse"**
-  (`catalog/api/v1/endpoints/warehouses.py:166`, `settings.reserved_bucket_set`). The guard is audited
-  (2026-07-23, "the Mallory scenario's first door") and the reason is exactly the disclosure such a bind
-  would create: `provision_bucket` is idempotent on an existing bucket, so the claim would silently
-  succeed, make that project the bucket's owner, and let **a later project-policy set govern every
-  tenant's data in the shared catalog bucket**. The reservation is DEFENCE IN DEPTH across three
-  independent places, so do not assume one check is the whole story: `reserved_bucket_set`
-  (`catalog/core/config.py:112` — the catalog root, the control/registry root, the model registry, every
-  approved multi-base data bucket, and `LANCE_RESERVED_BUCKETS`), the warehouse-create and bucket-claim
-  refusals (`warehouses.py:164`/`:641`), and — for the case where a bad record already exists —
-  `policies.py:372`, which subtracts reserved buckets from the project-policy MATCH set rather than
-  trusting the registry. So "give the medallion path a warehouse" is not an
-  unfinished chore — it is a rejected design, and the cascade tiers are ungoverned BY CONSTRUCTION
-  because they live in platform storage. The probe project was deleted again (`DELETE /v1/projects/
-  platform` → 200, `tuples_revoked: 1`); do not re-create it. If those tiers ever need retention or
-  protection, the answer is a platform-level mechanism (a maintenance policy keyed on the reserved
-  bucket, or moving the cascade OUT of `lance-catalog` into a tenant warehouse), never a warehouse over
-  the reserved bucket.
+  credential vending, the FGA doors) keys off that object. It needs no warehouse, so it works in the
+  RESERVED bucket — while the WAREHOUSE route over that bucket is refused: `POST /v1/warehouses
+  {bucket: lance-catalog}` answers **400 "bucket 'lance-catalog' is reserved platform storage …"**
+  (`catalog/api/v1/endpoints/warehouses.py`, `settings.reserved_bucket_set`). The reason is the disclosure
+  the bind would create: `provision_bucket` is idempotent on an existing bucket, so the claim would
+  silently succeed, make that project the bucket's owner, and let **a later project-policy set govern
+  every tenant's data in the shared catalog bucket**. The reservation is DEFENCE IN DEPTH in three
+  places: `reserved_bucket_set` (`catalog/core/config.py` — the catalog root, the control/registry root,
+  the model registry, every approved multi-base data bucket, and `LANCE_RESERVED_BUCKETS`), the
+  warehouse-create and bucket-claim refusals (`warehouses.py`), and `policies.py`, which subtracts
+  reserved buckets from the project-policy MATCH set rather than trusting the registry. A dataset in
+  platform storage that needs retention or protection gets a platform-level mechanism or moves into a
+  tenant warehouse, never a warehouse over the reserved bucket.
 - **Five things live in a Lance dataset that a manifest scan does not reach.** Branches (`tree/`),
   multi-base files (`base_paths`), MemWAL shards (`_mem_wal/` — WAL + SSTable datasets, and the spec
   warns that GC'ing WAL files WEAKENS writer fencing, since fencing detects a stalled writer by a
@@ -644,15 +563,15 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   /v1/table/{id}/maintenance/compact`, `require_reclaimable` (the root-scoped gate) in front of
   `…/maintenance/run`, plus the `base_refs` guard in front of both. They kept the flags-only mask
   until the maintenance-door audit (2026-09-02), which made the BUTTON stricter than the CRON — it
-  refused every `initial_bases` table (i.e. every medallion tier) while
+  refused every `initial_bases` table (every table carrying an external blob prefix) while
   telling the operator "the sweep refuses it for the same reason", and the sweep was compacting them
   on the next tick. Strictness there protected nothing: the cron performs these same operations
   unattended on the same datasets, so the button only withheld the operator's remedy. The cost of the old blanket refusal was measured: 17 of the estate's datasets were refused
   on flag 16, exactly the ones with fragments and version history, so the 120s sweep did no work at
   all.
   **The COMPACTION gate asks about the BASES, not about the flag — it is the one gate here that is not
-  flags-only.** Refusing every flag-16 dataset was still over-broad by exactly the shape the cascade
-  writes: `medallion/services/compute.py` registers ONE external
+  flags-only.** Refusing every flag-16 dataset was still over-broad by exactly the shape of a table with
+  one external blob prefix: `initial_bases` registers ONE external
   blob prefix via `initial_bases`, which sets 16 while every data file stays under the dataset's own
   root — measured on pylance 10.0.0, compacting that is a merge and nothing more (4 fragments -> 1,
   9,445 -> 14,366 bytes locally, base byte-identical, 20/20 payloads still resolving). Refused anyway,

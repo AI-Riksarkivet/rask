@@ -32,14 +32,19 @@ something adjacent.
 | **Q6** | Does it hand a person work, or take work away from them? | `TASK_ASSIGNED` / `TASK_UNASSIGNED` / `TASK_CHANGES_REQUESTED` / `TASK_DROPPED` / `TASK_LEASE_EXPIRED` | the same envelope; `extra.subject` is the WORKER, never the manager who clicked |
 | **Q7** | Will a scheduled act take something from a person unless they act first? | `ERASURE_RELEASE_SCHEDULED` | the same envelope, one per person (the erasure's requester and each table owner); `extra.due_at` is the deadline (ADR 0138) |
 
-**Q2 is the one people miss, and it exists because Q1 is unreachable for most long work.** The estate's
-expensive runs — a Ray training job, a medallion stage — execute detached, hours after the request, and
-post their own lineage as a service. `enforce_author` then OVERWRITES the author facet with that
-service's verified sub (trap 2), so the human CANNOT be the author and must not try to be. `originator`
-is the field for a run authored by a service but run FOR a person; it is a TARGETING hint that
-authorizes nothing, because the plane re-derives every recipient's visibility at delivery. The worked
-reference is the `/train` chain (`tests/unit/test_train_originator.py`): five links — door → trigger →
-consumer → Ray submission → the job's own events — and the person is told only if every one carries it.
+**Q2 is the one people miss, and it exists because Q1 is unreachable for most long work.** Expensive
+runs execute detached, hours after the request, and post their own lineage as a service. `enforce_author`
+then OVERWRITES the author facet with that service's verified sub (trap 2), so the human CANNOT be the
+author and must not try to be. `originator` is the field for a run authored by a service but run FOR a
+person; it is a TARGETING hint that authorizes nothing, because the plane re-derives every recipient's
+visibility at delivery. Every hop between the request and the job's own events must carry it, or the
+person is not told.
+
+**A user's pipeline is its own producer** (ADR 0155). Moving data between tiers runs on the user's own
+compute and orchestrator, and the lakehouse emits no run event for work it does not run: a pipeline's
+runs reach people through the OpenLineage events the pipeline's job emits, targeted by their
+`author.sub` (Q1), or by `lance.originator` when the job authenticates as a service (Q2). The catalog's
+own COMPLETE for each commit the pipeline makes is authored as the verified caller.
 
 **Long-running jobs need the identity in TWO places, and they are not interchangeable.** Ray's own
 `metadata` (`rask.originator`, returned by `GET /api/jobs/<id>`) is how an OUTSIDE observer recovers who
@@ -74,13 +79,6 @@ nulls `assignee` in the same turn, so the post-turn document names nobody), and 
 the RECORD rather than `self.id.id` — identical in production, but the actor-runtime attribute does not
 exist under a test double, so an emit that used it silently swallowed an `AttributeError` and asserted
 nothing.
-
-Not every control action names a party: `run_planned` (a stage runner or the producer announcing a planned Ray run,
-CP-029) is the bring-your-own-engine seam's, untargeted like `transform_set`, so the lane files it IGNORED and the
-producer's head ignores it; its signer role is `medallion_stage_runner` on a `stage_run:` object and
-`medallion_producer` on a `train_run:` one. A training run's terminal reaches people through lineage: the job's own
-events, or the producer's in the train-watcher shape (author = the producer's identity, `lance.originator` and
-`lance.project` carried) when the job never reported.
 
 Q4 is the sharpest and is why the control lane exists at all: *losing access silently is how someone
 discovers it by hitting a 403 in the middle of work*. That lane deliberately runs **no visibility
@@ -133,7 +131,7 @@ event = {
     "outputs": [{"namespace": "gold", "name": f"{project_id}-gold$catalog"}],  # (4)
 }
 # (5) SIGNED with this service's own key, through the service's one emit door
-#     (`medallion/core/lineage_publish.py::emit_lineage`). A bare dict is refused by lineage and acked.
+#     (`maintenance/core/lineage_emit.py` is a worked service emitter). A bare dict is refused by lineage and acked.
 event = attach_signature(event, key=holder.key(), identity=holder.identity)
 await publish_event(client, pubsub_name="pubsub", topic_name="lineage.events.v1", data=json.dumps(event), data_content_type="application/json")
 ```
@@ -220,28 +218,17 @@ so it must read as a reason a person would accept; and `notification-center.stor
 1. **A role literal in `author.sub` reaches nobody.** `author_subject()` reads `author.sub` and
    **nothing else** — never `author.name`, never the standard `ownership` facet — because those are
    producer-supplied and honouring them would let any producer put a row in a named person's inbox.
-   The medallion stage runners author with a chart role literal (`data_eng`/`analyst`, `chart/values.yaml`
-   `medallion.stageRunners[].author`; the producer's is `ray`), so a failed cascade addresses an inbox
-   actor named `ray`. That is not a bug to fix at the stage runner — `enforce_author` would overwrite a
-   human there anyway (trap 2). The literal is *correct* as the author; what makes the cascade
-   reachable is the ORIGINATOR riding beside it, which is why every trigger payload in the chain
-   re-carries it.
-   **The hop that lost it was the TIER BOUNDARY, and the lesson generalises past this cascade.**
-   `/bronze-arrival` → the stage runner's four FAIL emits all carried the human; the stage runner then
-   publishes its output to the CATALOG (the tag move is what wakes the next tier), and that call
-   carried `cascade_id` and dropped the person. The publication head filled the gap by deriving an
-   originator from the control event's `actor` — but a stage runner authenticates to the catalog AS ITSELF,
-   so the silver→gold trigger named `service-bronze-to-silver` and every gold failure wrote into an
-   inbox actor named after a stage runner. **A service subject in the originator is the same defect as a role
-   literal in the author, and it is worse than silence because it looks delivered.** Closed by the
-   `cascade_id` shape: the stage runner puts the human on the publish body
-   (`catalog_register.publish_stage_output`), the catalog RESOLVES it once
-   (`publication.publication_originator` — a service caller's carried claim, else a human caller's own
-   verified sub, else nothing) and echoes it onto `table_published`, and the head reads `extra`
-   instead of guessing. The catalog owns that decision because its door is the one that verified the
-   caller: a `ServicePrincipal` (a projected service-account token, [[LH-220]]) is a service, and an
-   IdP token is a person whatever claims it carries.
-   Pinned end-to-end on delivered rows by `tests/unit/test_cascade_originator.py`.
+   A service that authors with a role literal or its own identity addresses an inbox actor of that
+   name; the literal is *correct* as the author, and what reaches the person is the ORIGINATOR riding
+   beside it, so every hop that carries the work re-carries it.
+   **A service subject in the originator is the same defect as a role literal in the author, and it is
+   worse than silence because it looks delivered.** A service authenticates to the catalog AS ITSELF,
+   so an originator derived from a control event's `actor` names the service. The catalog RESOLVES the
+   originator of a publication once (`publication.publication_originator` — a service caller's carried
+   claim, else a human caller's own verified sub, else nothing) and echoes it onto `table_published`, so
+   a reader takes `extra` instead of guessing. The catalog owns that decision because its door is the one
+   that verified the caller: a `ServicePrincipal` (a projected service-account token, [[LH-220]]) is a
+   service, and an IdP token is a person whatever claims it carries.
 2. **A service token SUBSTITUTES the author.** If your emit runs behind a service bearer,
    `enforce_author` (`lineage/api/fga_deps.py:96-103`) **overwrites** the facet with that service's
    sub — "never trust the request body" is doing its job, and your human is gone. Carrying the human's
@@ -271,7 +258,7 @@ so it must read as a reason a person would accept; and `notification-center.stor
    **A new lineage-lane producer is a
    `lance.signers` entry in the chart** (it mints the pair, sets `RASK_SIGNING_IDENTITY` and lists the identity in
    `LINEAGE_SIGNERS`) that calls `attach_signature` on every event it emits and emits nothing while its key is
-   unresolved (`SigningKeyUnavailableError`). Worked reference: `services/medallion/src/medallion/core/lineage_publish.py`.
+   unresolved (`SigningKeyUnavailableError`). Worked reference: `services/maintenance/src/maintenance/core/lineage_emit.py`.
 
 ## The FGA prerequisite
 
@@ -324,11 +311,9 @@ survives is the shape of what remains, because these classes recur every time a 
 notify somebody.
 
 1. **No identity at the door.** A producer that never captured a verified sub can never name a person,
-   and nothing downstream can repair it. Closed for `/train`, the producer's only write door, and
-   for every write through the catalog's namespace doors, whose event the catalog authors as the
+   and nothing downstream can repair it. Closed for every write through the catalog's namespace doors, whose event the catalog authors as the
    verified caller (data enters the lakehouse only there, ADR 0154). Still open for
-   `services/compute` (`RayJob` has no author field) and the controlplane (the Project CR carries
-   `spec.team`, a literal, not a requester). See `docs/adr/0042-the-compute-service-gets-no-emitter-yet-and-the-blocker-is.md` — an emitter without an identity
+   `services/compute` (`RayJob` has no author field). See `docs/adr/0042-the-compute-service-gets-no-emitter-yet-and-the-blocker-is.md` — an emitter without an identity
    produces events the plane is *designed* to discard, which reads as coverage and is not.
 2. **No principal at all.** Some transitions are caused by a TIMER, not a person: the annotator's
    `lease_expired` fires from an actor reminder with no request and no emitter in scope. The audience
@@ -336,9 +321,8 @@ notify somebody.
 3. **A fact that only exists while somebody is looking.** Several failures are composed at read time
    inside an HTTP handler and never persisted or published — flows' unparsable result. Nothing can notify what was never recorded.
 4. **An audience that is real but unmodelled.** `services/flows` has no project and no lakehouse
-   output, so even a perfect emit dies on `notifiable()`'s output rule; the controlplane keys watches
-   by CR name while fan-out matches the FGA tenant id, and nothing joins the two namespaces.
-5. **Steady states wearing an event's clothes.** A permanently un-granted stage runner, a repeating denial, a
+   output, so even a perfect emit dies on `notifiable()`'s output rule.
+5. **Steady states wearing an event's clothes.** A permanently un-granted service, a repeating denial, a
    degraded lane — these are METRICS, and `docs/adr/0039-lineage-records-what-happened-to-data-an-authorization.md` records why lineage must not carry them.
 
 **The line, worth re-reading before adding anything:** lineage answers *what happened to this dataset

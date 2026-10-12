@@ -9,7 +9,8 @@ design rule for this platform: every tier governed, nothing over-built, and no c
 say where its data came from.
 
 A **Lance lakehouse** under Lance Namespace (governed REST catalog + OpenLineage lineage into Apache
-AGE), **durable execution and events** on Dapr + NATS JetStream, **batch compute** on Ray, and
+AGE), **durable execution and events** on Dapr + NATS JetStream, **batch compute** on the engine the user
+brings (Ray in development), and
 **complete lineage and governance** over both — Dex OIDC for identity, OpenFGA for authorization,
 S3-compatible storage (RustFS in-cluster).
 
@@ -19,9 +20,8 @@ its identity. Anything that reads bytes, writes a governed table and emits linea
 shape — text, image, audio, video, embeddings.
 
 **The platform itself has no concept of HTR, and that is enforced rather than aspirational.** Modality
-lives in exactly two places: the sealed `runners/htr` project and the named HTR stage/schema inside
-`services/medallion`. It must not leak into a shared seam — the catalog, the medallion cascade, the
-maintenance sweep, lineage, notifications — because a seam that knows one modality makes the next one a
+lives in exactly one place: the sealed `runners/<workload>` projects. It must not leak into a shared seam —
+the catalog and its tier governance, the maintenance sweep, lineage, notifications — because a seam that knows one modality makes the next one a
 second-class citizen. That is not hypothetical: registration shipped as `htr_register.py` and served the
 HTR lane alone, so that lane was governed and every other lane wrote **ungoverned** bytes until it was
 generalised. The test for any shared seam is *would this still be right for audio?*
@@ -37,12 +37,12 @@ Two language-pure planes: Python at the repo root, all JS/TS under `frontend/`.
   `ray-kit`, `service-kit`, `storage`, `validate`, plus `ray-cluster-env` (deps-only, ships no code)
 - `services/` — runnable Python services (uv workspace members):
   - **lakehouse**: `catalog` (governed Lance REST catalog — projects → warehouses → namespaces →
-    tables), `lineage` (OpenLineage → AGE), `medallion` (the bronze→silver→gold cascade),
-    `maintenance` (compaction, index optimize, version reclamation, drift + orphan reporting)
+    tables, and the bronze→silver→gold tier governance a pipeline's writes pass through), `lineage`
+    (OpenLineage → AGE, and the durable `GET /events` log), `maintenance` (compaction, index optimize, version reclamation, drift + orphan reporting)
   - **media**: `viewer`, `search`, `annotator`
-  - **fleet**: `gateway` (reverse proxy `:8888`), `compute` (Ray introspection + Serve proxy),
-    `controlplane`, `flows` (the studio flow-builder's server half), `notifications` (the
-    per-subject inbox)
+  - **fleet**: `gateway` (reverse proxy `:8888`), `flows` (the studio flow-builder's server half),
+    `notifications` (the per-subject inbox), and `compute` (Ray introspection + Serve proxy), the companion of a
+    bring-your-own Ray engine, which ships in its own chart (`deploy/fixtures/compute`) and has no gateway row
 - `runners/` — **sealed model environments, not workspace members** (each owns its `pyproject.toml`
   and `uv.lock`, so torch/model pins never enter the fleet's resolution): `htr`, `asr`, `diarize`,
   `voiceprint`, `topics`, `kg`, `assist`, `insid3`, `dummy`
@@ -111,7 +111,6 @@ The chart in `chart/` is the single deploy artifact for both.
   ```bash
   make kind-up kind-images kind-load kind-deploy
   make e2e-ci        # governed kind stack + the live e2e suites   (== CI e2e-stack job)
-  make e2e-ray-ci    # ray-ON stack + real KubeRay + both Ray suites (== CI e2e-ray job)
   ```
 
 > Both clusters can exist at once, and a bare `kubectl` may reach the **kind** one. The k3s release
@@ -135,7 +134,7 @@ make scan-image NAME=gateway
 
 `.github/workflows/ci.yml` calls the Dagger module's real functions — `lint`, `typecheck`, `openapi`,
 `test`, `test-pg`, `charts`, `frontend`, `test-lineage`, `scan-*` — plus the kind-backed live jobs
-(`make e2e-ci` / `make e2e-ray-ci`), the per-zone Playwright suites, and the zone-image build+smoke.
+(`make e2e-ci`), the per-zone Playwright suites, and the zone-image build+smoke.
 Everything hermetic runs identically on your machine: `dagger call <fn>` == the CI step.
 
 ## Common Make targets
@@ -149,7 +148,7 @@ Everything hermetic runs identically on your machine: `dagger call <fn>` == the 
 | `make dev-micro` / `make dev-frontends` | Local backend fleet / all zones on `:3024`                           |
 | `make k3s-build k3s-import k3s-up`      | The long-lived k3s deploy                                            |
 | `make kind-up … kind-deploy`            | Throwaway kind cluster lifecycle                                     |
-| `make e2e-ci` / `make e2e-ray-ci`       | The guarded live proofs (kind)                                       |
+| `make e2e-ci`                           | The guarded live proofs (kind)                                       |
 | `make e2e`                              | Playwright browser e2e against a running deploy                      |
 | `make storybook`                        | `@rask/ui` Storybook on `:6006`                                      |
 | `make dev-gc`                           | Reclaim the dev loop's two disk leaks (Dagger cache + dev registry)   |

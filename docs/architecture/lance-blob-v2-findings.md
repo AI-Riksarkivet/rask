@@ -91,9 +91,8 @@ class, exactly the kind this estate's gates exist to catch.
 
 1. Use `scanner(columns=[…], blob_handling="all_binary")` — it preserves cardinality correctly, nulls
    included, and it returns the tabular columns in the SAME scan, so alignment holds by construction with
-   no mask to maintain. In this repo that is `service_kit.lakehouse.blobs.read_aligned_table`, and it is
-   the scan the medallion cascade (`compute._blob_slices`) and the Ray media stage
-   (`ray_stage_job._media_rows`) both stream in bounded slices.
+   no mask to maintain. In this repo that is `service_kit.lakehouse.blobs.read_aligned_table`, which the
+   viewer's page reads use.
 2. Key off the row address the API already returns — `read_blobs` yields `(row_address, payload)` and
    `read_blob_ranges` yields `(request_index, row_address, payload)`; map results back by that
    identifier rather than by position.
@@ -113,7 +112,7 @@ Any code of ours that pairs `read_blobs` output positionally is doing less than 
 ## ⚠ The landmine is WORSE on pylance 8 — and it is not fixable there
 
 Measured 2026-07-28 (R27 audit) against the same three-row dataset above, written by pylance 9.0.0 with one
-null payload, then read at the version `.docker/ray-lance.dockerfile` used to pin:
+null payload, then read at pylance 8.0.0:
 
 | read path | pylance 8.0.0 | pylance 9.0.0 |
 |---|---|---|
@@ -122,11 +121,11 @@ null payload, then read at the version `.docker/ray-lance.dockerfile` used to pi
 | blob descriptor `is_valid()` | **`[True, True, True]` — wrong**, so the presence-mask fallback silently mis-detects | `[True, False, True]` — correct |
 
 So at pylance 8.0.0 there is **no** correct way to read a null-bearing blob-v2 column: the cardinality-safe
-path errors out and the mask-based fallback lies. That is why the Ray image's Lance pins are now asserted
-equal to the workspace's (`tests/unit/test_ray_job_images.py`) — the Ray jobs read and write the *same*
-datasets the services write, so a version split there is a correctness bug, not a currency preference.
+path errors out and the mask-based fallback lies. Any engine that reads and writes the *same* datasets the
+catalog serves must therefore run a pylance at least as new as the catalog's: a version split there is a
+correctness bug, not a currency preference.
 
-Two related version facts measured in the same pass, for anyone reading old comments in the Ray jobs:
+Related `lance-ray` version facts measured in the same pass:
 
 - `lance_ray.write_lance` genuinely had **no** `enable_stable_row_ids` at lance-ray 0.4.2 (hence the
   create-with-stable-ids-then-append dance); it exists at 0.5.0. `add_columns_from`,
@@ -136,8 +135,7 @@ Two related version facts measured in the same pass, for anyone reading old comm
   parameters**, contrary to what `ray_lance_job.py` recorded. The conclusion (fall back to the native
   build) held; the stated reason did not.
 - `lance_ray.read_lance(uri, scanner_options={"with_row_id": True})` **does** surface `_rowid` (verified at
-  both 0.4.2 and 0.5.0), contradicting `ray_stage_job.py`'s note that it does not — see the R27 record in
-  `lance-ns-merge.md`.
+  both 0.4.2 and 0.5.0) — see the R27 record in `lance-ns-merge.md`.
 
 ## Sizing note for rask's page images
 

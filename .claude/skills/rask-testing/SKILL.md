@@ -56,7 +56,7 @@ consequences it does not spell out.
   Every offline lane deselects `e2e`. A new `tests/e2e-py` file needs a per-suite marker registered in
   the root `pyproject.toml` with a `make e2e-<suite>` target (listed in `E2E_SUITES`), or its path in
   `ci.yml`, a `.dagger/*.go` lane or a `scripts/*.sh`. A `make e2e-<suite>` target alone is not CI: CI
-  runs only the files `scripts/e2e_stack.sh`, `scripts/ray_e2e_stack.sh` and `.dagger/*.go` name.
+  runs only the files `scripts/e2e_stack.sh` and `.dagger/*.go` name.
   `tests/unit/test_e2e_collection_gate.py` checks only that every `tests/e2e-py/test_*.py` collects.
   A change that deletes a suite deletes its marker, its target, its `E2E_SUITES` entry and every
   script line that names it: pytest exits 4 on a path that does not exist and 5 on a marker no test
@@ -71,7 +71,7 @@ consequences it does not spell out.
   `references/testing.md` § Fixtures).
 - **Markers.** `slow` means real models or a long runtime; `make test` and CI deselect it. `e2e`
   means a live stack: `tests/e2e-py/conftest.py` applies it to everything collected there, and each
-  per-suite selector (`cas`, `governed_union`, ...) rides on top of it. Neither `strict_markers` nor
+  per-suite selector (`cas`, `nats_auth`, ...) rides on top of it. Neither `strict_markers` nor
   `--strict-markers` is configured, so pass `--strict-markers` when you add or use a marker (the whole
   suite, 6,040 tests, collects cleanly under it, measured 2026-09-29).
 - **Async is strict.** No `asyncio_mode` is set, so pytest-asyncio runs in strict mode. The `anyio`
@@ -93,7 +93,7 @@ consequences it does not spell out.
 | CI: `dagger call test` (`.dagger/test.go`)        | the `make test` marker filter, serially, with `--timeout=300 --timeout-method=thread`, helm installed. **No runner suite** |
 | CI: `dagger call auth-chain`, `dagger call governance-chain` | a real Dex, OpenFGA and catalog as Dagger services (plus lineage for `governance-chain`), asserting through `scripts/auth_chain.sh` and `tests/e2e-py/test_governance_e2e.py` respectively |
 | CI: `dagger call nats-auth` (= `make nats-auth`, ms-gates leg `nats-auth`) | `tests/e2e-py/test_nats_admits_each_client_only_to_its_own_subjects.py` (marker `nats_auth`): the NATS fixture's nats-server in operator mode with test-only nsc keys, the permission table read off the render's dev seed, every user's call set, foreign and credential-less publishes refused, and one real daprd 1.18.1 per component shape, judged by the broker's log ([[XC-078]]) |
-| CI: `e2e-stack` (= `make e2e-ci`), `e2e-ray` (= `make e2e-ray-ci`), `dagger call test-lineage` | the `tests/e2e-py` files named in `scripts/e2e_stack.sh`, `scripts/ray_e2e_stack.sh` and `.dagger/e2e.go`, against a stack the lane brings up |
+| CI: `e2e-stack` (= `make e2e-ci`), `dagger call test-lineage` | the `tests/e2e-py` files named in `scripts/e2e_stack.sh` and `.dagger/e2e.go`, against a stack the lane brings up |
 | `make fga-test` (part of `make check`)            | the OpenFGA model's own `.fga.yaml` suite                                                                         |
 | `make e2e-<suite>`, `make e2e-live`               | `tests/e2e-py` against a stack already deployed: one marker at the addresses you pass, or `-m e2e` against the k3s release |
 
@@ -113,7 +113,8 @@ Don't redo any of it in a suite. At import, before collection builds any app, it
   the `respx_allows_unused_routes` fixture.
 
 Around every test, as autouse fixtures, it bounds the Dapr sidecar handshake to 1 s, clears Dapr's
-process-global actor-proxy factory, and closes medallion's pooled Ray client.
+process-global actor-proxy factory, and writes the projected service-account token files the catalog's
+and lineage's doors read.
 
 ## What stands in for what
 

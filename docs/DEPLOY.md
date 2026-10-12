@@ -24,7 +24,6 @@ into `.localbin/` (gitignored).
 | **catalog** | app (FastAPI) + daprd sidecar | **producer** — creates Lance tables on S3; publishes OpenLineage events via Dapr |
 | **lineage** | app (FastAPI) + daprd sidecar | **consumer** — Dapr subscription ingests events into Apache AGE; serves the lineage API |
 | **frontend zones** | 4 apps (SvelteKit SSR) | the UI as rask-style micro-frontend **zones** — `home` (catch-all `/`, owns `/auth/*`) + `lakehouse` (`/lakehouse`) + `media` (`/media`) + `annotator` (`/annotator`). `lakehouse` is one app hosting four AREAS at `/lakehouse/{data,lineage,models,admin}`: they were four separate zones over one backend plane and one shared client, paying four SSR servers and a hard reload per hop for no independent-deploy payoff. `annotator` stays separate from `media` despite sharing its plane, purely to keep its Pixi + OpenCV bundle out of a searcher's. One parametrized `frontend.dockerfile` (`lance-<zone>:tag`, per-zone tag override on `frontend.apps`); the **Ingress** path-routes each zone (`ingress.yaml`); every zone shares one env seam (`lance.frontendEnv`) + reads one origin-wide OIDC session cookie. The admin AREA serves the ops pages `/lakehouse/admin/{audit,dlq,events,streams,tenants,access}` behind a fail-closed estate-admin gate; the data area carries the namespace + table **lifecycle** surfaces. | the UI as rask-style micro-frontend **zones** — `home` (catch-all `/`) + `data` (`/data`) + `lineage` (`/lineage`) + `models` (`/models`) + `admin` (`/admin`). One parametrized `frontend.dockerfile` (`lance-<zone>:tag`); the **Ingress** path-routes each zone (`ingress.yaml`); every zone shares one env seam (`lance.frontendEnv`) + reads one origin-wide OIDC session cookie (the `home` zone owns `/auth/*`). Replaces the retired single `web` pod. The admin zone additionally serves the ops pages `/admin/{audit,dlq,events,streams,tenants}` — the estate-wide ones (events feed, JetStream panel, tenant admin) gate on the `auth.bootstrapAdmin` estate-admin grant — and the data zone carries the namespace + table **lifecycle** surfaces (`/data/{namespaces,tables,warehouses}`: declare/create, drop/deregister/restore, rename, grants). |
-| **medallion** | 4 apps + sidecars | event-driven pipeline: `medallion-producer` producer + raw→bronze→silver→gold stage runners (see [MEDALLION.md](MEDALLION.md)) |
 | **compaction** | app + sidecar | compaction/GC service triggered by a Dapr **cron binding** (`bindings.cron`) — compacts Lance fragments + GCs old versions |
 | **gateway** | nginx + sidecar | **backend** clean-URL edge that routes API traffic via **Dapr service invocation** (`/v1.0/invoke/...`): `/lineage/`,`/catalog/`,`/perses/`,`/greptime/`. Reached by a port-forward to its Service (`make dashboards`); it is **out of the frontend path** now (the zones' BFF proxies reach the backend directly, and the Ingress routes the zones). Dapr-delivered routes (lineage ingest + the reconcile cron binding) are **403-blocked** from one source (`lance.lineageSidecarOnlyRoutes`) — the sidecar is their only legitimate caller |
 | **Dapr** | subchart | control plane + sidecar injection + pub/sub + secret-store + tracing config |
@@ -57,8 +56,8 @@ catalog --DaprClient.publish_event--> [daprd sidecar] --pubsub.jetstream--> NATS
 - **Every subscriber has its own pubsub component** (`lineage-pubsub-<app-id>`, the `lance.subPubsub`
   helper): `queueGroupName=<app-id>` makes that app's replicas a competing-consumer group (single
   delivery per app — safe to scale), and `deliverPolicy` is `all` for lineage (restart replays into the
-  idempotent MERGE = the durability story) but `new` for the cascade head + stage runners (a replay would
-  re-fire every cascade in the 168h retention window). The bare `lineage-pubsub` component is publish-only
+  idempotent MERGE = the durability story) but `new` for notifications and maintenance (a replay would
+  re-deliver every event in the 168h retention window). The bare `lineage-pubsub` component is publish-only
   (catalog + compaction).
 - `make verify` publishes a `create_table` event and asserts AGE recorded the creator.
 
@@ -95,7 +94,7 @@ pipeline works **and** is observable".
 **Lance-native IO metrics (live since the pylance 9 bump):** pylance ≥ 9.0 ships
 `lance.otel.instrument_lance_metrics()` (the `pylance[otel]` extra) — Lance's Rust object-store/IO
 metrics registered straight onto the global MeterProvider the services already run under. Every
-Lance-I/O service (catalog, lineage, compaction, medallion producer + stage runners) calls the guarded
+Lance-I/O service (catalog, lineage, maintenance) calls the guarded
 `service_kit.lakehouse.lance_metrics.instrument_lance_if_available()` at startup; the lock pins
 pylance 9.0.0, so it logs `lance_metrics_instrumented` and the metrics land in GreptimeDB (the guard
 stays: a consumer resolving pylance < 9 degrades to a logged no-op rather than failing startup). OTel
@@ -134,8 +133,7 @@ login on `data` is a login on `admin` too. Every zone's `hooks.server.ts` reads 
 (`makeSessionHandle`) and its BFF forwards the signed-in user's OWN bearer to the governed backends (per-user
 authz). The BFF is a **confidential** OIDC client — the bundled `dex.clientId` carries a secret, wired as
 `OIDC_CLIENT_SECRET` from `dex.clientSecret` via the `<release>-frontend-session` Secret (secretKeyRef,
-zero-plaintext); the bundled Dex registers the zones' `…/auth/callback`. NOTE: the audit viewer's admin gate
-calls `MEDALLION_API`, so keep `medallion.enabled=true` when `frontend.oidc.enabled`.
+zero-plaintext); the bundled Dex registers the zones' `…/auth/callback`.
 
 **Proving it live on kind (the cross-zone drive).** The composition needs the Ingress, so kind needs an
 Ingress controller. These steps mutate the cluster — run them yourself (or `!`-prefix each):
@@ -148,16 +146,14 @@ Ingress controller. These steps mutate the cluster — run them yourself (or `!`
 !kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.11.2/deploy/static/provider/kind/deploy.yaml
 !kubectl -n ingress-nginx rollout status deploy/ingress-nginx-controller --timeout=180s
 
-# 3. deploy governed + zones OIDC-on + ingress-on (publicOrigin = the forwarded ingress origin;
-#    produceAdminProject=acme so alice's admin grant opens the produce door)
+# 3. deploy governed + zones OIDC-on + ingress-on (publicOrigin = the forwarded ingress origin)
 !helm upgrade --install lance-ns ./chart --timeout 300s \
    --set auth.enabled=true --set auth.bootstrapAdmin=alice \
-   --set medallion.enabled=true --set medallion.produceAdminProject=acme \
    --set ingress.enabled=true \
    --set frontend.oidc.enabled=true \
    --set frontend.oidc.publicIssuer=http://lance-ns-dex:5556/dex \
    --set frontend.oidc.publicOrigin=http://localhost:8090
-!kubectl rollout restart deploy/lance-ns-dex deploy/lance-ns-medallion-producer
+!kubectl rollout restart deploy/lance-ns-dex
 
 # 4. drive the cross-zone login + authz (the script does its own ingress/dex/openfga port-forwards +
 #    seeds alice=admin project:acme, then runs the headless browser through the ingress origin)
@@ -169,8 +165,7 @@ Ingress controller. These steps mutate the cluster — run them yourself (or `!`
 **Proven live on kind (2026-07-22):** all 5 zones rolled out Ready; the Ingress path-routed each zone
 (`/`→home 200, `/data`/`/lineage`/`/models`/`/admin`→their zone SSR); `verify_cross_zone_oidc.sh` drove a
 real Dex login — alice signed in on `/data` was still signed in on `/admin` (the shared origin-wide cookie),
-her cascade opened the produce door (2xx, run token), and bob was 403-denied (`needs the project-admin
-rung`). Cross-zone OIDC + per-user authz proven end-to-end.
+her project-admin call answered 2xx, and bob was 403-denied (`needs the project-admin rung`). Cross-zone OIDC + per-user authz proven end-to-end.
 
 `scripts/verify_cross_zone_oidc.sh` drives a real headless Dex login through the Ingress origin and asserts
 the shared cookie carries across zones + per-user authz. The browser↔Dex reachability puzzle (the
@@ -183,7 +178,7 @@ catalog/lineage.
 
 - **Dapr JetStream consumers** are split BY RECOVERY STORY (2026-07-06/12): the LINEAGE ingest stays
   **ephemeral** (deliverPolicy=all — a restart replays the retained stream into the idempotent MERGE;
-  a durable cursor would defeat that recovery), while the cascade head + stage runners pair
+  a durable cursor would defeat that recovery), while notifications and maintenance pair
   `deliverPolicy=new` with a **durable + queue-group** consumer (cursor survives pod death/redeploys —
   chaos-verified; the durable-orphan failure applies only to durables WITHOUT a queue group). Since
   2026-07-12 the **Dapr Resiliency + DLQ layer is DEFAULT ON** (`dapr.resiliency.enabled`): the sidecar
@@ -199,7 +194,7 @@ catalog/lineage.
   which delivery resumes on its own. The chart's stream-provision Job now reconciles this automatically at
   every `helm upgrade` (drifted `*-durable` consumers are deleted; sidecars recreate them within
   seconds); manual fast cutover — `nats consumer rm` the `<app>-durable` consumers on
-  LINEAGE/MEDALLION/TRAINING/DLQ — is only needed when upgrading with a chart older than that Job. With NATS auth on, run it as `admin` ([OPERATORS.md](OPERATORS.md) § 7): nats-box itself runs as the read-only `monitor`.
+  LINEAGE/CATALOG_CONTROL/MAINTENANCE_WORK/MAINTENANCE_INDEX/DLQ — is only needed when upgrading with a chart older than that Job. With NATS auth on, run it as `admin` ([OPERATORS.md](OPERATORS.md) § 7): nats-box itself runs as the read-only `monitor`.
   Fresh installs never hit this. Details: [`RESILIENCE.md`](RESILIENCE.md) gap #7.
 - **Control-plane change-events (`catalog.controlEmit`, default on):** the catalog broadcasts its own
   control-plane mutations (create/drop/grant/…) on a **dedicated group-less pubsub component**
@@ -213,13 +208,6 @@ catalog/lineage.
   from web-admin pods only — the browser never touches NATS) and diffs live consumers against
   `JETSTREAM_EXPECTED_CONSUMERS` (rendered from the same values the subscriptions render from) to
   flag silently-dead subscriptions.
-- **Per-tenant medallion routing (`medallion.projectsEnabled`, opt-in, #84):** when true, the producer +
-  stage runners resolve a `project`-carrying trigger to that project's ACTIVE warehouse bucket (via
-  `MEDALLION_CONTROL_ROOT`) and the cascade writes `s3://<project-bucket>/medallion/<stage>` with
-  project-qualified lineage; project-less traffic is byte-identical, and with it false a project-carrying
-  trigger is dropped fail-closed. Warehouse-create refuses the medallion zone buckets
-  (`LANCE_RESERVED_BUCKETS`, auto-derived from `medallion.buckets`). Tenant lifecycle is driven from
-  `/admin/tenants`.
 - **AGE + OpenFGA share one Postgres**: AGE's `ag_catalog` search-path would break OpenFGA migrations,
   so the openfga db is pinned to `search_path = public` in the AGE initdb.
 - **kind has no host ports** — reach services via `make dashboards` (port-forwards).
@@ -229,9 +217,6 @@ catalog/lineage.
 ✅ Verified: the event-driven catalog→lineage flow, all components healthy (`helm STATUS: deployed`),
 Dapr sidecar injection, the full 3-signal observability (`make e2e-obs` green — AGE data + PromQL metric
 + distributed trace + logs in GreptimeDB), `make k3s-up` brings the whole stack up green.
-✅ Verified: the event-driven **medallion** cascade — one bronze write cascades
-bronze→silver→gold via Dapr pub/sub, building the lineage DAG, as **one distributed trace** across
-all 5 services, with the `medallion_stage_transitions_total` metric in PromQL (`make e2e-medallion`).
 ✅ Verified: the **compaction/GC** service — a Dapr `bindings.cron` component POSTs `/compaction-cron`
 on its schedule (and `make compaction` on demand); each sweep discovers every Lance dataset in the bucket
 and runs `compact_files()` + `cleanup_old_versions()`, with `compaction_*` metrics in PromQL.
@@ -243,8 +228,8 @@ port-forward fronts the whole platform (`/lineage/livez` → 200 through the gat
 Dapr defaults `vaultKVPrefix=dapr` (reads `secret/data/dapr/<key>`); set `vaultKVUsePrefix=false` so it
 reads the natural `secret/data/<key>` the seed writes.
 ✅ Verified: the **multi-tenant ReBAC hierarchy** — `team → project → warehouse(bucket) →
-namespace → table` with concentric `owner>writer>reader` rungs + a `validator` rung that gates medallion
-stage promotion. Proven offline (`fga model test`: 7/7 tests, 24/24 checks) **and** live against the
+namespace → table` with concentric `owner>writer>reader` rungs + a `validator` rung that gates promotion
+(`can_promote`). Proven offline (`fga model test`: 7/7 tests, 24/24 checks) **and** live against the
 deployed OpenFGA: a plain writer `can_promote` gold = **false**, a validator = **true**; projects are
 isolated (one bucket per warehouse, and a project holds MANY warehouses; a team can own many projects). See `packages/service-kit/src/service_kit/governed/auth/model.fga` + `model.fga.yaml`.
 ⚠️ Deployed-not-wired: the app auto-seeding of the project/team/warehouse hierarchy on create (the

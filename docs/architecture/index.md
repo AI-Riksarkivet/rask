@@ -10,9 +10,10 @@ materialization; it fans HTR work across a Ray cluster with model weights kept
 resident in **Ray Serve** (TrOCR on `/transcribe` and the full HTRflow pipeline
 on `/htrflow`). Images come from **IIIF** or
 pre-staged **S3** buckets; ALTO XML output lands back in S3. The HTTP backend is
-a fleet of FastAPI services behind a **gateway** on port 8888: the **ray**
-service (dashboard introspection + Serve proxy), the **controlplane**, and the
-lance lakehouse/media planes (`/api/catalog`, `/api/lineage`, `/api/explorer/*`).
+a fleet of FastAPI services behind a **gateway** on port 8888: flows, notifications and the
+lance lakehouse/media planes (`/api/catalog`, `/api/lineage`, `/api/explorer/*`). The **compute**
+service (Ray dashboard introspection + Serve proxy) ships in its own chart beside the Ray engine and has no
+gateway row.
 A set of **SvelteKit 2 + Svelte 5 SSR** apps (svelte-adapter-bun, served behind the
 gateway) composed as routing-based microfrontend zones — a catch-all `home`
 owning `/` plus per-domain apps (lakehouse/media/annotator/compute/studio/train) —
@@ -27,9 +28,8 @@ flowchart TB
     browser["Browser"] --> spa["Frontend · SvelteKit SSR (Bun)<br/><sub>frontend/microfrontends/home</sub>"]
     spa -->|"/api/*"| gw["Gateway · :8888<br/><sub>services/gateway</sub>"]
     cli["Runner · Python CLI<br/><sub>runners/htr</sub>"] --> head
-    gw --> rayapi["ray · :8804"]
-    gw --> cp["controlplane · :8820"]
-    gw --> lake["lance lakehouse<br/>catalog · lineage · medallion"]
+    rayapi["compute · :8804<br/><sub>own chart, no gateway row</sub>"]
+    gw --> lake["lance lakehouse<br/>catalog · lineage · maintenance"]
     gw --> media["lance media<br/>viewer · search · annotator"]
     media --> s3[("S3")]
     rayapi -.->|proxy| head["Ray head :6379 · dashboard :8265"]
@@ -52,8 +52,8 @@ flowchart TB
   deployment* (`htrflow`).
 - **No auth anywhere.** Only optional CORS plus request-id/timing headers; the
   fleet assumes a trusted/localhost network. The frontend hits `/api/*` on the
-  gateway (SSR `load` uses the absolute gateway URL server-side);
-  `/api/serve/*` is proxied by the compute service.
+  gateway (SSR `load` uses the absolute gateway URL server-side); the gateway
+  has no row for the compute service's `/api/ray/*` and `/api/serve/*`.
 - **State** lives in the governed Lance lakehouse on S3 (the batches DB and the
   orchestrator died at P7a; core-api/search-api/volumes-api died in the R6/R20
   wave). A Helm chart in `chart/` deploys everything to Kubernetes, while the

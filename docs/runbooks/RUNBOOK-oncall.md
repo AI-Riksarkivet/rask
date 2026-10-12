@@ -8,16 +8,16 @@ these are found by watching the Perses dashboards (`make dashboards`) or a user 
 
 ## Orientation
 
-- **Services** (FastAPI): `catalog` (REST catalog + model registry), `lineage` (OpenLineage → Apache AGE
-  graph), the medallion **stage runners** (`bronze-to-silver`, `silver-to-gold`, `media-to-silver`),
-  `medallion-producer` (the cascade head `/bronze-arrival` + `/train`), `compaction`, `gateway`, `web`.
+- **Services** (FastAPI): `catalog` (REST catalog, tier governance and the model registry), `lineage`
+  (OpenLineage → Apache AGE graph, plus the durable `GET /events` log), `maintenance` (planner + worker),
+  `notifications`, `flows`, `gateway`, `web`. The lakehouse runs no stage and no pipeline: moving data
+  between tiers is the user's job on their own compute ([ADR 0155](../adr/0155-the-medallion-is-tier-governance-in-the-catalog.md)).
 - **Stores**: `age-postgres` (the lineage graph **AND** OpenFGA's datastore — one pod, dual-purpose),
   `rustfs` (the Lance object store — all medallion + registry data), `openfga` (authz), `openbao` (secrets,
   prod = sealed file backend), `greptimedb` (metrics), `dex` (OIDC).
 - **Signals**: Perses panels (`make dashboards`), `kubectl logs`, and the domain metrics —
   `lineage_events_processed_total{lance_lineage_outcome}` (incl. `DEAD_LETTERED`),
-  `medallion_stage_transitions_total{lance_medallion_transition}`, `medallion_dlq_parked{lance_medallion_app}`,
-  `outbox_depth` / `outbox_oldest_age_seconds`, `lance_training_*`.
+  `outbox_depth` / `outbox_oldest_age_seconds`.
 - **First move for any pod issue**: `kubectl get pods -o wide`, then `kubectl logs <pod> --all-containers
   --tail=100` and `kubectl describe pod <pod>` (Events section).
 
@@ -29,8 +29,7 @@ these are found by watching the Perses dashboards (`make dashboards`) or a user 
 | App pods stuck `0/1` "waiting for application startup" after a restart/drain | [OpenBao sealed](#openbao-sealed-on-restart--boot-deadlock) |
 | A pod `CrashLoopBackOff` shortly after boot | [Slow boot / startupProbe](#crashloop-on-boot) |
 | `/readyz` = 503 `{"database":"unavailable"}`, pod `NotReady` | [readyz degraded](#readyz-degraded--pool-or-graph) |
-| Cascade stops mid-way (bronze but no silver, etc.) | [Cascade stalled](#cascade-stalled) |
-| `medallion_dlq_parked` rising / `dapr_dead_letter_parked` ERROR logs | [DLQ parking](#dlq-parking--a-delivery-gave-up) |
+| `dapr_dead_letter_parked` ERROR logs | [DLQ parking](#dlq-parking--a-delivery-gave-up) |
 | `LineageSignatureRefusedForAListedSigner` firing, `lineage_signature_refused` WARN logs | [Lineage refusing a signer's events](#lineage-refusing-a-signers-events) |
 | `outbox_depth` sustained > 0, `outbox_oldest_age_seconds` climbing | [Outbox not draining](#outbox-not-draining) |
 | Catalog reads/writes fail, Lance data unreachable | [RustFS down](#rustfs-down--data-plane) |
@@ -41,7 +40,7 @@ these are found by watching the Perses dashboards (`make dashboards`) or a user 
 
 ## OpenFGA down → 503 everywhere
 
-**Symptom.** Broad 503s: catalog writes, lineage reads, AND the cascade all fail at once. Logs show
+**Symptom.** Broad 503s: catalog writes, lineage reads AND notifications all fail at once. Logs show
 `authorization service is not available` or FGA check timeouts.
 
 **Cause.** OpenFGA is the authz chokepoint — every governed call `fga.check`s it and **fails closed**. A
@@ -97,89 +96,19 @@ is the `lineage` graph present? Is the pool reachable?
 **Act.** If the graph is absent on managed PG, lineage self-heals via `ensure_graph()` on next boot —
 restart the pod. If the pool is down, see [AGE down](#age-postgres-down--lineage--fga).
 
-## Cascade stalled
-
-**Symptom.** A bronze write landed through the catalog but the cascade stops mid-way — e.g. `bronze$events` exists but `silver$features`
-never lands. `medallion_stage_transitions_total` flat for the missing stage.
-
-**Cause (in order of likelihood).** (1) The stage runner was **FGA-denied** — it lacks the grant to write its
-target (`medallion_stage_denied` rises); re-seed with `scripts/seed_medallion_fga.sh`. (2) A **quality gate**
-blocked a bad batch (`medallion_stage_quality_blocked`) — by design, the bad batch does not promote; the
-failed run is in the lineage graph. (3) With Ray on, the stage Ray job failed/timed out — check
-`ray job list` on `ray-lance-head`. (4) The delivery exhausted retries and parked — see
-[DLQ parking](#dlq-parking--a-delivery-gave-up). (5) **`MedallionCascadeLagBlind`** — the lane's source
-publishes but its lag cannot be stated, so no lag series exists to page on. **Branch on the alert's
-`lance_medallion_reason` label.**
-
-*`stores_disagree`*: the consumed frontier is ahead of the published version — a `published` tag moved
-backwards, or a lineage run outlived the table it names. Compare the table's tag against the runs that
-claim to have consumed it; the graph is the side that can hold a stale row.
-
-*`destination_invisible`*: two conditions answer alike at lineage's door, because its metadata gate runs
-before existence resolution, and telling them apart is the first diagnostic step:
-
-```bash
-kubectl exec rask-age-0 -- psql -U lance -d lineage -tAc "LOAD 'age'; SET search_path = ag_catalog, \"\$user\", public;
-  SELECT name::text FROM cypher('lineage', \$q\$ MATCH (d:Dataset) RETURN d.name \$q\$) as (name agtype)
-  WHERE name::text LIKE '%<project>%';"
-```
-
-No node for the destination means the hop has **never run** — replay it. A node that IS present means the
-dataset exists without a tuple for the medallion identity, which is a governance gap: re-seed with
-`scripts/seed_medallion_fga.sh`.
-
-**Diagnose.** Stage runner logs (`kubectl logs -l app.kubernetes.io/component=bronze-to-silver`); grep
-`medallion_stage_denied` / `medallion_quality_blocked` / `ray_stage_job`.
-
-*Ask what stopped:* `GET /api/cascade/stalled` lists the tiers that were written and never published, with
-no instance id needed: `{"unpublished_source": [{"edge": "silver->gold", "project": "acme"}]}`. It measures
-on each request and moves no lag series. A listed source never published, so no hop was ever triggered
-from it: the fault is in whatever writes that tier, not in the next hop. Auth: a signed-in bearer sees
-only the cells of the projects where its subject holds `can_administer` (the single-tenant row, project
-`""`, counts as `project:<medallion.produceAdminProject>`), and `?project=` has no effect. **An empty list
-means none of YOUR projects has a stalled tier, not that nothing is stalled** — ask as an admin of the
-tenant in question, or in-cluster with the app token, which sees every tenant's cells. A service token
-that reaches it through the gateway is refused.
-
-**Act.** Re-seed FGA for a denial; a quality block is expected (fix the source data); resubmit/replay after
-fixing a Ray-job cause.
-
-*Re-drive one missed hop* (a source that DID publish; `MedallionCascadeLag` names the edge):
-`POST /api/stage-runners/stages/rerun` with
-
-```json
-{"object_id": "table:acme-silver$features", "project": "acme", "to_version": 7, "from_version": 5, "token": "<event id from the DLQ line>"}
-```
-
-- `object_id` is the PUBLISHED source table, `table:<project>-<tier>$<table>`. Its tier picks the edge, so
-  `acme-silver$features` re-drives silver→gold. An id that is not one of `project`'s tables (no
-  `table:`, unqualified `table:silver$features`, another project's table) is a 400.
-- `to_version` is the source's `published` tag version
-  (`POST /api/catalog/v1/table/acme-silver$features/tags/list`, no body). Omit `from_version` to consume everything up
-  to it.
-- `token` is optional. With it the stage runner reattaches to a live or finished job (`mode:
-  reattach-if-live`); without it the hop recomputes and may duplicate a live job's compute
-  (`mode: recompute`). The stage write overwrites, so the data converges either way.
-- Auth: a signed-in bearer (there is no service-token path), whose subject holds the edge's own rung on
-  `namespace:<project>-<destination tier>`: `can_promote` into gold, `can_create_table` for the other
-  edges (`medallion.stageRunners[].requiredAction`). 202 when the trigger is published. 503 means the
-  trigger could not be published or authorization was unavailable, so retry. 403 means the caller lacks
-  the rung or the table's tier drives no cascade edge. 400 means `object_id` is not one of `project`'s
-  tables.
-
 ## DLQ parking → a delivery gave up
 
-**Symptom.** `medallion_dlq_parked{lance_medallion_app}` rises and/or `dapr_dead_letter_parked` ERROR
-logs. A specific cascade item is permanently stalled after exhausting its retry schedule.
+**Symptom.** `dapr_dead_letter_parked` ERROR logs (and `LineageIngestDeadLettering` or `NotificationsDeadLettering`
+for those subscribers). A specific event was not processed after exhausting its retry schedule.
 
 **Cause.** Dapr's Resiliency retry policy was exhausted for a delivery, so the sidecar published it to the
 DLQ topic and acked the original (no infinite retry loop). The message is retained in JetStream.
 
-**Diagnose.** The log line carries `app`, `source_topic`, and `token` — trace that token through the stage runner
-logs to the root failure (a bad payload, a persistent downstream outage).
+**Diagnose.** The log line carries `app`, `source_topic`, and `token` — trace that token through the subscribing
+service's logs to the root failure (a bad payload, a persistent downstream outage).
 
-**Act.** Fix the root cause, then **replay** from the retained JetStream stream (or re-trigger the stage).
-Deliberately no auto-requeue — re-firing a poison message blind would loop the cascade.
+**Act.** Fix the root cause, then **replay** from the retained JetStream stream. Deliberately no auto-requeue —
+re-firing a poison message blind would loop it through the same failure.
 
 ## Lineage refusing a signer's events
 
@@ -208,13 +137,13 @@ the keys published by then.
 
 ## A bus door refusing events
 
-**Symptom.** `MedallionHeadRefusingEvents`, `NotificationsDoorRefusingEvents` or `MaintenanceArrivalRefusingEvents`
+**Symptom.** `NotificationsDoorRefusingEvents` or `MaintenanceArrivalRefusingEvents`
 fires, with `<service>_signature_refused_total` rising for a door and a reason, and `<service>_signature_refused` WARN
 lines on that service's pods naming the door, the claimed identity, the event and the reason. Every door x reason
 series exists at 0 from the pod's start, so one refusal fires its alert about two minutes later, and the alert resolves
 about three minutes after that unless another refusal follows.
 
-**Cause.** With `RASK_SIGNATURE_DOORS=enforce`, the cascade heads (`/bronze-arrival`, `/publication-arrival`),
+**Cause.** With `RASK_SIGNATURE_DOORS=enforce`,
 notifications (`/lineage-events`, `/control-events`) and maintenance's `/maintenance-arrival` act on a bus event only when
 a signer that door allows verifiably signed it: a lineage event against `RASK_EVENT_SIGNERS` and `RASK_EVENT_DELEGATORS`,
 a control event against the identities `RASK_CONTROL_SIGNER_ROLES` lists for the role
@@ -226,16 +155,13 @@ annotation project) are never verified, so an unsigned or unlisted event on the 
 stopped signing.
 
 **Diagnose.** Read the claimed identity off the log line and compare it with the door's lists in the pod's environment.
-An identity a list lacks after a chart change is a render defect, except at `/bronze-arrival`, whose list is the producer
-and the catalog alone by design: a stage runner refused there with `signer` means a declared lane names that runner's
-output as its input, and that lane belongs on `/publication-arrival`. `kid` or `signature` from a listed identity reads as
+An identity a list lacks after a chart change is a render defect. `kid` or `signature` from a listed identity reads as
 § Lineage refusing a signer's events. A key list that could not be read is not a refusal: the door answers RETRY and logs
 `<service>_signature_keys_unavailable`.
 
 **Act.** A forged event is an incident: find the pod that published it, and rotate any identity whose key it presented.
-A signer that broke: restart it so it re-resolves its key. A refused event is not presented again. A cascade a head
-refused to start is re-driven with `POST /stage-runners/stages/rerun` for its edge, and a write maintenance refused to
-plan is compacted by the hourly sweep.
+A signer that broke: restart it so it re-resolves its key. A refused event is not presented again; a write maintenance
+refused to plan is picked up by the hourly sweep.
 
 ## Outbox not draining
 
@@ -323,15 +249,16 @@ must be in the age-postgres ingress allow-list).
 **Act.** Restore the policy, then purge what accumulated while it was off — the policy applies only to
 workflows that *newly* reach a terminal state, so it cannot reach backwards and the backlog stays forever
 otherwise. Purge through the sidecar, never with a direct `DELETE` on `daprstate.state`, which bypasses the
-actor runtime that owns those keys:
+actor runtime that owns those keys. `flows` is the one service that hosts Dapr workflows, so its sidecar is the
+one that can purge them:
 
 ```bash
-POD=$(kubectl get pod --no-headers -o name | grep rask-medallion-producer | head -1)
+POD=$(kubectl get pod --no-headers -o name | grep rask-flows | head -1)
 IDS=$(kubectl exec rask-age-0 -- bash -lc "psql -U lance -d daprstate -tAc \
   \"select distinct split_part(key,'||',3) from state \
     where key like '%workflow%' and insertdate < '<cutoff-date>'\"")
 for id in $IDS; do
-  kubectl exec ${POD#pod/} -c medallion-producer -- \
+  kubectl exec ${POD#pod/} -c flows -- \
     curl -s -X POST "http://127.0.0.1:3500/v1.0-beta1/workflows/dapr/$id/purge"
 done
 ```

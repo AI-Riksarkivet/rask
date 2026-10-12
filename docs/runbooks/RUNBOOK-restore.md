@@ -99,7 +99,7 @@ mandatory before relying on this path.**
 
 1. Provision a new PVC from the VolumeSnapshot (`dataSource: {kind: VolumeSnapshot, name: <snap>}`).
 2. Point the `rustfs` StatefulSet at it (or restore into the existing PVC per your CSI driver's clone flow).
-3. Restart `rustfs`; then `catalog`/`lineage`/stage runners reconnect (their `/readyz` gates hold them out until the
+3. Restart `rustfs`; then `catalog`/`lineage`/`maintenance` reconnect (their `/readyz` gates hold them out until the
    object store answers).
 
 ## Restore — the control root (projects, warehouses, bindings, trash)

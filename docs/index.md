@@ -27,8 +27,8 @@ flowchart LR
    with TrOCR model weights kept warm in **Ray Serve**.
 2. Transcriptions are written back to S3 as **ALTO XML**.
 3. An indexer builds **Lance** full-text tables over the transcribed lines.
-4. A **gateway** (`:8888`) routes API traffic to the `compute` service, the
-   controlplane, and the lance lakehouse/media planes (`/api/catalog`,
+4. A **gateway** (`:8888`) routes API traffic to flows, notifications and the
+   lance lakehouse/media planes (`/api/catalog`,
    `/api/lineage`, `/api/explorer/*`) that the **SvelteKit** (SSR, Bun-server)
    frontend consumes.
 

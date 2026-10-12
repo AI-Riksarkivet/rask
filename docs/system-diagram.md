@@ -72,8 +72,8 @@ The toggle is the *credential-delivery* shape — both modes run on the **same**
 > That's the point of pluggable vending. *(RustFS lifecycle e2e: `make rustfs-lifecycle`.)*
 
 > 🔑 **Who holds secrets (least-privilege).** Only the **catalog** and **lineage svc** consume OpenBao.
-> Compute jobs (**medallion-producer**) **never** read OpenBao — they get short-TTL scoped creds *from the
-> catalog* and authenticate with **workload identity** (KubeRay SA / OIDC token), not a vault key.
+> A pipeline job (the user's, on their own compute) **never** reads OpenBao — it gets short-TTL scoped creds
+> *from the catalog* and authenticates with **workload identity** (its own OIDC token), not a vault key.
 > That is why only the catalog connects to OpenBao in the diagram — by design, not omission.
 
 ---
@@ -83,7 +83,7 @@ The toggle is the *credential-delivery* shape — both modes run on the **same**
 | Node | Role (color) | What it is |
 |---|---|---|
 | **Client** | user (mint) | LanceDB SDK / `lance-ray` / app — speaks the REST + Arrow API |
-| **medallion-producer job** | compute (magenta) | medallion promotion + compaction on the KubeRay cluster (a catalog *client*, not an endpoint) |
+| **lance-ray job** | compute (magenta) | the user's pipeline moving data between tiers on their own compute (a catalog *client*, not an endpoint) |
 | **OIDC IdP** | embed (amber) | Dex — issues JWTs; catalog verifies against JWKS (fail-closed) |
 | **OpenBao** | seed (orange) | secrets · KV v2 — **catalog + lineage only**; jobs use workload identity (planned) |
 | **Catalog** | orch (sky) | FastAPI over native `pylance` `DirectoryNamespace`; the control plane |
@@ -113,7 +113,10 @@ The toggle is the *credential-delivery* shape — both modes run on the **same**
 5. **Catalog → Object store** — return location; **STS vending** also returns a short-TTL STS token, **Mode B** returns the location only.
 6. **Client → Object store** — **S3:** read directly with the vended token. **Mode B:** the read instead goes through the catalog's Arrow-IPC query endpoint (no creds on the client).
 
-### 3. Promote (medallion) — `medallion-producer` producer + Dapr stage runners, bronze → silver → gold  *(built & deployed: the `medallion-producer`'s `/bronze-arrival` fires the cascade on the catalog's announcement of a bronze write, and the event-driven stage runners promote each stage, emitting OpenLineage at every hop — see [`FLOW.md`](FLOW.md). The **distributed** lance-ray Ray Data job is the rask future; the in-process fake-Ray compute fills the same contract today.)*
+### 3. Promote (medallion) — the user's pipeline, bronze → silver → gold
+*The lakehouse runs no stage ([ADR 0155](adr/0155-the-medallion-is-tier-governance-in-the-catalog.md)): the pipeline is
+the user's, on their own compute and orchestrator. The catalog announces every committed write on lineage; how a
+pipeline outside the estate consumes those announcements is a separate decision.*
 1. **Job → Catalog** — describe bronze (the job is a catalog client; it authenticates with **workload identity**, never OpenBao).
 2. **Catalog → OpenFGA** — `check can_read_data` for `role:data_engineer#assignee` (role-as-subject).
 3. **Job → Object store** — read only the **new bronze versions** — the version range *is* the change feed.
@@ -147,7 +150,7 @@ The toggle is the *credential-delivery* shape — both modes run on the **same**
 
 - **"Show me security end-to-end"** — run *Create table*; pause on steps 2→3→5 (verify → authorize → seed-ownership). The cascade is why one create grants exactly the right future access.
 - **"Two credential modes"** — open *Read / query*, step through once in **Mode B** (server-mediated), then flip to **STS vending** and step again. Same flow, same S3 storage, two credential paths.
-- **"Where does lineage come from?"** — run *Promote*; the last two steps (emit → MERGE) show provenance is a **byproduct of the job**. Ingest now **binds the verified author** (P0 #2). The event-driven medallion stage runners that emit this lineage are built & deployed ([`FLOW.md`](FLOW.md)); only the *distributed* lance-ray Ray Data job is still the rask future.
+- **"Where does lineage come from?"** — run *Promote*; the last two steps (emit → MERGE) show provenance is a **byproduct of the job**. Ingest **binds the verified author** (P0 #2), and the catalog announces every write the job commits.
 - **"What's still open?"** — *Lineage query*, steps 2–3 are now the SHIPPED authz gate
   (`RASK_OIDC_ENABLED` + `RASK_FGA_ENABLED`, on in the chart); the remaining opens live in
   [`docs/adr/0007-7a-live-verification-residuals.md`](adr/0007-7a-live-verification-residuals.md) §7a (live-verification residuals) and

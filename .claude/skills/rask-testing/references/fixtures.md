@@ -19,8 +19,7 @@ itself for the current code; this reference does not restate it. The generic mec
 
 Every service builds `app` at module import. Pick the fixture by how settings reach the app.
 
-**Settings through an `lru_cache`d getter**: `get_settings()` in catalog, lineage, maintenance and
-medallion; `get_<service>_settings()` in annotator, search and viewer. Copy
+**Settings through an `lru_cache`d getter**: `get_settings()` in catalog, lineage and maintenance; `get_<service>_settings()` in annotator, search and viewer. Copy
 `tests/integration/conftest.py::real_ns_client`. The order is load-bearing:
 
 1. `monkeypatch.setenv` every variable the service needs to build and boot. For the catalog that
@@ -42,26 +41,26 @@ test of one of those needs `importlib.reload`.
 The sibling fixture `::client` has the same order over a `MagicMock(spec=LanceNamespace)`. It serves
 only claims about routing, identifier parsing and error mapping.
 
-**Settings read once at import** (`make_service_app`'s `build_settings()` in compute, controlplane,
+**Settings read once at import** (`make_service_app`'s `build_settings()` in compute,
 flows and notifications; `build_gateway_settings()` in the gateway):
 
 - Set the env the whole directory needs around the first import, in its `conftest.py`, then hand it
-  back. Copy `services/controlplane/tests/conftest.py`. Env left set leaks into every other testpath,
+  back. Copy `services/compute/tests/conftest.py`. Env left set leaks into every other testpath,
   because pytest collects all of them before it runs any test, and nothing checks for the leak: the
   suite stays green while a later module builds its app from the wrong values.
 - A test that needs another value sets it with `monkeypatch.setenv` and calls
   `importlib.reload(<package>)` (`services/gateway/tests/test_notifications_proxy_shapes.py`).
 - Code in `service_kit` itself builds a synthetic app with `make_service_app(..., settings=...)`
   (`packages/service-kit/tests/test_settings_are_injectable.py`).
-- compute, controlplane and notifications also keep `lru_cache`d service getters
-  (`get_compute_settings`, `get_controlplane_settings`, `get_notifications_settings`,
+- compute and notifications also keep `lru_cache`d service getters
+  (`get_compute_settings`, `get_notifications_settings`,
   `get_ingress_settings`). A test that changes one of their values clears that getter before and after,
   as `services/notifications/tests/conftest.py::_notifications_env` does.
 
 **Authorization.** `service_kit.governed.deps.make_auth_deps` builds each service's `current_subject`
 and `get_checker`. Override those callables: `security._deps.current_subject` and
 `security._deps.get_checker` on the service's security module
-(`services/controlplane/tests/test_projects_are_gated.py`; the flows, notifications and search suites
+(`services/flows/tests/test_run_gate.py`; the notifications and search suites
 do the same), or the re-exported names where a service exports them (`annotator.api.security`).
 
 **Real OTLP exporters.** `packages/service-kit/tests/conftest.py` pins required env from the ambient
@@ -96,7 +95,7 @@ serves S3 over HTTP, and the catalog is pointed at it with `LANCE_REST_ROOT=s3:/
 ## A live uvicorn socket
 
 Use one when the claim is about the wire. The rask example is
-`tests/integration/test_a_catalog_insert_into_bronze_starts_the_cascade.py` (`uvicorn.Config(app, port=0, lifespan="on")` on a
+`tests/integration/test_a_catalog_reader_reads_a_whole_table_in_bounded_pages.py` (`uvicorn.Config(app, port=0, lifespan="on")` on a
 thread, with a bounded wait for `server.started`). Why it matters here:
 `tests/unit/test_search_spec_binding.py`'s docstring records a query-model binding that `TestClient`
 accepted and a live uvicorn on fastapi 0.140.13 answered with 422 on every call.

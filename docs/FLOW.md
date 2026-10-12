@@ -1,120 +1,71 @@
-# End-to-end flow — the implemented pipeline, in order
+# End-to-end flow — what happens to a write, in order
 
-The single read-this-first narrative of the **information + batch-processing flow as it is actually built
-and tested today**. Each stage links to the deep doc for that subsystem. For the *distributed* variants
-(KubeRay, nats-py pull workers, Dapr-Workflow) see [§7 Future](#7-future--the-distributed-variants) — those
-are aspirational and clearly marked, **not** the current mechanism.
-
-> **What "implemented" means here:** event-driven choreography (Dapr pub/sub over NATS JetStream), real
-> versioned Lance data when compute is on, OpenLineage emitted+ingested to an Apache AGE graph, two opt-in
-> promotion gates (authz + quality), and a compaction cron — all exercised by `tests/` and running in the
-> `kind` cluster (`chart/`). The one piece that is *not* in-cluster is the **distributed** compute engine
-> (a real Ray Data job); its in-process stand-in fills the identical contract so the loop is testable.
+The single read-this-first narrative of how data enters the lakehouse, moves between tiers and is traced. Each step
+links to the deep doc for its subsystem. The lakehouse runs no ingest, no stage, no training and no engine
+([ADR 0154](adr/0154-the-lakehouse-runs-no-ingest-and-no-workflow-engine.md),
+[ADR 0155](adr/0155-the-medallion-is-tier-governance-in-the-catalog.md)): every write below is a client's, and the
+lakehouse governs, records and announces it.
 
 ```
-     catalog insert into           lineage.events.v1        medallion.bronze          medallion.silver
-     <project>-bronze$events ─────▶ /bronze-arrival ──pub─────────▶ bronze→silver ──pub────────▶ silver→gold
- (a client, through the catalog)   (medallion-producer)              (stage runner)                (stage runner, terminal)
-                                                                      │ transform                 │ transform
-                                                                      │ + emit + GATE             │ + emit + GATE
-                                                                      ▼                           ▼
-   the catalog and every stage emit an OpenLineage event ─pub(lineage.events)─▶ lineage consumer ─▶ Apache AGE graph
-                                                                                         (Run/Job/Dataset + edges)
-   resulting lineage DAG:   bronze$events ─▶ silver$features ─▶ gold$catalog
-   compaction cron ──every N──▶ discover every dataset ─▶ compact + GC old versions ─▶ emit maintenance lineage
+ a client (the user's pipeline, on its own compute)
+   │  namespace doors: CreateTable / InsertIntoTable / MergeInsertIntoTable / DeclareTable / RegisterTable
+   ▼
+ catalog ── authorizes (OpenFGA), commits the Lance write, announces it ──pub(lineage.events.v1)──▶ lineage ─▶ Apache AGE graph
+                                                                                                      └─▶ durable event log
+ the user's pipeline (on its own compute) reads bronze, writes silver through the catalog, emits its own
+   │  OpenLineage run; then silver → gold the same way
+   ▼
+ maintenance ── expires versions, purges trash, scans orphans, reconciles stores ── emits maintenance lineage
 ```
 
-## 1. Ingest — a client writes bronze through the catalog, and the catalog's announcement fires the head
+## 1. A client writes, through the catalog
 
-The lakehouse runs no ingest of its own ([ADR 0154](adr/0154-the-lakehouse-runs-no-ingest-and-no-workflow-engine.md)).
 Data enters only through the catalog's Lance Namespace doors (`CreateTable`, `InsertIntoTable`,
-`MergeInsertIntoTable`, `DeclareTable` + vended credentials, `RegisterTable`; `lance_docs/ns_catalog/spec.yaml`).
-A client — the deployer's ingest job on its own compute, or in development and the e2e lanes
-`tests/e2e-py/bronze_seed.py` (`seed_bronze_events`: create `<project>-bronze$events` if absent, then insert) —
-writes rows into `<project>-bronze$events`, and the catalog announces the committed write as an OpenLineage
-`COMPLETE` event on `lineage.events.v1`. A CREATE is announced as a DDL `DatasetEvent` and does not start the
-cascade; a data write (`insert`, `merge_insert`, an overwrite) does. The catalog stamps no `lance.token`, so the
-cascade token is the write run's `runId`.
+`MergeInsertIntoTable`, `DeclareTable` + vended credentials, `RegisterTable`; `lance_docs/ns_catalog/spec.yaml`). The
+writer is a client: the deployer's ingest job on its own compute (a sealed runner, CP-061, not yet built), a user's
+pipeline moving data between tiers, or in development and the e2e lanes `tests/e2e-py/bronze_seed.py`
+(`seed_bronze_events`: create `<project>-bronze$events` if absent, then insert). Each door authorizes the caller on
+OpenFGA before it commits.
 
-`medallion-producer` *subscribes* to the lineage topic (`/bronze-arrival`) and — only for a `COMPLETE` write
-to the bronze dataset, or to a table a lane declares as its input — publishes the first trigger
-`medallion.bronze`, naming the location the catalog vended for the table. So the cascade is driven by the
-**arrival of data INTO bronze**, whoever wrote it (GOAL 4 B2), and the head is a subscriber like every
-other stage. It is loop-guarded so the stage runners' own downstream events cannot re-fire it, and a
-byte-free catalog marker (register, deregister, declare) or a maintenance pass does not fire it either.
+→ [`MEDALLION.md`](MEDALLION.md) · code: `services/catalog`
 
-A trigger publish that fails answers `RETRY`, so Dapr redelivers the bronze-write event rather than
-dropping the cascade.
+## 2. The catalog announces the commit
 
-→ [`MEDALLION.md`](MEDALLION.md) · code: `services/medallion/{producer.py,services/ingest_trigger.py}`
+The catalog announces every committed write as an OpenLineage event on `lineage.events.v1`: a data write (`insert`,
+`merge_insert`, an overwrite, a schema evolution) as a `COMPLETE` `RunEvent`, a definition change (create, drop,
+register, declare) as a `DatasetEvent`. The event names the table, the Lance version the write produced, the branch it
+landed on, the project and the verified author, and it is signed with the catalog's key.
 
-## 2. Transform — the stage runners (one Dapr subscriber per DAG edge)
+→ [`LINEAGE.md`](LINEAGE.md#signed-events-the-rask_signature-facet) · code: `services/catalog/src/catalog/core/lineage_emit.py`
 
-The stage runners run the **same** module (`medallion.stage_runner:app`), differing only by `MEDALLION_*` env:
+## 3. Lineage records it — graph and feed
 
-| Stage runner | subscribes | publishes | operation |
-|-------|-----------|-----------|-----------|
-| `bronze→silver` | `medallion.bronze` | `medallion.silver` | `embed_features` |
-| `silver→gold` | `medallion.silver` | — (terminal) | `aggregate_gold` |
-
-On each delivery a stage runner (`services/medallion/services/transform.py: handle_stage`):
-
-1. (compute on) runs the **fake-Ray compute** — reads its upstream Lance dataset, applies a stage transform,
-   writes the downstream dataset (`read → transform → write → version`), measuring exact rows + on-disk
-   bytes. This is the **lance-ray seam** — the identical contract a distributed Ray Data job fills (§7).
-2. runs the two **promotion gates** (§3);
-3. emits the transform's OpenLineage `RunEvent` (`inputs=[upstream]`, `outputs=[downstream]` → the
-   `DERIVED_FROM` edge), carrying the version + `outputStatistics` (+ `dataQualityAssertions` when the
-   quality gate ran);
-4. publishes the next stage's trigger (unless terminal, or blocked by a gate).
-
-Idempotent + at-least-once safe: the run_id is `operation-token`, the graph MERGEs on it, and a transient
-failure returns `RETRY` so the Dapr sidecar redelivers.
-
-→ [`MEDALLION.md`](MEDALLION.md) · code: `services/medallion/{stage_runner.py,services/transform.py,services/compute.py}`
-
-## 3. Promotion gates — who *may* promote, and whether the data is *good enough*
-
-A stage advances (fires the next trigger) only when it passes **two independent, opt-in gates** — the
-distinction between a *registered validator that gates movement* and the *event-driven transform itself*:
-
-| Gate | Flag | Question | Fail action |
-|------|------|----------|-------------|
-| **Authorization** (OpenFGA) | `RASK_FGA_ENABLED` | May this identity promote? `silver→gold` needs `can_promote` (validator rung), the others `can_create_table` (writer) — checked as the stage runner's own service identity | `DROP` + `medallion.stage.denied` |
-| **Data quality** | `MEDALLION_QUALITY_ENABLED` | Is the produced data good enough? assertions on the written dataset (`row_count_positive`, `not_null` on the key) | `DROP` + `medallion.stage.quality_blocked`; the failed run + its `dataQualityAssertions` are still emitted (auditable) |
-
-Both gate the **same act** (promotion) and compose: a stage promotes only when *authorized* **and** the data
-*passes quality*. A quality block is recorded on the `WROTE` edge as `quality_passed=false` *with* the real
-version, so the blocked batch is auditable.
-
-→ [`MEDALLION.md` § Promotion gates](MEDALLION.md#promotion-gates--who-may-promote-and-whether-the-data-is-good-enough-to)
-· authz model: `packages/service-kit/src/service_kit/governed/auth/model.fga`
-
-## 4. Lineage — emit → ingest → graph
-
-Every stage's `RunEvent` is published to the `lineage.events` topic; the Dapr sidecar persists it to NATS
-JetStream and delivers it to the **lineage service** (`services/lineage/`, a separate microservice owning
-the Apache AGE graph). The consumer ingests it idempotently into:
+The lineage service consumes the topic and ingests each event idempotently into the AGE graph:
 
 - `(:Run)-[:OF_JOB]->(:Job)`, `(:Run)-[:READ]->(:Dataset)` (inputs),
 - `(:Run)-[:WROTE {version, schema, row_count, size_bytes, quality_passed, quality_assertions}]->(:Dataset)` (outputs),
-- `(:Dataset)-[:DERIVED_FROM]->(:Dataset)` (the medallion DAG), `(:User)-[:CREATED]->(:Dataset)`.
+- `(:Dataset)-[:DERIVED_FROM]->(:Dataset)`, `(:User)-[:CREATED]->(:Dataset)`.
 
-The full event JSON is also appended to a durable `/events` feed (dedup'd on `(run_id, event_type,
-event_time)`). Queries: `upstream`/`downstream`/`producers`/`graph`/`reconcile` + column-level lineage.
+In the same transaction it appends the full event to the durable feed (dedup'd on `(run_id, event_type, event_time)`).
+Queries: `upstream`/`downstream`/`producers`/`graph`/`reconcile` + column-level lineage.
 
 → [`LINEAGE.md`](LINEAGE.md) · code: `services/lineage/{services/consumer.py,services/repository.py}`
 
-## 5. Batch processing & data lifecycle — the compaction cron
+## 4. The user's pipeline moves the data on
 
-A **compaction** service (`services/compaction/`) runs on a Dapr cron binding: it discovers every dataset in
-the bucket and, per dataset, compacts small fragments + `cleanup_old_versions(older_than=7d)`, then emits a
-versionless `compaction` maintenance run so the GC shows up in `producers()`. Tiers differ in durability:
-bronze/silver are **transient** (re-derivable; their old versions are GC'd), gold/catalog are
-**permanent** (the system of record). The current version is always kept (no data loss); only time-travel
-*depth* is capped.
+The user's pipeline reads the tier, transforms on its own compute, writes the next tier through the catalog's doors
+(step 1 again) and emits its own OpenLineage run for the transform (`POST /api/lineage/api/v1/lineage`), naming its
+inputs so the graph carries the `DERIVED_FROM` edge. How a pipeline outside the estate learns of a committed write is a
+separate decision; the NATS topics are internal.
 
-→ [`MEDALLION.md`](MEDALLION.md), [`DURABILITY.md`](DURABILITY.md) · code: `services/compaction/services/{sweep.py,optimize.py}`
+## 5. Maintenance — data lifecycle
+
+The maintenance service (`services/maintenance`) runs version expiry, trash purge, the orphan scan, cross-store
+reconcile and protection, and compacts tables by policy; each materially-changed dataset gets a versionless
+`compaction` maintenance run so the work shows up in `producers()`. ADR 0155 decides that maintenance keeps the policy
+of what needs compacting or reindexing while the rewrites leave for a bring-your-own job.
+
+→ [`DURABILITY.md`](DURABILITY.md) · code: `services/maintenance`
 
 ## 6. Recovery & drift
 
@@ -125,14 +76,3 @@ bronze/silver are **transient** (re-derivable; their old versions are GC'd), gol
   nor Lakekeeper does.
 
 → [`LINEAGE.md`](LINEAGE.md), [`DURABILITY.md`](DURABILITY.md)
-
-## 7. Future — the distributed variants
-
-What lands when this merges into the sibling `rask` repo (see [`RASK-INTEGRATION.md`](RASK-INTEGRATION.md)):
-
-- **Distributed compute:** the in-process fake-Ray compute (`compute.py`) is replaced by a real **lance-ray**
-  Ray Data job on rask's **KubeRay** cluster — the *same* `read → transform → write → version` contract, just
-  distributed. Nothing else in the flow changes.
-- **Auto-instrumented lineage (GOAL 3):** instead of the stage runner hand-building the `RunEvent`, the medallion-producer
-  OpenLineage integration emits the `outputStatistics`/`dataQualityAssertions` facets **automatically** from
-  the runtime — true Marquez-grade auto-lineage.

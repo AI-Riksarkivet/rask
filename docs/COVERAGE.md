@@ -60,16 +60,10 @@ So the catalog is complete **to the limit of its backend**; the remaining stubs 
 Rust `DirectoryNamespace` (backfill/transaction) or a real query engine (MV) — not a thin in-process fill.
 
 ## Durable-artifact + recovery
-- **The medallion stage runners write provenance by default, and real Lance data when `MEDALLION_COMPUTE_ENABLED`.**
-  Off (default): they emit OpenLineage only. On: the in-process **fake-Ray compute** (`compute.transform_stage`)
-  does a real `lance.write_dataset` per stage (incl. gold) — proven by `test_medallion_cascade.py`. What
-  stays demo-only is the **gold whole-history JSONB embed** (`medallion_demo.py: write_gold`); the fake-Ray
-  `compute.py` only stamps a `stage` column, not the JSONB. The genuine remaining gap is the **distributed**
-  producer — **lance-ray** (a Ray Data job; `lr.write_lance`/`read_lance`, the same read→transform→write→
-  version contract the fake-Ray compute fills) — which lands when this merges into rask's KubeRay cluster
-  (`docs/adr/`). So: event-driven + provenance + (opt-in) in-process data are validated here; the
-  distributed compute + the gold-JSONB-in-the-deployed-path are the rask integration.
-- **Stage recovery works** — `restore_table` (v1→v3 verified) on the native backend; the medallion `WROTE`
+- **The lakehouse writes no tier data of its own.** Moving rows between bronze, silver and gold is the user's
+  pipeline on their own compute, committing through the catalog's namespace doors; the catalog announces each
+  committed write ([ADR 0155](adr/0155-the-medallion-is-tier-governance-in-the-catalog.md)).
+- **Version recovery works** — `restore_table` (v1→v3 verified) on the native backend; the catalog's `WROTE`
   edge records the Lance version (`DatasetVersionDatasetFacet`); `/reconcile` anchors gold to the on-disk
   `latest_write_version`.
 - **Retention nuance:** the compaction cron runs `cleanup_old_versions(older_than=7d)` over **every** dataset

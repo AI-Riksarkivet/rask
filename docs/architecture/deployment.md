@@ -39,7 +39,7 @@ In production also HA (`global.ha.enabled`) and an injector that drops every sid
 
 ## Prerequisite: NATS JetStream
 
-Every event rask moves (lineage, the medallion cascade, the catalog's control broadcast, the maintenance queues) rides Dapr pub/sub over **NATS JetStream, a prerequisite** (ADR 0153) the platform runs. The chart
+Every event rask moves (lineage, the catalog's control broadcast, the maintenance queues) rides Dapr pub/sub over **NATS JetStream, a prerequisite** (ADR 0153) the platform runs. The chart
 renders no server; it renders what is rask's: the address its clients dial, the stream definitions (the stream Job,
 which creates rask's streams on the bus as the `admin` user), and the bus users (`nats.auth.users`, one per app). Name
 the bus in `nats.url` (the render refuses without it) and its HTTP monitor in `nats.monitorUrl` for the lakehouse ops
@@ -119,7 +119,7 @@ make e2e              # verify MFE hydration + API round-trip end-to-end (run af
 make k3s-down         # uninstall   |   make k3s-purge  # + delete PVCs
 ```
 
-`k3s-build` builds the fleet (gateway, ray, controlplane) plus the frontend zone
+`k3s-build` builds the fleet (gateway, compute, notifications) plus the frontend zone
 images, the `ray-cluster` image, and the `lance-rest-catalog` lakehouse image as
 `:dev` tags.
 `k3s-import` side-loads them into k3s containerd via `docker save | ctr images
@@ -183,27 +183,28 @@ flowchart LR
 
 ## Remote KubeRay
 
-The runner accepts `--address ray://…:10001`. Job submission goes through the **`compute`
-service** (`:8804`, over `ray-kit`'s Job SDK wrapper) to the Ray dashboard REST API at
-`RAY_DASHBOARD_URL`, which the chart renders on the compute pod alone. The medallion names no Ray: it hands a
-work order to compute by Dapr service invocation (CP-056, ADR 0140). That address and the annotator's Serve
-discovery come from one helper, `rask.rayDashboardUrl`, so `compute` prunes job history on the cluster it
-submits to: `ray.dashboardUrl` names the engine, and left empty with an engine enabled
-(`services.compute.engines`) the render fails. The chart installs no Ray (ADR 0153): no KubeRay operator, no
+The runner accepts `--address ray://…:10001`. The lakehouse submits no Ray job ([ADR 0155](../adr/0155-the-medallion-is-tier-governance-in-the-catalog.md)):
+a pipeline on Ray is the user's, on the engine they run. The **`compute` service** (`:8804`, over `ray-kit`) reads
+that engine's Ray dashboard REST API at `RAY_DASHBOARD_URL` for the jobs board and job-history prune, and proxies
+`/api/serve/*`. That address, the annotator's Serve discovery and the zones' Serve origin come from one helper,
+`rask.rayDashboardUrl`, so every Ray consumer names the same engine: `ray.dashboardUrl`. The chart installs no Ray (ADR 0153): no KubeRay operator, no
 RayCluster or RayService. The engine owner runs Ray; in development `make k3s-up` installs the
 `kuberay-operator` and `ray-cluster` fixtures (`deploy/fixtures`, not for production), whose head Service is
-`rask-ray-head-svc`, and `deploy/values-local.yaml` names it. rask's side of the seam is the address, the
-token its Ray clients present (`ray.auth.enabled`, `<release>-ray-auth-token`), and the engine identity its doors
-admit as the trainer (`ray.engineServiceAccount`).
+`rask-ray-head-svc`, and `deploy/values-local.yaml` names it. The `compute` service is the engine's companion and
+ships with it: its own chart, `deploy/fixtures/compute` (release `compute` in rask's namespace, installed by
+`make k3s-fixtures`), reads the rask release's Dapr app token, `lance-tracing` Configuration, Dex, OpenFGA, OTel
+Collector and Ray auth token by reference, and rask's OpenFGA admits its service account only when the product
+chart's `auth.externalFgaClients` names it. The gateway has no `/api/ray` or `/api/serve` row, so the `compute`
+zone cannot reach it through the gateway. rask's side of the seam is the address and the
+token its Ray clients present (`ray.auth.enabled`, `<release>-ray-auth-token`).
 
 ## Helm chart (`chart/`)
 
 `make k3s-up` runs `helm upgrade --install rask ./chart --wait`. The chart deploys:
 
 - **gateway** — reverse proxy on `:8888` (path-routes `/api/*`, no catch-all).
-- **compute** — the Ray dashboard proxy and `/api/serve/*` on `:8804`, over the engine `ray.dashboardUrl` names.
-- **controlplane** — project provisioning on `:8820`.
-- **the lance planes** — catalog/lineage/medallion/compaction + the media trio
+- **flows** and **notifications** — the studio flow-builder's server half and the per-subject inbox.
+- **the lance planes** — catalog/lineage/maintenance/notifications + the media trio
   (viewer/search/annotator; the viewer carries the S3 object browser).
 - **frontend zones** — SvelteKit SSR apps on `:3000` each.
 - **Ingress** (Traefik) — `/api` → gateway:8888, `/` → the zone services.

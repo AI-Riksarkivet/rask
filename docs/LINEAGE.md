@@ -14,8 +14,9 @@ catalog table ids, authors are OIDC subs).
 
 Two hard constraints force a small backend rather than querying a DB from the UI:
 
-1. **Ingestion is server-side.** OpenLineage events come from compute jobs (ray /
-   promotion jobs), not the browser — something must receive them and write the graph.
+1. **Ingestion is server-side.** OpenLineage events come from the catalog (every committed write),
+   maintenance, and the jobs of a user's pipeline on its own compute — not the browser — so something
+   must receive them and write the graph.
 2. **DB-per-service.** The AGE graph is owned by exactly one service; the frontend (SSR
    or otherwise) calls this service through the gateway, it never touches AGE directly.
 
@@ -87,12 +88,12 @@ boundary rather than trusting a gateway.
 | UI | bundled React app | deferred; the `/graph` endpoint feeds a future SSR micro-frontend |
 
 We deliberately store lineage as a **graph** (it *is* one) rather than reconstructing it from
-relational tables, and we drop everything not needed for the medallion flow.
+relational tables, and we drop everything the lakehouse's provenance does not need.
 
 ## Graph model (Apache AGE)
 
 ```
-(:Job {namespace, name, source_location})         # the compute job — Ray (Ray runs jobs, Lance is the data); source_location = where its code lives
+(:Job {namespace, name, source_location})         # what ran: a catalog operation on one table, or a client's own job; source_location = where its code lives
 (:Run {run_id, author, event_type, event_time, producer, error_message})
 (:Dataset {name, namespace, source_uri, tags})    # name = catalog table id; MERGEd on name only
 (:User {name})                                    # an OIDC sub (the verified principal)
@@ -142,8 +143,8 @@ persists as history — a reader can tell it was deleted/detached, not just last
 `register_table`/`declare_table` (which also record the location as the `dataSource` facet). The one
 mutation that does **not** emit synchronously is `backfill_column` — it returns a `job_id` (the backfill
 runs asynchronously), so its produced version isn't known at request time; reconcile recovers it. The
-**compaction service** emits a versionless `operation=compaction` maintenance run per materially-compacted dataset
-(`services/compaction/core/lineage_emit.py`), so a GC/compaction shows up in `producers()` next to the
+**maintenance service** emits a versionless `operation=compaction` maintenance run per materially-compacted dataset
+(`services/maintenance/src/maintenance/core/lineage_emit.py`), so a GC/compaction shows up in `producers()` next to the
 data writes. All of these are awaited **inline** on the durable Dapr/JetStream transport (not FastAPI
 `BackgroundTasks` — no retry, dies with the worker), so a lineage outage never loses provenance.
 
@@ -154,9 +155,9 @@ authz gate — best-effort, so an audit-write failure never fails a read.
 ## OpenLineage facets we capture (and Marquez reuse)
 
 The demo producer (`seed.py`) emits via the official `openlineage-python` client classes; the runtime
-services (catalog / medallion / compaction) build the `RunEvent` **by hand** and keep it spec-true through
-one shared helper (`common.openlineage`, verified against the installed `openlineage-python`): a **UUID**
-`runId` (deterministic where the cascade needs idempotency), the required top-level `schemaURL`, and
+services (catalog / maintenance) build the `RunEvent` **by hand** and keep it spec-true through
+one shared helper (`service_kit.openlineage`, verified against the installed `openlineage-python`): a **UUID**
+`runId` (deterministic where a producer needs idempotency), the required top-level `schemaURL`, and
 `_producer`/`_schemaURL` on every facet — standard or custom. So a Marquez instance — or any OpenLineage
 consumer — can ingest them unchanged at the same `/api/v1/lineage` path. Our ingest tolerates *every* facet
 (`extra="allow"`) and reads these:
@@ -166,7 +167,7 @@ consumer — can ingest them unchanged at the same `/api/v1/lineage` path. Our i
 | `producer` (event field) | run | the software that emitted the event | `Run.producer` |
 | `author` (custom) → `ownership` | run / job | who ran the job (OIDC sub), standard owner fallback | `Run.author` |
 | `lance` (custom) | run | catalog `operation` (the mutation kind); a table-origination op (`create_table`/`register_table`/`declare_table`) → who-created | `Run.operation`, `(:User)-[:CREATED]` |
-| `jobType` | job | `processingType` BATCH/STREAMING, `integration=RAY`, `jobType` ETL/TRANSFORMATION | (read; surfaced via job) |
+| `jobType` | job | `processingType` BATCH/STREAMING, `integration` (the engine, e.g. `RAY`, `SPARK`), `jobType` ETL/TRANSFORMATION | (read; surfaced via job) |
 | `sourceCodeLocation` | job | where the job's code lives (git url + path) — a here-dummy (GOAL 3), auto-derived by rask's runner later | `Job.source_location` |
 | `schema` | dataset | column names/types per layer | `WROTE.schema` (per-version) |
 | `version` | dataset | the Lance version a run produced | `WROTE.version` |
@@ -176,41 +177,31 @@ consumer — can ingest them unchanged at the same `/api/v1/lineage` path. Our i
 | `tags` | dataset | governance labels (`layer`, `pii`, …) — UNIONed into the node's set at ingest (#49: the property also holds human-curated tags, which a producer facet never clobbers; comma-bearing labels are sanitized) | `Dataset.tags` |
 | `errorMessage` | run | failure message on a `FAIL`/`ABORT` run | `Run.error_message` |
 
-**Ray is the compute, Lance is the data.** Each `Job` is a Ray job; each `Dataset` is a Lance
-table. The `jobType` facet records that split: `integration=RAY`, and `jobType` distinguishes the
-**ETL** that lands raw data into bronze from the **TRANSFORMATION** jobs that move data between
-medallion layers.
+**The compute is the writer's, Lance is the data.** Each `Dataset` is a Lance table; a `Job` is whatever
+wrote it — a catalog operation, or a job of a user's pipeline on its own engine
+([ADR 0155](adr/0155-the-medallion-is-tier-governance-in-the-catalog.md)). The `jobType` facet records the
+engine (`integration`) and distinguishes the **ETL** that lands external data into bronze from the
+**TRANSFORMATION** jobs that move data between medallion tiers.
 
-### Runtime-measured facets — declared → measured lineage (Marquez GOAL 1 + 2 + 3)
+### Runtime-measured facets — declared → measured lineage
 
-Most of our lineage is **producer-declared** (the emitter states the topology). Three facets carry what the
-job actually **observed** at runtime — the step from declared toward Marquez-grade measured lineage. The
-first two ride the same `WROTE` edge as `version`/`schema`; the third rides the `(:Job)` node:
+Most lineage is **producer-declared** (the emitter states the topology). Three facets carry what a job
+actually **observed** at runtime. The first two ride the same `WROTE` edge as `version`/`schema`; the third
+rides the `(:Job)` node. The graph stores them from whichever producer sends them; the lakehouse runs no tier
+job of its own, so for tier writes that producer is the user's pipeline, emitting on its own run:
 
-- **`outputStatistics`** (GOAL 1) — the **exact** rows + on-disk bytes the compute wrote, read straight off
-  the dataset (`count_rows()` + `DataStatistics.bytes_on_disk`, not estimated). Present only on a real
-  measured write; a dummy emit omits it, so we never claim numbers we didn't measure. Surfaced as
-  `ProducerInfo.{row_count,size_bytes}`.
-- **`dataQualityAssertions`** (GOAL 2) — the **validator gate**'s checks on the produced data
-  (`row_count_positive`, `not_null` on the key column). The medallion stage runner emits this when
-  `MEDALLION_QUALITY_ENABLED`, and a *failed* assertion **blocks promotion** (the next stage is not
-  triggered) — so a `quality_passed=false` edge *with a real version* is the durable, auditable record of a
-  batch the gate stopped. This composes with the OpenFGA gate: **FGA decides who may promote, quality
-  decides whether the data is good enough to** — both gate movement. Surfaced as
-  `ProducerInfo.{quality_passed,quality_assertions}`.
-- **`sourceCodeLocation`** (GOAL 3, job facet) — **where the job's code lives** (`type=git`, repo url, path,
-  branch). A here-dummy the medallion emitter asserts from the known `services/medallion` git location;
-  stored on the `(:Job)` node as `source_location`. This is the declared dummy of what rask's runner will
-  auto-derive (its git repo + pipeline path) once medallion-producer OpenLineage lands. *(Also in GOAL 3: `insert`
-  now stamps the real Lance version on its `WROTE` edge — it used to emit versionless.)*
+- **`outputStatistics`** — the **exact** rows + on-disk bytes the job wrote (`count_rows()` +
+  `DataStatistics.bytes_on_disk`, not estimated). Surfaced as `ProducerInfo.{row_count,size_bytes}`.
+- **`dataQualityAssertions`** — quality checks on the produced data (`row_count_positive`, `not_null` on the
+  key column; the shared vocabulary is `service_kit.lakehouse.quality`, which the catalog's publish door runs
+  as its gate). A `quality_passed=false` edge *with a real version* is the durable record of a batch that
+  failed its checks. This composes with OpenFGA: **FGA decides who may promote, quality decides whether the
+  data is good enough to**. Surfaced as `ProducerInfo.{quality_passed,quality_assertions}`.
+- **`sourceCodeLocation`** (job facet) — **where the job's code lives** (`type=git`, repo url, path, branch),
+  stored on the `(:Job)` node as `source_location`.
 
-Because `record_event` stores the **full** event JSON in the durable `event` column, every facet is also
+Because the feed stores the **full** event JSON in the durable `event` column, every facet is also
 visible verbatim in the `GET /events` feed — the graph promotes the headline fields, the feed keeps the rest.
-
-> **GOAL 3-real** (at rask) is to stop *declaring* these (incl. the `sourceCodeLocation` dummy above) and
-> have them emitted **automatically** by the distributed compute — the
-> [medallion-producer OpenLineage integration](RASK-INTEGRATION.md) on KubeRay — the true auto-instrumented,
-> Marquez-grade path that supersedes the here-dummies.
 
 ## Signed events (the `rask_signature` facet)
 
@@ -221,8 +212,8 @@ in the outbox signs it with its own Ed25519 key. The signature rides inside the 
 signer (`identity`), its key (`kid`) and, for a delegation, `onBehalfOf`. Lineage holds public keys only, so it can admit
 or refuse an event and cannot forge one (`packages/lineage-kit/src/lineage_kit/signing.py` owns the format).
 
-- **Who signs.** The identities the chart lists in `LINEAGE_SIGNERS` (`lance.signingIdentities`): the catalog,
-  maintenance, the medallion producer and each stage runner. A signer is its own author. The one exception is
+- **Who signs.** The identities the chart lists in `LINEAGE_SIGNERS` (`lance.signingIdentities`): the catalog and
+  maintenance. A signer is its own author. The one exception is
   the catalog, the sole entry in `LINEAGE_DELEGATORS`, which signs for the person it authenticated.
 - **Control events.** A `CatalogControlEvent` on `catalog.control.v1` is a flat envelope with no facet bag, so the same
   facet rides as its top-level `rask_signature` member, and the signed bytes are canon-1 of the whole envelope with only
@@ -231,8 +222,7 @@ or refuse an event and cannot forge one (`packages/lineage-kit/src/lineage_kit/s
   service acting for itself, signed with no delegation. The emitting service signs at emit, before the event is staged
   (`service_kit.control_emit`, its signer injected). Who signs which action is
   `service_kit.control_events.control_signer_role`: the catalog signs every action it emits, for the person it
-  authenticated; maintenance signs `table_purged` and `namespace_purged` as itself; the medallion producer signs
-  `promotion_review_requested`. The annotator's task actions and its grants on an `annotation_project:` object travel
+  authenticated; maintenance signs `table_purged` and `namespace_purged` as itself. The annotator's task actions and its grants on an `annotation_project:` object travel
   unsigned (owner rulings R3 and R5), so any identity the bus lets publish on the topic can forge them. A signer whose key
   is unresolved publishes and stages nothing unsigned: it withholds the event, counts it under
   `<service>_control_emit_failed_total{lance_<service>_reason="unsigned"}` and reports itself not ready, so a control
@@ -243,8 +233,8 @@ or refuse an event and cannot forge one (`packages/lineage-kit/src/lineage_kit/s
 - **What lineage accepts, and from where.** With `signing.enforce` on (the default, rendered only where auth and the
   secret store are on) lineage records an event only when a listed signer's published key verifies it. All four doors
   that record a bus or staged event apply the rule: the `/lineage-events` subscription, the outbox drain, the operator's
-  DLQ replay and the parking route's re-ingest. The authenticated HTTP door (`POST /api/v1/lineage`: Ray jobs, the web
-  zones, ingest's live emits) takes no signature; it authenticates the caller's bearer token and strips any
+  DLQ replay and the parking route's re-ingest. The authenticated HTTP door (`POST /api/v1/lineage`: a user's pipeline, the web
+  zones, any OpenLineage client) takes no signature; it authenticates the caller's bearer token and strips any
   `rask_signature` the body carries. With `signing.enforce` off lineage verifies nothing and ignores a present facet.
 - **What is refused.** An event with no facet (`unsigned`), a malformed facet or an unsupported `alg` or `canon`, an
   identity outside `LINEAGE_SIGNERS` (`signer`), a signer that is not the stamped author and declares no delegation
@@ -256,12 +246,10 @@ or refuse an event and cannot forge one (`packages/lineage-kit/src/lineage_kit/s
   claimed identity and the reason. A key list that cannot be read is an outage, not a verdict, and the delivery is
   retried. What each reason means and what to do:
   [RUNBOOK-oncall.md](runbooks/RUNBOOK-oncall.md#lineage-refusing-a-signers-events).
-- **The doors that act on the bus.** The cascade heads (`/bronze-arrival`, `/publication-arrival`), notifications
-  (`/lineage-events`, `/control-events`) and maintenance's `/maintenance-arrival` verify the same signatures before they
-  act, in the mode `RASK_SIGNATURE_DOORS` names (chart `signing.doors`: off, observe or enforce). A lineage event verifies
-  against `RASK_EVENT_SIGNERS` and `RASK_EVENT_DELEGATORS`: lineage's own sets at notifications and maintenance, and at
-  the bronze head the producer and the catalog (`lance.doorEnv` lists both; the events it acts on are the catalog's
-  write announcements, and the head ignores a maintenance pass, `compaction`, `compact_table` or `create_index`, before verifying anything). A control
+- **The doors that act on the bus.** Notifications (`/lineage-events`, `/control-events`) and maintenance's
+  `/maintenance-arrival` verify the same signatures before they act, in the mode `RASK_SIGNATURE_DOORS` names (chart
+  `signing.doors`: off, observe or enforce). A lineage event verifies against `RASK_EVENT_SIGNERS` and
+  `RASK_EVENT_DELEGATORS`, lineage's own sets. A control
   event verifies against the identities `RASK_CONTROL_SIGNER_ROLES` lists for the role its action names. Only an event
   the door would act on is verified. Enforcing, a refusal is acknowledged and drives nothing, counted in
   `<service>_signature_refused_total` by door and reason; every one of those series exists at 0 from the door's
@@ -276,9 +264,10 @@ or refuse an event and cannot forge one (`packages/lineage-kit/src/lineage_kit/s
 
 ## Closing the loop: gold embeds its lineage as JSONB (demo driver only)
 
-> **Scope:** this is done by the **demo driver** (`scripts/medallion_demo.py: write_gold`), NOT by the
-> deployed event-driven cascade — the `silver→gold` stage runner emits provenance to the graph but does not (yet)
-> embed the JSONB column. Making the stage runner embed it when `medallion.compute` is on is a tracked follow-up.
+> **Scope:** this is done by the **demo driver** (`scripts/medallion_demo.py: write_gold`), a client writing the
+> tiers the way a user's pipeline does. The lakehouse writes no tier itself
+> ([ADR 0155](adr/0155-the-medallion-is-tier-governance-in-the-catalog.md)), so embedding provenance in a gold
+> table is the writing pipeline's choice.
 
 The final `aggregate_gold` step writes the **whole upstream provenance** **into the gold Lance file
 itself** as a JSONB `lineage` column (Lance's `pa.json_()` / `lance.json` extension type — stored as
@@ -334,6 +323,7 @@ Layered like the catalog (`api/` · `core/` · `services/` + a thin entrypoint),
 | `GET /datasets/{name}/columns` | The **column-lineage subgraph** around `name` (typed column nodes + field-to-field edges with transformation kind + `masking`) — the column analogue of `/graph` |
 | `GET /runs` | Live run-status board (state folded onto each `(:Run)` node; durable, governed) |
 | `GET /events` | Recent ingested OpenLineage events, newest first (durable, governed) |
+| `GET /events/projection` | The same feed with no per-dataset filter, cut to the fields that decide whom to notify; gated on `can_read_event_feed`, for the notifications reconciler |
 | `GET /livez` | Liveness |
 
 `name` is the catalog table id, e.g. `bronze$images`. Because the ingest path is the
