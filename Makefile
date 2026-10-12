@@ -30,6 +30,8 @@ install:
 	@command -v prek >/dev/null 2>&1 && prek install --hook-type pre-commit --hook-type commit-msg || echo "  (prek not on PATH — git hooks NOT installed)"
 	@# The Claude Code plugins (ra-skills, the mattpocock skills) and the svelte MCP server install here too,
 	@# so a new machine does not depend on someone remembering a second command.
+	@# The chart tests render chart/ and the fixture charts, so `make test` needs their subcharts on disk.
+	@command -v helm >/dev/null 2>&1 && $(MAKE) --no-print-directory k3s-deps || echo "  (helm not on PATH — subcharts NOT fetched; the chart tests in make test will fail until make k3s-deps runs)"
 	@command -v claude >/dev/null 2>&1 && $(MAKE) --no-print-directory claude-bootstrap || echo "  (claude CLI not on PATH — Claude Code plugins NOT installed; run make claude-bootstrap after installing it)"
 
 build:
@@ -697,6 +699,10 @@ k3s-install: ## One-time host bootstrap: k3s + helm only (everything else is the
 k3s-deps: ## Add subchart repos + vendor chart dependencies into chart/charts/, and each local fixture chart's
 	@for r in $(K3S_DEP_REPOS); do n=$${r%%=*}; u=$${r#*=}; helm repo add $$n $$u >/dev/null 2>&1 || true; done
 	@helm repo update >/dev/null
+	@# Every charts/ directory is gitignored and generated. `helm dependency build` adds the archives Chart.lock names
+	@# but never removes others, and helm renders every archive it finds there: a subchart left from an older
+	@# Chart.yaml (nvidia-device-plugin, measured 2026-10-12 on a second machine) fails `helm template` after a pull.
+	rm -f chart/charts/*.tgz deploy/fixtures/*/chart/charts/*.tgz
 	helm dependency build ./chart
 	./scripts/fixtures.sh --vendor
 

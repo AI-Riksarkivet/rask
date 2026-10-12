@@ -14,7 +14,7 @@ all of it: the toolchain, the clone, and the k3s estate installed from empty.
 ## Install
 
 ```bash
-make install        # = bun --cwd=frontend install + uv sync --all-packages + git hooks + make claude-bootstrap
+make install        # = bun --cwd=frontend install + uv sync --all-packages + git hooks + make k3s-deps + make claude-bootstrap
 make test           # offline suites
 make check          # fmt + lint + import contracts + typecheck + knip + fga-test
 ```
