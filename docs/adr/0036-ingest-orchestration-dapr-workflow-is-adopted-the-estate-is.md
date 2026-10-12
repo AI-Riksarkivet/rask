@@ -1,5 +1,7 @@
 # 0036. Ingest orchestration — Dapr Workflow IS adopted; the estate is event-driven now (2026-08-03, owner ruling)
 
+**Status:** Superseded by [ADR 0154](0154-the-lakehouse-runs-no-ingest-and-no-workflow-engine.md): the lakehouse hosts no workflow engine and runs no ingest.
+
 **Superseded the same day by the owner, and the reason is not a flaw in the analysis below — it is
 that the analysis answered the wrong question.** The entry that follows argued the `OPERATORS.md` §4
 reopen criterion (*"a step that cannot be made idempotent by any caller-chosen key"*) and concluded

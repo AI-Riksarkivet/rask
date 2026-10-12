@@ -165,3 +165,5 @@ before they had a record here; each names its source document and the date of th
 | [0150](0150-protection-guards-deletion-not-history-reclaim.md) | LH-300 | Protection guards deletion, not history reclaim (2026-10-10) |
 | [0151](0151-a-boot-bound-secret-rotates-only-for-consumers-rask-owns.md) | D8 | A boot-bound secret rotates only for consumers rask owns in production (2026-10-10) |
 | [0152](0152-service-kit-ships-py-typed-and-skips-report-zeros.md) | PS | service-kit ships py.typed, and skip attribution reports zeros (2026-10-10) |
+| [0153](0153-the-app-chart-is-the-product.md) | XC-085 | The app chart is the product; operators, compute and observability are prerequisites (2026-10-11) |
+| [0154](0154-the-lakehouse-runs-no-ingest-and-no-workflow-engine.md) | LH-461 | The lakehouse runs no ingest and no workflow engine; data enters through the catalog's namespace doors (2026-10-12) |
