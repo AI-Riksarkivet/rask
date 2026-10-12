@@ -10,7 +10,7 @@ defaults that match `Procfile.micro`.
 
 Carries the lance-ns rows since the gateway fold (the merge plan's P1 "Gateway fold (code half)";
 the decision is docs/adr/0117-nginx-is-retired-and-the-fastapi-gateway-is-the-in-cluster.md: rask's
-FastAPI gateway wins, the nginx gateway retired): `/api/catalog`, `/api/lineage`, the medallion producer's `/api/produce`,
+FastAPI gateway wins, the nginx gateway retired): `/api/catalog`, `/api/lineage`, the medallion producer's
 `/api/train`, `/api/trains`, `/api/promotions`, `/api/stage-runners` and `/api/cascade`, and the
 whole-plane explorer namespace `/api/explorer{,/search,/annotations}`. The lance
 services serve their own internal prefixes (`/v1/...`, `/api/...`), so each route
