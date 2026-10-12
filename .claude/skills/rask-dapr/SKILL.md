@@ -146,6 +146,11 @@ load, not a wrong answer).
 
 ## Sidecar map — who can call Dapr APIs at all
 
+The control plane (injector, sentry, operator, placement, scheduler) is the platform's, a prerequisite installed once
+per cluster (ADR 0153, [[XC-128]]); rask renders only its Components, Configurations and Resiliency, and refuses to
+render for a cluster that does not serve `dapr.io/v1alpha1`. Development installs it from `deploy/fixtures/dapr` in
+`dapr-system`, with `dapr_rbac.secretReader` off (`rask-helm` §8).
+
 Sidecars are injected for the fleet + lakehouse services and stage runners (`rask.daprAnnotations`; the
 injector webhook is fail-closed via the paired label — a pod with the annotation but no label is the
 silent no-sidecar failure). **No sidecar:** the 7 web zones, Ray head/workers, and every runner.

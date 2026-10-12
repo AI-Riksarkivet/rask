@@ -32,6 +32,9 @@ Measured 2026-09-25 on revision 240 (96.3% of the ceiling):
 | Kueue's templated CRDs (manifest) | ~24% |
 | the other seven subcharts together | ~5.5% |
 
+With every operator, the compute engine, the telemetry chain and the development stand-ins out of the chart (ADR 0153,
+[[XC-124]] to [[XC-132]]), revision 312 measured 286,008 packed bytes on 2026-10-12: **27.3%** of the ceiling.
+
 **`values.yaml` prose is free** — it is stored as a parsed map, comments dropped. **Template prose is
 not**, so templates carry no `{{/* */}}` comments ([[XC-123]], ADR 0153): a template's rationale lives in
 `docs/chart/templates/<template>.md`, one section per template line it explains, and each setting carries a
@@ -266,6 +269,11 @@ catalog, lineage, maintenance, the medallion, OpenBao and Dex ran as `default` w
   has applied it. Read a pod's Configuration from its `dapr.io/config`, never by a name built from the app-id.
   The gates: `tests/unit/test_only_the_owner_may_read_its_signing_key.py` (who may read which secret) and
   `tests/unit/test_event_signing_is_wired_by_the_chart_in_every_deploy_mode.py` (the name follows the spec).
+- **OpenFGA and its Postgres are optional, and production names the platform's** ([[XC-132]]): `openfga.enabled` and
+  `age.enabled` off, `auth.fgaApiUrl` and `age.externalHost` set (the render refuses either empty). Every FGA client
+  dials `lance.openfgaUrl` and every Postgres client `lance.ageConnectHost` (on the AGE-on-CNPG path, `lance-pg-rw`);
+  a template never builds either address itself. The OpenFGA subchart's schema refuses unknown keys, so a rask value
+  about OpenFGA lives under `auth`, never under `openfga`.
 - **OpenFGA admits only a projected `rask-openfga` token from a listed ServiceAccount** ([[XC-077]]): OIDC
   against the cluster SA issuer, keys fetched through the issuer mirror in `templates/openfga-authn.yaml`
   (OpenFGA fetches discovery with no bearer and k3s answers that 401), the subject allow-list from

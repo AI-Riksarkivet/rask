@@ -201,16 +201,21 @@ admit as the trainer (`ray.engineServiceAccount`).
 `make k3s-up` runs `helm upgrade --install rask ./chart --wait`. The chart deploys:
 
 - **gateway** — reverse proxy on `:8888` (path-routes `/api/*`, no catch-all).
-- **ray** — Ray dashboard proxy + `/api/serve/*` on `:8804` (singleTenant).
+- **compute** — the Ray dashboard proxy and `/api/serve/*` on `:8804`, over the engine `ray.dashboardUrl` names.
 - **controlplane** — project provisioning on `:8820`.
 - **the lance planes** — catalog/lineage/medallion/compaction + the media trio
   (viewer/search/annotator; the viewer carries the S3 object browser).
 - **frontend zones** — SvelteKit SSR apps on `:3000` each.
 - **Ingress** (Traefik) — `/api` → gateway:8888, `/` → the zone services.
-- **In-cluster deps** (gated by values toggles; the chart installs no operator):
-  - `minio.enabled` — MinIO as a first-party StatefulSet, no operator (LH-133: RustFS gates STS `AssumeRole` to root and cannot grant the right, so the catalog could not hold a scoped identity there). S3 at `rask-minio:9000`, console on `:9001`. 1 pod / 4 PVCs (erasure-coding minimum). Buckets, users and policies are provisioned by the `mc` hooks. Values under `minio.*`.
-  - `ray.enabled` — KubeRay `RayService` (head + Serve app). GPU-shaped rendering is derived, see below.
-  - `observability.enabled` — the first-party OTel Collector and the fleet's OTLP export to it (see below).
+- **Optional, in-chart for development and the platform's in production** ([[XC-132]]): `openfga.enabled` (the
+  OpenFGA subchart) and `age.enabled` (the apache/age Postgres StatefulSet); see *Prerequisites in production*.
+- **Its own configuration of what it does not run**: the Dapr Components, Configurations and Resiliency, the NATS stream
+  Job, the ExternalSecrets and SecretStore, the MinIO bucket and user hooks, and the dev OpenBao's seed scripts.
+- **The OTel Collector**, with `observability.enabled` (see below).
+
+Everything else is a separate release ([[XC-085]], ADR 0153). `make k3s-up` installs the development set from
+`deploy/fixtures` first (`make k3s-fixtures`): the External Secrets Operator, Dapr, NATS, the CloudNativePG operator,
+Dex, MinIO, OpenBao, the KubeRay operator and a Ray cluster, and the telemetry chain. A platform brings its own.
 
 ### GPUs are the engine's
 
