@@ -33,6 +33,13 @@ There is no fga CLI image, so the Job reuses the catalog image and speaks the Op
 service_kit's own store and model rules, CHECKS each grant first (the idempotence guard), and only
 then writes it, treating a duplicate-write 400/409 as success.
 
+## `"helm.sh/hook-weight": "10"`
+
+After every hook this Job waits on: `openfga-model` (0), whose model must hold the relations it writes, and
+`minio-scoped-users` (5), whose S3 user the catalog it waits for cannot start without. On a first install the latter is
+`post-install` only, and at one weight Helm runs the two by name, this Job first, so the install timed out on it
+(XC-133, CI run 38217921913). Pinned by `tests/unit/test_the_authorization_model_reaches_the_store.py`.
+
 ## `ttlSecondsAfterFinished: 3600`
 
 Reap the finished pod. Each revision's job carries a -r<revision> name, so Helm's

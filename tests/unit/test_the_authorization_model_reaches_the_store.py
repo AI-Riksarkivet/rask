@@ -58,17 +58,17 @@ def _weight(job: dict) -> int:
     return int(job["metadata"]["annotations"]["helm.sh/hook-weight"])
 
 
-def test_it_runs_BEFORE_the_hook_that_writes_tuples() -> None:
-    """Order is the whole point. `bootstrap-admin` writes `warehouse:...#maintainer`, which the store
-    can only accept once the model defining that relation is in it — that ordering inversion is what
-    CrashLooped and wedged the release."""
+def test_bootstrap_admin_runs_AFTER_every_hook_it_waits_on() -> None:
+    """Order is the whole point. `bootstrap-admin` writes `warehouse:...#maintainer`, which the store can only accept once
+    the model defining that relation is in it — that ordering inversion is what CrashLooped and wedged the release. It
+    also waits for the catalog, which on a first install cannot start until `minio-scoped-users` (`post-install` only
+    there) has created its S3 user: at one weight Helm runs the two by name, bootstrap-admin first, and the install times
+    out on it ([[XC-133]], CI run 38217921913)."""
     jobs = _jobs(_render("--set", "fga.enabled=true"))
-    writer = next(j for name, j in jobs.items() if "model" in name and "openfga" in name)
     bootstrap = next((j for name, j in jobs.items() if "bootstrap-admin" in name), None)
-
     if bootstrap is None:
         pytest.skip("bootstrap-admin does not render here; the ordering it must beat is not present")
-    assert _weight(writer) < _weight(bootstrap), (
-        f"the model write (weight {_weight(writer)}) runs at or after the tuple write "
-        f"(weight {_weight(bootstrap)}), so the tuples land against a model that cannot express them"
-    )
+    before = {name: j for name, j in jobs.items() if ("model" in name and "openfga" in name) or "-minio-scoped-users" in name}
+    assert len(before) == 2, sorted(jobs)
+    late = {name: _weight(j) for name, j in before.items() if _weight(j) >= _weight(bootstrap)}
+    assert not late, f"these run at or after bootstrap-admin (weight {_weight(bootstrap)}), which waits on them: {late}"
