@@ -99,7 +99,7 @@ spec:
             {{- end }}
             {{- if or .Values.medallion.fgaEnabled .Values.auth.enabled }}
             - { name: RASK_FGA_ENABLED, value: "true" }
-            - { name: RASK_FGA_API_URL, value: {{ .Values.medallion.fgaApiUrl | quote }} }
+            - { name: RASK_FGA_API_URL, value: {{ include "lance.openfgaUrl" . | quote }} }
             {{- include "lance.fgaToken" (list "env") | nindent 12 }}
             {{- with .Values.auth.fgaStoreId }}
             - { name: RASK_FGA_STORE_ID, value: {{ . | quote }} }
@@ -345,7 +345,7 @@ spec:
             {{- end }}
             {{- if $root.Values.medallion.fgaEnabled }}
             - { name: RASK_FGA_ENABLED, value: "true" }
-            - { name: RASK_FGA_API_URL, value: {{ $root.Values.medallion.fgaApiUrl | quote }} }
+            - { name: RASK_FGA_API_URL, value: {{ include "lance.openfgaUrl" $root | quote }} }
             {{- include "lance.fgaToken" (list "env") | nindent 12 }}
             {{- with $root.Values.auth.fgaStoreId }}
             - { name: RASK_FGA_STORE_ID, value: {{ . | quote }} }

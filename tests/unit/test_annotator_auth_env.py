@@ -59,5 +59,4 @@ def test_auth_enabled_wires_fga_and_oidc_onto_the_annotator() -> None:
     env = _annotator_env(_render(explorer__enabled="true", auth__enabled="true", auth__allowHeadless="true"))
     assert env.get("RASK_FGA_ENABLED") == "true"
     assert env.get("RASK_OIDC_ENABLED") == "true"
-    assert "openfga" in env.get("RASK_FGA_API_URL", ""), env.get("RASK_FGA_API_URL")
     assert env.get("RASK_OIDC_AUDIENCE"), "the audience must come from dex.clientId"

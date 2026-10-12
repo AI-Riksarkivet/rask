@@ -65,6 +65,28 @@ The version rask is tested against is in `deploy/fixtures/cloudnative-pg` (the d
 release `cloudnative-pg` in `cnpg-system`): chart 0.28.3, operator 1.29.1, CRDs applied server-side from
 `chart/crds-bootstrap/` by `make k3s-crds` before it. The path itself needs CNPG >= 1.27 and Kubernetes 1.33+.
 
+## Prerequisites in production: OpenFGA and its Postgres
+
+The chart can run OpenFGA (the `openfga` subchart) and the Postgres behind the lineage graph, OpenFGA and the Dapr state
+store (the `rask-age` StatefulSet). Development runs both. **Production names the platform's** ([[XC-132]], ADR 0153),
+and `deploy/values-prod.yaml` turns both off (`openfga.enabled: false`, `age.enabled: false`):
+
+- `auth.fgaApiUrl` is the platform's OpenFGA HTTP API. Every FGA client, the `openfga-model` hook and the
+  bootstrap-admin Job dial it. Each one presents its projected ServiceAccount token: audience `rask-openfga`, issuer
+  `auth.serviceAccountIssuer`, subject `system:serviceaccount:<namespace>:<release>-sa-<component>`. The platform's
+  OpenFGA takes OIDC against that issuer, fetching its keys from the cluster's ServiceAccount JWKS. rask's issuer
+  mirror and subject ConfigMap serve only the in-chart OpenFGA. The subjects to admit are the ones
+  `lance.openfgaSubjects` (chart/templates/_helpers.tpl) computes for the overlay. A render with `openfga.enabled=true`
+  prints them in the `<release>-openfga-authn` ConfigMap.
+- `age.externalHost` is the platform's Postgres, which needs the Apache AGE extension (docs/CNPG-AGE.md) and the
+  `lineage`, `openfga` and `daprstate` databases owned by `age.user`. Its password is the secret store's
+  `postgres-password`, which ESO delivers, and the Dapr state store reads its whole DSN from the store's
+  `dapr-state-connection-string` (`postgres://<age.user>:<password>@<age.externalHost>:<age.port>/<age.stateDb>`),
+  which the platform writes beside it. No chart value carries either.
+
+The render refuses either one when it is empty and its part is off. Under the production NetworkPolicy (default-deny egress), each endpoint needs a `networkPolicy.extraEgress` entry, as an external NATS or OTLP backend does. OpenFGA's own datastore, availability and
+backups belong to the platform, so production runs no `pg_dump` CronJob.
+
 ## Development stand-ins
 
 A real deployment brings its own identity provider, object store and secret store, and the chart takes them by

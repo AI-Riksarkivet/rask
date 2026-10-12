@@ -89,15 +89,18 @@ podDisruptionBudget:
   enabled: true
   minAvailable: 1
 
-# OpenFGA is the authz chokepoint — every governed catalog write, every lineage read, and all four stage runners'
-# WRITE path fail CLOSED through it, so a single drained/OOMed replica 503s the whole estate until it
-# reschedules. Run the subchart's supported 3 replicas (kind pinned it to 1) + size its resources. Its PDB
-# + pod anti-affinity are P2 (they need the subchart's own label selector). (prod-readiness P1)
+# OpenFGA and the Postgres behind AGE and OpenFGA are the platform's ([[XC-132]], ADR 0153): production runs neither
+# and names them. The deployer sets `auth.fgaApiUrl` (the platform's OpenFGA HTTP API) and `age.externalHost`, and the
+# render refuses either empty. No credential is a value: an FGA client presents its projected `rask-openfga`
+# ServiceAccount token, which the platform's OpenFGA admits by OIDC against the cluster's ServiceAccount issuer for the
+# subjects `lance.openfgaSubjects` lists, and the Postgres password is the store's `postgres-password`, which ESO
+# delivers. The platform's Postgres carries the Apache AGE extension for the lineage graph (docs/CNPG-AGE.md) and the
+# `lineage`, `openfga` and `daprstate` databases; OpenFGA is the authz chokepoint every governed call fails closed
+# through, so the platform runs it highly available.
 openfga:
-  replicaCount: 3
-  resources:
-    requests: { cpu: 100m, memory: 256Mi }
-    limits: { cpu: "1", memory: 512Mi }
+  enabled: false
+age:
+  enabled: false
 
 # Network isolation: default-deny + DNS egress + the EXCLUSIVE OpenBao-ingress lock (only secret-consuming
 # app pods may reach openbao:8200). The chart ships the full, correct impl (templates/network-policy.yaml);
@@ -125,19 +128,16 @@ resources:
   catalog:
     requests: { cpu: 200m, memory: 512Mi }
     limits: { cpu: "2", memory: 1Gi } # sized by catalog.maxConcurrentWrites above (cap×256MiB + 512Mi)
-  age:
-    requests: { cpu: 250m, memory: 512Mi }
-    limits: { cpu: "2", memory: 1Gi } # dual-purpose store: the lineage graph AND OpenFGA's datastore
   rustfs:
     requests: { cpu: 200m, memory: 512Mi }
     limits: { cpu: "2", memory: 1Gi } # the lakehouse + observability object store under real load
 
-# --- Backups (P4): ON for the SELF-CONTAINED in-cluster-prod path (in-cluster AGE + RustFS PVC). If you
-# externalize to CloudNativePG / rustfs-operator (the rask path), set BOTH back to false — the operators do
-# PITR/scheduled backups + snapshots better. (snapshotClassName must be a real CSI VolumeSnapshotClass.) ----
+# --- Backups (P4): the Postgres is the platform's, and its operator does PITR and scheduled backups, so the pg_dump
+# CronJob is off. The volume snapshot covers the in-cluster RustFS PVC; with a managed S3 set it false too.
+# (snapshotClassName must be a real CSI VolumeSnapshotClass.) ----
 backups:
   pgDump:
-    enabled: true
+    enabled: false
   volumeSnapshot:
     enabled: true
     snapshotClassName: "" # set your cluster's CSI VolumeSnapshotClass
@@ -237,18 +237,6 @@ observability:
 # rustfs (rustfs-operator / any managed S3):         # managed S3 for the lakehouse
 #   enabled: false
 #   externalEndpoint: https://s3.us-east-1.amazonaws.com
-# age (CloudNativePG):                               # managed Postgres for the AGE graph + OpenFGA datastore
-#   enabled: false
-#   externalHost: lance-pg-rw                        # the CNPG Cluster's -rw service
-#   user: lance                                      # match the CNPG Cluster's role and dbs; the password
-#                                                    # is the store's `postgres-password`
-#   # ⚠ AGE-EXTENSION DECISION (docs/OPERATORS.md, RASK-INTEGRATION.md): a STOCK CNPG image cannot run the
-#   # lineage graph — `LOAD 'age'` / create_graph / ag_catalog need the Apache AGE extension compiled in. Run
-#   # CNPG with a CUSTOM imageName that bundles AGE (ghcr image built from the CNPG PG16 base + AGE), matching
-#   # age.image's PG major. OpenFGA (plain SQL) is unaffected. Alternatively keep AGE as a separate operand.
-# openfga:                                           # the openfga subchart's datastore points at the same DB
-#   datastore:
-#     uri: postgres://lance:REPLACE-ME@lance-pg-rw:5432/openfga?sslmode=require
 # openbao (the platform's store):                   # ESO (a prerequisite) syncs every Secret a pod without a
 #   enabled: false                                   # sidecar mounts FROM it; the platform provisions the ESO
 #   externalAddr: https://vault.internal:8200        # role and every field the chart's header lists

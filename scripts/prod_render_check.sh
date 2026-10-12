@@ -30,7 +30,8 @@ PROD_VALUES="${PROD_VALUES:-deploy/values-prod.yaml}"
 # keys exist in the sealed store (templates/signing-provisioned.yaml refuses a non-dev store without it), and
 # nats.auth.provisioned the same for the NATS users (templates/nats-provisioned.yaml). nats.url is the platform's NATS
 # bus, a prerequisite values-prod leaves for the deployer to name.
-# observability.export.endpoint is the platform's OTLP backend, which values-prod leaves for the deployer to name.
+# observability.export.endpoint is the platform's OTLP backend, which values-prod leaves for the deployer to name, and
+# auth.fgaApiUrl and age.externalHost the platform's OpenFGA and Postgres ([[XC-132]]).
 COMMON=(--api-versions external-secrets.io/v1/ExternalSecret --api-versions dapr.io/v1alpha1
         --set frontend.oidc.publicIssuer=https://auth.example.com/dex
         --set frontend.oidc.publicOrigin=https://lance.example.com
@@ -39,7 +40,9 @@ COMMON=(--api-versions external-secrets.io/v1/ExternalSecret --api-versions dapr
         --set nats.auth.provisioned=true
         --set-string ray.dashboardUrl=https://ray.example.com:8265
         --set-string nats.url=nats://nats.example.com:4222
-        --set-string observability.export.endpoint=http://otlp.example.com:4318/v1/otlp)
+        --set-string observability.export.endpoint=http://otlp.example.com:4318/v1/otlp
+        --set-string auth.fgaApiUrl=https://fga.example.com
+        --set-string age.externalHost=pg.example.com)
 OUT="$(mktemp)"
 trap 'rm -f "$OUT"' EXIT
 
@@ -71,11 +74,11 @@ grep -A20 "name: rask-nats-monitor" "$OUT" | grep -q "app.kubernetes.io/componen
 grep -A20 "name: rask-nats-monitor" "$OUT" | grep -q "port: 8222" \
   || fail "the nats-monitor rule must target the 8222 monitor port"
 
-# 2. OpenFGA HA — the authz chokepoint every governed call fails-closed through: 3 replicas. (The subchart
-# Deployment's spec.replicas renders ~10 lines below its metadata.name; only the Deployment carries a
-# replicas: field, so the windowed grep can't false-match the Service/SA/migrate-Job of the same name.)
-grep -A15 "name: rask-openfga$" "$OUT" | grep -q "replicas: 3" \
-  || fail "prod OpenFGA must run 3 replicas (authz SPOF)"
+# 2. OpenFGA and its Postgres are the platform's ([[XC-132]]): prod runs neither, and every client dials the endpoints
+# the deployer names.
+grep -qE "name: rask-(openfga|age)$" "$OUT" && fail "prod must not run an OpenFGA or a Postgres (the platform's)"
+grep -qE "rask-openfga:8080|host=rask-age |@rask-age:" "$OUT" && fail "a prod client dials the in-chart OpenFGA or Postgres"
+grep -q '"https://fga.example.com"' "$OUT" || fail "prod's FGA clients must dial auth.fgaApiUrl"
 
 # 3. The Dapr control plane is the platform's (ADR 0153): prod renders none of it, only rask's own Dapr objects.
 grep -qE "name: dapr-(sentry|operator|placement-server|scheduler-server|sidecar-injector)$" "$OUT" \
@@ -90,8 +93,7 @@ grep -qE "image: \"?ghcr.io/cloudnative-pg/cloudnative-pg:" "$OUT" \
   && fail "prod must not run a CloudNativePG operator (it is a prerequisite)"
 grep -q "name: cnpg-validating-webhook-configuration$" "$OUT" && fail "prod must not render CloudNativePG's webhooks"
 
-# 4. PodDisruptionBudgets: the request-serving backends (catalog/lineage/gateway) + OpenFGA (the authz
-# chokepoint) + one per frontend zone (frontend.replicas=2 in prod; the zones are the Ingress-routed
+# 4. PodDisruptionBudgets: the request-serving backends (catalog/lineage/gateway) + one per frontend zone (frontend.replicas=2 in prod; the zones are the Ingress-routed
 # north-south edge — audit 2026-07-24: the raw `>=5` count was inflated by the 5 Dapr-HA subchart PDBs,
 # so the missing zone PDBs sailed through). NAMED asserts on the PDB documents themselves, not a count.
 pdb=$(grep -c "kind: PodDisruptionBudget" "$OUT" || true)
@@ -106,7 +108,7 @@ pdb_names=$(awk '/^kind: PodDisruptionBudget$/{f=1} f&&/^  name: /{print $2; f=0
 # Input-vs-output, not circular: the expected set comes from values.yaml, the actual from the render.
 zones=$(awk '/^  apps:/{f=1;next} f&&/^  [a-zA-Z]/{exit} f&&match($0,/name: [a-z0-9-]+/){print substr($0,RSTART+6,RLENGTH-6)}' "$CHART/values.yaml")
 [ -n "$zones" ] || fail "could not derive frontend.apps from $CHART/values.yaml — the PDB zone assertion would be vacuous"
-for p in catalog lineage gateway openfga $(sed 's/^/web-/' <<<"$zones"); do
+for p in catalog lineage gateway $(sed 's/^/web-/' <<<"$zones"); do
   grep -qx "rask-$p" <<<"$pdb_names" \
     || fail "prod is missing the rask-$p PodDisruptionBudget (got: $(tr '\n' ' ' <<<"$pdb_names"))"
 done
@@ -115,11 +117,11 @@ done
 spread=$(grep -c "topologySpreadConstraints:" "$OUT" || true)
 [ "$spread" -ge 4 ] || fail "prod must spread the 4 multi-replica services across nodes (>=4), got $spread"
 
-# 6. Resource tiers: the memory-heavy workloads (catalog Arrow buffer, age dual-store, minio data plane)
+# 6. Resource tiers: the memory-heavy workloads (catalog Arrow buffer, the object store's data plane)
 # get a 1Gi limit above the shared 512Mi default. The default render tiers NOTHING to 1Gi (verified), so a
 # non-zero count here proves the per-workload tiers apply on the prod overlay only.
 tiers=$(grep -c "memory: 1Gi" "$OUT" || true)
-[ "$tiers" -ge 3 ] || fail "prod must tier the memory-heavy workloads (catalog/age/minio) to 1Gi, got $tiers"
+[ "$tiers" -ge 2 ] || fail "prod must tier the memory-heavy workloads (catalog, the object store) to 1Gi, got $tiers"
 
 # 7. The Collector exports to the endpoint the deployer names, and rask ships no store or alert engine of its own
 # (ADR 0153): the alert rules are deploy/alerting/rules.yml, for the platform's evaluator.
@@ -214,14 +216,14 @@ grep -q -- "- minio-mkbucket" "$OUT" || fail "the minio ingress client list must
 
 # POD IDENTITY. Asserted on the RENDER: a template that stops naming its SA is invisible to any values
 # grep. Counted, not merely found: one dedicated ServiceAccount proves the SAs render, not that the
-# fleet uses them. Measured on this overlay 2026-10-11, with the prerequisites outside the release
-# (ADR 0153; NATS's two SAs are the bus's, [[XC-129]], and CloudNativePG's the operator's, [[XC-130]], and the dev Dex's and MinIO's the fixtures', [[XC-131]]): 26 ServiceAccounts and 22
+# fleet uses them. Measured on this overlay 2026-10-12, with the prerequisites outside the release
+# (ADR 0153; NATS's two SAs are the bus's, [[XC-129]], and CloudNativePG's the operator's, [[XC-130]], the dev Dex's and MinIO's the fixtures', [[XC-131]], and OpenFGA's and the Postgres's the platform's, [[XC-132]]): 24 ServiceAccounts and 21
 # `automountServiceAccountToken: false`. The per-pod verdict (no first-party pod on `default`, no idle
 # token, no secret grant to their SAs) is
 # tests/unit/test_a_first_party_pod_cannot_read_a_secret_through_the_kube_api.py.
 sa=$(grep -c "^kind: ServiceAccount" "$OUT" || true)
-[ "$sa" -ge 26 ] \
-  || fail "prod must give the fleet dedicated ServiceAccounts (templates/security-sa.yaml), rendered $sa (>=26 expected; 18 is the everything-runs-as-default baseline)"
+[ "$sa" -ge 24 ] \
+  || fail "prod must give the fleet dedicated ServiceAccounts (templates/security-sa.yaml), rendered $sa (>=24 expected; 18 is the everything-runs-as-default baseline)"
 automount=$(grep -c "automountServiceAccountToken: false" "$OUT" || true)
 [ "$automount" -ge 15 ] \
   || fail "prod must stop mounting the SA token into app pods, rendered $automount refusals (>=15 expected; 1 is the baseline)"
@@ -236,4 +238,4 @@ grep -q 'dapr.io/sidecar-seccomp-profile-type: RuntimeDefault' "$OUT" \
 grep -q "deployment.environment.name=prod" "$OUT" \
   || fail "prod telemetry must carry deployment.environment.name=prod (observability.environment) — it renders $(grep -oE 'deployment\.environment\.name=[^,\"]*' "$OUT" | sort -u | head -1)"
 
-echo "✓ prod-render-check: NetworkPolicy=$np, OpenFGA=3, Dapr control plane external, PDBs=$pdb (backends+OpenFGA+zones named), spread=$spread, tiers=$tiers, export named, no-bespoke-scraper, write-cap=$cap fits $cat_mem, minio-externalize atomic, ESO path renders, hook pods labeled, ServiceAccounts=$sa, token-automount-refusals=$automount"
+echo "✓ prod-render-check: NetworkPolicy=$np, OpenFGA+Postgres external, Dapr control plane external, PDBs=$pdb (backends+zones named), spread=$spread, tiers=$tiers, export named, no-bespoke-scraper, write-cap=$cap fits $cat_mem, minio-externalize atomic, ESO path renders, hook pods labeled, ServiceAccounts=$sa, token-automount-refusals=$automount"

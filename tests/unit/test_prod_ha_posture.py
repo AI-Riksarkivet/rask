@@ -39,6 +39,8 @@ _PROD_ARGS = [
     "--set", "signing.provisioned=true",
     "--set", "nats.auth.provisioned=true",
     "--set-string", "observability.export.endpoint=http://otlp.example.com:4318/v1/otlp",
+    "--set-string", "auth.fgaApiUrl=https://fga.example.com",
+    "--set-string", "age.externalHost=pg.example.com",
     "--set", "backups.volumeSnapshot.snapshotClassName=csi-snapclass",
     "--set", "ingress.host=lance.example.com",
     *PREREQ_ARGS,

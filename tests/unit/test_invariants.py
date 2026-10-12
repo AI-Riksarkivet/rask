@@ -23,6 +23,7 @@ import importlib.util
 import json
 import re
 import subprocess
+import urllib.parse
 from pathlib import Path
 from typing import Any
 
@@ -586,6 +587,8 @@ _PROD_INPUTS = (
     "--set", "image.catalog.tag=v0", "--set", "frontend.image.tag=v0", "--set", "image.repository=ghcr.io/example/rask",
     "--set", "signing.provisioned=true", "--set", "nats.auth.provisioned=true",
     "--set-string", "observability.export.endpoint=http://otlp.example.com:4318/v1/otlp",
+    "--set-string", "auth.fgaApiUrl=https://fga.example.com",
+    "--set-string", "age.externalHost=pg.example.com",
     "--set", "backups.volumeSnapshot.snapshotClassName=csi-snapclass", "--set", "ingress.host=lance.example.com",
 )  # fmt: skip
 _LOCAL_INPUTS = ("--set", "image.localImages=true", "-f", str(REPO / "deploy/values-local.yaml"))
@@ -689,6 +692,47 @@ def test_the_render_runs_no_development_stand_in(stand_in: str) -> None:
         or (doc.get("kind") == "Service" and (doc["spec"].get("selector") or {}).get("app.kubernetes.io/component") == stand_in)
     ]
     assert not found, f"the render runs the development {stand_in}, which is a fixture: {found}"
+
+
+def test_a_render_with_external_openfga_and_postgres_runs_neither_and_dials_the_platforms() -> None:
+    """[[XC-132]]: OpenFGA and the Postgres behind AGE and OpenFGA are optional; production turns them off and names the
+    platform's instances (ADR 0153). Such a render runs no OpenFGA or Postgres workload or identity, every FGA client
+    and every Postgres client dials the named endpoint, and no credential rides along in an env value: the FGA token is
+    a projected file and the Postgres password the store's `postgres-password`, both by reference."""
+    fga, pg = "https://fga.platform.example", "pg.platform.example"
+    docs = chart_render.render(
+        *chart_render.DEFAULT_ARGS, *chart_render.OBSERVABILITY_ARGS,
+        "--set", "auth.enabled=true", "--set", "openfga.enabled=false", "--set", "age.enabled=false",
+        "--set-string", f"auth.fgaApiUrl={fga}", "--set-string", f"age.externalHost={pg}",
+    )  # fmt: skip
+
+    found = sorted(
+        f"{workload}/{name} ({container['image']})"
+        for workload, name, container in chart_render.containers(docs)
+        if container["image"].split("/")[-1].split(":")[0] in {"openfga", "age", "postgres"}
+    )
+    found += sorted(f"{doc['kind']}/{doc['metadata']['name']}" for doc in docs if doc["metadata"]["name"] in {"rask-age", "rask-openfga", "rask-sa-age"})
+    assert not found, f"the render runs part of an OpenFGA or Postgres the platform serves: {found}"
+
+    text = json.dumps(docs)
+    assert not re.findall(r"rask-(?:age|openfga)(?::\d| \d|\.[a-z0-9-]+\.svc)|(?:@|//|host=|-h )rask-(?:age|openfga)\b|'rask-(?:age|openfga)'", text), (
+        "a client still dials the in-chart instance"
+    )
+    fga_urls = {env[k] for _, _, c in chart_render.containers(docs) for k in ("RASK_FGA_API_URL", "FGA_API_URL") if k in (env := chart_render.env_of(c))}
+    assert fga_urls == {fga}, fga_urls
+    lineage_db = {
+        chart_render.env_of(c)["LINEAGE_DATABASE_URL"] for _, _, c in chart_render.containers(docs) if "LINEAGE_DATABASE_URL" in chart_render.env_of(c)
+    }
+    assert {urllib.parse.urlsplit(u).hostname for u in lineage_db} == {pg}, lineage_db
+    assert f"host={pg} " in text, "the Collector's state-store scrape does not dial the platform's Postgres"
+
+    leaked = sorted(
+        f"{workload}/{name}: {key}"
+        for workload, name, container in chart_render.containers(docs)
+        for key, value in chart_render.env_of(container).items()
+        if isinstance(value, str) and "://" in value and urllib.parse.urlsplit(value).password
+    )
+    assert not leaked, f"a credential rides in an env value rather than by reference: {leaked}"
 
 
 # `test_the_kubelet_probes_the_inbox_on_a_path_the_service_actually_serves` lived here and is GONE,

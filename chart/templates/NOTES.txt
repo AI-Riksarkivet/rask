@@ -20,11 +20,7 @@ Services (ClusterIP):
   - media:     {{ include "rask.fullname" $root }}-{viewer,search,annotator} (the media plane, /api/explorer/*)
 {{- end }}
 {{- end }}
-{{- with .Values.age }}
-{{- if .enabled }}
-  - age:       {{ include "lance.ageHost" $root }}:5432 (Apache AGE — the lineage graph)
-{{- end }}
-{{- end }}
+  - age:       {{ include "lance.ageConnectHost" . }}:{{ .Values.age.port }} (Apache AGE — the lineage graph{{ if .Values.age.externalHost }}; the platform's Postgres{{ end }})
 {{- if .Values.minio.enabled }}
   - minio:    {{ include "rask.fullname" $root }}-minio:{{ .Values.minio.port }} (the minio fixture's development store)
 {{- end }}
@@ -32,10 +28,8 @@ Services (ClusterIP):
   - ray:       {{ . }} (the engine's; rask installs no Ray)
 {{- end }}
   - nats:      {{ include "lance.natsUrl" . }} (the platform's JetStream; rask installs no NATS)
-{{- with .Values.openfga }}
-{{- if .enabled }}
-  - openfga:   {{ include "lance.openfgaHost" $root }}:8080 (authorization model; :8081 gRPC)
-{{- end }}
+{{- if or .Values.openfga.enabled .Values.auth.fgaApiUrl }}
+  - openfga:   {{ include "lance.openfgaUrl" . }} (authorization model{{ if not .Values.openfga.enabled }}; the platform's OpenFGA{{ end }})
 {{- end }}
 {{- with .Values.openbao }}
 {{- if .enabled }}

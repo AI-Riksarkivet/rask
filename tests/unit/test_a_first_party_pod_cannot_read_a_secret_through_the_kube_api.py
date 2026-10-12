@@ -44,6 +44,8 @@ _PROD_ARGS: tuple[str, ...] = (
     "--set", "signing.provisioned=true",
     "--set", "nats.auth.provisioned=true",
     "--set-string", "observability.export.endpoint=http://otlp.example.com:4318/v1/otlp",
+    "--set-string", "auth.fgaApiUrl=https://fga.example.com",
+    "--set-string", "age.externalHost=pg.example.com",
     "--set", "backups.volumeSnapshot.snapshotClassName=csi-snapclass",
     "--set", "ingress.host=lance.example.com",
     "--set", "image.repository=ghcr.io/example/rask",
@@ -291,7 +293,10 @@ def test_no_first_party_service_account_can_read_a_secret_or_review_a_token(over
     # The walk sees the chart's pods and the subcharts', and the classifier reads rendered roles; without these every
     # assertion below passes by parsing nothing.
     assert sum(pod.first_party for pod in pods) >= 25, f"{overlay}: only {sum(p.first_party for p in pods)} first-party pod templates"
-    assert any(not pod.first_party for pod in pods), f"{overlay}: no subchart pods rendered; the source split is broken"
+    # OpenFGA is the chart's one subchart and production names the platform's ([[XC-132]]), so the overlays that run it
+    # prove the split.
+    if overlay != "prod":
+        assert any(not pod.first_party for pod in pods), f"{overlay}: no subchart pods rendered; the source split is broken"
     # No role the render holds grants `secrets` (the operators that needed one are prerequisites, ADR 0153), so the proof that
     # the classifier recognises one is the planted binding of the module's mutation check.
     assert any(b.role not in _BUILTIN_GRANTS for b in bindings), f"{overlay}: no binding to a rendered role was classified"

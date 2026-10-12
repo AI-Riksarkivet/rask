@@ -41,7 +41,7 @@ spec:
             limits: { cpu: "500m", memory: "512Mi" }
           volumeMounts: {{- include "lance.fgaToken" (list "mounts") | nindent 12 }}
           env:
-            - { name: FGA_API_URL, value: "http://{{ include "lance.openfgaHost" . }}:8080" }
+            - { name: FGA_API_URL, value: {{ include "lance.openfgaUrl" . | quote }} }
             {{- include "lance.fgaToken" (list "env") | nindent 12 }}
             {{- with .Values.auth.fgaStoreId }}
             - { name: RASK_FGA_STORE_ID, value: {{ . | quote }} }

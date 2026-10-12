@@ -207,6 +207,7 @@ spec:
         {{- end }}
       ports:
         - { protocol: TCP, port: 8200 }
+{{- if .Values.age.enabled }}
 ---
 # (3c) age-postgres:5432 — the lineage graph + the OpenFGA datastore + the Dapr state store
 # (dapr-statestore.yaml rides this same instance). Clients: lineage, openfga (subchart pods carry
@@ -246,6 +247,7 @@ spec:
             matchLabels: { app.kubernetes.io/name: openfga }
       ports:
         - { protocol: TCP, port: {{ .Values.age.port }} }
+{{- end }}
 ---
 # (3d) minio:9000 — the lakehouse bytes. Clients: the data-plane services + the snapshot backup job. The ray-lance demo pods live outside the release's
 # labels — add them via networkPolicy.minioExtraFrom (default provided in values).

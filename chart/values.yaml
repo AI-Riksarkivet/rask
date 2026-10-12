@@ -1050,6 +1050,8 @@ auth:
   # the stream even with auth on.
   # -- Emit the structured authn/authz/credential-vending audit stream (LANCE_AUDIT_ENABLED and siblings); takes effect only with auth on. false silences it.
   audit: true
+  # -- The platform's OpenFGA HTTP API (e.g. `https://fga.internal:8080`), which every FGA client, the openfga-model hook and the bootstrap-admin Job dial when `openfga.enabled` is false; the render refuses it empty then. It must admit rask's projected `rask-openfga` tokens: OIDC against the cluster's ServiceAccount issuer, the subjects `lance.openfgaSubjects` lists.
+  fgaApiUrl: ""
   # Pin the OpenFGA store id. When set, EVERY FGA consumer (the services, the openfga-model hook and the
   # bootstrap-admin Job) uses that store; empty (default) = the newest store named `lance-catalog`. A
   # MODEL pin makes every service check against that one model whatever its image carries; no deployment
@@ -1369,8 +1371,6 @@ medallion:
   # (scripts/seed_medallion_fga.sh) before flipping it on.
   # -- Each stage runner checks OpenFGA for its `requiredAction` on the target namespace before producing. Seed the stage-runner identity grants first.
   fgaEnabled: false
-  # -- OpenFGA HTTP API URL the producer and stage runners check against (RASK_FGA_API_URL) when FGA is on.
-  fgaApiUrl: http://rask-openfga:8080
   # #64 human trigger door: the project a signed-in user must hold `can_administer` on to fire /produce or
   # /train from the UI (the web BFF forwards ONLY the user's bearer — no service token leaves the web pod).
   # The service-to-service app-token path is unchanged; this is a SECOND, admin-only door, gated on
@@ -3398,10 +3398,11 @@ age:
   stateDb: daprstate
   # -- Postgres port of the AGE store, used by every client DSN, the backup job and the network policy.
   port: 5432
-  # Externalize: when set, lineage + the OpenFGA datastore connect to THIS host instead of the in-cluster
-  # AGE — pair with age.enabled=false + a managed Postgres (set user/password/dbs to match). NOTE: the
-  # openfga subchart's `openfga.datastore.uri` must also be overridden to the external DSN.
-  # -- Postgres host lineage, OpenFGA and the Dapr state store use instead of the in-cluster AGE; pair with age.enabled=false. Empty = in-cluster.
+  # Externalize ([[XC-132]]): with age.enabled=false every client (lineage, the in-chart OpenFGA's datastore DSN, the
+  # Dapr state store, the Collector's state-store scrape, the dump) dials THIS host. user and the database names must
+  # match the platform's; the password is never a value: it is the secret store's `postgres-password`, which ESO
+  # delivers and the dev seed writes into its DSNs.
+  # -- Postgres host lineage, OpenFGA and the Dapr state store use instead of the in-cluster AGE; the render refuses it empty with age.enabled=false.
   externalHost: "" # e.g. rask-postgres-rw (the CNPG Cluster's -rw service)
   # Effectively immutable after first install: StatefulSet volumeClaimTemplates can't be updated in
   # place, so the chart fails the upgrade if this differs from the deployed StatefulSet instead of

@@ -1,5 +1,8 @@
 
-{{- $components := list "catalog" "lineage" "web" "maintenance" "medallion-producer" "age" "jobs" "viewer" "search" "annotator" "assist" "issuer-mirror" "hooks" }}
+{{- $components := list "catalog" "lineage" "web" "maintenance" "medallion-producer" "jobs" "viewer" "search" "annotator" "assist" "issuer-mirror" "hooks" }}
+{{- if .Values.age.enabled }}
+{{- $components = append $components "age" }}
+{{- end }}
 {{- if and .Values.openbao.enabled (not .Values.openbao.devMode) }}
 {{- $components = append $components "openbao" }}
 {{- end }}

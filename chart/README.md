@@ -34,7 +34,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | age.cnpgCluster.enabled | bool | `false` | Render the AGE-on-CNPG `Cluster` (templates/age-cluster.yaml); mutually exclusive with `age.enabled`. Needs an extension image, K8s 1.33+ and the CloudNativePG operator (>= 1.27), a prerequisite: the render refuses on a cluster that does not serve postgresql.cnpg.io/v1. |
 | age.cnpgCluster.extensionImage | string | `""` | The built AGE extension image for the CNPG cluster (e.g. ghcr.io/<org>/age-cnpg-ext:1.7.0-18); required when `cnpgCluster.enabled`, no default. |
 | age.enabled | bool | `true` | Run the in-cluster apache/age Postgres StatefulSet that serves the lineage graph, OpenFGA and the Dapr state store databases. |
-| age.externalHost | string | `""` | Postgres host lineage, OpenFGA and the Dapr state store use instead of the in-cluster AGE; pair with age.enabled=false. Empty = in-cluster. |
+| age.externalHost | string | `""` | Postgres host lineage, OpenFGA and the Dapr state store use instead of the in-cluster AGE; the render refuses it empty with age.enabled=false. |
 | age.image | string | `"apache/age:release_PG16_1.6.0"` | Postgres+AGE image for the StatefulSet and the pg_dump backup job (PG16; 1.6.0 is multi-arch amd64+arm64). |
 | age.lineageDb | string | `"lineage"` | Name of the AGE graph and database holding the OpenLineage graph. |
 | age.openfgaDb | string | `"openfga"` | Name of the database OpenFGA uses as its datastore. |
@@ -48,6 +48,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | auth.audit | bool | `true` | Emit the structured authn/authz/credential-vending audit stream (LANCE_AUDIT_ENABLED and siblings); takes effect only with auth on. false silences it. |
 | auth.bootstrapAdmin | string | `""` | Dex subject (id_token `sub`) the bootstrap-admin hook grants `owner` on the default warehouse and `admin` on estate:rask. Empty = human grants are made out of band. |
 | auth.enabled | bool | `true` | Govern the estate: authn on every door plus OpenFGA authz. On by default (fails closed); a bare install then needs frontend OIDC configured or it refuses to render. |
+| auth.fgaApiUrl | string | `""` | The platform's OpenFGA HTTP API (e.g. `https://fga.internal:8080`), which every FGA client, the openfga-model hook and the bootstrap-admin Job dial when `openfga.enabled` is false; the render refuses it empty then. It must admit rask's projected `rask-openfga` tokens: OIDC against the cluster's ServiceAccount issuer, the subjects `lance.openfgaSubjects` lists. |
 | auth.fgaModelId | string | `""` | Pin the OpenFGA authorization model id every service checks against, whatever its image carries. Empty = the store's latest model. |
 | auth.fgaStoreId | string | `""` | Pin the OpenFGA store id used by every service, the openfga-model hook and the bootstrap-admin Job. Empty = the newest store named `lance-catalog`. |
 | auth.issuerMirror.enabled | bool | `true` | Render the issuer mirror (templates/openfga-authn.yaml) that republishes the SA issuer's discovery and JWKS unauthenticated for OpenFGA; off only for a publicly served issuer. |
@@ -238,7 +239,6 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | medallion.cascadeLag.schedule | string | `"@every 300s"` | Dapr cron schedule on which the producer measures per-edge cascade lag and sets the `medallion.cascade.lag` gauge. |
 | medallion.compute | bool | `true` | Stages do a real Lance read, transform and write (MEDALLION_COMPUTE_ENABLED) rather than emitting lineage only; stage URIs derive from `minio.bucket` and each namespace. |
 | medallion.enabled | bool | `true` | Deploy the medallion cascade: the medallion-producer head and the stage runners in `stageRunners`, with their pubsub components and crons. |
-| medallion.fgaApiUrl | string | `"http://rask-openfga:8080"` | OpenFGA HTTP API URL the producer and stage runners check against (RASK_FGA_API_URL) when FGA is on. |
 | medallion.fgaEnabled | bool | `false` | Each stage runner checks OpenFGA for its `requiredAction` on the target namespace before producing. Seed the stage-runner identity grants first. |
 | medallion.goldWarehouse | bool | `false` | Route the terminal stage runner's project writes to the project's gold serving warehouse when one exists (MEDALLION_GOLD_WAREHOUSE_ENABLED). Off = work warehouse. |
 | medallion.inprocessTasks | list | `[{"cardinalities":["1:1","1:N"],"command":"medallion.transform_stage","task":"stage-transform"}]` | Tasks the in-process plane can run, registered at boot (MEDALLION_INPROCESS_TASKS) whether or not Ray is on: `task`, `command`, optional `cardinalities`. |

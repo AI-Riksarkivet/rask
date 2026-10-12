@@ -175,7 +175,7 @@ spec:
             - { name: MAINTENANCE_POLICY_ROOT, value: {{ .Values.maintenance.policyRoot | default "" | quote }} }
             {{- if .Values.auth.enabled }}
             - { name: RASK_FGA_ENABLED, value: "true" }
-            - { name: RASK_FGA_API_URL, value: "http://{{ include "lance.openfgaHost" . }}:8080" }
+            - { name: RASK_FGA_API_URL, value: {{ include "lance.openfgaUrl" . | quote }} }
             {{- include "lance.fgaToken" (list "env") | nindent 12 }}
 
             {{- with .Values.auth.fgaStoreId }}

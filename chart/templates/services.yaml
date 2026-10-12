@@ -333,7 +333,7 @@ spec:
             - { name: RASK_OIDC_AUDIENCE, value: {{ .Values.dex.clientId | quote }} }
             - { name: RASK_OIDC_ALLOW_INSECURE, value: {{ ternary "false" "true" (hasPrefix "https://" .Values.dex.issuer) | quote }} }
             - { name: RASK_FGA_ENABLED, value: "true" }
-            - { name: RASK_FGA_API_URL, value: "http://{{ include "lance.openfgaHost" . }}:8080" }
+            - { name: RASK_FGA_API_URL, value: {{ include "lance.openfgaUrl" . | quote }} }
             {{- include "lance.fgaToken" (list "env") | nindent 12 }}
             {{- with .Values.auth.fgaStoreId }}
             - { name: RASK_FGA_STORE_ID, value: {{ . | quote }} }

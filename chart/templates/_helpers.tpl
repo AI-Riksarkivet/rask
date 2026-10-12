@@ -185,7 +185,17 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end -}}
 
 {{- define "lance.ageConnectHost" -}}
-{{- .Values.age.externalHost | default (include "lance.ageHost" .) -}}
+{{- if .Values.age.externalHost -}}{{ .Values.age.externalHost }}
+{{- else if .Values.age.enabled -}}{{ include "lance.ageHost" . }}
+{{- else if .Values.age.cnpgCluster.enabled -}}lance-pg-rw
+{{- else -}}{{ fail "age.enabled is false, so the Postgres behind AGE and OpenFGA is the platform's: set age.externalHost to its host (docs/architecture/deployment.md, Prerequisites)" }}
+{{- end -}}
+{{- end -}}
+
+{{- define "lance.openfgaUrl" -}}
+{{- if .Values.openfga.enabled -}}http://{{ include "lance.openfgaHost" . }}:8080
+{{- else -}}{{ required "openfga.enabled is false, so OpenFGA is the platform's: set auth.fgaApiUrl to its HTTP API (docs/architecture/deployment.md, Prerequisites)" .Values.auth.fgaApiUrl }}
+{{- end -}}
 {{- end -}}
 
 {{- define "lance.otlpEndpoint" -}}http://{{ include "lance.fullname" . }}-otel-collector:4318{{- end -}}
@@ -610,7 +620,7 @@ securityContext:
 {{- define "lance.governedFgaEnv" -}}
 {{- $root := . }}
 - { name: RASK_FGA_ENABLED, value: "true" }
-- { name: RASK_FGA_API_URL, value: "http://{{ include "lance.openfgaHost" $root }}:8080" }
+- { name: RASK_FGA_API_URL, value: {{ include "lance.openfgaUrl" $root | quote }} }
 {{- include "lance.fgaToken" (list "env") }}
 {{- end -}}
 
