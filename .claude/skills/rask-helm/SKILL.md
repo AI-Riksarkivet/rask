@@ -33,7 +33,7 @@ Measured 2026-09-25 on revision 240 (96.3% of the ceiling):
 | the other seven subcharts together | ~5.5% |
 
 With every operator, the compute engine, the telemetry chain and the development stand-ins out of the chart (ADR 0153,
-[[XC-124]] to [[XC-132]]), revision 312 measured 286,008 packed bytes on 2026-10-12: **27.3%** of the ceiling.
+[[XC-124]] to [[XC-132]]), revision 316 measured 335,260 packed bytes on 2026-10-12 with `values.schema.json` in the chart: **32.0%** of the ceiling.
 
 **`values.yaml` prose is free** — it is stored as a parsed map, comments dropped. **Template prose is
 not**, so templates carry no `{{/* */}}` comments ([[XC-123]], ADR 0153): a template's rationale lives in
@@ -173,8 +173,14 @@ operator and attested by `signing.provisioned`).
   not a switch: every first-party pod runs as its own SA from `templates/security-sa.yaml`, tokenless
   on the SA object; a first-party pod mounts a token only where a binding gives its SA work: OpenBao
   under ESO, and the pods whose templates carry their own RBAC (§8).
-- **`values.schema.json`** — validates the MERGED values at install and upgrade, so a missing or
-  mistyped key fails before any pod starts. rask has none yet.
+- **`values.schema.json`** — validates the MERGED values at install and upgrade, so a mistyped key fails
+  before any pod starts. rask's is generated from `values.yaml`'s types and `# --` comments by helm-values-schema-json
+  (`make chart-docs`, beside the README; `make chart-docs-check` fails on a stale one). It caught a live `--set-string`
+  float on its first deploy (2026-10-12: `recycleAtMemoryFraction: "0.70"`, re-imposed every `make k3s-up` by `-f
+  <live values>`); `--set` keeps a float a string, so set one with `--set-json`. It costs ~49 KB of the release.
+- **Lint and the empty-cluster install run in Dagger**: `dagger call charts` lints through the helm Dagger module
+  (disaster37/dagger-library-go/helm, pinned) on the pinned helm, and `dagger call install-from-empty` installs the
+  fixtures then the chart onto an empty k3s until every workload is Ready ([[XC-133]]).
 - **Standard labels** (`app.kubernetes.io/name|instance|version|managed-by`, `helm.sh/chart`) through
   a helper, never hand-built per template.
 - **Chart `version` follows semver** and moves when the chart changes. rask's reads `0.3.0` on every

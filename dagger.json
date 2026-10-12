@@ -1,8 +1,15 @@
 {
   "name": "rask",
-  "engineVersion": "v0.21.7",
+  "engineVersion": "v0.21.8",
   "sdk": {
     "source": "go"
   },
+  "dependencies": [
+    {
+      "name": "helm",
+      "source": "github.com/disaster37/dagger-library-go/helm@e205189be6eba617e7bcc870db2e73a04171f38e",
+      "pin": "e205189be6eba617e7bcc870db2e73a04171f38e"
+    }
+  ],
   "source": ".dagger"
 }

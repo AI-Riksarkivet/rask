@@ -1,0 +1,3019 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+        "age": {
+            "type": "object",
+            "properties": {
+                "cnpgCluster": {
+                    "type": "object",
+                    "properties": {
+                        "enabled": {
+                            "description": "Render the AGE-on-CNPG `Cluster` (templates/age-cluster.yaml); mutually exclusive with `age.enabled`. Needs an extension image, K8s 1.33+ and the CloudNativePG operator (\u003e= 1.27), a prerequisite: the render refuses on a cluster that does not serve postgresql.cnpg.io/v1.",
+                            "type": "boolean"
+                        },
+                        "extensionImage": {
+                            "description": "The built AGE extension image for the CNPG cluster (e.g. ghcr.io/\u003corg\u003e/age-cnpg-ext:1.7.0-18); required when `cnpgCluster.enabled`, no default.",
+                            "type": "string"
+                        }
+                    }
+                },
+                "enabled": {
+                    "description": "Run the in-cluster apache/age Postgres StatefulSet that serves the lineage graph, OpenFGA and the Dapr state store databases.",
+                    "type": "boolean"
+                },
+                "externalHost": {
+                    "description": "Postgres host lineage, OpenFGA and the Dapr state store use instead of the in-cluster AGE; the render refuses it empty with age.enabled=false.",
+                    "type": "string"
+                },
+                "image": {
+                    "description": "Postgres+AGE image for the StatefulSet and the pg_dump backup job (PG16; 1.6.0 is multi-arch amd64+arm64).",
+                    "type": "string"
+                },
+                "lineageDb": {
+                    "description": "Name of the AGE graph and database holding the OpenLineage graph.",
+                    "type": "string"
+                },
+                "openfgaDb": {
+                    "description": "Name of the database OpenFGA uses as its datastore.",
+                    "type": "string"
+                },
+                "port": {
+                    "description": "Postgres port of the AGE store, used by every client DSN, the backup job and the network policy.",
+                    "type": "integer"
+                },
+                "stateDb": {
+                    "description": "Name of the database the Dapr Postgres state store owns and migrates itself.",
+                    "type": "string"
+                },
+                "storage": {
+                    "description": "PVC size of the AGE StatefulSet. Immutable after install: the chart fails an upgrade that changes it (see docs/runbooks/RUNBOOK-restore.md).",
+                    "type": "string"
+                },
+                "user": {
+                    "description": "Postgres user every AGE client connects as; its password is the store's `postgres-password` secret, never a value.",
+                    "type": "string"
+                }
+            }
+        },
+        "allocator": {
+            "type": "object",
+            "properties": {
+                "arenaMax": {
+                    "description": "MALLOC_ARENA_MAX set on every lakehouse container (lance.allocatorEnv) to cap glibc malloc arenas. Default 2.",
+                    "type": "integer"
+                },
+                "arrowMemoryPool": {
+                    "description": "ARROW_DEFAULT_MEMORY_POOL on every lakehouse container; `system` routes Arrow through malloc so `arenaMax` bounds it.",
+                    "type": "string"
+                }
+            }
+        },
+        "auth": {
+            "type": "object",
+            "properties": {
+                "allowHeadless": {
+                    "description": "Permit `auth.enabled` without a frontend sign-in flow, for a deliberately API-only estate; otherwise templates/auth-consistency.yaml refuses that combination.",
+                    "type": "boolean"
+                },
+                "audit": {
+                    "description": "Emit the structured authn/authz/credential-vending audit stream (LANCE_AUDIT_ENABLED and siblings); takes effect only with auth on. false silences it.",
+                    "type": "boolean"
+                },
+                "bootstrapAdmin": {
+                    "description": "Dex subject (id_token `sub`) the bootstrap-admin hook grants `owner` on the default warehouse and `admin` on estate:rask. Empty = human grants are made out of band.",
+                    "type": "string"
+                },
+                "enabled": {
+                    "description": "Govern the estate: authn on every door plus OpenFGA authz. On by default (fails closed); a bare install then needs frontend OIDC configured or it refuses to render.",
+                    "type": "boolean"
+                },
+                "fgaApiUrl": {
+                    "description": "The platform's OpenFGA HTTP API (e.g. `https://fga.internal:8080`), which every FGA client, the openfga-model hook and the bootstrap-admin Job dial when `openfga.enabled` is false; the render refuses it empty then. It must admit rask's projected `rask-openfga` tokens: OIDC against the cluster's ServiceAccount issuer, the subjects `lance.openfgaSubjects` lists.",
+                    "type": "string"
+                },
+                "fgaModelId": {
+                    "description": "Pin the OpenFGA authorization model id every service checks against, whatever its image carries. Empty = the store's latest model.",
+                    "type": "string"
+                },
+                "fgaStoreId": {
+                    "description": "Pin the OpenFGA store id used by every service, the openfga-model hook and the bootstrap-admin Job. Empty = the newest store named `lance-catalog`.",
+                    "type": "string"
+                },
+                "issuerMirror": {
+                    "type": "object",
+                    "properties": {
+                        "enabled": {
+                            "description": "Render the issuer mirror (templates/openfga-authn.yaml) that republishes the SA issuer's discovery and JWKS unauthenticated for OpenFGA; off only for a publicly served issuer.",
+                            "type": "boolean"
+                        }
+                    }
+                },
+                "serviceAccountIssuer": {
+                    "type": "string"
+                }
+            }
+        },
+        "autoscaling": {
+            "type": "object",
+            "properties": {
+                "enabled": {
+                    "description": "Renders CPU-based HPAs for catalog and lineage. Needs metrics-server; off by default.",
+                    "type": "boolean"
+                },
+                "maxReplicas": {
+                    "description": "HPA maximum replicas for catalog and lineage.",
+                    "type": "integer"
+                },
+                "minReplicas": {
+                    "description": "HPA minimum replicas for catalog and lineage.",
+                    "type": "integer"
+                },
+                "scaleDownStabilizationSeconds": {
+                    "description": "HPA scale-down stabilization window in seconds; stops a spiky service oscillating.",
+                    "type": "integer"
+                },
+                "targetCPUUtilizationPercentage": {
+                    "description": "HPA target CPU as a percentage of the pod's CPU request (not its limit).",
+                    "type": "integer"
+                }
+            }
+        },
+        "backups": {
+            "type": "object",
+            "properties": {
+                "controlRoot": {
+                    "type": "object",
+                    "properties": {
+                        "dest": {
+                            "description": "S3 URI the control-root backup is copied to. Empty writes `_backups/control/` inside the control root itself, which does not survive losing the bucket.",
+                            "type": "string"
+                        },
+                        "enabled": {
+                            "description": "Schedule a CronJob that backs up the control root (project, warehouse, binding and bucket-claim registries). Off by default.",
+                            "type": "boolean"
+                        },
+                        "keep": {
+                            "description": "Number of newest control-root backups kept after each successful copy; 0 keeps every run.",
+                            "type": "integer"
+                        },
+                        "schedule": {
+                            "description": "Cron schedule of the control-root backup (default daily 01:00, ahead of the pg dump).",
+                            "type": "string"
+                        }
+                    }
+                },
+                "pgDump": {
+                    "type": "object",
+                    "properties": {
+                        "enabled": {
+                            "description": "Schedule a CronJob that pg_dumps the lineage, OpenFGA and Dapr state databases (gzip) to `_backups/pg/\u003cdate\u003e/` in the lakehouse bucket. Off by default.",
+                            "type": "boolean"
+                        },
+                        "keep": {
+                            "description": "Number of newest daily pg dumps kept; older ones are pruned on each run.",
+                            "type": "integer"
+                        },
+                        "schedule": {
+                            "description": "Cron schedule of the pg dump (default daily 02:00).",
+                            "type": "string"
+                        }
+                    }
+                },
+                "volumeSnapshot": {
+                    "type": "object",
+                    "properties": {
+                        "enabled": {
+                            "description": "Schedule a CronJob that creates a CSI VolumeSnapshot of the lakehouse PVC; needs a CSI snapshotter and a VolumeSnapshotClass. Off by default.",
+                            "type": "boolean"
+                        },
+                        "kubectlImage": {
+                            "description": "Image the snapshot job runs; it needs both a shell and kubectl.",
+                            "type": "string"
+                        },
+                        "schedule": {
+                            "description": "Cron schedule of the volume snapshot (default daily 03:00).",
+                            "type": "string"
+                        },
+                        "snapshotClassName": {
+                            "description": "VolumeSnapshotClass the snapshot names; empty uses the cluster default.",
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "catalog": {
+            "type": "object",
+            "properties": {
+                "controlEmit": {
+                    "description": "Publish catalog control events (catalog.control.v1) on a broadcast Dapr topic; renders the control pubsub component, CATALOG_CONTROL stream and subscription. Best-effort.",
+                    "type": "boolean"
+                },
+                "controlOutbox": {
+                    "type": "object",
+                    "properties": {
+                        "bindingName": {
+                            "description": "Name of the control relay's Dapr cron Component; also the catalog's LANCE_CONTROL_RELAY_BINDING_NAME and the route it serves. Must stay one string.",
+                            "type": "string"
+                        },
+                        "enabled": {
+                            "description": "Stage control events in a durable S3 outbox and run the relay cron that drains it; carries the `table_published` wake-up for silver to gold. Requires `controlEmit`.",
+                            "type": "boolean"
+                        },
+                        "schedule": {
+                            "description": "Dapr cron schedule of the control outbox relay; bounds how long a cascade stays halted after a bus outage.",
+                            "type": "string"
+                        }
+                    }
+                },
+                "erasure": {
+                    "type": "object",
+                    "properties": {
+                        "bindingName": {
+                            "description": "Name of the erasure-release Dapr cron Component; also the catalog's LANCE_ERASURE_RELEASE_BINDING_NAME and the route it serves.",
+                            "type": "string"
+                        },
+                        "releaseGraceDays": {
+                            "description": "Days after an erasure blocked by a tag or branch pin, during which owners are told, before the pins are released (LANCE_ERASURE_RELEASE_GRACE_DAYS). Required.",
+                            "type": "integer"
+                        },
+                        "schedule": {
+                            "description": "Dapr cron schedule on which due erasure pin releases run; lateness only costs time.",
+                            "type": "string"
+                        }
+                    }
+                },
+                "maxBodyBytes": {
+                    "description": "Maximum request-body bytes on any catalog route (LANCE_MAX_BODY_BYTES); larger bodies get 413 before buffering. Default 256 MiB.",
+                    "type": "integer"
+                },
+                "maxConcurrentWrites": {
+                    "description": "Cap on concurrent in-flight Arrow-IPC writes; over it the catalog answers 429 + Retry-After. Peak buffer memory is this times `maxBodyBytes`. 0 disables shedding.",
+                    "type": "integer"
+                },
+                "multibase": {
+                    "type": "object",
+                    "properties": {
+                        "baseCredentialRefs": {
+                            "description": "Map of data-base URI to a Dapr secret-store reference naming that base's credential. Every key must also be in `dataBases` or the render fails. Empty = estate options.",
+                            "type": "object"
+                        },
+                        "dataBases": {
+                            "description": "Allowlist of bucket URIs one table's fragments may be spread across (`?data_base=` on create). Empty = multi-base off, single-location creates.",
+                            "type": "array"
+                        },
+                        "devSeed": {
+                            "description": "Local fixture: create each referenced base's bucket, scoped MinIO user and dev-OpenBao secret. Refused on a real deployment, without MinIO or without the dev OpenBao.",
+                            "type": "boolean"
+                        }
+                    }
+                },
+                "serviceIdentity": {
+                    "description": "The identity the catalog presents and signs its emitted lineage as (the one delegator). Empty = the catalog emits unsigned lineage.",
+                    "type": "string"
+                },
+                "trashGraceDays": {
+                    "description": "Days a dropped table or namespace stays undroppable before the trash purge may reclaim it (LANCE_TRASH_GRACE_DAYS). 0 destroys immediately.",
+                    "type": "integer"
+                },
+                "warehouses": {
+                    "type": "object",
+                    "properties": {
+                        "enabled": {
+                            "description": "Per-warehouse physical multi-tenancy: POST /v1/warehouses provisions a bucket per warehouse and binds top-level namespaces to it. Unbound namespaces use `minio.bucket`.",
+                            "type": "boolean"
+                        }
+                    }
+                }
+            }
+        },
+        "config": {
+            "type": "object",
+            "properties": {
+                "AWS_REGION": {
+                    "description": "AWS region written to the fleet ConfigMap for S3 clients; any value works against RustFS/MinIO.",
+                    "type": "string"
+                },
+                "HCP_INSECURE": {
+                    "description": "Skips TLS verification for the S3 client (`storage.client` reads it as an alias of RASK_S3_INSECURE). String \"true\" or \"false\".",
+                    "type": "string"
+                },
+                "RASK_API_PREFIX": {
+                    "description": "Path prefix the fleet apps mount their API under, via the shared fleet ConfigMap.",
+                    "type": "string"
+                }
+            }
+        },
+        "controlplane": {
+            "type": "object",
+            "properties": {
+                "enabled": {
+                    "description": "Deploy the controlplane service (the `/api/projects` surface) and its resiliency policy.",
+                    "type": "boolean"
+                },
+                "port": {
+                    "description": "HTTP port the controlplane listens on.",
+                    "type": "integer"
+                },
+                "urlScheme": {
+                    "description": "Scheme of each project's entry link in the home gallery (RASK_PROJECT_URL_SCHEME): `http` or `https`.",
+                    "type": "string"
+                }
+            }
+        },
+        "dapr": {
+            "type": "object",
+            "properties": {
+                "apiTimeoutSeconds": {
+                    "description": "Deadline in seconds for every DaprClient gRPC call (DAPR_API_TIMEOUT_SECONDS), so a wedged sidecar fails a publish instead of hanging it.",
+                    "type": "integer"
+                },
+                "controlPlaneNamespace": {
+                    "description": "Namespace the Dapr control plane runs in; the Collector scrapes it and, under NetworkPolicy, every pod may reach it.",
+                    "type": "string"
+                },
+                "dashboard": {
+                    "type": "object",
+                    "properties": {
+                        "enabled": {
+                            "description": "Deploy the Dapr dashboard web UI (templates/dapr-dashboard.yaml), reached by port-forward; requires `dapr.enabled`.",
+                            "type": "boolean"
+                        },
+                        "image": {
+                            "description": "Container image for the Dapr dashboard Deployment.",
+                            "type": "string"
+                        }
+                    }
+                },
+                "enabled": {
+                    "description": "Use Dapr: inject a daprd sidecar into every fleet and lakehouse pod and render rask's Components, Configurations and Resiliency. Needs a Dapr control plane (dapr.io/v1alpha1); the render refuses without it.",
+                    "type": "boolean"
+                },
+                "logLevel": {
+                    "description": "daprd sidecar log level, stamped as the `dapr.io/log-level` annotation (debug, info, warn, error).",
+                    "type": "string"
+                },
+                "maxBodySize": {
+                    "description": "Max request body for Dapr service invocation (`dapr.io/max-body-size`); Dapr's own default is 4Mi.",
+                    "type": "string"
+                },
+                "resiliency": {
+                    "type": "object",
+                    "properties": {
+                        "enabled": {
+                            "description": "Render the Dapr Resiliency policy (sidecar retries, constant 120s x 4), per-app dead-letter topics, and the long broker backOff; false = broker-only.",
+                            "type": "boolean"
+                        }
+                    }
+                },
+                "sidecarResources": {
+                    "type": "object",
+                    "properties": {
+                        "cpuLimit": {
+                            "description": "CPU limit for every injected daprd sidecar (`dapr.io/sidecar-cpu-limit`).",
+                            "type": "string"
+                        },
+                        "cpuRequest": {
+                            "description": "CPU request for every injected daprd sidecar (`dapr.io/sidecar-cpu-request`).",
+                            "type": "string"
+                        },
+                        "memoryLimit": {
+                            "description": "Memory limit for every injected daprd sidecar (`dapr.io/sidecar-memory-limit`).",
+                            "type": "string"
+                        },
+                        "memoryRequest": {
+                            "description": "Memory request for every injected daprd sidecar (`dapr.io/sidecar-memory-request`).",
+                            "type": "string"
+                        }
+                    }
+                },
+                "sidecarRestricted": {
+                    "description": "Add the RuntimeDefault seccomp annotation to daprd for PodSecurity `restricted`; also set the injector's `sidecarDropALLCapabilities`.",
+                    "type": "boolean"
+                },
+                "workflowRetention": {
+                    "type": "object",
+                    "properties": {
+                        "completed": {
+                            "description": "How long a completed workflow's history is kept, as a positive h or m duration of at least 1h; default 168h (7 days).",
+                            "type": "string"
+                        },
+                        "enabled": {
+                            "description": "Render a Dapr workflow `stateRetentionPolicy`, the only thing that purges workflow history; false means history grows unbounded.",
+                            "type": "boolean"
+                        },
+                        "failed": {
+                            "description": "How long a failed workflow's history is kept for post-mortems, as a positive h or m duration of at least 1h; default 720h.",
+                            "type": "string"
+                        },
+                        "terminated": {
+                            "description": "How long a terminated workflow's history is kept, as a positive h or m duration of at least 1h; default 720h (30 days).",
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "dex": {
+            "type": "object",
+            "properties": {
+                "clientId": {
+                    "description": "The development Dex's static client id; also the audience services check (`RASK_OIDC_AUDIENCE`) and the client MinIO's OIDC provider uses.",
+                    "type": "string"
+                },
+                "clientSecret": {
+                    "description": "The development Dex's static client secret (demo value); seeded into OpenBao as `publisher-oidc-client-secret`.",
+                    "type": "string"
+                },
+                "enabled": {
+                    "description": "This estate uses the development Dex (deploy/fixtures/dex, Service `\u003crelease\u003e-dex`): the ingress serves it at /dex, its publisher password is seeded into the dev store, and a real deployment refuses it. The chart renders no Dex.",
+                    "type": "boolean"
+                },
+                "issuer": {
+                    "description": "OIDC issuer URL Dex serves and services trust (`RASK_OIDC_ISSUER`); a non-https issuer sets `RASK_OIDC_ALLOW_INSECURE=true`.",
+                    "type": "string"
+                },
+                "port": {
+                    "description": "Port of the development Dex's Service.",
+                    "type": "integer"
+                },
+                "publisher": {
+                    "type": "object",
+                    "properties": {
+                        "password": {
+                            "description": "Plain password of the publish saga's service account, seeded into OpenBao; must match the hash the development Dex holds (demo default `password`).",
+                            "type": "string"
+                        },
+                        "username": {
+                            "description": "Login email of the publish saga's service account; the annotator mints a fresh token with it per publish.",
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "docs": {
+            "type": "object",
+            "properties": {
+                "enabled": {
+                    "description": "Serves /docs, /redoc and /openapi.json on every app in the release, the gateway included. Off by default; turn on only for a dev cluster.",
+                    "type": "boolean"
+                }
+            }
+        },
+        "encoders": {
+            "type": "object",
+            "properties": {
+                "embedUrl": {
+                    "description": "Base URL of the OpenAI-shaped embedding server search calls and viewer probes (MEDIA_EMBED_URL). Empty = vector search modes report unavailable.",
+                    "type": "string"
+                },
+                "rerankUrl": {
+                    "description": "Base URL of the OpenAI-shaped reranker server (MEDIA_RERANK_URL). Empty = the rerank leg reports unavailable.",
+                    "type": "string"
+                }
+            }
+        },
+        "existingSecret": {
+            "description": "Name of a pre-made Secret used instead of the chart's `\u003crelease\u003e-app` (object store access key ID and endpoint, never a credential). Empty renders `\u003crelease\u003e-app`.",
+            "type": "string"
+        },
+        "explorer": {
+            "type": "object",
+            "properties": {
+                "catalogUri": {
+                    "description": "Catalog URL the explorer services use (MEDIA_CATALOG_URI). Empty = the in-release catalog Service.",
+                    "type": "string"
+                },
+                "controlEmit": {
+                    "description": "Annotator publishes `task_assigned`/`task_unassigned` control events for the notifications inbox, and is scoped on the control pubsub component.",
+                    "type": "boolean"
+                },
+                "corpus": {
+                    "type": "object",
+                    "properties": {
+                        "accessMode": {
+                            "description": "Access mode of the chart-created corpus PVC; ReadWriteMany because three services read it concurrently.",
+                            "type": "string"
+                        },
+                        "claimName": {
+                            "description": "Existing PVC to mount when mode is `pvc`. Empty = the chart creates `\u003crelease\u003e-media-corpus` (kept on uninstall).",
+                            "type": "string"
+                        },
+                        "hostPath": {
+                            "description": "Node directory mounted as the corpus when mode is `hostPath`.",
+                            "type": "string"
+                        },
+                        "mode": {
+                            "description": "How the corpus volume is provided: `emptyDir` (default), `pvc` (existing `claimName` or a chart-created claim) or `hostPath` (DirectoryOrCreate).",
+                            "type": "string"
+                        },
+                        "size": {
+                            "description": "Requested size of the chart-created corpus PVC.",
+                            "type": "string"
+                        },
+                        "storageClass": {
+                            "description": "StorageClass of the chart-created corpus PVC. Empty = the cluster's default StorageClass.",
+                            "type": "string"
+                        }
+                    }
+                },
+                "corpusMountPath": {
+                    "description": "Path the corpus volume is mounted at, read-only, in all three explorer services.",
+                    "type": "string"
+                },
+                "corpusS3Root": {
+                    "description": "S3 root (e.g. a warehouse bucket) the viewer serves the media corpus from (MEDIA_S3_DB_ROOT). Empty = the mounted corpus volume.",
+                    "type": "string"
+                },
+                "enabled": {
+                    "description": "Deploy the explorer trio (viewer, search, annotator services) and their gateway URLs.",
+                    "type": "boolean"
+                },
+                "readBackend": {
+                    "description": "Where the explorer services read annotations from (MEDIA_READ_BACKEND): `catalog` (governed) or `direct` (standalone dev).",
+                    "type": "string"
+                },
+                "services": {
+                    "type": "object",
+                    "properties": {
+                        "annotator": {
+                            "description": "Explorer annotator service: `port` and `daprAppId`; the app-id is scoped on the control pubsub when `explorer.controlEmit` is on.",
+                            "type": "object",
+                            "properties": {
+                                "daprAppId": {
+                                    "type": "string"
+                                },
+                                "port": {
+                                    "type": "integer"
+                                }
+                            }
+                        },
+                        "search": {
+                            "description": "Explorer search service: `port` (its HTTP port) and `daprAppId` (its Dapr app-id).",
+                            "type": "object",
+                            "properties": {
+                                "daprAppId": {
+                                    "type": "string"
+                                },
+                                "port": {
+                                    "type": "integer"
+                                }
+                            }
+                        },
+                        "viewer": {
+                            "description": "Explorer viewer service: `port` (its HTTP port) and `daprAppId` (its Dapr app-id).",
+                            "type": "object",
+                            "properties": {
+                                "daprAppId": {
+                                    "type": "string"
+                                },
+                                "port": {
+                                    "type": "integer"
+                                }
+                            }
+                        }
+                    }
+                },
+                "writeBackend": {
+                    "description": "Where the explorer services write annotations to (MEDIA_WRITE_BACKEND): `catalog` (governed) or `direct` (standalone dev).",
+                    "type": "string"
+                }
+            }
+        },
+        "externalSecrets": {
+            "type": "object",
+            "properties": {
+                "kubernetesAuthPath": {
+                    "description": "Mount path of the Vault/OpenBao Kubernetes auth backend the SecretStore authenticates through.",
+                    "type": "string"
+                },
+                "kvMount": {
+                    "description": "Vault/OpenBao KV mount path the SecretStore reads from.",
+                    "type": "string"
+                },
+                "kvVersion": {
+                    "description": "KV engine version of `kvMount` (`v1` or `v2`).",
+                    "type": "string"
+                },
+                "namespace": {
+                    "description": "Namespace of the External Secrets Operator ServiceAccount the Vault role is bound to.",
+                    "type": "string"
+                },
+                "refreshInterval": {
+                    "description": "How often each ExternalSecret re-syncs from the store (a duration, e.g. `1h`).",
+                    "type": "string"
+                },
+                "role": {
+                    "description": "Vault role the operator's ServiceAccount assumes; also names its read policy.",
+                    "type": "string"
+                },
+                "secretPath": {
+                    "description": "KV key holding the infra bundle (postgres-password, minio-secret-key), e.g. `lance` for secret/data/lance.",
+                    "type": "string"
+                },
+                "serviceAccount": {
+                    "description": "Name of the External Secrets Operator ServiceAccount the Vault role is bound to, so no other pod can assume it.",
+                    "type": "string"
+                }
+            }
+        },
+        "forwardedAllowIps": {
+            "description": "Peers whose x-forwarded-* headers uvicorn trusts in every fleet pod (--forwarded-allow-ips). Set to the ingress controller's pod CIDR; `*` is refused.",
+            "type": "string"
+        },
+        "frontend": {
+            "type": "object",
+            "properties": {
+                "apps": {
+                    "description": "The zones to deploy: `name` (image `web-\u003cname\u003e`), `path` (/\u003cname\u003e) or `catchAll` for home at /, and an optional per-zone image `tag`.",
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "catchAll": {
+                                "type": "boolean"
+                            },
+                            "name": {
+                                "type": "string"
+                            },
+                            "path": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                },
+                "bodySizeLimit": {
+                    "description": "Request-body ceiling of each zone's Bun server (BODY_SIZE_LIMIT), kept above the BFF's 25 MB inference guard.",
+                    "type": "string"
+                },
+                "enabled": {
+                    "description": "Deploy the SvelteKit zone servers, one Deployment and Service per entry in `frontend.apps`.",
+                    "type": "boolean"
+                },
+                "idleTimeoutSeconds": {
+                    "description": "Bun server idle timeout per connection in seconds (0 to 255); 0 disables it so live query streams are not cut.",
+                    "type": "integer"
+                },
+                "image": {
+                    "type": "object",
+                    "properties": {
+                        "pullPolicy": {
+                            "description": "Image pull policy for the zone containers; empty falls back to `image.pullPolicy`.",
+                            "type": "string"
+                        },
+                        "tag": {
+                            "description": "Default image tag for every zone (an immutable commit tag); a zone overrides it with `tag` on its `apps` entry.",
+                            "type": "string"
+                        }
+                    }
+                },
+                "oidc": {
+                    "type": "object",
+                    "properties": {
+                        "enabled": {
+                            "description": "Per-user OIDC login shared across all zones; must move together with `auth.enabled` (templates/auth-consistency.yaml).",
+                            "type": "boolean"
+                        },
+                        "publicIssuer": {
+                            "description": "Browser-reachable IdP issuer URL, e.g. https://auth.example.com/dex; required when `oidc.enabled`.",
+                            "type": "string"
+                        },
+                        "publicOrigin": {
+                            "description": "Browser-reachable app origin, e.g. https://app.example.com; forms the /auth/callback redirect URI. Required when `oidc.enabled`.",
+                            "type": "string"
+                        }
+                    }
+                },
+                "podSecurityContext": {
+                    "type": "object",
+                    "properties": {
+                        "runAsNonRoot": {
+                            "description": "Pod-level securityContext for zone pods: refuse to start a container running as root.",
+                            "type": "boolean"
+                        }
+                    }
+                },
+                "replicas": {
+                    "description": "Replicas per zone Deployment; above 1 the chart also renders a PodDisruptionBudget per zone.",
+                    "type": "integer"
+                },
+                "resources": {
+                    "description": "Default CPU and memory requests/limits per zone container, used when `resources.web-\u003czone\u003e` is not set.",
+                    "type": "object",
+                    "properties": {
+                        "limits": {
+                            "type": "object",
+                            "properties": {
+                                "cpu": {
+                                    "type": "string"
+                                },
+                                "memory": {
+                                    "type": "string"
+                                }
+                            }
+                        },
+                        "requests": {
+                            "type": "object",
+                            "properties": {
+                                "cpu": {
+                                    "type": "string"
+                                },
+                                "memory": {
+                                    "type": "string"
+                                }
+                            }
+                        }
+                    }
+                },
+                "securityContext": {
+                    "type": "object",
+                    "properties": {
+                        "allowPrivilegeEscalation": {
+                            "description": "Container securityContext for zones: forbid privilege escalation.",
+                            "type": "boolean"
+                        },
+                        "capabilities": {
+                            "description": "Container securityContext capabilities for zones; drops ALL Linux capabilities.",
+                            "type": "object",
+                            "properties": {
+                                "drop": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "string"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "serveUrl": {
+                    "description": "Ray Serve HTTP origin for zones that run inference; empty uses `ray.dashboardUrl`.",
+                    "type": "string"
+                },
+                "service": {
+                    "type": "object",
+                    "properties": {
+                        "port": {
+                            "description": "Port each zone's Bun server listens on and its Service exposes.",
+                            "type": "integer"
+                        }
+                    }
+                },
+                "serviceIdentity": {
+                    "description": "FGA subject the zones' BFF uses for service reads; the `\u003crelease\u003e-sa-web` ServiceAccount maps to it. Must be reader on the warehouse.",
+                    "type": "string"
+                }
+            }
+        },
+        "fullnameOverride": {
+            "description": "Base name for every rendered object; pinned to `rask` so in-cluster Services resolve as `rask-\u003ccomponent\u003e`.",
+            "type": "string"
+        },
+        "image": {
+            "type": "object",
+            "properties": {
+                "catalog": {
+                    "description": "Lakehouse image (catalog, lineage, medallion, maintenance, media services): `repository` is the image name under image.repository, `tag` is required (empty fails the render).",
+                    "type": "object",
+                    "properties": {
+                        "repository": {
+                            "type": "string"
+                        },
+                        "tag": {
+                            "type": "string"
+                        }
+                    }
+                },
+                "digest": {
+                    "description": "Global digest pin (sha256:...) for every first-party image; wins over `tag`. Empty uses tags.",
+                    "type": "string"
+                },
+                "digests": {
+                    "description": "Per-component digest map keyed by component name; beats `tags` and the global tag.",
+                    "type": "object"
+                },
+                "localImages": {
+                    "description": "Renders bare `\u003ccomponent\u003e:\u003ctag\u003e` references for images side-loaded into the node (k3s-import). Never for a remote cluster.",
+                    "type": "boolean"
+                },
+                "pullPolicy": {
+                    "description": "imagePullPolicy for first-party containers.",
+                    "type": "string"
+                },
+                "repository": {
+                    "description": "Registry prefix for every first-party image (e.g. ghcr.io/\u003corg\u003e/\u003crepo\u003e). Required unless localImages is true.",
+                    "type": "string"
+                },
+                "tag": {
+                    "description": "Default tag for every first-party image when no per-component tag or digest is set.",
+                    "type": "string"
+                },
+                "tags": {
+                    "description": "Per-component tag map keyed by component name (gateway, lance-rest-catalog, web-\u003czone\u003e, ...); beats the global tag.",
+                    "type": "object"
+                }
+            }
+        },
+        "imagePullSecrets": {
+            "description": "List of pull Secrets ({name: ...}) added to every first-party pod and hook Job. Empty pulls anonymously.",
+            "type": "array"
+        },
+        "ingress": {
+            "type": "object",
+            "properties": {
+                "annotations": {
+                    "description": "Annotations merged onto the Ingress; defaults raise nginx proxy buffers to 16k, read/send timeouts to 3600 s and the body cap to 64m.",
+                    "type": "object",
+                    "properties": {
+                        "nginx.ingress.kubernetes.io/proxy-body-size": {
+                            "type": "string"
+                        },
+                        "nginx.ingress.kubernetes.io/proxy-buffer-size": {
+                            "type": "string"
+                        },
+                        "nginx.ingress.kubernetes.io/proxy-buffers-number": {
+                            "type": "string"
+                        },
+                        "nginx.ingress.kubernetes.io/proxy-read-timeout": {
+                            "type": "string"
+                        },
+                        "nginx.ingress.kubernetes.io/proxy-send-timeout": {
+                            "type": "string"
+                        }
+                    }
+                },
+                "className": {
+                    "description": "IngressClass name. Empty uses the cluster default (Traefik on k3s).",
+                    "type": "string"
+                },
+                "enabled": {
+                    "description": "Renders the Ingress publishing `/` and `/api`. Only one release per cluster may hold a host-less Ingress.",
+                    "type": "boolean"
+                },
+                "host": {
+                    "description": "Hostname the Ingress routes. Empty is a cluster-wide catch-all on `/` and `/api`.",
+                    "type": "string"
+                },
+                "tls": {
+                    "description": "List of Ingress TLS entries ({secretName, hosts}). Empty serves plain HTTP.",
+                    "type": "array"
+                }
+            }
+        },
+        "lifecycle": {
+            "type": "object",
+            "properties": {
+                "maintenanceTerminationGracePeriodSeconds": {
+                    "description": "Grace period in seconds for maintenance pods, long enough that an in-flight sweep or Lance write is not SIGKILLed.",
+                    "type": "integer"
+                },
+                "preStopSeconds": {
+                    "description": "Seconds every pod sleeps in preStop before SIGTERM, so endpoint removal propagates first.",
+                    "type": "integer"
+                },
+                "sidecarBlockShutdownSeconds": {
+                    "description": "Seconds the Dapr sidecar keeps running after SIGTERM to flush acks; must lie between preStopSeconds and the grace period.",
+                    "type": "integer"
+                },
+                "teardownSeconds": {
+                    "description": "Seconds reserved for the app's lifespan teardown; uvicorn's graceful-shutdown bound is grace - preStop - this.",
+                    "type": "integer"
+                },
+                "terminationGracePeriodSeconds": {
+                    "description": "Pod grace period in seconds; must be at least preStop + sidecar drain + 5 s buffer.",
+                    "type": "integer"
+                }
+            }
+        },
+        "maintenance": {
+            "type": "object",
+            "properties": {
+                "bindingName": {
+                    "description": "Name of the Dapr cron binding that fires the sweep tick (`MAINTENANCE_BINDING_NAME`).",
+                    "type": "string"
+                },
+                "catalogServiceIdentity": {
+                    "description": "Subject maintenance claims at the catalog's identity door; bootstrap grants it on each warehouse and the catalog audits it on every vend.",
+                    "type": "string"
+                },
+                "compactThreads": {
+                    "description": "Compaction read threads. Memory ceiling is scanBatchSize x row size x compactThreads; set the two together.",
+                    "type": "integer"
+                },
+                "controlEmit": {
+                    "description": "Announce each reclamation on the catalog control topic (catalog.control.v1); needs Dapr sidecars. Off by default.",
+                    "type": "boolean"
+                },
+                "controlRoot": {
+                    "description": "S3 root of the catalog's control registries (projects, warehouses, trash, `_bases/`). Empty uses the primary bucket; set together with the catalog's.",
+                    "type": "string"
+                },
+                "daprAppId": {
+                    "description": "Dapr app-id of the maintenance planner and workers; also prefixes their durable consumer names.",
+                    "type": "string"
+                },
+                "declaredPlatformRoots": {
+                    "description": "Platform-owned store roots the catalog cannot resolve (e.g. medallion models) that the reconciler accounts for instead of reporting as unreadable.",
+                    "type": "string"
+                },
+                "dedicatedWorkers": {
+                    "type": "object",
+                    "properties": {
+                        "enabled": {
+                            "description": "Run compaction and index units on a separate worker Deployment and stop the planner consuming its own work queue. Needs `workTopic`.",
+                            "type": "boolean"
+                        },
+                        "indexConcurrentUnits": {
+                            "description": "Slice of `maxConcurrentUnits` reserved for index builds per worker; compaction gets the remainder.",
+                            "type": "integer"
+                        },
+                        "maxConcurrentCompactions": {
+                            "description": "Memory bound: how many compaction rewrites one worker holds resident at once. No-op units never take one.",
+                            "type": "integer"
+                        },
+                        "maxConcurrentUnits": {
+                            "description": "Throughput bound: units one worker executes at once across both lanes; the lanes' maxAckPending split this number.",
+                            "type": "integer"
+                        },
+                        "recycleAfterPasses": {
+                            "description": "Retire a worker after this many committed rewrites to shed retained memory; 0 disables.",
+                            "type": "integer"
+                        },
+                        "recycleAtMemoryFraction": {
+                            "description": "Retire a worker when resident memory reaches this fraction of its cgroup limit (0.70 = ~2.87 GiB of 4Gi); 0 disables.",
+                            "type": "number"
+                        },
+                        "replicas": {
+                            "description": "Number of worker pods; they are competing consumers of the work and index queues. More than 1 also renders a PDB.",
+                            "type": "integer"
+                        },
+                        "resources": {
+                            "description": "CPU/memory requests and limits of each worker pod, sized for the compaction work rather than the planner's 512Mi.",
+                            "type": "object",
+                            "properties": {
+                                "limits": {
+                                    "type": "object",
+                                    "properties": {
+                                        "cpu": {
+                                            "type": "integer"
+                                        },
+                                        "memory": {
+                                            "type": "string"
+                                        }
+                                    }
+                                },
+                                "requests": {
+                                    "type": "object",
+                                    "properties": {
+                                        "cpu": {
+                                            "type": "string"
+                                        },
+                                        "memory": {
+                                            "type": "string"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "discoveryMaxDepth": {
+                    "description": "How deep the bucket walk descends looking for a dataset's `_versions/`; a subtree it stops inside is an IncompleteScan that blocks the purge.",
+                    "type": "integer"
+                },
+                "distributedCompaction": {
+                    "description": "Let the catalog plan and commit compaction while this pod only rewrites, signed by a vended credential; falls back to in-pod compaction. Off by default.",
+                    "type": "boolean"
+                },
+                "driftRepair": {
+                    "description": "Revoke OpenFGA tuples whose object no registry names (ghost projects/warehouses/tables); deletes tuples only. Off by default.",
+                    "type": "boolean"
+                },
+                "driftRepairDryRun": {
+                    "description": "Plan and report drift repair without deleting any tuple. Defaults true.",
+                    "type": "boolean"
+                },
+                "driftRepairMaxPerTick": {
+                    "description": "Maximum objects drift repair revokes per reconcile tick; the remainder is reported as capped and taken next tick.",
+                    "type": "integer"
+                },
+                "enabled": {
+                    "description": "Deploy the maintenance service (planner, sweep and reconcile crons) and, with its other switches, the dedicated workers.",
+                    "type": "boolean"
+                },
+                "expectedDatasets": {
+                    "description": "Estate size the work lane is sized for; with `schedule` and `secondsPerUnit` it declares the required drain rate.",
+                    "type": "integer"
+                },
+                "floorRaise": {
+                    "description": "Write one metadata-only commit per stranded dataset to raise its Lance listing floor so residue becomes reclaimable. Off by default.",
+                    "type": "boolean"
+                },
+                "floorRaiseDryRun": {
+                    "description": "Plan and report floor raises without committing. Defaults true; set false to commit once `floorRaise` is on.",
+                    "type": "boolean"
+                },
+                "floorRaiseMaxPerTick": {
+                    "description": "Maximum datasets the floor raise commits to per tick; the remainder is reported as capped.",
+                    "type": "integer"
+                },
+                "indexAckWait": {
+                    "description": "Ack window for one index build unit (a duration, default 3600s); too short redelivers a build mid-flight to a second worker.",
+                    "type": "string"
+                },
+                "indexDlqTopic": {
+                    "description": "Dead-letter topic for index build units that exhaust their retries.",
+                    "type": "string"
+                },
+                "indexPubsub": {
+                    "description": "Dapr pub/sub component name of the index build lane.",
+                    "type": "string"
+                },
+                "indexTopic": {
+                    "description": "Topic the catalog's create-index doors publish build units to for the workers. Empty builds the index inside the catalog request.",
+                    "type": "string"
+                },
+                "lineageEmit": {
+                    "description": "Emit a lineage event per materially compacted dataset and a FAIL event per errored one; covers catalog-laid-out tables only.",
+                    "type": "boolean"
+                },
+                "maxSourceBytes": {
+                    "description": "Byte bound on what one compaction rewrite reads (default 256 MiB); fits together with the worker memory limit and concurrency.",
+                    "type": "integer"
+                },
+                "olderThanDays": {
+                    "description": "Days of version history kept by old-version GC.",
+                    "type": "integer"
+                },
+                "orphanScan": {
+                    "description": "Run the reconciler's per-dataset unreferenced-file scan; read-only, and required for `trashPurge` to certify a clean report.",
+                    "type": "boolean"
+                },
+                "policyRoot": {
+                    "description": "S3 root of maintenance policy records. Empty falls back to `controlRoot`, then the primary bucket.",
+                    "type": "string"
+                },
+                "port": {
+                    "description": "HTTP port of the maintenance planner and worker containers.",
+                    "type": "integer"
+                },
+                "reconcileBindingName": {
+                    "description": "Name of the Dapr cron binding that fires the drift reconciler (`MAINTENANCE_RECONCILE_BINDING_NAME`).",
+                    "type": "string"
+                },
+                "reconcileSchedule": {
+                    "description": "Cadence of the drift reconciler, which only reads OpenFGA, the control-root registries and the bucket listing.",
+                    "type": "string"
+                },
+                "scanBatchSize": {
+                    "description": "Rows per compaction read batch (Lance defaults to 8192); with large blob rows this bounds memory, set together with `compactThreads`.",
+                    "type": "integer"
+                },
+                "schedule": {
+                    "description": "Sweep cron cadence. With `workTopic` set it is a backstop: relax to hourly but no slower than 75 minutes.",
+                    "type": "string"
+                },
+                "secondsPerUnit": {
+                    "description": "Measured end-to-end seconds per work unit (dispatch, ack and queueing included), used with `expectedDatasets` to size the lane.",
+                    "type": "integer"
+                },
+                "sweepBudgetSeconds": {
+                    "description": "Wall-clock ceiling for one sweep tick, checked between datasets; 0 means unlimited.",
+                    "type": "integer"
+                },
+                "tombstoneSweep": {
+                    "description": "Clear trash records whose bytes a probe proves are gone; deletes bookkeeping rows, never bytes. Off by default.",
+                    "type": "boolean"
+                },
+                "tombstoneSweepDryRun": {
+                    "description": "Plan and report the tombstone sweep without clearing anything. Defaults true.",
+                    "type": "boolean"
+                },
+                "tombstoneSweepMaxPerTick": {
+                    "description": "Maximum trash records the tombstone sweep probes and clears per tick; the remainder is reported as capped.",
+                    "type": "integer"
+                },
+                "trashPurge": {
+                    "description": "Delete the bytes of trash records past their grace deadline and revoke their grants, only when that tick's drift report is clean. Irreversible; off by default.",
+                    "type": "boolean"
+                },
+                "trashPurgeDryRun": {
+                    "description": "Run the purge pass for real but perform no mutation, reporting `would_purge`; adds full read cost.",
+                    "type": "boolean"
+                },
+                "trashPurgeMaxPerTick": {
+                    "description": "Maximum trash records purged per tick; the remainder is reported as capped and drained next tick.",
+                    "type": "integer"
+                },
+                "tupleRebuild": {
+                    "description": "Recreate OpenFGA tuples the control-plane registries still justify (project admin seed, warehouse tenancy); additive only. Off by default.",
+                    "type": "boolean"
+                },
+                "tupleRebuildDryRun": {
+                    "description": "Plan and report the tuple rebuild without writing. Defaults true.",
+                    "type": "boolean"
+                },
+                "tupleRebuildMaxPerTick": {
+                    "description": "Maximum tuples the rebuild writes per tick; the remainder is reported as capped.",
+                    "type": "integer"
+                },
+                "vendWriteCredentials": {
+                    "description": "Sign each compaction write with a per-table credential vended by the catalog instead of the deployment's S3 key; falls back per dataset.",
+                    "type": "boolean"
+                },
+                "workDlqTopic": {
+                    "description": "Dead-letter topic for compaction work units that exhaust their retries.",
+                    "type": "string"
+                },
+                "workPubsub": {
+                    "description": "Dapr pub/sub component name of the compaction work lane.",
+                    "type": "string"
+                },
+                "workTopic": {
+                    "description": "Topic the sweep publishes one unit per dataset to. Empty runs the whole sweep inside the cron request (the serial lane).",
+                    "type": "string"
+                }
+            }
+        },
+        "medallion": {
+            "type": "object",
+            "properties": {
+                "buckets": {
+                    "description": "Map of stage namespace to S3 bucket (e.g. `{gold: lance-sink}`); unset namespaces use `minio.bucket`. Listed buckets are auto-created and reserved from warehouses.",
+                    "type": "object"
+                },
+                "cascadeLag": {
+                    "type": "object",
+                    "properties": {
+                        "bindingName": {
+                            "description": "Name of the read-only cascade-lag cron Component, the producer's MEDALLION_CASCADE_LAG_BINDING_NAME and its route. Empty disables the lag detector.",
+                            "type": "string"
+                        },
+                        "schedule": {
+                            "description": "Dapr cron schedule on which the producer measures per-edge cascade lag and sets the `medallion.cascade.lag` gauge.",
+                            "type": "string"
+                        }
+                    }
+                },
+                "compute": {
+                    "type": "boolean"
+                },
+                "enabled": {
+                    "description": "Deploy the medallion cascade: the medallion-producer head and the stage runners in `stageRunners`, with their pubsub components and crons.",
+                    "type": "boolean"
+                },
+                "fgaEnabled": {
+                    "description": "Each stage runner checks OpenFGA for its `requiredAction` on the target namespace before producing. Seed the stage-runner identity grants first.",
+                    "type": "boolean"
+                },
+                "goldWarehouse": {
+                    "description": "Route the terminal stage runner's project writes to the project's gold serving warehouse when one exists (MEDALLION_GOLD_WAREHOUSE_ENABLED). Off = work warehouse.",
+                    "type": "boolean"
+                },
+                "inprocessTasks": {
+                    "description": "Tasks the in-process plane can run, registered at boot (MEDALLION_INPROCESS_TASKS) whether or not Ray is on: `task`, `command`, optional `cardinalities`.",
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "cardinalities": {
+                                "type": "array",
+                                "items": {
+                                    "type": "string"
+                                }
+                            },
+                            "command": {
+                                "type": "string"
+                            },
+                            "task": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                },
+                "mediaBronzeNamespace": {
+                    "description": "Bronze namespace of the media lane, where /ingest-media lands blobs (MEDALLION_MEDIA_BRONZE_URI). Default `bronze-media`.",
+                    "type": "string"
+                },
+                "mediaSeedSamples": {
+                    "description": "Have /ingest-media write two sample PNGs into the source prefix before ingesting (MEDALLION_MEDIA_SEED_SAMPLES); set false when the source is real media.",
+                    "type": "boolean"
+                },
+                "planSweep": {
+                    "type": "object",
+                    "properties": {
+                        "bindingName": {
+                            "description": "Name of the plan-sweep cron Component (MEDALLION_PLAN_SWEEP_BINDING_NAME and route) that resolves open Ray stage and training plans. Rendered only with `ray`; empty disables it.",
+                            "type": "string"
+                        },
+                        "schedule": {
+                            "description": "Dapr cron schedule of the plan sweep; four ticks is the grace a lost submission gets before it counts as never registered.",
+                            "type": "string"
+                        }
+                    }
+                },
+                "port": {
+                    "description": "HTTP port the medallion producer and stage runners listen on.",
+                    "type": "integer"
+                },
+                "produceAdminProject": {
+                    "description": "Project a signed-in user needs `can_administer` on to fire /produce or /train from the UI, and the default project a projectless produce is checked against.",
+                    "type": "string"
+                },
+                "producer": {
+                    "type": "object",
+                    "properties": {
+                        "author": {
+                            "description": "Author the producer stamps on its bronze-write lineage (MEDALLION_PRODUCER_AUTHOR).",
+                            "type": "string"
+                        },
+                        "bronzeDataset": {
+                            "description": "Dataset name the producer stamps on the bronze trigger (MEDALLION_BRONZE_DATASET); must equal the first stage runner's `fromDataset` or every trigger is dropped.",
+                            "type": "string"
+                        },
+                        "bronzeNamespace": {
+                            "description": "Bronze namespace the producer writes (MEDALLION_BRONZE_NAMESPACE), declared unqualified; on a projects estate it becomes `\u003cproject\u003e-bronze` at runtime.",
+                            "type": "string"
+                        },
+                        "bronzeTopic": {
+                            "description": "Topic the producer's /bronze-arrival publishes the first cascade trigger on (MEDALLION_BRONZE_TOPIC); the first stage runner's `subTopic`.",
+                            "type": "string"
+                        },
+                        "daprAppId": {
+                            "description": "Dapr app-id of the medallion-producer; also names its derived pubsub components, durable consumers and state-store scope.",
+                            "type": "string"
+                        },
+                        "expose": {
+                            "description": "Intended to gate the gateway route to POST /produce (values-prod sets false). No chart template reads it.",
+                            "type": "boolean"
+                        },
+                        "operation": {
+                            "description": "Operation name the producer stamps on its bronze-write lineage (MEDALLION_PRODUCER_OPERATION).",
+                            "type": "string"
+                        },
+                        "serviceIdentity": {
+                            "description": "Subject the producer presents at the catalog's service door and signs lineage as; the identity the FGA seed grants. Must not be blank.",
+                            "type": "string"
+                        }
+                    }
+                },
+                "producerReplicas": {
+                    "description": "Replica count of the medallion-producer Deployment (default 1); replicas share a queue group, so each trigger is delivered once.",
+                    "type": "integer"
+                },
+                "projectsEnabled": {
+                    "description": "Per-project routing: give producer and stage runners MEDALLION_CONTROL_ROOT so a `project` trigger resolves that project's warehouse. Off drops project triggers fail-closed.",
+                    "type": "boolean"
+                },
+                "promotionReviewBand": {
+                    "description": "Fractional row-count change from the previous version that triggers a review (0.25 = 25%); a first promotion always asks. 0 asks about every change.",
+                    "type": "number"
+                },
+                "promotionTopic": {
+                    "description": "Topic a stage runner holding a promotion publishes it on for the producer's review workflow (MEDALLION_PROMOTION_TOPIC).",
+                    "type": "string"
+                },
+                "quality": {
+                    "description": "Run data-quality assertions (row count, key column non-null, declared columns) after each stage write and block promotion on failure. Requires `compute`.",
+                    "type": "boolean"
+                },
+                "qualityKeyColumn": {
+                    "description": "Column the quality gate asserts is non-null (MEDALLION_QUALITY_KEY_COLUMN). Used when `quality` is on.",
+                    "type": "string"
+                },
+                "qualityReview": {
+                    "description": "Route unusual (not broken) promotions to a person through the producer's promotion_review workflow instead of blocking; also scopes the producer on the state store.",
+                    "type": "boolean"
+                },
+                "qualityReviewApprover": {
+                    "description": "OIDC subject asked to approve a held promotion. Empty = nobody can be asked and the review answers BLOCKED.",
+                    "type": "string"
+                },
+                "qualityReviewHours": {
+                    "description": "Hours a promotion review stays open before the promotion is EXPIRED and not promoted.",
+                    "type": "integer"
+                },
+                "ray": {
+                    "description": "Stage runners submit their transform as a Ray job (MEDALLION_RAY_ENABLED) to the estate's one Ray dashboard; the render fails if no Ray address is configured.",
+                    "type": "boolean"
+                },
+                "rayTasks": {
+                    "description": "Tasks the Ray plane can run, registered by the producer at boot (MEDALLION_RAY_TASKS): `task`, baked `command`, optional `cardinalities` (empty = all). Rendered with `ray`.",
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "cardinalities": {
+                                "type": "array",
+                                "items": {
+                                    "type": "string"
+                                }
+                            },
+                            "command": {
+                                "type": "string"
+                            },
+                            "task": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                },
+                "stageRunnerReplicas": {
+                    "description": "Replica count of each stage-runner Deployment (default 1); replicas form a competing-consumer queue group.",
+                    "type": "integer"
+                },
+                "stageRunners": {
+                    "description": "The stage runners, one Deployment each in DAG order: name, daprAppId, from/to namespace and dataset, operation, author, sub/pub topics, requiredAction, serviceIdentity, requiredColumns.",
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "author": {
+                                "type": "string"
+                            },
+                            "daprAppId": {
+                                "type": "string"
+                            },
+                            "fromDataset": {
+                                "type": "string"
+                            },
+                            "fromNamespace": {
+                                "type": "string"
+                            },
+                            "name": {
+                                "type": "string"
+                            },
+                            "operation": {
+                                "type": "string"
+                            },
+                            "pubTopic": {
+                                "type": "string"
+                            },
+                            "requiredAction": {
+                                "type": "string"
+                            },
+                            "requiredColumns": {
+                                "type": "string"
+                            },
+                            "serviceIdentity": {
+                                "type": "string"
+                            },
+                            "subTopic": {
+                                "type": "string"
+                            },
+                            "toDataset": {
+                                "type": "string"
+                            },
+                            "toNamespace": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                },
+                "train": {
+                    "type": "object",
+                    "properties": {
+                        "entrypoint": {
+                            "description": "Ray job entrypoint the trainer submits (MEDALLION_TRAIN_ENTRYPOINT); the script must be baked into the Ray cluster image.",
+                            "type": "string"
+                        },
+                        "lineageUrl": {
+                            "description": "Lineage URL the training job emits its RunEvents to (MEDALLION_TRAIN_LINEAGE_URL). Empty = the release's own lineage Service.",
+                            "type": "string"
+                        },
+                        "modelsNamespace": {
+                            "description": "Catalog namespace the model registry writes trained models into (MEDALLION_MODELS_NAMESPACE).",
+                            "type": "string"
+                        },
+                        "topic": {
+                            "description": "Topic the /train head publishes training requests on and the trainer consumer subscribes to (MEDALLION_TRAIN_TOPIC).",
+                            "type": "string"
+                        },
+                        "trainerIdentity": {
+                            "description": "Service identity training runs act and emit as (MEDALLION_TRAINER_IDENTITY).",
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "minio": {
+            "type": "object",
+            "properties": {
+                "accessKey": {
+                    "description": "Access key id of the store's root account; its secret is the store's `minio-secret-key`. No service should present it.",
+                    "type": "string"
+                },
+                "bucket": {
+                    "description": "The lakehouse root bucket (catalog `LANCE_REST_ROOT`, warehouse registry, lineage outbox).",
+                    "type": "string"
+                },
+                "buckets": {
+                    "description": "Extra platform buckets the bucket-init Job creates and the reconcile exempts from orphan_buckets; governed tiers only, not the root or feature buckets.",
+                    "type": "array"
+                },
+                "catalogAccessKey": {
+                    "description": "Access key of the catalog's scoped store identity; the secret derives in-cluster (`lance.scopedSecretFn`). Wide on data, no admin rights.",
+                    "type": "string"
+                },
+                "enabled": {
+                    "description": "This estate uses the development object store (deploy/fixtures/minio, Service `\u003crelease\u003e-minio`): rask runs its bucket-init Job and scoped-users hook against it and its dev store issues the root credential. Off with `externalEndpoint` set uses a managed S3. The chart renders no MinIO server.",
+                    "type": "boolean"
+                },
+                "externalEndpoint": {
+                    "description": "S3 endpoint the apps use instead of the in-cluster MinIO; pair with `minio.enabled=false`. Empty uses the in-cluster store.",
+                    "type": "string"
+                },
+                "lineageAccessKey": {
+                    "description": "Access key of the lineage service's scoped store identity (read-only plus deletes of its own outbox); secret derives in-cluster.",
+                    "type": "string"
+                },
+                "maintenanceAccessKey": {
+                    "description": "Access key of maintenance's scoped store identity, the fallback when vending degrades; secret derives in-cluster.",
+                    "type": "string"
+                },
+                "medallionAccessKey": {
+                    "description": "Access key the medallion producer and stage runners share; secret derives in-cluster. Data in any warehouse, `_tasks/` writable.",
+                    "type": "string"
+                },
+                "oidc": {
+                    "type": "object",
+                    "properties": {
+                        "enabled": {
+                            "description": "The development store trusts Dex id_tokens for STS AssumeRoleWithWebIdentity (`vending.mode: web_identity`): ESO writes the Dex client secret it reads into `\u003crelease\u003e-infra-credentials`. Turn on the fixture's `oidc.enabled` with it.",
+                            "type": "boolean"
+                        }
+                    }
+                },
+                "port": {
+                    "description": "S3 API port of the development store's Service.",
+                    "type": "integer"
+                },
+                "rayComputeAccessKey": {
+                    "description": "Access key of the Ray compute plane's scoped store identity, kept off the tenant root; secret derives in-cluster.",
+                    "type": "string"
+                },
+                "viewerAccessKey": {
+                    "description": "Access key of the object browser's scoped identity (list and get only); secret derives in-cluster.",
+                    "type": "string"
+                }
+            }
+        },
+        "nameOverride": {
+            "description": "Overrides the chart name used in `rask.name` labels when `fullnameOverride` is empty. Empty uses the chart name.",
+            "type": "string"
+        },
+        "nats": {
+            "type": "object",
+            "properties": {
+                "auth": {
+                    "type": "object",
+                    "properties": {
+                        "flagged": {
+                            "description": "Extra user grants keyed by a values flag path, merged into `nats.auth.users` only while that flag is true (lance.natsTable).",
+                            "type": "object",
+                            "properties": {
+                                "explorer.controlEmit": {
+                                    "type": "object",
+                                    "properties": {
+                                        "annotator": {
+                                            "type": "object",
+                                            "properties": {
+                                                "publish": {
+                                                    "type": "array",
+                                                    "items": {
+                                                        "type": "string"
+                                                    }
+                                                },
+                                                "subscribe": {
+                                                    "type": "array",
+                                                    "items": {
+                                                        "type": "string"
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                },
+                                "maintenance.controlEmit": {
+                                    "type": "object",
+                                    "properties": {
+                                        "maintenance": {
+                                            "type": "object",
+                                            "properties": {
+                                                "publish": {
+                                                    "type": "array",
+                                                    "items": {
+                                                        "type": "string"
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                },
+                                "medallion.ray": {
+                                    "type": "object",
+                                    "properties": {
+                                        "bronze-to-silver": {
+                                            "type": "object",
+                                            "properties": {
+                                                "publish": {
+                                                    "type": "array",
+                                                    "items": {
+                                                        "type": "string"
+                                                    }
+                                                }
+                                            }
+                                        },
+                                        "media-to-silver": {
+                                            "type": "object",
+                                            "properties": {
+                                                "publish": {
+                                                    "type": "array",
+                                                    "items": {
+                                                        "type": "string"
+                                                    }
+                                                }
+                                            }
+                                        },
+                                        "silver-to-gold": {
+                                            "type": "object",
+                                            "properties": {
+                                                "publish": {
+                                                    "type": "array",
+                                                    "items": {
+                                                        "type": "string"
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                        "provisioned": {
+                            "description": "Attests the platform store holds every `nats-user-\u003cuser\u003e`; required when the store is not the chart's dev OpenBao.",
+                            "type": "boolean"
+                        },
+                        "users": {
+                            "description": "The bus user table, one user per Dapr app-id plus admin, monitor and ingest, each with publish and subscribe subject lists (never empty).",
+                            "type": "object",
+                            "properties": {
+                                "admin": {
+                                    "type": "object",
+                                    "properties": {
+                                        "publish": {
+                                            "type": "array",
+                                            "items": {
+                                                "type": "string"
+                                            }
+                                        },
+                                        "subscribe": {
+                                            "type": "array",
+                                            "items": {
+                                                "type": "string"
+                                            }
+                                        }
+                                    }
+                                },
+                                "bronze-to-silver": {
+                                    "type": "object",
+                                    "properties": {
+                                        "publish": {
+                                            "type": "array",
+                                            "items": {
+                                                "type": "string"
+                                            }
+                                        },
+                                        "subscribe": {
+                                            "type": "array",
+                                            "items": {
+                                                "type": "string"
+                                            }
+                                        }
+                                    }
+                                },
+                                "catalog": {
+                                    "type": "object",
+                                    "properties": {
+                                        "publish": {
+                                            "type": "array",
+                                            "items": {
+                                                "type": "string"
+                                            }
+                                        },
+                                        "subscribe": {
+                                            "type": "array",
+                                            "items": {
+                                                "type": "string"
+                                            }
+                                        }
+                                    }
+                                },
+                                "ingest": {
+                                    "type": "object",
+                                    "properties": {
+                                        "publish": {
+                                            "type": "array",
+                                            "items": {
+                                                "type": "string"
+                                            }
+                                        },
+                                        "subscribe": {
+                                            "type": "array",
+                                            "items": {
+                                                "type": "string"
+                                            }
+                                        }
+                                    }
+                                },
+                                "lineage": {
+                                    "type": "object",
+                                    "properties": {
+                                        "publish": {
+                                            "type": "array",
+                                            "items": {
+                                                "type": "string"
+                                            }
+                                        },
+                                        "subscribe": {
+                                            "type": "array",
+                                            "items": {
+                                                "type": "string"
+                                            }
+                                        }
+                                    }
+                                },
+                                "maintenance": {
+                                    "type": "object",
+                                    "properties": {
+                                        "publish": {
+                                            "type": "array",
+                                            "items": {
+                                                "type": "string"
+                                            }
+                                        },
+                                        "subscribe": {
+                                            "type": "array",
+                                            "items": {
+                                                "type": "string"
+                                            }
+                                        }
+                                    }
+                                },
+                                "medallion-producer": {
+                                    "type": "object",
+                                    "properties": {
+                                        "publish": {
+                                            "type": "array",
+                                            "items": {
+                                                "type": "string"
+                                            }
+                                        },
+                                        "subscribe": {
+                                            "type": "array",
+                                            "items": {
+                                                "type": "string"
+                                            }
+                                        }
+                                    }
+                                },
+                                "media-to-silver": {
+                                    "type": "object",
+                                    "properties": {
+                                        "publish": {
+                                            "type": "array",
+                                            "items": {
+                                                "type": "string"
+                                            }
+                                        },
+                                        "subscribe": {
+                                            "type": "array",
+                                            "items": {
+                                                "type": "string"
+                                            }
+                                        }
+                                    }
+                                },
+                                "monitor": {
+                                    "type": "object",
+                                    "properties": {
+                                        "publish": {
+                                            "type": "array",
+                                            "items": {
+                                                "type": "string"
+                                            }
+                                        },
+                                        "subscribe": {
+                                            "type": "array",
+                                            "items": {
+                                                "type": "string"
+                                            }
+                                        }
+                                    }
+                                },
+                                "notifications": {
+                                    "type": "object",
+                                    "properties": {
+                                        "publish": {
+                                            "type": "array",
+                                            "items": {
+                                                "type": "string"
+                                            }
+                                        },
+                                        "subscribe": {
+                                            "type": "array",
+                                            "items": {
+                                                "type": "string"
+                                            }
+                                        }
+                                    }
+                                },
+                                "silver-to-gold": {
+                                    "type": "object",
+                                    "properties": {
+                                        "publish": {
+                                            "type": "array",
+                                            "items": {
+                                                "type": "string"
+                                            }
+                                        },
+                                        "subscribe": {
+                                            "type": "array",
+                                            "items": {
+                                                "type": "string"
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "monitorUrl": {
+                    "description": "HTTP monitoring endpoint of the bus (varz/jsz) the lakehouse zone's ops view reads (e.g. http://rask-nats-headless:8222). Empty hides the panel.",
+                    "type": "string"
+                },
+                "streamReplicas": {
+                    "description": "Raft replica count for every stream the stream Job provisions; must not exceed the bus's node count.",
+                    "type": "integer"
+                },
+                "url": {
+                    "description": "NATS JetStream address every pub/sub component, the stream Job and ingest connect to (e.g. nats://nats.internal:4222). Required: empty fails the render.",
+                    "type": "string"
+                }
+            }
+        },
+        "networkPolicy": {
+            "type": "object",
+            "properties": {
+                "enabled": {
+                    "description": "Renders default-deny NetworkPolicies with explicit allows and exclusive client lists for the guarded stores. Needs a policy-enforcing CNI.",
+                    "type": "boolean"
+                },
+                "extraEgress": {
+                    "description": "List of extra egress rules, verbatim NetworkPolicy entries, for external backends (off-cluster S3, managed NATS, external OTLP).",
+                    "type": "array"
+                },
+                "minioExtraFrom": {
+                    "description": "List of extra NetworkPolicy `from` peers allowed to reach the object store; defaults admit the ray-lance demo pods.",
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "podSelector": {
+                                "type": "object",
+                                "properties": {
+                                    "matchLabels": {
+                                        "type": "object",
+                                        "properties": {
+                                            "app": {
+                                                "type": "string"
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "openbaoExtraFrom": {
+                    "description": "List of extra NetworkPolicy `from` peers allowed to reach OpenBao (e.g. the external-secrets namespace).",
+                    "type": "array"
+                }
+            }
+        },
+        "observability": {
+            "type": "object",
+            "properties": {
+                "enabled": {
+                    "description": "Deploy rask's OTel Collector and turn on OTLP export from the fleet, Dapr and OpenFGA to it; needs `export.endpoint`.",
+                    "type": "boolean"
+                },
+                "environment": {
+                    "description": "Value of the `deployment.environment.name` OTel resource attribute; empty falls back to the release namespace.",
+                    "type": "string"
+                },
+                "export": {
+                    "type": "object",
+                    "properties": {
+                        "auditHeaders": {
+                            "description": "Headers added to the export of `lance.audit` records, which leave on their own exporter.",
+                            "type": "object",
+                            "properties": {
+                                "x-greptime-log-table-name": {
+                                    "type": "string"
+                                }
+                            }
+                        },
+                        "endpoint": {
+                            "description": "OTLP/HTTP base URL the Collector exports traces, metrics and logs to (`/v1/traces` etc. are appended); the platform's backend. Required while `enabled`: empty fails the render.",
+                            "type": "string"
+                        },
+                        "headers": {
+                            "description": "Headers sent on every export.",
+                            "type": "object",
+                            "properties": {
+                                "x-greptime-db-name": {
+                                    "type": "string"
+                                }
+                            }
+                        },
+                        "traceHeaders": {
+                            "description": "Headers added to the trace export.",
+                            "type": "object",
+                            "properties": {
+                                "x-greptime-pipeline-name": {
+                                    "type": "string"
+                                }
+                            }
+                        }
+                    }
+                },
+                "otelCollector": {
+                    "type": "object",
+                    "properties": {
+                        "image": {
+                            "description": "Container image for the OTel Collector (contrib distribution).",
+                            "type": "string"
+                        }
+                    }
+                },
+                "query": {
+                    "type": "object",
+                    "properties": {
+                        "auditTable": {
+                            "description": "Table the audit viewer reads `lance.audit` records from; the same table `export.auditHeaders` routes them to.",
+                            "type": "string"
+                        },
+                        "url": {
+                            "description": "Base URL of the store's SQL and PromQL API the zones read (GREPTIME_API); empty leaves those panels without data.",
+                            "type": "string"
+                        }
+                    }
+                },
+                "samplingRate": {
+                    "description": "Dapr tracing sampling rate in the Dapr Configuration, as a string from 0 to 1; \"1\" traces every request.",
+                    "type": "string"
+                }
+            }
+        },
+        "openbao": {
+            "type": "object",
+            "properties": {
+                "devMode": {
+                    "description": "The development store: in-memory, auto-unsealed with a fixed root token (demo only), run by the openbao fixture. False renders a sealed file-backed server an operator must init and unseal.",
+                    "type": "boolean"
+                },
+                "devToken": {
+                    "description": "Root token of the development store (the openbao fixture's `devToken`), which the Dapr secret store presents when `devMode` is true.",
+                    "type": "string"
+                },
+                "enabled": {
+                    "description": "An in-cluster OpenBao at `\u003crelease\u003e-openbao`: with `devMode` the development store (deploy/fixtures/openbao), whose seed runs the scripts this chart renders (`\u003crelease\u003e-openbao-seed`); without it the sealed server this chart renders.",
+                    "type": "boolean"
+                },
+                "externalAddr": {
+                    "description": "Address of an external Vault/OpenBao the secret stores point at instead of the in-cluster server; pair with `openbao.enabled=false`.",
+                    "type": "string"
+                },
+                "image": {
+                    "description": "OpenBao container image; also used by the MinIO scoped-users hook.",
+                    "type": "string"
+                },
+                "port": {
+                    "description": "Port of the OpenBao Service.",
+                    "type": "integer"
+                },
+                "storage": {
+                    "description": "PVC size of the file backend when `devMode` is false.",
+                    "type": "string"
+                }
+            }
+        },
+        "openfga": {
+            "type": "object",
+            "properties": {
+                "authn": {
+                    "type": "object",
+                    "properties": {
+                        "method": {
+                            "description": "Subchart passthrough: OpenFGA API authentication method; `oidc` admits only projected ServiceAccount tokens.",
+                            "type": "string"
+                        },
+                        "oidc": {
+                            "type": "object",
+                            "properties": {
+                                "audience": {
+                                    "description": "Token audience OpenFGA requires; templates/openfga-authn.yaml refuses a render unless it equals `lance.openfgaAudience` (rask-openfga).",
+                                    "type": "string"
+                                },
+                                "issuer": {
+                                    "description": "Subchart passthrough (tpl-rendered): the OIDC issuer OpenFGA fetches keys from, the release's ServiceAccount issuer mirror.",
+                                    "type": "string"
+                                }
+                            }
+                        }
+                    }
+                },
+                "datastore": {
+                    "description": "Subchart passthrough: Postgres datastore on the AGE server, DSN from `rask-infra-credentials`, bundled migrations off (rask's Job migrates), pool 30 open/10 idle.",
+                    "type": "object",
+                    "properties": {
+                        "applyMigrations": {
+                            "type": "boolean"
+                        },
+                        "engine": {
+                            "type": "string"
+                        },
+                        "existingSecret": {
+                            "type": "string"
+                        },
+                        "maxIdleConns": {
+                            "type": "integer"
+                        },
+                        "maxOpenConns": {
+                            "type": "integer"
+                        },
+                        "secretKeys": {
+                            "type": "object",
+                            "properties": {
+                                "uriKey": {
+                                    "type": "string"
+                                }
+                            }
+                        },
+                        "waitForMigrations": {
+                            "type": "boolean"
+                        }
+                    }
+                },
+                "enabled": {
+                    "description": "Install the OpenFGA authorization server subchart, plus rask's migrate Job, authn subject ConfigMap and PodDisruptionBudget for it.",
+                    "type": "boolean"
+                },
+                "extraEnvVars": {
+                    "description": "Subchart passthrough env: OPENFGA_EXPERIMENTALS=weighted_graph_check, the OIDC issuer alias, and the subject allow-list from `rask-openfga-authn`.",
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": {
+                                "type": "string"
+                            },
+                            "value": {
+                                "type": "string"
+                            },
+                            "valueFrom": {
+                                "type": "object",
+                                "properties": {
+                                    "configMapKeyRef": {
+                                        "type": "object",
+                                        "properties": {
+                                            "key": {
+                                                "type": "string"
+                                            },
+                                            "name": {
+                                                "type": "string"
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "http": {
+                    "description": "Subchart passthrough: CORS for the OpenFGA HTTP API, closed by allowing only the unreachable origin `https://openfga.invalid`.",
+                    "type": "object",
+                    "properties": {
+                        "corsAllowedHeaders": {
+                            "type": "array",
+                            "items": {
+                                "type": "string"
+                            }
+                        },
+                        "corsAllowedOrigins": {
+                            "type": "array",
+                            "items": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                },
+                "image": {
+                    "type": "object",
+                    "properties": {
+                        "tag": {
+                            "description": "OpenFGA image tag for the subchart server and for rask's own migrate Job (templates/openfga-migrate.yaml), so schema and binary match.",
+                            "type": "string"
+                        }
+                    }
+                },
+                "playground": {
+                    "type": "object",
+                    "properties": {
+                        "enabled": {
+                            "description": "Subchart passthrough: the OpenFGA browser playground; off, since it only runs with authn `none`.",
+                            "type": "boolean"
+                        }
+                    }
+                },
+                "replicaCount": {
+                    "description": "Subchart passthrough: number of OpenFGA server replicas.",
+                    "type": "integer"
+                },
+                "resources": {
+                    "description": "Subchart passthrough: CPU and memory requests/limits for the OpenFGA server.",
+                    "type": "object",
+                    "properties": {
+                        "limits": {
+                            "type": "object",
+                            "properties": {
+                                "memory": {
+                                    "type": "string"
+                                }
+                            }
+                        },
+                        "requests": {
+                            "type": "object",
+                            "properties": {
+                                "cpu": {
+                                    "type": "string"
+                                },
+                                "memory": {
+                                    "type": "string"
+                                }
+                            }
+                        }
+                    }
+                },
+                "telemetry": {
+                    "description": "Subchart passthrough: OpenFGA OTLP tracing to the OTel Collector; off by default, ratio 0.001 because each Check emits ~1,900 spans.",
+                    "type": "object",
+                    "properties": {
+                        "trace": {
+                            "type": "object",
+                            "properties": {
+                                "enabled": {
+                                    "type": "boolean"
+                                },
+                                "otlp": {
+                                    "type": "object",
+                                    "properties": {
+                                        "endpoint": {
+                                            "type": "string"
+                                        }
+                                    }
+                                },
+                                "sampleRatio": {
+                                    "type": "number"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "podDisruptionBudget": {
+            "type": "object",
+            "properties": {
+                "enabled": {
+                    "description": "Renders a PodDisruptionBudget for each service, controlplane and zone running more than one replica.",
+                    "type": "boolean"
+                },
+                "minAvailable": {
+                    "description": "minAvailable of every rendered PodDisruptionBudget.",
+                    "type": "integer"
+                }
+            }
+        },
+        "pubsub": {
+            "type": "object",
+            "properties": {
+                "controlName": {
+                    "description": "Name of the broadcast (no queue group) Dapr pubsub component for catalog.control.v1; must match the catalog's LANCE_CONTROL_PUBSUB default. Used when `controlEmit` is on.",
+                    "type": "string"
+                },
+                "name": {
+                    "description": "Name of the shared lineage publish Dapr pubsub component; each subscriber app gets a derived `\u003cname\u003e-\u003capp-id\u003e` component with its own queue group.",
+                    "type": "string"
+                },
+                "topic": {
+                    "description": "Topic OpenLineage run events are published and subscribed on (LANCE_DAPR_TOPIC, MEDALLION_LINEAGE_TOPIC and siblings).",
+                    "type": "string"
+                }
+            }
+        },
+        "ray": {
+            "type": "object",
+            "properties": {
+                "auth": {
+                    "type": "object",
+                    "properties": {
+                        "enabled": {
+                            "description": "rask's Ray clients present the token in `\u003crelease\u003e-ray-auth-token`; the engine must enforce the same one. Off for dev.",
+                            "type": "boolean"
+                        }
+                    }
+                },
+                "dashboardUrl": {
+                    "description": "Address of the engine's Ray dashboard, used verbatim by every Ray consumer; the ray-cluster fixture serves http://rask-ray-head-svc:8265.",
+                    "type": "string"
+                },
+                "enabled": {
+                    "description": "rask talks to a Ray engine: the NetworkPolicy admits the pods KubeRay marks `ray.io/is-ray-node`, and the Collector scrapes them.",
+                    "type": "boolean"
+                },
+                "engineServiceAccount": {
+                    "description": "Service account (in the release namespace) whose tokens rask admits as the trainer; empty admits none. The ray-cluster fixture runs its head as `\u003crask\u003e-sa-ray`.",
+                    "type": "string"
+                }
+            }
+        },
+        "resources": {
+            "type": "object",
+            "properties": {
+                "age": {
+                    "description": "CPU/memory requests and limits for the AGE Postgres StatefulSet (lineage and OpenFGA databases).",
+                    "type": "object",
+                    "properties": {
+                        "limits": {
+                            "type": "object",
+                            "properties": {
+                                "cpu": {
+                                    "type": "string"
+                                },
+                                "memory": {
+                                    "type": "string"
+                                }
+                            }
+                        },
+                        "requests": {
+                            "type": "object",
+                            "properties": {
+                                "cpu": {
+                                    "type": "string"
+                                },
+                                "memory": {
+                                    "type": "string"
+                                }
+                            }
+                        }
+                    }
+                },
+                "assist": {
+                    "description": "CPU/memory requests and limits for the assist model runner (two warm torch models).",
+                    "type": "object",
+                    "properties": {
+                        "limits": {
+                            "type": "object",
+                            "properties": {
+                                "cpu": {
+                                    "type": "string"
+                                },
+                                "memory": {
+                                    "type": "string"
+                                }
+                            }
+                        },
+                        "requests": {
+                            "type": "object",
+                            "properties": {
+                                "cpu": {
+                                    "type": "string"
+                                },
+                                "memory": {
+                                    "type": "string"
+                                }
+                            }
+                        }
+                    }
+                },
+                "catalog": {
+                    "description": "CPU/memory requests and limits for the catalog; requests sized so the HPA CPU target is meaningful.",
+                    "type": "object",
+                    "properties": {
+                        "limits": {
+                            "type": "object",
+                            "properties": {
+                                "cpu": {
+                                    "type": "string"
+                                },
+                                "memory": {
+                                    "type": "string"
+                                }
+                            }
+                        },
+                        "requests": {
+                            "type": "object",
+                            "properties": {
+                                "cpu": {
+                                    "type": "string"
+                                },
+                                "memory": {
+                                    "type": "string"
+                                }
+                            }
+                        }
+                    }
+                },
+                "compute": {
+                    "description": "CPU/memory requests and limits for the compute service, sized for the Ray Job SDK it imports.",
+                    "type": "object",
+                    "properties": {
+                        "limits": {
+                            "type": "object",
+                            "properties": {
+                                "cpu": {
+                                    "type": "string"
+                                },
+                                "memory": {
+                                    "type": "string"
+                                }
+                            }
+                        },
+                        "requests": {
+                            "type": "object",
+                            "properties": {
+                                "cpu": {
+                                    "type": "string"
+                                },
+                                "memory": {
+                                    "type": "string"
+                                }
+                            }
+                        }
+                    }
+                },
+                "default": {
+                    "description": "CPU/memory requests and limits for every lakehouse app container that names no tier of its own (lance.resources).",
+                    "type": "object",
+                    "properties": {
+                        "limits": {
+                            "type": "object",
+                            "properties": {
+                                "cpu": {
+                                    "type": "string"
+                                },
+                                "memory": {
+                                    "type": "string"
+                                }
+                            }
+                        },
+                        "requests": {
+                            "type": "object",
+                            "properties": {
+                                "cpu": {
+                                    "type": "string"
+                                },
+                                "memory": {
+                                    "type": "string"
+                                }
+                            }
+                        }
+                    }
+                },
+                "fleet": {
+                    "description": "CPU/memory requests and limits for fleet services (templates/fleet.yaml) that name no tier of their own.",
+                    "type": "object",
+                    "properties": {
+                        "limits": {
+                            "type": "object",
+                            "properties": {
+                                "cpu": {
+                                    "type": "string"
+                                },
+                                "memory": {
+                                    "type": "string"
+                                }
+                            }
+                        },
+                        "requests": {
+                            "type": "object",
+                            "properties": {
+                                "cpu": {
+                                    "type": "string"
+                                },
+                                "memory": {
+                                    "type": "string"
+                                }
+                            }
+                        }
+                    }
+                },
+                "lineage": {
+                    "description": "CPU/memory requests and limits for lineage; requests sized so the HPA CPU target is meaningful.",
+                    "type": "object",
+                    "properties": {
+                        "limits": {
+                            "type": "object",
+                            "properties": {
+                                "cpu": {
+                                    "type": "string"
+                                },
+                                "memory": {
+                                    "type": "string"
+                                }
+                            }
+                        },
+                        "requests": {
+                            "type": "object",
+                            "properties": {
+                                "cpu": {
+                                    "type": "string"
+                                },
+                                "memory": {
+                                    "type": "string"
+                                }
+                            }
+                        }
+                    }
+                },
+                "otel-collector": {
+                    "description": "CPU/memory requests and limits for the OTel Collector; memory limit matches its hardcoded 400 MiB memory_limiter.",
+                    "type": "object",
+                    "properties": {
+                        "limits": {
+                            "type": "object",
+                            "properties": {
+                                "cpu": {
+                                    "type": "string"
+                                },
+                                "memory": {
+                                    "type": "string"
+                                }
+                            }
+                        },
+                        "requests": {
+                            "type": "object",
+                            "properties": {
+                                "cpu": {
+                                    "type": "string"
+                                },
+                                "memory": {
+                                    "type": "string"
+                                }
+                            }
+                        }
+                    }
+                },
+                "viewer": {
+                    "description": "CPU/memory requests and limits for the explorer viewer (in-process KG engine and atlas cache).",
+                    "type": "object",
+                    "properties": {
+                        "limits": {
+                            "type": "object",
+                            "properties": {
+                                "cpu": {
+                                    "type": "string"
+                                },
+                                "memory": {
+                                    "type": "string"
+                                }
+                            }
+                        },
+                        "requests": {
+                            "type": "object",
+                            "properties": {
+                                "cpu": {
+                                    "type": "string"
+                                },
+                                "memory": {
+                                    "type": "string"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "runners": {
+            "type": "object",
+            "properties": {
+                "assist": {
+                    "type": "object",
+                    "properties": {
+                        "image": {
+                            "description": "Assist runner image: `repository` and `tag`; the tag is required when runners are enabled.",
+                            "type": "object",
+                            "properties": {
+                                "repository": {
+                                    "type": "string"
+                                },
+                                "tag": {
+                                    "type": "string"
+                                }
+                            }
+                        },
+                        "port": {
+                            "description": "HTTP port of the assist runner Service.",
+                            "type": "integer"
+                        }
+                    }
+                },
+                "enabled": {
+                    "description": "Deploy the `assist` model runner and point the annotator's MEDIA_ASSIST_URL at it instead of its in-repo mock.",
+                    "type": "boolean"
+                },
+                "jobsUrl": {
+                    "description": "RayJob submit endpoint for the annotator's batch-labeling seam (MEDIA_JOBS_URL). Empty = the annotator keeps its submit/poll mock.",
+                    "type": "string"
+                }
+            }
+        },
+        "secrets": {
+            "type": "object",
+            "properties": {
+                "hfTokenInStore": {
+                    "description": "True once the Hugging Face token is in the secret store at `\u003ckvMount\u003e/hf-token`; renders the `\u003crelease\u003e-hf-token` ExternalSecret. False starts Ray pods without HF_TOKEN.",
+                    "type": "boolean"
+                }
+            }
+        },
+        "security": {
+            "type": "object",
+            "properties": {
+                "infraContexts": {
+                    "type": "object",
+                    "properties": {
+                        "age": {
+                            "description": "uid/fsGroup for the AGE Postgres pod (postgres image uid/gid 999).",
+                            "type": "object",
+                            "properties": {
+                                "fsGroup": {
+                                    "type": "integer"
+                                },
+                                "runAsUser": {
+                                    "type": "integer"
+                                }
+                            }
+                        },
+                        "enabled": {
+                            "description": "Applies pinned runAsUser/fsGroup securityContexts to the infra pods (AGE, OpenBao). Off by default.",
+                            "type": "boolean"
+                        },
+                        "openbao": {
+                            "description": "uid/fsGroup for the OpenBao pod (image uid 100).",
+                            "type": "object",
+                            "properties": {
+                                "fsGroup": {
+                                    "type": "integer"
+                                },
+                                "runAsUser": {
+                                    "type": "integer"
+                                }
+                            }
+                        }
+                    }
+                },
+                "readOnlyRootFilesystem": {
+                    "description": "Read-only root filesystem for every first-party app container; each gets a writable /tmp emptyDir.",
+                    "type": "boolean"
+                },
+                "tmpSizeLimit": {
+                    "description": "sizeLimit of each app's /tmp emptyDir (upload spool, Lance spill, OTel queue); stops one pod filling the node's disk.",
+                    "type": "string"
+                }
+            }
+        },
+        "services": {
+            "type": "object",
+            "properties": {
+                "catalog": {
+                    "type": "object",
+                    "properties": {
+                        "daprAppId": {
+                            "description": "Dapr app-id of the catalog; also names its pubsub components and durable consumers.",
+                            "type": "string"
+                        },
+                        "module": {
+                            "description": "uvicorn import path the catalog Deployment runs (templates/services.yaml).",
+                            "type": "string"
+                        },
+                        "port": {
+                            "description": "Container and Service port of the Lance catalog.",
+                            "type": "integer"
+                        },
+                        "replicas": {
+                            "description": "Replica count of the catalog; above 1 requires catalog.controlEmit=true or the render fails.",
+                            "type": "integer"
+                        }
+                    }
+                },
+                "compute": {
+                    "type": "object",
+                    "properties": {
+                        "daprIngest": {
+                            "description": "Renders APP_API_TOKEN for compute, whose boot refuses to start with Dapr on and no token (it hosts the prune cron route).",
+                            "type": "boolean"
+                        },
+                        "frontDoor": {
+                            "description": "Renders compute outside singleTenant, because the gateway routes /api/ray and /api/serve to it.",
+                            "type": "boolean"
+                        },
+                        "governedAuth": {
+                            "description": "Gives compute the OIDC/FGA env and FGA token mount when auth.enabled; without it its routes answer anonymously.",
+                            "type": "boolean"
+                        },
+                        "module": {
+                            "description": "uvicorn import path the compute Deployment runs.",
+                            "type": "string"
+                        },
+                        "port": {
+                            "description": "Container and Service port of the compute app (Ray introspection and the /api/serve proxy).",
+                            "type": "integer"
+                        },
+                        "rayClient": {
+                            "description": "Gives compute the RAY_AUTH_* env when ray.auth.enabled, for dashboard introspection and the Serve proxy.",
+                            "type": "boolean"
+                        },
+                        "replicas": {
+                            "description": "Replica count of the compute Deployment; 0 scales it to zero.",
+                            "type": "integer"
+                        },
+                        "waitFor": {
+                            "description": "List of dependencies compute waits for in an init container; only `minio` is honoured (when minio.enabled).",
+                            "type": "array"
+                        }
+                    }
+                },
+                "flows": {
+                    "type": "object",
+                    "properties": {
+                        "frontDoor": {
+                            "description": "Renders flows outside singleTenant, because the gateway routes /api/flows to it.",
+                            "type": "boolean"
+                        },
+                        "governedAuth": {
+                            "description": "Gives flows the OIDC/FGA env and FGA token mount when auth.enabled; its run door checks the writer tier.",
+                            "type": "boolean"
+                        },
+                        "module": {
+                            "description": "uvicorn import path the flows (studio flow-builder server) Deployment runs.",
+                            "type": "string"
+                        },
+                        "port": {
+                            "description": "Container and Service port of the flows app.",
+                            "type": "integer"
+                        },
+                        "replicas": {
+                            "description": "Replica count of the flows Deployment; 0 scales it to zero.",
+                            "type": "integer"
+                        },
+                        "waitFor": {
+                            "description": "List of dependencies flows waits for in an init container; only `minio` is honoured (when minio.enabled).",
+                            "type": "array"
+                        }
+                    }
+                },
+                "gateway": {
+                    "type": "object",
+                    "properties": {
+                        "frontDoor": {
+                            "description": "Renders the gateway outside singleTenant; it is the /api entry point.",
+                            "type": "boolean"
+                        },
+                        "healthPath": {
+                            "description": "Liveness probe path of the gateway (default `/livez`).",
+                            "type": "string"
+                        },
+                        "module": {
+                            "description": "uvicorn import path the gateway Deployment runs.",
+                            "type": "string"
+                        },
+                        "port": {
+                            "description": "Container and Service port of the gateway (the /api reverse proxy the Ingress routes to).",
+                            "type": "integer"
+                        },
+                        "readyPath": {
+                            "description": "Readiness probe path of the gateway (default `/readyz`); it asks no upstream, so the gateway stays Ready without backends.",
+                            "type": "string"
+                        },
+                        "replicas": {
+                            "description": "Replica count of the gateway Deployment; 0 scales it to zero.",
+                            "type": "integer"
+                        },
+                        "waitFor": {
+                            "description": "List of dependencies the gateway waits for in an init container; only `minio` is honoured (when minio.enabled).",
+                            "type": "array"
+                        }
+                    }
+                },
+                "ingest": {
+                    "type": "object",
+                    "properties": {
+                        "cronBindingName": {
+                            "description": "Name of the Dapr cron binding for the incremental poll (templates/ingest-cron.yaml). Empty renders no binding and the poll is off.",
+                            "type": "string"
+                        },
+                        "cronDataset": {
+                            "description": "Dataset the incremental poll lands into. No template renders it; the app reads RASK_INGEST_CRON_DATASET, which this value does not reach.",
+                            "type": "string"
+                        },
+                        "cronKind": {
+                            "description": "Source kind the incremental poll ingests. No template renders it; the app reads RASK_INGEST_CRON_KIND, which this value does not reach.",
+                            "type": "string"
+                        },
+                        "cronOptions": {
+                            "description": "Source options for the incremental poll. No template renders it; the app reads RASK_INGEST_CRON_OPTIONS, which this value does not reach.",
+                            "type": "string"
+                        },
+                        "cronSchedule": {
+                            "description": "Schedule of the incremental-poll cron binding (Dapr cron syntax, e.g. `@every 1h`). Used only when cronBindingName is set.",
+                            "type": "string"
+                        },
+                        "daprIngest": {
+                            "description": "Renders APP_API_TOKEN for an app that refuses to start without it. False for ingest, which gets the token through lanceWriter instead.",
+                            "type": "boolean"
+                        },
+                        "env": {
+                            "description": "Env-var map rendered verbatim into the ingest container: lineage/catalog URLs and identities, the pinned service project, local-dir and lance-append roots (empty refuses the kind), unit and run-hour ceilings.",
+                            "type": "object",
+                            "properties": {
+                                "RASK_CATALOG_SERVICE_IDENTITY": {
+                                    "type": "string"
+                                },
+                                "RASK_CATALOG_URL": {
+                                    "type": "string"
+                                },
+                                "RASK_INGEST_LANCE_ROOT": {
+                                    "type": "string"
+                                },
+                                "RASK_INGEST_LOCAL_ROOT": {
+                                    "type": "string"
+                                },
+                                "RASK_INGEST_MAX_RUN_HOURS": {
+                                    "type": "string"
+                                },
+                                "RASK_INGEST_MAX_UNITS": {
+                                    "type": "string"
+                                },
+                                "RASK_INGEST_SECRETS_FROM_DAPR": {
+                                    "type": "string"
+                                },
+                                "RASK_INGEST_SERVICE_PROJECT": {
+                                    "type": "string"
+                                },
+                                "RASK_INGEST_USE_CATALOG": {
+                                    "type": "string"
+                                },
+                                "RASK_LINEAGE_ENDPOINT": {
+                                    "type": "string"
+                                },
+                                "RASK_LINEAGE_SERVICE_IDENTITY": {
+                                    "type": "string"
+                                },
+                                "RASK_LINEAGE_URL": {
+                                    "type": "string"
+                                }
+                            }
+                        },
+                        "frontDoor": {
+                            "description": "Renders ingest outside singleTenant, because the gateway routes /api/ingest to it.",
+                            "type": "boolean"
+                        },
+                        "governedAuth": {
+                            "description": "Gives ingest the OIDC/FGA env and FGA token mount when auth.enabled, feeding its user door.",
+                            "type": "boolean"
+                        },
+                        "incrementalMaxRows": {
+                            "description": "Ceiling on rows the poll's anti-join reads; 0 is unbounded, over it the run refuses. No template renders it; the app reads RASK_INGEST_INCREMENTAL_MAX_ROWS.",
+                            "type": "integer"
+                        },
+                        "lanceWriter": {
+                            "description": "Injects the S3 endpoint, warehouse, lineage outbox and LANCE_REST_ROOT env so ingest can write Lance to the warehouse.",
+                            "type": "boolean"
+                        },
+                        "module": {
+                            "description": "uvicorn import path (module:factory) the ingest Deployment runs.",
+                            "type": "string"
+                        },
+                        "port": {
+                            "description": "Container and Service port of the ingest app.",
+                            "type": "integer"
+                        },
+                        "replicas": {
+                            "description": "Replica count of the ingest Deployment; 0 scales it to zero.",
+                            "type": "integer"
+                        },
+                        "waitFor": {
+                            "description": "List of dependencies the pod waits for in an init container before starting; only `minio` is honoured (when minio.enabled).",
+                            "type": "array"
+                        }
+                    }
+                },
+                "lineage": {
+                    "type": "object",
+                    "properties": {
+                        "ageStatementTimeoutSeconds": {
+                            "description": "Server-side per-statement timeout in seconds on lineage's AGE pool; bounds a runaway Cypher traversal.",
+                            "type": "integer"
+                        },
+                        "daprAppId": {
+                            "description": "Dapr app-id of lineage; also names its pubsub, DLQ and durable consumers and scopes its reconcile cron.",
+                            "type": "string"
+                        },
+                        "demoData": {
+                            "description": "Mounts the unauthenticated /demo/* data-peek router. Demo only; off by default.",
+                            "type": "boolean"
+                        },
+                        "eventsRetentionDays": {
+                            "description": "Days of arrival time the durable /events feed keeps, pruned on the reconcile tick; bounds how long a notifications outage it survives. 0 is unbounded.",
+                            "type": "integer"
+                        },
+                        "freshnessBudgetHours": {
+                            "description": "Hours after which a dataset with no new version is flagged `stale` by reconcile and the dataset GET. 0 turns the check off.",
+                            "type": "integer"
+                        },
+                        "module": {
+                            "description": "uvicorn import path the lineage Deployment runs (templates/services.yaml).",
+                            "type": "string"
+                        },
+                        "outbox": {
+                            "type": "object",
+                            "properties": {
+                                "enabled": {
+                                    "description": "Stages each lineage event to `s3://\u003cminio.bucket\u003e/_lineage_outbox` before publishing, drained by reconcile. Requires reconcile.enabled.",
+                                    "type": "boolean"
+                                }
+                            }
+                        },
+                        "port": {
+                            "description": "Container and Service port of the lineage service.",
+                            "type": "integer"
+                        },
+                        "readAudit": {
+                            "description": "Records every allowed FGA-gated data read (feeds GET /datasets/{name}/readers). Rendered only when auth.enabled.",
+                            "type": "boolean"
+                        },
+                        "reconcile": {
+                            "type": "object",
+                            "properties": {
+                                "bindingName": {
+                                    "description": "Name of the reconcile cron binding; the sidecar POSTs to /\u003cbindingName\u003e.",
+                                    "type": "string"
+                                },
+                                "enabled": {
+                                    "description": "Renders the storage-to-graph reconcile cron, which back-fills lost lineage events, drains the outbox and prunes. Needs dapr.enabled.",
+                                    "type": "boolean"
+                                },
+                                "schedule": {
+                                    "description": "Schedule of the reconcile sweep (Dapr cron syntax, e.g. `@every 300s` or a cron expression).",
+                                    "type": "string"
+                                }
+                            }
+                        },
+                        "replicas": {
+                            "description": "Replica count of lineage; replicas form a competing-consumer group, so it scales freely.",
+                            "type": "integer"
+                        },
+                        "runRetentionDays": {
+                            "description": "Days after which reconcile prunes graph :Run nodes and the Dataset nodes that leaves orphaned. 0 keeps everything.",
+                            "type": "integer"
+                        }
+                    }
+                },
+                "notifications": {
+                    "type": "object",
+                    "properties": {
+                        "channels": {
+                            "type": "object",
+                            "properties": {
+                                "email": {
+                                    "type": "object",
+                                    "properties": {
+                                        "enabled": {
+                                            "description": "Renders the `notifications-email` Dapr SMTP binding and adds `email` to RASK_NOTIFICATIONS_CHANNELS. Off by default.",
+                                            "type": "boolean"
+                                        },
+                                        "from": {
+                                            "description": "Sender address the email channel sends from.",
+                                            "type": "string"
+                                        },
+                                        "host": {
+                                            "description": "SMTP server host for the email channel.",
+                                            "type": "string"
+                                        },
+                                        "port": {
+                                            "description": "SMTP server port for the email channel (default 587).",
+                                            "type": "integer"
+                                        },
+                                        "secretName": {
+                                            "description": "Secret-store key holding the SMTP `user` and `password` fields.",
+                                            "type": "string"
+                                        }
+                                    }
+                                },
+                                "slack": {
+                                    "type": "object",
+                                    "properties": {
+                                        "enabled": {
+                                            "description": "Renders the Slack Dapr binding and adds `slack` to RASK_NOTIFICATIONS_CHANNELS. Off by default.",
+                                            "type": "boolean"
+                                        },
+                                        "secretName": {
+                                            "description": "Secret-store key holding the Slack `webhookUrl` field.",
+                                            "type": "string"
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                        "daprIngest": {
+                            "description": "Renders APP_API_TOKEN for notifications, which refuses to start with Dapr on and no token.",
+                            "type": "boolean"
+                        },
+                        "env": {
+                            "description": "Env-var map rendered verbatim into the notifications container; RASK_LINEAGE_SERVICE_IDENTITY is the subject it maps to at lineage's door.",
+                            "type": "object",
+                            "properties": {
+                                "RASK_LINEAGE_SERVICE_IDENTITY": {
+                                    "type": "string"
+                                }
+                            }
+                        },
+                        "frontDoor": {
+                            "description": "Renders notifications outside singleTenant, because the gateway routes /api/notifications to it.",
+                            "type": "boolean"
+                        },
+                        "governedAuth": {
+                            "description": "Gives notifications the OIDC/FGA env and FGA token mount when auth.enabled.",
+                            "type": "boolean"
+                        },
+                        "module": {
+                            "description": "uvicorn import path the notifications (inbox) Deployment runs.",
+                            "type": "string"
+                        },
+                        "port": {
+                            "description": "Container and Service port of the notifications app.",
+                            "type": "integer"
+                        },
+                        "reconcileBindingName": {
+                            "description": "Name of the reconcile cron binding; also rendered as RASK_NOTIFICATIONS_BINDING_NAME so the tick reaches the matching route.",
+                            "type": "string"
+                        },
+                        "reconcileSchedule": {
+                            "description": "Schedule of the reconcile cron over lineage's /events feed; must stay above the app's 25 s reconcile budget.",
+                            "type": "string"
+                        },
+                        "replicas": {
+                            "description": "Replica count of the notifications Deployment; replicas form a competing-consumer group. 0 scales it to zero.",
+                            "type": "integer"
+                        },
+                        "waitFor": {
+                            "description": "List of dependencies notifications waits for in an init container; only `minio` is honoured (when minio.enabled).",
+                            "type": "array"
+                        }
+                    }
+                }
+            }
+        },
+        "signing": {
+            "type": "object",
+            "properties": {
+                "doors": {
+                    "description": "Mode of the bus doors' signature check: \"off\", \"observe\" (count would-refuse) or \"enforce\" (ack and refuse). Always quoted.",
+                    "type": "string"
+                },
+                "enforce": {
+                    "description": "Lineage refuses unsigned or non-verifying events when the secret store and auth are also on. False renders no signer sets and lineage verifies nothing.",
+                    "type": "boolean"
+                },
+                "mintImage": {
+                    "description": "Image of the dev OpenBao's `mint` init container that generates each identity's NKEY pair.",
+                    "type": "string"
+                },
+                "provisioned": {
+                    "description": "Attest that signing keys exist for every identity in a non-dev store; the render fails until it is true there.",
+                    "type": "boolean"
+                }
+            }
+        },
+        "singleTenant": {
+            "type": "object",
+            "properties": {
+                "enabled": {
+                    "description": "Renders the single-tenant default workloads (every fleet service, domain zones). False installs front-door services only; the object store is gated by `minio.enabled`.",
+                    "type": "boolean"
+                }
+            }
+        },
+        "stateStore": {
+            "type": "object",
+            "properties": {
+                "componentVersion": {
+                    "description": "Version of the Dapr Postgres state store component.",
+                    "type": "string"
+                },
+                "enabled": {
+                    "description": "Render the Dapr Postgres state store component (actor and workflow state) on the AGE `stateDb`.",
+                    "type": "boolean"
+                },
+                "metadataTableName": {
+                    "description": "Table the Dapr state store keeps its own metadata in.",
+                    "type": "string"
+                },
+                "name": {
+                    "description": "Name of the Dapr state store component.",
+                    "type": "string"
+                },
+                "scopes": {
+                    "description": "App-ids allowed to load the state store; the secret-store scope is derived from this list too. Adding one needs a restart of scoped pods.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "secretStore": {
+                    "description": "Dapr secret store that resolves the state store's connection string (OpenBao, never a k8s Secret).",
+                    "type": "string"
+                },
+                "tableName": {
+                    "description": "Postgres table holding Dapr state rows.",
+                    "type": "string"
+                }
+            }
+        },
+        "storage": {
+            "type": "object",
+            "properties": {
+                "stores": {
+                    "description": "Object-store registry rendered as RASK_STORES for the fleet and the explorer viewer; each entry is {name, bucket, role, secret, description, endpoint?, insecure?}, `secret` a Dapr secret-store key.",
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "bucket": {
+                                "type": "string"
+                            },
+                            "description": {
+                                "type": "string"
+                            },
+                            "name": {
+                                "type": "string"
+                            },
+                            "role": {
+                                "type": "string"
+                            },
+                            "secret": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "vending": {
+            "type": "object",
+            "properties": {
+                "allowExternalBlobs": {
+                    "description": "Allow blob-v2 columns to reference arbitrary external objects (Blob.from_uri) on create. Off by default: an SSRF and dangling-pointer risk; prefer `externalBlobBases`.",
+                    "type": "boolean"
+                },
+                "assumeRoleArn": {
+                    "description": "Role ARN passed on AssumeRole in `sts`/`web_identity` mode (LANCE_S3_ASSUME_ROLE_ARN); stores with inherited policies ignore it but boto3 requires it.",
+                    "type": "string"
+                },
+                "encryption": {
+                    "description": "Server-side encryption for direct writes, carried in vended storage options: `algorithm` (AES256, aws:kms, aws:kms:dsse) and `kmsKeyId` (kms only). Empty = bucket default.",
+                    "type": "object"
+                },
+                "externalBlobBases": {
+                    "description": "Comma-separated allowlist of base URIs external blob pointers may live under (LANCE_EXTERNAL_BLOB_BASES). Empty = `s3://\u003cminio.bucket\u003e/models/`; a value replaces that default.",
+                    "type": "string"
+                },
+                "mode": {
+                    "description": "How the catalog vends storage credentials for direct object I/O: `mode_b` (none, server-mediated), `web_identity`, `sts` (default, scoped AssumeRole) or `static`.",
+                    "type": "string"
+                },
+                "ttlSeconds": {
+                    "description": "Lifetime in seconds of a vended STS / web-identity credential (LANCE_VENDING_TTL_SECONDS).",
+                    "type": "integer"
+                }
+            }
+        }
+    }
+}

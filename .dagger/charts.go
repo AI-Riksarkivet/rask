@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 
 	"dagger/rask/internal/dagger"
 )
@@ -26,6 +27,10 @@ const helmVersion = "3.16.4"
 // helmDocsVersion is the helm-docs that generates chart/README.md; the Makefile's HELM_DOCS_V pins the same one,
 // because a different version renders a different README and the staleness check would then disagree with itself.
 const helmDocsVersion = "1.14.2"
+
+// helmSchemaVersion is the helm-values-schema-json that generates chart/values.schema.json; the Makefile's HELM_SCHEMA_V
+// pins the same one, for the same reason.
+const helmSchemaVersion = "2.6.0"
 
 // promVersion matches the CI job's promtool exactly (PV=2.55.1) — the version that authored rules_test.yml.
 const promVersion = "2.55.1"
@@ -88,6 +93,12 @@ func (m *Rask) chartsBase(src *dagger.Directory) *dagger.Container {
 				"curl -fsSL https://github.com/norwoodj/helm-docs/releases/download/v" + helmDocsVersion +
 				"/helm-docs_" + helmDocsVersion + "_Linux_${a}.tar.gz" +
 				" | tar xz -C /usr/local/bin helm-docs"}).
+		// Pin helm-schema, the release's standalone `schema` binary.
+		WithExec([]string{"sh", "-c",
+			"set -eu; a=\"$(dpkg --print-architecture)\"; " +
+				"curl -fsSL https://github.com/losisin/helm-values-schema-json/releases/download/v" + helmSchemaVersion +
+				"/helm-values-schema-json_" + helmSchemaVersion + "_linux_${a}.tgz" +
+				" | tar xz -C /tmp schema && install -m0755 /tmp/schema /usr/local/bin/helm-schema"}).
 		WithDirectory("/src", src, dagger.ContainerWithDirectoryOpts{
 			Exclude: []string{"**/.env", "**/.env.*", ".venv", ".git", "node_modules", ".dagger", "frontend/node_modules", ".localbin"},
 		}).
@@ -105,6 +116,15 @@ func (m *Rask) Charts(
 	// +optional
 	src *dagger.Directory,
 ) (string, error) {
+	// The chart's lint through the helm Dagger module (owner, 2026-10-12), on the pinned helm rather than the module's
+	// unpinned default image.
+	lintBase := dag.Container().From(chartsBaseImage).
+		WithExec([]string{"apt-get", "update"}).
+		WithExec([]string{"apt-get", "install", "-y", "--no-install-recommends", "ca-certificates"}).
+		WithFile("/usr/local/bin/helm", helmBinary())
+	if _, err := dag.Helm(src.Directory("chart"), dagger.HelmOpts{BaseHelmContainer: lintBase}).Lint(ctx); err != nil {
+		return "", fmt.Errorf("helm lint: %w", err)
+	}
 	return m.chartsBase(src).
 		// Fetch the subcharts FIRST. `chart/charts/` is gitignored (.gitignore: "vendored helm subcharts
 		// — rebuilt via `make k3s-deps`"), so a fresh checkout has Chart.yaml's ten dependencies declared
@@ -126,22 +146,12 @@ func (m *Rask) Charts(
 		// Chart.lock, while update re-resolves and rewrites it — which would let CI render a different
 		// subchart version than a deploy does, and make this verdict depend on upstream release timing.
 		WithExec([]string{"make", "k3s-deps"}).
-		// 'Helm lint + render': lint the chart, then prove a render succeeds.
-		//
-		// ── THIS STEP WAS UNSATISFIABLE FOR 923 COMMITS, AND IT TOOK FIVE GATES DOWN WITH IT ─────────
-		// A bare `helm template chart` has been REFUSED since 3c909e0a (2026-08-04, "registry required")
-		// made `image.repository` a `required`, and again by an OIDC guard. So this line exited 1 on every run, and everything after it — the NetworkPolicy
-		// isolation invariants, the service-account hardening invariants, the Dapr resiliency/DLQ
-		// invariants, `make prod-render-check` and `make alert-rules-check` — never executed once.
-		//
-		// `helm lint chart` on the line ABOVE exits 0 on the same tree, emitting the guard text only as
-		// `[INFO]`, which is why the job looked like it was failing on a render detail rather than on a
-		// gate that could not start.
+		// 'Helm render': prove a render succeeds. The lint above exits 0 on a chart whose `required` guards refuse every
+		// render, printing the guard text only as `[INFO]`, so it says nothing about whether the chart renders.
 		//
 		// The arguments are not a workaround: a `required` guard means the chart HAS no valid default
 		// render, so a gate that renders must state a configuration. renderArgs is that statement, in
 		// one place, used by every render below.
-		WithExec([]string{"helm", "lint", "chart"}).
 		WithExec([]string{"sh", "-c", "helm template chart " + renderArgs + " >/dev/null"}).
 		// 'Helm render network-policy layer (flag on) + invariants'.
 		WithExec([]string{"bash", "-c", networkPolicyGate}).
@@ -153,7 +163,7 @@ func (m *Rask) Charts(
 		WithExec([]string{"make", "prod-render-check"}).
 		// 'Alert rules — validate + prove they fire (promtool)' == make alert-rules-check.
 		WithExec([]string{"make", "alert-rules-check"}).
-		// The generated chart README is current and every value carries a `# --` description.
+		// The generated chart README and values schema are current and every value carries a `# --` description.
 		WithExec([]string{"make", "chart-docs-check"}).
 		Stdout(ctx)
 }

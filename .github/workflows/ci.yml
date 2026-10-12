@@ -56,7 +56,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install Dagger CLI (pinned to the module's engineVersion)
         run: |
-          curl -fsSL https://dl.dagger.io/dagger/install.sh | DAGGER_VERSION=0.21.7 BIN_DIR=/usr/local/bin sh
+          curl -fsSL https://dl.dagger.io/dagger/install.sh | DAGGER_VERSION=0.21.8 BIN_DIR=/usr/local/bin sh
       # STARTING THE ENGINE IS A NETWORK CALL, and it was failing often enough to make this CI's verdict
       # about the weather. Measured 2026-09-24: four Dagger jobs across two runs died on
       # `start engine: failed to pull image ... read: connection reset by peer` from registry.dagger.io,
@@ -122,12 +122,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        gate: [lint, typecheck, openapi, charts, alert-rules-drill, go-fmt, nats-auth]
+        # install-from-empty: rask installed onto an empty k3s inside Dagger, fixtures then the product chart, until
+        # every workload is Ready ([[XC-133]]); the command a developer runs locally.
+        gate: [lint, typecheck, openapi, charts, alert-rules-drill, go-fmt, nats-auth, install-from-empty]
     steps:
       - uses: actions/checkout@v4
       - name: Install Dagger CLI (pinned to the module's engineVersion)
         run: |
-          curl -fsSL https://dl.dagger.io/dagger/install.sh | DAGGER_VERSION=0.21.7 BIN_DIR=/usr/local/bin sh
+          curl -fsSL https://dl.dagger.io/dagger/install.sh | DAGGER_VERSION=0.21.8 BIN_DIR=/usr/local/bin sh
       # STARTING THE ENGINE IS A NETWORK CALL, and it was failing often enough to make this CI's verdict
       # about the weather. Measured 2026-09-24: four Dagger jobs across two runs died on
       # `start engine: failed to pull image ... read: connection reset by peer` from registry.dagger.io,
@@ -191,7 +193,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install Dagger CLI (pinned to the module's engineVersion)
         run: |
-          curl -fsSL https://dl.dagger.io/dagger/install.sh | DAGGER_VERSION=0.21.7 BIN_DIR=/usr/local/bin sh
+          curl -fsSL https://dl.dagger.io/dagger/install.sh | DAGGER_VERSION=0.21.8 BIN_DIR=/usr/local/bin sh
       # STARTING THE ENGINE IS A NETWORK CALL, and it was failing often enough to make this CI's verdict
       # about the weather. Measured 2026-09-24: four Dagger jobs across two runs died on
       # `start engine: failed to pull image ... read: connection reset by peer` from registry.dagger.io,
@@ -239,7 +241,7 @@ jobs:
           fetch-depth: 0
       - name: Install Dagger CLI (pinned to the module's engineVersion)
         run: |
-          curl -fsSL https://dl.dagger.io/dagger/install.sh | DAGGER_VERSION=0.21.7 BIN_DIR=/usr/local/bin sh
+          curl -fsSL https://dl.dagger.io/dagger/install.sh | DAGGER_VERSION=0.21.8 BIN_DIR=/usr/local/bin sh
       # STARTING THE ENGINE IS A NETWORK CALL, and it was failing often enough to make this CI's verdict
       # about the weather. Measured 2026-09-24: four Dagger jobs across two runs died on
       # `start engine: failed to pull image ... read: connection reset by peer` from registry.dagger.io,
@@ -288,7 +290,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install Dagger CLI (pinned to the module's engineVersion)
         run: |
-          curl -fsSL https://dl.dagger.io/dagger/install.sh | DAGGER_VERSION=0.21.7 BIN_DIR=/usr/local/bin sh
+          curl -fsSL https://dl.dagger.io/dagger/install.sh | DAGGER_VERSION=0.21.8 BIN_DIR=/usr/local/bin sh
       # STARTING THE ENGINE IS A NETWORK CALL, and it was failing often enough to make this CI's verdict
       # about the weather. Measured 2026-09-24: four Dagger jobs across two runs died on
       # `start engine: failed to pull image ... read: connection reset by peer` from registry.dagger.io,
@@ -379,7 +381,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install Dagger CLI (pinned to the module's engineVersion)
         run: |
-          curl -fsSL https://dl.dagger.io/dagger/install.sh | DAGGER_VERSION=0.21.7 BIN_DIR=/usr/local/bin sh
+          curl -fsSL https://dl.dagger.io/dagger/install.sh | DAGGER_VERSION=0.21.8 BIN_DIR=/usr/local/bin sh
       # STARTING THE ENGINE IS A NETWORK CALL, and it was failing often enough to make this CI's verdict
       # about the weather. Measured 2026-09-24: four Dagger jobs across two runs died on
       # `start engine: failed to pull image ... read: connection reset by peer` from registry.dagger.io,
@@ -503,7 +505,7 @@ jobs:
 
       - name: Install Dagger CLI (pinned to the module's engineVersion)
         run: |
-          curl -fsSL https://dl.dagger.io/dagger/install.sh | DAGGER_VERSION=0.21.7 BIN_DIR=/usr/local/bin sh
+          curl -fsSL https://dl.dagger.io/dagger/install.sh | DAGGER_VERSION=0.21.8 BIN_DIR=/usr/local/bin sh
       # STARTING THE ENGINE IS A NETWORK CALL, and it was failing often enough to make this CI's verdict
       # about the weather. Measured 2026-09-24: four Dagger jobs across two runs died on
       # `start engine: failed to pull image ... read: connection reset by peer` from registry.dagger.io,
@@ -630,7 +632,7 @@ jobs:
 
       - name: Install Dagger CLI (pinned to the module's engineVersion)
         run: |
-          curl -fsSL https://dl.dagger.io/dagger/install.sh | DAGGER_VERSION=0.21.7 BIN_DIR=/usr/local/bin sh
+          curl -fsSL https://dl.dagger.io/dagger/install.sh | DAGGER_VERSION=0.21.8 BIN_DIR=/usr/local/bin sh
       # STARTING THE ENGINE IS A NETWORK CALL, and it was failing often enough to make this CI's verdict
       # about the weather. Measured 2026-09-24: four Dagger jobs across two runs died on
       # `start engine: failed to pull image ... read: connection reset by peer` from registry.dagger.io,
@@ -677,7 +679,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install Dagger CLI (pinned to the module's engineVersion)
         run: |
-          curl -fsSL https://dl.dagger.io/dagger/install.sh | DAGGER_VERSION=0.21.7 BIN_DIR=/usr/local/bin sh
+          curl -fsSL https://dl.dagger.io/dagger/install.sh | DAGGER_VERSION=0.21.8 BIN_DIR=/usr/local/bin sh
       # STARTING THE ENGINE IS A NETWORK CALL, and it was failing often enough to make this CI's verdict
       # about the weather. Measured 2026-09-24: four Dagger jobs across two runs died on
       # `start engine: failed to pull image ... read: connection reset by peer` from registry.dagger.io,
@@ -743,7 +745,7 @@ jobs:
 
       - name: Install Dagger CLI (pinned to the module's engineVersion)
         run: |
-          curl -fsSL https://dl.dagger.io/dagger/install.sh | DAGGER_VERSION=0.21.7 BIN_DIR=/usr/local/bin sh
+          curl -fsSL https://dl.dagger.io/dagger/install.sh | DAGGER_VERSION=0.21.8 BIN_DIR=/usr/local/bin sh
       # STARTING THE ENGINE IS A NETWORK CALL, and it was failing often enough to make this CI's verdict
       # about the weather. Measured 2026-09-24: four Dagger jobs across two runs died on
       # `start engine: failed to pull image ... read: connection reset by peer` from registry.dagger.io,
@@ -798,7 +800,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install Dagger CLI (pinned to the module's engineVersion)
         run: |
-          curl -fsSL https://dl.dagger.io/dagger/install.sh | DAGGER_VERSION=0.21.7 BIN_DIR=/usr/local/bin sh
+          curl -fsSL https://dl.dagger.io/dagger/install.sh | DAGGER_VERSION=0.21.8 BIN_DIR=/usr/local/bin sh
       # STARTING THE ENGINE IS A NETWORK CALL, and it was failing often enough to make this CI's verdict
       # about the weather. Measured 2026-09-24: four Dagger jobs across two runs died on
       # `start engine: failed to pull image ... read: connection reset by peer` from registry.dagger.io,
@@ -869,7 +871,7 @@ jobs:
 
       - name: Install Dagger CLI (pinned to the module's engineVersion)
         run: |
-          curl -fsSL https://dl.dagger.io/dagger/install.sh | DAGGER_VERSION=0.21.7 BIN_DIR=/usr/local/bin sh
+          curl -fsSL https://dl.dagger.io/dagger/install.sh | DAGGER_VERSION=0.21.8 BIN_DIR=/usr/local/bin sh
 
       # STARTING THE ENGINE IS A NETWORK CALL — see e2e-lineage for the measurement. The retry stays
       # on the PULL and off the work, so a lane that genuinely fails is never retried into passing.

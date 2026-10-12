@@ -269,10 +269,10 @@ coverage: ## The coverage report, computed on request against a correct denomina
 # `.dagger/storage.go` was sitting unformatted in a pushed commit when that was measured (2026-09-24).
 check: fmt lint lint-imports typecheck knip fga-test go-fmt chart-docs-check
 
-chart-docs: ## Regenerate chart/README.md from values.yaml's `# --` comments (helm-docs)
+chart-docs: ## Regenerate chart/README.md and chart/values.schema.json from values.yaml (helm-docs, helm-schema)
 	@bash scripts/chart_docs.sh
 
-chart-docs-check: ## Fail when chart/README.md is stale or a chart value has no `# --` description
+chart-docs-check: ## Fail when chart/README.md or values.schema.json is stale, or a chart value has no `# --` description
 	@bash scripts/chart_docs.sh --check
 
 # The authorization model's OWN suite, plus the drift check between its three copies. Both halves lived
@@ -949,12 +949,14 @@ KUBECTL_V := v1.31.3
 FGA_V     := 0.6.4
 K9S_V     := v0.32.7
 HELM_DOCS_V := 1.14.2
+# helm-values-schema-json's standalone `schema` binary: chart/values.schema.json from values.yaml (scripts/chart_docs.sh).
+HELM_SCHEMA_V := 2.6.0
 # helm-docs names its assets Linux/Darwin and x86_64/arm64.
 HELM_DOCS_ARCH := $(shell uname -m | sed -e 's/aarch64/arm64/')
 # k9s tags its assets Linux/Darwin (capitalised), unlike everything else above.
 K9S_OS    := $(shell uname -s)
 
-bootstrap: ## Download kind/kubectl/fga/k9s/helm-docs into .localbin (idempotent) — helm + docker must be on PATH
+bootstrap: ## Download kind/kubectl/fga/k9s/helm-docs/helm-schema into .localbin (idempotent) — helm + docker must be on PATH
 	@mkdir -p $(LOCALBIN)
 	@test -n "$(HOST_ARCH)" || { echo "!! unsupported CPU '$$(uname -m)' — need x86_64 or arm64"; exit 1; }
 	@test -x $(KIND)              || { echo "kind ->"; curl -fsSL -o $(KIND) "https://kind.sigs.k8s.io/dl/$(KIND_V)/kind-$(HOST_OS)-$(HOST_ARCH)" && chmod +x $(KIND); }
@@ -962,6 +964,7 @@ bootstrap: ## Download kind/kubectl/fga/k9s/helm-docs into .localbin (idempotent
 	@test -x $(LOCALBIN)/fga      || { echo "fga ->"; curl -fsSL "https://github.com/openfga/cli/releases/download/v$(FGA_V)/fga_$(FGA_V)_$(HOST_OS)_$(HOST_ARCH).tar.gz" | tar xz -C $(LOCALBIN) fga; }
 	@test -x $(LOCALBIN)/k9s      || { echo "k9s ->"; curl -fsSL "https://github.com/derailed/k9s/releases/download/$(K9S_V)/k9s_$(K9S_OS)_$(HOST_ARCH).tar.gz" | tar xz -C $(LOCALBIN) k9s; }
 	@test -x $(LOCALBIN)/helm-docs || { echo "helm-docs ->"; curl -fsSL "https://github.com/norwoodj/helm-docs/releases/download/v$(HELM_DOCS_V)/helm-docs_$(HELM_DOCS_V)_$(K9S_OS)_$(HELM_DOCS_ARCH).tar.gz" | tar xz -C $(LOCALBIN) helm-docs; }
+	@test -x $(LOCALBIN)/helm-schema || { echo "helm-schema ->"; curl -fsSL "https://github.com/losisin/helm-values-schema-json/releases/download/v$(HELM_SCHEMA_V)/helm-values-schema-json_$(HELM_SCHEMA_V)_$(HOST_OS)_$(HOST_ARCH).tgz" | tar xz -C $(LOCALBIN) schema && mv $(LOCALBIN)/schema $(LOCALBIN)/helm-schema; }
 	@command -v docker >/dev/null || { echo "!! docker not on PATH — install https://docs.docker.com/get-docker/"; exit 1; }
 	@command -v helm   >/dev/null || { echo "!! helm not on PATH — install https://helm.sh/docs/intro/install/"; exit 1; }
 	@echo "toolchain ready in .localbin ($(HOST_OS)/$(HOST_ARCH))"
