@@ -134,6 +134,9 @@ spec:
             {{- end }}
             {{- with include "lance.signingEnv" (list $root $name) }}{{ . | nindent 12 }}{{- end }}
             {{- if eq $name "notifications" }}{{- with include "lance.doorEnv" (list $root true) }}{{ . | nindent 12 }}{{- end }}{{- end }}
+            {{- if eq $name "compute" }}{{- with include "rask.rayDashboardUrl" $root }}
+            - { name: RAY_DASHBOARD_URL, value: {{ . | quote }} }
+            {{- end }}{{- end }}
             {{- if and (eq $name "compute") (include "lance.outOfProcessEngine" $root) }}
             {{- $tasks := dict }}{{- range $n, $e := $svc.engines }}{{- if $e.enabled }}{{- $t := dict }}{{- range $e.tasks }}{{- $_ := set $t .task .command }}{{- end }}{{- $_ := set $tasks $n $t }}{{- end }}{{- end }}
             - { name: RASK_COMPUTE_ENGINE_TASKS, value: {{ toJson $tasks | quote }} }

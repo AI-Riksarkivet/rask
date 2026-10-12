@@ -5,6 +5,7 @@ from functools import lru_cache
 from typing import Annotated
 
 import httpx
+from dotenv import load_dotenv
 from fastapi import Depends, Request
 
 from compute.config import ComputeSettings
@@ -34,7 +35,7 @@ def get_ray_client(request: Request) -> JobSubmissionClient | None:
     if last_attempt is not None and now - last_attempt < cooldown:
         return None
     request.app.state.ray_client_last_attempt = now
-    client = build_client(request.app.state.settings.ray_dashboard_url)
+    client = build_client(get_compute_settings().ray_dashboard_url)
     request.app.state.ray_client = client
     return client
 
@@ -45,12 +46,15 @@ RayClientDep = Annotated[JobSubmissionClient | None, Depends(get_ray_client)]
 
 @lru_cache(maxsize=1)
 def get_compute_settings() -> ComputeSettings:
-    """The service's own settings, carrying the estate's auth knobs.
+    """The service's own settings: the object the app is built with, carrying the auth knobs and the Ray dashboard.
 
-    Separate from `app.state.settings` (the generic object the lifespan builds) because
-    `make_auth_deps` binds against a TYPE, and the generic one has no auth fields to bind. Built once;
-    `lru_cache` on a module-level function, never on a method (writing-python).
+    Read through this typed accessor rather than `app.state.settings` because `make_auth_deps` binds against a TYPE
+    and the generic `Settings` has neither the auth fields nor the dashboard address. Built once; `lru_cache` on a
+    module-level function, never on a method (writing-python). `load_dotenv` runs first, as `build_settings` does for
+    the apps it builds, so a variable read straight from the environment (the Ray token, `ray_kit.auth`) sees a local
+    `.env` too.
     """
+    load_dotenv()
     return ComputeSettings()
 
 

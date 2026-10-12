@@ -11,9 +11,10 @@ ON (`ray.auth.enabled` → `RAY_AUTH_TOKEN`), and the gateway carries
 and the whole Serve status API, to anonymous callers. `proxy.py`'s own comment — "Never widen this
 without an auth layer in front of /api" — was an acknowledgement that no such layer existed.
 
-Subclasses the shared `Settings` rather than `BaseSettings` directly: this service reads
-`ray_dashboard_url` and the rest of the common surface, and a second parallel settings object would
-be two answers to "what is the dashboard URL".
+Subclasses the shared `Settings` rather than `BaseSettings` directly: this service reads the common surface, and
+it is the object `make_service_app` is built with, so the app holds one answer to every setting. The Ray dashboard's
+address is a field HERE and not on the shared `Settings`: compute is its one reader, and a field on the shared class
+would put a Ray address in every lakehouse service's configuration (CP-056).
 """
 
 from pydantic import Field
@@ -24,6 +25,13 @@ from service_kit.governed.settings import GovernedAuthSettings
 
 class ComputeSettings(GovernedAuthSettings, Settings):
     """The shared settings plus the estate's auth knobs. Every added field defaults OFF."""
+
+    ray_dashboard_url: str = Field(
+        default="http://localhost:8265",
+        alias="RAY_DASHBOARD_URL",
+        description="The Ray dashboard the introspection routes, the Serve proxy, the job prune and the engine door all "
+        "address, so the cluster that runs a job is the cluster that reports and reclaims it.",
+    )
 
     ray_client_retry_cooldown_s: float = Field(
         default=10.0,

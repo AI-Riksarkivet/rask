@@ -61,8 +61,6 @@ class Settings(BaseSettings):
     #: `test_the_audit_trail_is_armed_by_configuration_not_by_the_log_level.py`.
     audit_enabled: bool = Field(default=True, alias="RASK_AUDIT_ENABLED")
 
-    ray_dashboard_url: str = Field(default="http://localhost:8265", alias="RAY_DASHBOARD_URL")
-
     http_timeout: float = Field(default=15.0, alias="RASK_HTTP_TIMEOUT")
 
     #: The request-body ceiling every app built by `make_service_app` enforces (`body_limit.py`).

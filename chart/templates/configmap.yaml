@@ -37,7 +37,3 @@ data:
   RASK_EXPLORER_SEARCH_URL: {{ printf "http://%s-search:%v" (include "lance.fullname" .) .Values.explorer.services.search.port | quote }}
   RASK_EXPLORER_ANNOTATOR_URL: {{ printf "http://%s-annotator:%v" (include "lance.fullname" .) .Values.explorer.services.annotator.port | quote }}
   {{- end }}
-
-  {{- with include "rask.rayDashboardUrl" . }}
-  RAY_DASHBOARD_URL: {{ . | quote }}
-  {{- end }}

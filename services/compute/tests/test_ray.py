@@ -6,8 +6,6 @@ import pytest
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
-from service_kit import build_settings
-
 
 @pytest.fixture
 def client() -> Iterator[TestClient]:
@@ -128,7 +126,6 @@ def test_get_ray_client_rebuilds_lazily_when_none(monkeypatch: pytest.MonkeyPatc
 
     # A real app + Request, so app.state and the scope behave exactly as in prod.
     app = FastAPI()
-    app.state.settings = build_settings().model_copy(update={"ray_dashboard_url": "http://ray:8265"})
     app.state.ray_client = None
     request = Request({"type": "http", "app": app})
 
@@ -165,7 +162,6 @@ def test_get_ray_client_retries_after_the_cooldown_elapses(monkeypatch: pytest.M
     from compute.config import ComputeSettings
 
     app = FastAPI()
-    app.state.settings = build_settings().model_copy(update={"ray_dashboard_url": "http://ray:8265"})
     app.state.ray_client = None
     request = Request({"type": "http", "app": app})
 
@@ -194,7 +190,6 @@ def test_get_ray_client_negative_caches_while_ray_down(monkeypatch: pytest.Monke
     from compute import dependencies
 
     app = FastAPI()
-    app.state.settings = build_settings().model_copy(update={"ray_dashboard_url": "http://ray:8265"})
     app.state.ray_client = None
     request = Request({"type": "http", "app": app})
 

@@ -7,9 +7,8 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import Response
 
 from compute import security
-from compute.dependencies import HttpDep
+from compute.dependencies import ComputeSettingsDep, HttpDep
 from ray_kit import dashboard
-from service_kit.dependencies import SettingsDep
 
 
 # GATED AT THE ROUTER, and per route would not be enough: `_register_proxy` adds a
@@ -34,7 +33,7 @@ def _canonical(path: str) -> str:
     return path if path.endswith("/") else path + "/"
 
 
-async def _proxy(request: Request, http: HttpDep, settings: SettingsDep, path: str) -> Response:
+async def _proxy(request: Request, http: HttpDep, settings: ComputeSettingsDep, path: str) -> Response:
     body = await request.body()
     resp = await dashboard.proxy(
         http,
@@ -55,10 +54,10 @@ def _register_proxy(prefix: str) -> None:
     """Forward `<prefix>` and `<prefix>/{path:path}` to the Ray Dashboard."""
     suffix = prefix.lstrip("/")
 
-    async def catchall(request: Request, http: HttpDep, settings: SettingsDep, path: str) -> Response:
+    async def catchall(request: Request, http: HttpDep, settings: ComputeSettingsDep, path: str) -> Response:
         return await _proxy(request, http, settings, f"{suffix}/{path}")
 
-    async def catchall_root(request: Request, http: HttpDep, settings: SettingsDep) -> Response:
+    async def catchall_root(request: Request, http: HttpDep, settings: ComputeSettingsDep) -> Response:
         return await _proxy(request, http, settings, suffix)
 
     router.add_api_route(f"{prefix}/{{path:path}}", catchall, methods=_PROXY_METHODS, name=f"ray-proxy-{prefix}")

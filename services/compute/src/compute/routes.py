@@ -6,7 +6,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query
 
 from compute import security
-from compute.dependencies import HttpDep, RayClientDep
+from compute.dependencies import ComputeSettingsDep, HttpDep, RayClientDep
 from ray_kit import dashboard
 from ray_kit.schemas import (
     RayActorsPayload,
@@ -18,7 +18,6 @@ from ray_kit.schemas import (
     RayOverviewPayload,
     RayTasksPayload,
 )
-from service_kit.dependencies import SettingsDep
 
 
 # GATED AT THE ROUTER. Every route below reads the Ray plane through a dashboard the chart
@@ -32,46 +31,46 @@ _LOG_LINE_CAP = Query(ge=1, le=100_000)
 
 
 @router.get("/health")
-async def ray_health(client: RayClientDep, settings: SettingsDep) -> RayHealth:
+async def ray_health(client: RayClientDep, settings: ComputeSettingsDep) -> RayHealth:
     return await dashboard.health(client, settings.ray_dashboard_url)
 
 
 @router.get("/jobs")
-async def ray_jobs(client: RayClientDep, settings: SettingsDep) -> RayJobsPayload:
+async def ray_jobs(client: RayClientDep, settings: ComputeSettingsDep) -> RayJobsPayload:
     return await dashboard.list_jobs(client, settings.ray_dashboard_url)
 
 
 @router.get("/jobs/{submission_id}/logs")
 async def ray_job_logs(
-    http: HttpDep, client: RayClientDep, settings: SettingsDep, submission_id: str, tail: Annotated[int, _LOG_LINE_CAP] = 2000
+    http: HttpDep, client: RayClientDep, settings: ComputeSettingsDep, submission_id: str, tail: Annotated[int, _LOG_LINE_CAP] = 2000
 ) -> RayJobLogsPayload:
     return await dashboard.job_logs(http, client, settings.ray_dashboard_url, submission_id, tail)
 
 
 @router.get("/cluster")
-async def ray_cluster(http: HttpDep, settings: SettingsDep) -> RayClusterPayload:
+async def ray_cluster(http: HttpDep, settings: ComputeSettingsDep) -> RayClusterPayload:
     return await dashboard.cluster_status(http, settings.ray_dashboard_url)
 
 
 @router.get("/actors")
-async def ray_actors(http: HttpDep, settings: SettingsDep) -> RayActorsPayload:
+async def ray_actors(http: HttpDep, settings: ComputeSettingsDep) -> RayActorsPayload:
     return await dashboard.list_actors(http, settings.ray_dashboard_url)
 
 
 @router.get("/tasks")
-async def ray_tasks(http: HttpDep, settings: SettingsDep, job_id: str | None = None) -> RayTasksPayload:
+async def ray_tasks(http: HttpDep, settings: ComputeSettingsDep, job_id: str | None = None) -> RayTasksPayload:
     return await dashboard.list_tasks(http, settings.ray_dashboard_url, job_id)
 
 
 @router.get("/overview")
-async def ray_overview(http: HttpDep, settings: SettingsDep) -> RayOverviewPayload:
+async def ray_overview(http: HttpDep, settings: ComputeSettingsDep) -> RayOverviewPayload:
     return await dashboard.overview(http, settings.ray_dashboard_url)
 
 
 @router.get("/logs")
 async def ray_logs(
     http: HttpDep,
-    settings: SettingsDep,
+    settings: ComputeSettingsDep,
     node_id: str,
     filename: str | None = None,
     lines: Annotated[int, _LOG_LINE_CAP] = 200,

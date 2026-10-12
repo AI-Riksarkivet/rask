@@ -73,7 +73,7 @@ class IngestAuthSettings(GovernedAuthSettings, BaseSettings):
     # every alias below silently gained an un-namespaced twin (MedallionSettings.ray_address
     # answered to Ray's own $RAY_ADDRESS). `env_prefix` redirects that fallback onto the
     # namespace the aliases already declare; an explicit alias bypasses it, so the
-    # deliberately-bare ones (DAPR_HTTP_PORT, RAY_DASHBOARD_URL) still land.
+    # deliberately-bare ones (DAPR_HTTP_PORT) still land.
     # See tests/unit/test_settings_env_namespace.py.
     model_config = SettingsConfigDict(env_file=".env", extra="ignore", case_sensitive=False, populate_by_name=True, env_prefix="LANCE_")
 

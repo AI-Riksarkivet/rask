@@ -618,6 +618,9 @@ def test_every_ray_consumer_names_one_cluster_or_the_render_refuses(overlay: tup
     renders `rask.rayDashboardUrl`; the local case passes a stale `medallion.rayAddress` to prove no second
     key can split the plane, and a render that names no Ray with an engine enabled refuses.
 
+    The address reaches compute alone, its one reader (CP-056): a shared ConfigMap would hand a Ray address to every
+    fleet pod that loads it, the lakehouse's controlplane and notifications among them, which never call Ray.
+
     The engine is bring-your-own ([[XC-125]], ADR 0153): no render holds a `ray.io` object or the KubeRay operator, so
     the address is always one the estate names (the local overlay names the ray-cluster fixture's head Service).
     """
@@ -632,13 +635,13 @@ def test_every_ray_consumer_names_one_cluster_or_the_render_refuses(overlay: tup
     named: dict[str, set[str]] = {}
     for doc in docs:
         if doc.get("kind") == "ConfigMap" and "RAY_DASHBOARD_URL" in (doc.get("data") or {}):
-            named.setdefault("RAY_DASHBOARD_URL", set()).add(doc["data"]["RAY_DASHBOARD_URL"])
-    for _, _, container in chart_render.containers(tuple(docs)):
+            named.setdefault(f"ConfigMap/{doc['metadata']['name']} RAY_DASHBOARD_URL", set()).add(doc["data"]["RAY_DASHBOARD_URL"])
+    for workload, _, container in chart_render.containers(tuple(docs)):
         for name, value in chart_render.env_of(container).items():
-            if name == "MEDIA_SERVE_DISCOVERY_URL" or "RAY_ADDRESS" in name:
-                named.setdefault(name, set()).add(value)
+            if name in ("RAY_DASHBOARD_URL", "MEDIA_SERVE_DISCOVERY_URL") or "RAY_ADDRESS" in name:
+                named.setdefault(f"{workload} {name}", set()).add(value)
 
-    assert named == {"RAY_DASHBOARD_URL": {address}, "MEDIA_SERVE_DISCOVERY_URL": {address}}
+    assert named == {"Deployment/rask-compute RAY_DASHBOARD_URL": {address}, "Deployment/rask-annotator MEDIA_SERVE_DISCOVERY_URL": {address}}
     engine = sorted(
         f"{doc['kind']}/{doc['metadata']['name']}"
         for doc in docs

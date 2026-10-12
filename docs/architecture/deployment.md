@@ -186,10 +186,11 @@ flowchart LR
 
 The runner accepts `--address ray://…:10001`. Job submission goes through the **`compute`
 service** (`:8804`, over `ray-kit`'s Job SDK wrapper) to the Ray dashboard REST API at
-`RAY_DASHBOARD_URL`. The chart renders that address, the medallion's `MEDALLION_RAY_ADDRESS` and the
-annotator's Serve discovery from one helper, `rask.rayDashboardUrl`, so `compute` prunes job history on
-the cluster the cascade submits to: `ray.dashboardUrl` names the engine, and left empty with the cascade's
-Ray lane on (`medallion.ray`) the render fails. The chart installs no Ray (ADR 0153): no KubeRay operator, no
+`RAY_DASHBOARD_URL`, which the chart renders on the compute pod alone. The medallion names no Ray: it hands a
+work order to compute by Dapr service invocation (CP-056, ADR 0140). That address and the annotator's Serve
+discovery come from one helper, `rask.rayDashboardUrl`, so `compute` prunes job history on the cluster it
+submits to: `ray.dashboardUrl` names the engine, and left empty with an engine enabled
+(`services.compute.engines`) the render fails. The chart installs no Ray (ADR 0153): no KubeRay operator, no
 RayCluster or RayService. The engine owner runs Ray; in development `make k3s-up` installs the
 `kuberay-operator` and `ray-cluster` fixtures (`deploy/fixtures`, not for production), whose head Service is
 `rask-ray-head-svc`, and `deploy/values-local.yaml` names it. rask's side of the seam is the address, the

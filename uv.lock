@@ -561,6 +561,7 @@ version = "0.1.0"
 source = { editable = "services/compute" }
 dependencies = [
     { name = "httpx" },
+    { name = "python-dotenv" },
     { name = "ray-kit" },
     { name = "service-kit", extra = ["governed"] },
     { name = "uvicorn" },
@@ -569,6 +570,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "httpx", specifier = ">=0.27" },
+    { name = "python-dotenv", specifier = ">=1.0" },
     { name = "ray-kit", editable = "packages/ray-kit" },
     { name = "service-kit", extras = ["governed"], editable = "packages/service-kit" },
     { name = "uvicorn", specifier = ">=0.30" },

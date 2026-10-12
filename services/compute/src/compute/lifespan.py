@@ -33,12 +33,12 @@ def make_lifespan(settings: Settings) -> Callable[[FastAPI], AbstractAsyncContex
         # The engine door's Jobs-API client (`compute.engine`): one per process, addressed at the same dashboard the
         # prune and the introspection routes read, so the cluster that runs a job is the cluster that reclaims it.
         app.state.jobs_api = httpx.AsyncClient(
-            base_url=settings.ray_dashboard_url, timeout=get_compute_settings().engine_request_timeout_s, headers=auth_headers()
+            base_url=get_compute_settings().ray_dashboard_url, timeout=get_compute_settings().engine_request_timeout_s, headers=auth_headers()
         )
         # Stamp the attempt so get_ray_client's negative cache dates from boot: if Ray is down now,
         # the first request waits out the cooldown rather than immediately restorming the dashboard.
         app.state.ray_client_last_attempt = time.monotonic()
-        app.state.ray_client = await to_thread.run_sync(build_client, settings.ray_dashboard_url)
+        app.state.ray_client = await to_thread.run_sync(build_client, get_compute_settings().ray_dashboard_url)
         # FAIL CLOSED ON THE APP TOKEN, like every sibling that hosts a sidecar-delivered route. The
         # prune binding (`pruner.py`) is guarded by `require_dapr_token`, which is a documented no-op
         # while `APP_API_TOKEN` is unset — safe only because this call turns that into a boot refusal

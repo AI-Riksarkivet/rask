@@ -34,4 +34,5 @@ app = make_service_app(
     routers=[health.router, routes.router],
     proxy_router=_root,
     lifespan=make_lifespan,
+    settings=get_compute_settings(),
 )
