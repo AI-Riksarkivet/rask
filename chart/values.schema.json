@@ -2515,7 +2515,7 @@
                                             }
                                         },
                                         "codeVersion": {
-                                            "description": "The build the engine runs (its image), the second axis of a run's key, so a rolled image is a new run: the engine is bring-your-own (ADR 0153), so its owner names it; empty keys runs on stage, token and URIs alone.",
+                                            "description": "The build the engine runs (its image), the second axis of a run's key, so a rolled image is a new run: the engine is bring-your-own (ADR 0153), so its owner names it; empty, a stage run keys on the lakehouse image (MEDALLION_CODE_VERSION) and the producer's task registrations carry none.",
                                             "type": "string"
                                         },
                                         "enabled": {

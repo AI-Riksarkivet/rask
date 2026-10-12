@@ -1265,4 +1265,5 @@ announcement. The lakehouse names no engine; an engine is an app it invokes by D
 `MEDALLION_ENGINES`: each enabled engine as the planners invoke it (app-id `compute`, the `rask-compute` token), with
 its tasks minus their commands when the caller registers them (`include "lance.medallionEngines" (list $root
 <with-tasks>)`). An engine's `code_version` is its `codeVersion` value: the engine is bring-your-own (ADR 0153), so its
-owner names the build, and a rolled image is then a new run rather than a re-attach to the old build's.
+owner names the build, and a rolled image is then a new run rather than a re-attach to the old build's; empty, a
+stage run keys on the lakehouse image.
