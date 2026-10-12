@@ -3,35 +3,36 @@
 rask is a monorepo with two **language-pure planes** — Python at the repo root,
 JS/TS under `frontend/`. Each plane is its own workspace root (uv for Python, Bun
 + Turborepo for JS/TS), and inside each plane the library/runnable boundary is
-deliberate — don't blur it. (Two earlier layers are gone: a Polylith-inspired
-`projects/` layer of per-deployable composition pyprojects, removed July 2026 —
-deployables now build straight from the root uv workspace, one
-`.docker/<name>.dockerfile` per deployable running `uv sync --frozen --package
-<name>` against the root `uv.lock` — and the mixed `components/` tree, dissolved
-into `services/`, `frontend/`, and `scripts/`.)
+deliberate — don't blur it. Deployables build straight from the root uv workspace,
+one `.docker/<name>.dockerfile` per deployable running `uv sync --frozen --package
+<name>` against the root `uv.lock`.
 
 ```mermaid
 flowchart TD
     subgraph py["Python plane · repo root · uv workspace"]
         subgraph services["services/ · runnable code"]
-            cs["gateway · compute · flows<br/>catalog · lineage · maintenance · notifications<br/>viewer · search · annotator"]
+            lake["lakehouse: catalog · lineage · maintenance · notifications"]
+            fleet["gateway · flows · compute"]
+            media["media: viewer · search · annotator"]
         end
         subgraph packages["packages/ · reusable libraries (no entrypoints)"]
-            pst["storage"]
             psk["service-kit"]
+            plk["lineage-kit"]
+            pst["storage"]
             prk["ray-kit"]
             ptv["validate"]
+            prc["ray-cluster-env (deps only)"]
         end
-        cx["scripts/ · one-shot dev + ops tools"]
+        cx["scripts/ · dev + ops tools"]
     end
     subgraph js["frontend/ · JS/TS plane · bun + turbo workspace"]
-        mf["microfrontends/ · home<br/>overview · compute · discover<br/>storage · train · studio"]
-        fpk["packages/ · ui · api · zone-contract"]
+        mf["microfrontends/ · home · lakehouse · explorer<br/>annotator · compute · models · studio"]
+        fpk["packages/ · ui · api · explorer-api · dockview<br/>flow · engine · labeling · config · zone-contract"]
     end
-    rn["runners/htr · SEALED<br/><sub>own pyproject + own lock<br/>NOT a workspace member</sub>"] --> pst
-    cs --> psk
-    cs --> prk
-    cs --> pst
+    rn["runners/&lt;workload&gt; · SEALED<br/><sub>own pyproject, NOT a workspace member</sub>"] --> pst
+    lake --> psk
+    lake --> plk
+    fleet --> psk
     mf --> fpk
 ```
 
@@ -43,62 +44,53 @@ plane, and language purity is what lets both workspaces glob their members.
 
 | Package | Language | Purpose |
 |---|---|---|
-| [`packages/storage`](../packages/storage.md) | Python | `FSSource/Sink`, `S3Source/Sink`, `IIIFCachedSource`, `s3_client`, `iter_keys`, HCP credential derivation. |
-| `packages/service-kit` | Python | Platform library: `make_service_app` app factory, `Settings`/config, exceptions, middleware, `get_settings`, injectable lifespan. Dependency-light (no lancedb/ray/sqlmodel). |
-| `packages/ray-kit` | Python | Ray Job SDK + dashboard wrapper (schemas, `build_client`, `RAY_TRANSIENT_ERRORS`, dashboard service). Used by the `compute` service. |
-| `packages/validate` | Python | Validation helpers (`validate`). |
-| `frontend/packages/ui` | TS / Svelte | Svelte 5 + Bits UI + Tailwind 4 component library with Storybook (package `@rask/ui`); `@rask/ui/shell` exports the shared `AppShell`/`AppSidebar`/`nav-config` every app imports. |
-| `frontend/packages/api` | TS | Shared API client (package `@rask/api`, valibot fetch client), split into `ray`/`ingest`/`projects` modules (+ the BFF/OIDC subpaths). |
-| `frontend/packages/zone-contract` | TS | `@rask/zone-contract` — the cross-zone link guard (a cross-zone `<a>` must carry `data-sveltekit-reload`), enforced as a **vitest test** over every zone's `.svelte` files rather than a lint rule. |
-
-!!! note "`packages/control` was absorbed into `core`"
-    An earlier `packages/control` (S3 sync + chunk submission) no longer exists
-    as a standalone package — its logic lives in the `core` package's service layer
-    (`core/services/sync.py`, `core/services/submission.py`).
+| `packages/service-kit` | Python | Platform library: `make_service_app` app factory, `Settings`/config, exceptions, middleware, `get_settings`, injectable lifespan, plus the governed (`service_kit.governed`) and lakehouse (`service_kit.lakehouse`) seams. Dependency-light (no lancedb/ray/sqlmodel). |
+| `packages/lineage-kit` | Python | The OpenLineage emission kernel and the Ed25519 signing and verifying seam for lineage events, used by catalog, lineage, maintenance, notifications and annotator. |
+| [`packages/storage`](../packages/storage.md) | Python | The S3 client seam (`s3_client`, `configured_endpoint`, STS, the `StorageError` family) plus `FSSource/Sink`, `S3Source/Sink`, `iter_keys` and `build_source`/`build_sink`. |
+| `packages/ray-kit` | Python | Ray Job SDK + dashboard wrapper (schemas, `build_client`, `RAY_TRANSIENT_ERRORS`, dashboard service). Used by the `compute` service only; the lakehouse may not import it. |
+| `packages/validate` | Python | Pre-upload image validation over bytes or paths. |
+| `packages/ray-cluster-env` | Python | A deps-only member (ships no code) naming the Ray images' platform environment. |
+| `frontend/packages/ui` | TS / Svelte | `@rask/ui`: Svelte 5 + Bits UI + Tailwind 4 component library with Storybook; `@rask/ui/shell` exports the shared `AppShell` every zone renders. |
+| `frontend/packages/api` | TS | `@rask/api`: the typed gateway client plus the OIDC/BFF plane and the lineage client. |
+| `frontend/packages/explorer-api` | TS | `@rask/explorer-api`: the Arrow-backed explorer/viewer client. |
+| `frontend/packages/{dockview,flow,engine,labeling,config}` | TS | Workbench docks, the studio flow canvas, the annotation canvas, the `LabelOp` model and the shared `tsconfig`. |
+| `frontend/packages/zone-contract` | TS | `@rask/zone-contract`: the estate's shape gates as a vitest suite (cross-zone `data-sveltekit-reload`, the zone manifest, deploy paths, the toolchain guard) plus the `make dev-zone` scripts. |
 
 ## `services/` · `frontend/microfrontends/` · `scripts/` — runnable code
 
 | Path | Type | Purpose |
 |---|---|---|
-| `frontend/microfrontends/home` | SvelteKit 2 + Svelte 5 (SSR) | Catch-all app (package `home`, `:5273`) on `svelte-adapter-bun` — owns `/` (the platform home) behind the gateway. |
-| `frontend/microfrontends/{lakehouse,media,annotator,compute,train,studio}` | SvelteKit 2 + Svelte 5 (SSR) | The six domain microfrontend zones (`svelte-adapter-bun`), each pinned to a bare base `/<zone>` — **not** `/default/<zone>` — on its own dev port (`media` 5173, `lakehouse` 5174, `compute` 5175, `studio` 5176, `annotator` 5177, `train` 5178) and rendering the shared `@rask/ui/shell`. Composed by Turborepo's built-in microfrontends proxy on `:3024` in dev / the k3s Ingress in prod. `overview`, `discover` and `storage` are **retired** — `/storage` and `/data` are routes *inside* `lakehouse`. |
+| `services/{catalog,lineage,maintenance,notifications}` | FastAPI | The lakehouse: the governed Lance Namespace catalog with tier governance, OpenLineage → AGE and the durable `GET /events` feed, maintenance (expiry, purge, orphan scan, reconcile), and the targeted inbox. |
+| `services/{viewer,search,annotator}` | FastAPI | The media plane (`:8101`–`:8103`, public `/api/explorer/*`). The viewer also serves the S3 object browser. |
 | `services/gateway` | FastAPI | Reverse proxy on `:8888` — path-routes `/api/*` to per-domain services (longest-prefix-first, no catch-all). |
-| `services/compute` | FastAPI | The `compute` service: Ray dashboard introspection + `/api/serve/*` proxy on `:8804`; no DB. Deps: `service-kit` + `ray-kit` + httpx. (`compute` on every surface — R22; its paths are `/api/ray` + `/api/serve`.) Deployed by its own chart, `deploy/fixtures/compute`, not the product chart; the gateway has no row for it. |
-| `services/{catalog,lineage,maintenance,notifications}` | FastAPI | The lance lakehouse plane (governed REST catalog with tier governance, OpenLineage → AGE, maintenance, the targeted inbox). |
-| `services/{viewer,search,annotator}` | FastAPI | The lance media plane (`:8101`–`:8103`, public `/api/explorer/*`). The viewer also serves the S3 object browser ported from the retired volumes-api. |
-| `scripts/` | Python + shell | Every dev/ops one-shot tool in one place: `harvest_ead`, `deploy_serve`, `dev-micro.sh`, `k3s-install.sh`, the e2e stack drivers, … No production-state-changing CLIs — mutations run through the HTTP services. |
+| `services/flows` | FastAPI | The studio flow-builder's server half (`/api/flows`). |
+| `services/compute` | FastAPI | Ray dashboard introspection + `/api/serve/*` proxy on `:8804`, the companion of a bring-your-own Ray engine; deployed by its own chart, `deploy/fixtures/compute`, not the product chart. |
+| `frontend/microfrontends/home` | SvelteKit 2 + Svelte 5 (SSR) | The catch-all zone (`:5273`) on `svelte-adapter-bun`; owns `/` and the OIDC BFF. |
+| `frontend/microfrontends/{lakehouse,explorer,annotator,compute,models,studio}` | SvelteKit 2 + Svelte 5 (SSR) | The six domain zones, each pinned to a bare base `/<zone>` and rendering the shared `@rask/ui/shell`; composed by Turborepo's microfrontends proxy on `:3024` in dev and the Ingress in-cluster. |
+| `scripts/` | Python + shell | Every dev/ops tool in one place: `dev-micro.sh`, `k3s-install.sh`, the e2e stack drivers, … No production-state-changing CLIs — data enters and moves only through the catalog's namespace doors. |
 
 ## `runners/` — sealed model environments, deliberately NOT workspace members
 
-`runners/htr` is the HTR engine: the Ray Data pipeline (`src/runner`) **and** the model
-actors (`src/htr`), together in one project with **its own `pyproject.toml` and its own
-`uv.lock`**. It is matched by no glob in `[tool.uv.workspace] members`, so its dependency
-stack — torch, htrflow, ultralytics, transformers, opencv — never enters the fleet's
-resolution. That is the whole point: sealing it took the root lock from 200 packages to
-145, and the fleet's test suite from ~32 minutes to ~6 seconds.
+`runners/<workload>` is the only place a modality may live: each directory holds one workload's Ray Data pipeline
+(`src/runner`) and its model actors in one project with **its own `pyproject.toml`** (`asr`, `assist`, `diarize`,
+`dummy`, `htr`, `insid3`, `kg`, `topics`, `voiceprint`). None is matched by a glob in `[tool.uv.workspace] members`,
+so a runner's heavy ML stack never enters the fleet's resolution, and the platform knows nothing about any of them:
+a runner reaches the lakehouse as a client of the catalog, like any other pipeline.
 
 Consequences that follow from the seal, all deliberate:
 
-- `storage` is a **path** dependency (`{ path = "../../packages/storage" }`), not a
-  workspace one.
-- Its tests are invisible to the root `pytest` — `make test` runs them separately
-  (`uv run --project runners/htr pytest`). Drop that line and 28 tests silently vanish.
-- It carries its own copy of the ruff config; ruff resolves the *nearest* pyproject, so
-  without it the runner would be linted against ruff's weaker defaults and nothing would
-  say so.
-- Its images (`.docker/{runner,ray}.dockerfile`) build from **its** lock, not the root one.
-- The Ray job entrypoint is `uv run --project runners/htr runner` (`runner_cmd`); the
-  in-cluster ray image overrides it with `RASK_RUNNER_CMD=runner`, since that image ships
-  the console script on PATH with no uv and no source tree.
+- `storage` is a **path** dependency, not a workspace one.
+- A runner's tests are invisible to the root `pytest`; `make test` runs them separately.
+- Each runner carries its own ruff config; ruff resolves the *nearest* pyproject.
+- A runner's image is built from the parametrized `.docker/ray-runner.dockerfile`
+  (`scripts/dagger-image.sh --runner <runner>`), from its own lock where it commits one (`assist`, `dummy`, `htr`).
 
 ## Deployables — workspace members with a dockerfile
 
-There is **no `projects/` layer**. The fleet deployables are `runner` plus
-`gateway`, `compute`, `flows` and `notifications`; each is an ordinary
-workspace member built by its `.docker/<name>.dockerfile` via
-`uv sync --frozen --package <name>` against the **root** `uv.lock` (one lock for
-dev, tests, and every image). The lakehouse + media services build from the one
-`lance-rest-catalog` image; the Ray cluster image is `.docker/ray-cluster.dockerfile`.
+There is **no `projects/` layer**. `gateway`, `compute`, `flows` and `notifications`
+each build their own `.docker/<name>.dockerfile` via `uv sync --frozen --package <name>`
+against the **root** `uv.lock`; one image, `.docker/rest-catalog.dockerfile`, serves `catalog`, `lineage`,
+`maintenance`, `viewer`, `search` and `annotator`. The seven zones build from `.docker/frontend.dockerfile`.
 
 ## Workspace membership is globbed
 
@@ -119,4 +111,5 @@ is therefore just creating the directory with its manifest — no root file to e
   `@rsvelte/fmt` for `.svelte`, plus `svelte-check`. Each is a **per-package
   turbo task** (`lint`, `fmt`, `fmt:check`, `check`) run from `frontend/`:
   `bun --cwd=frontend run lint`.
+- **Images** are built by Dagger (`scripts/dagger-image.sh`), never by docker.
 - Identifiers and env vars carry **no `ra-` prefix** — env vars are `RASK_*`.

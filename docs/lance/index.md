@@ -7,8 +7,13 @@ description: Vendored upstream Lance format, SDK, and namespace documentation.
 
 A **read-only, vendored copy** of the upstream Lance documentation, kept in
 [`lance_docs/`](https://github.com/AI-Riksarkivet/rask/tree/main/lance_docs) at the
-repo root as the reference the lakehouse merge was built against. The pages in this
+repo root as the reference every Lance and lance-namespace question in rask is answered from. The pages in this
 section embed those files verbatim.
+
+!!! warning "spec.yaml is authoritative"
+    [`ns_catalog/spec.yaml`](spec.md) is the contract the catalog serves. The single-page
+    [`namespace.md`](namespace.md) is an older prose bundle that contradicts the spec in places (its REST paths among
+    them); cite the spec. [Provenance](provenance.md) records the commit each file is pinned at.
 
 !!! info "Vendored snapshot"
     These are flattened snapshots of the upstream Lance / lance-namespace docs.
@@ -19,14 +24,17 @@ section embed those files verbatim.
 
 - [File Format](file-format.md) — the Lance file/table format internals
 - [Format Guide](guide.md) — extension arrays, blobs, distributed writes, tags, …
-- [Python SDK](sdk.md) — the LanceDB Python API reference
-- [Namespace & Catalog Spec](namespace.md) — the full Lance Catalog & Namespace spec (single page)
+- [LanceDB Python API](sdk.md) — the LanceDB Python API reference
+- [Namespace OpenAPI Spec](spec.md) — `ns_catalog/spec.yaml`, the authoritative namespace contract
+- [Namespace & Catalog (prose)](namespace.md) — the older single-page prose bundle; defer to the spec where they differ
+- [Provenance](provenance.md) — where each vendored file came from and its pinned commit
 - [Partitioning Spec](partitioning-spec.md) — the Lance partitioning specification
-- [Ray Integration](ray.md) — compaction, distributed indexing, read/write via Ray
+- [Ray Integration](ray.md) — compaction, distributed indexing, read/write via Ray (the lakehouse runs none of
+  this itself; a bring-your-own job does)
 
 ## The exploded spec tree
 
-`namespace.md` above is the single-page dump. The same content exists as a browsable
+`namespace.md` above is the single-page prose dump. A browsable
 tree of ~157 pages (per-operation request/response models, supported catalogs,
 REST/dir implementations) under
 [`lance_docs/ns_catalog/`](https://github.com/AI-Riksarkivet/rask/tree/main/lance_docs/ns_catalog):
@@ -35,5 +43,5 @@ REST/dir implementations) under
 - [`ns_catalog/namespace/`](https://github.com/AI-Riksarkivet/rask/tree/main/lance_docs/ns_catalog/namespace) — namespace client spec, operations + models
 - [`ns_catalog/spec.yaml`](https://github.com/AI-Riksarkivet/rask/blob/main/lance_docs/ns_catalog/spec.yaml) — the OpenAPI spec for the namespace protocol
 
-It is deliberately not mirrored page-by-page into this site — the single-page spec
-above is the searchable copy; the tree is for upstream-shaped browsing.
+It is deliberately not mirrored page-by-page into this site; the tree is for upstream-shaped browsing, and
+`spec.yaml` is the contract.

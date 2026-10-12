@@ -1,6 +1,6 @@
 <h1 align="center">LA<img src="docs/assets/lagom-peepo.png" alt="" height="42" align="absmiddle">GOM</h1>
 
-<p align="center"><strong>rask</strong> — an agnostic multimodal AI platform: governed lakehouse + batch processing.</p>
+<p align="center"><strong>rask</strong> — an agnostic multimodal lakehouse: Lance tables governed by a catalog, with lineage and authorization.</p>
 
 > ⚠️ **Work in progress — don't use.**
 
@@ -8,23 +8,22 @@
 design rule for this platform: every tier governed, nothing over-built, and no capability that cannot
 say where its data came from.
 
-A **Lance lakehouse** under Lance Namespace (governed REST catalog + OpenLineage lineage into Apache
-AGE), **durable execution and events** on Dapr + NATS JetStream, **batch compute** on the engine the user
-brings (Ray in development), and
-**complete lineage and governance** over both — Dex OIDC for identity, OpenFGA for authorization,
-S3-compatible storage (RustFS in-cluster).
+A **Lance lakehouse** under Lance Namespace (a governed REST catalog that enforces the bronze → silver → gold
+tiers in its write path, and OpenLineage provenance), **events** on Dapr + NATS JetStream, and **governance** over
+all of it — Dex OIDC for identity, OpenFGA for authorization, S3-compatible storage (MinIO in development, the
+platform's S3 in production). The lakehouse runs no ingest, no pipeline stage, no training and no workflow engine:
+compute and orchestration are the user's, and a pipeline writes every tier through the catalog's Lance Namespace
+doors like any other client (ADRs 0154 and 0155).
 
 **The platform is workload-agnostic by design.** It stores and governs blobs and multimodal data;
-HTR (handwritten-text recognition over archive scans) is the example workload that exercises it, not
-its identity. Anything that reads bytes, writes a governed table and emits lineage fits the same
+no workload is its identity. Anything that reads bytes, writes a governed table and emits lineage fits the same
 shape — text, image, audio, video, embeddings.
 
-**The platform itself has no concept of HTR, and that is enforced rather than aspirational.** Modality
+**The platform itself knows no modality, and that is enforced rather than aspirational.** Modality
 lives in exactly one place: the sealed `runners/<workload>` projects. It must not leak into a shared seam —
-the catalog and its tier governance, the maintenance sweep, lineage, notifications — because a seam that knows one modality makes the next one a
-second-class citizen. That is not hypothetical: registration shipped as `htr_register.py` and served the
-HTR lane alone, so that lane was governed and every other lane wrote **ungoverned** bytes until it was
-generalised. The test for any shared seam is *would this still be right for audio?*
+the catalog and its tier governance, the maintenance sweep, lineage, notifications — because a seam that knows
+one modality makes the next one a second-class citizen. The test for any shared seam is *would this still be
+right for audio?*
 
 Polyglot monorepo: Python via [uv], JS/TS via [Bun] + Turborepo (oxlint + oxfmt), docs via
 [Zensical], hermetic builds via [Dagger] (`.dagger/` — **every image**, local and CI).
@@ -38,7 +37,8 @@ Two language-pure planes: Python at the repo root, all JS/TS under `frontend/`.
 - `services/` — runnable Python services (uv workspace members):
   - **lakehouse**: `catalog` (governed Lance REST catalog — projects → warehouses → namespaces →
     tables, and the bronze→silver→gold tier governance a pipeline's writes pass through), `lineage`
-    (OpenLineage → AGE, and the durable `GET /events` log), `maintenance` (compaction, index optimize, version reclamation, drift + orphan reporting)
+    (OpenLineage → AGE, and the durable `GET /events` log), `maintenance` (version expiry, trash purge, the orphan
+    scan, cross-store reconcile; it still compacts and rebuilds indices until LH-467 #587 moves those rewrites out)
   - **media**: `viewer`, `search`, `annotator`
   - **fleet**: `gateway` (reverse proxy `:8888`), `flows` (the studio flow-builder's server half),
     `notifications` (the per-subject inbox), and `compute` (Ray introspection + Serve proxy), the companion of a
@@ -56,8 +56,9 @@ Two language-pure planes: Python at the repo root, all JS/TS under `frontend/`.
 - `scripts/` — all dev/ops scripts (indexing, harvesting, the dev fleet, the e2e stack drivers)
 - `tests/` — cross-service suites: `unit`, `integration`, `e2e-py` (**live**, `-m e2e`, needs a
   deployed stack), `e2e` (Playwright, its own lockfile)
-- `chart/` — the single Helm deploy artifact (fleet + subcharts: CNPG, RustFS, KubeRay, Dapr, NATS,
-  OpenFGA, observability)
+- `chart/` — the product chart: rask's services, zones and their configuration, with OpenFGA as its only
+  (optional) subchart. Dapr, NATS JetStream, the CloudNativePG operator, External Secrets, Dex, the object store
+  and observability are prerequisites, installed in development from `deploy/fixtures/` (ADR 0153)
 - `.docker/` — one dockerfile per deployable; `.dagger/` — the build + CI module; `docs/` — Zensical
   source (the depth lives here)
 
@@ -84,20 +85,20 @@ make check       # fmt + lint + typecheck + knip
 ```bash
 make dev-zone ZONE=lakehouse   # ONE zone + its own mock upstreams — no cluster, no containers
 make dev-frontends             # all seven zones behind the :3024 proxy
-make dev-micro                 # the backend fleet: gateway :8888 + per-domain services
-make ray-up                    # local Ray head; `make serve-up` deploys the Serve apps
+make dev-micro                 # gateway :8888 + compute, flows, notifications and the explorer trio
 ```
 
 **`make dev-zone` is the leanest loop and the only one that needs nothing else** — it starts a zone
 plus the seed-driven mock upstreams its own Playwright suite uses, so it also runs in a cloud sandbox
 or CI. Auth is off and cross-zone links 404, because exactly one zone is listening. Open **`:3024`**,
-not a zone's own port, when running the full composition.
+not a zone's own port, when running the full composition. The lakehouse services (catalog, lineage,
+maintenance) need Dapr, NATS, OpenFGA and an object store, so they run on k3s, not in `make dev-micro`.
 
 ## Clusters
 
 The chart in `chart/` is the single deploy artifact for both.
 
-- **k3s** — the long-lived local/single-node deploy (GPU-capable), and where the live estate runs:
+- **k3s** — the long-lived local/single-node deploy, and where the live estate runs:
 
   ```bash
   make k3s-install                       # one-time host bootstrap (sudo)

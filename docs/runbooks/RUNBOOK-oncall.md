@@ -10,10 +10,10 @@ these are found by watching the Perses dashboards (`make dashboards`) or a user 
 
 - **Services** (FastAPI): `catalog` (REST catalog, tier governance and the model registry), `lineage`
   (OpenLineage → Apache AGE graph, plus the durable `GET /events` log), `maintenance` (planner + worker),
-  `notifications`, `flows`, `gateway`, `web`. The lakehouse runs no stage and no pipeline: moving data
+  `notifications`, `flows`, `gateway`, and the zones (`web-<zone>`). The lakehouse runs no stage and no pipeline: moving data
   between tiers is the user's job on their own compute ([ADR 0155](../adr/0155-the-medallion-is-tier-governance-in-the-catalog.md)).
 - **Stores**: `age-postgres` (the lineage graph **AND** OpenFGA's datastore — one pod, dual-purpose),
-  `rustfs` (the Lance object store — all medallion + registry data), `openfga` (authz), `openbao` (secrets,
+  the object store (MinIO in development: every Lance table and the registries), `openfga` (authz), `openbao` (secrets,
   prod = sealed file backend), `greptimedb` (metrics), `dex` (OIDC).
 - **Signals**: Perses panels (`make dashboards`), `kubectl logs`, and the domain metrics —
   `lineage_events_processed_total{lance_lineage_outcome}` (incl. `DEAD_LETTERED`),
@@ -32,7 +32,7 @@ these are found by watching the Perses dashboards (`make dashboards`) or a user 
 | `dapr_dead_letter_parked` ERROR logs | [DLQ parking](#dlq-parking--a-delivery-gave-up) |
 | `LineageSignatureRefusedForAListedSigner` firing, `lineage_signature_refused` WARN logs | [Lineage refusing a signer's events](#lineage-refusing-a-signers-events) |
 | `outbox_depth` sustained > 0, `outbox_oldest_age_seconds` climbing | [Outbox not draining](#outbox-not-draining) |
-| Catalog reads/writes fail, Lance data unreachable | [RustFS down](#rustfs-down--data-plane) |
+| Catalog reads/writes fail, Lance data unreachable | [Object store down](#object-store-down--data-plane) |
 | No lineage, `/runs` empty or erroring, FGA also failing | [AGE down](#age-postgres-down--lineage--fga) |
 | `DaprWorkflowHistoryNotCollected` / `DaprWorkflowStateMetricsMissing` firing | [Workflow history not collected](#workflow-history-not-collected) |
 
@@ -178,18 +178,19 @@ mean something other than the catalog wrote under `_control_outbox`: treat that 
 
 **Act.** Restore lineage / the bus; the relay re-ingests staged survivors idempotently on recovery.
 
-## RustFS down → data plane
+## Object store down → data plane
 
-**Symptom.** Catalog reads/writes fail; Lance datasets unreadable; GreptimeDB flush errors.
+**Symptom.** Catalog reads/writes fail; Lance datasets unreadable.
 
-**Cause.** `rustfs` is a single-replica object store backing BOTH the Lance lakehouse and GreptimeDB's
-object storage — a data-plane SPOF (kind). Prod answer is a managed S3 (`rustfs.externalEndpoint` — see
+**Cause.** In development the object store is the `minio` fixture (`deploy/fixtures/minio`, StatefulSet
+`rask-minio`), a data-plane single point of failure. The production answer is the platform's managed S3
+(`minio.externalEndpoint` — see
 [docs/adr/0033-p4-p7-backups-structural-spofs-the-prod-answer-is.md "P4/P7"](../adr/0033-p4-p7-backups-structural-spofs-the-prod-answer-is.md)).
 
-**Diagnose.** `kubectl get pods -l app.kubernetes.io/component=rustfs`; check the PVC is bound and the node
-can mount it (RWO + Recreate strategy means it can't move nodes while the old pod holds the volume).
+**Diagnose.** `kubectl get pods -l app.kubernetes.io/component=minio`; check its claims
+(`data-<n>-rask-minio-<i>`) are bound and the node can mount them.
 
-**Act.** Recover the pod/volume; for prod durability, externalize to managed S3.
+**Act.** Recover the pod/volume; for prod durability, use the platform's managed S3.
 
 ## AGE Postgres down → lineage + FGA
 

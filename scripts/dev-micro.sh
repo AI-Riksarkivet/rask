@@ -9,7 +9,7 @@
 # core-api/search-api/volumes-api trio died in the R6/R20 media wave — the S3
 # object browser now rides the media-plane VIEWER, which this fleet starts so
 # the lakehouse storage browser has a live /api/explorer backend in dev. See
-# docs/architecture/lance-ns-merge.md P7.)
+# ADR 0112.)
 set -euo pipefail
 
 # NOTE: do NOT bash-source .env here. Every service loads it itself via

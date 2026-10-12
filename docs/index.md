@@ -1,9 +1,9 @@
 # rask
 
-**rask** is a distributed image-to-ALTO-XML pipeline and search service for the
-[Swedish National Archives (Riksarkivet)](https://riksarkivet.se). It runs
-handwritten-text recognition (HTR) over archival page images at scale and makes
-the resulting transcriptions searchable.
+**rask** is an agnostic, multimodal lakehouse: Lance tables governed by a catalog, with lineage, authorization,
+events and annotation across them. Any modality (text, image, audio, video, embeddings) is a first-class citizen:
+bytes in, a governed table out, lineage emitted. The lakehouse runs no compute and no workflow engine of its own;
+every write, from whatever engine the user brings, comes in through the catalog's Lance Namespace doors.
 
 It is a polyglot monorepo — **Python + Svelte/TypeScript**, managed with
 [uv](https://docs.astral.sh/uv/) (Python 3.13) and [Bun](https://bun.sh) — split
@@ -11,35 +11,37 @@ into two language-pure planes: the Python plane (reusable **`packages/`**
 libraries plus runnable **`services/`**) and the JS/TS plane under
 **`frontend/`**, its own Bun + Turborepo workspace root. Deployables build from
 the root workspace (`uv sync --package <name>`), one dockerfile each under
-`.docker/`.
+`.docker/`, and Dagger builds every image.
 
 ## What it does
 
 ```mermaid
 flowchart LR
-    img[("Page images<br/>IIIF · S3")] --> htr["HTR pipeline<br/><sub>Ray Data + Ray Serve</sub>"]
-    htr --> alto[("ALTO XML<br/>S3")]
-    alto --> idx["Search index<br/><sub>Lance FTS</sub>"]
-    idx --> ui["SvelteKit (SSR) frontend"]
+    pipe["A user's pipeline<br/><sub>on its own compute</sub>"] -->|"namespace doors"| cat["Catalog<br/><sub>tier governance · FGA</sub>"]
+    cat --> store[("Lance tables<br/>S3")]
+    cat -->|"commit announcement"| lin["Lineage<br/><sub>GET /events · graph</sub>"]
+    lin --> notif["Notifications"]
+    maint["Maintenance<br/><sub>expiry · purge · reconcile</sub>"] --> store
+    ui["SvelteKit (SSR) zones"] --> cat
+    ui --> lin
 ```
 
-1. A **runner** CLI submits Ray Data jobs that fan HTR work across a Ray cluster,
-   with TrOCR model weights kept warm in **Ray Serve**.
-2. Transcriptions are written back to S3 as **ALTO XML**.
-3. An indexer builds **Lance** full-text tables over the transcribed lines.
-4. A **gateway** (`:8888`) routes API traffic to flows, notifications and the
-   lance lakehouse/media planes (`/api/catalog`,
-   `/api/lineage`, `/api/explorer/*`) that the **SvelteKit** (SSR, Bun-server)
-   frontend consumes.
+1. A client (the user's pipeline, an ingest job, a notebook) writes through the catalog's **Lance Namespace** doors;
+   the catalog authorizes it on **OpenFGA** and governs the bronze → silver → gold tiers in its own write path.
+2. The catalog announces every committed write as an **OpenLineage** event; lineage records it and serves the
+   durable `GET /events` feed a pipeline polls, and **notifications** tells the right person.
+3. **Maintenance** expires versions, purges trash, scans for orphans and reconciles stores.
+4. The **SvelteKit** zones read the catalog, lineage and the media services (viewer, search, annotator) through the
+   gateway on `:8888`.
 
 ## Where to go next
 
-- **[Getting Started](getting-started/index.md)** — install, run the stack locally, and submit your first batch.
-- **[Architecture](architecture/index.md)** — how runner, Ray, the services, the frontend, and storage fit together.
-- **[Packages](packages/index.md)** — the monorepo's libraries, layer by layer.
+- **[Getting Started](getting-started/index.md)** — install, run it locally, and deploy to k3s.
+- **[Architecture](architecture/index.md)** — how the catalog, lineage, maintenance, the zones and storage fit together.
+- **[Tier Governance](TIER-GOVERNANCE.md)** — what the catalog enforces on a write into a tier.
+- **[Packages](packages/index.md)** — the monorepo's libraries.
 - **[API Reference](reference/storage.md)** — auto-generated from source docstrings.
 
 !!! note "Audience"
-    These docs describe the system as it is. For deeper design rationale and
-    historical decisions, see the in-repo architecture notes linked from the
-    [Architecture overview](architecture/index.md).
+    These docs describe the system as it is. Decisions and their history are in the
+    [decision records](adr/README.md).

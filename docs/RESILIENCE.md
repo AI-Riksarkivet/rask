@@ -116,7 +116,7 @@ semantics, so it must not undercut the slowest handler. Either way the window co
      live here. Down → all ingest returns `RETRY` (buffered) and every lineage read fails.
    - **NATS / JetStream** — one node, `streamReplicas=1`; the Dapr pub/sub backbone. Down → no event flows at
      all (catalog emits swallow, notifications and maintenance hear nothing).
-   - **RustFS** — one pod (now on a keep-PVC, not emptyDir); the S3 data plane. Down → no Lance read/write.
+   - **The object store** (the MinIO fixture in development) — the S3 data plane. Down → no Lance read/write.
    - **OpenBao / OpenFGA / Dex** — one pod each; down → (respectively) app-tier secrets fail-closed at boot,
      authz checks fail, OIDC login fails.
    *Fix (prod):* multi-replica + `streamReplicas=3` for NATS, a real Postgres HA (Patroni/CNPG), a replicated
@@ -159,15 +159,15 @@ chart and live-verified on kind.
   consumed from OpenBao at boot when a secret store is configured. `helm template -f values-prod.yaml` shows
   zero plaintext secret values in env/args.
 - **Graceful rollout drain.** Every app Deployment has a `preStop` sleep + `terminationGracePeriodSeconds`
-  (compaction gets a longer budget for an in-flight sweep) so endpoint removal propagates before SIGTERM —
+  (maintenance gets a longer budget for an in-flight sweep) so endpoint removal propagates before SIGTERM —
   in-flight requests drain instead of connection-refusing (`lance.preStop`, `lifecycle.*`).
 - **Bounded Dapr publishes.** Every `publish_event` is wrapped in `asyncio.timeout`
-  (`common/dapr_publish.py`) so a wedged sidecar/NATS can't hang a write handler past its ack window.
+  (`service_kit/dapr_publish.py`) so a wedged sidecar/NATS can't hang a write handler past its ack window.
 - **Liveness + readiness probes on every workload.** App pods get an HTTP `readinessProbe` (`/readyz`,
   dependency-aware) **and** `livenessProbe` (`/livez`, process-up only — never restarts on a slow backend);
-  web + RustFS get `tcpSocket` probes (`lance.appProbes` / `lance.tcpProbes`).
+  the zones get `tcpSocket` probes (`lance.appProbes` / `lance.tcpProbes`).
 - **Restricted container securityContext on every app pod.** `runAsNonRoot` (images ship a numeric
-  `USER` — uid 10001 catalog, 1000 web — so the kubelet can verify non-root at admission), drop **ALL**
+  `USER` — uid 10001 — so the kubelet can verify non-root at admission), drop **ALL**
   capabilities, no privilege escalation, `seccompProfile: RuntimeDefault`, and `readOnlyRootFilesystem`
   with a writable `/tmp` emptyDir for scratch (`lance.securityContext`, `security.readOnlyRootFilesystem`).
 - **Single-flight reconcile.** The B4 reconcile sweep runs under a Postgres
@@ -177,6 +177,23 @@ chart and live-verified on kind.
   DB (`duplicate key value violates unique constraint "lineage_run_uniq"`) instead of leaving a dup vertex.
   Ingest MERGEs datasets in a **deterministic name-sorted order** so two concurrent ingests that first-create
   the same vertices acquire the index locks in the same order — no deadlock (the index's only new failure mode).
+
+## Invariants of the lakehouse's own background work
+
+The lakehouse runs no batch pipeline ([ADR 0155](adr/0155-the-medallion-is-tier-governance-in-the-catalog.md)); a
+pipeline's own invariants are its engine's business. Two rules bind the work the lakehouse does run, and each has a
+test that fails without it:
+
+- **Refuse new work while draining.** `service_kit.draining.retry_when_draining` guards every sidecar-delivered work
+  door (notifications' subscriptions, maintenance's arrival, work and index routes): a draining process answers
+  RETRY so the broker redelivers to a live replica. It answers RETRY, not DROP, because on a subscription that
+  declares a `deadLetterTopic` daprd routes a DROP to that topic, so a good message would be parked for a human to
+  find (`service_kit/draining.py` carries the daprd source references). Pinned by
+  `packages/service-kit/tests/test_draining_refuses_admission.py`.
+- **Randomise iteration order.** The maintenance sweep shuffles its dataset list and its failure-retry list
+  (`maintenance/services/sweep.py`), so a dataset that fails every pass cannot starve the ones listed after it.
+  Deleting the shuffle passes every functional test, which is why
+  `tests/unit/test_batch_invariants_are_actually_guarded.py` pins it.
 
 ## Prod hardening backlog (delegate-to-platform — NOT dev-blocking)
 

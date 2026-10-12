@@ -19,14 +19,15 @@ of three properties the storage and bus already have, plus three enforcement poi
 
 | Layer | The contract | Where it lives |
 |---|---|---|
-| **Storage** | **The Lance manifest IS the schema; the version IS the handshake.** Every write commits an immutable, numbered version whose manifest embeds the full schema — data is self-describing, so there is nothing separate to register or drift from. A consumer that pins `(dataset, version)` gets bit-identical data + schema forever (time travel). | Lance format itself; CAS commit (put-if-not-exists) validated live against RustFS — `tests/e2e/test_object_store_cas_e2e.py`, verdict in `docs/DURABILITY.md` |
+| **Storage** | **The Lance manifest IS the schema; the version IS the handshake.** Every write commits an immutable, numbered version whose manifest embeds the full schema — data is self-describing, so there is nothing separate to register or drift from. A consumer that pins `(dataset, version)` gets bit-identical data + schema forever (time travel). | Lance format itself; CAS commit (put-if-not-exists), proven per store by `tests/e2e/test_object_store_cas_e2e.py` (`make e2e-cas`), verdict in `docs/DURABILITY.md` |
 | **Bus** | **Events carry POINTERS, never data** (claim-check): a catalog write announcement names the table, its Lance version, its branch and its author; a control event names an object and an action. The OpenLineage facets' `_schemaURL`s ARE the event-shape contract — official spec URLs, pinned in code. | `catalog/core/lineage_emit.py`; facet URLs in `packages/service-kit/src/service_kit/openlineage.py` |
 | **Identity** | One string threads all planes: `table:<id>` is the catalog id, the OpenFGA object, and the lineage graph node — so the contract's subject is never ambiguous. | catalog + `model.fga` + AGE ingest |
 
 The **handshake in practice**: the catalog announces every committed write on lineage, naming the table and the
 version it produced; a user's pipeline reads the upstream at a version, writes downstream through the catalog
-producing a NEW version, and names its inputs at their versions in its own OpenLineage run. How a pipeline outside the
-estate consumes the announcements is a separate decision.
+producing a NEW version, and names its inputs at their versions in its own OpenLineage run. A pipeline reads the
+announcements from lineage's durable `GET /events` with its own token; the forward `since=` cursor and a documented
+commit-event shape are LH-472 (#598).
 
 ## 3 · The three enforcement points (who checks the contract, when)
 
@@ -42,9 +43,9 @@ Plus the provenance guard: a writer cannot drop, rename or rewrite the provenanc
 ## 4 · Is it prod-ready? The honest split
 
 **Enforced today and proven (unit and/or live):**
-- Immutable versions + CAS commits — the storage half of the contract rests on
-  put-if-not-exists, and that was VALIDATED against RustFS (3-tier contended-write harness, all
-  green — `docs/DURABILITY.md`). This is the strongest link.
+- Immutable versions + CAS commits — the storage half of the contract rests on put-if-not-exists, which the
+  3-tier contended-write harness proved against RustFS (`docs/DURABILITY.md`); the same harness is the check for
+  MinIO, the store now in use, and no MinIO run is recorded there.
 - The publish-time quality gate, FGA gates, the provenance guard, reconcile back-fill — all shipped with tests.
 - **Additive** schema evolution is safe *by construction*: `add_columns` makes a new version;
   old versions stay readable; per-version schemas ride the lineage `WROTE` edge.
@@ -59,8 +60,10 @@ Plus the provenance guard: a writer cannot drop, rename or rewrite the provenanc
   `lineage_reconcile_contract_violation`) reads `LINEAGE_DECLARED_COLUMNS`, which the chart does not render, so the
   patrol is off. Additive evolution is never blocked. The wider schema-declaration item is tracked in
   `docs/adr/0012-schema-declaration-claim-check-hardening.md`.
-- **Inputs are declared by the writer.** A silver or gold write is authorized like any write, and its inputs are
-  named only in the writer's own OpenLineage run.
+- **Inputs are declared by the writer.** Today a silver or gold write is authorized like any write, and its inputs
+  are named only in the writer's own OpenLineage run. ADR 0156 makes the run and inputs part of the write itself,
+  carried in the spec `Context` and stamped by the catalog (LH-225, #180), and a table's tier the `rask.tier`
+  namespace property judged at every write door (LH-470, #595).
 - **The claim-check rule is convention + spot-enforcement, not a universal guard.** There is no payload-size guard
   at EVERY publish site yet, and no cap on facet metadata bloat for thousand-column tables. NATS's ~1 MB message limit
   is the physical backstop.
@@ -94,8 +97,9 @@ No — related species, different format and bigger scope on our side:
 | The "contract" | the Iceberg spec: snapshots, schema evolution via column IDs, hidden partitioning — metadata JSON managed by the catalog | the Lance manifest + immutable versions (§2) — self-describing storage, catalog is a thin adapter |
 | AuthZ | OpenFGA (same choice — we studied theirs) | OpenFGA, threaded through the SAME `table:<id>` identity as lineage |
 | Lineage | none | OpenLineage → AGE graph, column-level, reconcile back-fill |
+| Change events | CloudEvents emitted on every change | OpenLineage events on lineage's durable `GET /events` feed |
+| Change approval | a `ContractVerification` trait inside the catalog that can refuse a table change that would break a data contract or quality SLO | the same idea on the Lance write path: tier governance and the publish-time gate in the catalog (ADR 0155, ADR 0156) |
 | Data movement | none (catalog only) | none either: moving data between tiers is the user's pipeline (ADR 0155) |
-| Data contracts as a product | no — like us, the table format IS the contract | no registry either; adds the quality/FGA/reconcile gates on top |
 
 We deliberately mined Lakekeeper for patterns: vended
 credentials with `expires_at_millis`, idempotency keys, scoped event emission — adopted; their

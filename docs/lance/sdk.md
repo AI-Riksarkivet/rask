@@ -1,9 +1,9 @@
 ---
-title: Lance Python SDK
+title: LanceDB Python API
 description: Vendored snapshot of the LanceDB Python API reference.
 ---
 
-# Lance Python SDK reference
+# LanceDB Python API reference
 
 !!! info "Vendored snapshot"
     Embedded verbatim from [`lance_docs/lance_sdk.md`](https://github.com/AI-Riksarkivet/rask/blob/main/lance_docs/lance_sdk.md).

@@ -683,7 +683,7 @@
   <div class="legend" aria-label="Component legend">
     <span class="item"><span class="swatch" style="background:var(--c-user)"></span> Client</span>
     <span class="item"><span class="swatch" style="background:var(--c-orch)"></span> Catalog / service</span>
-    <span class="item"><span class="swatch" style="background:var(--c-compute)"></span> lance-ray job</span>
+    <span class="item"><span class="swatch" style="background:var(--c-compute)"></span> pipeline job</span>
     <span class="item"><span class="swatch" style="background:var(--c-embed)"></span> OIDC / auth</span>
     <span class="item"><span class="swatch" style="background:var(--c-vector)"></span> Datastore</span>
     <span class="item"><span class="swatch" style="background:var(--c-seed)"></span> Secrets</span>
@@ -747,8 +747,8 @@
 
       <div class="node" data-role="compute" data-id="ray" style="left:1%; top:80%;">
         <div class="icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></div>
-        <div class="label">lance-ray job</div>
-        <div class="tech">promotion · compaction</div>
+        <div class="label">pipeline job</div>
+        <div class="tech">the user's, on its own compute</div>
         <span class="step-badge">·</span>
       </div>
 
@@ -897,13 +897,13 @@ Content-Type: application/vnd.apache.arrow.stream`, chips:["Arrow IPC","OIDC"] }
   },
 
   read_query: {
-    name:"Read / query", note:"describe (+ optional vend) → read — data path differs by mode",
+    name:"Read / query", note:"describe with vend_credentials → read — data path differs by mode",
     steps:[
       { from:"client", to:"catalog", color:"--c-user", title:"Open table", route:"GET describe_table",
-        desc:"Client asks the catalog to locate the table (and, on S3, to vend scoped credentials).",
-        payload:`GET /v1/table/alpha$silver$features            # describe
-POST /v1/table/alpha$silver$features/credentials?tier=read   # vend (own endpoint)
-Authorization: Bearer <JWT>`, chips:["describe","credentials endpoint"] },
+        desc:"Client asks the catalog to locate the table and, with the spec's <code>vend_credentials</code>, for table-scoped storage options. The rask extension <code>/management/v1/table/{id}/credentials?tier=</code> vends a named tier.",
+        payload:`POST /v1/table/alpha$silver$features/describe   # spec DescribeTable
+{ "vend_credentials": true }
+Authorization: Bearer <JWT>`, chips:["describe","vend_credentials"] },
       { from:"catalog", to:"oidc", color:"--c-embed", title:"Verify token", route:"JWKS verify",
         desc:"Same fail-closed OIDC verification as every /v1 route.",
         payload:`verify(JWT) -> { sub: "dee" }`, chips:["JWKS cache"] },
@@ -944,10 +944,10 @@ Authorization: Bearer <JWT>`, chips:["describe","credentials endpoint"] },
     name:"Promote (medallion)", note:"the user's pipeline moves bronze → silver → gold through the catalog, then emits lineage",
     steps:[
       { from:"ray", to:"catalog", color:"--c-compute", title:"Describe bronze", route:"GET describe_table",
-        desc:"The promotion job is a <em>catalog client</em>, not an endpoint. It authenticates with <em>workload identity</em> (KubeRay SA / OIDC token) — <em>not</em> a vault secret — gets short-TTL scoped creds from the catalog, and <em>never touches OpenBao</em>.",
-        payload:`GET /v1/table/alpha$bronze$images                # describe
-POST /v1/table/alpha$bronze$images/credentials?tier=read     # vend (own endpoint)
-Authorization: Bearer <workload-identity token>`, chips:["lance-ray job","workload identity"] },
+        desc:"The user's pipeline is a <em>catalog client</em>, not an endpoint. It authenticates with <em>workload identity</em> (a service-account or OIDC token) — <em>not</em> a vault secret — gets short-TTL scoped creds from the catalog, and <em>never touches OpenBao</em>.",
+        payload:`POST /v1/table/alpha$bronze$images/describe     # spec DescribeTable
+{ "vend_credentials": true }
+Authorization: Bearer <workload-identity token>`, chips:["pipeline job","workload identity"] },
       { from:"catalog", to:"openfga", color:"--c-vector", title:"Authorize read bronze", route:"check can_read_data",
         desc:"Role-as-subject: the job runs as a role whose members get read on bronze.",
         payload:`check {
@@ -980,17 +980,17 @@ MERGE (d)-[:DERIVED_FROM]->(:Dataset {name:"alpha$bronze$images"})`, chips:["Apa
   },
 
   lineage_query: {
-    name:"Lineage query", note:"GET upstream — provenance over the AGE graph (read-authz: OIDC + can_get_metadata, opt-in)",
+    name:"Lineage query", note:"GET upstream — provenance over the AGE graph (read-authz: OIDC + can_get_metadata)",
     steps:[
       { from:"client", to:"lineage", color:"--c-user", title:"Ask provenance", route:"GET upstream",
         desc:"Where did gold come from? Query the provenance axis.",
         payload:`GET /datasets/alpha$gold$catalog/upstream
 Authorization: Bearer <JWT>`, chips:["provenance"] },
-      { from:"lineage", to:"oidc", color:"--c-embed", title:"Verify token (opt-in)", route:"JWKS verify",
-        desc:"<em>Implemented (P0 #1):</em> when <code>RASK_OIDC_ENABLED</code>, the bearer JWT is verified first (401 if absent), reusing the catalog's verifier. Default OFF in dev.",
-        payload:`verify(JWT) -> { sub: "ana" }`, chips:["JWKS","default OFF"] },
-      { from:"lineage", to:"openfga", color:"--c-vector", title:"Authorize (opt-in)", route:"check can_get_metadata",
-        desc:"<em>Implemented (P0 #1):</em> same permission as describe-table — you see lineage only if you may see the table's metadata. Reuses the shared OpenFGA store read-only; related/graph datasets you can't see are filtered out (<code>batch_check</code>). Default OFF.",
+      { from:"lineage", to:"oidc", color:"--c-embed", title:"Verify token", route:"JWKS verify",
+        desc:"<em>Implemented (P0 #1):</em> when <code>RASK_OIDC_ENABLED</code>, the bearer JWT is verified first (401 if absent), reusing the catalog's verifier. On in the chart.",
+        payload:`verify(JWT) -> { sub: "ana" }`, chips:["JWKS"] },
+      { from:"lineage", to:"openfga", color:"--c-vector", title:"Authorize", route:"check can_get_metadata",
+        desc:"<em>Implemented (P0 #1):</em> same permission as describe-table — you see lineage only if you may see the table's metadata. Reuses the shared OpenFGA store read-only; related/graph datasets you can't see are filtered out (<code>batch_check</code>).",
         payload:`check {
   user:     "user:ana",
   relation: "can_get_metadata",

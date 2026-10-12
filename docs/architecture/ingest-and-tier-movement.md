@@ -11,9 +11,9 @@ moves no data between tiers ([ADR 0155](../adr/0155-the-medallion-is-tier-govern
   data reaches bronze only from a client that speaks the namespace doors; development and the e2e lanes seed bronze
   through the catalog's `insert`.
 - **Tier movement is the user's pipeline.** It writes the next tier through the same doors. The catalog announces
-  every committed write on lineage; how a pipeline outside the estate consumes those announcements is a separate
-  decision.
-  What the catalog enforces on those writes is [MEDALLION.md](../MEDALLION.md).
+  every committed write on lineage, and the pipeline reads those announcements from lineage's durable `GET /events`
+  with its own token, then decides what to run ([LINEAGE.md](../LINEAGE.md); the forward cursor is LH-472, #598).
+  What the catalog enforces on those writes is [Tier Governance](../TIER-GOVERNANCE.md).
 - **Annotator output and readiness**:
   [ADR 0131](../adr/0131-annotations-are-derived-and-readiness-is-the-published-tag.md). The annotator derives its
   publish target from the tenant rather than a bare tier name.

@@ -6,11 +6,11 @@ requirements **and proven by a drill**: `scripts/age_restore_drill.sh` (run insi
 against a throwaway DB, wired into `e2e_stack.sh` behind `E2E_RESTORE_DRILL`) performs this runbook's exact
 pg_dump→drop→restore and verifies the graph came back with its labels + a real vertex — green on the
 pinned PG16 engine. The drill green does not transfer across a Postgres major (see the migration section
-below). The RustFS `VolumeSnapshot` leg is **not** drilled — validate it on your cluster's CSI driver
+below). The object-store `VolumeSnapshot` leg is **not** drilled — validate it on your cluster's CSI driver
 before trusting it in an incident.
 
 > The in-cluster backups are the SELF-CONTAINED-prod path. If you externalize to CloudNativePG (Postgres)
-> and a managed S3 / rustfs-operator (object store), use THEIR PITR + snapshots instead — set
+> and a managed S3 (object store), use THEIR PITR + snapshots instead — set
 > `backups.pgDump.enabled=false` + `backups.volumeSnapshot.enabled=false`. This runbook is for the
 > in-cluster path.
 
@@ -18,8 +18,8 @@ before trusting it in an incident.
 
 | Artifact | What | Where | Template |
 |---|---|---|---|
-| **pg_dump** (gzip) | the `lineage` DB (AGE graph + events/reads tables), the `openfga` DB (authz tuples) **and** the `daprstate` DB (Dapr state store: inbox read state + workflow/actor instances) | RustFS S3 `_backups/pg/<UTC>/` | `backup-pg.yaml` (CronJob, `backups.pgDump`) |
-| **VolumeSnapshot** | the RustFS data PVC = the **Lance lakehouse** (all medallion + registry data) | cluster CSI VolumeSnapshot | `backup-snapshot.yaml` (`backups.volumeSnapshot`) |
+| **pg_dump** (gzip) | the `lineage` DB (AGE graph + events/reads tables), the `openfga` DB (authz tuples) **and** the `daprstate` DB (Dapr state store: inbox read state + workflow/actor instances) | the object store, `_backups/pg/<UTC>/` | `backup-pg.yaml` (CronJob, `backups.pgDump`) |
+| **VolumeSnapshot** | the MinIO fixture's data PVCs = the **Lance lakehouse** (every tier + registry data) | cluster CSI VolumeSnapshot | `backup-snapshot.yaml` (`backups.volumeSnapshot`) |
 | **control-root records** | the governance objects: `_projects/`, `_warehouses/` (registry + namespace bindings), `_trash/`, `_protection/`, `_policies/`, `_gates/`, `_transforms/`, `_tasks/` | a timestamped prefix, `_backups/control/<UTC>/` by default | `scripts/control_root_backup.py` |
 
 > **The VolumeSnapshot row needs a cluster that can take one.** Measured 2026-09-14 on the k3s dev
@@ -31,15 +31,15 @@ before trusting it in an incident.
 
 **Not backed up** (accept the loss window or externalize — see [docs/adr/0033-p4-p7-backups-structural-spofs-the-prod-answer-is.md "P4/P7"](../adr/0033-p4-p7-backups-structural-spofs-the-prod-answer-is.md) and
 [DURABILITY.md](../DURABILITY.md)): GreptimeDB local WAL/metadata (metrics — reconstructable), OpenBao's file
-PVC (an open gap — back up the unseal material out-of-band), and note the pg_dump lands on RustFS, so a
-**total RustFS loss loses both the Lance data AND the DB dumps** unless you also ship the dumps
+PVC (an open gap — back up the unseal material out-of-band), and note the pg_dump lands on the same object
+store, so a **total store loss loses both the Lance data AND the DB dumps** unless you also ship the dumps
 off-cluster (the "fate-sharing" gap).
 
-## Consistency: restore AGE + RustFS as a pair
+## Consistency: restore AGE + the object store as a pair
 
-The lineage graph (AGE) references Lance datasets that live in RustFS; the registry (RustFS) is described by
-the catalog. Restoring one far from the other leaves dangling provenance. **Restore the pg_dump and the
-RustFS snapshot from the SAME backup window**, and expect the reconcile sweep to converge minor drift
+The lineage graph (AGE) references Lance datasets that live in the object store; the registry (in the store) is
+described by the catalog. Restoring one far from the other leaves dangling provenance. **Restore the pg_dump and the
+object-store snapshot from the SAME backup window**, and expect the reconcile sweep to converge minor drift
 (storage↔graph) afterward.
 
 ## Restore — Postgres (AGE lineage graph + OpenFGA + Dapr state)
@@ -95,11 +95,11 @@ NOT trusted: switch the backup to an AGE-aware dump (per-graph `SELECT * FROM ag
 or CloudNativePG logical backup with the extension) and re-drill. **This is exactly why the drill is
 mandatory before relying on this path.**
 
-## Restore — RustFS (the Lance lakehouse)
+## Restore — the object store (the Lance lakehouse)
 
 1. Provision a new PVC from the VolumeSnapshot (`dataSource: {kind: VolumeSnapshot, name: <snap>}`).
-2. Point the `rustfs` StatefulSet at it (or restore into the existing PVC per your CSI driver's clone flow).
-3. Restart `rustfs`; then `catalog`/`lineage`/`maintenance` reconnect (their `/readyz` gates hold them out until the
+2. Point the MinIO fixture's StatefulSet at it (or restore into the existing PVC per your CSI driver's clone flow).
+3. Restart the store; then `catalog`/`lineage`/`maintenance` reconnect (their `/readyz` gates hold them out until the
    object store answers).
 
 ## Restore — the control root (projects, warehouses, bindings, trash)
@@ -177,7 +177,7 @@ supported route is logical: dump on the old major → fresh data directory on th
    written, and the restored inboxes disagree with the lineage dump taken beside them.
 2. **Take a fresh dump of all three DBs**: trigger the backup CronJob out of schedule —
    `kubectl create job --from=cronjob/<release>-pg-backup pg-migrate-dump` (`backup-pg.yaml`; it dumps
-   `lineage` + `openfga` + `daprstate` gzipped to `_backups/pg/<UTC>/` on RustFS) — or run the equivalent manual
+   `lineage` + `openfga` + `daprstate` gzipped to `_backups/pg/<UTC>/` on the object store) — or run the equivalent manual
    `pg_dump` per database. Manually, do NOT write it as `pg_dump | gzip`: the pipeline reports only gzip's
    status, so a dump that dies mid-stream leaves a valid gzip and a zero exit — see `backup-pg.yaml` for the
    form that catches it. Then copy the dumps somewhere off the estate too; don't let the only copy
@@ -185,7 +185,7 @@ supported route is logical: dump on the old major → fresh data directory on th
    major's `pg_dump`; if you want that, run a one-off pod on the new image pointed at `<release>-age:5432`
    before cutover.)
 3. **Keep a rollback for the datadir**: take a manual CSI VolumeSnapshot of `data-<release>-age-0`
-   (`backup-snapshot.yaml` only snapshots the RustFS PVC, so this one is by hand). No snapshotter? Then the
+   (`backup-snapshot.yaml` only snapshots the object store's PVCs, so this one is by hand). No snapshotter? Then the
    step-2 dumps are your only rollback — verify they exist and gunzip cleanly before proceeding.
 4. **Cut over**: `kubectl scale sts <release>-age --replicas=0`, delete the PVC `data-<release>-age-0`, then
    `helm upgrade` with the new `age.image`. The fresh PVC makes initdb run the `age-postgres.yaml` ConfigMap
