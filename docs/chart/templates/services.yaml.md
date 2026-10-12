@@ -10,8 +10,10 @@ pubsub.jetstream component. The daprd sidecar (injected by the annotations) carr
 
 ## `args:`
 
-command/args are split so the dev-only reload flags can be appended. These are the
-fleet.yaml — so a synced file landed in the pod and the worker never re-read it.
+command/args are split so the module, bind address, port and graceful-shutdown flag
+(`rask.shutdownArg`, sized from the pod's termination grace) render as uvicorn arguments,
+one per line, the same whether the command is bare `uvicorn` or wrapped in
+`opentelemetry-instrument`.
 
 ## `- { name: LANCE_MAX_CONCURRENT_WRITES, value: {{ hasKey .Values.catalog "maxConcurrentWrites" | ternary .Va...`
 
@@ -56,7 +58,7 @@ runtime one is indistinguishable from a caller inventing a bucket.
 ## `- { name: LANCE_DAPR_SECRET_S3_FIELD, value: {{ include "lance.catalogSecretField" . | quote }} }`
 
 NAMED HERE rather than left to the service's own default, which is what every sibling
-already does (lineage, medallion, maintenance each render their own field). The catalog
+already does (lineage and maintenance each render their own field). The catalog
 was the one that did not, so the FIELD NAME lived only in its image — and when the seed
 started writing a differently-named property, a running pod asked OpenBao for a field
 that no longer existed and failed closed at startup on an estate whose store was
@@ -117,9 +119,9 @@ service reads the SAME value, so neither side can believe a worker exists when i
 
 ## `- { name: LANCE_CONTROL_OUTBOX_URI, value: "s3://{{ .Values.minio.bucket }}/_control_outbox" }`
 
-#4 transactional outbox on the CONTROL lane + the cron that RELAYS it. `table_published` is
-the only thing that wakes silver->gold (nothing re-reads the `published` tag), so a publish
-lost to a NATS blip ended the cascade with every pod green. Staged here, re-published by
+#4 transactional outbox on the CONTROL lane + the cron that RELAYS it. A control event lost
+to a NATS blip (a grant, a `table_published`) reaches nobody — not the notifications control
+lane, not any replica's GET /v1/events buffer — with every pod green. Staged here, re-published by
 `catalog/api/control_relay.py` on the schedule in catalog-control-relay-cron.yaml.
 
 A PRIVATE PREFIX, never `_lineage_outbox`: lineage's reconcile cron parses everything in
@@ -135,12 +137,12 @@ The binding name IS the route this app serves it on — one string with the Comp
 Explicit APP_API_TOKEN so require_dapr_token can verify the `dapr-api-token` header the sidecar
 stamps on /control-events delivery → a forged direct in-cluster POST is 403'd. Without it the
 guard silently no-ops and any pod could inject fabricated change-events into every replica's
-buffer. Same secret + pattern as the lineage/medallion/compaction apps; the catalog
+buffer. Same secret + pattern as the lineage and maintenance apps; the catalog
 lifespan also asserts it is set when control eventing is on (fail-closed, not silently open).
 
 ## `{{- include "lance.appTokenEnv" (list $root $root.Values.services.catalog.daprAppId) | nindent 12 }}`
 
-Same rule as the medallion's and maintenance's: this verifies the header the SIDECAR
+Same rule as maintenance's: this verifies the header the SIDECAR
 stamps, so without one there is nothing to verify and the Secret is not rendered.
 
 ## `- { name: DAPR_API_TIMEOUT_SECONDS, value: {{ .Values.dapr.apiTimeoutSeconds | quote }} }`
@@ -150,17 +152,15 @@ every write handler, so a wedged sidecar/NATS would otherwise hang every catalog
 
 ## `{{- $maintainers := list }}`
 
-THE SWEEP'S OWN RUNG, and the reason it is a second list rather than another entry
-in the one above: a cascade identity moves data between tiers and holds
-writer/publisher/validator, while maintenance rewrites HOW a dataset is stored and
-must hold `maintainer` and nothing else. `can_maintain` neither implies nor is
-implied by `can_write_data`, so merging the lists would grant each the other's
-authority.
+THE SWEEP'S OWN RUNG: maintenance rewrites HOW a dataset is stored and must hold
+`maintainer` and nothing else. `can_maintain` neither implies nor is implied by
+`can_write_data`, so no writer identity may ride this list. ADR 0156 C4 narrows the
+maintain vend tier to this identity alone (LH-473, #599).
 GATED EXACTLY LIKE THE BOOTSTRAP HOOK'S OWN GRANT (`bootstrap-admin.yaml`), so an
 estate that vends no write credentials grants nothing — a standing tuple for a
 service that is not using it is the kind nobody remembers to revoke.
 Measured 2026-09-15: without this the catalog's list was empty in every deployment,
-so `cascade_tuples` wrote no maintainer grant, and the 93 warehouses that had one
+so `cascade_tuples` (the warehouse-create grants, `catalog/api/fga_deps.py`) wrote no maintainer grant, and the 93 warehouses that had one
 had it written by hand into the live store.
 
 ## `- { name: LANCE_AUDIT_ENABLED, value: {{ hasKey .Values.auth "audit" | ternary .Values.auth.audit true | qu...`
@@ -235,8 +235,10 @@ Lineage (consumer) — SUBSCRIBES (via its daprd sidecar) to the lineage topic a
 
 ## `args:`
 
-command/args are split so the dev-only reload flags can be appended. These are the
-fleet.yaml — so a synced file landed in the pod and the worker never re-read it.
+command/args are split so the module, bind address, port and graceful-shutdown flag
+(`rask.shutdownArg`, sized from the pod's termination grace) render as uvicorn arguments,
+one per line, the same whether the command is bare `uvicorn` or wrapped in
+`opentelemetry-instrument`.
 
 ## `{{- include "lance.appTokenEnv" (list $root $root.Values.services.lineage.daprAppId) | nindent 12 }}`
 

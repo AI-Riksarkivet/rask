@@ -15,13 +15,11 @@ fleet entry needs nothing.
 
 ## `{{- if and (not (has $name $lakehouse)) (or $svc.frontDoor $root.Values.singleTenant.enabled) }}`
 
-`frontDoor: true` = part of the DEFAULT install, regardless of singleTenant. This gate used to
-name "gateway" literally, so every other front-door service was invisible unless someone set a
-LEGACY single-tenant flag. compute is the case that exposed it: it has an image, is built and
-imported by k3s-build/k3s-import, and the gateway routes /api/ray + /api/serve to its app-id
-UNCONDITIONALLY — so a default install answered ERR_DIRECT_INVOKE on the very route Makefile:406
-prints as its post-install check, and dev-frontends-k3s blocked forever polling it. compute is
-not a single-tenant concept; it is a client for a Ray dashboard URL, and Ray is external.
+`frontDoor: true` = part of the DEFAULT install, regardless of singleTenant. A gate that names one
+service literally leaves every other front-door service unrendered unless someone sets the LEGACY
+single-tenant flag, and the gateway routes to its front-door app-ids UNCONDITIONALLY — so a default
+install answers ERR_DIRECT_INVOKE on a route the gateway publishes (measured 2026-08 on compute's
+/api/ray, which the compute fixture chart now serves outside this chart, ADR 0155).
 
 ## `terminationGracePeriodSeconds: {{ $root.Values.lifecycle.terminationGracePeriodSeconds }}`
 
@@ -83,10 +81,10 @@ than receiving it by default.
 ## `- { name: RASK_AUDIT_ENABLED, value: {{ hasKey $root.Values.auth "audit" | ternary $root.Values.auth.audit ...`
 
 The #41 compliance trail, for the FACTORY-BUILT half of the fleet. `auth.audit`
-already reached catalog, lineage and medallion, which arm the `lance.audit` logger
-themselves; every service in this loop leaves it at NOTSET and `make_service_app`
-now applies this flag instead — so without the row the operator's one lever silences
-three services of ten and the rest keep emitting. hasKey+ternary, not `| default`:
+reaches catalog and lineage as `LANCE_AUDIT_ENABLED` (services.yaml), which arm the
+`lance.audit` logger themselves; every service in this loop leaves it at NOTSET and
+`make_service_app` applies this flag instead — so without the row the operator's one
+lever silences only those two and the rest keep emitting. hasKey+ternary, not `| default`:
 Sprig's default() treats boolean false as empty, and a bare reference renders "" on a
 `--reuse-values` upgrade from a release predating the key, which is a pydantic
 bool_parsing crash at boot. Same convention as LANCE_AUDIT_ENABLED.
@@ -117,9 +115,7 @@ ExternalSecret (external-secrets.yaml) and it also gates this reference.
 The USER door, for services that declare `governedAuth` — NOT every frontDoor
 service. `frontDoor` means "the gateway routes to it", which is a different
 question: the GATEWAY reads no auth settings at all, so keying on it emits
-variables that service never reads. (`compute` was the second example here until
-2026-08-26; it now declares GovernedAuthSettings and gates both routers, so it
-carries `governedAuth: true` and this env is exactly what feeds its door.) A governed service's settings carry their own prefix, so
+variables that service never reads. A governed service's settings carry their own prefix, so
 the prefix this env uses is verified per service, not assumed: emitting the wrong prefix produces variables the
 service never reads, which looks wired and does nothing.
 

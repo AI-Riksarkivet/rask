@@ -53,7 +53,7 @@ ships this setting EMPTY for exactly that reason, so this line is where the two 
 Its own subject rather than a shared one — a per-subTopic DLQ once had two apps parking on each
 other's dead letters and counting them — and `dlq.>` is already bound by the
 DLQ stream, so no new NATS stream is needed. The parking subscription rides this app's OWN pubsub
-component (the medallion shape, not lineage's `-dlq` clone): that component is already
+component, not a `-dlq` clone like lineage's: that component is already
 deliverPolicy=new + durable, which is the property lineage needed a second component to obtain,
 and `notifications-durable` is free on the DLQ stream because NATS scopes consumer names per stream.
 

@@ -11,11 +11,12 @@ is a chart value, so with no operator nothing would deliver one: the render refu
 a release whose pods wait on Secrets nobody creates. `.Capabilities` is the cluster's own answer on an
 install or upgrade; a cluster-less render states the target with `--api-versions`.
 
-## `{{- $stores := or (lookup "apps/v1" "StatefulSet" .Release.Namespace (include "lance.ageHost" .)) (lookup "...`
+## `{{- $stores := or (lookup "apps/v1" "StatefulSet" .Release.Namespace (include "lance.ageHost" .)) $objectStore }}`
 
 AN ESTATE THAT ALREADY HOLDS DATA KEEPS ITS CREDENTIALS. The AGE database and the object store keep the
 password and root they were initialised with, so generating fresh ones beside them hands every consumer a
-credential its server refuses. On an upgrade of an estate whose stores exist, the credential Secret must
+credential its server refuses. The object store counts only when its StatefulSet and the
+`<release>-infra-credentials` Secret it reads both exist (`$objectStore`). On an upgrade of an estate whose stores exist, the credential Secret must
 already exist: created from the current credentials before the first upgrade, and rotated in place
 afterwards (docs/OPERATORS.md 8). `lookup` answers only against a cluster, so a cluster-less render and a
 fresh install, where no store exists yet, generate.

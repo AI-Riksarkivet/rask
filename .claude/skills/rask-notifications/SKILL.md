@@ -46,6 +46,12 @@ runs reach people through the OpenLineage events the pipeline's job emits, targe
 `author.sub` (Q1), or by `lance.originator` when the job authenticates as a service (Q2). The catalog's
 own COMPLETE for each commit the pipeline makes is authored as the verified caller.
 
+Decided and not yet built, so do not design against them as if they exist: moving a governed table's
+`published` tag notifies the project's watchers (ADR 0156 C1, LH-466 #586); lineage's `GET /events` gains a
+forward `since=` cursor and a documented commit-event shape (C7, LH-472 #598); and lineage shrinks to an
+authenticated OpenLineage intake, a Lance-stored commit feed and edge list, and a forwarder to a
+bring-your-own graph (ADR 0158, LH-468 #592). Today the feed and the graph are lineage's Postgres+AGE.
+
 **Long-running jobs need the identity in TWO places, and they are not interchangeable.** Ray's own
 `metadata` (`rask.originator`, returned by `GET /api/jobs/<id>`) is how an OUTSIDE observer recovers who
 a job was for *after* it died — including a job that died before emitting anything. `runtime_env.env_vars`
@@ -315,9 +321,9 @@ notify somebody.
    verified caller (data enters the lakehouse only there, ADR 0154). Still open for
    `services/compute` (`RayJob` has no author field). See `docs/adr/0042-the-compute-service-gets-no-emitter-yet-and-the-blocker-is.md` — an emitter without an identity
    produces events the plane is *designed* to discard, which reads as coverage and is not.
-2. **No principal at all.** Some transitions are caused by a TIMER, not a person: the annotator's
-   `lease_expired` fires from an actor reminder with no request and no emitter in scope. The audience
-   exists (the task's holder) but the emit site does not.
+2. **No principal at all.** Some transitions are caused by a TIMER, not a person. The audience usually
+   exists (the annotator's `lease_expired` targets the task's holder) but the emit site must be given a
+   handle to an emitter; see the `lease_expired` paragraph above for how that one was closed.
 3. **A fact that only exists while somebody is looking.** Several failures are composed at read time
    inside an HTTP handler and never persisted or published — flows' unparsable result. Nothing can notify what was never recorded.
 4. **An audience that is real but unmodelled.** `services/flows` has no project and no lakehouse

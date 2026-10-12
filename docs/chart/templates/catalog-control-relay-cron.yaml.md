@@ -21,6 +21,6 @@ Delivered to `POST /<component name>` at the catalog's pod ROOT (never under a p
 require_dapr_token so only the sidecar's cron may drive the replay. The Component's name, the app's
 LANCE_CONTROL_RELAY_BINDING_NAME and the served path are ONE string.
 
-Mirrors the notifications / maintenance / compute crons: schedule as Component config so the
+Mirrors the notifications and maintenance crons: schedule as Component config so the
 cadence is a values edit rather than an app redeploy, scoped to the one consuming app-id, gated on
 dapr.enabled (no control plane, no Component CRD, and the release would fail to apply).

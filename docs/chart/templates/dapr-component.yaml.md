@@ -151,8 +151,8 @@ One durable per subscriber app-id, for the reasons in the block above.
 ## `{{- if $.Values.dapr.resiliency.enabled }}`
 
 backOff supersedes ackWait for redelivery timing (NATS consumer semantics): its FIRST value is the
-effective ack window, so it must not undercut the slowest handler (a compute-on stage runner does real
-S3 reads+writes) — a 1s first step would concurrently redeliver mid-handling even at 1 replica.
+effective ack window, so it must not undercut the slowest handler (one doing real S3 reads+writes,
+like a maintenance work unit) — a 1s first step would concurrently redeliver mid-handling even at 1 replica.
 
 ## `- { name: ackWait, value: "720s" }`
 

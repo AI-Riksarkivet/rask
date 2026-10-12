@@ -211,13 +211,10 @@ nobody calls.
 
 ## `value: "/livez,/readyz,/healthz,/api/health,/metrics"`
 
-MUST cover every path `fleet.yaml` points a probe at — NOT just the operational pair, and
-not whatever those paths happen to be today (they were `healthPath | default "/api/health"`
-until the probes split). It listed only
-/livez,/readyz,/metrics until 2026-08-23, and the four services taking the default
-(controlplane, compute, ingest, notifications) therefore traced their own kubelet polls
-twice a second: 31,916 spans in three hours, measured, eight times the workflow keepalive
-everyone had noticed instead. Each probe costs SEVERAL spans, not one — ASGI
+MUST cover every path `fleet.yaml` points a probe at — NOT just the operational pair. A list
+that leaves out `/api/health` lets every service taking the default health path trace its own
+kubelet polls twice a second: measured 2026-08-23, 31,916 spans in three hours across four such
+services, eight times the Dapr workflow keepalive. Each probe costs SEVERAL spans, not one — ASGI
 instrumentation emits a child per send/receive, which is why `GET /api/health http send`
 outnumbered `GET /api/health` three to one.
 
@@ -226,16 +223,16 @@ outnumbered `GET /api/health` three to one.
 ---------------------------------------------------------------------------------------------------
 lance-ns — grafted verbatim from lance-ns main@083b49a chart/templates/_helpers.tpl.
 
-Every one of these is referenced by a grafted lance template (services.yaml, medallion.yaml,
-compaction.yaml, media.yaml, gateway.yaml, minio-buckets.yaml, openbao.yaml, age-postgres.yaml,
+Every one of these is referenced by a grafted lance template (services.yaml, maintenance.yaml,
+explorer.yaml, fleet.yaml, minio-buckets.yaml, openbao.yaml, openbao-seed.yaml, age-postgres.yaml,
 otel-collector.yaml, network-policy.yaml, ha.yaml, runners.yaml, …). None of them
 was renamed: no lance name collided with a rask name.
 
 VALUES THEY REQUIRE (the values.yaml merge must land these or the render breaks):
-  age.externalHost · auth.enabled · catalog.controlEmit · dapr.{enabled,sidecars,sidecarRestricted,
+  age.externalHost · auth.enabled · catalog.controlEmit · dapr.{enabled,sidecarRestricted,
   sidecarResources.*,resiliency.enabled} · dex.clientId · frontend.{apps,image.tag,serviceIdentity,
-  idleTimeoutSeconds,oidc.*} · gateway.port · image.catalog.{repository,tag} · lifecycle.preStopSeconds ·
-  medallion.{enabled,port,buckets,producer.daprAppId,stageRunners} · nats.url ·
+  idleTimeoutSeconds,oidc.*} · services.gateway.port · image.catalog.{repository,tag} · lifecycle.preStopSeconds ·
+  medallion.buckets · nats.url ·
   observability.{enabled,environment} · openbao.{enabled,port,externalAddr} · pubsub.name ·
   resources.{default,<component>} · minio.{bucket,port,externalEndpoint} · security.readOnlyRootFilesystem ·
   services.{catalog,lineage}.{port,daprAppId,reconcile.bindingName}
@@ -749,15 +746,13 @@ Side-loaded: a bare name the kubelet must already hold. Never valid for a remote
 ── the governed-auth env, defined ONCE ─────────────────────────────────────────────────────
 `(include "lance.governedOidcEnv" $root)` -> RASK_OIDC_*, everywhere, for every service.
 
-This helper used to take the variable PREFIX as a parameter, because the estate did not share
-one: service-kit read LANCE_*, lineage's own config LINEAGE_*, medallion's MEDALLION_*. The
-parameter is gone with the copies (2026-08-30) — the auth field-set is declared once, in
-`service_kit.governed.settings`, and binds one RASK_* name each. A prefix parameter here is now
-the way to emit variables nothing reads.
+The helper takes no variable PREFIX: the auth field-set is declared once, in
+`service_kit.governed.settings`, and binds one RASK_* name each. A prefix parameter here would
+emit variables nothing reads.
 
-Split into OIDC / FGA / PINS rather than one block, because the callers genuinely need
-different subsets: the medallion producer runs OIDC without turning FGA on, and folding them
-would silently enable an authorizer on a service whose block never asked for one.
+Split into OIDC / FGA / PINS rather than one block, because a caller may need a subset: a
+service that runs OIDC without FGA would otherwise have an authorizer silently enabled that its
+block never asked for.
 
 Safe to set estate-wide: these change behaviour ONLY where a route declares an auth dependency,
 so a service with no gated route is unaffected and cannot quietly 401 a surface nobody gated.
@@ -789,7 +784,7 @@ A fleet service's door audiences, read off the identities it declares in `env`.
 A verifier door's map of caller service account (full username) -> subject, as JSON. Every key is an
 SA security-sa.yaml renders for a pod that projects this door's audience. A blank identity fails the render: the
 account would authenticate as the empty subject, and every account mapped to it as the same one.
-Call: include "lance.saSubjects" (list $root "catalog"|"lineage"|"producer"|"stage").
+Call: include "lance.saSubjects" (list $root "catalog"|"lineage").
 
 ## `{{- define "lance.saVerifier" -}}`
 
@@ -1107,11 +1102,10 @@ http_server_duration_milliseconds_* instead — a deliberate erasure, not an ove
 
 NOT SET, and it is a decision rather than an oversight. `latencyDistributionBuckets` is GLOBAL:
 workflow-execution latency shares the HTTP distribution, so one bucket list has to cover both.
-Dapr's default 34 buckets top out at 100s, and `promotion_review` blocks on
-`ctx.wait_for_external_event` — a human approving a promotion — so it is unbounded BY DESIGN and
-no list covers it. Measured: that workflow already has 0 observations at le=100000 and 1 at
-le=+Inf. Consequence to know before trusting a chart: the workflow p95 panel renders +Inf for
-that lane. Setting a wider ceiling trades a visibly-broken quantile for a silently-wrong one.
+Dapr's default 34 buckets top out at 100s, and a workflow that blocks on
+`ctx.wait_for_external_event` (a person answering) is unbounded BY DESIGN, so no list covers it.
+Consequence to know before trusting a chart: the workflow p95 panel renders +Inf for such a
+lane. Setting a wider ceiling trades a visibly-broken quantile for a silently-wrong one.
 
 ## `obfuscateURLs: true`
 

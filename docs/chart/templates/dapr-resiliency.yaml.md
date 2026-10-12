@@ -62,7 +62,7 @@ component-only entry would silently miss.
 ## `{{- if .Values.services.notifications }}`
 
 The NOTIFICATION plane's control-topic subscriber (v3 targeting), which `$subscribers` misses
-for exactly the same reason the producer's does: `lance.subPubsub` renders the LINEAGE-topic
+because `lance.subPubsub` renders the LINEAGE-topic
 component name, and this subscription rides the control one. `notifications` is already in
 `$subscribers`, so `scopes:` below covers the app — it is only the second COMPONENT target that
 has to be named, which is the shape that makes this class of omission invisible.
@@ -164,10 +164,10 @@ entry is picked up here automatically.
 ## `{{- range $name, $svc := .Values.services }}`
 
 Mirrors fleet.yaml's gate EXACTLY — `frontDoor` or singleTenant — because this list claims to be
-DERIVED from it. It was restated as `if singleTenant.enabled` alone, so the moment compute became a
-front-door service the two drifted: compute rendered a pod the gateway invokes while this CR did not
-target it, leaving it with no timeout, no retry and no circuit breaker — the identical call to
-catalog had all three. gateway is excluded because it is the CALLER, not a target.
+DERIVED from it. A restated gate (`if singleTenant.enabled` alone) drifts the moment a service
+becomes front-door: the chart renders a pod the gateway invokes while this CR does not target it,
+leaving that call with no timeout, no retry and no circuit breaker while the identical call to
+catalog has all three (measured on compute, before it moved to its own fixture chart). gateway is excluded because it is the CALLER, not a target.
 
 ## `{{- $writeDoors := list .Values.services.catalog.daprAppId }}`
 

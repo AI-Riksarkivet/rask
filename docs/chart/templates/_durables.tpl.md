@@ -9,10 +9,10 @@ EVERY JETSTREAM DURABLE THIS CHART CREATES, as one space-separated list.
 
 [[LH-127]]. `nats-stream-job.yaml`'s orphan pass deletes a `*-durable` that nothing here created, and
 the only safe key for "nothing here created it" is the set of names this chart RENDERS. Deriving it
-from app-ids instead — the form the row originally asked for — is destructive: measured 2026-09-16,
-three chart-owned durables are not named `<app-id>-durable` (`lineage-dlq-durable`,
-`medallion-producer-control-durable`, `notifications-control-durable`), so stripping the suffix yields
-names in no app-id set and the pass removes the dead-letter consumer and both control lanes. That is
+from app-ids instead is destructive: several chart-owned durables are not named `<app-id>-durable`
+(`lineage-dlq-durable`, `notifications-control-durable`, maintenance's `-work-durable` and
+`-index-durable`; measured 2026-09-16 on the set then rendered), so stripping the suffix yields
+names in no app-id set and the pass removes the dead-letter consumer and the control lane. That is
 the 2026-07-13 dead-subscription failure, produced by the loop built to prevent it.
 
 ONE DERIVATION, TWO CONSUMERS. `dapr-component.yaml` spells durable names five different ways and the

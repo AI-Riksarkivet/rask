@@ -3,11 +3,11 @@
 The fleet (`make dev-micro`, driven by `scripts/dev-micro.sh`) is SEVEN processes:
 gateway `:8888` + compute `:8804` + flows `:8840` + notifications `:8850` + the explorer trio —
 viewer `:8101`, search `:8102`, annotator `:8103`. (`PORT_OFFSET=<n>` shifts all seven
-so a second fleet can share a host.) The gateway routes none of compute's paths, and in-cluster compute
-ships in its own fixture chart (`deploy/fixtures/compute`), not the product chart. The orchestrator process (`:8810`) died at P7a;
-core-api/search-api/volumes-api died in the R6/R20 media wave (lance-ns-merge.md P7).
+so a second fleet can share a host.) The gateway routes compute's `/api/ray` and `/api/serve` rows to
+`RASK_COMPUTE_URL`, and in-cluster compute ships in its own fixture chart (`deploy/fixtures/compute`),
+not the product chart.
 
-The frontend's Vite proxy targets `:8888` (the gateway) for `compute`/`studio`/`train`
+The frontend's Vite proxy targets `:8888` (the gateway) for `compute`/`studio`/`models`
 **only**; `home`/`lakehouse` proxy `/api` to `LANCE_BACKEND` (`:8001`, which this fleet
 does NOT start) and `explorer`/`annotator` have no `/api` proxy at all — they reach
 `:8101`/`:8102`/`:8103` through their own BFF. See `rask-frontend`.
@@ -31,23 +31,23 @@ the layout. See rask-architecture's "Three factories are sanctioned".
 
 | Service | Port | Composes package(s) | Lifespan | DB? | Notes |
 |---|---|---|---|---|---|
-| `gateway` | 8888 | none (httpx proxy) | own asynccontextmanager | no | path-routes `/api/*` longest-prefix-first, **no catch-all**; upstreams env-overridable (`RASK_FLOWS_URL`, `RASK_NOTIFICATIONS_URL`, `RASK_CATALOG_API_URL`, `RASK_LINEAGE_API_URL`, `RASK_EXPLORER_{VIEWER,SEARCH,ANNOTATOR}_URL`). There is **no** `RASK_MEDIA_*_URL` — the media→explorer rename took those names with it. |
-| `compute` | 8804 | `ray-kit` | `compute.lifespan.make_lifespan` | no | Ray dashboard introspection; `proxy_router` mounts at root so `/api/serve/*` reaches Serve status API. No gateway row; deployed by its own fixture chart |
+| `gateway` | 8888 | none (httpx proxy) | own asynccontextmanager | no | path-routes `/api/*` longest-prefix-first, **no catch-all**; upstreams env-overridable (`RASK_COMPUTE_URL`, `RASK_FLOWS_URL`, `RASK_NOTIFICATIONS_URL`, `RASK_CATALOG_API_URL`, `RASK_LINEAGE_API_URL`, `RASK_EXPLORER_{VIEWER,SEARCH,ANNOTATOR}_URL`). There is **no** `RASK_MEDIA_*_URL` — the media→explorer rename took those names with it. |
+| `compute` | 8804 | `ray-kit` | `compute.lifespan.make_lifespan` | no | Ray dashboard introspection; `proxy_router` mounts at root so `/api/serve/*` reaches Serve status API. The gateway's `/api/ray` and `/api/serve` rows reach it; deployed by its own fixture chart |
 | `viewer` (explorer plane) | 8101 | `service-kit[lancekit]` + `storage` | own (lazy registry) | no | `/api/explorer/*` incl. the S3 objects browser ported from volumes-api |
 
-## The batches/orchestrator plane is gone (P7a)
+## The lakehouse runs no ingest, no stage and no engine
 
-The reconcile→derive→submit loop, the two-lane prefetch/compute slot model, the
-`batches` table and S3-sync were deleted at the compute-plane cutover
-(lance-ns-merge.md P7a). The lakehouse runs no ingest of its own (ADR 0154): data enters only
+The lakehouse runs no ingest of its own (ADR 0154): data enters only
 through the catalog's Lance Namespace doors (`CreateTable`, `InsertIntoTable`, `MergeInsertIntoTable`,
 `DeclareTable` + vended credentials, `RegisterTable`), and ingest of an external source is a
 bring-your-own client job (a sealed runner, CP-061) that commits through the catalog.
 
 **The lakehouse runs no stage, no training and no engine (ADR 0155).** Moving data between tiers is the
 user's pipeline, on their own compute and orchestrator, writing each tier through the catalog's doors.
-The catalog announces every committed write as an OpenLineage `COMPLETE` on lineage; how a pipeline
-outside the estate consumes those announcements is a separate decision, and the NATS topics stay internal.
+The catalog announces every committed write as an OpenLineage `COMPLETE` on lineage, and the NATS
+topics stay internal. A pipeline follows committed writes on lineage's durable `GET /events`, which
+ADR 0156 C7 gives a forward `since=` cursor and a documented commit-event shape (LH-472, #598; today it
+pages only backwards).
 
 ## Why the fleet services never grow heavy deps
 

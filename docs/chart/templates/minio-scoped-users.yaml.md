@@ -5,12 +5,10 @@ every release revision, under a 1 MiB ceiling. Each section is headed by the tem
 
 ## `apiVersion: batch/v1`
 
-SCOPED USERS — the provisioning step `values.yaml` admitted was missing.
-
-`rayComputeAccessKey` shipped with the note "scripts/ has no provisioning step yet: create the policy
-and user with the mc image the mkbucket Job already uses, then set these." So the estate's one proven
-scoped-user precedent was a values knob that only a hand-run `mc` session could turn, and a fresh
-install came up on the tenant root. This is that step, written once for both consumers.
+SCOPED USERS — the provisioning step for every plane identity named in values.yaml `minio`
+(maintenance, lineage, catalog, viewer, and each multi-base data base). Without a step in the release,
+a scoped identity is a values knob only a hand-run `mc` session can turn, and a fresh install comes up
+on the tenant root.
 
 WHY A POLICY AND NOT JUST A USER: a MinIO user created with no policy gets whatever the server
 defaults to, which is not a documented deny. The point of this Job is the DENY — the compaction
@@ -18,14 +16,14 @@ credential must not reach `_projects/`, `_protection/` or `_policies/`, the reco
 maintenance is permitted to do. A credential that can rewrite its own governing policy can turn off
 the shallow-clone guard that stops a compaction destroying another dataset's source.
 
-THREE POLICY LESSONS, each of which cost a broken cascade, and none of which is recoverable by
+THREE POLICY LESSONS, each of which cost a broken pipeline, and none of which is recoverable by
 reading the docs:
 
 * `s3:ListBucket` is BUCKET-scoped, not object-scoped. An object-scoped rule constrains a LIST not
 at all — the first attempt allowed the whole control plane to be listed and looked like the
 store ignoring Deny.
-* the prefix condition must be `medallion*`, NOT `medallion/*`: Lance lists with `prefix=medallion/`
-and `StringLike` does not match a trailing-slash pattern against it.
+* a prefix condition must match both `<p>` and `<p>/*` (the base policies below list both): Lance
+lists with `prefix=<p>/`, and `StringLike` does not match a trailing-slash pattern against it.
 * a bucket-NAME allow-list cannot govern this estate at all, because the buckets that hold tenant
 data are minted at runtime by `POST /v1/warehouses`. See the long note above the policies.
 
@@ -126,52 +124,35 @@ HOME on the tmp emptyDir: this container now runs with a read-only rootfs, and t
 
 ## `{{- $control := .Values.minio.bucket }}`
 
-THE BUCKET SET IS NOT KNOWABLE AT RENDER TIME, so neither policy enumerates one.
+THE BUCKET SET IS NOT KNOWABLE AT RENDER TIME, so the maintenance policy enumerates none.
 
-Both credentials open buckets that no value in this chart names. `catalog.warehouses.enabled`
+The sweep opens buckets that no value in this chart names. `catalog.warehouses.enabled`
 (on by default) provisions one physically separate bucket per warehouse at
-`POST /v1/warehouses`, with an operator-chosen name; the Ray stage/train jobs then read and
-write `<that warehouse root>/medallion/<tier>` for every tenant trigger, and the sweep
-enumerates the same buckets itself out of the registry (`sweep.py::_buckets_to_sweep`).
-An allow-list built from `minio.bucket` + `medallion.buckets` + `catalog.multibase.dataBases`
-covers none of them: those three name the shared bucket, the cascade storage zones and the
-fragment-spreading allowlist, and a per-warehouse bucket is by construction in none.
+`POST /v1/warehouses`, with an operator-chosen name, and the sweep enumerates those buckets itself
+out of the registry (`sweep.py::_buckets_to_sweep`). An allow-list built from `minio.bucket` +
+`medallion.buckets` + `catalog.multibase.dataBases` covers none of them: those three name the
+shared bucket, the tier storage zones and the fragment-spreading allowlist, and a per-warehouse
+bucket is by construction in none.
 
-MEASURED 2026-09-04, and it is the quiet failure in both directions: a re-run of project
-`acme`'s bronze->silver edge submitted a Ray job that died `AccessDenied` listing
-`acme-bucket?prefix=medallion/_versions/` — reported by the stage runner as a failed job, by nothing
-as a missing grant — while on the sweep side `compact_one` records AccessDenied per dataset
-as an `open:` error, which reads as a broken dataset and is acked SUCCESS.
+MEASURED 2026-09-04, and it is a quiet failure: with a bucket-name allow-list, `compact_one`
+recorded AccessDenied per dataset as an `open:` error, which reads as a broken dataset and is
+acked SUCCESS.
 
-So the shape is inverted to the one the Sids always claimed: ALLOW the data planes on every
-bucket, and DENY the control plane precisely. What is given up is bucket-name scoping, which
-was never enforcing anything an operator could rely on; what is kept, and now applies in
-EVERY bucket rather than only the statically-named ones, is the deny that this user exists
-for.
+So the shape is: ALLOW the data plane on every bucket, and DENY the control plane precisely
+(`_projects/`, `_protection/`, `_warehouses/`, `_gates/`, `__manifest/`, and any write to
+`_bases/`). What is given up is bucket-name scoping, which was never enforcing anything an
+operator could rely on; what is kept, in EVERY bucket rather than only the statically-named
+ones, is the deny this user exists for.
 
-The control bucket keeps its tight listing through `StringNotLike` on `s3:prefix` rather
-than through its name. That operator was PROBED before being depended on — with
-`Deny s3:ListBucket` conditioned `StringNotLike s3:prefix medallion*`,
-`lance-catalog/medallion/` listed while `lance-catalog/` and `lance-catalog/_projects/`
-were denied and other buckets listed freely. Enforced, not ignored — which matters,
-because a condition the store DROPPED would turn a Deny into a hole rather than a hard
-failure. READ THE DATE ON THAT: it was driven against RustFS 1.0.0-beta.8, the store
-this estate ran before the LH-133 swap, and condition support is exactly the kind of
-thing two S3 implementations differ on. Re-drive it against MinIO before relying on
-this deny.
-
-WHAT THE WIDENING COSTS, measured rather than reasoned about: the compute credential can
-ENUMERATE the estate's buckets. Neither policy grants `s3:ListAllMyBuckets`, and that does
-not withhold the list — the store answers an enumeration by falling back to per-bucket
-`ListBucket`/`GetBucketLocation`, which `arn:aws:s3:::*` grants everywhere. Driven with the
-deployed credential: `mc ls ray/` returned 104 buckets. Bucket NAMES are disclosed and, under
-the object-wildcard resource, object reads outside the denied control prefixes. (Spelling
-that wildcard out here would end this Helm comment early — the sequence closes it.)
-
-It stays wide because the alternative is the allow-list this replaced, which could not name
-a runtime-minted warehouse and broke every tenant's cascade — a correctness failure traded
-for a disclosure one. The narrowing that actually closes it is per-table vended credentials
-on the Ray lane, which is a service change rather than a policy one.
+WHAT THE WIDENING COSTS: a credential granted `ListBucket`/`GetBucketLocation` on
+`arn:aws:s3:::*` can ENUMERATE the estate's buckets even without `s3:ListAllMyBuckets` (the
+store falls back to per-bucket calls; measured 2026-09-04 with a then-deployed credential of the
+same shape, 104 buckets listed), and maintenance holds `ListAllMyBuckets` outright for the
+reconcile drift report. Bucket NAMES are disclosed, and object reads outside the denied control
+prefixes are granted. It stays wide because a render-time allow-list cannot name a
+runtime-minted warehouse. ADR 0156 C4 narrows what the maintenance identity is FOR (expiry and
+purge, no rewrites; LH-467 #587, LH-473 #599); the per-table narrowing is vended credentials,
+a service change rather than a policy one.
 
 Outcomes are pinned by `tests/unit/test_scoped_policies_reach_runtime_minted_warehouses.py`,
 which evaluates the rendered JSON as IAM does instead of grepping it for a bucket name — a
@@ -189,7 +170,7 @@ already re-ingested (`outbox.drop_event`). `outbox.stage_event` — the write ha
 called by the PRODUCERS (the catalog, maintenance) and never here, so granting this
 identity a write would grant a capability it has no code to use.
 
-THE READ IS DELIBERATELY UNSCOPED, for the reason the two policies above already record:
+THE READ IS DELIBERATELY UNSCOPED, for the reason the maintenance policy above already records:
 the bucket set is not knowable at render time. Lineage reconciles whatever datasets the
 graph names, across warehouses this chart does not enumerate, so a narrowed read is a
 reconciler that silently stops seeing part of the estate — and a reconciler that cannot
@@ -206,10 +187,9 @@ did until LH-133 made a scoped vend possible at all: measured 2026-09-11, RustFS
 `vending.mode: sts` rather than an oversight. On MinIO a policy-attached user both
 assumes AND has the session policy enforced, so the requirement is gone.
 
-The DATA grant cannot be narrowed by bucket the way maintenance's or medallion's can:
-warehouse buckets are minted at RUNTIME by `POST /v1/warehouses`, so a render-time list
-is stale by construction — the same reason recorded above for the ray and lineage
-policies. `s3:CreateBucket`/`s3:DeleteBucket` are here because provisioning and purge
+The DATA grant cannot be narrowed by bucket: warehouse buckets are minted at RUNTIME by
+`POST /v1/warehouses`, so a render-time list is stale by construction — the same reason
+recorded above for the maintenance and lineage policies. `s3:CreateBucket`/`s3:DeleteBucket` are here because provisioning and purge
 are this service's own doors, and no other identity in the estate holds them.
 
 WHAT ROOT HAD AND THIS DOES NOT: the admin API. No `mc admin user`, no
