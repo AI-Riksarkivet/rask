@@ -220,7 +220,7 @@ class MaintenanceSettings(SignatureDoorSettings, FgaSettings, BaseSettings):
     #: misconfiguration fails toward NOT recycling.
     recycle_at_memory_fraction: float = Field(default=0.70, ge=0.0, le=1.0, alias="MAINTENANCE_RECYCLE_AT_MEMORY_FRACTION")
     #: Stores the PLATFORM owns and the catalog deliberately cannot resolve ([[LH-164]]). Today that is
-    #: the model registry: the medallion trainer writes `<root>/medallion/models/<model>` directly and
+    #: the model registry: it lives at `<root>/medallion/models/<model>`, an explicit location, and
     #: the catalog's promote/describe doors open it by EXPLICIT URI, because native namespace resolution
     #: would drop the `/medallion/` prefix (`catalog/core/config.py:516-522`).
     #:

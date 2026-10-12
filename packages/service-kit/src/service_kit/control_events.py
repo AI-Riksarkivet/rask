@@ -50,18 +50,8 @@ ControlAction = Literal[
     "warehouse_deleted",
     "policy_set",
     "policy_deleted",
-    # A medallion LANE, declared and undeclared. Governance in the same sense a policy is: the record
-    # names an entrypoint that will EXECUTE on the shared Ray cluster against the tenant's data, so
-    # "who added this lane, and when" is exactly the #41 audit question.
-    #
-    # Deliberately NOT in the notifications plane's `NAMED_ACTIONS`, and the omission is the rule
-    # rather than an oversight: that gate targets on `extra.subject`, and a lane declaration names no
-    # party — it is a catalog mutation, and delivering those recreates the estate-wide feed the inbox
-    # exists to replace. `policy_set` sits on exactly this line for exactly this reason.
-    "transform_set",
-    "transform_deleted",
-    # A project's quality-gate settings changed through the catalog door. Audited for the same
-    # reason a lane declaration is: it decides whether a promotion waits for a human.
+    # A project's quality-gate settings changed through the catalog door. Audited because it decides
+    # whether a promotion waits for a human. Untargeted: it names no party, like `policy_set`.
     "gate_set",
     "gate_deleted",
     "namespace_created",
@@ -141,18 +131,6 @@ ControlAction = Literal[
     # principal. That is honest rather than limiting: the lane targets on `extra.subject` and never
     # reads `actor` at all.
     "task_lease_expired",
-    # A held PROMOTION asking a person to decide. The medallion's quality gate could only ever say
-    # NO, permanently — right for a corrupt blob pointer, wrong for a promotion that is unusual
-    # rather than broken. The Dapr external-system-interaction pattern gives it a third answer, and
-    # this is how the request reaches somebody: a workflow parked on `wait_for_external_event` that
-    # nobody was told about is an outage wearing a pause.
-    "promotion_review_requested",
-    # A PLANNED RUN (CP-029 D-2): the plan a medallion stage runner (`stage_run:<id>`) or the producer (`train_run:<id>`)
-    # wrote before submitting a job, announced once per attempt so an engine other than the in-tree adapter can take it
-    # (the bring-your-own-engine seam).
-    # `extra` names the plan (its control-root URI) rather than carrying it: claim-check. Untargeted, like
-    # `transform_set`: it names no party, so notifications files it IGNORED and the producer's head ignores it.
-    "run_planned",
     # An erasure's residual is pinned by a tag or a branch, and its release is scheduled (ADR 0138, [[LH-178]]).
     # TARGETED: one event per person it costs, the requester and each table owner in `extra.subject`, because the
     # release deletes the tags and recreates the branches at the deadline in `extra.due_at`, and a branch's own
@@ -165,9 +143,8 @@ ControlAction = Literal[
 #: when tenants got their own registry record (`open_hierarchy_lifecycle.md` Decision 1).
 #: `annotation_task` is deliberately NOT `table`: a task is a unit of work inside an annotation project,
 #: not a governed lakehouse object, and conflating them would send the console to invalidate a table view
-#: for an assignment that changed no data. `run` is a planned job (`stage_run:<action id>` or `train_run:<action id>`),
-#: the resource the medallion's operator doors already name.
-ControlObjectType = Literal["project", "grant", "warehouse", "policy", "namespace", "table", "annotation_task", "transform", "gate", "run"]
+#: for an assignment that changed no data.
+ControlObjectType = Literal["project", "grant", "warehouse", "policy", "namespace", "table", "annotation_task", "gate"]
 
 #: The caps on the two cascade CLAIMS a publication echoes onto `table_published`'s `extra`: the batch
 #: id and the person the batch is for. The catalog's publish door enforces them, and a door that takes
@@ -205,7 +182,7 @@ class CatalogControlEvent(BaseModel):
 
 #: A service whose own signing identity signs the control actions it emits ([[XC-078]]), and so a key of
 #: `RASK_CONTROL_SIGNER_ROLES`, which the chart renders as each role's signing identities.
-type ControlSigner = Literal["catalog", "maintenance", "medallion_producer", "medallion_stage_runner"]
+type ControlSigner = Literal["catalog", "maintenance"]
 
 #: Whose signature an action needs before a door acts on it: a `ControlSigner`, or "exempt" for none.
 type ControlSignerRole = ControlSigner | Literal["exempt"]
@@ -238,8 +215,6 @@ def control_signer_role(action: ControlAction, object_id: str) -> ControlSignerR
             | "warehouse_deleted"
             | "policy_set"
             | "policy_deleted"
-            | "transform_set"
-            | "transform_deleted"
             | "gate_set"
             | "gate_deleted"
             | "namespace_created"
@@ -268,16 +243,6 @@ def control_signer_role(action: ControlAction, object_id: str) -> ControlSignerR
         case "table_purged" | "namespace_purged":
             # The expiry purge: maintenance's sweep emits both under `maintenance.controlEmit`.
             return "maintenance"
-        case "run_planned" if object_id.startswith("train_run:"):
-            # The medallion producer plans the training jobs it submits (`medallion.services.train_plans`).
-            return "medallion_producer"
-        case "run_planned":
-            # A stage runner plans its Ray stage jobs (`medallion.services.stage_plans`), each signing as itself.
-            return "medallion_stage_runner"
-        case "promotion_review_requested":
-            # Asked by the `promotion_review` workflow, which the medallion producer hosts beside the door that answers
-            # it (`medallion.api.promotions`). The stage runner that held the promotion publishes only the hold.
-            return "medallion_producer"
         case "task_assigned" | "task_unassigned" | "task_changes_requested" | "task_dropped" | "task_lease_expired":
             # EXEMPT by owner ruling R3 (2026-10-04): the annotator emits these and has no signing identity, so a door
             # acts on them unverified. The residual is named: any identity the bus lets publish here can forge them.

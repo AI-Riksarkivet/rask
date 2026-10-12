@@ -13,9 +13,9 @@ object as an OpenLineage RunEvent and DELETES what it cannot — so a control ev
 destroyed as poison rather than relayed. (The catalog now refuses to boot with the two prefixes
 equal, for exactly that reason.)
 
-What that cost: `table_published` is the ONLY thing that wakes silver->gold — the stage runner does not
-fire the next topic and the medallion plane runs no cron, so nothing re-reads the `published` tag.
-One lost publish ended the cascade with the tag advanced, the route 200 and every pod green.
+What that cost: a subscriber that acts on `table_published` learns of a publication only from this
+lane, so one lost publish was a publication nobody downstream heard of, with the tag advanced, the
+route 200 and every pod green.
 
 Delivered to `POST /<component name>` at the catalog's pod ROOT (never under a prefix), guarded by
 require_dapr_token so only the sidecar's cron may drive the replay. The Component's name, the app's

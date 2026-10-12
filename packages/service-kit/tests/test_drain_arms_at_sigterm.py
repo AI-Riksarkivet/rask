@@ -1,6 +1,6 @@
 """The drain flag flips at SIGTERM, and SIGTERM still reaches the handler the drain displaced.
 
-`retry_when_draining` / `refuse_when_draining` read `app.state.shutting_down`, and a lifespan that
+`retry_when_draining` reads `app.state.shutting_down`, and a lifespan that
 sets it only in its `finally` sets it after uvicorn has stopped accepting connections and drained
 in-flight requests — so the guards would refuse nothing. `arm_drain_on_sigterm` flips it when the
 signal arrives instead. Owner ruling 2026-08-25.

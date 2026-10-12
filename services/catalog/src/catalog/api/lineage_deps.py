@@ -57,7 +57,7 @@ async def emit_measured_write(
     as a write to main. A branch write also carries that branch's ``branch_identifier``, because a recreated
     branch restarts its numbering and ``(ref, version)`` alone then names two commits.
 
-    ``inputs`` names the version-pinned source dataset(s) this write DERIVED FROM (a stage runner's merge from
+    ``inputs`` names the version-pinned source dataset(s) this write DERIVED FROM (a pipeline's merge from
     ``source@N``); ``extra_run_facets`` rides caller-supplied run facets (e.g. training ``params``) —
     both threaded verbatim to :func:`emit_write_event`, so the catalog stays un-opinionated about them.
     """

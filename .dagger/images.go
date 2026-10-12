@@ -80,7 +80,7 @@ func extraArgs(kv []string) []dagger.BuildArg {
 
 // Image builds ANY deployable from its own dockerfile under .docker/.
 //
-// `name` is the dockerfile stem: gateway, compute, controlplane, rest-catalog, ray-cluster, ray-lance,
+// `name` is the dockerfile stem: gateway, compute, controlplane, rest-catalog, ray-cluster,
 // runner, assist-runner, cnpg-age-ext, minio.
 func (m *Rask) Image(
 	// +ignore=["**/.venv", ".git", "**/node_modules", "**/.svelte-kit", "**/.turbo",

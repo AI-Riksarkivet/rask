@@ -42,35 +42,11 @@ explorer:
     # but that is luck, not a contract" is wrong in both halves: it is not luck, and it does not bind.
     accessMode: ReadWriteOnce
 
-# The cascade's Ray is not set here: the RayCluster below renders `<release>-ray-head-svc`, and every
-# Ray consumer derives that one address from `rask.rayDashboardUrl` ([[CP-041]]).
-#
 # A value the estate depends on lives in a FILE: a `--set` does not survive into `helm get values`, so
-# an upgrade reusing the live values drops it — measured 2026-08-25, when two upgrades put the stage
-# runners back on a name that resolved to nothing and the cascade died again.
-medallion:
-  # THE QUALITY GATE, IN A FILE FOR THE REASON THE PARAGRAPH ABOVE GIVES. It was live as a
-  # `kubectl set env` on the producer and absent from `helm get values`, so the next upgrade would
-  # have silently turned it off — measured 2026-09-20 by diffing every live deployment's env against
-  # `helm template`. `values.yaml` defaults it FALSE, and the default render also drops
-  # MEDALLION_PROMOTION_REVIEW_BAND, which is nested inside the same conditional.
-  quality: true
-  # THE CASCADE'S PER-HOP ReBAC, here for the same reason `quality` is: it was live as a
-  # `kubectl set env` on the three stage runners and absent from `helm get values`.
-  #
-  # `transform.py` says "an unauthorized stage runner returns DROP (redelivery won't grant the role),
-  # so the cascade enforces the ReBAC" — and that preflight is gated on this flag, which `values.yaml`
-  # defaults FALSE for the open-mode demo. Measured on this estate 2026-09-20: the producer had it on
-  # and all three stage runners did not, so a revoked writer rung was never DROPped. The denial
-  # surfaced deeper as a catalog 403, the handler acked RETRY, and the run COMPLETED once the grant
-  # came back — the deny was a delay, not a refusal.
-  #
-  # ON HERE BECAUSE THIS ESTATE MEETS THE PREREQUISITE the flag's own comment names: the stage-runner
-  # identity grants are seeded, and auth is on. `values-prod.yaml:24` already sets it; this brings the
-  # local release to the same posture instead of leaving the demo one under a governed estate.
-  fgaEnabled: true
-
-# Distributed compaction was live the same way and would have gone the same way: declared at
+# an upgrade reusing the live values drops it — measured 2026-08-25, when two upgrades reverted a setting
+# the estate depended on.
+#
+# Distributed compaction was live as a hand-set env and would have been reverted that way: declared at
 # `values.yaml:1598`, defaulting false, inside a `vendWriteCredentials` conditional. The catalog plans
 # and commits under its own key and only the byte rewrite happens in maintenance, signed by the
 # table-scoped credential the vend issues.
@@ -104,12 +80,10 @@ maintenance:
   tombstoneSweepDryRun: true
 
 # THE ENGINE ([[CP-041]]): the ray-cluster fixture's RayCluster `rask-ray` gives KubeRay's own `rask-ray-head-svc`,
-# the one address compute prunes on and the cascade submits to.
+# the one address compute prunes on.
 ray:
-  # The ray-cluster fixture's head (deploy/fixtures/ray-cluster), installed before rask by `make k3s-up`, and the
-  # identity it runs as, which rask's doors admit as the trainer.
+  # The ray-cluster fixture's head (deploy/fixtures/ray-cluster), installed before rask by `make k3s-up`.
   dashboardUrl: http://rask-ray-head-svc:8265
-  engineServiceAccount: rask-sa-ray
 
 # Interactive API docs (/docs, /redoc, /openapi.json) across the release.
 #
@@ -122,8 +96,8 @@ docs:
 
 # THE SCOPED STORAGE IDENTITIES this estate actually runs on.
 #
-# They were live long before they were written down: the Deployments held `rask-maintenance` and
-# `rask-medallion` while `helm get values` carried no `minio` section at all. That is drift Helm
+# They were live long before they were written down: the Deployments held `rask-maintenance`
+# while `helm get values` carried no `minio` section at all. That is drift Helm
 # cannot correct — it only patches fields that CHANGED between releases, so a hand-set env survives
 # every upgrade and reverts to the tenant ROOT the moment one values edit touches the field, with
 # nothing going red. The same class as the corpus PVC this file's header describes, and worse: the
@@ -144,10 +118,9 @@ docs:
 #
 # The hook runs POST-upgrade, so on the one upgrade that first names an identity the pods read the
 # derived secret from OpenBao before the store has been told about it. Expect a brief window of failed
-# S3 calls there; the stage runners are idempotent and retry.
+# S3 calls there.
 minio:
   maintenanceAccessKey: rask-maintenance
-  medallionAccessKey: rask-medallion
 
 # THE CONTROL ROOT'S SCHEDULED BACKUP ([[LH-110]]), on here so the lane is exercised rather than only
 # rendered. `dest` is left empty deliberately for a dev estate: that writes `_backups/control/` inside

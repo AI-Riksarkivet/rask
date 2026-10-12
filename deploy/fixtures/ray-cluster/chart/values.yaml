@@ -1,6 +1,6 @@
 # The rask release this engine serves. Every rask name below derives from it: the cluster `<rask>-ray` (KubeRay
 # names its head Service `<rask>-ray-head-svc`, what rask's ray.dashboardUrl points at), the identity
-# `<rask>-sa-ray` (rask's ray.engineServiceAccount), the lineage and OTel endpoints, the object store, and the Secrets
+# `<rask>-sa-ray`, the lineage and OTel endpoints, the object store, and the Secrets
 # the head reads by reference.
 rask:
   release: rask
@@ -15,7 +15,7 @@ otel:
   environment: rask
 rayVersion: "2.58.0"
 image:
-  # The head image with rask's job scripts baked in (.docker/ray-cluster.dockerfile), pushed to the dev registry.
+  # The head image (.docker/ray-cluster.dockerfile), pushed to the dev registry.
   repository: localhost:5000/ray-cluster
   tag: dev
   pullPolicy: IfNotPresent
@@ -28,15 +28,14 @@ runtimeClassName: nvidia
 authSecretName: ""
 rayStartParams:
   dashboard-host: "0.0.0.0"
-# Extra environment on the head, beside what the template derives from `rask.release`. The head runs the lakehouse's
-# own stage write (service_kit.lakehouse.tier_write) and its training job, so it takes rask's allocator bounds
-# (values.yaml `allocator`): two glibc arenas and Arrow on the system allocator, which kept the lakehouse pods' RSS flat.
+# Extra environment on the head, beside what the template derives from `rask.release`: rask's allocator bounds
+# (values.yaml `allocator`), two glibc arenas and Arrow on the system allocator, which kept the lakehouse pods' RSS flat.
 env:
   - {name: MALLOC_ARENA_MAX, value: "2"}
   - {name: ARROW_DEFAULT_MEMORY_POOL, value: system}
 # Projected service-account tokens the head's jobs present to rask, one per audience, mounted at
-# /var/run/secrets/rask/identity/<audience>/token.
-identityAudiences: [rask-lineage, rask-medallion]
+# /var/run/secrets/rask/identity/<audience>/token. Empty: no rask door maps the engine's account to a subject (ADR 0155).
+identityAudiences: []
 resources:
   requests: {cpu: "2", memory: 8Gi}
   limits: {cpu: "4", memory: 16Gi}

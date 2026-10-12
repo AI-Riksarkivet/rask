@@ -14,7 +14,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Annotated, Any, Literal, Self
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic.json_schema import JsonDict
 
 from catalog.core.vending import VendedCredentials
@@ -23,7 +23,6 @@ from catalog.services.changes import ChangeKind
 from catalog.services.dataplane import COMPACTION_EXECUTOR_BOUNDS
 from service_kit.control_events import CASCADE_ID_MAX_LENGTH, ORIGINATOR_MAX_LENGTH, CatalogControlEvent
 from service_kit.governed.user_state import UserStateDocument
-from service_kit.lakehouse.stage_stamp import ONE_TO_ONE
 
 
 # --------------------------------------------------------------------------- #
@@ -708,8 +707,7 @@ class CreateWarehouseRequest(BaseModel):
     project: str
     bucket: str | None = None  # defaults to the id (a warehouse = one bucket)
     # Serving designation (docs/adr/0034-medallion-tiers-hybrid-physical-layout-2026-07-24.md "Medallion tiers — hybrid physical layout"): "gold" marks this as the
-    # project's gold SERVING warehouse — the silver→gold stage runner's tenant target root when the chart's
-    # medallion.goldWarehouse is on. Absent (default) = a WORK warehouse. Only "gold" is accepted for now.
+    # project's gold SERVING warehouse — a tenant's gold target root. Absent (default) = a WORK warehouse. Only "gold" is accepted for now.
     serving: str | None = None
     # #123 deletion protection, ARMABLE at last. The guard (`require_not_protected` at the delete
     # door) shipped a year before any API could set this flag — the only armed warehouses were ones
@@ -964,23 +962,22 @@ class PublishRequest(BaseModel):
     #: THE BATCH THIS PUBLISH BELONGS TO (§8 change 9). Opaque to the catalog — it is echoed onto the
     #: `table_published` event and nothing here interprets it.
     #:
-    #: It exists because a batch had no identity that survived a tier boundary. The cascade is
-    #: topic-chained, and the publication head minted the NEXT trigger's token from the event id, so
-    #: bronze, silver and gold were three unrelated runs in the graph with nothing joining them. A
-    #: person asking "did my ingest finish?" had to follow dataset names by eye.
+    #: It exists because a batch has no other identity that survives a tier boundary: without it the
+    #: bronze, silver and gold writes are unrelated runs in the graph with nothing joining them, and a
+    #: person asking "did my batch finish?" follows dataset names by eye.
     #:
-    #: Carried through the catalog rather than stamped in the dataset because this is the ONLY hop
-    #: where the identity would otherwise be lost: the stage runner knows it, the next stage runner needs it, and
-    #: the tag move in between is what wakes the next tier.
+    #: Carried through the catalog rather than stamped in the dataset because the publish is the hop
+    #: where the identity would otherwise be lost: one tier's writer knows it, the next tier's writer
+    #: needs it, and the `table_published` event in between is what that writer reads.
     cascade_id: str = Field(default="", max_length=CASCADE_ID_MAX_LENGTH)
     #: THE PERSON THE BATCH IS FOR, when the caller is a service running on their behalf.
     #:
     #: An untrusted CLAIM, exactly like `cascade_id`: it authorizes nothing here and nothing downstream
     #: — the notifications plane re-derives every recipient's visibility at delivery — so carrying it
     #: across the bus needs no new trust. It is a TARGETING hint, and the reason it must be a hint is
-    #: that the truthful actor cannot serve: a stage runner authenticates to this door as itself, so a cascade
-    #: publish names `service-<daprAppId>`, and a stage that fails later would address an inbox actor
-    #: named after a stage runner.
+    #: that the truthful actor cannot serve: a pipeline's service principal authenticates to this door as
+    #: itself, so its publish names the service, and a stage that fails later would address an inbox
+    #: actor named after a service.
     #:
     #: Resolved, never echoed blindly — see `publication_originator`, which prefers this over the actor
     #: only when the actor is a SERVICE, and refuses anything that names no person.
@@ -1067,86 +1064,18 @@ class TrashEntry(BaseModel):
 
 
 # --------------------------------------------------------------------------- #
-# Transform lanes — a medallion bronze->silver edge, DECLARED as a record
+# Quality gates — a project's promotion gate, DECLARED as a record
 # --------------------------------------------------------------------------- #
-
-
-class TransformSpecRequest(BaseModel):
-    """Declare one transform. The project comes from the gated PATH, never from here.
-
-    Omitting ``project`` is the security half, not an ergonomic one: a body-supplied project would
-    let an admin of one tenant pass the ``can_administer`` gate on their own project while writing a
-    transform into somebody else's.
-
-    Field semantics — including why ``task`` must name a REGISTERED task rather than a program — live
-    on ``service_kit.lakehouse.transform_specs.TransformSpec``, which is the model this validates
-    into and the one the stage runner reads. One definition, two services.
-    """
-
-    model_config = ConfigDict(extra="forbid", populate_by_name=True)
-
-    name: str
-    from_id: str
-    to_id: str
-    task: str
-    engine: str = ""
-    params: dict[str, str] = Field(default_factory=dict)
-    code_version: str = ""
-    #: Row cardinality. Validated by `TransformSpec`, not here — one definition, two services — so an
-    #: unknown value is refused at declaration time with the field named, rather than becoming a
-    #: stage FAIL on the cluster hours later.
-    cardinality: str = ONE_TO_ONE
-
-
-class RegisteredTaskResponse(BaseModel):
-    """One registered task, as the door answers it.
-
-    ``command`` is included and is DELIBERATELY not interpreted here: an operator choosing a task
-    needs to see what it will actually run, and the platform's rule is that it never parses the
-    string — showing it and parsing it are different acts.
-    """
-
-    model_config = ConfigDict(populate_by_name=True)
-    task: str
-    engine: str
-    command: str
-    code_version: str = ""
-    #: EMPTY MEANS ALL — a task that constrains nothing need not enumerate the vocabulary.
-    cardinalities: list[str] = Field(default_factory=list)
-    obligations: list[str] = Field(default_factory=list)
-
-
-class RegisteredTasksResponse(BaseModel):
-    """What may be named in a transform declaration, so the vocabulary is discoverable.
-
-    Answered per project because that is the tier of the caller who needs it — the same
-    ``can_administer`` that declaring requires — even though the registry itself is estate-wide: one
-    cluster runs a task for every tenant, and a per-tenant registry would make the same capability
-    need one record per project.
-    """
-
-    model_config = ConfigDict(populate_by_name=True)
-    project: str
-    tasks: list[RegisteredTaskResponse] = Field(default_factory=list)
-
-
-class TransformNameRequest(BaseModel):
-    """Name one transform — the body of describe/delete."""
-
-    model_config = ConfigDict(extra="forbid", populate_by_name=True)
-
-    name: str = Field(validation_alias=AliasChoices("name", "lane"))
 
 
 class GateSpecRequest(BaseModel):
     """Declare one project's gate. The project comes from the gated PATH, never from here.
 
-    Omitting ``project`` is the security half, exactly as on ``TransformSpecRequest``: a
-    body-supplied project would let an admin of one tenant pass ``can_administer`` on their own
-    project while rewriting somebody else's gate.
+    Omitting ``project`` is the security half: a body-supplied project would let an admin of one
+    tenant pass ``can_administer`` on their own project while rewriting somebody else's gate.
 
     Field semantics live on ``service_kit.lakehouse.gate_specs.GateSpec``, which is the model this
-    validates into and the one the medallion reads. One definition, two services.
+    validates into.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -1163,38 +1092,6 @@ class GateSpecResponse(BaseModel):
     required_columns: list[str] = Field(default_factory=list)
     review_band: float
     review_enabled: bool
-
-
-class TransformSpecResponse(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-    name: str
-    project: str
-    from_id: str
-    to_id: str
-    task: str
-    engine: str = ""
-    params: dict[str, str] = Field(default_factory=dict)
-    code_version: str = ""
-    #: Read back so an operator can audit which contract governs a lane. A declared value that cannot
-    #: be read is indistinguishable from one that was never stored.
-    cardinality: str = ONE_TO_ONE
-
-
-class TransformDeleteResponse(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-    #: ``deleted`` when a record was removed, ``absent`` when there was none. Delete is idempotent, so
-    #: both are 200 — the field is what lets a caller tell "I removed it" from "it was already gone"
-    #: without inferring it from a status code that is the same either way.
-    status: str
-    project: str
-    name: str = Field(validation_alias=AliasChoices("name", "lane"))
-
-
-class ProjectTransformsResponse(BaseModel):
-    """Every lane declared in one project — the answer to "what actually runs here?"."""
-
-    project: str
-    transforms: list[TransformSpecResponse] = Field(default_factory=list)
 
 
 # --------------------------------------------------------------------------- #

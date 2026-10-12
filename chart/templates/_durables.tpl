@@ -1,14 +1,6 @@
 {{- define "lance.chartDurables" -}}
 
 {{- $names := list (printf "%s-durable" .Values.services.lineage.daprAppId) -}}
-{{- if .Values.medallion.enabled -}}
-
-  {{- $names = append $names (printf "%s-durable" .Values.medallion.producer.daprAppId) -}}
-  {{- range .Values.medallion.stageRunners -}}
-    {{- $names = append $names (printf "%s-durable" .daprAppId) -}}
-  {{- end -}}
-  {{- $names = append $names (printf "%s-control-durable" .Values.medallion.producer.daprAppId) -}}
-{{- end -}}
 
 {{- $names = append $names "notifications-durable" -}}
 {{- if and .Values.dapr.enabled .Values.services.notifications -}}

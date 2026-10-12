@@ -186,15 +186,15 @@ tuples:
   - { user: 'user:deepest', relation: reader, object: 'namespace:depth_7' }
   # A STAGE RUNNER'S OWN OUTPUT — the tuple `register_table` writes for itself. Registering calls
   # `seed_ownership_or_compensate(resource="table")`, so the identity that registered a table is
-  # granted `owner` on it. That is what decides whether a stage runner can publish what it just wrote, and
+  # granted `owner` on it. That is what decides whether a pipeline can publish what it just wrote, and
   # nothing in any seed script grants it.
   - { user: 'user:service-bronze-to-silver', relation: owner, object: 'table:acme_silver$features' }
   - { user: 'namespace:acme_silver', relation: parent, object: 'table:acme_silver$features' }
-  # The same stage runner's STANDING grant: writer on the stage it writes into, and nothing above it.
+  # The same pipeline's STANDING grant: writer on the stage it writes into, and nothing above it.
   - { user: 'user:service-bronze-to-silver', relation: writer, object: 'namespace:acme_silver' }
-  # A table the stage runner did NOT register — same namespace, no ownership tuple.
+  # A table the pipeline did NOT register — same namespace, no ownership tuple.
   - { user: 'namespace:acme_silver', relation: parent, object: 'table:acme_silver$foreign' }
-  # The promoting stage runner: validator on gold, never owner.
+  # The promoting pipeline: validator on gold, never owner.
   - { user: 'user:service-silver-to-gold', relation: validator, object: 'namespace:acme_gold' }
 
 tests:
@@ -233,11 +233,11 @@ tests:
         object: role:estate_auditors
         assertions:
           project: false
-  - name: a stage runner can PUBLISH what it registered, and only what it registered
-    # P5 of "stage runners publish the tag". `publish` is gated at `can_update_tag`, which is OWNER-tier —
-    # strictly above the writer/validator rungs the stage runners are seeded with. It resolves anyway,
+  - name: a pipeline can PUBLISH what it registered, and only what it registered
+    # P5 of "pipelines publish the tag". `publish` is gated at `can_update_tag`, which is OWNER-tier —
+    # strictly above the writer/validator rungs the pipelines are seeded with. It resolves anyway,
     # because registering a table grants the registrant `owner` ON THAT TABLE. So no model change and
-    # no new grant are needed, and the scope is exactly right: a stage runner may move the tag on its own
+    # no new grant are needed, and the scope is exactly right: a pipeline may move the tag on its own
     # output and on nothing else.
     check:
       - user: user:service-bronze-to-silver
@@ -589,7 +589,7 @@ tests:
     #               `project.can_administer: admin` against a widening to `member`; her arrival here
     #               is not incidental, it re-proves that `member from project` reaches this far.
     #   service-silver-to-gold — the cascade writer, and it belongs here for the same reason dave does:
-    #               it holds `writer` on the warehouse, and a stage runner READS the tier below the one
+    #               it holds `writer` on the warehouse, and a pipeline READS the tier below the one
     #               it writes, so reader is a rung it genuinely needs rather than a side effect to trim.
     #               Note the contrast with `service-maintenance`, which is absent: `maintainer` neither
     #               implies nor is implied by reader, so the sweep never enters an audience list. That
@@ -631,8 +631,8 @@ tests:
         assertions: { can_create_namespace: false, can_create_table: false }
 
   - name: who can promote into gold? (list_users) — owners + validators, never plain writers
-    # `service-silver-to-gold` belongs here: `seed_medallion_fga.sh` grants exactly this, and the
-    # enumeration is the check that a plain writer never appears. A stage runner owning the table it wrote
+    # `service-silver-to-gold` (a pipeline promoting into gold) belongs here, holding exactly this, and the
+    # enumeration is the check that a plain writer never appears. A pipeline owning the table it wrote
     # (see the P5 test above) does not put it in this list — promotion is gated on the DESTINATION
     # namespace, which no amount of table ownership reaches.
     #
@@ -1359,7 +1359,7 @@ tests:
   - name: a cascade writer may PUBLISH what it may not DESTROY, and that separation runs both ways
     # Owner ruling 2026-09-10 (zero trust). The cascade calls four table doors — describe, credentials,
     # register, publish — and only `publish` sat above the writer tier, because `can_update_tag` had no
-    # rung beneath `owner`. So every stage runner was granted `owner` on every tenant warehouse to buy
+    # rung beneath `owner`. So every pipeline was granted `owner` on every tenant warehouse to buy
     # one capability, and got `can_drop`, `can_deregister`, `can_restore`, `can_create_branch` and
     # `manage_grants` on every table in the estate with it. Measured on the live store 2026-09-10:
     # 95 owner tuples EACH, across four identities.
@@ -1384,7 +1384,7 @@ tests:
           # rather than one this grant adds. Only the producer's resume path uses it.
           can_promote: true
           # THE HALF THAT MATTERS. A cascade writer may not destroy the table, rewind its history, fork
-          # it, or hand its access to anyone — so a compromised stage runner cannot take the estate with
+          # it, or hand its access to anyone — so a compromised pipeline cannot take the estate with
           # it. Each of these was TRUE for all four identities on every tenant before this rung existed.
           can_drop: false
           can_deregister: false
@@ -1413,7 +1413,7 @@ tests:
 
   - name: a table a MACHINE registered is owned by the project, never by the machine
     # Owner ruling 2026-09-10 (zero trust). `seed_ownership` used to grant `owner` on a just-created
-    # object to whoever created it — and for a stage runner's output that creator is the stage runner,
+    # object to whoever created it — and for a pipeline's output that creator is the pipeline,
     # so a cascade identity kept can_drop / can_deregister / can_restore / manage_grants on every
     # governed tier of every tenant it had ever run in. LH-052 withdrew the warehouse grant; this is
     # the second, quieter one it did not reach.
@@ -1432,7 +1432,7 @@ tests:
           can_deregister: true
           can_restore: true
           manage_grants: true
-      # The stage runner that would have registered it: writer and publisher through the warehouse
+      # The pipeline that would have registered it: writer and publisher through the warehouse
       # grant LH-052 left it, and none of the destructive rungs an owner tuple would have added.
       - user: user:service-silver-to-gold
         object: table:acme_gold_catalog

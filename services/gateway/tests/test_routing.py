@@ -22,17 +22,14 @@ def test_target_base_uses_sidecar_when_enabled(gw, monkeypatch: pytest.MonkeyPat
 
 def test_a_sibling_prefix_does_not_fall_into_a_shorter_row() -> None:
     """`_pick_route` matches on `path == prefix or path.startswith(prefix + "/")`, so a sibling prefix never
-    falls into a shorter row. `/api/train` and `/api/trains` are two rows to two producer paths, and
-    `/api/training` belongs to neither: it has no upstream, and 404 is the correct answer. "Longest prefix
-    first" is the kind of rule someone reorders on instinct, which is why this is a test and not a comment.
+    falls into a shorter row. `/api/catalog` is a row; `/api/catalogue` belongs to no row: it has no upstream,
+    and 404 is the correct answer. "Longest prefix first" is the kind of rule someone reorders on instinct,
+    which is why this is a test and not a comment.
     """
     from gateway import _pick_route, _routes
 
     rows = _routes()
-    train = _pick_route("/api/train", rows)
-    assert train is not None and train[1] == "/train"
+    catalog = _pick_route("/api/catalog/v1/namespace/list", rows)
+    assert catalog is not None and catalog.app_id == "catalog"
 
-    trains = _pick_route("/api/trains/abc", rows)
-    assert trains is not None and trains[1] == "/trains"
-
-    assert _pick_route("/api/training", rows) is None, "a sibling prefix must not fall into the /api/train row"
+    assert _pick_route("/api/catalogue", rows) is None, "a sibling prefix must not fall into the /api/catalog row"

@@ -189,10 +189,8 @@ def missing_app_token_knob() -> str:
 def refuse_unconfigured_door(*, caller: str | None = None) -> None:
     """Raise unless this deployment has DECLARED that an unauthenticated door is acceptable.
 
-    THE ONE PLACE THE UNSET-TOKEN RULE LIVES, and it is a function because it was two answers. Every
-    sidecar-delivered door refused; `medallion.api.produce_auth.authorize_produce` returned a
-    service-caller result and admitted. Nothing in either said which was intended, so a reader of one
-    learned the wrong rule about the other — and the door that opened is the cascade head. Owner ruling
+    THE ONE PLACE THE UNSET-TOKEN RULE LIVES, and it is a function because it was two answers. One
+    door refusing while another admitted taught a reader of one the wrong rule about the other. Owner ruling
     2026-09-19: an unset token is a refusal everywhere (`docs/adr/0066-four-rulings-on-the-lakehouse-s-unblocked-rows-owner-2026.md`).
 
     FAILING CLOSED IS NOT SEVERITY, IT IS THE CONTROL EXISTING. A guard with no expected value cannot

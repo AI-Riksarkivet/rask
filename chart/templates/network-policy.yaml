@@ -163,8 +163,8 @@ spec:
         - podSelector: {}
 ---
 # (3b) openbao:8200 — THE crown jewel (the audit's headline: "reachable by any pod"). Only the
-# secret-consuming app pods' daprd sidecars may connect: catalog, lineage, maintenance (planner and worker), the
-# medallion producer (medallion-producer), every stage runner, and (DAPRIFY 2026-07-27) the state-store-scoped
+# secret-consuming app pods' daprd sidecars may connect: catalog, lineage, maintenance (planner and worker),
+# and (DAPRIFY 2026-07-27) the state-store-scoped
 # apps — their daprd resolves the state store's connectionString through the lance-secrets
 # component at boot (dapr-component.yaml derives the secret-store scope from stateStore.scopes the
 # same way), so blocking them here wedges the sidecar on component init. The newly-sidecared fleet/
@@ -187,10 +187,7 @@ spec:
               - key: app.kubernetes.io/component
                 operator: In
 
-                {{- $openbaoClients := list "catalog" "lineage" "maintenance" "maintenance-worker" "medallion-producer" }}
-                {{- range .Values.medallion.stageRunners }}
-                {{- $openbaoClients = append $openbaoClients .name }}
-                {{- end }}
+                {{- $openbaoClients := list "catalog" "lineage" "maintenance" "maintenance-worker" }}
                 {{- if and .Values.dapr.enabled .Values.stateStore.enabled }}
                 {{- $openbaoClients = concat $openbaoClients .Values.stateStore.scopes }}
                 {{- end }}
@@ -249,8 +246,8 @@ spec:
         - { protocol: TCP, port: {{ .Values.age.port }} }
 {{- end }}
 ---
-# (3d) minio:9000 — the lakehouse bytes. Clients: the data-plane services + the snapshot backup job. The ray-lance demo pods live outside the release's
-# labels — add them via networkPolicy.minioExtraFrom (default provided in values).
+# (3d) minio:9000 — the lakehouse bytes. Clients: the data-plane services + the snapshot backup job. A client outside the release's
+# labels is added via networkPolicy.minioExtraFrom.
 # The development store (the minio fixture) stamps this component label on its pods; a managed S3 runs outside the
 # namespace and needs no rule.
 apiVersion: networking.k8s.io/v1
@@ -272,7 +269,6 @@ spec:
                   - catalog
                   - lineage
                   - compaction
-                  - medallion-producer
                   - minio-backup
                   - backup-pg # the pg-backup CronJob uploads its dumps to the lakehouse (_backups/pg/)
                   - minio-mkbucket # the bucket-provisioning hook Job — blocked, no install ever gets buckets
@@ -287,9 +283,6 @@ spec:
                   # absent from this list they are SILENTLY dropped (green pods, empty corpus).
                   - search
                   - annotator
-                  {{- range .Values.medallion.stageRunners }}
-                  - {{ .name }}
-                  {{- end }}
         {{- if .Values.ray.enabled }}
         # The HTR runner executes inside the KubeRay-managed RayService pods (PageLoader reads the
         # image cache, AltoWriter writes ALTO — s3://images-batch*). The chart's head template stamps
@@ -359,7 +352,7 @@ spec:
 ---
 # (3f) nats:4222 — the client port. Admitted from ANY intra-namespace pod, port-scoped, and honestly so:
 # the legitimate clients are the daprd SIDECARS, which live inside every dapr.io/enabled app pod
-# (gateway, catalog, lineage, compaction, medallion-producer, each medallion stage runner) plus the nats-box hook Jobs
+# (gateway, catalog, lineage, compaction, maintenance, notifications) plus the nats-box hook Jobs
 # (stream provision + DLQ tooling) — i.e. nearly every first-party pod in the namespace, and the set
 # follows the dapr.io/enabled ANNOTATION, which no label selector can see. Enumerating component labels
 # would restate that near-total list and silently strand the next sidecar carrier (a wedged bus, not a
@@ -382,25 +375,4 @@ spec:
         - podSelector: {}
       ports:
         - { protocol: TCP, port: 4222 }
----
-# The medallion-producer ingress restriction: /train and the operator doors are direct operator
-# triggers — in-release pods only, defense-in-depth on top of require_dapr_token.
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: {{ include "lance.fullname" . }}-medallion-producer
-  labels: {{- include "lance.labels" . | nindent 4 }}
-spec:
-  podSelector:
-    matchLabels:
-      app.kubernetes.io/component: medallion-producer
-      app.kubernetes.io/instance: {{ .Release.Name }}
-  policyTypes: [Ingress]
-  ingress:
-    - from:
-        - podSelector:
-            matchLabels:
-              app.kubernetes.io/instance: {{ .Release.Name }}
-      ports:
-        - { protocol: TCP, port: {{ .Values.medallion.port }} }
 {{- end }}

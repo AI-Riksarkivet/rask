@@ -229,7 +229,7 @@ def log_sweep(report: SweepReport) -> None:
     * ``dangling_blobs`` — payloads gone from under a version-wise-healthy table; the bytes are lost.
     * ``stale`` — data stopped arriving inside the freshness budget; the fix is upstream.
     * ``contract_violations`` — a dataset's CURRENT schema lost a column a consumer declared, i.e. a
-      write that bypassed the stage runner skipped the gate.
+      write that bypassed the publish door skipped the gate.
     * ``provenance_holes`` — versions on disk the graph held no ``WROTE`` edge for. The ONE class here
       the sweep does auto-fix, and it is still worth a line of its own: the recovered edge carries
       ``author='reconcile'`` and no inputs, so the version's ACTOR and DERIVATION are gone for good even
@@ -650,9 +650,8 @@ async def _drain_outbox(
             else:
                 await repository.ingest_event(event)  # idempotent — MERGE on run_id, feed ON CONFLICT DO NOTHING
             # RE-PUBLISH, then drop. Ingesting alone repairs the GRAPH and leaves every SUBSCRIBER unaware:
-            # medallion's `/bronze-arrival` reacts to a head RUN, so one recovered but never re-published
-            # means provenance is restored while the bronze->silver->gold run it should have started stays
-            # halted forever; a recovered DDL change reaches the notifications bus lane only this way. Only a re-publish can restart it, and the DLQ replay makes the
+            # a recovered RUN never re-published restores provenance while maintenance's arrival door and
+            # the notifications inbox never hear of it; a recovered DDL change reaches the notifications bus lane only this way. Only a re-publish can restart it, and the DLQ replay makes the
             # same one (`republish_staged`).
             #
             # BEFORE the drop, never after: a publish that fails must leave the staged object for the next

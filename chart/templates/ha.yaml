@@ -53,7 +53,7 @@ spec:
 {{- end }}
 {{- if .Values.openfga.enabled }}
 ---
-# OpenFGA is the authz chokepoint — every governed catalog write, lineage read, and stage runner WRITE fails
+# OpenFGA is the authz chokepoint — every governed catalog write and lineage read fails
 # CLOSED through it, so a drain that evicts the quorum 503s the whole estate. Separate block: the subchart's
 # pods carry name/instance labels, not our component label. (prod-readiness P2)
 apiVersion: policy/v1

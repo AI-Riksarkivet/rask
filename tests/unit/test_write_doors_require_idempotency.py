@@ -1,97 +1,33 @@
-"""A write door must not accept an unkeyed write while its sidecar replays 5xx.
+"""A write app-id is not replayed on a bare 500 by its sidecar.
 
 open_fastapi-audit — "The Dapr sidecar's automatic 5xx retry is aimed at write doors whose
 idempotency key is optional, so one operator click can start four unrelated runs".
 
 THE MECHANISM. `dapr-resiliency.yaml` gives the invoked app-ids `invokeRetry` — constant, 2s, 3
-retries, matching `408,429,500-599`. A write door that mints `token = token or uuid4()` per attempt
-does not converge on a replayed 500: each attempt starts another unrelated run.
+retries, matching `408,429,500-599`. A write that is not keyed does not converge on a replayed 500.
 
-`python-infrastructure`'s rule is explicit and offers exactly two outs: "Always pair retry with an
-idempotency key OR mark the operation non-retryable." This closes BOTH — the key is required, and 500
-leaves the retry matcher for these app-ids, so the only statuses replayed are the ones whose door has
-an explicit `Retry-After` contract.
-
-WHY REQUIRED RATHER THAN DEFAULTED. `token = token or uuid4()` is not a safe default: it is the
-platform layer inventing the one value only the CALLER can hold stable across attempts. The estate
-already asserts this elsewhere — `tests/unit/test_publish_saga.py` refuses a minted token because
-"inventing a token here would defeat the entire idempotency argument". A 422 naming the missing
-header is a better answer than a silently duplicated run.
+`python-infrastructure`'s rule offers exactly two outs: "Always pair retry with an idempotency key OR
+mark the operation non-retryable." The catalog takes the second: the Lance Namespace spec defines no
+`Idempotency-Key` and a stock client must work with no rask SDK, so 500 leaves the retry matcher for it.
 """
 
 from __future__ import annotations
 
 import pathlib
 
-import pytest
+
+#: App-ids taken OFF the 500-retry. A 500 from one of these is NOT safe to replay blindly: the write
+#: either landed or did not. `catalog` is here on the rule's "mark the operation non-retryable" branch
+#: because it has 91 write routes and no key on any of them (§ Q17-32).
+_WRITE_APP_IDS = ("catalog",)
 
 
-#: Doors whose key is REQUIRED. Each starts a run and has no spec above it, so the estate is free to
-#: demand the one value only the caller can hold stable across attempts.
-#:
-#: THE CATALOG IS DELIBERATELY ABSENT, and it is on `_WRITE_APP_IDS` below, which reads like a
-#: contradiction until you see which branch of the rule each list is. The Lance Namespace spec defines
-#: no `Idempotency-Key` and a stock client must work with no rask SDK, so requiring one on
-#: `POST /v1/table/{id}/create` would fail conformance on 54 routed operations — a worse defect than
-#: the replay it would close. The catalog therefore takes the rule's OTHER branch (off the bare-500
-#: matcher) and offers the key as OPTIONAL convergence for the replays that remain. Adding it here
-#: would be asserting the wrong thing about the wrong plane.
-DOORS = [
-    ("medallion.api.train", "/train"),
-]
+def test_a_write_app_is_not_replayed_on_a_bare_500() -> None:
+    """Narrowing the matcher stops the estate replaying the one status that carries no promise about
+    whether the work happened.
 
-
-def _header_param(module: str, path: str):
-    """The `Idempotency-Key` parameter of the route serving `path`, as FastAPI resolved it."""
-    import importlib
-
-    from fastapi.routing import APIRoute
-
-    mod = importlib.import_module(module)
-    for route in mod.router.routes:
-        if isinstance(route, APIRoute) and route.path == path and "POST" in route.methods:
-            for field in route.dependant.header_params:
-                if (field.alias or field.name) == "Idempotency-Key":
-                    return field
-            pytest.fail(f"{module} {path} declares no Idempotency-Key header at all")
-    pytest.fail(f"{module} has no POST {path}")
-
-
-@pytest.mark.parametrize(("module", "path"), DOORS, ids=[m for m, _ in DOORS])
-def test_the_write_door_REQUIRES_an_idempotency_key(module: str, path: str) -> None:
-    """Optional means the platform mints one per attempt, which is what duplicates the cascade."""
-    field = _header_param(module, path)
-    # `field_info.is_required()`, not `field.required` — FastAPI's ModelField wrapper has no such
-    # attribute, and reading it raises rather than returning False, which is a test that cannot pass
-    # rather than one that reports the truth.
-    assert field.field_info.is_required(), (
-        f"{module} POST {path} accepts a request with no Idempotency-Key — the service then mints one "
-        f"per attempt, so a Dapr 5xx replay starts a second unrelated run instead of converging"
-    )
-
-
-#: App-ids whose routes include a cascade head. A 500 from one of these is NOT safe to replay
-#: blindly: the run either started or did not, and only the caller's key can tell the difference.
-#: App-ids taken OFF the 500-retry. `medallion-producer` pairs the narrow policy with a required
-#: `Idempotency-Key` on `/train`. `catalog` joined 2026-09-09 on the rule's OTHER branch — "pair
-#: retry with an idempotency key OR mark the operation non-retryable" — because it has 91 write routes
-#: and no key on any of them (§ Q17-32). When the key lands there, it keeps this policy AND gains the
-#: pairing; the two halves cover what the other misses, which is why the rule says do both.
-_WRITE_APP_IDS = ("medallion-producer", "catalog")
-
-
-def test_a_cascade_head_is_not_replayed_on_a_bare_500() -> None:
-    """The other half of the rule, and the half a required key alone does not cover.
-
-    `python-infrastructure`: "Always pair retry with an idempotency key OR mark the operation
-    non-retryable." Both are done here, because each covers what the other misses. The required key
-    makes a replay CONVERGE; narrowing the matcher stops the estate replaying the one status that
-    carries no promise about whether the work happened.
-
-    500 is exactly that status. 502/503/504 mean the request did not reach a working app — and these
-    doors answer 503 with an explicit `Retry-After: 5`, so a retry is what they ASK for. A 500 means
-    the app was reached and something failed inside it, possibly after the cascade head published.
-    Replaying it three times at 2 s is how one operator click became four bronze→gold runs.
+    500 is exactly that status. 502/503/504 mean the request did not reach a working app. A 500 means
+    the app was reached and something failed inside it, possibly after the write landed.
 
     Scoped to the write app-ids rather than applied estate-wide: retrying a read after a 500 is
     harmless, and widening this would cost every other caller a retry that was working correctly.
@@ -121,8 +57,8 @@ def test_a_cascade_head_is_not_replayed_on_a_bare_500() -> None:
 
     policies = resiliency["spec"]["policies"]["retries"]
     assert "writeRetry" in policies, (
-        "no `writeRetry` policy — the cascade heads still share `invokeRetry`, which matches 500-599 "
-        "and replays a bare 500 three times against a door that starts a bronze->gold run"
+        "no `writeRetry` policy — the write app-ids still share `invokeRetry`, which matches 500-599 "
+        "and replays a bare 500 three times against a door that writes"
     )
     codes = str(policies["writeRetry"]["matching"]["httpStatusCodes"]).split(",")
     assert "500" not in codes and "500-599" not in codes, f"writeRetry still replays 500: {codes}"
@@ -130,7 +66,7 @@ def test_a_cascade_head_is_not_replayed_on_a_bare_500() -> None:
     apps = resiliency["spec"]["targets"]["apps"]
     for app_id in _WRITE_APP_IDS:
         assert app_id in apps, f"{app_id} is not a resiliency target at all"
-        assert apps[app_id].get("retry") == "writeRetry", f"{app_id} is on {apps[app_id].get('retry')!r} — its cascade head is still replayed on a bare 500"
+        assert apps[app_id].get("retry") == "writeRetry", f"{app_id} is on {apps[app_id].get('retry')!r} — its writes are still replayed on a bare 500"
 
     # And the siblings must NOT have been narrowed with it: a read after a 500 is safe to retry, and
     # widening this fix would silently take that away from every other caller.

@@ -1,29 +1,21 @@
-"""The per-stage provenance stamp — ONE implementation, imported by both cascade drivers.
+"""The per-stage provenance stamp — the tier provenance columns and the one function that writes them.
 
-The medallion runs its bronze→silver transform two ways: in-process (`medallion/services/compute.py`)
-and distributed on Ray (`scripts/ray_stage_job.py`). Both must stamp the same provenance columns, and
-until this module existed both did it with their own copy. The Ray copy's docstring said so outright —
-"Mirrors compute._carry_source_rowid + _stamp_stage" — and a mirror maintained by hand is a mirror that
-drifts.
-
-IT HAD DRIFTED. Given one table already carrying `stage`, the two produced different SCHEMAS: the
-in-process copy replaced the column in place, the Ray copy dropped it and appended it at the end. Since
-`lance.write_dataset(mode="overwrite")` takes the table's schema as the dataset's, a silver table's
-column order depended on which compute path wrote it — so two runs of one lane over one dataset left
-schemas that are not equal, for no data reason.
+The column names (`stage`, `source_rowid`, `lineage`) and `LINEAGE_DATASET_ID_KEY` are the contract the
+catalog's provenance guard, its publish door's quality gate and maintenance's lineage emitter read, and
+`stamp_stage` writes them. One definition, so a writer and the readers that judge it cannot disagree on a
+name, a type or a column position: `lance.write_dataset(mode="overwrite")` takes the table's schema as the
+dataset's, so two stamps that place a column differently leave schemas that are not equal for no data
+reason.
 
 PURE AT IMPORT, and pure per function but one. The stamp is a table in, a table out — no storage
-options, no lance, no Ray — which is what lets one function serve a driver that holds a
+options, no lance, no Ray — which is what lets one function serve a writer that holds a
 `LanceDataset` and one that holds a Ray batch, and it is the `writing-python` § "Mixed I/O and
 business logic" rule applied. The single exception, `ensure_declared_dataset_id`, takes a dataset
 because the thing it repairs only exists on one; it imports lance LAZILY so this module stays
 importable wherever the stamp is wanted.
 
-IT LIVES IN service-kit rather than in the medallion because the Ray job CANNOT import the service: it
-is baked into `.docker/ray-cluster.dockerfile`, which builds `--package ray-cluster-env` (the deps-only
-platform-environment member) from the root lock, and that environment carries `service-kit`. Both
-images therefore already have this package. A shared module in the medallion would be unreachable from
-exactly one of its two callers.
+IT LIVES IN service-kit rather than in a service because the catalog and maintenance both read it,
+and a governance contract cannot belong to one of its readers.
 """
 
 from __future__ import annotations
@@ -59,7 +51,7 @@ LINEAGE_DATASET_ID_KEY: Final = "lineage.dataset_id"
 #: value advances on the next overwrite, so persisting it records an id that will not be true.
 _ROWID: Final = "_rowid"
 
-#: A lane that maps each input row to exactly one output row — every default stage runner's shape.
+#: A lane that maps each input row to exactly one output row.
 ONE_TO_ONE: Final = "1:1"
 
 #: A lane that may emit MANY output rows per input row: a video into frames, a recording into speaker
@@ -69,8 +61,8 @@ ONE_TO_ONE: Final = "1:1"
 #: spec registry.
 ONE_TO_MANY: Final = "1:N"
 
-#: Every cardinality a lane may declare. An unknown one is REFUSED rather than defaulted, at both the
-#: declaration door and the job — a typo must not buy the loosest contract by falling through.
+#: Every cardinality a lane may declare. An unknown one is REFUSED rather than defaulted — a typo must
+#: not buy the loosest contract by falling through.
 CARDINALITIES: Final = frozenset({ONE_TO_ONE, ONE_TO_MANY})
 
 
@@ -179,14 +171,14 @@ def ensure_declared_dataset_id(uri: str, dataset_id: str, storage_options: dict[
     THE STAMP ALONE IS NOT ENOUGH, and measuring the destination rather than the call is what showed
     it: `merge_insert` does not carry the source table's schema metadata onto the dataset (pylance
     10.0.0 — a dataset created declaring `acme$bronze` still declared `acme$bronze` after a full-sync
-    merge of a table declaring `acme$silver`; only an `overwrite` moved it). The cascade's steady-state
-    write is deliberately that merge, because an overwrite re-mints every `_rowid` and the tier above
+    merge of a table declaring `acme$silver`; only an `overwrite` moved it). A tier's steady-state
+    write is that merge, because an overwrite re-mints every `_rowid` and the tier above
     resolves `source_rowid` against them. So without this, a corrected stamp would land only on tiers
     created after it and every tier already on disk would keep its parent's name forever, repaired by
     no re-run.
 
     `update_schema_metadata` is a metadata-only commit: it touches one key, preserves the rest, rewrites
-    no data and re-mints no row id. Idempotent by the read below, so it is safe on every cascade tick
+    no data and re-mints no row id. Idempotent by the read below, so it is safe on every call
     and the estate self-heals rather than needing a backfill pass.
     """
     import lance

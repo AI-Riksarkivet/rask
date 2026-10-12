@@ -367,10 +367,9 @@ def describe_table(
     are ignored: the caller is the verified bearer token, not a field of the request body.
 
     ``vend_credentials`` (spec 0.9) returns short-lived, table-scoped ``storage_options`` in the response —
-    the SPEC'S OWN way for a client to get credentials. We previously ignored the field entirely and offered
-    only a bespoke ``POST /{id}/credentials``, which meant a GENERIC Lance client (including medallion-producer in
-    REST mode) got no credentials and had no way to discover our endpoint: interop-breaking, and the one
-    confirmed reinvention in the 2026-07-14 audit. ``/credentials`` remains as the richer superset (tiers,
+    the SPEC'S OWN way for a client to get credentials. A bespoke ``POST /{id}/credentials`` alone would leave a
+    GENERIC Lance client with no credentials and no way to discover our endpoint: interop-breaking, and the
+    one confirmed reinvention in the 2026-07-14 audit. ``/credentials`` remains as the richer superset (tiers,
     web-identity exchange).
 
     READ TIER ONLY, deliberately. The router already gates describe on the reader rung; vending a WRITE

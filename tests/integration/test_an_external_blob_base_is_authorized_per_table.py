@@ -19,7 +19,6 @@ from __future__ import annotations
 import json
 import uuid
 from collections.abc import Iterator
-from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
@@ -30,8 +29,6 @@ import pytest
 from fastapi.testclient import TestClient
 from lance.blob import Blob, blob_array
 
-from medallion.services.catalog_register import ensure_stage_output
-from medallion.services.compute import read_upstream
 from service_kit.lakehouse import blobs
 from service_kit.lakehouse.objectfs import lance_storage_options
 from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
@@ -140,9 +137,9 @@ def test_a_create_pointing_at_another_tenants_object_is_refused(estate: _Estate,
     assert estate.client.post("/v1/table/db$thief/describe", json={}).status_code == 404
 
 
-def test_a_stage_output_takes_its_upstreams_carried_pointers(estate: _Estate, tmp_path: Path) -> None:
-    """The cascade forwards an external upstream's pointers into the tier it creates through the catalog: the stage asks
-    the create for the upstream's base, and a carried pointer then merges into the new tier and reads back."""
+def test_a_derived_tier_takes_its_upstreams_carried_pointers(estate: _Estate) -> None:
+    """A pipeline forwards an external upstream's pointers into the tier it creates through the catalog: it asks the
+    create for the upstream's base, and a carried pointer then merges into the new tier and reads back."""
     base = f"s3://{estate.corpus}/media/pages/"
     estate.s3.put_object(Bucket=estate.corpus, Key="media/pages/p-1.bin", Body=b"PAGE-ONE")
     rows = pa.table({"id": pa.array([1], pa.int64()), "payload": blob_array([Blob.from_uri(f"{base}p-1.bin")])})
@@ -150,21 +147,13 @@ def test_a_stage_output_takes_its_upstreams_carried_pointers(estate: _Estate, tm
     assert bronze.status_code == 200, bronze.text
     bronze_uri = str(bronze.json()["location"])
     lance.write_dataset(rows, bronze_uri, mode="append", storage_options=estate.key)
-    upstream = read_upstream(bronze_uri, estate.key)
-    token = tmp_path / "token"
-    token.write_text("t")
 
-    silver_uri = ensure_stage_output(
-        catalog_url="http://testserver",
-        table_id="db$silver",
-        schema=upstream.schema,
-        external_blob_base=upstream.external_base,
-        identity_token_file=str(token),
-        client=estate.client,
-    )
+    silver = estate.create("db$silver", rows.schema.empty_table(), base)
+    assert silver.status_code == 200, silver.text
+    silver_uri = str(silver.json()["location"])
 
     [descriptor] = lance.dataset(bronze_uri, storage_options=estate.key).to_table(columns=["payload"]).column("payload").to_pylist()
-    carried = pa.table({"id": pa.array([1], pa.int64()), "payload": blob_array([blobs.carry_external_descriptor(descriptor, str(upstream.external_base))])})
+    carried = pa.table({"id": pa.array([1], pa.int64()), "payload": blob_array([blobs.carry_external_descriptor(descriptor, base)])})
     lance.dataset(silver_uri, storage_options=estate.key).merge_insert("id").when_matched_update_all().when_not_matched_insert_all().execute(carried)
     assert [payload for _, payload in lance.dataset(silver_uri, storage_options=estate.key).read_blobs("payload", indices=[0])] == [b"PAGE-ONE"]
 

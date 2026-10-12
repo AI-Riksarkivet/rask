@@ -292,7 +292,7 @@ def test_no_first_party_service_account_can_read_a_secret_or_review_a_token(over
 
     # The walk sees the chart's pods and the subcharts', and the classifier reads rendered roles; without these every
     # assertion below passes by parsing nothing.
-    assert sum(pod.first_party for pod in pods) >= 25, f"{overlay}: only {sum(p.first_party for p in pods)} first-party pod templates"
+    assert sum(pod.first_party for pod in pods) >= 20, f"{overlay}: only {sum(p.first_party for p in pods)} first-party pod templates"
     # OpenFGA is the chart's one subchart and production names the platform's ([[XC-132]]), so the overlays that run it
     # prove the split.
     if overlay != "prod":

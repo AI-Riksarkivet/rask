@@ -1,14 +1,10 @@
 """Governed-auth settings: the OIDC + OpenFGA knobs, declared ONCE for the whole estate.
 
-THE DEFECT THIS MODULE NOW CLOSES. Until 2026-08-30 the same field-set was declared FIVE times under
-FOUR prefixes — this mixin and the catalog's inline twin under `LANCE_*`, lineage's under `LINEAGE_*`,
-maintenance's under `MAINTENANCE_*`, medallion's under `MEDALLION_*`. Turning authorization on
-estate-wide therefore meant setting four different names for one switch (the chart carried a
-prefix-PARAMETERISED helper whose only reason to exist was that disagreement), and the copies had
-already drifted in both directions: medallion declared `fga_store_id: str = ""` where every other copy
-declared `str | None`, dropped the `ge=0.1` floor on `fga_timeout_seconds`, and — with lineage —
-never grew the HTTPS-issuer validator, so an `http://` issuer booted there and answered 401 on every
-VALID bearer.
+ONE DECLARATION FOR THE ESTATE, because per-service copies under per-service prefixes (`LANCE_*`,
+`LINEAGE_*`, `MAINTENANCE_*`) make turning authorization on estate-wide mean setting several names for
+one switch, and the copies drift: measured before 2026-08-30, one copy declared `fga_store_id: str = ""`
+where the rest declared `str | None`, dropped the `ge=0.1` floor on `fga_timeout_seconds`, and never grew
+the HTTPS-issuer validator, so an `http://` issuer booted there and answered 401 on every VALID bearer.
 
 One declaration, one `RASK_*` name each. The old prefixed names are DELETED, with no alias list and no
 precedence chain: `_refuse_retired_names` turns a deployment that still sets one into a startup error,
@@ -17,7 +13,7 @@ because the failure it replaces — half an estate authenticating and half not �
 THREE CLASSES, because the estate really does have three postures:
 
 * `FgaSettings` — the OpenFGA client alone. A service that authorizes as its OWN service identity and
-  has no human door (`maintenance`'s reconciler; medallion's stage runners) needs the client and no verifier.
+  has no human door (`maintenance`'s reconciler) needs the client and no verifier.
 * `OidcSettings` — the bearer-token verifier alone, with the invariant that a knowable
   misconfiguration must not become a runtime 401.
 * `GovernedAuthSettings` — both, plus the coupling: FGA answers "may THIS subject do it", so a service
@@ -43,8 +39,7 @@ from service_kit.control_events import ControlSigner
 
 #: The names the 2026-08-30 hard rename deleted. Kept as a REFUSAL list, never as an alias list: an
 #: operator who upgrades without re-templating must be stopped at boot, not silently unauthenticated.
-#: Service-specific FGA knobs (`LANCE_FGA_CASCADE_WRITERS`, `LANCE_FGA_LOCK_ROOT_CREATE`,
-#: `LINEAGE_FGA_OBJECT_TYPE`, `MEDALLION_FGA_SERVICE_IDENTITY`, `MEDALLION_FGA_REQUIRED_ACTION`) are
+#: Service-specific FGA knobs (`LANCE_FGA_LOCK_ROOT_CREATE`, `LINEAGE_FGA_OBJECT_TYPE`) are
 #: absent on purpose — each is declared once already and keeps its owning service's namespace.
 RETIRED_AUTH_ENV_NAMES: tuple[str, ...] = tuple(
     f"{prefix}_{suffix}"

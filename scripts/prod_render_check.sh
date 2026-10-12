@@ -13,8 +13,7 @@ PROD_VALUES="${PROD_VALUES:-deploy/values-prod.yaml}"
 # Every value the chart's `required` guards demand before it will render at all. values-prod sets
 # auth.enabled AND frontend.oidc.enabled — a governed backend with a UI that can sign in — so
 # templates/{auth-consistency,frontends}.yaml demand the three OIDC values on EVERY render here, and
-# _helpers.tpl demands a registry-qualified image.repository and, with the cascade's Ray lane on and no
-# in-cluster head, the estate's Ray dashboard (`rask.rayDashboardUrl`).
+# _helpers.tpl demands a registry-qualified image.repository.
 # One array, used by all four helm calls below: adding a fifth without them would fail the whole script
 # at that line with no message (set -e + command substitution), which is how this reached CI red.
 # Dummies on purpose: they satisfy the fail-closed guards and thereby also prove the guards do not block
@@ -139,8 +138,7 @@ grep -q "name: rask-vmagent$" "$OUT" && fail "vmagent must NOT be shipped (the O
 #
 # The nginx gateway exposed unauthenticated locations, among them /perses/ + /greptime/ (basic-auth'd via
 # observability.edgeAuth). The gateway fold (docs/adr/0117-nginx-is-retired-and-the-fastapi-gateway-is-the-in-cluster.md) retired nginx:
-# the FastAPI gateway proxies /api/* only, /train enforces fail-closed dual-auth in the service itself
-# (#64), and the telemetry suite is cluster-internal (port-forward only — no Ingress path routes it). Assert the doors stay CLOSED under the new topology,
+# the FastAPI gateway proxies /api/* only, and the telemetry suite is cluster-internal (port-forward only — no Ingress path routes it). Assert the doors stay CLOSED under the new topology,
 # on the rendered OUTPUT: an Ingress path or a resurfaced nginx block reopens a door invisibly.
 grep -qE "location /(produce|perses|greptime)" "$OUT" \
   && fail "an nginx location block resurfaced — the nginx gateway is retired (docs/adr/0117-nginx-is-retired-and-the-fastapi-gateway-is-the-in-cluster.md)"

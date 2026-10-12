@@ -218,11 +218,11 @@
                             "type": "string"
                         },
                         "enabled": {
-                            "description": "Stage control events in a durable S3 outbox and run the relay cron that drains it; carries the `table_published` wake-up for silver to gold. Requires `controlEmit`.",
+                            "description": "Stage control events in a durable S3 outbox and run the relay cron that drains it; carries `table_published` to its subscribers. Requires `controlEmit`.",
                             "type": "boolean"
                         },
                         "schedule": {
-                            "description": "Dapr cron schedule of the control outbox relay; bounds how long a cascade stays halted after a bus outage.",
+                            "description": "Dapr cron schedule of the control outbox relay; bounds how long a control event stays undelivered after a bus outage.",
                             "type": "string"
                         }
                     }
@@ -775,7 +775,7 @@
             "type": "object",
             "properties": {
                 "catalog": {
-                    "description": "Lakehouse image (catalog, lineage, medallion, maintenance, media services): `repository` is the image name under image.repository, `tag` is required (empty fails the render).",
+                    "description": "Lakehouse image (catalog, lineage, maintenance, media services): `repository` is the image name under image.repository, `tag` is required (empty fails the render).",
                     "type": "object",
                     "properties": {
                         "repository": {
@@ -1141,212 +1141,8 @@
             "type": "object",
             "properties": {
                 "buckets": {
-                    "description": "Map of stage namespace to S3 bucket (e.g. `{gold: lance-sink}`); unset namespaces use `minio.bucket`. Listed buckets are auto-created and reserved from warehouses.",
+                    "description": "Map of tier namespace to S3 bucket (e.g. `{gold: lance-sink}`); unset namespaces use `minio.bucket`. Listed buckets are auto-created, swept by maintenance and reserved from warehouses.",
                     "type": "object"
-                },
-                "cascadeLag": {
-                    "type": "object",
-                    "properties": {
-                        "bindingName": {
-                            "description": "Name of the read-only cascade-lag cron Component, the producer's MEDALLION_CASCADE_LAG_BINDING_NAME and its route. Empty disables the lag detector.",
-                            "type": "string"
-                        },
-                        "schedule": {
-                            "description": "Dapr cron schedule on which the producer measures per-edge cascade lag and sets the `medallion.cascade.lag` gauge.",
-                            "type": "string"
-                        }
-                    }
-                },
-                "compute": {
-                    "type": "boolean"
-                },
-                "defaultEngine": {
-                    "description": "Engine a stage runner that declares no transform runs on (MEDALLION_DEFAULT_ENGINE): empty = the first enabled `services.compute.engines` entry, else in-process.",
-                    "type": "string"
-                },
-                "enabled": {
-                    "description": "Deploy the medallion cascade: the medallion-producer head and the stage runners in `stageRunners`, with their pubsub components and crons.",
-                    "type": "boolean"
-                },
-                "fgaEnabled": {
-                    "description": "Each stage runner checks OpenFGA for its `requiredAction` on the target namespace before producing. Seed the stage-runner identity grants first.",
-                    "type": "boolean"
-                },
-                "goldWarehouse": {
-                    "description": "Route the terminal stage runner's project writes to the project's gold serving warehouse when one exists (MEDALLION_GOLD_WAREHOUSE_ENABLED). Off = work warehouse.",
-                    "type": "boolean"
-                },
-                "inprocessTasks": {
-                    "description": "Tasks the in-process plane can run, registered at boot (MEDALLION_INPROCESS_TASKS) whether or not Ray is on: `task`, `command`, optional `cardinalities`.",
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "cardinalities": {
-                                "type": "array",
-                                "items": {
-                                    "type": "string"
-                                }
-                            },
-                            "command": {
-                                "type": "string"
-                            },
-                            "task": {
-                                "type": "string"
-                            }
-                        }
-                    }
-                },
-                "planSweep": {
-                    "type": "object",
-                    "properties": {
-                        "bindingName": {
-                            "description": "Name of the plan-sweep cron Component (MEDALLION_PLAN_SWEEP_BINDING_NAME and route) that resolves open Ray stage and training plans. Rendered only with `ray`; empty disables it.",
-                            "type": "string"
-                        },
-                        "schedule": {
-                            "description": "Dapr cron schedule of the plan sweep; four ticks is the grace a lost submission gets before it counts as never registered.",
-                            "type": "string"
-                        }
-                    }
-                },
-                "port": {
-                    "description": "HTTP port the medallion producer and stage runners listen on.",
-                    "type": "integer"
-                },
-                "produceAdminProject": {
-                    "description": "Project a signed-in user needs `can_administer` on to fire /train from the UI, and the project a run with no tenant of its own is authorized on.",
-                    "type": "string"
-                },
-                "producer": {
-                    "type": "object",
-                    "properties": {
-                        "bronzeDataset": {
-                            "description": "Dataset name the producer stamps on the bronze trigger (MEDALLION_BRONZE_DATASET); must equal the first stage runner's `fromDataset` or every trigger is dropped.",
-                            "type": "string"
-                        },
-                        "bronzeNamespace": {
-                            "description": "Bronze namespace whose catalog write announcements fire the head (MEDALLION_BRONZE_NAMESPACE), declared unqualified; on a projects estate it becomes `\u003cproject\u003e-bronze` at runtime.",
-                            "type": "string"
-                        },
-                        "bronzeTopic": {
-                            "description": "Topic the producer's /bronze-arrival publishes the first cascade trigger on (MEDALLION_BRONZE_TOPIC); the first stage runner's `subTopic`.",
-                            "type": "string"
-                        },
-                        "daprAppId": {
-                            "description": "Dapr app-id of the medallion-producer; also names its derived pubsub components, durable consumers and state-store scope.",
-                            "type": "string"
-                        },
-                        "serviceIdentity": {
-                            "description": "Subject the producer presents at the catalog's service door and signs lineage as; the identity the FGA seed grants. Must not be blank.",
-                            "type": "string"
-                        }
-                    }
-                },
-                "producerReplicas": {
-                    "description": "Replica count of the medallion-producer Deployment (default 1); replicas share a queue group, so each trigger is delivered once.",
-                    "type": "integer"
-                },
-                "projectsEnabled": {
-                    "description": "Per-project routing: give producer and stage runners MEDALLION_CONTROL_ROOT so a `project` trigger resolves that project's warehouse. Off drops project triggers fail-closed.",
-                    "type": "boolean"
-                },
-                "promotionReviewBand": {
-                    "description": "Fractional row-count change from the previous version that triggers a review (0.25 = 25%); a first promotion always asks. 0 asks about every change.",
-                    "type": "number"
-                },
-                "promotionTopic": {
-                    "description": "Topic a stage runner holding a promotion publishes it on for the producer's review workflow (MEDALLION_PROMOTION_TOPIC).",
-                    "type": "string"
-                },
-                "quality": {
-                    "description": "Run data-quality assertions (row count, key column non-null, declared columns) after each stage write and block promotion on failure. Requires `compute`.",
-                    "type": "boolean"
-                },
-                "qualityKeyColumn": {
-                    "description": "Column the quality gate asserts is non-null (MEDALLION_QUALITY_KEY_COLUMN). Used when `quality` is on.",
-                    "type": "string"
-                },
-                "qualityReview": {
-                    "description": "Route unusual (not broken) promotions to a person through the producer's promotion_review workflow instead of blocking; also scopes the producer on the state store.",
-                    "type": "boolean"
-                },
-                "qualityReviewApprover": {
-                    "description": "OIDC subject asked to approve a held promotion. Empty = nobody can be asked and the review answers BLOCKED.",
-                    "type": "string"
-                },
-                "qualityReviewHours": {
-                    "description": "Hours a promotion review stays open before the promotion is EXPIRED and not promoted.",
-                    "type": "integer"
-                },
-                "stageRunnerReplicas": {
-                    "description": "Replica count of each stage-runner Deployment (default 1); replicas form a competing-consumer queue group.",
-                    "type": "integer"
-                },
-                "stageRunners": {
-                    "description": "The stage runners, one Deployment each in DAG order: name, daprAppId, from/to namespace and dataset, operation, author, sub/pub topics, requiredAction, serviceIdentity, requiredColumns.",
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "author": {
-                                "type": "string"
-                            },
-                            "daprAppId": {
-                                "type": "string"
-                            },
-                            "fromDataset": {
-                                "type": "string"
-                            },
-                            "fromNamespace": {
-                                "type": "string"
-                            },
-                            "name": {
-                                "type": "string"
-                            },
-                            "operation": {
-                                "type": "string"
-                            },
-                            "pubTopic": {
-                                "type": "string"
-                            },
-                            "requiredAction": {
-                                "type": "string"
-                            },
-                            "requiredColumns": {
-                                "type": "string"
-                            },
-                            "serviceIdentity": {
-                                "type": "string"
-                            },
-                            "subTopic": {
-                                "type": "string"
-                            },
-                            "toDataset": {
-                                "type": "string"
-                            },
-                            "toNamespace": {
-                                "type": "string"
-                            }
-                        }
-                    }
-                },
-                "train": {
-                    "type": "object",
-                    "properties": {
-                        "modelsNamespace": {
-                            "description": "Catalog namespace the model registry writes trained models into (MEDALLION_MODELS_NAMESPACE).",
-                            "type": "string"
-                        },
-                        "topic": {
-                            "description": "Topic the /train head publishes training requests on and the trainer consumer subscribes to (MEDALLION_TRAIN_TOPIC).",
-                            "type": "string"
-                        },
-                        "trainerIdentity": {
-                            "description": "Service identity training runs act and emit as (MEDALLION_TRAINER_IDENTITY).",
-                            "type": "string"
-                        }
-                    }
                 }
             }
         },
@@ -1383,10 +1179,6 @@
                 },
                 "maintenanceAccessKey": {
                     "description": "Access key of maintenance's scoped store identity, the fallback when vending degrades; secret derives in-cluster.",
-                    "type": "string"
-                },
-                "medallionAccessKey": {
-                    "description": "Access key the medallion producer and stage runners share; secret derives in-cluster. Data in any warehouse, `_tasks/` writable.",
                     "type": "string"
                 },
                 "oidc": {
@@ -1463,44 +1255,6 @@
                                             }
                                         }
                                     }
-                                },
-                                "services.compute.engines.ray.enabled": {
-                                    "type": "object",
-                                    "properties": {
-                                        "bronze-to-silver": {
-                                            "type": "object",
-                                            "properties": {
-                                                "publish": {
-                                                    "type": "array",
-                                                    "items": {
-                                                        "type": "string"
-                                                    }
-                                                }
-                                            }
-                                        },
-                                        "media-to-silver": {
-                                            "type": "object",
-                                            "properties": {
-                                                "publish": {
-                                                    "type": "array",
-                                                    "items": {
-                                                        "type": "string"
-                                                    }
-                                                }
-                                            }
-                                        },
-                                        "silver-to-gold": {
-                                            "type": "object",
-                                            "properties": {
-                                                "publish": {
-                                                    "type": "array",
-                                                    "items": {
-                                                        "type": "string"
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
                                 }
                             }
                         },
@@ -1513,23 +1267,6 @@
                             "type": "object",
                             "properties": {
                                 "admin": {
-                                    "type": "object",
-                                    "properties": {
-                                        "publish": {
-                                            "type": "array",
-                                            "items": {
-                                                "type": "string"
-                                            }
-                                        },
-                                        "subscribe": {
-                                            "type": "array",
-                                            "items": {
-                                                "type": "string"
-                                            }
-                                        }
-                                    }
-                                },
-                                "bronze-to-silver": {
                                     "type": "object",
                                     "properties": {
                                         "publish": {
@@ -1597,40 +1334,6 @@
                                         }
                                     }
                                 },
-                                "medallion-producer": {
-                                    "type": "object",
-                                    "properties": {
-                                        "publish": {
-                                            "type": "array",
-                                            "items": {
-                                                "type": "string"
-                                            }
-                                        },
-                                        "subscribe": {
-                                            "type": "array",
-                                            "items": {
-                                                "type": "string"
-                                            }
-                                        }
-                                    }
-                                },
-                                "media-to-silver": {
-                                    "type": "object",
-                                    "properties": {
-                                        "publish": {
-                                            "type": "array",
-                                            "items": {
-                                                "type": "string"
-                                            }
-                                        },
-                                        "subscribe": {
-                                            "type": "array",
-                                            "items": {
-                                                "type": "string"
-                                            }
-                                        }
-                                    }
-                                },
                                 "monitor": {
                                     "type": "object",
                                     "properties": {
@@ -1649,23 +1352,6 @@
                                     }
                                 },
                                 "notifications": {
-                                    "type": "object",
-                                    "properties": {
-                                        "publish": {
-                                            "type": "array",
-                                            "items": {
-                                                "type": "string"
-                                            }
-                                        },
-                                        "subscribe": {
-                                            "type": "array",
-                                            "items": {
-                                                "type": "string"
-                                            }
-                                        }
-                                    }
-                                },
-                                "silver-to-gold": {
                                     "type": "object",
                                     "properties": {
                                         "publish": {
@@ -1712,26 +1398,8 @@
                     "type": "array"
                 },
                 "minioExtraFrom": {
-                    "description": "List of extra NetworkPolicy `from` peers allowed to reach the object store; defaults admit the ray-lance demo pods.",
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "podSelector": {
-                                "type": "object",
-                                "properties": {
-                                    "matchLabels": {
-                                        "type": "object",
-                                        "properties": {
-                                            "app": {
-                                                "type": "string"
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    "description": "List of extra NetworkPolicy `from` peers allowed to reach the object store.",
+                    "type": "array"
                 },
                 "openbaoExtraFrom": {
                     "description": "List of extra NetworkPolicy `from` peers allowed to reach OpenBao (e.g. the external-secrets namespace).",
@@ -2056,7 +1724,7 @@
                     "type": "string"
                 },
                 "topic": {
-                    "description": "Topic OpenLineage run events are published and subscribed on (LANCE_DAPR_TOPIC, MEDALLION_LINEAGE_TOPIC and siblings).",
+                    "description": "Topic OpenLineage run events are published and subscribed on (LANCE_DAPR_TOPIC and siblings).",
                     "type": "string"
                 }
             }
@@ -2080,10 +1748,6 @@
                 "enabled": {
                     "description": "rask talks to a Ray engine: the NetworkPolicy admits the pods KubeRay marks `ray.io/is-ray-node`, and the Collector scrapes them.",
                     "type": "boolean"
-                },
-                "engineServiceAccount": {
-                    "description": "Service account (in the release namespace) whose tokens rask admits as the trainer; empty admits none. The ray-cluster fixture runs its head as `\u003crask\u003e-sa-ray`.",
-                    "type": "string"
                 }
             }
         },
@@ -2463,50 +2127,6 @@
                         "daprIngest": {
                             "description": "Renders APP_API_TOKEN for compute, whose boot refuses to start with Dapr on and no token (it hosts the prune cron route).",
                             "type": "boolean"
-                        },
-                        "engines": {
-                            "description": "Engines compute serves by Dapr invocation (CP-056, ADR 0140): per engine, `enabled`, `capabilities`, and the `tasks` it runs (`task`, the `command` its cluster image bakes, optional `cardinalities`, empty = all). Any enabled engine needs `ray.dashboardUrl`.",
-                            "type": "object",
-                            "properties": {
-                                "ray": {
-                                    "type": "object",
-                                    "properties": {
-                                        "capabilities": {
-                                            "type": "array",
-                                            "items": {
-                                                "type": "string"
-                                            }
-                                        },
-                                        "codeVersion": {
-                                            "description": "The build the engine runs (its image), the second axis of a run's key, so a rolled image is a new run: the engine is bring-your-own (ADR 0153), so its owner names it; empty, a stage run keys on the lakehouse image (MEDALLION_CODE_VERSION) and the producer's task registrations carry none.",
-                                            "type": "string"
-                                        },
-                                        "enabled": {
-                                            "type": "boolean"
-                                        },
-                                        "tasks": {
-                                            "type": "array",
-                                            "items": {
-                                                "type": "object",
-                                                "properties": {
-                                                    "cardinalities": {
-                                                        "type": "array",
-                                                        "items": {
-                                                            "type": "string"
-                                                        }
-                                                    },
-                                                    "command": {
-                                                        "type": "string"
-                                                    },
-                                                    "task": {
-                                                        "type": "string"
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
                         },
                         "frontDoor": {
                             "description": "Renders compute outside singleTenant, because the gateway routes /api/ray and /api/serve to it.",

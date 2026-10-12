@@ -14,11 +14,11 @@ export RASK_EXPECT_CONTEXT
 # the LIVE kind `lance` cluster with the P5 micro-frontend zones deployed OIDC-on behind ingress-nginx.
 #
 # Prereq (see docs/DEPLOY.md "the cross-zone drive"): the 5 zone images built + kind-loaded, ingress-nginx
-# installed, and `helm upgrade … --set auth.enabled=true --set medallion.enabled=true
-# --set medallion.produceAdminProject=acme --set ingress.enabled=true --set frontend.oidc.enabled=true
+# installed, and `helm upgrade … --set auth.enabled=true
+# --set ingress.enabled=true --set frontend.oidc.enabled=true
 # --set frontend.oidc.publicIssuer=http://lance-ns-dex:5556/dex
 # --set frontend.oidc.publicOrigin=http://localhost:8090` applied,
-# then `kubectl rollout restart deploy/lance-ns-dex deploy/lance-ns-medallion-producer`. This script seeds alice's
+# then `kubectl rollout restart deploy/lance-ns-dex`. This script seeds alice's
 # admin grant + drives the browser (read-only forwards); run it OUTSIDE auto mode (or `!`-prefix).
 #
 #   bash scripts/verify_cross_zone_oidc.sh

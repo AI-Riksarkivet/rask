@@ -47,42 +47,6 @@ scopes:
 {{- include "lance.publishPubsub" (list . (printf "%s-%s" (.Values.pubsub.controlName | default "catalog-control-pubsub") .Values.explorer.services.annotator.daprAppId) .Values.explorer.services.annotator.daprAppId) }}
 {{- end }}
 
-{{- if and .Values.medallion.enabled (include "lance.outOfProcessEngine" .) .Values.medallion.compute }}
-{{- range .Values.medallion.stageRunners }}
-{{- include "lance.publishPubsub" (list $ (printf "%s-%s" ($.Values.pubsub.controlName | default "catalog-control-pubsub") .daprAppId) .daprAppId) }}
-{{- end }}
-{{- end }}
-{{- if .Values.medallion.enabled }}
----
-apiVersion: dapr.io/v1alpha1
-kind: Component
-metadata:
-  name: {{ .Values.pubsub.controlName | default "catalog-control-pubsub" }}-{{ .Values.medallion.producer.daprAppId }}
-  labels: {{- include "lance.labels" . | nindent 4 }}
-spec:
-  type: pubsub.jetstream
-  version: v1
-  metadata:
-    - { name: natsURL, value: "{{ include "lance.natsUrl" . }}" }
-    - { name: name, value: "lance-dapr-catalog-control" }
-    - { name: queueGroupName, value: {{ .Values.medallion.producer.daprAppId | quote }} }
-    - { name: deliverPolicy, value: "new" }
-    - { name: durableName, value: "{{ .Values.medallion.producer.daprAppId }}-control-durable" }
-
-    {{- if .Values.dapr.resiliency.enabled }}
-    - { name: ackWait, value: "720s" }
-    - { name: maxDeliver, value: "3" }
-    - { name: backOff, value: "720s,720s" }
-    {{- else }}
-    - { name: ackWait, value: "30s" }
-    - { name: maxDeliver, value: "5" }
-    - { name: backOff, value: "30s,60s,120s,300s" }
-    {{- end }}
-    {{- with include "lance.natsCreds" (list . .Values.medallion.producer.daprAppId) }}{{ . | nindent 4 }}{{- end }}
-{{- include "lance.natsAuth" . }}
-scopes:
-  - {{ .Values.medallion.producer.daprAppId }}
-{{- end }}
 {{- if and .Values.dapr.enabled .Values.services.notifications }}
 ---
 apiVersion: dapr.io/v1alpha1
@@ -117,12 +81,6 @@ scopes:
 {{- end }}
 
 {{- $subscribers := list (dict "appId" .Values.services.lineage.daprAppId "deliverPolicy" "all") }}
-{{- if .Values.medallion.enabled }}
-{{- $subscribers = append $subscribers (dict "appId" .Values.medallion.producer.daprAppId "deliverPolicy" "new") }}
-{{- range .Values.medallion.stageRunners }}
-{{- $subscribers = append $subscribers (dict "appId" .daprAppId "deliverPolicy" "new") }}
-{{- end }}
-{{- end }}
 
 {{- $subscribers = append $subscribers (dict "appId" "notifications" "deliverPolicy" "new") }}
 

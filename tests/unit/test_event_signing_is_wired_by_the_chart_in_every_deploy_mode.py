@@ -10,8 +10,7 @@
   and only when the store and auth are on; off, it carries neither. An enforced render with no signer at all is refused rather
   than rendered as a lineage that requires nothing.
 - `signing.doors` is the bus doors' mode (off, observe or enforce). Wherever the store and auth are on, every pod whose app hosts a
-  door carries that mode and the two sets lineage verifies with, except that the producer's signer set is the producer and the
-  catalog alone: its lineage door is the bronze head, and nothing else signs an event that head acts on. The pods whose doors take
+  door carries that mode and the two sets lineage verifies with. The pods whose doors take
   control events also carry the role map their per-action policy resolves signers from. A door verifying against other sets would
   refuse what reaches it honestly, or act on what lineage refuses. A mode that verifies is refused at render with no signer at all,
   since such a pod refuses to boot, and with a deployed control-event service no identity holds, since its doors would refuse every
@@ -56,15 +55,15 @@ def _lineage_env(docs: tuple[dict, ...]) -> dict[str, str]:
     return chart_render.env_of(lineage["spec"]["template"]["spec"]["containers"][0])
 
 
-#: The apps that host a signature door, and whether one of their doors takes control events: the producer's /bronze-arrival
-#: and /publication-arrival, notifications' /lineage-events and /control-events, and maintenance's /maintenance-arrival, which
-#: `register_arrival_route` registers on every pod whose MAINTENANCE_WORK_TOPIC is set.
-_DOOR_APPS = {"medallion.producer:app": True, "notifications:app": True, "maintenance.service:app": False}
+#: The apps that host a signature door, and whether one of their doors takes control events: notifications' /lineage-events
+#: and /control-events, and maintenance's /maintenance-arrival, which `register_arrival_route` registers on every pod whose
+#: MAINTENANCE_WORK_TOPIC is set.
+_DOOR_APPS = {"notifications:app": True, "maintenance.service:app": False}
 _DOOR_ENV = ("RASK_SIGNATURE_DOORS", "RASK_EVENT_SIGNERS", "RASK_EVENT_DELEGATORS", "RASK_CONTROL_SIGNER_ROLES")
 #: The door hosts each case names, so a values change that stops rendering one fails the case rather than shrinking it. Both
 #: maintenance Deployments register /maintenance-arrival and share one queue group, so an arrival reaches the planner's pod or a
 #: worker's: a setting on the planner alone would leave most deliveries unchecked.
-_CONTROL_HOSTS = frozenset({"Deployment/rask-medallion-producer", "Deployment/rask-notifications"})
+_CONTROL_HOSTS = frozenset({"Deployment/rask-notifications"})
 _ALL_HOSTS = _CONTROL_HOSTS | {"Deployment/rask-maintenance", "Deployment/rask-maintenance-worker"}
 
 
@@ -171,18 +170,14 @@ def test_lineage_and_every_bus_door_verify_against_exactly_the_rendered_signers_
     roles = {
         "catalog": _identities_running(docs, "catalog.main:app"),
         "maintenance": _identities_running(docs, "maintenance.service:app"),
-        "medallion_producer": _identities_running(docs, "medallion.producer:app"),
-        "medallion_stage_runner": _identities_running(docs, "medallion.stage_runner:app"),
     }
     expected: dict[str, dict[str, object]] = {}
     if doors is not None:
-        assert roles["catalog"] and roles["medallion_producer"], f"a role no rendered pod signs as makes the role map's comparison vacuous: {roles}"
-        # The producer's lineage door is the bronze head, which only the producer's own events and the catalog's write announcements fire.
-        bronze_head = sorted({*roles["catalog"], *roles["medallion_producer"]})
+        assert roles["catalog"], f"a role no rendered pod signs as makes the role map's comparison vacuous: {roles}"
         expected = {
             workload: {
                 "RASK_SIGNATURE_DOORS": doors,
-                "RASK_EVENT_SIGNERS": bronze_head if app == "medallion.producer:app" else _signers(docs),
+                "RASK_EVENT_SIGNERS": _signers(docs),
                 "RASK_EVENT_DELEGATORS": ["service-catalog"],
             }
             | ({"RASK_CONTROL_SIGNER_ROLES": roles} if _DOOR_APPS[app] else {})
@@ -197,7 +192,6 @@ def test_lineage_and_every_bus_door_verify_against_exactly_the_rendered_signers_
 _NOBODY = (
     "--set", "catalog.serviceIdentity=",
     "--set", "maintenance.enabled=false",
-    "--set", "medallion.enabled=false",
 )  # fmt: skip
 
 

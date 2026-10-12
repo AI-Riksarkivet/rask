@@ -70,10 +70,10 @@ class NotificationReason(StrEnum):
     #: ingress — `NotificationDelivery` refuses an unknown reason at the door — and reachable only when
     #: reading back state a NEWER build stored. See `InboxPointer._tolerate_a_newer_vocabulary`.
     UNKNOWN = "unknown"
-    #: v5 — the human whose work a SERVICE-authored run is doing. The medallion's stage runners author with a
-    #: chart role literal (`data_eng`/`analyst`/`htr`/`ray`), which is a truthful statement about who ran
-    #: the stage and a useless inbox address — so a failed cascade reached nobody. Distinct from AUTHOR
-    #: rather than a substitution: the stage runner really did run it, and overwriting attribution to fix
+    #: v5 — the human whose work a SERVICE-authored run is doing. A service authors with a role literal
+    #: (`data_eng`/`analyst`/`ray`), which is a truthful statement about who ran the stage and a useless
+    #: inbox address — so a failed run reached nobody. Distinct from AUTHOR rather than a substitution:
+    #: the service really did run it, and overwriting attribution to fix
     #: targeting would trade one wrong answer for another.
     ORIGINATOR = "originator"
     #: v4 — annotation work. Same targeting rule as the grant pair (the event NAMES its subject), one
@@ -87,11 +87,6 @@ class NotificationReason(StrEnum):
     #: manager's `reopen`) — from the submitter's side those are one fact.
     TASK_CHANGES_REQUESTED = "task_changes_requested"
     TASK_DROPPED = "task_dropped"
-    #: v7 — a promotion the quality gate HELD, asking a named approver to decide. Governance-lane
-    #: targeting like the grant pair: the event names its subject, so being named IS the targeting.
-    #: Distinct from the hold's own lineage FAIL, which says what happened to the DATA rather than
-    #: what is being asked of a person.
-    PROMOTION_REVIEW_REQUESTED = "promotion_review_requested"
     #: v7 — a self-claimed task whose lease lapsed. The only reason in this family that no person
     #: caused: it is fired by the annotator's own timer, which is exactly why the holder cannot be
     #: expected to notice it.

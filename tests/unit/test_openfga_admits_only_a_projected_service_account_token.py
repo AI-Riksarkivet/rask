@@ -20,10 +20,8 @@ import pytest
 from tests.unit.chart_render import DEFAULT_ARGS, containers, env_of, render
 
 
-#: The default render, and one with every optional FGA client on: the explorer trio and the stage runners.
-_RENDERS = pytest.mark.parametrize(
-    "overlay", [pytest.param((), id="default"), pytest.param(("--set", "explorer.enabled=true", "--set", "medallion.fgaEnabled=true"), id="every-client")]
-)
+#: The default render, and one with every optional FGA client on: the explorer trio.
+_RENDERS = pytest.mark.parametrize("overlay", [pytest.param((), id="default"), pytest.param(("--set", "explorer.enabled=true"), id="every-client")])
 
 
 def _openfga(docs: tuple[dict, ...]) -> dict[str, str]:
@@ -76,7 +74,7 @@ def test_every_fga_client_presents_a_projected_token_openfga_admits(overlay: tup
         if {(s.get("audience"), s["path"]) for s in sources} != {(audience, token.name)}:
             missing.append(f"{workload}/{name}")
 
-    assert len(clients) >= 11, f"the render names fewer OpenFGA clients than the estate runs: {clients}"
+    assert len(clients) >= 10, f"the render names fewer OpenFGA clients than the estate runs: {clients}"
     assert missing == [], f"these FGA clients present no projected {audience!r} token at RASK_FGA_TOKEN_FILE: {missing}"
     assert admitted == accounts, (
         f"OpenFGA's subject list differs from the FGA clients' accounts: refused {sorted(accounts - admitted)}, admitted non-clients {sorted(admitted - accounts)}"

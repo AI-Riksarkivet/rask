@@ -27,7 +27,6 @@ _RENDERED = {
     "RASK_CATALOG_API_URL": "http://rask-catalog:2333",
     "RASK_LINEAGE_API_URL": "http://rask-lineage:8000",
     "RASK_LINEAGE_SIDECAR_ONLY_ROUTES": "lineage-events,lineage-reconcile-cron",
-    "RASK_MEDALLION_API_URL": "http://rask-medallion-producer:8000",
 }
 
 
@@ -38,7 +37,6 @@ def test_the_rendered_configmap_binds() -> None:
     assert settings.docs_enabled is False
     assert settings.dapr_enabled is True
     assert settings.compute_url == "http://rask-compute:8804"
-    assert settings.medallion_url == "http://rask-medallion-producer:8000"
     assert settings.sidecar_only_routes == ("lineage-events", "lineage-reconcile-cron")
 
 

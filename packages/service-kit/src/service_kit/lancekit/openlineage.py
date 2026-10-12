@@ -125,9 +125,7 @@ def build_run_event(
 ) -> dict[str, Any]:
     """A minimal, spec-2-0-2 OpenLineage ``RunEvent`` (standalone mirror).
 
-    Prefer lance-ns's ``medallion.schemas.events.build_run_event`` when merged — pass
-    it to ``emit_stage_lineage(builder=...)``. This exists so a pre-merge run can emit
-    the same-shaped event; keep it faithful, don't extend it past their facets.
+    Keep it faithful to the spec's facets; don't extend it past them.
     """
     run_id = run_id_for(seed or f"{operation}-{output_name}")
     output_facets: dict[str, Any] = {

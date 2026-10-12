@@ -134,7 +134,7 @@ def main() -> int:
     creator = poll(lambda: get_json(f"{LINEAGE}/datasets/{bronze}/creator").get("creator"), alice_sub)
     check(creator == alice_sub, f"lineage creator of {bronze} = {creator} (want {alice_sub})")
 
-    step("a medallion-producer job promotes bronze -> silver and emits OpenLineage")
+    step("a pipeline job promotes bronze -> silver and emits OpenLineage")
     promote = {
         "eventType": "COMPLETE",
         "eventTime": "2026-06-24T00:00:00+00:00",
@@ -142,7 +142,7 @@ def main() -> int:
             "runId": f"promote-{os.getpid()}",
             "facets": {"author": {"name": alice_sub, "sub": alice_sub}},
         },
-        "job": {"namespace": "medallion-producer", "name": "promote_bronze_to_silver"},
+        "job": {"namespace": "pipeline", "name": "promote_bronze_to_silver"},
         "inputs": [{"namespace": ns, "name": bronze}],
         "outputs": [{"namespace": ns, "name": silver}],
     }

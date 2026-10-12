@@ -1,7 +1,7 @@
 """Model-registry read + promotion ops for #17 (candidate→blessed).
 
-The registry is one Lance dataset per model at ``<models_root>/<model>`` — the medallion trainer writes it
-DIRECTLY there (``registry_uri_for``), so these ops open it by EXPLICIT URI, NOT the catalog's native
+The registry is one Lance dataset per model at ``<models_root>/<model>``, an explicit location,
+so these ops open it by EXPLICIT URI, NOT the catalog's native
 namespace resolver (which would drop the ``/medallion/`` prefix and miss it). Training publishes are
 APPEND-only (each adds that publish's ``artifact``/``payload``/``meta`` rows, so the rows appended LAST
 carry the newest publish's ``meta``) — but the compaction sweep also lands maintenance commits on the

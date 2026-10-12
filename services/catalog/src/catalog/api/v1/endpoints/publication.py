@@ -84,9 +84,9 @@ def publication_originator(claimed: str, token: Principal | None) -> str:
 
     Precedence, and both halves are load-bearing:
 
-    * A SERVICE caller's `claimed` wins. A stage runner publishes as `service-<daprAppId>`, so the actor is a
-      role, not an address; the human is only on the request body, carried there from the cascade head
-      by `catalog_register.publish_stage_output`.
+    * A SERVICE caller's `claimed` wins. A service principal publishes as itself, so the actor is a
+      role, not an address; the human is only on the request body, carried there by the pipeline
+      running on their behalf.
     * A PERSON's own sub wins over anything they claimed. Someone publishing by hand IS the
       originator, and honouring a body field over a verified sub would let a caller redirect a
       notification into somebody else's inbox.
@@ -217,9 +217,8 @@ async def resolve_effective_gate(
 ) -> publication.EffectiveGate:
     """The gate this publish runs under: the project's DECLARED record where one exists, else the request.
 
-    THE DECLARATION IS CONSULTED HERE BECAUSE THIS DOOR IS THE ONE EVERY WRITER SHARES. A stage runner
-    resolves the same `GateSpec` for itself before it ever calls the catalog; an external writer —
-    Spark, an Argo step, a person with credentials — resolves nothing, so a door trusting the request
+    THE DECLARATION IS CONSULTED HERE BECAUSE THIS DOOR IS THE ONE EVERY WRITER SHARES. A writer —
+    Spark, an Argo step, a person with credentials — resolves no `GateSpec` for itself, so a door trusting the request
     alone gave the least-trusted writer the weakest gate. The composition rules and why the two fields
     compose differently live on `publication.EffectiveGate`.
 
@@ -329,16 +328,9 @@ async def publish_table(
     #
     # `extra` carries the RANGE, which is the whole point of the signal (D-R3) — a consumer resolves
     # {from, to} by the change-feed consumer rule (`catalog.services.changes`) and keeps no bookmark.
-    #
-    # THIS COMMENT USED TO SAY a consumer that misses the event "loses nothing", because the tag still
-    # answers "what is ready?". That is true of a POLLING consumer and false of the one that matters:
-    # under `medallion.cascadeViaPublish` the stage runner deliberately does not fire its own topic, so the
-    # silver->gold hop happens ONLY when `/publication-arrival` receives this event — and the
-    # medallion plane runs no cron and no reconcile binding, so it never re-reads the tag. A dropped
-    # event there cancels the cascade outright, with every pod green.
-    #
-    # The emitter now STAGES through the control outbox, so a failed publish leaves a recoverable
-    # object rather than nothing, and `cascadeViaPublish` refuses to start without one configured.
+    # A POLLING consumer that misses the event loses nothing, because the tag still answers "what is
+    # ready?"; a consumer that acts on the event alone does lose it, so the emitter STAGES through the
+    # control outbox and a failed publish leaves a recoverable object rather than nothing.
     if result.advanced:
         await emit_control(
             control,
@@ -357,8 +349,8 @@ async def publish_table(
                 accepted=result.accepted,
                 cascade_id=body.cascade_id,
                 # WHO this publication is FOR, as opposed to `actor`, which is who performed it. They
-                # differ on exactly the path that matters: a cascade publish is performed by a stage runner
-                # and is for the person whose bronze write started the batch.
+                # differ on exactly the path that matters: a pipeline's publish is performed by its service
+                # principal and is for the person whose bronze write started the batch.
                 originator=publication_originator(body.originator, token),
             ),
         )

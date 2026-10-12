@@ -1,7 +1,7 @@
 """A scoped storage identity the chart PROVISIONS must be the one its service actually presents.
 
-`minio-scoped-users.yaml` creates a least-privilege RustFS user and policy for the maintenance,
-medallion and lineage planes on every install and upgrade. All three are then OFF by default —
+`minio-scoped-users.yaml` creates a least-privilege RustFS user and policy for the maintenance
+and lineage planes on every install and upgrade. Both were OFF by default —
 `rustfs.<plane>AccessKey: ""` falls back to the tenant ROOT credential — so the chart builds the
 identity, provisions it, and then hands the service `minioadmin` anyway.
 
@@ -41,7 +41,6 @@ CHART = REPO / "chart"
 #: provisions a scoped RustFS user for in `minio-scoped-users.yaml`.
 PROVISIONED_PLANES = {
     "MAINTENANCE_S3_ACCESS_KEY_ID": "maintenance",
-    "MEDALLION_S3_ACCESS_KEY_ID": "the medallion plane",
     "LINEAGE_S3_ACCESS_KEY_ID": "lineage",
 }
 

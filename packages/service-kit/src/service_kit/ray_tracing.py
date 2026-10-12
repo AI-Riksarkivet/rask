@@ -75,7 +75,7 @@ def setup_tracing() -> None:
     spans itself at span time, so reaching for them here buys nothing and breaks worker startup.
 
     Idempotent. A Ray job script may already have installed its own provider to continue the
-    submitter's trace (``scripts/ray_stage_job.py`` does exactly that), and OTel answers a second
+    submitter's trace, and OTel answers a second
     ``set_tracer_provider`` with a warning rather than an error — so without this check the caller
     would believe it had configured tracing while the first provider stayed in place.
     """

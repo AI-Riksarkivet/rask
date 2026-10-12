@@ -53,8 +53,6 @@ CONTROL_PREFIXES: tuple[str, ...] = (
     "_protection/",
     "_policies/",
     "_gates/",
-    "_transforms/",
-    "_tasks/",
     "_bases/",
 )
 
@@ -145,7 +143,7 @@ def do_backup(client: Any, *, root: str, dest: str | None, stamp: str) -> dict[s
                 CopySource={"Bucket": src_bucket, "Key": key},
             )
             # THE COPY'S ETAG, NOT THE LISTING'S. A live control root is written while it is being
-            # read — measured 2026-09-14, three `_tasks/` records changed between the list and the
+            # read — measured 2026-09-14, three records changed between the list and the
             # copy on a single run — so recording the listed value made the manifest describe a
             # version the backup does not contain, and `verify` then reported a perfectly good backup
             # as corrupt. The manifest must describe the BYTES IT HAS.

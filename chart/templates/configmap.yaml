@@ -28,9 +28,6 @@ data:
   RASK_CATALOG_API_URL: {{ printf "http://%s-catalog:%v" (include "lance.fullname" .) .Values.services.catalog.port | quote }}
   RASK_LINEAGE_API_URL: {{ printf "http://%s-lineage:%v" (include "lance.fullname" .) .Values.services.lineage.port | quote }}
   RASK_LINEAGE_SIDECAR_ONLY_ROUTES: {{ include "lance.lineageSidecarOnlyRoutes" . | quote }}
-  {{- if .Values.medallion.enabled }}
-  RASK_MEDALLION_API_URL: {{ printf "http://%s-medallion-producer:%v" (include "lance.fullname" .) .Values.medallion.port | quote }}
-  {{- end }}
   {{- if .Values.explorer.enabled }}
   RASK_EXPLORER_VIEWER_URL: {{ printf "http://%s-viewer:%v" (include "lance.fullname" .) .Values.explorer.services.viewer.port | quote }}
   RASK_EXPLORER_SEARCH_URL: {{ printf "http://%s-search:%v" (include "lance.fullname" .) .Values.explorer.services.search.port | quote }}

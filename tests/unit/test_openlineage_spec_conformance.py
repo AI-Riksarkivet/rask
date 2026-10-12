@@ -31,7 +31,6 @@ from openlineage.client import facet_v2
 from catalog.core import lineage_emit as catalog_emit
 from lineage.models import ColumnLineageEdge, Dataset, OutputStatistics, RunEvent
 from maintenance.core import lineage_emit as compaction_emit
-from medallion.schemas import events as medallion_events
 from service_kit import openlineage as ol
 from service_kit.lancekit import openlineage as lancekit_ol
 
@@ -117,43 +116,6 @@ def test_catalog_versionless_write_event_conforms(operation: str) -> None:
         job_namespace="lance-catalog",
     )
     _assert_conforms(event)
-
-
-def test_medallion_run_event_conforms() -> None:
-    event = medallion_events.build_run_event(
-        operation="promote_bronze_to_silver",
-        author="alice",
-        job_namespace="medallion-producer",
-        inputs=[("alpha$bronze", "alpha$bronze$images")],
-        output_namespace="alpha$silver",
-        output_name="alpha$silver$features",
-        version=2,
-        row_count=64,
-        size_bytes=4096,
-        assertions=[{"assertion": "row_count", "success": True}],
-        source_uri="s3://lakehouse/silver/features",
-        schema_fields=[{"name": "id", "type": "int64"}, {"name": "embedding", "type": "array<float>"}],
-        column_map=[("embedding", "payload", "TRANSFORMATION"), ("id", "id", "IDENTITY")],
-        token="tok1",
-        project="acme",
-    )
-    _assert_conforms(event)
-
-
-def test_medallion_fail_event_conforms() -> None:
-    event = medallion_events.build_run_event(
-        operation="promote_bronze_to_silver",
-        author="alice",
-        job_namespace="medallion-producer",
-        inputs=[("alpha$bronze", "alpha$bronze$images")],
-        output_namespace="alpha$silver",
-        output_name="alpha$silver$features",
-        token="tok1",
-        event_type="FAIL",
-        error_message="CUDA OOM while embedding batch 7/12",
-    )
-    _assert_conforms(event)
-    assert event["eventType"] in _SPEC["$defs"]["RunEvent"]["allOf"][1]["properties"]["eventType"]["enum"]
 
 
 def test_compaction_maintenance_events_conform() -> None:

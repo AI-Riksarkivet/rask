@@ -9,19 +9,6 @@
 {{- if $root.Values.dapr.resiliency.enabled -}}
 {{- $expected = append $expected (printf "DLQ:%s" $root.Values.services.lineage.daprAppId) -}}
 {{- end -}}
-{{- if $root.Values.medallion.enabled -}}
-{{- $expected = append $expected (printf "LINEAGE:%s" $root.Values.medallion.producer.daprAppId) -}}
-{{- range $root.Values.medallion.stageRunners -}}
-{{- $expected = append $expected (printf "MEDALLION:%s" .daprAppId) -}}
-{{- end -}}
-{{- $expected = append $expected (printf "TRAINING:%s" $root.Values.medallion.producer.daprAppId) -}}
-{{- if $root.Values.dapr.resiliency.enabled -}}
-{{- $expected = append $expected (printf "DLQ:%s" $root.Values.medallion.producer.daprAppId) -}}
-{{- range $root.Values.medallion.stageRunners -}}
-{{- $expected = append $expected (printf "DLQ:%s" .daprAppId) -}}
-{{- end -}}
-{{- end -}}
-{{- end -}}
 {{- if $root.Values.catalog.controlEmit -}}
 {{- $expected = append $expected (printf "CATALOG_CONTROL:%s" $root.Values.services.catalog.daprAppId) -}}
 {{- end -}}

@@ -104,11 +104,9 @@ class S3FileSystemSource:
     adapter serves MinIO, RustFS, or AWS by swapping the filesystem — the exact provider-agnostic seam,
     and what the name says: this adapter reaches S3 through a pyarrow FILESYSTEM.
 
-    **The long name is the point.** It was ``S3Source`` until 2026-08-30, which collided with
-    :class:`storage.S3Source` — a live, differently-shaped class (boto3 client, keyword-only,
-    ``keys()``/``read()``) that this one cannot be substituted for. ``services/medallion`` imported both
-    under that one name, in two modules of the same service, and a reader of either import line had no
-    way to tell which contract was in play.
+    **The long name is the point.** :class:`storage.S3Source` is a live, differently-shaped class (boto3
+    client, keyword-only, ``keys()``/``read()``) that this one cannot be substituted for; sharing its
+    name would leave a reader of an import line no way to tell which contract is in play.
     """
 
     def __init__(self, fs: pafs.S3FileSystem, bucket: str, prefix: str = "", client: Any | None = None) -> None:  # noqa: ANN401 — boto3 has no public stubs (same rule as storage.client)

@@ -86,20 +86,13 @@ spec:
                       print(f"waiting for store {STORE_NAME!r} ({store_id!r}) to hold this image's model", flush=True)
                       time.sleep(5)
 
-              # The admin's `owner`, then one `reader` per SERVICE principal that must READ governed data.
+              # The admin's `owner`, then the SERVICE principals' rungs.
               #
               # Each grant is checked before it is written, so re-running this hook on every upgrade
               # stays a no-op — and one already-granted subject never short-circuits another that is
-              # still missing, which the early `sys.exit(0)` this replaced did: it would have hidden
-              # every service grant behind an admin who was already in place.
-              {{- $readers := list }}
-              {{- if and .Values.medallion.enabled .Values.medallion.cascadeLag.bindingName }}
-
-              {{- $readers = append $readers .Values.medallion.producer.serviceIdentity }}
-              {{- end }}
-              readers = {{ $readers | toJson }}
-              # MAINTAINERS are a separate list because the rung is different and the reason is
-              # different. A reader observes; the maintenance plane REWRITES bytes. It holds the root
+              # still missing: an early exit would hide every service grant behind an admin who was
+              # already in place.
+              # MAINTAINERS: the maintenance plane REWRITES bytes. It holds the root
               # object-store key today and compacts every bucket with it, and the vending door replaces
               # that with a credential scoped to one table and expiring in 900s. Without a grant the vend
               # is refused and the service degrades silently back to the root key, i.e. the hardening
@@ -154,14 +147,12 @@ spec:
               # are unaffected by that.
               grants = (
                   ([(user, "owner")] if subject else [])
-                  + [(r if ":" in r else f"user:{r}", "reader") for r in readers]
                   + [(m if ":" in m else f"user:{m}", "maintainer") for m in maintainers]
               )
               # ESTATE GRANTS — a SHORTER list than the warehouse one, and the difference is the point.
               #
-              # The warehouse rungs above are about DATA: `reader` is how the cascade-lag detector reads
-              # versions and runs, `maintainer` is how the sweep rewrites bytes, and both reach every
-              # tier by cascading down `warehouse -> namespace -> table`. None of that is an estate
+              # The warehouse rung above is about DATA: `maintainer` is how the sweep rewrites bytes, and it
+              # reaches every tier by cascading down `warehouse -> namespace -> table`. None of that is an estate
               # privilege and none of it moves here.
               #
               # `admin` reaches every estate rung (`owner`/`writer`/`reader` and the can_* verbs), so the

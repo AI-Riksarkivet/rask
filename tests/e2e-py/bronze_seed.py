@@ -1,21 +1,14 @@
 """Seed a project's bronze through the catalog's namespace doors: the one way data enters the lakehouse (ADR 0154).
 
-The cascade head is the medallion producer's ``/bronze-arrival``, and it acts on the catalog's own announcement of a
-committed write: a ``COMPLETE`` lineage event whose output is ``<project>-bronze$events`` in namespace
-``<project>-bronze`` (``medallion.services.ingest_trigger._bronze_write``). So a suite that needs a cascade writes rows
-into that table through ``POST /v1/table/{id}/insert`` (spec ``InsertIntoTable``, Arrow IPC body) and nothing else.
+A client writes rows into ``<project>-bronze$events`` through ``POST /v1/table/{id}/insert`` (spec ``InsertIntoTable``,
+Arrow IPC body), and the catalog announces the committed write on the lineage feed. Moving those rows on to silver and
+gold is the user's own pipeline (ADR 0155); this module only lands bronze.
 
 TWO CALLS, AND THE SPLIT IS LOAD-BEARING. The table is created EMPTY first (``CreateTable`` with ``mode=exist_ok``): the
-catalog announces a create as a DDL change, a ``DatasetEvent`` with no run (``catalog.core.lineage_emit._is_ddl``), and
-the head ignores it, so rows landed by the create would sit in bronze without starting a cascade. The ``insert`` is a
-data write, announced as a ``COMPLETE`` run, and that is the event the head fires on.
+catalog announces a create as a DDL change, a ``DatasetEvent`` with no run (``catalog.core.lineage_emit._is_ddl``), while
+the ``insert`` is a data write announced as a ``COMPLETE`` run, the event a pipeline polling the feed acts on.
 
-THE CASCADE TOKEN IS THE INSERT'S RUN ID. The catalog stamps no ``lance.token`` on its events, so the head threads the
-cascade on the event's ``run.runId`` (``ingest_trigger._cascade_token``), and every stage's run id is derived from it.
-The insert's response names only the version it committed, so :func:`cascade_token` reads the run id back off the
-lineage graph by that version.
-
-Kept a plain module (not ``test_*.py``) so every suite and the integration test share one request shape.
+Kept a plain module (not ``test_*.py``) so every suite that seeds bronze shares one request shape.
 """
 
 from __future__ import annotations
@@ -28,14 +21,14 @@ import pyarrow as pa
 import requests
 
 
-#: The tier and the table the head is configured for (`MEDALLION_BRONZE_NAMESPACE`, `MEDALLION_BRONZE_DATASET`).
+#: The tier and the table a project's bronze events land in.
 BRONZE_TIER = "bronze"
 BRONZE_TABLE = "events"
 
 ARROW_STREAM = {"content-type": "application/vnd.apache.arrow.stream"}
 
-#: The governed tier row the stage runners read (`medallion/schemas/tier.py`): `id` is the row key the stages merge on,
-#: `payload` the opaque content, and `stage` the tier stamp every tier carries.
+#: The governed tier row: `id` is the row key a downstream merge keys on, `payload` the opaque content, and `stage` the
+#: tier stamp every tier carries.
 BRONZE_SCHEMA = pa.schema(
     [
         pa.field("id", pa.int64(), nullable=False),
@@ -57,8 +50,8 @@ def bronze_ids(project: str, delimiter: str = "$") -> tuple[str, str]:
 def bronze_rows(rows: int, *, first_id: int | None = None) -> pa.Table:
     """``rows`` bronze rows with ids no earlier seed used.
 
-    Ids are offset by the wall clock in microseconds, because an insert APPENDS and the stages merge on ``id``: a second
-    seed reusing ids would land rows the cascade reads as updates of the first seed's.
+    Ids are offset by the wall clock in microseconds, because an insert APPENDS and a downstream merge keys on ``id``: a
+    second seed reusing ids would land rows a merge reads as updates of the first seed's.
     """
     start = time.time_ns() // 1_000 if first_id is None else first_id
     return pa.table(
@@ -130,38 +123,3 @@ def seed_bronze_events(
     )
     _check(inserted, f"insert into {table_id}")
     return int(inserted.json()["version"])
-
-
-def cascade_token(
-    lineage_url: str,
-    *,
-    project: str,
-    version: int,
-    headers: Mapping[str, str] | None = None,
-    delimiter: str = "$",
-    timeout: float = 120.0,
-) -> str:
-    """The cascade token of the seed that committed ``version``: the run id the graph recorded for that insert.
-
-    Polls ``GET /datasets/{table}/producers`` until the run that wrote ``version`` appears, because the catalog's
-    announcement reaches the graph asynchronously.
-
-    Raises:
-        AssertionError: No run naming that version appeared within ``timeout`` seconds.
-    """
-    _, table_id = bronze_ids(project, delimiter)
-    base = lineage_url.rstrip("/")
-    deadline = time.monotonic() + timeout
-    seen: list[dict[str, object]] = []
-    while time.monotonic() < deadline:
-        try:
-            resp = requests.get(f"{base}/datasets/{table_id}/producers", headers=dict(headers or {}), timeout=10)
-        except (requests.ConnectionError, requests.Timeout):
-            resp = None
-        if resp is not None and resp.status_code == 200:
-            seen = resp.json().get("producers", [])
-            for producer in seen:
-                if producer.get("dataset_version") == str(version) and producer.get("event_type") == "COMPLETE":
-                    return str(producer["run_id"])
-        time.sleep(3)
-    raise AssertionError(f"no COMPLETE run wrote {table_id} at version {version} within {timeout:.0f}s; producers seen: {seen[-5:]}")

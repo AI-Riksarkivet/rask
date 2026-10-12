@@ -188,8 +188,7 @@ func (m *Rask) Charts(
 // real-registry shape turns it off as values-prod.yaml does. `signing.provisioned` is the operator's attestation
 // that the event-signing keys exist, without which `templates/signing-provisioned.yaml` refuses a sealed store;
 // `nats.auth.provisioned` attests every bus client's NATS user the same way (`templates/nats-provisioned.yaml`).
-// `ray.dashboardUrl` names the estate's Ray: with the cascade's Ray lane on and no in-cluster head the
-// chart refuses to render, because nothing else names the cluster it submits to ([[CP-041]]). `nats.url` names the
+// `ray.dashboardUrl` names the estate's Ray, the one address every Ray consumer renders ([[CP-041]]). `nats.url` names the
 // platform's NATS bus the same way: a prerequisite rask never installs ([[XC-129]]).
 const renderArgs = "--set image.repository=ghcr.io/example/rask " +
 	"--set-string ray.dashboardUrl=http://ray.example.com:8265 " +
@@ -336,15 +335,13 @@ grep -q "720s,720s" /tmp/resil.yaml
 ! grep -q "30s,60s,120s,300s" /tmp/resil.yaml
 render --set dapr.resiliency.enabled=false > /tmp/legacy.yaml
 off=$(grep -c "kind: Resiliency" /tmp/legacy.yaml || true); [ "$off" = "0" ] || exit 1
-# THE TOGGLE OWNS THE POLICY LANES, NOT EVERY DLQ IN THE ESTATE. This asserted zero DLQ_TOPIC of any
-# kind with resiliency off, which was true when the medallion lane was the only one that had a
-# dead-letter topic. It is not true now: the maintenance WORK and INDEX lanes are BYO-worker lanes with
-# their own Dapr components, their own ackWait and their own DLQ, none of which the medallion retry
-# policy governs -- so they correctly survive the toggle. Measured 2026-09-22: ON renders LINEAGE(1),
-# MEDALLION(4), NOTIFICATIONS(1), MAINTENANCE_WORK(2), MAINTENANCE_INDEX(2); OFF renders only the two
-# maintenance pairs. Asserting the policy-governed three by NAME says what the toggle actually means,
-# and a new lane that wires its own DLQ no longer reds a gate about somebody else's retry policy.
-for governed in LINEAGE_DLQ_TOPIC MEDALLION_DLQ_TOPIC RASK_NOTIFICATIONS_DLQ_TOPIC; do
+# THE TOGGLE OWNS THE POLICY LANES, NOT EVERY DLQ IN THE ESTATE. The maintenance WORK and INDEX lanes
+# are BYO-worker lanes with their own Dapr components, their own ackWait and their own DLQ, none of which
+# the subscriber retry policy governs -- so they correctly survive the toggle. ON renders LINEAGE,
+# NOTIFICATIONS, MAINTENANCE_WORK and MAINTENANCE_INDEX; OFF renders only the two maintenance pairs.
+# Asserting the policy-governed lanes by NAME says what the toggle actually means, and a new lane that
+# wires its own DLQ does not red a gate about somebody else's retry policy.
+for governed in LINEAGE_DLQ_TOPIC RASK_NOTIFICATIONS_DLQ_TOPIC; do
   ! grep -q "$governed" /tmp/legacy.yaml || { echo "FAIL: $governed survives dapr.resiliency.enabled=false, but the retry policy that gives it meaning does not"; exit 1; }
 done
 grep -q '30s,60s,120s,300s' /tmp/legacy.yaml`

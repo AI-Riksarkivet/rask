@@ -49,7 +49,6 @@ _SETTINGS: list[tuple[str, str, str]] = [
     ("packages/service-kit", "service_kit.media.config", "MediaSettings"),
     ("packages/lineage-kit", "lineage_kit.config", "LineageSettings"),
     ("services/lineage", "lineage.core.config", "LineageSettings"),
-    ("services/medallion", "medallion.core.config", "MedallionSettings"),
     ("services/notifications", "notifications.api.settings", "IngressSettings"),
     ("services/catalog", "catalog.core.config", "Settings"),
     ("services/maintenance", "maintenance.core.config", "MaintenanceSettings"),

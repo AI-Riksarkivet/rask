@@ -56,7 +56,7 @@ def _s3():
 
 
 def _storage_options() -> dict[str, str]:
-    # Same keys the app passes to lance (compaction/medallion config.storage_options), plus a very high AIMD
+    # Same keys the app passes to lance (the catalog and maintenance config.storage_options), plus a very high AIMD
     # ceiling so Lance's client-side rate limiter can't throttle (and thereby serialize) the concurrent
     # writers — that would mask a store silently dropping the conditional-put header (guide.md § Throttling).
     return {

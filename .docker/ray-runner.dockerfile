@@ -67,10 +67,8 @@ RUN apt-get update \
 
 WORKDIR /app
 
-# Identical to ray-cluster.dockerfile on purpose: this image and the fleet must resolve the SAME
-# Lance/Ray versions, because a split between them is a correctness bug rather than a currency
-# preference (measured: pylance 8.0.0 against a 9.0.0-written dataset made the row-aligned blob read
-# path unusable and mis-detected payload presence SILENTLY).
+# Identical to ray-cluster.dockerfile on purpose: this image and the head resolve the SAME platform
+# environment (Ray and the tracing hooks) from the root lock.
 RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=uv.lock,target=uv.lock \
     --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
@@ -89,8 +87,8 @@ FROM platform-builder AS workload-builder
 ARG RUNNER
 
 # A SECOND venv, never a second resolution into the first. The seal is the point of runners/: the
-# workload's lock and the root lock disagree by design (a runner carries torch and no lance; the
-# platform carries lance and no torch), so resolving them together is exactly the fattening
+# workload's lock and the root lock disagree by design (a runner carries torch; the platform
+# carries none), so resolving them together is exactly the fattening
 # CLAUDE.md refuses. Two environments, one PATH order, no shared resolution.
 ENV UV_PROJECT_ENVIRONMENT=/opt/runner-venv
 
@@ -156,12 +154,8 @@ RUN --network=none --mount=from=workload-builder,source=/opt/runner-venv,target=
     cp -a /tmp/rvenv /opt/runner-venv \
  && chown -R app:app /opt/runner-venv
 
-# NO JOB SCRIPTS ARE BAKED HERE, deliberately. `ray-cluster.dockerfile` bakes them because the
-# CLUSTER runs them — `python /home/ray/jobs/ray_stage_job.py`, under an interpreter whose environment
-# is the platform's and therefore has lance. This image's interpreter is the WORKLOAD's and does not
-# (measured below), so a job script baked here would resolve to a python that cannot import lance and
-# die `ModuleNotFoundError` instead of `can't open file` — a worse failure, because it names the
-# module rather than the image. Every job script is baked into the cluster image.
+# NO JOB SCRIPTS ARE BAKED HERE. The platform bakes none at all (ADR 0155): moving data between tiers
+# is the user's pipeline on their own compute.
 
 # The WORKLOAD venv wins on PATH, and that is the ONLY environment this image's default interpreter
 # has. Measured in the built image 2026-08-25:
@@ -170,14 +164,11 @@ RUN --network=none --mount=from=workload-builder,source=/opt/runner-venv,target=
 #     import runner.htrflow_service -> OK
 #     import lance                  -> ModuleNotFoundError
 #
-# `.docker/ray-htr.dockerfile` asserted the opposite — "the platform's own lance/ray stay importable
-# from the base venv behind it" — and it was never true: two venvs are two interpreters, and putting
-# one first on PATH does not make the other's site-packages visible. Nothing caught it because that
-# image could not be built at all.
+# Two venvs are two interpreters, and putting one first on PATH does not make the other's
+# site-packages visible.
 #
 # It is left this way ON PURPOSE rather than bridged with a .pth. This image exists to back ONE Serve
-# application through `runtime_env.image_uri`, and that application imports its own stack; the
-# platform's Lance plane belongs to the cluster image, which runs the jobs that need it. Making both
+# application through `runtime_env.image_uri`, and that application imports its own stack. Making both
 # importable from one interpreter would merge two independently-resolved locks — the runner's pins
 # against the root's — which is the collision the sealed-runner rule exists to prevent. /opt/venv is
 # still COPYed in so the image can host a platform process explicitly

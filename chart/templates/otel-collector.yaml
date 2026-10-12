@@ -157,8 +157,7 @@ data:
             # pod was dropped before any other rule ran. The consequence was total rather than partial:
             # no ray_tasks/ray_actors by state, no GCS liveness, no OOM-kill counter
             # (ray_memory_manager_worker_eviction_total), no object-store spill, no ray_serve_* replica
-            # health or latency, no ray_data_* backpressure — on the cluster the whole bronze->silver->
-            # gold cascade runs on. A head that is alive-but-wedged read identically to an idle one.
+            # health or latency, no ray_data_* backpressure — on the cluster the engine's jobs run on. A head that is alive-but-wedged read identically to an idle one.
             #
             # There is no PodMonitor alternative: the chart has no prometheus-operator dependency
             # (Chart.lock), so such an object would be reconciled by nothing.

@@ -1,7 +1,7 @@
 """Waiting for a service before deciding it is not there ([[XC-039]]).
 
 A SKIP THAT READS AS GREEN IS THE DEFECT. Seventeen `/livez` probes across this directory carry a bare
-`timeout=5` and skip the module on ANY exception, so a producer that is up and serving the cascade —
+`timeout=5` and skip the module on ANY exception, so a service that is up and serving its routes —
 merely loaded, mid-rollout, or waiting on a cold Lance open — turns a suite that would have passed
 into one that reports "not reachable". Nothing downstream can tell that apart from a genuine absence,
 which is how a live suite quietly stops covering anything.

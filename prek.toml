@@ -7,10 +7,8 @@ hooks = [
   # chart/templates are Helm templates ({{ … }}), not parseable as plain YAML.
   # chart/crds-bootstrap is a VENDORED upstream CRD bundle — legitimately multi-document
   # (`---`-separated), which this hook rejects by default, and not ours to reformat.
-  # deploy/ holds hand-applied manifests that carry several objects in one file (ray-lance-demo.yaml
-  # is a RayCluster and its Service), which is the ordinary shape for a kubectl-applied bundle and
-  # the same multi-document rejection. Found 2026-09-06 when a one-line comment edit to that file
-  # made the hook fire for the first time — nothing had touched it since the exclude was written.
+  # deploy/ holds hand-applied manifests and fixture charts that may carry several objects in one
+  # file, the ordinary shape for a kubectl-applied bundle and the same multi-document rejection.
   { id = "check-yaml", exclude = "^(chart/(templates|crds-bootstrap)|deploy)/" },
   { id = "check-toml" },
   # Lockfiles are legitimately large and MUST be committed — the root uv.lock is already

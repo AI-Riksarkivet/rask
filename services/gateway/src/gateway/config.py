@@ -78,7 +78,6 @@ class GatewaySettings(BaseSettings):
     controlplane_url: str = Field(default="http://127.0.0.1:8820", alias="RASK_CONTROLPLANE_URL")
     catalog_url: str = Field(default="http://127.0.0.1:2333", alias="RASK_CATALOG_API_URL")
     lineage_url: str = Field(default="http://127.0.0.1:8000", alias="RASK_LINEAGE_API_URL")
-    medallion_url: str = Field(default="http://127.0.0.1:8002", alias="RASK_MEDALLION_API_URL")
     explorer_viewer_url: str = Field(default="http://127.0.0.1:8101", alias="RASK_EXPLORER_VIEWER_URL")
     explorer_search_url: str = Field(default="http://127.0.0.1:8102", alias="RASK_EXPLORER_SEARCH_URL")
     explorer_annotator_url: str = Field(default="http://127.0.0.1:8103", alias="RASK_EXPLORER_ANNOTATOR_URL")

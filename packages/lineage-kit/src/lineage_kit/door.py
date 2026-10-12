@@ -1,7 +1,7 @@
 """What a bus door does with an event once its signature has been checked ([[XC-078]]).
 
-Five doors in three services make the same decision: medallion's `/bronze-arrival` and `/publication-arrival`, notifications'
-`/control-events` and `/lineage-events`, and maintenance's `/maintenance-arrival`. The decision has to catch this package's own
+Three doors in two services make the same decision: notifications' `/control-events` and `/lineage-events`, and
+maintenance's `/maintenance-arrival`. The decision has to catch this package's own
 exceptions, so it is written once here and each door only translates the verdict into its transport's answer.
 
 The door hands `judge` the check as a callable already bound to its event, its signer policy and its key source, for example

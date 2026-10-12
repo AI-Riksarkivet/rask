@@ -8,15 +8,15 @@ Three factories, three planes, and the split is deliberate rather than accidenta
   mount at the root; config is ``MediaSettings``; CORS must expose the Range headers a browser needs
   to seek video.
 * this — the LANCE plane. Routers mount at the root under each service's own paths (``/v1/...``,
-  ``/train``, ``/stage-runners/...``), config is each service's own ``*Settings``, and the middleware order
+  ``/events``, a cron binding's ``/<name>``), config is each service's own ``*Settings``, and the middleware order
   is per-service because the catalog's Arrow-IPC data plane carries load-shedding and a body cap that
   the others do not.
 
 docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit" DUP-12 counted eight module-level ``app = FastAPI(...)`` entrypoints
 hand-assembling
 the same boot and asked for a ``make_lance_service_app``. The media three are gone (they build through
-``build_media_app`` now); this is the other five, and what it owns is the part that was genuinely
-identical in all of them:
+``build_media_app`` now); this serves catalog, lineage and maintenance, and what it owns is the part that
+was genuinely identical in all of them:
 
 1. ``setup_logging()`` BEFORE the app exists. Every module in these services uses
    ``getLogger(__name__)``, and without this they propagate to a root logger with no handlers and are
@@ -33,8 +33,7 @@ identical in all of them:
 4. ``RequestIDMiddleware``. One id per request, minted or echoed, published to the context var
    ``setup_logging``'s filter reads — so a caller can quote an id from a failed request and an
    operator can grep for it. PURE ASGI, so it passes streaming bodies through untouched, which is what
-   makes it safe on a plane that serves Arrow IPC. The medallion STAGE RUNNER had no request-id layer at all
-   before this factory; that is the drift five copies produced.
+   makes it safe on a plane that serves Arrow IPC. One factory is what keeps every lance service carrying it.
 5. ``/livez`` + ``/readyz`` at the ROOT — a kubelet does not know a service's prefix.
 
 WHAT IT DOES NOT OWN, and why. ``inner_middleware`` is the escape hatch, and it exists for exactly

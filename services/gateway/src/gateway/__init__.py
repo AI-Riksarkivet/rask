@@ -10,8 +10,7 @@ defaults that match `Procfile.micro`.
 
 Carries the lance-ns rows since the gateway fold (the merge plan's P1 "Gateway fold (code half)";
 the decision is docs/adr/0117-nginx-is-retired-and-the-fastapi-gateway-is-the-in-cluster.md: rask's
-FastAPI gateway wins, the nginx gateway retired): `/api/catalog`, `/api/lineage`, the medallion producer's
-`/api/train`, `/api/trains`, `/api/promotions`, `/api/stage-runners` and `/api/cascade`, and the
+FastAPI gateway wins, the nginx gateway retired): `/api/catalog`, `/api/lineage`, and the
 whole-plane explorer namespace `/api/explorer{,/search,/annotations}`. The lance
 services serve their own internal prefixes (`/v1/...`, `/api/...`), so each route
 row names the upstream prefix that replaces the public one — a wrong prefix
@@ -171,8 +170,7 @@ class Route(NamedTuple):
 
     The upstream prefix REPLACES the public one when forwarding. rask rows keep it identical (the fleet
     services mount under RASK_API_PREFIX themselves); lance rows rewrite — catalog/lineage serve
-    `/v1/...`/`/runs` at root, the medallion producer serves `/train`, `/trains`,
-    `/promotions`, `/stage-runners` and `/cascade` at root, and the media trio serves `/api/...` internally.
+    `/v1/...`/`/runs` at root, and the media trio serves `/api/...` internally.
     """
 
     public_prefix: str
@@ -196,19 +194,14 @@ def _routes(settings: GatewaySettings | None = None) -> list[Route]:
     compute = ("compute", settings.compute_url)
     controlplane = ("controlplane", settings.controlplane_url)
     # lance-plane upstreams (P1 gateway fold). Localhost defaults follow the lance
-    # dev conventions: catalog 2333, lineage 8000, the medallion-producer producer 8002 (the
-    # port-forward the verify/e2e scripts use — its in-cluster port 8000 collides
-    # with lineage on one host), explorer trio 8101/8102/8103 (chart explorer.services).
+    # dev conventions: catalog 2333, lineage 8000, explorer trio 8101/8102/8103 (chart explorer.services).
     catalog = ("catalog", settings.catalog_url)
     lineage = ("lineage", settings.lineage_url)
-    medallion = ("medallion-producer", settings.medallion_url)
     viewer = ("viewer", settings.explorer_viewer_url)
     explorer_search = ("search", settings.explorer_search_url)
     annotator = ("annotator", settings.explorer_annotator_url)
     # The studio flow-builder's server half (open_studio_flows.md "Backend"): the node catalog, graph
-    # validation, and run execution. A BARE app-id, deliberately: the medallion row above points at
-    # `medallion-producer`, a legacy app-id that no longer names anything about the service it reaches
-    # (audit m1). A new row does not inherit that mistake.
+    # validation, and run execution. A BARE app-id: the app-id names the service it reaches.
     flows = ("flows", settings.flows_url)
     # The notification plane: the per-subject inbox behind the bell. Bare
     # app-id, like `flows`, and 8850 continues the 8840 fleet run.
@@ -223,26 +216,6 @@ def _routes(settings: GatewaySettings | None = None) -> list[Route]:
         Route("/api/explorer", "/api", *viewer),
         Route("/api/catalog", "", *catalog),
         Route("/api/lineage", "", *lineage),
-        # The training head (`POST /train`): the producer serves it root-mounted, so the rewrite is a
-        # literal rather than `prefix`-interpolated.
-        Route("/api/train", "/train", *medallion),
-        # A planned training run's status and terminate. A sibling of `/api/train`, not nested under it: the
-        # producer serves `/trains/{id}`, and `_pick_route` never lets one of the two rows match the other.
-        Route("/api/trains", "/trains", *medallion),
-        # The APPROVE door for a held promotion. It is on the producer rather than on the stage runner whose
-        # quality gate held it, because `raise_workflow_event` resolves a workflow instance through the
-        # CALLING app's app-id: route and instance must share a process, and a stage runner is bus-only — no
-        # row here, no Ingress path. Root-mounted like /train (the producer does not use
-        # `make_service_app`'s prefix), so the rewrite is a literal, not `prefix`-interpolated.
-        Route("/api/promotions", "/promotions", *medallion),
-        # The cascade's operator surface. Routed to the PRODUCER, which authorizes and forwards to the
-        # stage runner that hosts the instance — a stage runner has no row of its own because it is bus-only, and
-        # `terminate_workflow` must run under the stage runner's app-id, so neither end can do both halves.
-        Route("/api/stage-runners", "/stage-runners", *medallion),
-        # The cascade's stalled-tier read (`GET /cascade/stalled`); the producer answers each caller with
-        # the cells of the projects they administer. `tests/test_lance_routes.py` derives every route the
-        # producer serves as the chart deploys it.
-        Route("/api/cascade", "/cascade", *medallion),
         Route(f"{prefix}/ray", f"{prefix}/ray", *compute),
         Route(f"{prefix}/projects", f"{prefix}/projects", *controlplane),
         # PREFIX-INTERPOLATED, not the literal "/api/flows": the flows service is composed by `make_service_app`, which
@@ -617,7 +590,7 @@ async def proxy(path: str, request: Request) -> Response:
     # fan-out to every distinct upstream (concurrent, but still a 10 s per-target timeout it pays for).
     #
     # 404 rather than 403 when off, so the answer is indistinguishable from a gateway that never had
-    # a docs route — the same authz-before-existence rule the promotion read follows.
+    # a docs route — the same authz-before-existence rule every governed read follows.
     if scope_path in {f"{prefix}/openapi.json", f"{prefix}/docs"}:
         if not _docs_enabled:
             raise HTTPException(status_code=404, detail="Not Found")

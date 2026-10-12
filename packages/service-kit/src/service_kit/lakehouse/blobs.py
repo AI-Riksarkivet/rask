@@ -3,8 +3,7 @@
 Lance blob-v2 columns require file format ``>= 2.2`` and are identified by the
 ``lance.blob.v2`` Arrow extension type (registered when ``lance`` is imported).
 These helpers recognise a blob column from an Arrow schema without materialising
-the payloads; blob serving, the cascade's column map, the stage job's media lane
-(``scripts/ray_stage_job.py``) and the pointer-health probe use them.
+the payloads; blob serving, the viewer's page reads and the pointer-health probe use them.
 
 Detection picks no storage version: no writer chooses one from the schema, and every create in
 ``services/``, ``packages/`` and ``scripts/`` names ``data_storage_version="2.2"`` (grep, 2026-09-25).
@@ -30,10 +29,8 @@ __all__ = [
     "EXTERNAL_KIND",
     "blob_column_resolves",
     "blob_field_names",
-    "carried_blob_values",
     "carry_external_descriptor",
     "dangling_blob_columns",
-    "external_base_of",
     "is_blob_field",
     "read_aligned_table",
     "schema_has_blob",
@@ -55,44 +52,6 @@ log = logging.getLogger(__name__)
 #: The descriptor `kind` for an EXTERNAL blob — the payload lives at a URI the dataset does not own.
 #: Measured, not documented: 0 inline, 1 packed, 2 dedicated, 3 external.
 EXTERNAL_KIND = 3
-
-
-def external_base_of(ds: lance.LanceDataset) -> str | None:
-    """The external base this dataset's blob URIs are relative to, or None if it owns its bytes.
-
-    None is the MANAGED answer and is not an error: a dataset whose payloads exist at no URI (an
-    Arrow-IPC fragment landed by `lance-append`, a source whose lifecycle is not the estate's) must
-    own them, and a caller reading None should copy rather than refuse.
-
-    THE MANIFEST ONLY. Bases are manifest state (`lance_docs/file_format.md` § Base Path System),
-    written by the same commit as the data; `ds._ds.base_paths()` returns every registered base with
-    its name, path and `is_dataset_root` flag and survives a reopen (probed on pylance 10.0.0). A
-    schema-metadata key naming a base is not read ([[LH-208]]): schema metadata travels with a schema
-    copy and any table writer could set it, and a forged one made the in-process cascade null every
-    payload and register the forged base on the tier above.
-    """
-    for base in (_registered_bases(ds) or {}).values():
-        path = getattr(base, "path", None)
-        if path:
-            return str(path)
-    return None
-
-
-def _registered_bases(ds: lance.LanceDataset) -> dict[int, object] | None:
-    """`ds`'s registered bases, or None where the accessor is unavailable.
-
-    Reached through `_ds` because pylance exposes no public wrapper — the same private tier
-    `service_kit.lakehouse.features` already relies on for `serialized_manifest()`. Guarded rather
-    than assumed: a pylance upgrade that renames or removes it degrades to the managed answer, which
-    copies the bytes rather than breaking every blob-carrying stage runner.
-    """
-    accessor = getattr(getattr(ds, "_ds", None), "base_paths", None)
-    if accessor is None:
-        return None
-    try:
-        return accessor()
-    except Exception:  # noqa: BLE001 — any failure here means "managed", never a failed stage
-        return None
 
 
 def carry_external_descriptor(descriptor: object, base: str) -> object | None:
@@ -121,29 +80,6 @@ def carry_external_descriptor(descriptor: object, base: str) -> object | None:
     return Blob.from_uri(absolute)
 
 
-def carried_blob_values(ds: lance.LanceDataset, column: str, descriptors: list[object], row_ids: list[int], base: str) -> list[object | None]:
-    """One blob column of a dataset with an external base, as the values a downstream write takes.
-
-    AN EXTERNAL BASE DOES NOT MAKE EVERY ROW EXTERNAL. Blob V2 places each value by itself: a
-    `Blob(uri=...)` under the base is kind 3, and bytes written beside it land inline (0), packed (1) or
-    dedicated (2) by the column's thresholds (`lance_docs/lancemultibasebranchingblobv2.md`, Blob V2 storage
-    kinds). Kind 3 rows are forwarded as pointers; every other non-null row owns bytes that exist at no
-    URI, so those bytes are read and carried. Measured on pylance 12.0.0: one column held kinds
-    [3, 0, 1, 2, null], and mapping only kind 3 wrote [Blob, None, None, None, None] ([[LH-217]]).
-
-    `descriptors` and `row_ids` are one scan's blob descriptors and `_rowid`s, row-aligned. The managed
-    rows are read by row id with `preserve_order=True`, and only they are read: a null row keeps the `None`
-    its descriptor mapped to, and no external row's object is opened.
-    """
-    values = [carry_external_descriptor(descriptor, base) for descriptor in descriptors]
-    managed = [i for i, d in enumerate(descriptors) if isinstance(d, dict) and d.get("kind") != EXTERNAL_KIND]
-    if managed:
-        read = ds.read_blobs(column, ids=[row_ids[i] for i in managed], preserve_order=True)
-        for position, (_, payload) in zip(managed, read, strict=True):
-            values[position] = payload
-    return values
-
-
 def read_aligned_table(
     ds: lance.LanceDataset,
     *,
@@ -161,11 +97,10 @@ def read_aligned_table(
     ``read_blobs`` and ``take_blobs`` keep a null row's slot too (measured on pylance 12.0.0: ``read_blobs`` over
     indices ``[0, 1, 2]`` with a null in slot 1 answers ``[(0, b'a'), (1, None), (2, b'c')]``, and ``take_blobs``
     answers ``[BlobFile, None, BlobFile]``). They read by row, and are the reads for single-row serving and for a
-    known set of row ids (:func:`carried_blob_values`, :func:`blob_column_resolves`, the viewer's blob endpoints).
+    known set of row ids (:func:`blob_column_resolves`, the viewer's blob endpoints).
 
     THIS IS A WHOLE-RESULT READ: ``to_table`` holds every selected payload at once. ``limit`` bounds it for a caller
-    that needs a few rows; a caller that consumes every payload streams a bounded scanner instead
-    (``medallion.services.compute._blob_slices``, [[CP-051]]).
+    that needs a few rows; a caller that consumes every payload streams a bounded scanner instead ([[CP-051]]).
     """
     return ds.scanner(columns=columns, blob_handling="all_binary", with_row_id=with_row_id, limit=limit).to_table()
 

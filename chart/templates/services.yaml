@@ -152,19 +152,6 @@ spec:
             {{- include "lance.governedFgaEnv" . | nindent 12 }}
             {{- include "lance.saVerifier" (list $root "env" "catalog") | nindent 12 }}
 
-            {{- $cascadeWriters := list .Values.medallion.producer.serviceIdentity }}
-            {{- range .Values.medallion.stageRunners }}
-              {{- $cascadeWriters = append $cascadeWriters .serviceIdentity }}
-            {{- end }}
-            {{- range (.Values.medallion.mediaStageRunners | default list) }}
-              {{- $cascadeWriters = append $cascadeWriters .serviceIdentity }}
-            {{- end }}
-            {{- $prefixed := list }}
-            {{- range (compact $cascadeWriters | uniq | sortAlpha) }}
-              {{- $prefixed = append $prefixed (printf "user:%s" .) }}
-            {{- end }}
-            - { name: LANCE_FGA_CASCADE_WRITERS, value: {{ toJson $prefixed | quote }} }
-
             {{- $maintainers := list }}
             {{- if and $root.Values.maintenance.enabled $root.Values.maintenance.vendWriteCredentials }}
               {{- $maintainers = append $maintainers (printf "user:%s" $root.Values.maintenance.catalogServiceIdentity) }}
@@ -293,17 +280,6 @@ spec:
             {{- end }}
             {{- if .Values.services.lineage.freshnessBudgetHours }}
             - { name: LINEAGE_FRESHNESS_BUDGET_HOURS, value: {{ .Values.services.lineage.freshnessBudgetHours | quote }} }
-            {{- end }}
-            {{- if .Values.medallion.enabled }}
-            {{- $declared := dict }}
-            {{- range .Values.medallion.stageRunners }}
-            {{- if .requiredColumns }}
-            {{- $_ := set $declared .toDataset (splitList "," .requiredColumns) }}
-            {{- end }}
-            {{- end }}
-            {{- if $declared }}
-            - { name: LINEAGE_DECLARED_COLUMNS, value: {{ $declared | toJson | quote }} }
-            {{- end }}
             {{- end }}
             - { name: DAPR_API_TIMEOUT_SECONDS, value: {{ .Values.dapr.apiTimeoutSeconds | quote }} }
             - { name: LINEAGE_DEMO_DATA_ENABLED, value: {{ hasKey .Values.services.lineage "demoData" | ternary .Values.services.lineage.demoData false | quote }} }

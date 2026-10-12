@@ -107,32 +107,21 @@ put the credential in `helm get manifest`, the exact class the infra-credentials
 header documents for the Dex secret. Any future workerGroupSpecs container needs
 these entries too (jobs run on workers).
 
-BOTH HALVES FROM ONE OBJECT, and that is the fix rather than tidiness. The key
-used to arrive only through the submitter's `runtime_env` while the secret came
-from here, so the pair had two owners: repointing the pod alone gave every job
-`SignatureDoesNotMatch`, and repointing the stage runner alone took the STAGE RUNNER down
-(it does its own S3 work — `outbox.stage_event` issues a HeadBucket, which needs
-an unconditioned ListBucket a scoped policy refuses). Both measured 2026-08-30.
+BOTH HALVES FROM ONE OBJECT, and that is the fix rather than tidiness: a pair with
+two owners gave every job `SignatureDoesNotMatch` when one owner was repointed
+alone (measured 2026-08-30).
 `ray-compute-*` defaults to the root credential, so this is inert until an
 operator provisions the scoped MinIO user. NOTHING credential-shaped rides the
 submission any more, so this pod is the single source and there is no second
 value to keep in agreement.
 
 THE ADDRESS THE CREDENTIAL ABOVE IS USED AGAINST, owned by the same pod for the
-same reason. `scripts/ray_stage_job.py:86` reads `os.environ["S3_ENDPOINT"]` with a
-BRACKET, so a job that does not get it dies before reading a byte — and until this
-row existed the only thing supplying it was the SUBMITTER, which injected it into
-`runtime_env.env_vars` on every submission (measured 2026-09-18 on the deployed
-head: `S3_KEY` and `S3_SECRET` present, `S3_ENDPOINT` absent).
+same reason: a job that reads it and does not get it dies before reading a byte.
 
 An endpoint is NOT a secret — it is public routing information, and an inline
 value is the right delivery for it where a `secretKeyRef` would only hide it from
 the reader who needs it. That asymmetry is pinned by
 `tests/unit/test_the_ray_pod_owns_every_name_its_jobs_require.py`.
-
-It is also what unblocks [[LH-159]]: routing `workflow.py` through
-`executor_for(RAY_ENGINE)` sends `WorkOrder.to_env()` and nothing else, and
-`WorkOrder` is `extra="forbid"`, so a deployment fact cannot ride the order.
 
 ## `- name: S3_REGION`
 
@@ -140,17 +129,14 @@ The literal, matching `services.yaml:121` and both maintenance templates. A new
 `minio.region` value would be a fourth spelling of one constant that nothing in
 this estate varies, and a `| default` on it would keep an undeclared key from
 ever reaching the manifest as nil, so nothing would flag the new spelling.
-The convention is what keeps the spelling from multiplying. Inert today —
-`scripts/ray_stage_job.py:89` defaults to the same string — and here so the pod
-owns the whole pair rather than half of it.
+The convention is what keeps the spelling from multiplying, and it is here so the
+pod owns the whole pair rather than half of it.
 
 ## `{{- include "lance.lineageEmitEnv" (list .) | nindent 16 }}`
 
-The lineage transport for the jobs that emit (ray_train_job.py through lineage-kit,
-which packages/ray-cluster-env carries); the stage job emits nothing and reports its
-outcome to its planner's door instead (CP-029). The head is ONE account, `-sa-ray`:
-lineage maps its `rask-lineage` token, and a stage runner's outcome door its
-`rask-medallion` one, to `trainerIdentity` ([[LH-220]] D1).
+The lineage transport for a job that emits through lineage-kit. The head is ONE
+account, `-sa-ray`, and no rask door maps it to a subject (ADR 0155), so it projects
+no identity token (`identityAudiences`).
 
 ## `- {containerPort: 8080, name: metrics}`
 
@@ -173,7 +159,7 @@ sent the live-proof debugging at the head pod instead of at the Serve actor.
 ## GCS fault tolerance: not in this fixture
 
 The rask chart's `ray.cluster.gcsFaultTolerance` (an embedded RocksDB GCS store on a ReadWriteOnce claim, so a head
-restart keeps the job records the cascade polls) is not carried here; it was off on the estate. An engine that wants a
+restart keeps the job records) is not carried here; it was off on the estate. An engine that wants a
 known terminal state across a head restart adds it: Ray documents the embedded backend as alpha, Linux-only and
 single-writer, and it persists cluster metadata, not the driver.
 

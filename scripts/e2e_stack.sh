@@ -204,7 +204,7 @@ JOB_LOGS="$(mktemp)"
 # Recreate the app pods. Pod DELETE, not `rollout restart`: on a re-run against an existing cluster a rebuilt
 # same-tag image only lands on a freshly-scheduled pod, and delete forces that reschedule to pull the just-loaded
 # digest from the node cache (IfNotPresent) — the kind same-tag staleness fix (memory: kind-same-tag-image-gotcha).
-for d in catalog lineage medallion-producer bronze-to-silver silver-to-gold media-to-silver gateway; do
+for d in catalog lineage gateway; do
   kubectl delete pods -l "app.kubernetes.io/instance=$RELEASE,app.kubernetes.io/component=$d" \
     --ignore-not-found >/dev/null 2>&1 || true
 done
@@ -215,7 +215,6 @@ done
 kubectl rollout status deploy/"$RELEASE"-openfga --timeout=300s
 kubectl rollout status deploy/"$RELEASE"-catalog --timeout=300s
 kubectl rollout status deploy/"$RELEASE"-lineage --timeout=300s
-kubectl rollout status deploy/"$RELEASE"-medallion-producer --timeout=300s
 
 # The pod that actually came up must be running the image we just loaded — the definitive proof the whole
 # suite tests fresh code, not a stale same-tag image (the failure mode this guard exists for). NOTE: a
@@ -419,14 +418,6 @@ if grep -qE "[1-9][0-9]* skipped" /tmp/e2e-stack.log; then
   grep -E "^SKIPPED|skipped" /tmp/e2e-stack.log || true
   exit 1
 fi
-
-# The Ray-path suite (#53, test_ray_train_e2e.py) is NOT run here on purpose. It needs a
-# real KubeRay cluster AND services.compute.engines.ray/medallion.compute flipped on — and flipping ray-on rolls the medallion
-# stage runners into stage-compute-via-ray mode, which on a fresh CI stack races the OpenBao secret-store
-# readiness and hangs the stage runners (secret 500 + "waiting on port 8000"). Forcing that into the shared,
-# ray-OFF core-suite job destabilises the whole run for no isolation benefit. Its home is the ray-ON
-# lane, `scripts/ray_e2e_stack.sh` (CI `e2e-ray`), and `make e2e-ray-train` against a deployed estate;
-# wiring it into THIS job is a net regression.
 
 # --- P5 chaos drill: prove a core-dependency OUTAGE fails CLOSED (never fail-open) and RECOVERS. The stack
 # is auth-on, so this is the LIVE counterpart to the mocked OpenFGA-down unit test + the first test of the

@@ -10,11 +10,6 @@ Services (ClusterIP):
 {{- range $name, $svc := .Values.services }}
   - {{ $name }}: {{ include "rask.fullname" $root }}-{{ $name }}:{{ $svc.port }}
 {{- end }}
-{{- with .Values.medallion }}
-{{- if .enabled }}
-  - medallion-producer: {{ include "rask.fullname" $root }}-medallion-producer:{{ .port }} (medallion producer + stage runners)
-{{- end }}
-{{- end }}
 {{- with .Values.explorer }}
 {{- if .enabled }}
   - media:     {{ include "rask.fullname" $root }}-{viewer,search,annotator} (the media plane, /api/explorer/*)

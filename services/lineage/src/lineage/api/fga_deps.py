@@ -486,7 +486,7 @@ async def enforce_output_authz(
             raise PermissionDeniedError(reason)
     # Inputs: you may only RECORD reading a dataset you can SEE — else an authenticated reader (e.g. the
     # service-web read identity) could forge READ-edge provenance like "service-web read gold$catalog" into
-    # the governed audit graph. `writer ⊇ reader` in model.fga, so stage runners (writers) and the trainer (reader)
+    # the governed audit graph. `writer ⊇ reader` in model.fga, so writers and readers
     # still pass; only a claim to have read an unreachable dataset is refused. (bug hunt 2026-07-13)
     # THE AUTHZ SET MUST COVER THE WRITE SET, and it did not.
     #

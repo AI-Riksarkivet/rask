@@ -38,7 +38,7 @@ reports as a startup error and the pod survives — a Ready pod with a dead subs
 ## `RASK_NOTIFICATIONS_LINEAGE_TOPIC: {{ .Values.pubsub.topic | quote }}`
 
 The topic, from the same `pubsub.topic` value every other consumer of this stream reads
-(services.yaml LINEAGE_DAPR_TOPIC, medallion.yaml MEDALLION_LINEAGE_TOPIC, maintenance.yaml) —
+(services.yaml LINEAGE_DAPR_TOPIC, maintenance.yaml) —
 a subscriber that names the topic itself is a subscriber that can be retargeted halfway.
 
 ## `RASK_NOTIFICATIONS_CONTROL_PUBSUB: {{ printf "%s-notifications" (.Values.pubsub.controlName | default "cata...`
@@ -79,9 +79,9 @@ disagree is a cron that fires into a 404 on every tick while both halves look ri
 ## `RASK_CATALOG_API_URL: {{ printf "http://%s-catalog:%v" (include "lance.fullname" .) .Values.services.catalo...`
 
 lance-plane gateway upstreams (the P1 gateway fold, docs/adr/0117-nginx-is-retired-and-the-fastapi-gateway-is-the-in-cluster.md): the fleet gateway carries
-/api/catalog, /api/lineage, the producer's /api/{produce,train,trains,promotions,stage-runners,cascade}
+/api/catalog, /api/lineage
 and the /api/explorer/* namespace. Service names
-use lance.fullname — that is what services.yaml/medallion.yaml/explorer.yaml name their Services.
+use lance.fullname — that is what services.yaml/explorer.yaml name their Services.
 
 ## `RASK_LINEAGE_SIDECAR_ONLY_ROUTES: {{ include "lance.lineageSidecarOnlyRoutes" . | quote }}`
 

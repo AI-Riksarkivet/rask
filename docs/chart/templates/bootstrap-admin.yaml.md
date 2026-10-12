@@ -68,17 +68,6 @@ The operator-pinned store (env parity with the catalog's RASK_FGA_STORE_ID): the
 prefers this over the name lookup, so a pinned store named anything BUT `lance-catalog`
 still gets the bootstrap grant in the right place.
 
-## `{{- $readers = append $readers .Values.medallion.producer.serviceIdentity }}`
-
-THE CASCADE-LAG DETECTOR. It reads two governed surfaces — the source
-tables' `published` tag at the catalog and lineage's `/runs` board — to work out how
-far a tier has fallen behind. Without the grant both answer 403 and the detector
-publishes NO POINT for any edge, which is worse than an absent detector: the empty
-series reads as a healthy cascade. Measured live 2026-09-04, where every edge failed
-on every tick since the feature shipped.
-
-`reader`, never more: it observes versions and names, and writes nothing.
-
 ## `{{- $eventReaders := list }}`
 
 EVENT READERS hold `can_read_event_feed` on the estate ROOT ([[CTL-021]]): lineage's run feed

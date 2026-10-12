@@ -61,8 +61,6 @@ SEED = {
     "_protection/table/acme-bronze$events.json": b'{"protected": true}',
     "_policies/state/acme.json": b'{"retention_days": 30}',
     "_gates/acme.json": b'{"require_human": false}',
-    "_transforms/acme/lane.json": b'{"task": "stage-transform"}',
-    "_tasks/stage-transform.json": b'{"engine": "ray"}',
     # [[LH-279]] The catalog's base record: without it every table declaring a recorded foreign base is
     # refused by the vend and read doors, and a restored clone source loses its protection.
     "_bases/0123456789abcdef01234567.json": b'{"location": "acme-bucket/silver", "entries": []}',

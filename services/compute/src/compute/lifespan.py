@@ -30,11 +30,6 @@ def make_lifespan(settings: Settings) -> Callable[[FastAPI], AbstractAsyncContex
         # RAY_AUTH_MODE=token (RASK_RAY_AUTH_TOKEN / RAY_AUTH_TOKEN); {} otherwise. The
         # proxy strips inbound Authorization so this default is what reaches Ray.
         app.state.http = httpx.AsyncClient(timeout=settings.http_timeout, headers=auth_headers())
-        # The engine door's Jobs-API client (`compute.engine`): one per process, addressed at the same dashboard the
-        # prune and the introspection routes read, so the cluster that runs a job is the cluster that reclaims it.
-        app.state.jobs_api = httpx.AsyncClient(
-            base_url=get_compute_settings().ray_dashboard_url, timeout=get_compute_settings().engine_request_timeout_s, headers=auth_headers()
-        )
         # Stamp the attempt so get_ray_client's negative cache dates from boot: if Ray is down now,
         # the first request waits out the cooldown rather than immediately restorming the dashboard.
         app.state.ray_client_last_attempt = time.monotonic()
@@ -59,7 +54,6 @@ def make_lifespan(settings: Settings) -> Callable[[FastAPI], AbstractAsyncContex
             yield
         finally:
             await app.state.http.aclose()
-            await app.state.jobs_api.aclose()
             log.info("shutdown_complete")
 
     return lifespan

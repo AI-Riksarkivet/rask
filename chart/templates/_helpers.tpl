@@ -178,12 +178,6 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- if .Values.minio.externalEndpoint -}}{{ .Values.minio.externalEndpoint }}{{- else -}}http://{{ include "lance.minioHost" . }}:{{ .Values.minio.port }}{{- end -}}
 {{- end -}}
 
-{{- define "lance.stageBucket" -}}
-{{- $root := index . 0 -}}{{- $ns := index . 1 -}}
-{{- $buckets := $root.Values.medallion.buckets | default dict -}}
-{{- default $root.Values.minio.bucket (index $buckets $ns) -}}
-{{- end -}}
-
 {{- define "lance.ageConnectHost" -}}
 {{- if .Values.age.externalHost -}}{{ .Values.age.externalHost }}
 {{- else if .Values.age.enabled -}}{{ include "lance.ageHost" . }}
@@ -554,21 +548,8 @@ securityContext:
 {{- $root := index . 0 -}}{{- $door := index . 1 -}}{{- $v := $root.Values -}}
 {{- $sa := printf "system:serviceaccount:%s:%s-sa-" $root.Release.Namespace (include "lance.fullname" $root) -}}
 {{- $m := dict -}}
-{{- if and $v.medallion.enabled (eq $door "catalog" "lineage" "stage") -}}
-{{- $_ := set $m (printf "%smedallion-producer" $sa) (required "medallion.producer.serviceIdentity is blank" $v.medallion.producer.serviceIdentity) -}}
-{{- end -}}
-{{- if and $v.medallion.enabled (eq $door "catalog" "lineage") -}}
-{{- range $v.medallion.stageRunners }}{{- $_ := set $m (printf "%s%s" $sa .name) (required (printf "medallion.stageRunners[%s].serviceIdentity is blank" .name) .serviceIdentity) }}{{- end -}}
-{{- end -}}
-{{- if and $v.medallion.enabled (eq $door "compute") (include "lance.outOfProcessEngine" $root) -}}
-{{- $_ := set $m (printf "%smedallion-producer" $sa) $v.medallion.producer.serviceIdentity -}}
-{{- range $v.medallion.stageRunners }}{{- $_ := set $m (printf "%s%s" $sa .name) .serviceIdentity }}{{- end -}}
-{{- end -}}
 {{- if and $v.maintenance.enabled (eq $door "catalog") -}}
 {{- $_ := set $m (printf "%smaintenance" $sa) (required "maintenance.catalogServiceIdentity is blank" $v.maintenance.catalogServiceIdentity) -}}
-{{- end -}}
-{{- if or (eq $door "lineage") (and (eq $door "stage" "producer") $v.medallion.enabled (include "lance.outOfProcessEngine" $root)) -}}
-{{- with $v.ray.engineServiceAccount }}{{- $_ := set $m (printf "system:serviceaccount:%s:%s" $root.Release.Namespace .) (required "medallion.train.trainerIdentity is blank" $v.medallion.train.trainerIdentity) }}{{- end -}}
 {{- end -}}
 {{- if eq $door "lineage" -}}
 {{- if $v.frontend.enabled }}{{- $_ := set $m (printf "%sweb" $sa) (required "frontend.serviceIdentity is blank" $v.frontend.serviceIdentity) }}{{- end -}}
@@ -589,7 +570,7 @@ securityContext:
 {{- if and $root.Values.auth.enabled $subjects -}}
 {{- if eq $part "env" }}
 - { name: RASK_SA_ISSUER, value: {{ $root.Values.auth.serviceAccountIssuer | quote }} }
-- { name: RASK_SA_AUDIENCE, value: {{ ternary "rask-medallion" (printf "rask-%s" $door) (eq $door "producer" "stage") }} }
+- { name: RASK_SA_AUDIENCE, value: {{ printf "rask-%s" $door }} }
 - { name: RASK_SA_SUBJECTS, value: {{ toJson $subjects | quote }} }
 - { name: RASK_SA_FETCH_TOKEN_FILE, value: /var/run/secrets/rask/sa-fetch/token }
 - { name: RASK_SA_CA_FILE, value: /var/run/secrets/rask/sa-fetch/ca.crt }
@@ -639,8 +620,6 @@ securityContext:
 {{- if $v.explorer.enabled }}{{ range $n, $_ := $v.explorer.services }}{{ $out = append $out (printf "%s%s" $sa $n) }}{{ end }}{{ end -}}
 {{- range $n, $s := $v.services }}{{ if and (not (has $n (list "catalog" "lineage"))) (or $s.frontDoor $v.singleTenant.enabled) $s.governedAuth }}{{ $out = append $out (printf "%s%s" $sa $n) }}{{ end }}{{ end -}}
 {{- end -}}
-{{- if and $v.medallion.enabled (or $v.medallion.fgaEnabled $v.auth.enabled) }}{{ $out = append $out (printf "%smedallion-producer" $sa) }}{{ end -}}
-{{- if and $v.medallion.enabled $v.medallion.fgaEnabled }}{{ range $v.medallion.stageRunners }}{{ $out = append $out (printf "%s%s" $sa .name) }}{{ end }}{{ end -}}
 {{- $out | uniq | sortAlpha | join "," -}}
 {{- end -}}
 
@@ -718,13 +697,6 @@ scoped_secret() {
 {{- $scopes := list .Values.services.catalog.daprAppId .Values.services.lineage.daprAppId -}}
 {{- if .Values.maintenance.enabled -}}
 {{- $scopes = append $scopes .Values.maintenance.daprAppId -}}
-{{- end -}}
-{{- if .Values.medallion.enabled -}}
-
-{{- $scopes = append $scopes .Values.medallion.producer.daprAppId -}}
-{{- range .Values.medallion.stageRunners -}}
-{{- $scopes = append $scopes .daprAppId -}}
-{{- end -}}
 {{- end -}}
 {{- if .Values.explorer.enabled -}}
 
@@ -841,10 +813,6 @@ scoped_secret() {
 {{- define "lance.signers" -}}
 {{- $v := .Values -}}{{- $s := list (dict "id" $v.catalog.serviceIdentity "app" $v.services.catalog.daprAppId "role" "catalog") -}}
 {{- if $v.maintenance.enabled }}{{- $s = append $s (dict "id" $v.maintenance.catalogServiceIdentity "app" $v.maintenance.daprAppId "role" "maintenance") }}{{- end -}}
-{{- if $v.medallion.enabled }}
-{{- $s = append $s (dict "id" $v.medallion.producer.serviceIdentity "app" $v.medallion.producer.daprAppId "role" "medallion_producer") }}
-{{- range $v.medallion.stageRunners }}{{- $s = append $s (dict "id" .serviceIdentity "app" .daprAppId "role" (ternary "medallion_stage_runner" "" (and (not (not (include "lance.outOfProcessEngine" $))) $v.medallion.compute $v.catalog.controlEmit))) }}{{- end }}
-{{- end -}}
 {{- toJson $s -}}
 {{- end -}}
 
@@ -874,7 +842,7 @@ scoped_secret() {
 {{- end -}}
 
 {{- define "lance.controlSignerRoles" -}}
-{{- $m := dict "catalog" (list) "maintenance" (list) "medallion_producer" (list) "medallion_stage_runner" (list) -}}
+{{- $m := dict "catalog" (list) "maintenance" (list) -}}
 {{- range (include "lance.signers" . | fromJsonArray) }}{{- if and .id .role }}{{- $_ := set $m .role (append (get $m .role) .id | uniq | sortAlpha) }}{{- end }}{{- end -}}
 {{- toJson $m -}}
 {{- end -}}
@@ -924,8 +892,6 @@ keys_shaped() { case "$1" in *,) return 1 ;; *,*) pub_shaped "${1%%,*}" && pub_s
 {{- define "rask.rayDashboardUrl" -}}
 {{- if .Values.ray.dashboardUrl -}}
 {{- .Values.ray.dashboardUrl -}}
-{{- else if include "lance.outOfProcessEngine" . -}}
-{{- fail "services.compute.engines enables an engine on a Ray cluster this render does not name: set ray.dashboardUrl to the engine's Ray dashboard. rask installs no Ray (ADR 0153); in development the ray-cluster fixture serves http://rask-ray-head-svc:8265 (deploy/fixtures)." -}}
 {{- end -}}
 {{- end -}}
 
@@ -935,18 +901,4 @@ keys_shaped() { case "$1" in *,) return 1 ;; *,*) pub_shaped "${1%%,*}" && pub_s
 {{- else -}}
 {{- include "rask.rayDashboardUrl" . -}}
 {{- end -}}
-{{- end -}}
-
-{{- define "lance.outOfProcessEngine" -}}
-{{- range $n, $e := ((.Values.services.compute).engines | default dict) }}{{ if $e.enabled }}{{ $n }}{{ end }}{{ end -}}
-{{- end -}}
-
-{{- define "lance.medallionEngines" -}}
-{{- $root := index . 0 -}}{{- $out := dict -}}
-{{- range $n, $e := (($root.Values.services.compute).engines | default dict) }}{{- if $e.enabled }}
-{{- $b := dict "app_id" "compute" "token_file" "/var/run/secrets/rask/identity/rask-compute/token" "capabilities" ($e.capabilities | default list) "code_version" ($e.codeVersion | default "") }}
-{{- if index $ 1 }}{{- $t := list }}{{- range $e.tasks }}{{- $t = append $t (omit . "command") }}{{- end }}{{- $_ := set $b "tasks" $t }}{{- end }}
-{{- $_ := set $out $n $b }}
-{{- end }}{{- end -}}
-{{- toJson $out -}}
 {{- end -}}

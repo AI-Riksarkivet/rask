@@ -313,14 +313,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     if signing is not None:
         await signing.start()
     app.state.startup_complete = True
-    # Re-assert the cascade's grants over warehouses that already exist. BACKGROUND and non-fatal, and
+    # Re-assert the warehouse grants over warehouses that already exist. BACKGROUND and non-fatal, and
     # both of those are the design rather than caution:
     #
-    #   * The grants are written ONCE, at warehouse-create, from `LANCE_FGA_CASCADE_WRITERS` — a value
-    #     that CHANGES. Adding a stage runner extends the list and every older warehouse is missing the new
-    #     subject, so that stage runner cannot promote into any existing tenant. It fails 403 at promotion,
-    #     in a log nobody watches. Measured on the k3s estate: `user:service-silver-to-gold` held
-    #     `owner` on NEITHER warehouse:acme-bucket NOR warehouse:research-bucket.
+    #   * The grants are written ONCE, at warehouse-create, from `LANCE_FGA_MAINTAINERS` — a value that
+    #     CHANGES. Adding a subject extends the list and every older warehouse is missing it, so that
+    #     subject is refused on every existing tenant, in a log nobody watches.
     #   * A hook Job was the first choice and cannot work here. With `secrets_from_dapr` the registry
     #     read needs the S3 secret from the secret store, so the Job needs a Dapr sidecar — and a
     #     sidecar keeps a Job from ever completing. Putting the secret in the Job's env instead is the

@@ -2,26 +2,22 @@
 
 The gate decides whether a stage's output may publish: which column identifies a row
 (``key_column``), which columns a consumer depends on (``required_columns``), and how far a row
-count may move before a promotion needs a human (``review_band``). Every one of those lived ONLY as
-environment on a stage runner pod, so changing a threshold meant editing a values file and running
-``helm upgrade`` — and nothing could enumerate the gates, review one, or gate who changed it. That
-is the same defect ``transform_specs`` was written to end for lanes.
+count may move before a promotion needs a human (``review_band``). A record, rather than environment
+on a pod, so the gates can be enumerated, reviewed, and gated on who changed them without a values
+edit and a ``helm upgrade``.
 
-Same stateless-over-object-store shape as ``transform_specs`` and the warehouse registry, chosen for
-the same reason: one service WRITES (the catalog, admin-gated, audited) and a different one READS
-(the medallion, on a path holding no catalog client). Both need one format, so the format lives here
-rather than as two copies that drift.
+Same stateless-over-object-store shape as the warehouse registry: the catalog writes it (admin-gated,
+audited) and its publication door reads it, through this one format.
 
 Each record is one JSON document under ``<control_root>/_gates/``, keyed by ``project``.
 
-**KEYED BY PROJECT, NOT BY LANE.** ``promotion_review_band`` and ``quality_key_column`` are
-tenant-level thresholds in the chart today; making them per-lane here would invent a granularity the
+**KEYED BY PROJECT, NOT BY LANE.** The review band and the key column are tenant-level thresholds;
+making them per-lane here would invent a granularity the
 estate does not have and force every lane to answer a question nobody is asking. A per-lane override
 is an added key later, not a redesign.
 
 **UNSET IS NOT ZERO**, and this is the load-bearing invariant. ``get_spec`` answers ``None`` when
-nobody declared, exactly like the lane registry: the medallion must be able to tell "not configured"
-(keep the chart's settings, byte-for-byte) from "configured to 0.0" (a band of zero, which every
+nobody declared: a reader must be able to tell "not configured" (keep the request's own values) from "configured to 0.0" (a band of zero, which every
 non-empty delta breaches). Collapsing the two would put an estate that never opted in under a new
 scheme without anyone asking for it.
 """
@@ -100,7 +96,7 @@ class GateSpec(BaseModel):
 
 def _key(project: str) -> str:
     """A collision-free record key. The project id is user-supplied, so hash rather than concatenate
-    it into a path — the same reason `transform_specs._key` does."""
+    it into a path."""
     digest = hashlib.sha256(project.encode()).hexdigest()[:24]
     return f"{GATES_PREFIX}/{project}-{digest}.json"
 

@@ -209,20 +209,21 @@ def test_the_drain_RE_PUBLISHES_so_a_recovered_event_can_restart_a_halted_cascad
     Ordering is asserted, not assumed: the publish must happen BEFORE the staged object is dropped, so a
     publish that fails leaves the event for the next tick. The re-ingest then is a no-op (MERGE on run_id).
     """
+    from catalog.core.lineage_emit import INSERT, build_write_event
     from lineage.api import reconcile_cron
     from lineage.services import staged
-    from medallion.schemas.events import build_run_event
+    from service_kit.openlineage import run_id_for
 
     uri = _uri(tmp_path)
-    event = build_run_event(
-        operation="ingest_events",
+    event = build_write_event(
+        table_id="bronze$events",
+        namespace="bronze",
         author="alice",
-        job_namespace="medallion",
-        inputs=[("bronze", "bronze$events")],
-        output_namespace="bronze",
-        output_name="bronze$events",
         version=2,
-        token="t1",
+        operation=INSERT,
+        run_id=run_id_for("t1"),
+        event_time="2026-10-12T00:00:00+00:00",
+        job_namespace="lance-catalog",
     )
     run_id = event["run"]["runId"]
     outbox.stage_event(uri, {}, run_id, json.dumps(event))

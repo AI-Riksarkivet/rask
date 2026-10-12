@@ -87,8 +87,7 @@ def test_the_MEDALLION_CASCADE_layout_is_tiered(uri: str, expected: int) -> None
     exactly the "let Lance size a 1.8 MB-row tier by a row count meant for narrow data" outcome the
     module docstring says shipping a default exists to prevent.
 
-    The URIs come from chart/templates/medallion.yaml:148 (`MEDALLION_BRONZE_URI`) and :310-311
-    (`MEDALLION_FROM_URI`/`MEDALLION_TO_URI`), all `s3://<bucket>/medallion/<namespace>`.
+    The URIs are the `s3://<bucket>/medallion/<namespace>` layout.
     """
     assert target_rows_for(uri) == expected
 

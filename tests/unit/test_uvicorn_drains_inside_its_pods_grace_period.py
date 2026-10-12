@@ -29,8 +29,7 @@ from tests.unit.chart_render import DEFAULT_ARGS, REPO, containers, render, rend
 _FLAG = "--timeout-graceful-shutdown="
 
 #: Workloads whose lifespan arms `service_kit.draining.arm_drain_on_sigterm`, so the drain hands SIGTERM to
-#: THIS uvicorn. A floor: a detection that stopped finding uvicorn must not pass by finding nothing. The
-#: stage runners are one Deployment per configured stage, so they are matched by container name instead.
+#: THIS uvicorn. A floor: a detection that stopped finding uvicorn must not pass by finding nothing.
 _DRAIN_ARMED = frozenset(
     {
         "Deployment/rask-annotator",
@@ -38,7 +37,6 @@ _DRAIN_ARMED = frozenset(
         "Deployment/rask-lineage",
         "Deployment/rask-maintenance",
         "Deployment/rask-maintenance-worker",
-        "Deployment/rask-medallion-producer",
         "Deployment/rask-notifications",
         "Deployment/rask-search",
         "Deployment/rask-viewer",
@@ -82,7 +80,6 @@ def test_every_uvicorn_drains_inside_its_own_pods_grace_period(lifecycle: dict[s
 
     missing = sorted(_DRAIN_ARMED - {workload for workload, _ in bounded})
     assert not missing, f"{missing} arm the SIGTERM drain but no uvicorn container was found in them"
-    assert any(name == "stage-runner" for _, name in bounded), "the stage runners arm the drain, and no stage-runner uvicorn was found"
 
     wrong = {
         f"{workload}/{name}": f"grace {grace}s, preStop {pre_stop}s, args {args}"

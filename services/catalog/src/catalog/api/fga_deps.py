@@ -1304,11 +1304,9 @@ async def seed_ownership(
     """
     if not (settings.fga_enabled and token is not None and client is not None):
         return
-    # A MACHINE DOES NOT OWN WHAT IT REGISTERS (owner ruling 2026-09-10, zero trust). LH-052 withdrew
-    # the cascade's `owner` on every tenant warehouse; this is the second, quieter grant it did not
-    # reach — a stage runner registering its own output became that table's owner, so a cascade
-    # identity kept `can_drop`, `can_deregister`, `can_restore` and `manage_grants` on every governed
-    # tier of every tenant it had ever run in.
+    # A MACHINE DOES NOT OWN WHAT IT REGISTERS (owner ruling 2026-09-10, zero trust). A service principal
+    # registering its own output would become that table's owner, keeping `can_drop`, `can_deregister`,
+    # `can_restore` and `manage_grants` on every governed tier of every tenant it ever wrote to.
     #
     # THE TABLE IS NOT LEFT UNOWNED. `warehouse.owner: … or admin from project` →
     # `namespace.owner: … or owner from parent` → `table.owner: … or owner from parent`, so the
@@ -1461,12 +1459,12 @@ async def require_can_promote(
 
     The gate for #17 model promotion (candidate→blessed): moving the ``blessed`` tag on ``models$<model>`` is
     a promotion, which the FGA model separates from a plain WRITER — ``can_promote`` reduces to ``validator``
-    (a writer is NOT a validator), exactly as the silver→gold stage promotion is gated. The ``/v1/model/*``
+    (a writer is NOT a validator), exactly as a tier promotion is gated. The ``/v1/model/*``
     routes sit under the router-level ``authorize`` (its 401/503 pre-path checks still apply) but match no
     ``_RESOURCES`` prefix, so ``authorize`` makes no per-object decision there — the
     promote endpoint calls this EXPLICITLY. No FGA-model change is needed: ``table.can_promote: validator``
-    already exists and the trainer seeds the per-model ``namespace:models → table:models$<model>`` parent
-    link, so a ``validator namespace:models`` grant cascades. Fail-closed: 403 on deny, 503 on an OpenFGA
+    already exists and the per-model ``namespace:models → table:models$<model>`` parent link makes a
+    ``validator namespace:models`` grant cascade. Fail-closed: 403 on deny, 503 on an OpenFGA
     outage (via ``_require``/``fga.check``). No-op when FGA is off / unwired / unauthenticated."""
     if not (settings.fga_enabled and client is not None and token is not None):
         return
@@ -1582,15 +1580,10 @@ async def seed_warehouse(
     if not (settings.fga_enabled and token is not None and client is not None):
         return
     obj = f"warehouse:{warehouse_id}"
-    # The CASCADE's own identities, granted here and not per tier. `publish` is guarded by
-    # `can_update_tag` and the model defines `can_update_tag: owner`, so a stage runner without this cannot
-    # promote — the tenant is created, its tiers are created, rows land, lineage records the run, and
-    # the promotion is refused with a 403 in a log nobody is watching.
-    #
-    # At the WAREHOUSE because `namespace` and `table` both define `owner ... or owner from parent`:
-    # one tuple reaches every tier and every table under it, instead of three-plus per tenant that the
-    # hierarchy already implies. Written in the SAME call as the creator's grant so there is no window
-    # in which the warehouse exists and its cascade cannot publish into it.
+    # The project edge and the sweep's grant, granted here and not per tier, at the WAREHOUSE because
+    # `namespace` and `table` both define `... or ... from parent`: one tuple reaches every tier and every
+    # table under it. Written in the SAME call as the creator's grant so there is no window in which the
+    # warehouse exists and is unreachable from its project or unmaintained.
     await fga.write_tuples(  # noqa: TID251
         client,
         [
@@ -1602,55 +1595,16 @@ async def seed_warehouse(
     )
 
 
-#: The rungs a cascade identity actually needs, and nothing above them (owner ruling 2026-09-10, zero
-#: trust). `writer` covers three of the four table doors the cascade calls — `describe`, `credentials`
-#: and `register`; `publisher` covers the fourth, `publish`, which maps to `can_update_tag`.
-#:
-#: IT USED TO BE `owner`, bought for that single door because `can_update_tag` had no rung below it.
-#: Measured on the live store 2026-09-10: each of the four cascade identities held `owner` on 95
-#: warehouses — every tenant — and `owner` carries `can_drop`, `can_deregister`, `can_restore`,
-#: `can_create_branch` and `manage_grants` on every table beneath. One compromised stage runner could
-#: destroy or re-grant the estate's data, to promote a table it had just written.
-#:
-#: `validator` IS HERE AND IS NOT AN OVERSIGHT. `/publish` has a SECOND door: an `accept_assertions`
-#: body needs `can_promote`, which resolves from `validator`. The producer's `_resume_publish` sends
-#: exactly that — it is what resumes a promotion a HUMAN already approved, carrying the assertions
-#: that person accepted — and it runs under the producer's own service identity. `owner` implied
-#: `validator`, so dropping to `writer` + `publisher` alone would 403 every approved promotion AFTER
-#: someone said yes, which is the precise failure `test_cascade_writers_seeded.py` was written for.
-#: Keeping it is not a widening: it is a capability the cascade holds today, and everything this list
-#: REMOVES is destructive or grant-bearing.
-#:
-#: The tighter shape is per-subject — only the producer resumes an approval, so only it needs the
-#: promote rung — and that needs the chart to render the cascade identities with their rungs rather
-#: than as one flat list. Left as the next step deliberately: this change already removes every
-#: destructive power from all four identities, and guessing which subject needs which rung from a flat
-#: list is how a cascade breaks silently in a log nobody is watching.
-_CASCADE_RUNGS: Final = ("writer", "publisher", "validator")
-
-
 def cascade_tuples(settings: Settings, *, warehouse_id: str, project: str) -> list[fga.ClientTuple]:
-    """The tuples a warehouse needs to be REACHABLE — its project edge, plus the cascade's own rungs.
+    """The tuples a warehouse needs to be REACHABLE and MAINTAINED — its project edge, plus the sweep's grant.
 
-    Shared by the create path and the backfill so the two cannot drift. That is the whole reason it is
-    a function: a backfill that writes a different set from the one creates write is worse than no
-    backfill, because the estate then has two populations of warehouse that differ in a way nothing
-    reports.
+    Shared by the create path and the backfill so the two cannot drift: a backfill that writes a different set
+    from the one creates write leaves the estate with two populations of warehouse that differ in a way
+    nothing reports.
 
-    Granted at the WAREHOUSE, not per tier: `namespace` and `table` both define these rungs as
-    `... or <rung> from parent`, so one tuple at the container reaches every tier and every table
-    under it (`optimize-tuples.md`). It is also what keeps each identity's reach ENUMERABLE — one
-    tuple per tenant per rung.
-
-    THE SWEEP'S `maintainer` GRANT IS WRITTEN HERE TOO, and it is the reason this docstring changed.
-    It named that grant as precedent while no code in the estate wrote one: the create door emitted
-    these rungs, this backfill emitted these rungs, and the only committed writer of a `maintainer`
-    tuple was the Helm hook, on the single fixed object `warehouse:lance_catalog` (the default
-    warehouse — `maintainer` is a warehouse rung, and `type estate` does not define it). Measured 2026-09-15
-    — 93 of 97 warehouses carried the tuple because 92 were written BY HAND into the live store on
-    2026-09-08, and the 4 created since had none, so a tenant onboarded today was unmaintainable and
-    nothing said so. It belongs in this function rather than beside it because create and backfill
-    share it precisely so the two populations cannot differ.
+    Granted at the WAREHOUSE, not per tier: `namespace` and `table` both define `maintainer` as
+    `... or maintainer from parent`, so one tuple at the container reaches every tier and every table
+    under it (`optimize-tuples.md`), and the sweep's reach stays enumerable.
 
     The creator's own grant is deliberately NOT here. It is the one tuple a backfill must never write
     — re-running the create path over an existing estate to repair it would make whoever ran the
@@ -1659,23 +1613,10 @@ def cascade_tuples(settings: Settings, *, warehouse_id: str, project: str) -> li
     obj = f"warehouse:{warehouse_id}"
     return [
         fga.ClientTuple(user=f"project:{project}", relation="project", object=obj),
-        *(fga.ClientTuple(user=subject, relation=rung, object=obj) for subject in settings.fga_cascade_writers for rung in _CASCADE_RUNGS),
-        # `maintainer` ALONE, never beside a cascade rung. Maintenance rewrites how a dataset is
-        # stored and must not be able to drop it or change what it says, which is exactly the
-        # separation `can_maintain` was minted to express — so the two lists stay two lists.
+        # `maintainer` ALONE. Maintenance rewrites how a dataset is stored and must not be able to drop it
+        # or change what it says, which is exactly the separation `can_maintain` was minted to express.
         *(fga.ClientTuple(user=subject, relation="maintainer", object=obj) for subject in settings.fga_maintainers),
     ]
-
-
-def superseded_cascade_tuples(settings: Settings, *, warehouse_id: str) -> list[fga.ClientTuple]:
-    """The WIDE grant :data:`_CASCADE_RUNGS` replaces — `owner`, for the declared cascade subjects only.
-
-    Scoped to `settings.fga_cascade_writers` and to that one relation on purpose. A warehouse's other
-    owners are PEOPLE — the creator, a project admin — and a repair that withdrew their access while
-    fixing a service's would be a far worse defect than the one it closes.
-    """
-    obj = f"warehouse:{warehouse_id}"
-    return [fga.ClientTuple(user=subject, relation="owner", object=obj) for subject in settings.fga_cascade_writers]
 
 
 async def backfill_cascade_grants(
@@ -1686,16 +1627,11 @@ async def backfill_cascade_grants(
     project: str,
     actor: str,
 ) -> int:
-    """Repair one EXISTING warehouse's cascade grants: assert :func:`cascade_tuples`, then withdraw
-    :func:`superseded_cascade_tuples`. Returns the number of tuples written.
+    """Repair one EXISTING warehouse's grants: assert :func:`cascade_tuples`. Returns the number of tuples written.
 
     Why this is needed at all, given creates already seed: the grants are written ONCE, at create, from
-    a config value that CHANGES. Adding a stage runner to `medallion.stageRunners` extends
-    ``LANCE_FGA_CASCADE_WRITERS``, and every warehouse that predates the change is missing the new
-    subject — so the new stage runner cannot publish into any existing tenant, and the failure is a 403 at
-    promotion time in a log nobody is watching. Measured on this estate: `user:service-silver-to-gold`
-    held `owner` on NEITHER warehouse:acme-bucket NOR warehouse:research-bucket, both created before
-    the setting existed.
+    a config value that CHANGES (``LANCE_FGA_MAINTAINERS``), so every warehouse that predates a change is
+    missing the new subject.
 
     Idempotent by the same mechanism the create path relies on: ``write_tuples`` retries one-by-one
     when OpenFGA rejects a batch for containing a duplicate, so a re-run lands only what is missing.
@@ -1706,15 +1642,4 @@ async def backfill_cascade_grants(
         return 0
     tuples = cascade_tuples(settings, warehouse_id=warehouse_id, project=project)
     await fga.write_tuples(client, tuples, actor=actor, origin="cascade_backfill")  # noqa: TID251
-    # THEN withdraw the wide grant these replace. Narrowing what the CREATE path writes repairs nothing
-    # that already exists — `owner` still resolves beside the narrow rungs, so an add-only backfill is a
-    # security fix that is true in the repository and false in the estate (measured 2026-09-10: 95
-    # warehouses, one `owner` tuple per cascade identity on each).
-    #
-    # AFTER the write, never before, and the order is the fail-safe direction rather than a detail:
-    # revoke-first leaves a window — and on a failed write a permanent state — in which the cascade
-    # holds neither rung and every promotion 403s. This way the worst outcome is the over-granted
-    # warehouse the repair started from. `delete_tuples` treats an already-absent tuple as success, so
-    # a re-run over a repaired estate is a no-op.
-    await fga.delete_tuples(client, superseded_cascade_tuples(settings, warehouse_id=warehouse_id), actor=actor, origin="cascade_backfill")  # noqa: TID251
     return len(tuples)

@@ -458,8 +458,8 @@ PRODUCERS: Final = (
     "w.row_count, w.size_bytes, w.quality_passed, w.quality_assertions, r.operation, "
     # The RANGE this run consumed to produce the write. A run's property rather than the edge's, and
     # asked here because "what did the runs that wrote THIS dataset consume?" is a per-dataset
-    # question — the cascade lag reader was answering it by downloading the whole run board and
-    # filtering, which is O(estate) and, once the board is bounded, silently partial.
+    # question — answering it by downloading the whole run board and filtering is O(estate) and, once
+    # the board is bounded, silently partial.
     "r.consumed_from_version, r.consumed_to_version "
     # NEWEST FIRST: AGE returns rows in physical order otherwise, so a consumer taking "the latest run"
     # (e.g. the #82 quality-gate badge) could read a STALE earlier verdict — an older `passed` masking the

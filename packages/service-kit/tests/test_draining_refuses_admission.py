@@ -32,7 +32,7 @@ from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 from starlette.requests import Request
 
-from service_kit.draining import draining, refuse_when_draining, retry_when_draining
+from service_kit.draining import draining, retry_when_draining
 from service_kit.exceptions import register_handlers
 
 
@@ -66,29 +66,6 @@ class TestThePredicate:
         assert draining(Request(scope)) is False
 
 
-class TestTheHttpDoorRefusesWith503:
-    def _client(self, *, shutting_down: bool) -> TestClient:
-        app = FastAPI()
-        # The refusal is a `ServiceUnavailableError` now rather than an `HTTPException` carrying a
-        # Content-Type header (open_fastapi-audit: that header claimed problem+json over a `{"detail"}`
-        # body). `DomainError` subclasses `HTTPException`, so without this the starlette fallback still
-        # answers 503 with the header and no envelope — the defect this file asserts against.
-        register_handlers(app)
-        app.state.shutting_down = shutting_down
-
-        @app.post("/produce", dependencies=[Depends(refuse_when_draining)])
-        async def produce() -> dict[str, str]:
-            return {"status": "accepted"}
-
-        return TestClient(app, raise_server_exceptions=False)
-
-    def test_it_serves_while_healthy(self) -> None:
-        assert self._client(shutting_down=False).post("/produce").status_code == 200
-
-    def test_it_refuses_503_while_draining(self) -> None:
-        assert self._client(shutting_down=True).post("/produce").status_code == 503
-
-
 class TestTheSidecarDoorAsksForRedelivery:
     def _client(self, *, shutting_down: bool) -> TestClient:
         app = FastAPI()
@@ -99,16 +76,16 @@ class TestTheSidecarDoorAsksForRedelivery:
         register_handlers(app)
         app.state.shutting_down = shutting_down
 
-        @app.post("/bronze-arrival")
+        @app.post("/arrival")
         async def arrival(verdict: Annotated[dict[str, str] | None, Depends(retry_when_draining)] = None) -> dict[str, str]:
             return verdict or {"status": "SUCCESS"}
 
         return TestClient(app, raise_server_exceptions=False)
 
     def test_it_handles_the_event_while_healthy(self) -> None:
-        assert self._client(shutting_down=False).post("/bronze-arrival").json() == {"status": "SUCCESS"}
+        assert self._client(shutting_down=False).post("/arrival").json() == {"status": "SUCCESS"}
 
     def test_it_asks_for_REDELIVERY_while_draining(self) -> None:
-        resp = self._client(shutting_down=True).post("/bronze-arrival")
+        resp = self._client(shutting_down=True).post("/arrival")
         assert resp.status_code == 200, "a subscription answers 200 with a verdict, never an HTTP error"
         assert resp.json() == {"status": "RETRY"}

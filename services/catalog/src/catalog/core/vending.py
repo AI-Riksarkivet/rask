@@ -671,7 +671,7 @@ class StsVendor:
     this plug out of reach.
 
     That matters for which mode can serve which caller. ``web_identity`` requires the CALLER to present an
-    OIDC token, so it cannot serve the cascade at all: a stage runner authenticates with a projected
+    OIDC token, so it cannot serve a service principal at all: one authenticates with a projected
     service-account token minted for the catalog's audience alone, which ``raw_bearer`` never forwards, so
     the vend returns ``None``. This plug has no such requirement.
 

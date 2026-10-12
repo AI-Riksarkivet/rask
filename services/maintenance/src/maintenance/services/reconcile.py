@@ -164,7 +164,7 @@ class AbsentDataset(BaseModel):
 
     The report compares the catalog against AUTHZ in both directions and against STORAGE in one: bytes
     with no record were found, a record with no bytes was not. Measured on the live estate 2026-09-22,
-    that blind spot covered the cascade HEAD — `describe bronze$events` answered 200 with
+    that blind spot covered a bronze table — `describe bronze$events` answered 200 with
     `location = s3://lance-catalog/medallion/bronze` and the path did not exist, so a policy set on it
     policed no bytes and an FGA grant keyed off a table whose data was elsewhere.
 
@@ -749,7 +749,7 @@ def _absent_datasets(*, registered: dict[str, tuple[str, str | None]], discovere
 
     BOTH SPELLINGS RESOLVE. The spec calls `location` a "relative path to the table directory within
     the root", while a table registered through `register_written_dataset` carries an ABSOLUTE `s3://`
-    uri — the cascade head is one. Understanding only one form would either miss every explicitly
+    uri. Understanding only one form would either miss every explicitly
     registered table or mis-resolve every ordinary one.
 
     ``trashed`` is excluded for the reason its mirror excludes it: a dropped table's record and bytes

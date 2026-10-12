@@ -38,9 +38,9 @@ def parse_staged(event_json: str) -> RunEvent | DatasetEvent:
 async def republish_staged(publisher: object | None, settings: LineageSettings, event_json: str) -> None:
     """Re-announce a recovered event on the lineage topic, so its SUBSCRIBERS act on it as well as the graph.
 
-    Ingesting alone repairs the graph and leaves its subscribers unaware: a recovered head RUN never
-    reaches medallion's `/bronze-arrival`, so the cascade it should start never runs, and a recovered DDL
-    change never reaches the notifications bus lane. ``None`` is a deployment without the outbox, which has
+    Ingesting alone repairs the graph and leaves its subscribers unaware: a recovered RUN never reaches
+    maintenance's arrival door or the notifications inbox, and a recovered DDL change never reaches the
+    notifications bus lane. ``None`` is a deployment without the outbox, which has
     nothing to re-announce (`api.dependencies.get_publisher`).
 
     THE STAGED BYTES, never `event.model_dump_json()`. The model is the parsed Python shape (`run_id`,

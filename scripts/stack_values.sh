@@ -12,10 +12,6 @@ HELM_SET=(
   # The bus the nats fixture runs ([[XC-129]]).
   --set-string nats.url=nats://rask-nats:4222
   --set auth.enabled=true
-  --set medallion.fgaEnabled=true
-  # The ray-OFF core lane (the Ray path's home is ray_e2e_stack.sh): with the Ray engine on and no Ray
-  # named, the chart refuses the render ([[CP-041]]).
-  --set services.compute.engines.ray.enabled=false
   --set catalog.warehouses.enabled=true
   --set-json "catalog.multibase.dataBases=[\"$BASE_A\",\"$BASE_B\"]"
   --set services.lineage.outbox.enabled=true

@@ -2,15 +2,13 @@
 
 Three builders hand options to object_store: `service_kit.lakehouse.objectfs.lance_storage_options`
 (every vend and most service opens), the catalog's `namespace_properties` (its own `dir` connection)
-and `service_kit.media.config`'s `storage_options`. Two scripts build a set from their own arguments
-through the first, the baked Ray training job and the model-artifact janitor, and are checked by what
-they hand Lance. object_store lowercases the scheme — measured on pylance 12.0.0 against a closed
+and `service_kit.media.config`'s `storage_options`. One script builds a set from its own arguments
+through the first, the model-artifact janitor, and is checked by what it hands Lance. object_store lowercases the scheme — measured on pylance 12.0.0 against a closed
 port, `HTTP://127.0.0.1:1` with `allow_http=true` requests `http://127.0.0.1:1/…` and with
 `allow_http=false` dies at `builder error`. So a case-sensitive `startswith("http://")` hands an
 upper-case plaintext endpoint `false`, and the client is never built.
 
-The pyarrow half reads the same endpoint: `s3_filesystem`, and the builders that go through it —
-the training job's artifact writer and the janitor's filesystem.
+The pyarrow half reads the same endpoint: `s3_filesystem`, and the janitor's filesystem, which goes through it.
 pyarrow accepts only a lowercase `http`/`https` scheme — measured on pyarrow 25.0.0, `scheme="HTTP"`
 raises `ArrowInvalid: Invalid S3 connection scheme 'HTTP'` — so an endpoint Lance opens must not be
 one every pyarrow consumer refuses. An empty endpoint is AWS proper on both halves, and its regional
@@ -26,7 +24,6 @@ from __future__ import annotations
 import contextlib
 import importlib.util
 import io
-import os
 import sys
 import threading
 from collections.abc import Callable, Iterator
@@ -58,7 +55,6 @@ def _load_script(stem: str) -> ModuleType:
     return module
 
 
-train_job = _load_script("ray_train_job")
 janitor = _load_script("model_artifact_janitor")
 
 
@@ -77,12 +73,6 @@ def _media(endpoint: str) -> str:
     ).storage_options()
     assert options is not None
     return options["allow_http"]
-
-
-def _train_job_options(endpoint: str) -> StorageOptions:
-    env = {"S3_ENDPOINT": endpoint, "S3_KEY": "AK", "S3_SECRET": "SK", "S3_REGION": "us-east-1"}
-    with mock.patch.dict(os.environ, env):
-        return train_job._storage_options()
 
 
 def _janitor_options(endpoint: str) -> StorageOptions:
@@ -148,13 +138,10 @@ def test_the_janitor_filesystem_reads_the_scheme_by_the_same_rule(endpoint: str,
     assert root == "bucket/artifacts"
 
 
-@pytest.mark.parametrize("script", ["ray_train_job", "model_artifact_janitor"])
-def test_a_script_opens_lance_with_the_estate_builders_options(script: str) -> None:
+def test_a_script_opens_lance_with_the_estate_builders_options() -> None:
     """The builder's whole option set, not only `allow_http`: its `aws_`-prefixed credential keys are
     the ones that displace an ambient AWS_* environment (see `lance_storage_options`)."""
-    read = {"ray_train_job": _train_job_options, "model_artifact_janitor": _janitor_options}[script]
-
-    assert read("https://s3.example.com") == lance_storage_options("https://s3.example.com", "AK", "SK", "us-east-1")
+    assert _janitor_options("https://s3.example.com") == lance_storage_options("https://s3.example.com", "AK", "SK", "us-east-1")
 
 
 _EMPTY_LISTING = (
@@ -232,20 +219,3 @@ def test_pyarrow_addresses_the_root_lance_addresses(s3_stub: tuple[str, list[str
     received.clear()
     s3_filesystem(options).get_file_info("bucket/key")
     assert received[0] == f"HEAD {root}/bucket/key", received
-
-
-@pytest.mark.parametrize("path", ["/tenant"])
-@pytest.mark.parametrize("scheme", ["HTTP"])
-def test_the_train_job_writes_its_artifacts_under_the_root_lance_addresses(
-    s3_stub: tuple[str, list[str]], monkeypatch: pytest.MonkeyPatch, scheme: str, path: str
-) -> None:
-    url, received = s3_stub
-    monkeypatch.setenv("S3_ENDPOINT", f"{scheme}{url.removeprefix('http')}{path}")
-    monkeypatch.setenv("S3_KEY", "AK")
-    monkeypatch.setenv("S3_SECRET", "SK")
-
-    uris = train_job.write_artifacts("s3://bucket/models/m", "tok", {"weights.json": b"w"})
-
-    assert uris == {"weights.json": "s3://bucket/models/m/tok/weights.json"}
-    assert received, "the write reached no store"
-    assert all(line.split(" ", 1)[1].startswith(f"{path}/bucket/models/m/tok/weights.json") for line in received), received

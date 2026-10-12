@@ -99,7 +99,7 @@ The PER-SUBSCRIBER component, not the shared broadcast one. `queueGroupName` liv
 COMPONENT, so subscribing through `pubsub.name` gives every replica every event instead of
 a competing-consumer group — measured 2026-09-03, the arrival route bound to
 `pubsub=lineage-pubsub` and would have planned the same dataset once per replica. Used for
-publishing too, exactly as the stage runners do (`lance.subPubsub`): the queue group affects
+publishing too (`lance.subPubsub`): the queue group affects
 subscription only. With no queue lane it is a publish-only component, maintenance's own
 connection either way (values.yaml `nats.auth`).
 
@@ -111,7 +111,7 @@ removed), so a dropped publish loses the record of the one tick that actually re
 bytes — the graph then shows a dataset whose files changed with nothing saying what
 changed them.
 
-The SAME prefix the catalog, the stage runners and the drain name, because `lineage`'s reconcile
+The SAME prefix the catalog and the drain name, because `lineage`'s reconcile
 cron is the only thing that reads it. A private prefix here would stage objects nothing
 ever collects, which reads as durability and is not.
 

@@ -63,7 +63,7 @@ class ReconcileStatus(BaseModel):
     stale: bool = False
     # Declared-columns patrol (Batch 23): columns a consumer DECLARED (chart requiredColumns) that
     # the dataset's CURRENT storage schema no longer carries — the estate-wide re-check of the
-    # gate's column_declared assertion (a write that bypassed the stage runner skips the gate; this doesn't).
+    # gate's column_declared assertion (a write that bypassed the publish door skips the gate; this doesn't).
     missing_declared_columns: list[str] = Field(default_factory=list)
     # Provenance holes BELOW the tip: versions retained on disk that the graph holds no WROTE edge for.
     # The version axis above compares two maxima, so it reports in_sync for a dataset whose intermediate

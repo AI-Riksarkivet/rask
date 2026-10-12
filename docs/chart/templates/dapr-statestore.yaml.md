@@ -41,12 +41,5 @@ failed on the state store that hosts every actor, and the stack never came up.
 
 ## `{{- $scopes := .Values.stateStore.scopes | default list }}`
 
-No stage runner is in scope: a Ray stage is planned and resolved without a workflow (CP-029), so no stage
-runner hosts a workflow runtime or an actor. An app-id that hosts one is scoped; unscoped, its sidecar logs
+An app-id that hosts a workflow runtime or an actor is scoped; unscoped, its sidecar logs
 "Workflow engine started" after "actor hosting disabled" and every workflow fails (measured live 2026-08-15).
-
-## `{{- if .Values.medallion.qualityReview }}`
-
-The PRODUCER's app-id under `qualityReview`, the one condition on which producer.py starts a workflow runtime:
-`promotion_review` runs there, beside the approve route, because `raise_workflow_event` resolves the instance
-through the calling app's app-id. A training run is a plan (CP-029) and needs no actor.

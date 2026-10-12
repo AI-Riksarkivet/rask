@@ -2,15 +2,13 @@
 
 Lives in `service_kit.lakehouse` rather than in one service because § D-R1 makes the gate a property
 of PUBLICATION, not of the medallion: a version becomes consumable only after it passes, whoever
-wrote it. It started in `medallion/services/quality.py` and moved here the moment a second caller
-(the catalog's `publish`) needed it — a gate that only one writer can run is a gate every other
-writer has to reimplement, which is how the estate ends up with two definitions of "good enough".
+wrote it — a gate that only one writer can run is a gate every other writer has to reimplement, which
+is how the estate ends up with two definitions of "good enough".
 
-A medallion stage that produced a real Lance dataset (compute on) can be VALIDATED before it promotes: the
-stage runner runs cheap, exact assertions on the dataset it just wrote — does it have rows? is the key column free
-of nulls? — and emits them as the standard OpenLineage ``dataQualityAssertions`` facet. When the quality
-GATE is enabled, a failed assertion BLOCKS promotion: the failed run is still recorded (lineage keeps the
-assertions, so the bad batch is auditable) but the next stage is never triggered, so bad data can't cascade.
+The catalog's `publish` door runs cheap, exact assertions on the version being published — does it have
+rows? is the key column free of nulls? — in the shape of the standard OpenLineage
+``dataQualityAssertions`` facet, and a failed assertion BLOCKS the publication, so bad data never becomes
+consumable.
 
 This is the automated *validator* half of governance, and it composes with the FGA gate: FGA decides who
 MAY promote (a registered identity holding the role); quality decides whether the DATA is good enough to.
@@ -39,10 +37,8 @@ COLUMN_DECLARED = "column_declared"
 #: broken join or transform; an unresolvable blob pointer means the payload is gone. Neither becomes
 #: correct because somebody signed off.
 #:
-#: SHARED because it is enforced twice, and both points must agree on what "structural" means: the
-#: medallion's review refuses to ASK about these, and the catalog's publish door refuses to ACT on
-#: them — so a caller that bypasses the workflow cannot publish corrupt data either. One definition,
-#: two enforcement points, the same shape `blob_column_resolves` already has.
+#: The catalog's publish door refuses to ACT on these however an approval names them, so no caller can
+#: publish corrupt data by signing off on it.
 STRUCTURAL_ASSERTIONS: frozenset[str] = frozenset({NOT_NULL, BLOB_RESOLVES})
 
 #: The spec's two severity values (`DataQualityAssertionsDatasetFacet`). `error` means the failure
@@ -56,8 +52,8 @@ WARN: Final = "warn"
 #: refusal is auditable in the same list a caller already reads rather than arriving as a bare error.
 PROVENANCE: Final = "provenance_complete"
 
-#: The three columns that make a row traceable. Named here rather than imported from the medallion,
-#: because the rule is the PLATFORM's and a service must not be the authority on what governs it.
+#: The three columns that make a row traceable. Named here rather than in a service, because the rule
+#: is the PLATFORM's and a service must not be the authority on what governs it.
 _TIER_PROVENANCE_COLUMNS: frozenset[str] = frozenset({STAGE_COLUMN, LINEAGE_COLUMN, SOURCE_ROWID_COLUMN})
 
 
@@ -92,20 +88,19 @@ def tier_contract_violations(schema: pa.Schema, *, has_stable_row_ids: bool | No
 
     # A `source_rowid` of the wrong width is a DIFFERENT column wearing the right name, and it is the
     # failure a reader is least likely to see: present, non-null, and passing every count-based check.
-    # `stamp_stage` mints uint64 because that is what Lance's own stable row id is.
+    # It is uint64 because that is what Lance's own stable row id is.
     if SOURCE_ROWID_COLUMN in names:
         actual = schema.field(SOURCE_ROWID_COLUMN).type
         if not pa.types.is_uint64(actual):
             problems.append(f"{SOURCE_ROWID_COLUMN!r} is {actual}, not uint64 — the width Lance's stable row id uses")
 
-    # `lineage` IS TYPED, and the type is the whole reason the column is worth having. `stamp_stage`
-    # and the medallion both mint `pa.json_()` — the Arrow JSON extension Lance persists as JSONB —
-    # because that is what makes the cell queryable IN PLACE (`json_get_string` / `json_extract` in a
-    # filter) and indexable: `tier_write.index_lineage` builds a JSON scalar index over `lineage -> run_id`,
-    # and lance 11 refuses one on anything else — *"A JSON index can only be created on a Binary or
+    # `lineage` IS TYPED, and the type is the whole reason the column is worth having. It is
+    # `pa.json_()` — the Arrow JSON extension Lance persists as JSONB — because that is what makes the
+    # cell queryable IN PLACE (`json_get_string` / `json_extract` in a filter) and indexable: a JSON
+    # scalar index over `lineage -> run_id` needs it, and lance 11 refuses one on anything else — *"A JSON index can only be created on a Binary or
     # LargeBinary field"* (measured 2026-09-09, both types driven). A `pa.string()` column holding the
     # same bytes is a DIFFERENT column wearing the right name: it reads back, it is never null, and the
-    # tier it belongs to can never carry the index the platform builds for it.
+    # tier it belongs to can never carry that index.
     #
     # `stage` is deliberately NOT type-checked. Nothing indexes or json-parses it, so string vs
     # large_string has no consequence to name, and a refusal with no consequence behind it trains a

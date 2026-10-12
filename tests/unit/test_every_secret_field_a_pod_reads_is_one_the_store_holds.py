@@ -1,7 +1,7 @@
 """A field a workload is TOLD to read must be one the secret store is told to WRITE, in every overlay.
 
 Each governed service is handed the NAME of its scoped S3 secret — `LANCE_DAPR_SECRET_S3_FIELD`,
-`LINEAGE_…`, `MEDALLION_…`, `MAINTENANCE_…` — and fetches it from the Dapr secret store at boot. The
+`LINEAGE_…`, `MAINTENANCE_…` — and fetches it from the Dapr secret store at boot. The
 record names the secret; it never carries one. That only works while the seed writes every name a
 Deployment reads, and the two are decided by SEPARATE template conditions.
 
@@ -33,7 +33,7 @@ _FIELD_ENV = re.compile(r"_DAPR_SECRET_S3_FIELD, value: \"([a-z0-9-]+)\"")
 _SEEDED = re.compile(r"\b([a-z0-9-]+-secret-key)=")
 
 #: Blanking one identity at a time is what makes the two conditions disagree.
-_IDENTITIES = ("catalogAccessKey", "lineageAccessKey", "medallionAccessKey", "maintenanceAccessKey")
+_IDENTITIES = ("catalogAccessKey", "lineageAccessKey", "maintenanceAccessKey")
 
 _BASE = ("--set", "image.localImages=true")
 

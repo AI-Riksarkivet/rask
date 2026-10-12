@@ -2,7 +2,7 @@
 
 Four services consume the S3 secret from the Dapr secret store in their lifespan and then serve every
 later read out of the same ``@lru_cache``d ``get_settings()``, over five call sites: ``catalog.main``,
-``medallion.producer``, ``medallion.stage_runner``, ``maintenance.service`` and ``lineage.main`` (through
+``maintenance.service`` and ``lineage.main`` (through
 ``apply_lineage_secrets``, which splices the AGE password onto the same object). The splice
 (``service_kit.governed.secrets.apply_dapr_secrets``) therefore assigns onto the cached instance IN
 PLACE — that is the mechanism, not an accident, and it is what makes the per-request ``SettingsDep``
@@ -38,11 +38,9 @@ def _accessors() -> list[tuple[str, Callable[[], Any], dict[str, str]]]:
     whose boot splice these drive."""
     from catalog.core.config import get_settings as catalog_settings
     from maintenance.core.config import get_settings as maintenance_settings
-    from medallion.core.config import get_settings as medallion_settings
 
     return [
         ("catalog", catalog_settings, {"LANCE_S3_ACCESS_KEY_ID": "x", "LANCE_SECRETS_FROM_DAPR": "true"}),
-        ("medallion", medallion_settings, {"MEDALLION_SECRETS_FROM_DAPR": "true"}),
         ("maintenance", maintenance_settings, {"MAINTENANCE_SECRETS_FROM_DAPR": "true"}),
     ]
 

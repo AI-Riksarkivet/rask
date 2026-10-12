@@ -31,10 +31,6 @@ Lineage's own subscriber, unconditional like its component ([[LH-303]]): durable
 cannot unsubscribe it. Left out of this set, the orphan pass would delete it on every release and
 the re-created durable would replay the whole stream.
 
-## `{{- $names = append $names (printf "%s-durable" .Values.medallion.producer.daprAppId) -}}`
-
-One `<appId>-durable` per cascade subscriber.
-
 ## `{{- $names = append $names "notifications-durable" -}}`
 
 The literal the component uses, not a values lookup: `dapr-component.yaml:191` appends

@@ -303,7 +303,7 @@ PYEOF
 
 echo
 if [ "$MODE" = "apply" ]; then
-  echo "== ✓ demo_reset applied. Re-seed what the drive needs (e.g. seed_medallion_fga.sh) and go. =="
+  echo "== ✓ demo_reset applied. Re-seed what the drive needs and go. =="
 else
   echo "== dry-run complete — nothing was deleted. Re-run with --apply to execute. =="
 fi

@@ -116,7 +116,7 @@ ungoverned dev stack, which is the estate's DEFAULT combination.
 ## `{{- include "lance.appTokenEnv" (list $root $name) | nindent 12 }}`
 
 One secret, so the whole plane presents ONE service identity — the same
-`{{ .Release.Name }}-dapr-app-token` the medallion producer, the stage runners and the
+`{{ .Release.Name }}-dapr-app-token` the catalog, lineage and the
 maintenance cron read. It cannot dangle: `dapr.enabled` is what renders that Secret's
 ExternalSecret (external-secrets.yaml) and it also gates this reference.
 
@@ -176,10 +176,3 @@ already drifted from this block twice.
 
 A service may name its OWN tier (resources.<name>); otherwise the shared fleet one.
 compute needs it — see the values comment: the Ray SDK does not fit in 512Mi.
-
-## `{{- if and (eq $name "compute") (include "lance.outOfProcessEngine" $root) }}`
-
-CP-056, ADR 0140: compute is the engine door. `RASK_COMPUTE_ENGINE_TASKS` is engine -> task -> command, one table per
-enabled engine, so a second engine's `stage-transform` cannot replace Ray's command and compute refuses (422) an engine
-it does not serve or a task that engine's table does not name. `RASK_COMPUTE_ENGINE_OUTCOME_BASES` lists the planners'
-outcome doors a job may report to, and `lance.saVerifier` admits each planner's account (`lance.saSubjects`).

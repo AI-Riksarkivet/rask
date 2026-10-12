@@ -4,36 +4,23 @@ Nine lifespans set `app.state.shutting_down`. Before this module exactly one thi
 (:mod:`service_kit.probes`), whose whole effect is to make Kubernetes stop routing new CONNECTIONS.
 That is the wrong half for this estate, because the doors that matter are sidecar-delivered: Dapr's
 pub/sub delivery does not consult a readiness probe, so a pod that had begun shutting down kept
-accepting cascade triggers and run submissions, started work it could not finish, and took the run
+accepting deliveries, started work it could not finish, and took the work
 down with it. `docs/architecture/batch-processing-invariants.md` B6 names it: "the flag exists, nothing reads it on admission".
 
 §6 of that document rejected the `POST /drain` ENDPOINT — a process-local flag cannot mean "this
 deployment is draining" behind a multi-replica Service — and adopted this half. Nothing here decides
 that a deployment is draining; it reacts to the flag the lifespan already set for THIS process.
 
-TWO DOORS, TWO ANSWERS, and they are not interchangeable:
+A SIDECAR-DELIVERED ROUTE gets **RETRY** from :func:`retry_when_draining`, never DROP and never
+SUCCESS. A SUCCESS ack is indistinguishable from having done the work, and DROP does not mean what
+it looks like: on a subscription that declares a `deadLetterTopic`, daprd routes a DROP to that topic
+rather than discarding it (v1.18.1, `pkg/runtime/subscription/subscription.go:362-372` ->
+`sendToDeadLetter`; the HTTP postman turns the app's DROP into `ErrMessageDropped` at
+`postman/http/http.go:142-146`). So dropping a delivery because this replica happened to be draining
+would PARK a perfectly good message for a human to find, not cancel it quietly. RETRY hands the
+message back to the broker, which redelivers it to a replica that is still alive.
 
-* :func:`refuse_when_draining` — an HTTP caller gets **503**. It holds the request and can retry, and
-  a `Retry-After` turns that into "come back" rather than a backoff guess. A 4xx would tell the caller
-  its request was wrong, which is a lie about a pod that is merely leaving.
-* :func:`retry_when_draining` — a sidecar-delivered route gets **RETRY**, never DROP and never
-  SUCCESS. A SUCCESS ack is indistinguishable from having done the work, and DROP does not mean what
-  it looks like: on a subscription that declares a `deadLetterTopic`, daprd routes a DROP to that topic
-  rather than discarding it (v1.18.1, `pkg/runtime/subscription/subscription.go:362-372` ->
-  `sendToDeadLetter`; the HTTP postman turns the app's DROP into `ErrMessageDropped` at
-  `postman/http/http.go:142-146`). So dropping a trigger because this replica happened to be draining
-  would PARK a perfectly good message for a human to find, not cancel it quietly — which is worse for
-  an operator and no better for the cascade. RETRY hands the message back to the broker, which
-  redelivers it to a replica that is still alive.
-
-  MOST OF THIS GATE'S ROUTES DO DECLARE ONE, measured on the running estate 2026-09-16:
-  `bronze_arrival.py:42,100` and `promotions.py:340` pass `dead_letter_topic=settings.dlq_topic`, and
-  the medallion producer carries `MEDALLION_DLQ_TOPIC=dlq.medallion-producer`. Only
-  `maintenance/api/index_work.py:114` resolves to `None`, its `index_dlq_topic` being unset there. The
-  RETRY answer is right either way; what changes is that "the message just vanishes" was never the
-  alternative it was being weighed against.
-
-Both are pure reads of one boolean. Neither may touch a resource — a drain gate that opened a client
+It is a pure read of one boolean. It may not touch a resource — a drain gate that opened a client
 would fail during exactly the window it exists for, which is the rule `/readyz` already states:
 once `shutting_down` flips, that is the answer regardless of anything else.
 """
@@ -48,9 +35,7 @@ from contextlib import suppress
 from typing import TYPE_CHECKING, Final
 
 from fastapi import Request
-from fastapi.responses import JSONResponse
 
-from service_kit.exceptions import ServiceUnavailableError
 from service_kit.lifecycle import is_draining, mark_draining
 
 
@@ -62,14 +47,7 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
-#: Seconds a refused caller is told to wait. A pod's terminationGracePeriod is the natural scale: long
-#: enough that the retry lands after this replica is gone, short enough not to stall a real caller.
-RETRY_AFTER_SECONDS: Final = 30
-
-_PROBLEM_JSON: Final = "application/problem+json"
-
-#: The subscription verdict. Deliberately the same literal the medallion's own handlers use, so a
-#: reader does not have to check whether two spellings mean the same thing.
+#: The subscription verdict, the literal Dapr reads.
 RETRY: Final[dict[str, str]] = {"status": "RETRY"}
 
 
@@ -85,33 +63,6 @@ def draining(request: Request) -> bool:
     return is_draining(request.app)
 
 
-def refuse_when_draining(request: Request) -> None:
-    """FastAPI dependency for an HTTP run door: 503 while draining, transparent otherwise.
-
-    A DOMAIN ERROR, not `HTTPException`. This used to raise the framework's own error with
-    `Content-Type: application/problem+json` in `headers` — so the status and `Retry-After` were right
-    and the BODY was FastAPI's `{"detail": ...}` wearing a media type that asserts
-    `{type,title,status,detail}`. A header that renames a body without changing it is worse than no
-    header: it is the first thing a client reads to decide how to parse the payload.
-
-    The old docstring justified that with "raising is not an option here — the caller needs the
-    `Retry-After` header, and an exception handler would have to reconstruct it". That was true when it
-    was written and is not now: `DomainError` carries `headers` and `register_handlers` passes them
-    through, so the header rides the exception and the handler supplies the envelope.
-
-    NOTE FOR THE CALLING APP: `DomainError` subclasses `HTTPException`, so an app that installs only
-    `install_problem_handlers` renders this through starlette's built-in handler instead — status and
-    header intact, `{"detail": ...}` body again. Every app using this dependency must install
-    `register_handlers` too; `tests/test_draining_envelope.py` pins both planes.
-    """
-    if not draining(request):
-        return
-    raise ServiceUnavailableError(
-        "this instance is shutting down and is not accepting new runs — retry, another replica will serve it",
-        headers={"Retry-After": str(RETRY_AFTER_SECONDS)},
-    )
-
-
 def retry_when_draining(request: Request) -> dict[str, str] | None:
     """FastAPI dependency for a SIDECAR-delivered route: the RETRY verdict while draining, else None.
 
@@ -123,17 +74,7 @@ def retry_when_draining(request: Request) -> dict[str, str] | None:
     return RETRY if draining(request) else None
 
 
-def problem_response(detail: str) -> JSONResponse:
-    """The 503 as a response object, for a route that composes its own answer rather than depending."""
-    return JSONResponse(
-        status_code=503,
-        media_type=_PROBLEM_JSON,
-        headers={"Retry-After": str(RETRY_AFTER_SECONDS)},
-        content={"type": "about:blank", "title": "draining", "status": 503, "detail": detail},
-    )
-
-
-__all__ = ["RETRY", "RETRY_AFTER_SECONDS", "draining", "problem_response", "refuse_when_draining", "retry_when_draining"]
+__all__ = ["RETRY", "draining", "retry_when_draining"]
 
 
 #: What ``signal.getsignal`` can answer once ``None`` (a handler installed outside Python) is excluded.

@@ -18,8 +18,8 @@ THE TWO HALVES ARE NOT THE SAME DEFECT, and the audit is right to separate them:
 WHY THE SITES KEEP BUILDING A RESPONSE INSTEAD OF RAISING, which is where this deviates from the
 audit's suggested fix. Two of them are pure-ASGI middleware that sit outside `ExceptionMiddleware` and
 must answer before the body is buffered — they genuinely cannot raise, and the audit says so. But the
-others cannot simply raise either: EVERY one of these sites sets `Retry-After` (5s on the medallion
-doors, 60s on catalog maintenance), and `install_problem_handlers`' handler builds a bare
+others cannot simply raise either: EVERY one of these sites sets `Retry-After` (60s on catalog
+maintenance), and `install_problem_handlers`' handler builds a bare
 `JSONResponse(status_code=..., content=..., media_type=...)` with no headers at all. Raising would
 render the body correctly and silently drop the header — trading a missing `code` for a missing
 `Retry-After`, which the reference calls out by name ("clients can't self-throttle, retry storms
@@ -71,26 +71,6 @@ def test_the_maintenance_refusal_carries_a_code_and_keeps_retry_after() -> None:
     # Unrenamed: its type has always ended in `/maintenance` while its title is `MaintenanceMode`.
     assert body["type"] == "https://lance.org/problems/maintenance"
     assert body["title"] == "MaintenanceMode"
-
-
-@pytest.mark.parametrize(
-    ("module", "status", "title", "detail"),
-    [
-        ("medallion.api.train", 503, "ServiceUnavailable", "training trigger publish failed; retry"),
-    ],
-)
-def test_the_medallion_doors_carry_a_code(module: str, status: int, title: str, detail: str) -> None:
-    """Non-spec doors, so this is envelope consistency rather than a client break — but `produce.py`
-    claims parity with the catalog errors in a comment, and this is what that claim costs."""
-    import importlib
-    import json
-
-    mod = importlib.import_module(module)
-    response = mod._problem(status, title, detail)  # noqa: SLF001
-    body = json.loads(bytes(response.body))
-    assert set(body) >= REQUIRED_KEYS, f"{module} {status} body omits {REQUIRED_KEYS - set(body)}"
-    if status == 503:
-        assert response.headers["Retry-After"] == "5", "the draining contract's header was dropped"
 
 
 @pytest.mark.parametrize(

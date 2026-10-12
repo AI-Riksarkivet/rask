@@ -118,7 +118,7 @@ class LineageSettings(GovernedAuthSettings, BaseSettings):
     # version commit is older — arrival cadence becomes an ASSERTED contract clause, not a dashboard.
     freshness_budget_hours: float = Field(default=0, alias="LINEAGE_FRESHNESS_BUDGET_HOURS")
     # Declared consumer dependencies per dataset (data-contract, Batch 23): a JSON map
-    # {"dataset": ["col", ...]} the chart derives from the stage runners' requiredColumns. The reconcile
+    # {"dataset": ["col", ...]} the chart supplies. The reconcile
     # sweep compares each declared dataset's STORAGE schema against it and reports
     # missing_declared_columns — the estate-patrol half of the gate's column_declared assertion
     # (same two-enforcement-point pattern as the blob probe). "" (default) = no checks, no reads.
@@ -160,10 +160,10 @@ class LineageSettings(GovernedAuthSettings, BaseSettings):
         """The configured external blob bases, parsed as the catalog parses them."""
         return [base.strip() for base in self.external_blob_bases.split(",") if base.strip()]
 
-    # #4: the durable lineage-outbox prefix (shared with the medallion stage runners). When set, the reconcile
+    # #4: the durable lineage-outbox prefix (shared with the producers that stage there). When set, the reconcile
     # sweep also DRAINS it — re-ingesting any event a producer staged but whose publish never got acked
     # (a crash between the Lance commit and the publish), then deleting it. Empty = drain disabled. Must
-    # point at the SAME object-store prefix as ``MEDALLION_LINEAGE_OUTBOX_URI``.
+    # point at the SAME object-store prefix as ``LANCE_LINEAGE_OUTBOX_URI`` and ``MAINTENANCE_LINEAGE_OUTBOX_URI``.
     outbox_uri: str = Field(default="", alias="LINEAGE_OUTBOX_URI")
     # Max staged events one reconcile tick drains, OLDEST FIRST (docs/adr/0004-p1-2-bounded-oldest-first-outbox-drain.md P1.2 (bounded drain)).
     # The drain used to materialise the ENTIRE prefix in memory inside the single-flight lock, so a backlog

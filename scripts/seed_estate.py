@@ -197,15 +197,12 @@ DEMO_ESTATE = Estate(
                 Warehouse(
                     id="acme-bucket",
                     namespaces=(
-                        # The medallion cascade the fixtures describe. bronze holds no table there, and
+                        # The medallion tiers the fixtures describe. bronze holds no table there, and
                         # holding none here too keeps the two readable as the same estate.
                         Namespace(name="acme-bronze"),
-                        # TWO TABLES, one per LANE. A silver namespace holds a table per lane, and the
-                        # table layer POSTs `/declare` with `parent=namespace:<ns>` — which IS the link
-                        # a stage runner's warehouse rung needs to reach what it writes. Seeding only
-                        # `features` left the dummy lane's e2e unable to reach its terminal-event
-                        # assertion, failing with a message that named the missing link exactly.
-                        Namespace(name="acme-silver", tables=("features", "dummy")),
+                        # The table layer POSTs `/declare` with `parent=namespace:<ns>`, which is the link
+                        # a warehouse rung needs to reach the table.
+                        Namespace(name="acme-silver", tables=("features",)),
                         Namespace(name="acme-gold", tables=("catalog",)),
                     ),
                 ),
@@ -239,74 +236,11 @@ DEMO_ESTATE = Estate(
         Grant("team:partners", "team", "project:beta"),
         # dave: a plain WRITER on the bucket — writes any stage, but is NOT a validator.
         Grant("user:dave", "writer", "warehouse:acme-bucket"),
-        # ---- THE CASCADE'S OWN IDENTITIES ---------------------------------------------------------
-        # Observed live 2026-08-23: a seeded estate produced bronze, moved it to silver, and then DIED.
-        # `POST /management/v1/table/acme-silver$features/publish` answered 403 three times and the trigger parked
-        # in the DLQ, so the run reported nothing and gold never existed.
-        #
-        # The stage runner already had `writer` — the create seeds that — and writer is deliberately not
-        # enough: publishing is an owner-tier act, and the model's whole point is that "a plain writer
-        # can write within a stage but cannot promote INTO a gated one" (publication.py). Correct rule,
-        # and nothing granted the stage runners the rung that satisfies it, because this seed grants PEOPLE.
-        #
-        # A tenant whose tiers exist but whose cascade cannot publish into them is exactly the
-        # half-made state this script exists to prevent — the authz half of a ghost. The estate is not
-        # seeded until the services that fill it can.
-        # Granted on the NAMESPACE, not the table, and that is the prescribed shape rather than a
-        # convenience: `design-create-on-parent.md` — "creation permissions should usually live on the
-        # parent or container object, not on the leaf resource being created", because a grant whose
-        # object does not exist yet "forces the application to invent an object identifier before
-        # authorization". The stage runner CREATES `<tier>$<table>`, so the table cannot be the object here;
-        # `table` defines `owner from parent` for exactly this reason.
-        #
-        # And the failure itself is the one `core-tuples.md` names: "the model only defines what is
-        # possible, not what currently exists". `can_update_tag: owner` was the possibility; nothing
-        # made these identities owners, so ten 403s were the model working correctly on absent facts.
-        #
-        # THREE RUNGS, each a measured finding rather than a preference, and granting any one alone
-        # fails in a way that looks like a different bug. `writer` buys `can_create_table` and
-        # `can_write_data` — the first attempt granted `validator` alone, on the reasoning that
-        # promoting into a gated stage is a validator's act, and it failed with three more 403s.
-        # `publisher` buys `can_update_tag` + `can_create_tag`, which is what `publish` is guarded by.
-        # `validator` buys `can_promote`, the SECOND door on that route, taken only when the body
-        # carries `accept_assertions` — the producer resuming a promotion a person approved.
-        #
-        # THE FIRST TWO WERE ONE RUNG UNTIL 2026-09-10: `can_update_tag` was `owner`, so buying the
-        # publish door meant buying `can_drop`, `can_deregister`, `can_restore` and `manage_grants` on
-        # every table beneath (LH-052). They cascade the same way `owner` did — `<rung> from parent` on
-        # both `namespace` and `table` — so one grant per tier still reaches every table in it.
-        #
-        # KEEP IN STEP WITH `catalog/api/fga_deps.py::_CASCADE_RUNGS` and `seed_medallion_fga.sh`.
-        # Three seeders disagreeing about one identity's rung is how a denial reads as a mystery.
         # NO READ GRANT FOR `service-web`, and its absence is the control (Q17-8 / §F2-2 F2-4).
         # `bff.ts` and `runs-feed.ts` send that identity ONLY when there is no session, so it is the
         # ANONYMOUS principal — granting it reader on a tenant's tiers is granting the public those
-        # tiers. It held 7 reader grants across two tenants before this, seeded here and by
-        # `seed_medallion_fga.sh`, which `values-prod.yaml` names as a production prerequisite.
-        # A human reads a tenant's lineage with their OWN bearer; if a surface needs to be public,
+        # tiers. A human reads a tenant's lineage with their OWN bearer; if a surface needs to be public,
         # grant this subject that surface explicitly and it becomes visible in the model.
-        # The PRODUCER too, and its rung is not obvious from the cascade's shape: an approved promotion
-        # is resumed by `publish_promotion`, which runs in the PRODUCER's process (the workflow instance
-        # and the approve door must share an app-id for `raise_workflow_event` to resolve it). So the
-        # publish that completes a human-approved hold is made by `service-medallion-producer`, not by
-        # the stage runner that raised it — and without this grant the whole review path ends in
-        # `403 can_update_tag`, AFTER a person has already said yes. Measured 2026-08-23: the
-        # orchestration reported FAILED with exactly that, and the approval was silently worthless.
-        # The same rungs `seed_medallion_fga.sh` grants per tenant, in another language. Nothing checks
-        # the two seeders against each other, so a change to one's rungs has to reach the other in the
-        # same commit.
-        Grant("user:service-bronze-to-silver", "writer", "namespace:acme-silver"),
-        Grant("user:service-bronze-to-silver", "publisher", "namespace:acme-silver"),
-        Grant("user:service-bronze-to-silver", "validator", "namespace:acme-silver"),
-        Grant("user:service-silver-to-gold", "writer", "namespace:acme-gold"),
-        Grant("user:service-silver-to-gold", "publisher", "namespace:acme-gold"),
-        Grant("user:service-silver-to-gold", "validator", "namespace:acme-gold"),
-        Grant("user:service-medallion-producer", "writer", "namespace:acme-silver"),
-        Grant("user:service-medallion-producer", "publisher", "namespace:acme-silver"),
-        Grant("user:service-medallion-producer", "validator", "namespace:acme-silver"),
-        Grant("user:service-medallion-producer", "writer", "namespace:acme-gold"),
-        Grant("user:service-medallion-producer", "publisher", "namespace:acme-gold"),
-        Grant("user:service-medallion-producer", "validator", "namespace:acme-gold"),
         # carol: reaches gold ONLY through a role, plus reader on the bucket so she can read silver.
         Grant("user:carol", "assignee", "role:validators"),
         Grant("role:validators#assignee", "validator", "namespace:acme-gold"),

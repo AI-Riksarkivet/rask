@@ -70,9 +70,6 @@ auth:
 
 {{- $scopes := .Values.stateStore.scopes | default list }}
 
-{{- if .Values.medallion.qualityReview }}
-{{-   $scopes = append $scopes .Values.medallion.producer.daprAppId }}
-{{- end }}
 {{- if $scopes }}
 scopes:
 {{- range $scopes | uniq }}

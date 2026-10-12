@@ -14,7 +14,7 @@ without an auth layer in front of /api" — was an acknowledgement that no such 
 Subclasses the shared `Settings` rather than `BaseSettings` directly: this service reads the common surface, and
 it is the object `make_service_app` is built with, so the app holds one answer to every setting. The Ray dashboard's
 address is a field HERE and not on the shared `Settings`: compute is its one reader, and a field on the shared class
-would put a Ray address in every lakehouse service's configuration (CP-056).
+would put a Ray address in every lakehouse service's configuration.
 """
 
 from pydantic import Field
@@ -29,8 +29,8 @@ class ComputeSettings(GovernedAuthSettings, Settings):
     ray_dashboard_url: str = Field(
         default="http://localhost:8265",
         alias="RAY_DASHBOARD_URL",
-        description="The Ray dashboard the introspection routes, the Serve proxy, the job prune and the engine door all "
-        "address, so the cluster that runs a job is the cluster that reports and reclaims it.",
+        description="The Ray dashboard the introspection routes, the Serve proxy and the job prune all address, so the "
+        "cluster that runs a job is the cluster that reports and reclaims it.",
     )
 
     ray_client_retry_cooldown_s: float = Field(
@@ -77,27 +77,4 @@ class ComputeSettings(GovernedAuthSettings, Settings):
         "bounding post-mortem by submission VOLUME rather than by time. Deliberately far smaller than "
         "`prune_keep_jobs`: failures are rare in a healthy estate, and this is a safety net, not a "
         "second retention policy.",
-    )
-
-    # --- the engine door (`compute.engine`, CP-056) -----------------------------------------------
-    engine_tasks: dict[str, dict[str, str]] = Field(
-        default_factory=dict,
-        alias="RASK_COMPUTE_ENGINE_TASKS",
-        description="The engines this door serves and each one's tasks, engine -> task -> the Jobs-API entrypoint (a JSON "
-        "object). Keyed by engine first, so two engines registering one task each keep their own command. An order for an "
-        "engine or a task absent here is refused 422, so a planner's task key never reaches the cluster as a command. Each "
-        "script it names must be baked into the image the Ray cluster runs.",
-    )
-    engine_outcome_bases: list[str] = Field(
-        default_factory=list,
-        alias="RASK_COMPUTE_ENGINE_OUTCOME_BASES",
-        description="The planners' own addresses (a JSON list), the only hosts a job may report its outcome to: an order "
-        "whose outcome URL is not `<base>/runs/<its key>/outcome` for one of these is refused 422, because the job posts "
-        "its pod's projected token there.",
-    )
-    engine_request_timeout_s: float = Field(
-        default=10.0,
-        gt=0.0,
-        alias="RASK_COMPUTE_ENGINE_REQUEST_TIMEOUT_S",
-        description="The bound on one call to the Ray dashboard's Jobs API from the engine door.",
     )

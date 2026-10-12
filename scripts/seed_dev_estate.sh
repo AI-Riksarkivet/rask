@@ -123,11 +123,9 @@ for d in rask-search rask-viewer rask-annotator; do
   kubectl rollout status "deployment/$d" -n "$NS" --timeout=240s | tail -1
 done
 
-say "3/4 lakehouse: real pages into RustFS, REGISTERED in the catalog"
-# The governed half: bytes into the warehouse bucket AND a catalog table that owns them. Writing
-# without registering is the bug this script's predecessor had — data inside a governed lakehouse
-# that the catalog knows nothing about. Skipped (loudly, never silently) when the source is
-# unreachable, because a seed that dies on someone's offline laptop is a seed nobody runs.
+say "3/4 lakehouse: the annotations table, created through the catalog"
+# The governed half: a catalog table the demo user owns. Skipped (loudly, never silently) on request,
+# because a seed that dies on someone's offline laptop is a seed nobody runs.
 if [ "${RASK_SEED_SKIP_LAKEHOUSE:-0}" = "1" ]; then
   echo "  skipped (RASK_SEED_SKIP_LAKEHOUSE=1)"
 else
@@ -150,17 +148,6 @@ else
     -d "password=${RASK_SEED_PASS:-password}" -d scope='openid profile email' \
     -u lance-catalog:lance-catalog-secret \
     | python3 -c 'import sys,json; print(json.load(sys.stdin).get("id_token",""))' 2>/dev/null || true)"
-  if SEED_S3_ENDPOINT=http://127.0.0.1:19900 \
-     SEED_CATALOG_URL=http://127.0.0.1:12433 \
-     SEED_CATALOG_TOKEN="$SEED_TOKEN" \
-     SEED_MAX_PAGES="${RASK_SEED_PAGES:-3}" \
-     uv run --project "$REPO_ROOT" python "$REPO_ROOT/scripts/seed_bronze_pages.py" 2>&1 | sed 's/^/  /'; then
-    :
-  else
-    echo "  !! lakehouse seeding FAILED — the corpus above is still seeded; see the error and re-run" >&2
-    LAKEHOUSE_FAILED=1
-  fi
-
   # The ANNOTATIONS table, through the catalog. Without this the annotate canvas cannot open at all,
   # and the reason is not obvious: the catalog authorises BEFORE it checks existence, so a table that
   # was never created answers 403 "can_get_metadata required" rather than 404. No grant can fix that

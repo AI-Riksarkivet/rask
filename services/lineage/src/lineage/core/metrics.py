@@ -123,7 +123,7 @@ class ProvenanceGap(StrEnum):
 def record_provenance_gaps(*, unknown_to_graph: int | None, versions_below_tip: int) -> None:
     """Publish one sweep's provenance-completeness counts.
 
-    SYNCHRONOUS gauge, for the reason `medallion.services.cascade_lag` already states: an observable
+    SYNCHRONOUS gauge, because an observable
     gauge computes inside an SDK callback, and these numbers come from a graph query and an FGA
     enumeration. IO in a collection callback blocks the exporter and fails invisibly. The cron tick
     already did the reads; this records what it found.

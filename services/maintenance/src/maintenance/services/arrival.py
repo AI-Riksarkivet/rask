@@ -13,7 +13,7 @@ version and the operation, and no fragment or row count, so nothing here can tel
 already its sanctioned "nothing to do".
 
 Subscribing to `lineage.events.v1` rather than minting a trigger topic: it is the one lane every
-governed writer converges on (catalog doors, medallion stage runners, ingest, Ray, annotator publish), which
+governed writer converges on (the catalog's doors, annotator publish, an external producer), which
 `notifications`' reconciler established from the other direction. The control topic is deliberately not
 used — it is a broadcast with no queue group, and competing consumers need one.
 """
@@ -29,10 +29,8 @@ from pydantic import BaseModel
 log = logging.getLogger(__name__)
 
 #: Catalog operations that move NO BYTES. A registration is not an arrival: `register_table` emits a
-#: COMPLETE event indistinguishable — on the fields a subscriber matches — from a batch landing, and in
-#: the cascade that cost one extra full run per `POST /produce` until `ingest_trigger` denied them.
-#: Copied rather than imported: `services/medallion` is a sibling deployable, and a cross-service import
-#: would couple two release units to share four strings.
+#: COMPLETE event indistinguishable — on the fields a subscriber matches — from a batch landing, so a
+#: subscriber that acted on it would plan work for a write that moved nothing.
 _BYTE_FREE_OPERATIONS = frozenset({"register_table", "deregister_table", "declare_table"})
 
 #: THE LOOP GUARD, and it must name BOTH producers or it does not close. Maintenance publishes its own

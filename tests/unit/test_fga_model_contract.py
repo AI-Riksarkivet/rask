@@ -21,7 +21,6 @@ resolves in ``service_kit/governed/auth/model.json``, the file the app actually 
 from __future__ import annotations
 
 import asyncio
-import re
 from pathlib import Path
 from typing import Any, cast
 
@@ -209,21 +208,6 @@ def test_every_relation_the_catalog_checks_exists_in_the_model(monkeypatch: pyte
         f"the app can check relations that do NOT exist in service_kit/governed/auth/model.json: {phantom}. "
         "OpenFGA rejects these (relation not found) and service_kit.governed.fga fails closed → 503 for every caller."
     )
-
-
-def test_chart_medallion_required_actions_exist_on_namespace() -> None:
-    """CONTRACT: every ``requiredAction`` the chart configures for a medallion stage runner is a real
-    ``namespace`` relation (the stage runner checks it on ``namespace:<toNamespace>``). A typo here would
-    503 the whole cascade at the FGA gate, not deny it."""
-    namespace_relations = _model_relations()["namespace"]
-    actions = {
-        m
-        for values in ("chart/values.yaml", "deploy/values-prod.yaml")
-        for m in re.findall(r"requiredAction:\s*['\"]?([A-Za-z_]+)", (REPO_ROOT / values).read_text())
-    }
-    assert actions, "no requiredAction found in the chart — the regex drifted"
-    phantom = sorted(actions - namespace_relations)
-    assert not phantom, f"chart requiredAction(s) not defined on the `namespace` type: {phantom}"
 
 
 def test_transaction_alter_checks_a_real_namespace_writer_relation(

@@ -44,7 +44,6 @@ CHART = REPO / "chart"
 def _helm_template(*set_values: str) -> str:
     """Render the chart, skipping the test if helm is not on PATH or in .localbin."""
     import shutil
-    import subprocess
 
     helm = shutil.which("helm") or str(REPO / ".localbin/helm")
     if not Path(helm).exists():
@@ -102,7 +101,7 @@ def test_every_first_party_deployment_is_hardened() -> None:
     update drops in-flight requests while kube-proxy is still routing to the terminating pod.
 
     IT NO LONGER NAMES ITS OWN SUBJECTS. This carried a hand-written tuple of ten name fragments —
-    gateway, catalog, lineage, compaction, medallion-producer, the three stage runners, web, notifications —
+    gateway, catalog, lineage, compaction, web, notifications —
     which omitted controlplane, compute, flows, ingest, maintenance, viewer, search and annotator. So a
     gate whose docstring argues that "an every claim in prose is worth nothing" made exactly that kind
     of claim with a literal list, and controlplane shipped with no preStop at all: a first-party
@@ -601,22 +600,16 @@ _EXTERNAL_RAY = "https://ray.example.com:8265"
         pytest.param(("--set", "image.localImages=true"), None, id="default-names-no-ray"),
         pytest.param(_PROD_INPUTS, None, id="prod-names-no-ray"),
         pytest.param((*_PROD_INPUTS, "--set-string", f"ray.dashboardUrl={_EXTERNAL_RAY}"), _EXTERNAL_RAY, id="prod-external-ray"),
-        pytest.param(
-            (*_LOCAL_INPUTS, "--set-string", "medallion.rayAddress=http://elsewhere:8265"),
-            "http://rask-ray-head-svc:8265",
-            id="local-fixture-head",
-        ),
+        pytest.param(_LOCAL_INPUTS, "http://rask-ray-head-svc:8265", id="local-fixture-head"),
     ],
 )
 def test_every_ray_consumer_names_one_cluster_or_the_render_refuses(overlay: tuple[str, ...], address: str | None) -> None:
-    """[[CP-041]]: the cascade must submit to the cluster `compute` prunes job history on, and rask installs none of it.
+    """[[CP-041]]: every Ray consumer names the one cluster the estate names, and rask installs none of it.
 
-    Two values keys once named the Ray plane — `ray.dashboardUrl` (compute's RAY_DASHBOARD_URL, the only
-    job-history reclaimer, and the annotator's Serve discovery) and `medallion.rayAddress` (where the cascade
-    submits) — and a default render gave compute an external host while four medallion pods submitted to a
-    head Service nothing rendered. A head grown to 81,155 jobs OOMKilled compute that way. Every consumer now
-    renders `rask.rayDashboardUrl`; the local case passes a stale `medallion.rayAddress` to prove no second
-    key can split the plane, and a render that names no Ray with an engine enabled refuses.
+    A second key naming the Ray plane once split it: compute pruned job history on one head while other pods
+    submitted to a head Service nothing rendered, and a head grown to 81,155 jobs OOMKilled compute that way.
+    Every consumer renders `rask.rayDashboardUrl` (compute's RAY_DASHBOARD_URL and the annotator's Serve
+    discovery), and a render that names no Ray hands no consumer an address.
 
     The address reaches compute alone, its one reader (CP-056): a shared ConfigMap would hand a Ray address to every
     fleet pod that loads it, the lakehouse's controlplane and notifications among them, which never call Ray.
@@ -624,12 +617,6 @@ def test_every_ray_consumer_names_one_cluster_or_the_render_refuses(overlay: tup
     The engine is bring-your-own ([[XC-125]], ADR 0153): no render holds a `ray.io` object or the KubeRay operator, so
     the address is always one the estate names (the local overlay names the ray-cluster fixture's head Service).
     """
-    if address is None:
-        with pytest.raises(subprocess.CalledProcessError) as refused:
-            chart_render.render_chart_text(CHART, "--set", "explorer.enabled=true", *overlay, base=chart_render.UNNAMED_RAY_ARGS)
-        assert "services.compute.engines enables an engine on a Ray cluster this render does not name" in refused.value.stderr
-        return
-
     text = chart_render.render_chart_text(CHART, "--set", "explorer.enabled=true", *overlay, base=chart_render.UNNAMED_RAY_ARGS)
     docs = [doc for doc in yaml.load_all(text, Loader=FAST_LOADER) if isinstance(doc, dict)]
     named: dict[str, set[str]] = {}
@@ -641,7 +628,10 @@ def test_every_ray_consumer_names_one_cluster_or_the_render_refuses(overlay: tup
             if name in ("RAY_DASHBOARD_URL", "MEDIA_SERVE_DISCOVERY_URL") or "RAY_ADDRESS" in name:
                 named.setdefault(f"{workload} {name}", set()).add(value)
 
-    assert named == {"Deployment/rask-compute RAY_DASHBOARD_URL": {address}, "Deployment/rask-annotator MEDIA_SERVE_DISCOVERY_URL": {address}}
+    expected = (
+        {} if address is None else {"Deployment/rask-compute RAY_DASHBOARD_URL": {address}, "Deployment/rask-annotator MEDIA_SERVE_DISCOVERY_URL": {address}}
+    )
+    assert named == expected
     engine = sorted(
         f"{doc['kind']}/{doc['metadata']['name']}"
         for doc in docs
@@ -775,7 +765,6 @@ def test_the_notifications_cron_binding_name_is_the_route_it_is_delivered_to() -
     process, honours. A subprocess IS that fresh process.
     """
     import os
-    import subprocess
     import sys
 
     docs = _rendered_docs()
@@ -896,129 +885,6 @@ def test_the_sidecars_non_telemetry_config_survives_telemetry_being_off() -> Non
     assert api_logging.get("omitHealthChecks") is True, "the kubelet polls /v1.0/healthz on every sidecar; without this the stream is mostly probe noise"
 
 
-def test_what_the_producer_PUBLISHES_is_what_a_stage_runner_ACCEPTS() -> None:
-    """A lane whose two halves disagree fails with a 200 OK and no log line anywhere.
-
-    The producer stamps `bronzeDataset` / `bronzeNamespace` on the trigger it publishes to
-    `bronzeTopic`. The stage runner subscribed to that topic compares the claim against its own
-    `fromDataset` / `fromNamespace` and, on a mismatch, returns DROP — which is a SUCCESS ack. The
-    wire looks healthy end to end:
-
-        stage runner      POST /medallion-event  200 OK      <- the app accepted the delivery
-        stage runner      POST /dlq-event        200 OK      <- and immediately dead-lettered it
-        daprd      "DROP status returned from app while processing pub/sub event ..."
-
-    and the stage runner's own log says NOTHING. Measured 2026-08-25, after the tiers were nested: the
-    producer still published `bronze$events` while every stage runner had moved to `lakehouse$bronze$events`,
-    so the cascade died at the first hop and the only evidence was one warning in a SIDECAR log.
-
-    Pairing them here because they are rendered from different values by different templates and
-    nothing else compares them: they are one contract written in two places.
-    """
-    import yaml as _yaml
-
-    values = _yaml.safe_load((CHART / "values.yaml").read_text(encoding="utf-8"))
-    medallion = values.get("medallion") or {}
-    producer = medallion.get("producer") or {}
-    stage_runners = medallion.get("stageRunners") or []
-    assert stage_runners, "no stage_runners declared — this gate is now blind"
-
-    topic = producer.get("bronzeTopic")
-    assert topic, "the producer declares no bronzeTopic, so nothing can consume its writes"
-
-    consumers = [m for m in stage_runners if m.get("subTopic") == topic]
-    assert consumers, (
-        f"the producer publishes to {topic!r} and no stage runner subscribes to it — the head writes bronze "
-        f"and the cascade never starts, with every hop reporting success."
-    )
-
-    mismatched = []
-    for stage_runner in consumers:
-        for producer_key, stage_runner_key in (("bronzeDataset", "fromDataset"), ("bronzeNamespace", "fromNamespace")):
-            want, got = producer.get(producer_key), stage_runner.get(stage_runner_key)
-            if want != got:
-                mismatched.append(f"  {stage_runner.get('name')}: producer.{producer_key}={want!r} but stage_runner.{stage_runner_key}={got!r}")
-
-    assert not mismatched, (
-        f"the producer publishes a lane no stage_runner on {topic!r} accepts:\n" + "\n".join(mismatched) + "\n\n"
-        "The stage runner DROPs a trigger whose lane claim does not match its own, and DROP acks as success — "
-        "so this fails with 200 OK on every hop and no error in the stage runner's log. Rename BOTH halves or "
-        "neither."
-    )
-
-
-def test_a_medallion_NAMESPACE_can_actually_belong_to_a_warehouse() -> None:
-    """With warehouses on, a flat tier belongs to nothing — and a PRE-qualified one gets qualified twice.
-
-    `require_warehouse_scoped` refuses a top-level namespace that belongs to no warehouse, and every
-    bucket a medallion tier could resolve to is reserved platform storage no warehouse may back (the
-    catalog root in-app; anything in `medallion.buckets` by the chart, which appends that map into
-    `LANCE_RESERVED_BUCKETS`). So a bare `bronze` is unownable. Two shapes escape that, and an estate
-    must be in one of them:
-
-    * **Project-qualified** (`medallion.projectsEnabled`) — `project_namespace` prefixes `<project>-`
-      at RUNTIME (`transform.resolve_stage_identity`), so `bronze` becomes `acme-bronze`: still
-      top-level, but owned by that project's warehouse. This is the shape `seed_estate.py` has always built.
-    * **Nested** (`<parent>$bronze`) — the guard returns early for `len(segments) > 1`, so a child
-      inherits its parent's warehouse and only the parent is bound.
-
-    THE TRAP IS DOING BOTH. `project_namespace` prefixes every declared name unconditionally, so a
-    nested one is qualified too. Measured live 2026-08-25 on an estate whose project was `lakehouse`
-    and whose tiers had been nested under a parent also called `lakehouse`:
-
-        POST /v1/table/lakehouse-lakehouse$gold$catalog/create -> 403
-
-    Every silver→gold hop failed on a table id that can never exist, and the stage runner reported only
-    `medallion_stage_failed`. So with projects ON the declaration must stay UNQUALIFIED and unnested —
-    the runtime owns the qualification, and pre-empting it doubles it.
-    """
-    import yaml as _yaml
-
-    values = _yaml.safe_load((CHART / "values.yaml").read_text(encoding="utf-8"))
-    medallion = values.get("medallion") or {}
-    warehouses_on = bool(((values.get("catalog") or {}).get("warehouses") or {}).get("enabled"))
-    projects_on = bool(medallion.get("projectsEnabled"))
-    delimiter = (values.get("catalog") or {}).get("delimiter") or "$"
-
-    # The namespaces are the seeder's own derivation, so the gate and the seed cannot read the chart two
-    # ways. It indexes `stageRunners` strictly and reads `mediaStageRunners[]` too: a renamed key fails here.
-    import sys
-
-    spec = importlib.util.spec_from_file_location("seed_medallion_namespaces_under_test", REPO / "scripts" / "seed_medallion_namespaces.py")
-    assert spec is not None and spec.loader is not None
-    seeder = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = seeder
-    spec.loader.exec_module(seeder)
-    declared: list[str] = seeder.declared_namespaces([CHART / "values.yaml"])
-    assert declared, "no medallion namespaces declared — this gate is now blind"
-
-    if projects_on:
-        # The runtime qualifies. A declaration that is already nested (or already prefixed) is what
-        # produces the doubled id above, so it is refused regardless of the warehouse setting.
-        doubled = [ns for ns in declared if delimiter in ns]
-        assert not doubled, (
-            "medallion.projectsEnabled is true, so `project_namespace` prefixes `<project>-` at runtime — "
-            "and these namespaces are already nested, so they get qualified ANYWAY:\n  " + "\n  ".join(doubled) + "\n\n"
-            "The result is `<project>-<parent>$<tier>`, a table id nothing can create — every hop 403s and "
-            "the stage runner logs only `medallion_stage_failed`. Declare the bare tier name and let the runtime "
-            "qualify it."
-        )
-        return
-
-    if not warehouses_on:
-        return  # single-bucket: the shared root is the correct destination
-
-    flat = [ns for ns in declared if delimiter not in ns]
-    assert not flat, (
-        "catalog.warehouses.enabled is true and medallion.projectsEnabled is false, so nothing qualifies "
-        "these names and a top-level namespace must belong to a warehouse — but every bucket they could "
-        "resolve to is reserved platform storage no warehouse may back:\n  " + "\n  ".join(flat) + "\n\n"
-        "Turn on medallion.projectsEnabled (the runtime then owns `<project>-<tier>`, owned by that "
-        f"project's warehouse), nest them under one bound parent ('<parent>{delimiter}<tier>'), or run "
-        "single-bucket with catalog.warehouses.enabled=false."
-    )
-
-
 def test_ray_serve_is_actually_IMPORTABLE_from_the_root_lock() -> None:
     """Declaring `ray[serve]` is not the same as being able to import it, and the gap is upstream.
 
@@ -1055,7 +921,6 @@ def test_ray_serve_is_actually_IMPORTABLE_from_the_root_lock() -> None:
 _DOCS_ENV_BY_WORKLOAD: dict[str, str] = {
     "catalog": "LANCE_REST_DOCS",
     "lineage": "LINEAGE_DOCS",
-    "medallion-producer": "MEDALLION_DOCS",
     "maintenance": "MAINTENANCE_DOCS",
     "viewer": "MEDIA_DOCS",
     "search": "MEDIA_DOCS",
@@ -1271,9 +1136,8 @@ def test_the_catalog_STAGES_its_write_announcement_into_the_prefix_the_relay_DRA
     the code reads what no chart sets. Only a RENDER can tell either of them apart from a working feature.
 
     What it costs on the catalog specifically: the emit is inline-awaited and best-effort AFTER the Lance
-    write commits, and medallion's `/bronze-arrival` subscription reacts to that announcement — so a lost
-    publish does not merely under-report provenance, the whole bronze->silver->gold run silently never
-    happens.
+    write commits, and a pipeline reading the commit feed reacts to that announcement — so a lost
+    publish does not merely under-report provenance, the downstream run silently never happens.
 
     THE PREFIX EQUALITY IS THE LOAD-BEARING HALF. Staging is only durable because
     `lineage/api/reconcile_cron.py` drains `LINEAGE_OUTBOX_URI` and re-publishes what it finds; a catalog

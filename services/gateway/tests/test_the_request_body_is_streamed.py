@@ -98,7 +98,7 @@ async def test_the_upstream_is_reached_before_the_body_has_finished_arriving(gw)
         try:
             response = await asyncio.wait_for(
                 client.post(
-                    "/api/train",
+                    "/api/catalog/v1/table/ns$t/insert",
                     content=client_body(),
                     headers={"content-length": str(len(first) + len(second)), "content-type": "application/octet-stream"},
                 ),
@@ -120,7 +120,7 @@ async def test_the_forwarded_body_keeps_its_declared_length(gw) -> None:
     payload = b"C" * 2048
     transport = httpx.ASGITransport(app=gw.app)
     async with httpx.AsyncClient(transport=transport, base_url="http://gateway.test") as client:
-        response = await client.post("/api/train", content=payload)
+        response = await client.post("/api/catalog/v1/table/ns$t/insert", content=payload)
 
     assert response.status_code == 200
     assert upstream.body == payload
@@ -142,7 +142,7 @@ async def test_a_bodyless_get_is_not_re_framed_as_chunked(gw) -> None:
 
     transport = httpx.ASGITransport(app=gw.app)
     async with httpx.AsyncClient(transport=transport, base_url="http://gateway.test") as client:
-        response = await client.get("/api/train")
+        response = await client.get("/api/catalog/v1/table/ns$t/insert")
 
     assert response.status_code == 200
     assert upstream.body == b""

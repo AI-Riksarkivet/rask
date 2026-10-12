@@ -1,11 +1,10 @@
 {{- $ray := .Values.minio.rayComputeAccessKey }}
 {{- $maint := .Values.minio.maintenanceAccessKey }}
-{{- $medallion := .Values.minio.medallionAccessKey }}
 {{- $lineage := .Values.minio.lineageAccessKey }}
 {{- $viewer := .Values.minio.viewerAccessKey }}
 {{- $catalog := .Values.minio.catalogAccessKey }}
 {{- $fixture := include "lance.baseFixture" . | fromJson }}
-{{- if and .Values.minio.enabled (or $ray $maint $medallion $lineage $viewer $fixture) }}
+{{- if and .Values.minio.enabled (or $ray $maint $lineage $viewer $fixture) }}
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -57,7 +56,7 @@ spec:
               set -e
               root=$(cat "$ROOT_FILE")
               {{- include "lance.scopedSecretFn" . | nindent 14 }}
-              {{- range $id := list $ray $maint $medallion $lineage $catalog $viewer | compact | uniq }}
+              {{- range $id := list $ray $maint $lineage $catalog $viewer | compact | uniq }}
               scoped_secret {{ $id }} "$KEYS/{{ $id }}"
               {{- end }}
               {{- range $ref, $_ := $fixture }}
@@ -154,7 +153,7 @@ spec:
               {{- end }}
 
               {{- if $ray }}
-              # --- RAY COMPUTE: the cascade's stage/train jobs. ---------------------------------------
+              # --- RAY COMPUTE: the jobs the engine runs. ----------------------------------------------
               cat >/tmp/ray-compute.json <<'POLICY'
               {
                 "Version": "2012-10-17",
@@ -206,16 +205,10 @@ spec:
                 ]
               }
               POLICY
-              # The Ray lane's deny is TOTAL where maintenance's is write-only: a stage job reads
-              # `FROM_URI` and writes `TO_URI` and touches nothing else (`scripts/ray_stage_job.py`), so it
-              # has no reason to read a governance record either.
+              # The Ray lane's deny is TOTAL where maintenance's is write-only: a job reads and writes table
+              # data and has no reason to read a governance record.
               #
-              # THE DENY LISTS EVERY CONTROL PREFIX, and the four beyond the registry pair are the ones
-              # that matter most here: `_tasks/<hash>.json` carries an ENGINE AND A COMMAND
-              # (`service_kit/lakehouse/task_registry.py`) and `engine_choice` refuses any task nobody
-              # registered — so that prefix IS the list of what this estate's compute plane may run, and the
-              # Ray lane is its untrusted consumer. `_transforms/` re-points which transform a lane runs and
-              # `_gates/` decides which output is admitted. `_trash/` is the only thing making a dropped
+              # THE DENY LISTS EVERY CONTROL PREFIX. `_gates/` decides which output is admitted. `_trash/` is the only thing making a dropped
               # table restorable (#75/#96), so deleting a record strands live bytes behind an `undrop` that
               # can no longer find them — silent, and unrecoverable.
               #
@@ -231,71 +224,6 @@ spec:
               mc admin user add rfs {{ .Values.minio.rayComputeAccessKey }} "$(cat /keys/{{ .Values.minio.rayComputeAccessKey }})" || true
               mc admin policy attach rfs rask-ray-compute --user {{ .Values.minio.rayComputeAccessKey }} || true
               echo "provisioned scoped user {{ .Values.minio.rayComputeAccessKey }} (rask-ray-compute)"
-              {{- end }}
-
-              {{- if $medallion }}
-              # --- MEDALLION: the producer and the three stage runners. -------------------------------------
-              cat >/tmp/medallion.json <<'POLICY'
-              {
-                "Version": "2012-10-17",
-                "Statement": [
-                  {
-                    "Sid": "CascadeDataInAnyWarehouse",
-                    "Effect": "Allow",
-                    "Action": [
-                      "s3:ListBucket",
-                      "s3:GetBucketLocation",
-                      "s3:GetObject",
-                      "s3:PutObject",
-                      "s3:DeleteObject",
-                      "s3:AbortMultipartUpload",
-                      "s3:ListMultipartUploadParts"
-                    ],
-                    "Resource": ["arn:aws:s3:::*", "arn:aws:s3:::*/*"]
-                  },
-                  {
-                    "Sid": "NeverRewriteWhatGovernsTheCascade",
-                    "Effect": "Deny",
-                    "Action": ["s3:PutObject", "s3:DeleteObject"],
-                    "Resource": [
-                      "arn:aws:s3:::*/_projects/*",
-                      "arn:aws:s3:::*/_protection/*",
-                      "arn:aws:s3:::*/_bases/*",
-                      "arn:aws:s3:::*/_policies/*",
-                      "arn:aws:s3:::*/_warehouses/*",
-                      "arn:aws:s3:::*/_transforms/*",
-                      "arn:aws:s3:::*/_gates/*",
-                      "arn:aws:s3:::*/_trash/*",
-                      "arn:aws:s3:::*/__manifest/*"
-                    ]
-                  }
-                ]
-              }
-              POLICY
-              # A THIRD SHAPE, and reusing either existing one would have broken something. The Ray
-              # lane's deny is TOTAL, which is right for a stage job — it reads `FROM_URI`, writes
-              # `TO_URI` and consults nothing else — and wrong for the SERVICES that drive it: the
-              # medallion reaches control records directly over S3, not through the catalog door.
-              # Measured 2026-09-07: `transform_spec.resolve_task` / `resolve_transform`, `gate_specs`
-              # and `project_root` READ `_tasks/`, `_transforms/`, `_gates/` and the warehouse registry,
-              # so a total deny leaves every stage runner unable to resolve which transform to run.
-              #
-              # `_tasks/` IS ABSENT FROM THE DENY, and that is the carve-out this policy exists to make.
-              # `task_register.register_ray_tasks` writes `_tasks/<hash>.json` at boot and
-              # `engine_choice` refuses any task nobody registered — so this plane is that prefix's
-              # REGISTRAR while the Ray lane is its untrusted consumer, and the two credentials must
-              # differ there or one of them is wrong. Denying the registrar yields a cascade that can
-              # run nothing, with the policy looking correct.
-              #
-              # Everything else is write-deny, like maintenance's and for the same reason: the reads are
-              # load-bearing and the writes are not ones this plane ever makes. A stage runner that can rewrite
-              # `_transforms/` re-points what it runs; one that can rewrite `_gates/` admits its own
-              # blocked output; one that can delete `_trash/` strands bytes behind an undrop that can no
-              # longer find them.
-              mc admin policy create rfs rask-medallion /tmp/medallion.json
-              mc admin user add rfs {{ .Values.minio.medallionAccessKey }} "$(cat /keys/{{ .Values.minio.medallionAccessKey }})" || true
-              mc admin policy attach rfs rask-medallion --user {{ .Values.minio.medallionAccessKey }} || true
-              echo "provisioned scoped user {{ .Values.minio.medallionAccessKey }} (rask-medallion)"
               {{- end }}
 
               {{- if $lineage }}

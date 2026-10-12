@@ -43,14 +43,10 @@ WORKDIR /app
 # The PLATFORM compute environment, from the ROOT workspace lock.
 #
 # `packages/ray-cluster-env` is a deps-only member NAMING this image's environment: ray[data,
-# default,serve], pylance, lance-ray, pyarrow and service-kit[lancekit] — what the baked job
-# scripts import plus what the head runtime needs (its pyproject carries the measured incidents).
-# It replaced `--package ratch` at the dissolution (2026-08-28, open_ray-kernel.md move 13): the
-# image's environment was whatever ratch happened to depend on, for scripts that never imported
-# ratch. Building from the root lock means this image and the fleet resolve the SAME versions by
-# construction — a split between them is a correctness bug, not a currency preference (measured:
-# pylance 8.0.0 against a 9.0.0-written dataset made the whole row-aligned blob read path unusable
-# and mis-detected payload presence silently).
+# default,serve], jinja2 and service-kit (for `service_kit.ray_tracing`) — what the head runtime needs
+# (its pyproject carries the measured incidents). The head bakes no job (ADR 0155), so the Lance plane
+# is not here. Building from the root lock means this image and the fleet resolve the SAME versions by
+# construction.
 #
 # NO WORKLOAD DEPENDENCIES LIVE HERE. This image previously built from `runners/htr/uv.lock`, so
 # every lane inherited torch and htrflow whether it wanted them or not, and the platform's own
@@ -123,38 +119,6 @@ RUN --network=none --mount=from=builder,source=/opt/uv/python,target=/tmp/uvpy \
     cp -a /tmp/uvpy /opt/uv/python
 RUN --network=none --mount=from=builder,source=/opt/venv,target=/tmp/venv \
     cp -a /tmp/venv /opt/venv
-
-# compute's engine door submits `python /home/ray/jobs/<job>.py` — the commands of the task table
-# `services.compute.engines.ray.tasks` (compute's RASK_COMPUTE_ENGINE_TASKS). `ray-lance.dockerfile`
-# baked these for the SEPARATE ray-lance demo cluster; this is the image the chart's KubeRay cluster
-# actually runs, and it did not, so every submitted stage job died with
-#   python: can't open file '/home/ray/jobs/ray_stage_job.py': No such file or directory
-# and exit code 2. The cascade's success path had therefore never once run — the failure looked like
-# missing data rather than a missing file. The entrypoint defaults and this COPY name the same files,
-# so a change to either changes the other in the same commit.
-#
-# `--chown` rather than a following `RUN chown`: one layer instead of two, and the ownership is part
-# of the copy rather than a correction to it.
-COPY --chown=app:app scripts/ray_stage_job.py scripts/ray_train_job.py scripts/ray_dummy_job.py /home/ray/jobs/
-
-# The DUMMY runner's package, beside its job script — the estate's own end-to-end probe.
-#
-# `python /home/ray/jobs/ray_dummy_job.py` puts that directory on `sys.path[0]`, so
-# `from dummy_runner.job import main` resolves with no PYTHONPATH edit and, more importantly, NO
-# second dependency resolution. That distinction is what keeps this inside the "a workload's
-# awkward dependencies are ITS problem, never a fattened shared image" ruling: `dummy_runner`
-# imports pyarrow, lance and `lineage_kit`, all three of which are already here from the platform
-# env above — `lineage-kit` is a declared dependency of `packages/ray-cluster-env` because the
-# compute plane emits through it (LIN-001) and three baked jobs in this image do. A
-# `uv sync --project runners/dummy` would instead resolve a SECOND lock into this image and could
-# quietly move pylance out from under the htr runner — the actual harm the ruling names. A source
-# copy plus a root-lock dependency adds no second resolution at all.
-#
-# It is baked rather than shipped via `runtime_env` for the same reason every other job here is:
-# Ray documents runtime_env as development-only, and the whole point of a dummy lane is to exercise
-# the PRODUCTION submission path with a transform that needs no GPU and no model download. A probe
-# that ran differently from the thing it probes would be worth nothing.
-COPY --chown=app:app runners/dummy/src/dummy_runner /home/ray/jobs/dummy_runner
 
 ENV PATH=/opt/venv/bin:$PATH \
     PYTHONUNBUFFERED=1 \

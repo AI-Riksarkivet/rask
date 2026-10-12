@@ -18,16 +18,15 @@ from __future__ import annotations
 from typing import Final
 
 
-#: Values that are TRUE statements about who acted and useless as an address. `data_eng`/`analyst` are
-#: the chart's stage authors and `reconcile` is the back-fill's; the chart stamps them deliberately —
-#: the stage runner really did run it — which is why the estate carries `originator` as a SEPARATE
-#: field rather than overwriting attribution to fix targeting.
+#: Values that are TRUE statements about who acted and useless as an address. `data_eng`, `analyst` and
+#: `ray` are role and engine literals a writer may stamp as its author and `reconcile` is the back-fill's;
+#: each is true about who acted and addresses nobody, which is why the estate carries `originator` as a
+#: SEPARATE field rather than overwriting attribution to fix targeting.
 #:
 #: NO WORKLOAD NAME BELONGS HERE. A denylist naming a modality would make this shared seam know about
 #: one, which the platform is forbidden to do — so a workload whose stage authors under its own name is
 #: covered by the generic checks below (or by the producer declining to claim it), never by an entry.
-#: The same argument applies to an ENGINE: `ray` is listed because the chart stamps that literal as an
-#: author today, and the durable answer is for a producer to mark its own non-person authors rather than
+#: The same argument applies to an ENGINE: the durable answer is for a producer to mark its own non-person authors rather than
 #: for the platform to enumerate them — this frozenset is the floor, not the design.
 _NOT_A_PERSON: Final = frozenset({"", "anonymous", "anon", "system", "service", "*", "user:*", "data_eng", "analyst", "ray", "reconcile"})
 

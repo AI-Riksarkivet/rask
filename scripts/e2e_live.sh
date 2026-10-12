@@ -67,13 +67,6 @@ FGA="$(svc "$RELEASE-openfga")"      || true
 # The telemetry store is the platform's; on a dev estate, the observability fixture's (deploy/fixtures/observability).
 GREPTIME="$(svc greptimedb observability)" || true
 MAINT="$(svc "$RELEASE-maintenance")" || true
-# The producer answers to a LEGACY name in the suites. `LANCE_E2E_LANCERAY_URL` predates the rename
-# and every consumer probes it as `("medallion-producer", LANCERAY)` — so the variable names the
-# medallion producer, not anything on the Ray plane. Nine legs skipped for want of this one line.
-MEDALLION="$(svc "$RELEASE-medallion-producer")" || true
-# One stage runner is enough: the quality-block drive addresses whichever it is given, and bronze-to-silver
-# is the lane the cascade always has.
-STAGE_RUNNER="$(svc "$RELEASE-bronze-to-silver")" || true
 AGE="$(svc "$RELEASE-age")" || true
 [ -n "$CATALOG" ] || fail "no $RELEASE-catalog service — is the release deployed?"
 printf '   catalog=%s lineage=%s gateway=%s s3=%s\n' "$CATALOG" "$LINEAGE" "$GATEWAY" "$S3"
@@ -132,15 +125,6 @@ url() {  # url VARNAME HOST[/path] — export VARNAME=http://HOST... only if HOS
   local var="$1" host="$2" suffix="${3-}"
   if [ -n "$host" ]; then export "$var=http://$host$suffix"; else _missing="$_missing $var"; fi
 }
-# THE QUALITY MEASUREMENT IS A CHART TOGGLE, and two governed-union legs assert its output. The stage
-# runner only runs `assert_quality` — the sole producer of the `dataQualityAssertions` facet, and so the
-# only thing that ever sets `quality_passed` on a WROTE edge — when `medallion.quality` is on
-# (chart/values.yaml ships it FALSE). Read off the running pod rather than the values, because the pod
-# is what the suite will actually meet; absent, the legs skip with a reason instead of failing on a
-# NULL field, which is what they did before (measured 2026-09-14).
-QUALITY_ON="$(kubectl get deploy "$RELEASE-bronze-to-silver" -o jsonpath='{range .spec.template.spec.containers[0].env[?(@.name=="MEDALLION_QUALITY_ENABLED")]}{.value}{end}' 2>/dev/null || true)"
-[ "$QUALITY_ON" = "true" ] && export LANCE_E2E_QUALITY=1
-
 url LANCE_E2E_CATALOG_URL     "$CATALOG"
 url LANCE_E2E_LINEAGE_URL     "$LINEAGE"
 url LANCE_E2E_GATEWAY_URL     "$GATEWAY"
@@ -245,9 +229,6 @@ export LANCE_E2E_S3_REGION="${LANCE_E2E_S3_REGION:-us-east-1}"
 # against a different bring-up (a port-forward, `e2e_stack.sh`, a local compose) and named the same
 # service for what that bring-up called it. The runner's job is to answer to all of them rather than
 # to make thirty suites agree on a spelling.
-[ -n "$MEDALLION" ] && export LANCE_E2E_LANCERAY_URL="http://$MEDALLION"
-[ -n "$STAGE_RUNNER" ] && export LANCE_E2E_STAGE_RUNNER_URL="http://$STAGE_RUNNER"
-[ -n "$STAGE_RUNNER" ] && export LANCE_E2E_STAGE_RUNNER_TOKEN="$DAPR_TOKEN"
 export LANCE_E2E_AUTH_SERVER="http://$CATALOG"
 export MEDIA_CATALOG_URL="http://$CATALOG"
 export LANCE_REST_E2E_URL="http://$CATALOG"
@@ -341,21 +322,20 @@ fi
 
 # ---- settle gate -------------------------------------------------------------------------------
 # A SETTLING ESTATE AND A BROKEN ONE LOOKED IDENTICAL, and that is the whole reason this exists. The
-# suites drive the cascade, which runs on Dapr pub/sub — and after a rollout a stage runner's sidecar
-# takes time to re-register its subscriptions. A suite that starts inside that window publishes to a
-# topic nobody is listening on yet and reports a FAILED cascade, so a green run needed a second drive
-# and the first one taught nothing.
+# suites assert on what bus subscribers did — and after a rollout a subscriber's sidecar takes time to
+# re-register its subscriptions. A suite that starts inside that window publishes to a topic nobody is
+# listening on yet and reports a failure, so a green run needed a second drive and the first one taught
+# nothing.
 #
 # THE PROBE IS THE SIDECAR'S OWN ANSWER, not a sleep: `/v1.0/metadata` reports the subscriptions the
-# runtime has actually registered plus `actorRuntime.hostReady`. Verified against the running estate —
-# `bronze-to-silver` answers `['dlq.bronze-to-silver', 'medallion.bronze']` with hostReady true. A
+# runtime has actually registered plus `actorRuntime.hostReady` (notifications hosts the inbox actors). A
 # fixed sleep would be both slower on a settled estate and still wrong on a slow one.
 #
 # It FAILS rather than warns: proceeding into a suite that cannot pass produces a red run whose cause
 # is the clock, and this script's whole job is to make a red run mean something.
 settle_deadline=$(( $(date +%s) + ${LANCE_E2E_SETTLE_SECONDS:-120} ))
-step "3.5/4 waiting for the cascade's subscriptions to re-register"
-for dep in medallion-producer bronze-to-silver media-to-silver silver-to-gold; do
+step "3.5/4 waiting for the subscribers' subscriptions to re-register"
+for dep in notifications; do
   # ROLLOUT FIRST, THEN THE SIDECAR — and that order is the fix for a hole this gate had when it was
   # first driven. Mid-rollout `kubectl exec deploy/<name>` may land on the OLD pod, which is still
   # serving and still settled, so the probe answered "ready" 1 second after a restart while the NEW
@@ -374,7 +354,7 @@ sys.exit(0 if topics and ready else 1)
       printf '   ok   %s
 ' "$dep"; break
     fi
-    [ "$(date +%s)" -lt "$settle_deadline" ] || fail "$dep has not re-registered its subscriptions within ${LANCE_E2E_SETTLE_SECONDS:-120}s — the estate is not settled, and running now would report the clock as a cascade defect"
+    [ "$(date +%s)" -lt "$settle_deadline" ] || fail "$dep has not re-registered its subscriptions within ${LANCE_E2E_SETTLE_SECONDS:-120}s — the estate is not settled, and running now would report the clock as a defect"
     sleep 3
   done
 done

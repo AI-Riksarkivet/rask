@@ -10,13 +10,13 @@ and a NEW dead symbol stands out immediately. That is the whole point: keep the 
 
 The categories held here, all verified by reading the call site:
   · FastAPI route handlers / exception handlers  — invoked by the router, never by name.
-  · Dapr pub-sub + cron handlers (on_stage, on_bronze_arrival, on_train_trigger) — invoked by the sidecar.
+  · Dapr pub-sub + cron handlers — invoked by the sidecar.
   · pydantic `model_config` + `@model_validator` / `@field_validator` methods — invoked by pydantic.
   · pydantic MODEL FIELDS on response/claims schemas — "used" via serialization, not by name.
   · Test hooks and unittest.mock attributes (return_value / side_effect).
 
 LANDMINE — do NOT "clean up" what vulture flags without reading it first. `Image.MAX_IMAGE_PIXELS` in
-services/medallion/services/media.py is reported as an "unused attribute" because it is an assignment to a
+packages/service-kit/src/service_kit/lakehouse/media.py is reported as an "unused attribute" because it is an assignment to a
 Pillow global. It is the DECOMPRESSION-BOMB GUARD. Deleting it silently disarms a security control while
 every test stays green. That symbol is the reason this file is documented rather than auto-trusted.
 
@@ -42,16 +42,11 @@ quality_passed  # unused variable (services/lineage/schemas.py:78)
 description  # unused variable (services/lineage/schemas.py:112)
 transformation_type  # unused variable (services/lineage/schemas.py:164)
 description  # unused variable (services/lineage/schemas.py:167)
-on_stage  # unused function (services/medallion/api/events.py:36)
-on_bronze_arrival  # unused function (services/medallion/api/bronze_arrival.py:41)
-on_train_trigger  # unused function (services/medallion/api/train.py:100)
-model_config  # unused variable (services/medallion/core/config.py:21)
 pytestmark  # unused variable (tests/e2e/test_client_direct_e2e.py:27)
 pytestmark  # unused variable (tests/e2e-py/test_maintenance_e2e.py:33)
 pytestmark  # unused variable (tests/e2e/test_e2e.py:17)
 pytestmark  # unused variable (tests/e2e/test_gateway_e2e.py:23)
 pytestmark  # unused variable (tests/e2e/test_governance_e2e.py:40)
-pytestmark  # unused variable (tests/e2e/test_governed_union_e2e.py:72)
 pytestmark  # unused variable (tests/e2e/test_lineage_e2e.py:22)
 pytestmark  # unused variable (tests/e2e/test_multibase_e2e.py:32)
 pytestmark  # unused variable (tests/e2e/test_object_store_cas_e2e.py:42)

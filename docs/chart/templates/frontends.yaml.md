@@ -46,7 +46,7 @@ the intended future edge (not implemented on this branch).
 
 Dead-subscription detector (the lakehouse zone's admin /streams view): the comma
 list of "STREAM:service" consumer groups the estate EXPECTS on JetStream, rendered
-from the SAME values (and the same medallion.enabled / catalog.controlEmit /
+from the SAME values (and the same catalog.controlEmit /
 dapr.resiliency.enabled gates) that dapr-component.yaml renders the real
 subscriptions from — so the expectation cannot drift from the topology. Gated on
 dapr.enabled too: components may render, but with no injected sidecar nothing
@@ -146,11 +146,8 @@ The backend planes the zones' BFF proxies target directly.
 
 ## `- name: GREPTIME_API`
 
-NO `MEDALLION_API`. Its ONLY frontend reader was the models zone's `/pipeline` trigger
-door (`medallion.remote.ts` → POST /produce, /train), deleted 2026-08-07 — so injecting it
-now would be dead config: a plane fully "configured" and read by
-nobody. The medallion is still reachable SERVER-side, through the gateway's own
-`RASK_MEDALLION_API_URL` row, which is a different variable with a live reader.
+NO `MEDALLION_API`: the lakehouse runs no medallion service (ADR 0155), so there is nothing for a
+zone to reach.
 
 ## `- name: GREPTIME_AUDIT_TABLE`
 

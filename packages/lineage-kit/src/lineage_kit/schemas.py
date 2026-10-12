@@ -1,8 +1,7 @@
 """Pydantic OpenLineage schemas — THE standard emission shape for all Ray compute (R21).
 
-Every plane that runs on Ray (the medallion stage runners, the ingest→bronze producer, the HTR
-pipeline, ``ray_stage``/lance jobs, and online Ray Serve deployments) authors its lineage
-through these models instead of hand-building wire dicts. The models convert to the
+Every plane that runs on Ray (a sealed runner's pipeline and its online Ray Serve deployments)
+authors its lineage through these models instead of hand-building wire dicts. The models convert to the
 official ``openlineage-python`` ``event_v2`` classes (:meth:`RunEvent.to_openlineage`),
 and the wire form (:meth:`RunEvent.to_wire`) is produced BY the official serializer —
 spec fidelity is by construction, not by mirroring.
@@ -214,8 +213,7 @@ class JobTypeJobFacet(Facet):
 
     Modelled here rather than written out per producer because it is a STANDARD facet with a
     published schema of its own, so it must not point at ``BaseFacet`` the way `custom_facet` does.
-    Two producers were spelling the URL by hand (`runners/dummy`, `scripts/ray_train_job.py`) and a
-    hand-written spec URL is exactly the second authority LIN-001 exists to remove.
+    A producer spelling the URL by hand is exactly the second authority LIN-001 exists to remove.
     """
 
     schema_url: str = Field(default=JOB_TYPE_FACET_SCHEMA_URL, alias="_schemaURL")

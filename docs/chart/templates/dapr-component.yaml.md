@@ -5,7 +5,7 @@ every release revision, under a 1 MiB ceiling. Each section is headed by the tem
 
 ## `apiVersion: dapr.io/v1alpha1`
 
-Dapr pub/sub components — the catalog→lineage topic + the medallion triggers on NATS JetStream. The
+Dapr pub/sub components — the catalog→lineage topic and the control broadcast on NATS JetStream. The
 sidecar owns retry/backoff here (config, not app code); subscriptions are programmatic (each app
 serves GET /dapr/subscribe via dapr-ext-fastapi), so no declarative Subscription CRDs.
 
@@ -31,27 +31,6 @@ governance events into a fresh in-memory buffer — the buffer is a live-refresh
 The control topic's other publishers, each on its own component and so as its own NATS user: maintenance's #79 purge
 announcements and the annotator's assignments. A publisher a component does not scope is refused by its sidecar, silently.
 
-## `{{- if and .Values.medallion.enabled (include "lance.outOfProcessEngine" .) .Values.medallion.compute }}`
-
-Each stage runner announces the plans of its out-of-process stage runs (CP-029 D-2), whichever engine
-`services.compute.engines` enables.
-
-## `apiVersion: dapr.io/v1alpha1`
-
-The CASCADE's view of the same control stream (§ D2 B8). A SEPARATE component, not another scope on
-the broadcast one above, because the two want opposite delivery semantics:
-
-the console buffer  — broadcast, ephemeral, deliverPolicy=new. Every replica must see every event
-to answer GET /v1/events, and a missed one costs a stale refresh hint.
-the cascade head    — queue group + DURABLE. Exactly one replica must act on a publication, and a
-trigger published while the producer is down must be DELIVERED on recovery,
-not skipped. That is the chaos-verified rule the comment block below states
-for every `new` subscriber, and a publication is the most expensive thing in
-the estate to silently drop.
-
-Sharing the broadcast component would give a scaled producer one cascade per replica, and lose any
-trigger published during a rollout — both silent.
-
 ## `{{- if .Values.dapr.resiliency.enabled }}`
 
 Redelivery timing, on the SAME schedule the per-subscriber components below carry and for the same
@@ -73,7 +52,7 @@ nats-stream-job reconcile compares (maxDeliver/backOff) and repairs.
 ## `apiVersion: dapr.io/v1alpha1`
 
 The NOTIFICATION plane's control-topic subscriber (v3 targeting: a governance act that NAMED
-someone). Its OWN component, cloned from the producer's above rather than added as a scope to the
+someone). Its OWN component rather than a scope added to the
 broadcast component — `queueGroupName` lives on the COMPONENT, so a scope added to a broadcast
 splits it into a competing-consumer group instead of joining it, and the catalog's broadcast exists
 precisely to reach every replica.
@@ -92,11 +71,11 @@ still mid-retry and one event is handled twice, concurrently.
 One component PER SUBSCRIBER app-id (see the lance.subPubsub helper): queueGroupName makes that
 app's replicas a competing-consumer group (single delivery per app — without it every replica gets
 EVERY message: jetstream only sets a DeliverGroup when queueGroupName is non-empty), and it CANNOT
-live on one shared component because lineage and medallion-producer both consume lineage.events.v1 — one
+live on one shared component because lineage and notifications both consume lineage.events.v1 — one
 shared queue group would split those messages across the two apps. deliverPolicy differs on
 purpose: `all` for lineage (a NEW durable starts at the stream's first message, so its first attach,
 or a rebuild after `nats consumer rm LINEAGE lineage-durable`, replays the retained stream into the
-idempotent ingest), `new` for the cascade head + stage runners (replayed triggers re-fire cascades).
+idempotent ingest), `new` for the other subscribers (a replayed event acts twice).
 
 EVERY subscriber is DURABLE + queue group ([[LH-303]]). An ephemeral consumer dies with its last
 member and with a NATS restart, and the sidecar does not re-create it: measured 2026-09-26 on Dapr

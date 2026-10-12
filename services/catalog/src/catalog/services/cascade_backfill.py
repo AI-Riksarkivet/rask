@@ -1,12 +1,8 @@
-"""Re-assert the cascade's grants over every warehouse that already exists.
+"""Re-assert the warehouse grants over every warehouse that already exists.
 
-WHY THIS EXISTS. `seed_warehouse` writes the cascade-writer tuples exactly once, when a warehouse is
-created, from `LANCE_FGA_CASCADE_WRITERS` — a value that CHANGES. Adding a stage runner to
-`medallion.stageRunners` extends that list, and every warehouse created before the change is missing the
-new subject. The model makes `can_update_tag: owner`, so the new stage runner cannot promote into any
-existing tenant: rows land, lineage records the run, and the promotion is refused 403 in a log nobody
-reads. Measured on the k3s estate 2026-08-23 — `user:service-silver-to-gold` held `owner` on neither
-`warehouse:acme-bucket` nor `warehouse:research-bucket`, both created before the setting existed.
+WHY THIS EXISTS. `seed_warehouse` writes the project edge and the maintainer tuples exactly once, when a
+warehouse is created, from `LANCE_FGA_MAINTAINERS` — a value that CHANGES — so every warehouse created
+before a change is missing the new subject, and the sweep cannot maintain it.
 
 WHY A JOB AND NOT A STARTUP HOOK. The catalog's lifespan writes no tuples today, and making boot
 depend on an OpenFGA write has no good failure branch: crash-loop the catalog because a grant could
@@ -63,15 +59,10 @@ async def backfill(settings: Settings) -> tuple[int, int, list[str]]:
     if not settings.fga_enabled:
         log.info("cascade_backfill_skipped", extra={"reason": "fga_disabled"})
         return (0, 0, [])
-    if not (settings.fga_cascade_writers or settings.fga_maintainers):
-        # Not an error: an estate with no stage runners and no maintenance identity configured has
-        # nothing to grant. Logged because a silent zero is the same shape as a broken run.
-        #
-        # BOTH LISTS, because `cascade_tuples` now carries the sweep's `maintainer` grant alongside the
-        # cascade rungs. Guarding on the cascade list alone would make a maintenance-only estate skip
-        # the backfill entirely and report itself as having nothing to do — the same silent-skip shape
-        # that let the maintainer grant go unwritten in the first place.
-        log.info("cascade_backfill_skipped", extra={"reason": "no_cascade_writers_or_maintainers"})
+    if not settings.fga_maintainers:
+        # Not an error: an estate with no maintenance identity configured has nothing to grant. Logged
+        # because a silent zero is the same shape as a broken run.
+        log.info("cascade_backfill_skipped", extra={"reason": "no_maintainers"})
         return (0, 0, [])
 
     # THE SAME BOOTSTRAP THE LIFESPAN USES, not a private copy of it — this is a hook Job that must

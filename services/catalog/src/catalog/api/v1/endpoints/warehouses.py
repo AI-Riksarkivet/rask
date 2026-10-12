@@ -239,7 +239,7 @@ async def create_warehouse(
     }
     # Serving carries FORWARD on an idempotent re-create (same rationale as status above): a GitOps
     # reconcile re-POSTing the gold warehouse WITHOUT the serving field must not silently demote it to a
-    # work warehouse — the silver→gold stage runner would quietly fall back to the work root while the record
+    # work warehouse — a gold writer resolving the tenant's root would quietly fall back to the work root while the record
     # still looks fine. The field stays ABSENT (not null) on work warehouses, matching the resolver's
     # "absent = work" contract and keeping pre-serving records byte-identical.
     serving = body.serving or (existing.get("serving") if existing is not None else None)

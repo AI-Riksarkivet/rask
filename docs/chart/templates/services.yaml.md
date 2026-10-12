@@ -85,9 +85,9 @@ The catalog REFUSES an invalid pairing at boot rather than passing it on.
 
 #4 transactional outbox on the catalog's LINEAGE lane. The emit is inline-awaited and
 best-effort AFTER the Lance write commits, so without staging a crash between the commit and
-the publish loses the write announcement outright — and medallion's /bronze-arrival reacts to
-that announcement, so the loss is not a provenance hole but a bronze->silver->gold run that
-silently never happens.
+the publish loses the write announcement outright — and a pipeline polling the commit feed reacts
+to that announcement, so the loss is not only a provenance hole but a downstream run that silently
+never happens.
 
 The SAME prefix `LINEAGE_OUTBOX_URI` names below, because that is the only thing that drains
 it: lineage's reconcile cron re-ingests and re-publishes what it finds there. A private prefix
@@ -147,28 +147,6 @@ stamps, so without one there is nothing to verify and the Secret is not rendered
 
 Bound the DaprClient gRPC deadline (the SDK env) — the lineage publish is awaited INLINE in
 every write handler, so a wedged sidecar/NATS would otherwise hang every catalog write.
-
-## `{{- $cascadeWriters := list .Values.medallion.producer.serviceIdentity }}`
-
-The cascade's WRITERS, granted `writer` + `publisher` + `validator` on every warehouse
-this catalog creates — never `owner` (owner ruling 2026-09-10, zero trust). The RUNGS
-live in `catalog/api/fga_deps.py::_CASCADE_RUNGS`; this list is only WHO.
-Admission and authorization are different questions and this is deliberately NOT
-RASK_SA_SUBJECTS: that map says who may SPEAK to the catalog and includes identities
-such as maintenance's, which must never hold a cascade rung on a
-tenant's data. Only the identities that actually move data between tiers appear here —
-the producer (which resumes a human-approved promotion, so it publishes too) and the
-stage runners.
-
-A NAME ADDED HERE GETS ALL THREE RUNGS ON EVERY TENANT, which is why the list is
-narrow: `validator` carries the accept-assertions override, and only the producer's
-resume path actually needs it. Splitting the rungs per subject is the next step and
-needs this to render identities WITH their rungs rather than as a flat list.
-
-Without this a tenant is created, its tiers are created, rows land in bronze, lineage
-records the run — and the promotion is refused with `403 can_update_tag` in a stage runner log
-nobody is watching. Measured five times on the live estate, once AFTER a person had
-already approved it.
 
 ## `{{- $maintainers := list }}`
 
@@ -232,7 +210,7 @@ polling artefact is the wrong trade.
 
 `ClientIP` works here because every caller is a POD with a stable address — the console's poll
 runs server-side in the home zone and reaches this Service directly (`CATALOG_API`), never through
-the gateway. Stage runners, medallion and maintenance are their own pods and keep spreading.
+the gateway. Maintenance runs its own pods and keeps spreading.
 This is NOT a pattern to copy onto the gateway Service, which sits behind the Ingress: there every
 request arrives from the ingress controller's single address, and pinning it would send the whole
 estate to one replica.
@@ -300,12 +278,6 @@ DLQ backlog.
 
 Freshness budget (data-contract gap #2): reconcile flags `stale` datasets whose newest
 version commit is older than this many hours. Unset/0 = the axis is off.
-
-## `- { name: LINEAGE_DECLARED_COLUMNS, value: {{ $declared | toJson | quote }} }`
-
-Declared-columns patrol (Batch 23): DERIVED from the stage runners' requiredColumns — one
-declaration source (values), two enforcement points (the gate at promotion, this sweep
-after) — so the gate and the patrol can never disagree on what consumers declared.
 
 ## `- { name: DAPR_API_TIMEOUT_SECONDS, value: {{ .Values.dapr.apiTimeoutSeconds | quote }} }`
 

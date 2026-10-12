@@ -40,10 +40,11 @@ from typing import Any, cast
 import pytest
 from lance_namespace import PermissionDeniedError
 
+from catalog.core.lineage_emit import INSERT, build_write_event
 from lineage.api import reconcile_cron
 from lineage.core.config import LineageSettings
-from medallion.schemas.events import build_run_event
 from service_kit.lakehouse import outbox
+from service_kit.openlineage import run_id_for
 
 
 def _staged(uri: str, *, author: str, run: str, token: str) -> None:
@@ -51,15 +52,15 @@ def _staged(uri: str, *, author: str, run: str, token: str) -> None:
     than a quirk: `run_id` is derived from it, so two events sharing a token are ONE run and the second
     `stage_event` overwrites the first. Measured while writing this file — a two-event fixture staged
     one object, and the isolation leg below silently tested nothing."""
-    event = build_run_event(
-        operation="ingest_events",
+    event = build_write_event(
+        table_id=run,
+        namespace="bronze",
         author=author,
-        job_namespace="medallion",
-        inputs=[("bronze", "bronze$events")],
-        output_namespace="bronze",
-        output_name=run,
         version=2,
-        token=token,
+        operation=INSERT,
+        run_id=run_id_for(token),
+        event_time="2026-10-12T00:00:00+00:00",
+        job_namespace="lance-catalog",
     )
     outbox.stage_event(uri, {}, event["run"]["runId"], json.dumps(event))
 

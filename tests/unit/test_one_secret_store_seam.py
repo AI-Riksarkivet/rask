@@ -9,7 +9,7 @@ Two duplications share one surface here:
   no longer exists. `RASK_SECRET_STORE` was already the estate-wide name two services read; this pins
   that ONE name repointing every consumer, with each per-service alias kept as an override.
 * **DUP-09** — the fetch-and-splice that consumes that store was written four times: three
-  `apply_dapr_secrets` copies (lineage, medallion, maintenance) plus an inline block in the catalog's
+  `apply_dapr_secrets` copies (lineage, maintenance) plus an inline block in the catalog's
   own lifespan. `service_kit.governed.secrets.apply_dapr_secrets` is the one implementation; nothing
   else may assign the S3 secret from a store bundle.
 """
@@ -26,13 +26,11 @@ def _settings_builders() -> list[tuple[str, Any, str]]:
     from catalog.core.config import Settings as CatalogSettings
     from lineage.core.config import LineageSettings
     from maintenance.core.config import MaintenanceSettings
-    from medallion.core.config import MedallionSettings
     from service_kit.media.config import Settings as MediaSettings
     from viewer.core.config import ViewerSettings
 
     return [
         ("lineage", LineageSettings, "dapr_secret_store"),
-        ("medallion", MedallionSettings, "dapr_secret_store"),
         ("catalog", CatalogSettings, "dapr_secret_store"),
         ("maintenance", MaintenanceSettings, "dapr_secret_store"),
         ("media.s3", MediaSettings, "s3_secret_store"),
@@ -55,12 +53,11 @@ def test_one_env_var_repoints_every_consumer_of_the_one_secret_store(label: str,
     assert getattr(factory(), attribute) == "prod-secrets"
 
 
-@pytest.mark.parametrize("label", ["lineage", "medallion", "catalog", "maintenance", "media.s3", "viewer"])
+@pytest.mark.parametrize("label", ["lineage", "catalog", "maintenance", "media.s3", "viewer"])
 def test_the_per_service_alias_still_overrides_the_estate_wide_name(label: str, monkeypatch: pytest.MonkeyPatch) -> None:
     """The collapse must not REMOVE the per-service lever — a single service may still be repointed."""
     per_service = {
         "lineage": "LINEAGE_DAPR_SECRET_STORE",
-        "medallion": "MEDALLION_DAPR_SECRET_STORE",
         "catalog": "LANCE_DAPR_SECRET_STORE",
         "maintenance": "MAINTENANCE_DAPR_SECRET_STORE",
         "media.s3": "MEDIA_S3_SECRET_STORE",

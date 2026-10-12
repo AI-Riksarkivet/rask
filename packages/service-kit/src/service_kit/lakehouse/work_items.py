@@ -166,7 +166,7 @@ class IndexWorkItem(BaseModel):
     #: between them would build a different index than the caller asked for.
     kind: str = VECTOR_INDEX
     #: Lance's own index-type vocabulary (``IVF_PQ``, ``BTREE``, ``FTS``, …). OPAQUE here: this package
-    #: forwards it and never branches on it, the same rule `transform_specs` states for a task.
+    #: forwards it and never branches on it.
     index_type: str = ""
     name: str = ""
     #: Whether an index of this NAME may be overwritten, or ``None`` to leave pylance's own default

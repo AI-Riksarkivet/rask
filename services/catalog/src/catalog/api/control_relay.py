@@ -5,12 +5,8 @@ publishes and drops it only on ack, so a NATS blip leaves the event durable rath
 the other half: the thing that reads that prefix and delivers what it finds.
 
 **Why it matters more than "a refresh hint".** Most control events are exactly that — a console ring
-buffer or a tag-polling reader loses a redraw. ``table_published`` is not: the stage runner does not fire the
-next stage's topic, and ``/publication-arrival`` receiving this event is the ONLY thing that WAKES
-silver->gold. The medallion's cascade-lag cron re-reads the ``published`` tag since
-`docs/adr/0051-cascade-repair-detection-and-the-repair-verb-2026-09-04.md "Cascade repair"` C3, and that does not weaken this argument by a word: it MEASURES how far a
-tier has fallen behind and advances nothing, so a lost publish is still a cascade that stops. A dropped one ends the cascade with the tag advanced, the data consumable, the
-route 200, every pod green, and nothing red.
+buffer or a tag-polling reader loses a redraw. Not all of them: the notifications plane targets people off this
+lane, so a dropped event is a person never told, with the route 200, every pod green, and nothing red.
 
 **IT DELIVERS ONLY WHAT THIS CATALOG SIGNED, AND SIGNS NOTHING** ([[XC-078]]). A staged object proves nothing about who
 wrote it: anything that can write under the prefix can stage an object that parses as a control event. A relay that signed
@@ -198,23 +194,9 @@ async def _republish(publisher: object, settings: Settings, event_json: str) -> 
     re-orders ``extra`` and drops the ``rask_signature`` the model ignores, and the point of the
     redelivery is that subscribers see exactly what they would have seen the first time.
 
-    The staged ``event_id`` is also what makes the redelivery IDEMPOTENT, and the chain is worth stating
-    because it is the whole answer to "does this drive the cascade twice?":
-
-    ``event_id`` survives -> ``/publication-arrival`` mints its stage ``token`` from it
-    (`publication_trigger.py`) -> ``derive_idempotency_key(stage, token, from_uri, to_uri, code_version)`` hashes that
-    into the run's deterministic key, its plan's action id (`medallion/services/stage_submit.py`) -> the plan store
-    answers the plan already written under that key, and the engine re-attaches to the job submitted under it. So a
-    duplicate delivery attaches to the run already in flight rather than starting a second.
-
-    Every other subscriber on this topic keys on the same id: the catalog's own ring buffer dedupes on
-    ``event_id``, and the notifications plane's ledger on ``<event_id>@<ACTION>``.
-
-    THE BOUND OF THAT GUARANTEE, stated rather than assumed: the engine dedupes against instances it
-    still HOLDS. A redelivery arriving after the original instance has completed and been purged
-    schedules a fresh one, which re-runs the same hop. That is duplicate COMPUTE, not duplicate data —
-    the stage write is single-flighted and content-deterministic, so the second pass is a same-bytes
-    overwrite (`bronze_arrival.py` records the same property for the two cascade heads).
+    The staged ``event_id`` is also what makes the redelivery IDEMPOTENT: every subscriber on this topic
+    keys on it — the catalog's own ring buffer dedupes on ``event_id``, and the notifications plane's
+    ledger on ``<event_id>@<ACTION>``.
     """
     await dapr_publish.publish_event(  # noqa: TID251
         publisher,

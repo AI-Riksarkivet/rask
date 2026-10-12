@@ -159,10 +159,7 @@ def hierarchy_edge_tuples(*, child_object: str, parent_object: str, parent_relat
     one-directional link is a perfectly valid tuple that simply never resolves, so it is invisible to
     every mocked-client test and to the API itself. The set of callers is closed, and the TID251
     banned-api entry on `service_kit.governed.fga.hierarchy_edge_tuples` holds it that way:
-    `grant_on_create` below (where the catalog's create-door seed lands) and
-    `medallion.services.train`, whose model registry datasets have no catalog record and so reach no
-    create door at all. `scripts/seed_medallion_fga.sh` pairs the two directions in its own `link`
-    helper, being shell.
+    `grant_on_create` below, where the catalog's create-door seed lands, is its one caller.
 
     The inverse is written only when the PARENT's type declares `child` (:data:`_CHILD_EDGE_PARENT_TYPES`):
     a `child` tuple on a type that does not is accepted by the API and read by no rule, which is the
@@ -2005,9 +2002,9 @@ async def grant_on_create(
     """
     obj = f"{resource}:{obj_id}"
     # `grant_owner=False` writes the hierarchy edge ALONE — for a creator who should not own what it
-    # made. The estate's case is a machine: a stage runner registering its own output became that
-    # table's owner, keeping drop/deregister/restore/manage_grants on every tier of every tenant it
-    # ran in (owner ruling 2026-09-10). The object is not left unowned — ownership still descends the
+    # made. The estate's case is a machine: a service principal registering its own output would
+    # become that table's owner, keeping drop/deregister/restore/manage_grants on every tier of every
+    # tenant it wrote to (owner ruling 2026-09-10). The object is not left unowned — ownership still descends the
     # parent chain from the project's admin — which is exactly why the edge must still be written, and
     # why this is a flag on the SAME batch rather than a second call: dropping the owner tuple and
     # dropping the edge look identical at the call site and are opposite in effect.

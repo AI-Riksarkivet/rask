@@ -44,7 +44,7 @@ REPO = pathlib.Path(__file__).resolve().parents[2]
 _OWN_SOURCE = re.compile(r"^# Source: rask/templates/(\S+)", re.MULTILINE)
 
 #: The stack scripts whose `helm upgrade` overlay CI deploys. Read, not restated.
-_STACK_SCRIPTS = ("stack_values.sh", "ray_e2e_stack.sh")
+_STACK_SCRIPTS = ("stack_values.sh",)
 
 #: A shell variable inside a `--set` value. Substituted rather than skipped: dropping the flag would
 #: quietly shrink the overlay, and the gate is about SHAPE, so any syntactically valid value serves.

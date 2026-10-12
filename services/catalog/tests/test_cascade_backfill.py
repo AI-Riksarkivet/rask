@@ -36,21 +36,17 @@ async def test_fga_off_is_a_no_op_not_a_failure() -> None:
 
 
 @pytest.mark.asyncio
-async def test_no_declared_writers_is_a_no_op() -> None:
-    """Empty by default. Merging the backfill cannot change an estate that declares no cascade."""
+async def test_no_declared_maintainers_is_a_no_op() -> None:
+    """Empty by default. The backfill cannot change an estate that declares no maintenance identity."""
     assert await cascade_backfill.backfill(_fga_settings()) == (0, 0, [])
 
 
 @pytest.mark.asyncio
 async def test_a_maintenance_only_estate_still_runs_the_backfill(monkeypatch) -> None:
-    """The guard must not skip on the cascade list alone, because the maintainer grant rides with it.
-
-    `backfill` early-returns when there is nothing to grant. With the maintainer grant in
-    `cascade_tuples` ([[LH-165]]), a guard that read `fga_cascade_writers` only would skip the whole
-    backfill for an estate that declares a maintenance identity and no stage runners, and log that it
-    had nothing to do: the silent-skip shape that leaves a new warehouse unmaintainable.
+    """`backfill` early-returns when there is nothing to grant; a declared maintenance identity is something to
+    grant ([[LH-165]]), and skipping it is the silent-skip shape that leaves a new warehouse unmaintainable.
     """
-    settings = _fga_settings(LANCE_FGA_MAINTAINERS=["user:service-maintenance"])  # and NO cascade writers
+    settings = _fga_settings(LANCE_FGA_MAINTAINERS=["user:service-maintenance"])
     skipped: list[str] = []
 
     def _log_info(event: str, **kw: object) -> None:
@@ -88,7 +84,7 @@ async def test_a_record_without_a_project_is_REPORTED_not_guessed(monkeypatch) -
         "list_warehouses",
         lambda *a, **k: [{"id": "orphan"}, {"id": "wh1", "project": "acme"}],
     )
-    seen, written, failures = await cascade_backfill.backfill(_fga_settings(LANCE_FGA_CASCADE_WRITERS=["user:service-silver-to-gold"]))
+    seen, written, failures = await cascade_backfill.backfill(_fga_settings(LANCE_FGA_MAINTAINERS=["user:service-maintenance"]))
     assert seen == 2
     assert written == 2, "the healthy warehouse must still be repaired"
     assert len(failures) == 1 and "orphan" in failures[0] and "no project" in failures[0]
@@ -112,7 +108,7 @@ async def test_one_failure_does_not_abandon_the_rest(monkeypatch) -> None:
         "list_warehouses",
         lambda *a, **k: [{"id": "a", "project": "p"}, {"id": "boom", "project": "p"}, {"id": "z", "project": "p"}],
     )
-    seen, written, failures = await cascade_backfill.backfill(_fga_settings(LANCE_FGA_CASCADE_WRITERS=["user:service-silver-to-gold"]))
+    seen, written, failures = await cascade_backfill.backfill(_fga_settings(LANCE_FGA_MAINTAINERS=["user:service-maintenance"]))
     assert calls == ["a", "boom", "z"], "the walk stopped at the failure"
     assert (seen, written) == (3, 4)
     assert len(failures) == 1 and "openfga said no" in failures[0]

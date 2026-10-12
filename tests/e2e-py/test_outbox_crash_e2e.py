@@ -37,13 +37,14 @@ import sys
 import textwrap
 import time
 import uuid
+from datetime import UTC, datetime
 
 import pytest
 import requests
 from outbox_probe import owned_output_table
 
+from catalog.core.lineage_emit import INSERT, InputRef, build_write_event
 from lineage_kit.signing import SigningKey, attach_signature
-from medallion.schemas.events import build_run_event
 from service_kit.lakehouse import outbox
 
 
@@ -59,14 +60,18 @@ S3 = os.environ.get("LANCE_E2E_S3", "http://localhost:9900")
 # /events). Assert both, at the source of truth.
 DSN = os.environ.get("LINEAGE_DATABASE_URL", "")
 
+#: The job namespace the catalog stamps on its own events (`LANCE_LINEAGE_JOB_NAMESPACE`, default `lance-catalog`).
+#: The staged event is the one the catalog's insert announces, so it names the job the way the catalog does.
+CATALOG_JOB_NAMESPACE = os.environ.get("LANCE_E2E_CATALOG_JOB_NAMESPACE", "lance-catalog")
+
 #: WHO THE HARNESS SIGNS AS: the catalog, the one chart-listed identity that may stamp a person as the author. The release names the
 #: OpenBao Deployment whose `seed` container holds the store's CLI token, for the case where the stack script exports no seed.
 SIGNING_IDENTITY = os.environ.get("LANCE_E2E_SIGNING_IDENTITY", "service-catalog")
 RELEASE = os.environ.get("LANCE_E2E_RELEASE", "rask")
 
 #: The output this probe's staged event names. NAMESPACE AND TABLE SEPARATELY because the event needs
-#: both spellings: `output_namespace` is the OpenLineage domain label and `output_name` carries the
-#: CATALOG ID, which is `<namespace>$<table>`.
+#: both spellings: `namespace` is the OpenLineage domain label and `table_id` carries the CATALOG ID,
+#: which is `<namespace>$<table>`.
 PROBE_NAMESPACE = "bronze"
 PROBE_TABLE = "e2e_crash_ds"
 
@@ -156,7 +161,7 @@ def _kill_producer_mid_flight(event_json: str, run_id: str) -> None:
     """Spawn a real producer, let it stage, then SIGKILL it before it can publish or drop.
 
     The child stages the event and then blocks forever. We kill it with -9 from the parent: the process dies
-    with the staged object on disk and no publish — byte-for-byte the state a crashed stage runner leaves behind.
+    with the staged object on disk and no publish — byte-for-byte the state a producer that crashed between its commit and its announcement leaves behind.
     """
     child = textwrap.dedent(f"""
         import sys, time
@@ -238,11 +243,10 @@ def _drive_the_relay(lineage: str, run_id: str, *, budget_seconds: float = 420.0
 
 
 def test_sigkilled_producer_loses_nothing(lineage: str) -> None:
-    # A FRESH token per invocation. `build_run_event` derives run_id as a deterministic UUID5 over the
-    # event's identity, so a FIXED token made the run_id stable across runs — after the first run the event
-    # was already in the graph, and "the relay recovered it into the graph" would then pass VACUOUSLY even
-    # if the relay did nothing at all. The pre-flight assertion below is what caught it; keep both.
-    token = f"e2e-crash-probe-{uuid.uuid4()}"
+    # A FRESH run id per invocation. A run id that repeated across runs would already be in the graph after
+    # the first run, and "the relay recovered it into the graph" would then pass VACUOUSLY even if the relay
+    # did nothing at all. The pre-flight assertion below is what catches that; keep both.
+    run_id = str(uuid.uuid4())
     # THE AUTHOR MUST BE A SUBJECT AND THE OUTPUT MUST EXIST, or the relay can never drain what this
     # leg stages — `enforce_bus_authz` resolves the event's `author.sub` and asks whether it may write
     # the table the event names. A role LITERAL matches no subject and a table the catalog never
@@ -253,12 +257,19 @@ def test_sigkilled_producer_loses_nothing(lineage: str) -> None:
     # as `refused` on every sweep and never drained. A leg that cannot pass is bad; a leg that leaves
     # permanent residue behind each time it cannot pass is worse.
     author = owned_output_table(PROBE_NAMESPACE, PROBE_TABLE)
-    event = build_run_event(
-        operation="e2e_crash_probe",
+    # The event the catalog's own insert announces, from the catalog's own builder, so the staged object
+    # is the shape the relay drains in production rather than a hand-made look-alike.
+    event = build_write_event(
+        table_id=f"{PROBE_NAMESPACE}${PROBE_TABLE}",
+        namespace=PROBE_NAMESPACE,
         # `"e2e"` only where authz is off — there is nothing to resolve against and demanding a token
         # would skip this leg on the open deployments it was written for.
         author=author or "e2e",
-        job_namespace="medallion",
+        version=1,
+        operation=INSERT,
+        run_id=run_id,
+        event_time=datetime.now(UTC).isoformat(),
+        job_namespace=CATALOG_JOB_NAMESPACE,
         # THE NAMESPACE IS THE EXTERNAL MARKER, and `"external"` is not one. `is_external_source`
         # exempts an input from `can_get_metadata` in exactly two forms — a namespace carrying a URI
         # scheme (`s3://…`), or one of the bare identifiers in `EXTERNAL_SOURCE_NAMESPACES`
@@ -266,16 +277,11 @@ def test_sigkilled_producer_loses_nothing(lineage: str) -> None:
         # notional source outside the estate is authorized like a governed table and refused on an
         # object that can never carry a tuple. Measured live 2026-09-20:
         # `can_get_metadata required on inputs: e2e_crash_src`.
-        inputs=[("s3://e2e-crash-src", "e2e_crash_src")],
-        output_namespace=PROBE_NAMESPACE,
-        output_name=f"{PROBE_NAMESPACE}${PROBE_TABLE}",
-        version=1,
-        token=token,
+        inputs=[InputRef(namespace="s3://e2e-crash-src", name="e2e_crash_src", version=None)],
     )
     key = _signing_key()
     if key is not None:
         event = attach_signature(event, key=key, identity=SIGNING_IDENTITY, on_behalf_of=author or "e2e")
-    run_id = event["run"]["runId"]
     event_json = json.dumps(event)
 
     # 1-2. a REAL producer stages, then the OS kills it dead inside the commit→publish window.

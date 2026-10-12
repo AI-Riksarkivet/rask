@@ -139,7 +139,7 @@ def drop_event(outbox_uri: str, storage_options: StorageOptions, key: str) -> No
 
     The consequence was not a stranded object. `reconcile_cron` ingests, re-publishes, THEN drops —
     the first two succeed, so every staged event was redelivered to `lineage.events.v1` on every tick
-    for the lifetime of the estate, the medallion's `/bronze-arrival` among the subscribers. The drop
+    for the lifetime of the estate. The drop
     is the only thing that ends that loop.
 
     S3 goes through the estate's CLIENT seam (`packages/storage`), which issues a plain DeleteObject
@@ -263,7 +263,7 @@ def list_events(outbox_uri: str, storage_options: StorageOptions, *, limit: int 
         infos = infos[:limit]
     for info in infos:
         key = info.path.rsplit("/", 1)[-1].removesuffix(".json")
-        # TOCTOU: the medallion stage runner stages-then-drops on this SAME prefix continuously, so an object
+        # TOCTOU: a publishing writer stages-then-drops on this SAME prefix continuously, so an object
         # listed above can vanish before we open it. A concurrently-dropped event was already published
         # (that's why it's being dropped) — skip it, don't let the race 500 the whole reconcile tick.
         try:

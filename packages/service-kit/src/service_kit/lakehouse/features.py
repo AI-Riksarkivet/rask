@@ -174,9 +174,8 @@ SUPPORTED = FLAG_DELETION_FILES | FLAG_STABLE_ROW_IDS | FLAG_USE_V2_FORMAT_DEPRE
 #: one, but it is still the wrong thing to do behind an operator's back.
 #:
 #: That measurement is about a CLONE, and a dataset whose only base is an external blob prefix compacts
-#: safely — so a flags-only refusal is over-broad, and the cost was the cascade's own tiers
-#: (``medallion.services.compute`` passes ``initial_bases``) accumulating
-#: fragments forever. :func:`describe_compaction_unsupported_flags` now makes that distinction from
+#: safely — so a flags-only refusal is over-broad, and its cost is a table created with
+#: ``initial_bases`` accumulating fragments forever. :func:`describe_compaction_unsupported_flags` now makes that distinction from
 #: EVIDENCE rather than from the flag, and :mod:`maintenance.services.optimize` asks it — see that
 #: function for the three readings and the measurements behind each.
 SUPPORTED_FOR_GC = SUPPORTED | FLAG_BASE_PATHS

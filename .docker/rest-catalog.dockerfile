@@ -2,9 +2,8 @@
 # Lance lakehouse image — ONE image, many entrypoints, built from the ROOT uv workspace
 # (src-layout services installed as wheels; no PYTHONPATH, no raw source COPY in the final stage).
 # The chart runs every lakehouse container from this image with a different command
-# (see chart/templates/{services,medallion,maintenance,media}.yaml → include "lance.catalogImage"):
-#   catalog.main:app (:2333) · lineage.main:app (:8000) · medallion.producer:app /
-#   medallion.stage_runner:app (:8000) · maintenance.service:app (:8000) ·
+# (see chart/templates/{services,maintenance,explorer}.yaml → include "lance.catalogImage"):
+#   catalog.main:app (:2333) · lineage.main:app (:8000) · maintenance.service:app (:8000) ·
 #   viewer.main:app (:8101) · search.main:app (:8102) · annotator.main:app (:8103)
 # — optionally wrapped in `opentelemetry-instrument` (shipped via lineage's opentelemetry-distro).
 # Build context = repo root:  docker build -f .docker/rest-catalog.dockerfile .
@@ -29,17 +28,9 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
     --mount=type=bind,source=packages,target=packages \
     --mount=type=bind,source=services,target=services \
-# `--extra workflow` IS REQUIRED HERE, and only here, because THIS image runs the cascade.
-# `dapr-ext-workflow` moved out of medallion's unconditional dependencies so the lakehouse may be
-# DRIVEN BY a workflow engine without DEPENDING on one (goal condition 3, now expressed in package
-# metadata rather than only in the import graph). Measured: `uv export --package medallion` names the
-# engine 0 times, and with `--extra workflow` 2 times — so a per-package sync like this one drops it
-# unless asked. `medallion/workflow.py` is the adapter and imports it at module scope, so without this
-# flag the producer and both stage runners die at import with the image looking perfectly built.
     uv sync --frozen --no-dev --no-install-workspace --no-editable \
-        --package catalog --package lineage --package medallion --package maintenance \
-        --package viewer --package search --package annotator \
-        --extra workflow
+        --package catalog --package lineage --package maintenance \
+        --package viewer --package search --package annotator
 
 # Step 2: COPY real sources and install the workspace members as wheels (--no-editable →
 # they land in site-packages; the final stage needs only the venv).
@@ -48,9 +39,8 @@ COPY packages packages
 COPY services services
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev --no-editable \
-        --package catalog --package lineage --package medallion --package maintenance \
-        --package viewer --package search --package annotator \
-        --extra workflow
+        --package catalog --package lineage --package maintenance \
+        --package viewer --package search --package annotator
 
 # Strip residual setuid/setgid bits before the venv leaves the builder.
 RUN find / -xdev -perm /6000 -type f -exec chmod a-s {} + 2>/dev/null || true
@@ -62,7 +52,7 @@ ARG BUILD_DATE
 ARG VCS_REF
 ARG VERSION
 LABEL org.opencontainers.image.title="lance-rest-catalog" \
-      org.opencontainers.image.description="Lance lakehouse fleet image — REST catalog + lineage + medallion + maintenance + media trio (viewer/search/annotator); one image, per-container uvicorn commands" \
+      org.opencontainers.image.description="Lance lakehouse fleet image — REST catalog + lineage + maintenance + media trio (viewer/search/annotator); one image, per-container uvicorn commands" \
       org.opencontainers.image.source="https://github.com/AI-Riksarkivet/rask" \
       org.opencontainers.image.created="${BUILD_DATE}" \
       org.opencontainers.image.revision="${VCS_REF}" \
@@ -108,7 +98,7 @@ COPY --link scripts/pg_dump_upload.py /srv/pg_dump_upload.py
 # DECLARED dependency is invisible to the workspace venv (a sibling member resolves it) and can
 # only be seen here, where the deployable's own closure is the only one present. See the script.
 COPY .docker/import-gate.py /tmp/import-gate.py
-RUN --network=none /opt/venv/bin/python /tmp/import-gate.py catalog lineage medallion maintenance viewer search annotator && rm /tmp/import-gate.py
+RUN --network=none /opt/venv/bin/python /tmp/import-gate.py catalog lineage maintenance viewer search annotator && rm /tmp/import-gate.py
 
 # Strip setuid/setgid bits from the whole shipped filesystem (base account tools passwd/chsh/... +
 # anything in the venv) — no use in a container, residual privesc surface. Own RUN so its `|| true`
@@ -119,7 +109,7 @@ RUN find / -xdev -perm /6000 -type f -exec chmod a-s {} + || true
 # admission when the image user is numeric; a name ("app") makes the kubelet reject the pod
 # (CreateContainerConfigError). The chart's lance.securityContext relies on this.
 USER 10001
-# 2333 catalog · 8000 lineage/medallion/maintenance · 8101/8102/8103 viewer/search/annotator.
+# 2333 catalog · 8000 lineage/maintenance · 8101/8102/8103 viewer/search/annotator.
 EXPOSE 2333 8000 8101 8102 8103
 
 # Cheap socket-connect probe against the default CMD's port (avoids urllib's ssl/http.client

@@ -1990,31 +1990,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/outbox/credentials": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Vend Outbox Credentials
-         * @description Vend a maintain-tier (whole-prefix) credential scoped to the estate's lineage outbox prefix.
-         *
-         *     Answers `server_mediated` when no outbox is configured or the vendor declines — the same shape the
-         *     table door uses, so a caller has one response contract rather than two. A caller that receives it
-         *     stages nothing and its events stay on the primary publish path, which is the honest degradation:
-         *     the backstop is absent, not silently broken.
-         */
-        post: operations["vend_outbox_credentials_v1_outbox_credentials_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/v1/project/{id}/gate/delete": {
         parameters: {
             query?: never;
@@ -2078,80 +2053,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/project/{id}/transform/delete": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Delete Transform
-         * @description Undeclare one lane (idempotent) — admin-gated.
-         *
-         *     Idempotent rather than 422-on-missing, unlike describe: delete states a desired END state, and a
-         *     caller asking for a lane to be gone is satisfied by it already being gone. Describe asks a
-         *     question that has no answer, which is the case that must be refused.
-         */
-        post: operations["delete_transform_v1_project__id__transform_delete_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/project/{id}/transform/describe": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Describe Transform
-         * @description One lane's declaration — admin-gated; **422 naming the key** when the lane is undeclared.
-         */
-        post: operations["describe_transform_v1_project__id__transform_describe_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/project/{id}/transform/set": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Set Transform
-         * @description Declare (or re-declare) one lane — admin-gated; idempotent.
-         *
-         *     The spec model does the platform-level validation: a DNS-safe lane key and string params that
-         *     cannot collide with the ``RASK_PARAM_`` namespace. The task is checked HERE, against the
-         *     registry, because that check needs IO the model must not do — and because a lane that cannot be
-         *     declared can never be submitted, whereas a submit-time check has to be remembered by every
-         *     submit path.
-         *
-         *     The platform validates SHAPE and never meaning: what a param does belongs to the workload, and
-         *     what a task's ``command`` says belongs to the engine that registered it. This handler reads
-         *     neither.
-         */
-        post: operations["set_transform_v1_project__id__transform_set_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/v1/projects": {
         parameters: {
             query?: never;
@@ -2180,57 +2081,6 @@ export interface paths {
          *     like any other ACL change, only when it was actually written.
          */
         post: operations["create_project_v1_projects_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/projects/{id}/tasks": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Registered Tasks
-         * @description What may be named as a transform's ``task`` — the vocabulary, so it is discoverable.
-         *
-         *     Without this the declaration door refuses an unregistered task correctly and leaves the operator
-         *     guessing what IS registered, which turns a governed field into a trap. Same ``can_administer``
-         *     tier as declaring: being able to see the choices and being able to make one are the same act.
-         *
-         *     ESTATE-WIDE records answered under a project path. The registry is not per-tenant — one cluster
-         *     runs a task for everyone — but the caller who needs the list is a project admin, and gating on
-         *     the project they are already administering adds no new authorization object.
-         */
-        get: operations["list_registered_tasks_v1_projects__id__tasks_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/projects/{id}/transforms": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Transforms
-         * @description Every lane declared in this project — the answer to "what actually runs here?".
-         *
-         *     Admin-gated like the trio: the same information, and splitting the tier would let an admin be
-         *     shown one record and denied the list of all of them.
-         */
-        get: operations["list_transforms_v1_projects__id__transforms_get"];
-        put?: never;
-        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -5182,7 +5032,7 @@ export interface components {
              * Action
              * @enum {string}
              */
-            action: "grant_added" | "grant_revoked" | "project_created" | "project_deleted" | "warehouse_created" | "warehouse_activated" | "warehouse_deactivated" | "warehouse_bound" | "warehouse_unbound" | "warehouse_deleted" | "policy_set" | "policy_deleted" | "transform_set" | "transform_deleted" | "gate_set" | "gate_deleted" | "namespace_created" | "namespace_dropped" | "table_created" | "table_dropped" | "table_renamed" | "table_registered" | "table_deregistered" | "table_declared" | "table_protected" | "table_unprotected" | "namespace_protected" | "namespace_unprotected" | "table_undropped" | "namespace_undropped" | "table_purged" | "namespace_purged" | "table_published" | "table_branch_created" | "table_branch_deleted" | "table_tag_created" | "table_tag_updated" | "table_tag_deleted" | "task_assigned" | "task_unassigned" | "task_changes_requested" | "task_dropped" | "task_lease_expired" | "promotion_review_requested" | "run_planned" | "erasure_release_scheduled";
+            action: "grant_added" | "grant_revoked" | "project_created" | "project_deleted" | "warehouse_created" | "warehouse_activated" | "warehouse_deactivated" | "warehouse_bound" | "warehouse_unbound" | "warehouse_deleted" | "policy_set" | "policy_deleted" | "gate_set" | "gate_deleted" | "namespace_created" | "namespace_dropped" | "table_created" | "table_dropped" | "table_renamed" | "table_registered" | "table_deregistered" | "table_declared" | "table_protected" | "table_unprotected" | "namespace_protected" | "namespace_unprotected" | "table_undropped" | "namespace_undropped" | "table_purged" | "namespace_purged" | "table_published" | "table_branch_created" | "table_branch_deleted" | "table_tag_created" | "table_tag_updated" | "table_tag_deleted" | "task_assigned" | "task_unassigned" | "task_changes_requested" | "task_dropped" | "task_lease_expired" | "erasure_release_scheduled";
             /** Actor */
             actor?: string | null;
             /** Event Id */
@@ -5197,7 +5047,7 @@ export interface components {
              * Object Type
              * @enum {string}
              */
-            object_type: "project" | "grant" | "warehouse" | "policy" | "namespace" | "table" | "annotation_task" | "transform" | "gate" | "run";
+            object_type: "project" | "grant" | "warehouse" | "policy" | "namespace" | "table" | "annotation_task" | "gate";
             /**
              * Occurred At
              * Format: date-time
@@ -6976,12 +6826,11 @@ export interface components {
          * GateSpecRequest
          * @description Declare one project's gate. The project comes from the gated PATH, never from here.
          *
-         *     Omitting ``project`` is the security half, exactly as on ``TransformSpecRequest``: a
-         *     body-supplied project would let an admin of one tenant pass ``can_administer`` on their own
-         *     project while rewriting somebody else's gate.
+         *     Omitting ``project`` is the security half: a body-supplied project would let an admin of one
+         *     tenant pass ``can_administer`` on their own project while rewriting somebody else's gate.
          *
          *     Field semantics live on ``service_kit.lakehouse.gate_specs.GateSpec``, which is the model this
-         *     validates into and the one the medallion reads. One definition, two services.
+         *     validates into.
          */
         GateSpecRequest: {
             /**
@@ -8115,16 +7964,6 @@ export interface components {
             warehouses: components["schemas"]["ProjectWarehouse"][];
         };
         /**
-         * ProjectTransformsResponse
-         * @description Every lane declared in one project — the answer to "what actually runs here?".
-         */
-        ProjectTransformsResponse: {
-            /** Project */
-            project: string;
-            /** Transforms */
-            transforms?: components["schemas"]["TransformSpecResponse"][];
-        };
-        /**
          * ProjectWarehouse
          * @description One warehouse owned by the project — the registry facts an estate observer needs at a glance.
          */
@@ -8523,46 +8362,6 @@ export interface components {
              * @description Optional transaction identifier
              */
             transaction_id?: string | null;
-        };
-        /**
-         * RegisteredTaskResponse
-         * @description One registered task, as the door answers it.
-         *
-         *     ``command`` is included and is DELIBERATELY not interpreted here: an operator choosing a task
-         *     needs to see what it will actually run, and the platform's rule is that it never parses the
-         *     string — showing it and parsing it are different acts.
-         */
-        RegisteredTaskResponse: {
-            /** Cardinalities */
-            cardinalities?: string[];
-            /**
-             * Code Version
-             * @default
-             */
-            code_version?: string;
-            /** Command */
-            command: string;
-            /** Engine */
-            engine: string;
-            /** Obligations */
-            obligations?: string[];
-            /** Task */
-            task: string;
-        };
-        /**
-         * RegisteredTasksResponse
-         * @description What may be named in a transform declaration, so the vocabulary is discoverable.
-         *
-         *     Answered per project because that is the tier of the caller who needs it — the same
-         *     ``can_administer`` that declaring requires — even though the registry itself is estate-wide: one
-         *     cluster runs a task for every tenant, and a per-tenant registry would make the same capability
-         *     need one record per project.
-         */
-        RegisteredTasksResponse: {
-            /** Project */
-            project: string;
-            /** Tasks */
-            tasks?: components["schemas"]["RegisteredTaskResponse"][];
         };
         /**
          * ReindexAccepted
@@ -9051,96 +8850,6 @@ export interface components {
              * @description Version number that the tag points to
              */
             version: number;
-        };
-        /** TransformDeleteResponse */
-        TransformDeleteResponse: {
-            /** Name */
-            name: string;
-            /** Project */
-            project: string;
-            /** Status */
-            status: string;
-        };
-        /**
-         * TransformNameRequest
-         * @description Name one transform — the body of describe/delete.
-         */
-        TransformNameRequest: {
-            /** Name */
-            name: string;
-        };
-        /**
-         * TransformSpecRequest
-         * @description Declare one transform. The project comes from the gated PATH, never from here.
-         *
-         *     Omitting ``project`` is the security half, not an ergonomic one: a body-supplied project would
-         *     let an admin of one tenant pass the ``can_administer`` gate on their own project while writing a
-         *     transform into somebody else's.
-         *
-         *     Field semantics — including why ``task`` must name a REGISTERED task rather than a program — live
-         *     on ``service_kit.lakehouse.transform_specs.TransformSpec``, which is the model this validates
-         *     into and the one the stage runner reads. One definition, two services.
-         */
-        TransformSpecRequest: {
-            /**
-             * Cardinality
-             * @default 1:1
-             */
-            cardinality?: string;
-            /**
-             * Code Version
-             * @default
-             */
-            code_version?: string;
-            /**
-             * Engine
-             * @default
-             */
-            engine?: string;
-            /** From Id */
-            from_id: string;
-            /** Name */
-            name: string;
-            /** Params */
-            params?: {
-                [key: string]: string;
-            };
-            /** Task */
-            task: string;
-            /** To Id */
-            to_id: string;
-        };
-        /** TransformSpecResponse */
-        TransformSpecResponse: {
-            /**
-             * Cardinality
-             * @default 1:1
-             */
-            cardinality?: string;
-            /**
-             * Code Version
-             * @default
-             */
-            code_version?: string;
-            /**
-             * Engine
-             * @default
-             */
-            engine?: string;
-            /** From Id */
-            from_id: string;
-            /** Name */
-            name: string;
-            /** Params */
-            params?: {
-                [key: string]: string;
-            };
-            /** Project */
-            project: string;
-            /** Task */
-            task: string;
-            /** To Id */
-            to_id: string;
         };
         /**
          * TrashEntry
@@ -12622,40 +12331,6 @@ export interface operations {
             };
         };
     };
-    vend_outbox_credentials_v1_outbox_credentials_post: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CredentialResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     delete_gate_v1_project__id__gate_delete_post: {
         parameters: {
             query?: {
@@ -12770,126 +12445,6 @@ export interface operations {
             };
         };
     };
-    delete_transform_v1_project__id__transform_delete_post: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["TransformNameRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TransformDeleteResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    describe_transform_v1_project__id__transform_describe_post: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["TransformNameRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TransformSpecResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    set_transform_v1_project__id__transform_set_post: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["TransformSpecRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TransformSpecResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     list_projects_v1_projects_get: {
         parameters: {
             query?: {
@@ -12949,78 +12504,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProjectResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_registered_tasks_v1_projects__id__tasks_get: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RegisteredTasksResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_transforms_v1_projects__id__transforms_get: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ProjectTransformsResponse"];
                 };
             };
             /** @description Validation Error */

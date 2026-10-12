@@ -10,10 +10,10 @@ Asserts the dataops/governance story end to end:
   2. alice creates namespace + bronze table → 200 (app seeds owner);
   3. an outsider (no grant) describe → 403; alice (owner) describe → 200 (authz cascade);
   4. the catalog recorded alice as the **verified** creator of bronze in the lineage graph;
-  5. a promote run (bronze → silver, as a medallion-producer job emits) makes silver's upstream = bronze.
+  5. a promote run (bronze → silver, as a user's pipeline emits) makes silver's upstream = bronze.
 
 (The lineage service runs with its own auth OFF in this overlay; the gate is unit-tested +
-has its own e2e. This test focuses on catalog authz + provenance authorship + medallion lineage.)
+has its own e2e. This test focuses on catalog authz + provenance authorship + tier lineage.)
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ from service_kit.openlineage import RUN_EVENT_SCHEMA_URL, custom_facet, run_id_f
 
 
 #: OpenLineage ``producer`` URI for the promote event this suite emits — the spec requires one, and a
-#: fixture standing in for a real medallion-producer job has to look like one.
+#: fixture standing in for a user's pipeline job has to look like one.
 _PRODUCER = "https://github.com/Borg93/lance-ns/tree/main/tests/e2e-py/test_governance_e2e.py"
 
 SERVER = os.environ.get("LANCE_E2E_AUTH_SERVER", "")
@@ -155,7 +155,7 @@ def test_governance_flow(stack: tuple[str, str]) -> None:
     creator = _poll(lambda: _get_json(f"{lineage}/datasets/{bronze}/creator", ah).get("creator"), alice_sub)
     assert creator == alice_sub, f"expected lineage creator={alice_sub}, got {creator}"
 
-    # 5. a promote run (bronze -> silver), as a medallion-producer job would emit.
+    # 5. a promote run (bronze -> silver), as a user's pipeline would emit.
     # Spec-true on purpose: this fixture is our stand-in for a real producer, so it has to carry what the
     # spec REQUIRES — a UUID ``runId`` (``format: uuid``; Marquez rejects anything else), ``producer`` and
     # ``schemaURL`` on the envelope, and ``_producer``/``_schemaURL`` on the custom ``author`` facet. The
@@ -171,13 +171,13 @@ def test_governance_flow(stack: tuple[str, str]) -> None:
             "runId": run_id_for(f"promote-{ns}-{os.getpid()}"),
             "facets": {"author": custom_facet(_PRODUCER, name=alice_sub, sub=alice_sub)},
         },
-        "job": {"namespace": "medallion-producer", "name": "promote_bronze_to_silver"},
+        "job": {"namespace": "e2e-pipeline", "name": "promote_bronze_to_silver"},
         "inputs": [{"namespace": ns, "name": bronze}],
         "outputs": [{"namespace": ns, "name": silver}],
     }
     assert requests.post(f"{lineage}/api/v1/lineage", json=promote, headers=ah, timeout=10).status_code == 201
 
-    # 6. silver's upstream includes bronze (the medallion lineage). Governed read → forward alice's bearer;
+    # 6. silver's upstream includes bronze (the tier lineage). Governed read → forward alice's bearer;
     # alice can read silver via her ownership of the parent namespace ``ns`` (create-on-parent cascade).
     def _silver_upstream() -> list[str]:
         related = _get_json(f"{lineage}/datasets/{silver}/upstream", ah).get("related", [])

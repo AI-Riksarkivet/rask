@@ -9,7 +9,7 @@ HA for the stateless request-serving services — the lakehouse pair AND the fle
 `.Values.services` rather than named, plus controlplane from its own values block. Off by default
 (single-node kind); the prod overlay enables the PDB after bumping replicas. The stateful stores
 (AGE/MinIO) get HA from their operators in rask (CNPG), NOT from here. The
-event-driven stage runners/producer are intentionally excluded — eviction is safe there (Dapr redelivers, and
+event-driven subscribers are intentionally excluded — eviction is safe there (Dapr redelivers, and
 every hop converges on its idempotency key).
 
 ONE RULE THROUGHOUT, and it is why every block below is gated: a `minAvailable: 1` PDB over a SINGLE

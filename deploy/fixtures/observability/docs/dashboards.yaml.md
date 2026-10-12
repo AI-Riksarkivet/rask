@@ -15,8 +15,7 @@ release, so lance-ns's dashboards moved from the `lance-ns` project onto this on
 than provisioning a second, near-empty project beside it:
   fleet-red    — rask's fleet RED view (OTLP http.server metrics from service_kit.setup_otel)
   lineage      — lance-ns ingest domain signal + HTTP RED
-  service-flow — the event-driven medallion cascade edges + per-service activity
-  training     — per-model training run metrics (Ray train job → OTLP)
+  service-flow — per-service activity of the event-driven services
   notifications— the targeted inbox: both ingress lanes, fan-out outcomes, the DLQ floor
   maintenance  — the 120s table-maintenance sweep: coverage, refusals, and what it RECLAIMED
 

@@ -11,7 +11,7 @@ introspect, not this service."""
 
 from fastapi import APIRouter
 
-from compute import engine, health, proxy, pruner, routes
+from compute import health, proxy, pruner, routes
 from compute.dependencies import get_compute_settings
 from compute.lifespan import make_lifespan
 from service_kit import make_service_app
@@ -25,9 +25,6 @@ from service_kit import make_service_app
 _root = APIRouter()
 _root.include_router(proxy.router)
 _root.include_router(pruner.make_pruner_router(get_compute_settings()))
-# The engine door a planner invokes through Dapr (`/engine/runs`, CP-056): root-mounted, because a service
-# invocation delivers the method path verbatim and the route is a service contract, not a public API.
-_root.include_router(engine.router)
 
 app = make_service_app(
     title="compute",

@@ -6,14 +6,14 @@ contract. Durable catalog→lineage delivery rides the Dapr subscription (``line
 
 **THIS DOOR RECORDS; IT DOES NOT TRIGGER.** An event ingested here lands in AGE and the durable feed
 and drives NOTHING — the whole handler is authorize, ``ingest_event``, return, with no publish
-anywhere on the path. The medallion cascade's head is a Dapr subscription on
-the ``lineage.events.v1`` TOPIC (``medallion.api.bronze_arrival``), and nothing republishes from HTTP
+anywhere on the path. The subscribers on the ``lineage.events.v1`` TOPIC (maintenance's arrival
+door, the notifications inbox) hear only what is published there, and nothing republishes from HTTP
 ingest onto that topic.
 
 The distinction is easy to miss and expensive: this is the one door an external orchestrator finds,
 and the sentence above markets it to exactly the tools that would expect a write here to start a run.
 It does not. The result is a perfect graph, zero compute, every pod green, and nothing to grep for.
-An external producer that means to DRIVE the cascade writes its rows through the catalog's data-plane
+An external producer whose write must be announced writes its rows through the catalog's data-plane
 door (``POST /v1/table/{id}/insert``), whose own emitter announces the write onto the topic, and
 publishes no lineage event of its own for that write.
 """
@@ -170,8 +170,7 @@ async def ingest_event(
         await repository.ingest_dataset_event(event)
     else:
         await repository.ingest_event(event)
-    # Domain metrics for the HTTP transport too — the trainer's whole lifecycle and every external
-    # producer land here, so counting only the Dapr subscriber undercounted real ingest (audit 2026-07-15).
+    # Domain metrics for the HTTP transport too — every external producer lands here, so counting only the Dapr subscriber undercounted real ingest (audit 2026-07-15).
     # A 401 or a 422 still never reaches this point and needs no domain outcome: neither names a run the
     # graph should have held. An authorization refusal does, and is counted above.
     record_ingest_duration(time.perf_counter() - started)

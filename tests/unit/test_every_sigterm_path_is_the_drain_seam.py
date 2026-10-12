@@ -32,8 +32,6 @@ _ARMED = frozenset(
         "services/gateway/src/gateway/__init__.py",
         "services/lineage/src/lineage/main.py",
         "services/maintenance/src/maintenance/service.py",
-        "services/medallion/src/medallion/producer.py",
-        "services/medallion/src/medallion/stage_runner.py",
         "services/notifications/src/notifications/lifespan.py",
     }
 )

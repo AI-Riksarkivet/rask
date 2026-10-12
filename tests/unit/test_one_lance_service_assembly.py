@@ -1,17 +1,13 @@
 """The lance-plane entrypoints are assembled once (docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit" DUP-12).
 
 DUP-12: "The lance-service entrypoint is hand-assembled eight times; there is no
-`make_lance_service_app`." The eight were catalog, lineage, the medallion producer, the medallion
-stage runner, maintenance, viewer, search and annotator — each opening `app = FastAPI(...)` at module level
-and then repeating the same five steps in prose comments copied between them.
+`make_lance_service_app`." Each opened `app = FastAPI(...)` at module level and then repeated the same five
+steps in prose comments copied between them.
 
 The media three moved first, onto `service_kit.media.app.build_media_app` (see
-`test_one_media_service_seam.py`). This pins what `service_kit.lance_app` gives the other five.
-
-THE DRIFT THE COPIES HAD ALREADY PRODUCED, and what makes this more than tidying: the medallion STAGE RUNNER
-served no `RequestIDMiddleware` at all. Its four siblings each added one, under the same copied
-five-line comment about why a caller must be able to quote an id from a failed request — and the one
-service that consumes the cascade's bus deliveries did not have it. Nothing compared the five.
+`test_one_media_service_seam.py`). This pins what `service_kit.lance_app` gives catalog, lineage and
+maintenance: the copies had drifted, one service serving no `RequestIDMiddleware` at all, and nothing
+compared them.
 """
 
 from __future__ import annotations
@@ -28,8 +24,6 @@ from lance_namespace import UnauthenticatedError
 LANCE_APPS = (
     ("catalog", "catalog.main"),
     ("lineage", "lineage.main"),
-    ("medallion-producer", "medallion.producer"),
-    ("medallion-stage-runner", "medallion.stage_runner"),
     ("maintenance", "maintenance.service"),
 )
 
@@ -68,7 +62,7 @@ def _app(module_path: str) -> FastAPI:
 
 @pytest.mark.parametrize(("name", "module_path"), LANCE_APPS, ids=[row[0] for row in LANCE_APPS])
 def test_every_lance_app_stamps_one_request_id(name: str, module_path: str) -> None:
-    """THE DRIFT: the medallion stage runner served no request-id layer at all.
+    """Every lance app serves the request-id layer.
 
     Driven through a REQUEST rather than by looking for the class on `app.user_middleware`: a
     middleware that is registered but never reached stamps nothing, and the header is the contract.
@@ -86,7 +80,7 @@ def test_every_lance_app_stamps_one_request_id(name: str, module_path: str) -> N
 
 @pytest.mark.parametrize(("name", "module_path"), LANCE_APPS, ids=[row[0] for row in LANCE_APPS])
 def test_every_lance_app_translates_a_lance_error(name: str, module_path: str) -> None:
-    """The handler pair, in the order that makes it work — one place rather than five copied blocks."""
+    """The handler pair, in the order that makes it work — one place rather than copied blocks."""
     app = _app(module_path)
     with _probe_route(app):
 

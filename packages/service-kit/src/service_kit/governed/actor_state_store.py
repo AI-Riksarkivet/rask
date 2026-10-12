@@ -1,8 +1,8 @@
 """Ask the sidecar whether this app-id can actually reach an ACTOR state store.
 
 WHY THIS EXISTS, measured live on 2026-08-24. `lance-statestore` carries `actorStateStore: "true"`
-and is SCOPED to a list of app-ids. `medallion-producer` was missing from the scope list on the
-deployed Component, and nothing anywhere reported it:
+and is SCOPED to a list of app-ids. An app-id missing from the scope list on the deployed Component
+was reported by nothing anywhere:
 
 * The sidecar logs ``Actor state store not configured - actor hosting disabled, but invocation
   enabled`` and then ``Workflow engine started``, in that order. The second line is the one an
@@ -13,18 +13,18 @@ deployed Component, and nothing anywhere reported it:
 
 The failure then surfaces at the worst possible moment and in the worst possible place: the first
 `StartInstance` answers INTERNAL, and the follow-up state read NIL-DEREFERENCES daprd itself
-(`wfengine/state.LoadWorkflowState`, dapr 1.18.1) — so a held promotion did not merely fail to
-schedule, it SEGFAULTED the cascade head's sidecar, and the subscription's correct RETRY re-drove
-the crash on every redelivery.
+(`wfengine/state.LoadWorkflowState`, dapr 1.18.1) — so a workflow did not merely fail to schedule,
+it SEGFAULTED the sidecar, and a subscription's correct RETRY re-drove the crash on every
+redelivery.
 
 The discriminator is exact and cheap: a component the app-id cannot see is absent from its own
 sidecar's metadata entirely, and one it can see advertises its capabilities. So "is there a loaded
 component with the ACTOR capability" answers precisely the question the log lines do not.
 
 NON-FATAL, deliberately, and for the same reason as :mod:`actor_warmup`: the services that host a
-runtime also serve doors that do not need one. The medallion producer's cascade head and `/train`
-work perfectly without actors — refusing to boot would turn one dead capability into a dead estate. The verdict is logged at ERROR and returned, so a
-caller may also surface it on a health detail.
+runtime also serve doors that work perfectly without actors — refusing to boot would turn one dead
+capability into a dead estate. The verdict is logged at ERROR and returned, so a caller may also surface
+it on a health detail.
 """
 
 import asyncio

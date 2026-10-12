@@ -67,7 +67,6 @@ _UNTARGETED_ACTIONS: frozenset[str] = frozenset(
     {
         # A planned Ray stage run (CP-029 D-2): the bring-your-own-engine seam announcing work, naming the plan.
         # Nobody's standing moved; the run's own terminal reaches people through lineage.
-        "run_planned",
         # A gate declaration changes an OBJECT's configuration, not a person's standing — the same
         # shape as `transform_*` below. Nobody's access moved, so there is nobody to tell.
         # The ref plane ([[LH-056]]): a branch or tag moved, which is an OBJECT changing, not a
@@ -100,8 +99,6 @@ _UNTARGETED_ACTIONS: frozenset[str] = frozenset(
         "table_renamed",
         "table_undropped",
         "table_unprotected",
-        "transform_deleted",
-        "transform_set",
         "warehouse_activated",
         "warehouse_bound",
         "warehouse_created",

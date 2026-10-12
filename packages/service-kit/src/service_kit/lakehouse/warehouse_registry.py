@@ -3,9 +3,9 @@
 The catalog WRITES warehouse records (``services/catalog/services/warehouses.py``) as plain JSON at
 ``<control_root>/_warehouses/<id>.json`` with fields ``{id, bucket, root_uri, project, status, ...}``.
 This module is the shared READ half for services that must route by *project* without a catalog client
-(the established catalog↔compaction contract shape — see :mod:`service_kit.lakehouse.maintenance_policies`): the
-medallion stage runners/producer resolve a project-carrying trigger to that project's warehouse root and lay the
-stages out as ``<root_uri>/medallion/<namespace>``.
+(the established catalog↔compaction contract shape — see :mod:`service_kit.lakehouse.maintenance_policies`):
+maintenance resolves a project to its warehouse root, under which the tiers lie as
+``<root_uri>/medallion/<namespace>``.
 
 Records are immutable except ``status``, so resolution accepts short staleness through a per-process TTL
 cache — positive hits only, meaning a freshly provisioned warehouse is visible immediately while a
@@ -156,11 +156,10 @@ def is_safe_project(value: object) -> bool:
 
 
 def tier_namespace(tier: str) -> str:
-    """The namespace NAME a governed tier writes into — from the same env the medallion reads.
+    """The namespace NAME a governed tier writes into, overridable per tier by ``MEDALLION_<TIER>_NAMESPACE``.
 
-    Not a constant, for the reason `ingest/naming.py::bronze_namespace` already states:
-    ``MEDALLION_<TIER>_NAMESPACE`` is a chart value, and a tier the writer and the cascade head
-    disagree about is a write nothing downstream ever sees.
+    Not a constant, because a tier name every writer and reader must agree on is configuration: a tier
+    two of them disagree about is a write nothing downstream ever sees.
     """
     import os
 
@@ -171,10 +170,9 @@ def namespace_for(project: str, tier: str) -> str:
     """The namespace a write for ``project`` into ``tier`` lands in — ``acme-silver``, or ``silver``
     untenanted.
 
-    LIVES HERE for the same reason :func:`project_namespace` does, and the case that forced it is the
-    same one repeated a tier later: ingest qualifies bronze through this module while the annotator
-    composed the bare literal ``"silver"`` in four places, so with two tenants annotating, both landed
-    in one namespace — one FGA parent, one set of grants, both tenants' labels.
+    LIVES HERE for the same reason :func:`project_namespace` does: a writer that composes the bare literal
+    ``"silver"`` instead puts two annotating tenants in one namespace — one FGA parent, one set of grants,
+    both tenants' labels.
 
     The ``is_safe_project`` guard is applied HERE rather than by each caller, because applying it on
     only one side is how a garbage project produces a write that is refused for a reason invisible
@@ -193,41 +191,9 @@ def project_namespace(project: str, name: str) -> str:
     shape (``acme-bronze$events`` is still a valid ``stage$name`` dataset id).
 
     LIVES HERE, beside :func:`is_safe_project`, because it is the SAME concern and more than one plane
-    needs it. It began in ``medallion/core/config.py`` where only the medallion could reach it — and
-    the ingest plane, which writes bronze and must therefore name it identically, composed
-    ``f"{project}${dataset}"`` instead. That is not a near-miss: the cascade head matches on the
-    qualified pair (``ingest_trigger.py``), so ingest's bronze writes could never fire it. A naming
-    convention that two services must agree on cannot live inside one of them.
+    needs it: a naming convention that two services must agree on cannot live inside one of them.
     """
     return f"{project}-{name}" if project else name
-
-
-def lane_key(project: str, qualified: str) -> str:
-    """The TENANT-FREE lane key for a project-qualified dataset id -- the inverse of
-    :func:`project_namespace` when the project is KNOWN.
-
-    ``("acme", "acme-bronze$events")`` -> ``"bronze$events"``. Empty project, or a name that does not
-    carry that project's prefix, returns ``qualified`` unchanged.
-
-    THIS IS NOT THE UNSOUND INVERSE the module warns about above. Recovering the project FROM a name
-    is ambiguous -- ``PROJECT_PATTERN`` permits hyphens, so ``acme-bronze-silver`` could be project
-    ``acme`` or ``acme-bronze``. Here the project is supplied by the caller (the trigger carries it,
-    the record stores it), so the only judgement is a prefix test on the ``-`` BOUNDARY. Stripping on
-    the bare project name instead would turn ``acmebronze$x`` into ``bronze$x`` and match a lane
-    nobody declared.
-
-    WHY IT EXISTS. A stage trigger's ``dataset`` is a LANE KEY: the same string for every tenant, with
-    the tenant travelling separately on ``trigger.project``. That convention was already established
-    -- ``publication_trigger`` published the CATALOG identifier once and every tenant's publication
-    was dropped as another lane's -- but ``ingest_trigger``'s declared-lane branch still returned the
-    catalog id verbatim, so ONE function returned two different kinds of thing depending on which
-    branch fired. A lane declared through the door was then reachable from one head and not the other.
-
-    Lives beside :func:`project_namespace` for the reason stated there: a naming convention two
-    services must agree on cannot live inside one of them.
-    """
-    prefix = f"{project}-"
-    return qualified[len(prefix) :] if project and qualified.startswith(prefix) else qualified
 
 
 def namespace_tiers(qualified: str) -> frozenset[str]:
@@ -321,7 +287,7 @@ def _sole_root(matches: list[tuple[str, str, bool]], *, project: str, serving: s
     THIS USED TO BE `min(matches)`, warn, and carry on. That is deterministic, which is what the old
     test asserted — and deterministic is not correct. It routes a tenant's writes BY ALPHABET.
     Measured on the deployed estate 2026-09-06: project `acme` carried SIX active work warehouses,
-    five of them e2e residue, and the cascade head resolved `acme-bucket` only because that string
+    five of them e2e residue, and resolution picked `acme-bucket` only because that string
     sorts first. A suite minting `aaa-wh` would have relocated a tenant's bronze silently; the sole
     signal was a warning line.
 
@@ -393,7 +359,7 @@ def project_gold_root(
 
     The mirror of :func:`project_root` matching only records carrying ``"serving": "gold"`` (created via
     ``POST /v1/warehouses`` with the ``serving`` field — docs/adr/0034-medallion-tiers-hybrid-physical-layout-2026-07-24.md "Medallion tiers — hybrid physical
-    layout"): the silver→gold stage runner's tenant TARGET root when ``MEDALLION_GOLD_WAREHOUSE_ENABLED`` is on.
+    layout"): a tenant's gold TARGET root.
     Same lowest-id determinism, same positive-only TTL cache (partitioned by serving class, so a cached
     work root never answers a gold lookup). ``None`` means the project has no gold warehouse — the caller
     falls back to the work root, byte-identically to the pre-gold behavior. Blocking IO — threadpool it.

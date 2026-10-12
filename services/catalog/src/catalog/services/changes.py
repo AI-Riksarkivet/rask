@@ -52,11 +52,10 @@ is one the consumer never held. So it is answered without the walk, and without 
 need version 1's manifest that maintenance cleanup removes. A later begin whose manifest is gone is
 refused for every kind alike.
 
-THE CASCADE ASKS THE SAME QUESTION WITH ONE COLUMN, and the difference is deliberate.
-`scripts/ray_stage_job._delta_filter` filters on `_row_last_updated_at_version` alone, which selects
-the inserted and the updated rows together — a never-updated row carries its creation version there
-(measured 2026-09-11). It may collapse them because it merge-inserts whatever it selects; this module
-may not, because a consumer applying both streams double-counts an insert reported as both.
+A WRITER MAY ASK THE SAME QUESTION WITH ONE COLUMN, and the difference is deliberate. A filter on
+`_row_last_updated_at_version` alone selects the inserted and the updated rows together — a never-updated
+row carries its creation version there (measured 2026-09-11). A writer that merge-inserts whatever it
+selects may collapse them; this module may not, because a consumer applying both streams double-counts an insert reported as both.
 """
 
 from __future__ import annotations

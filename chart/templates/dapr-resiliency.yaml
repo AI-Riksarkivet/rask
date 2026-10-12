@@ -14,12 +14,6 @@ spec:
   targets:
     components:
 {{- $subscribers := list (dict "appId" .Values.services.lineage.daprAppId) }}
-{{- if .Values.medallion.enabled }}
-{{- $subscribers = append $subscribers (dict "appId" .Values.medallion.producer.daprAppId) }}
-{{- range .Values.medallion.stageRunners }}
-{{- $subscribers = append $subscribers (dict "appId" .daprAppId) }}
-{{- end }}
-{{- end }}
 
 {{- $subscribers = append $subscribers (dict "appId" "notifications") }}
 
@@ -28,12 +22,6 @@ spec:
 {{- end }}
 {{- range $subscribers }}
       {{ include "lance.subPubsub" (list $ .appId) }}:
-        inbound:
-          retry: pubsubDeliveryRetry
-{{- end }}
-
-{{- if and .Values.catalog.controlEmit .Values.medallion.enabled }}
-      {{ .Values.pubsub.controlName | default "catalog-control-pubsub" }}-{{ .Values.medallion.producer.daprAppId }}:
         inbound:
           retry: pubsubDeliveryRetry
 {{- end }}
@@ -95,16 +83,13 @@ spec:
 {{- if .Values.controlplane.enabled }}
 {{- $invoked = append $invoked "controlplane" }}
 {{- end }}
-{{- if .Values.medallion.enabled }}
-{{- $invoked = append $invoked .Values.medallion.producer.daprAppId }}
-{{- end }}
 {{- if .Values.explorer.enabled }}
 {{- range $name, $svc := .Values.explorer.services }}
 {{- $invoked = append $invoked $svc.daprAppId }}
 {{- end }}
 {{- end }}
 
-{{- $writeDoors := list .Values.medallion.producer.daprAppId .Values.services.catalog.daprAppId }}
+{{- $writeDoors := list .Values.services.catalog.daprAppId }}
 {{- range $invoked }}
       {{ . }}:
         timeout: invokeTimeout

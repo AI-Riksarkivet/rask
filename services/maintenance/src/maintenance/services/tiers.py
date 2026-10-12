@@ -156,7 +156,7 @@ def tier_of(dataset_uri: str) -> str | None:
          reroutes the medallion base per tenant and the child of `medallion/` is project-qualified.
       5. ``<bucket>/<uuid8>_<tier>-<lane>$<table>`` — a cascade LANE vended through the catalog, so
          the flat layout carries the cascade's `<tier>-<lane>` order rather than `<project>-<tier>`.
-      6. ``<bucket>/medallion/<namespace>/<table>`` — a TABLE under a cascade namespace (the trainer's
+      6. ``<bucket>/medallion/<namespace>/<table>`` — a TABLE under a cascade namespace (the model registry's
          `medallion/models/<model>`). The tier comes from `parts[-2]` alone, never from the table.
 
     THE THREE BRANCHES ARE ORDERED, and the order is load-bearing. `medallion` is the one directory

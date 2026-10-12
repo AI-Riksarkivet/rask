@@ -1,18 +1,17 @@
 """Quality-gate declaration endpoints — the governed door a project's gate is CONFIGURED through.
 
-The gate decides whether a stage's output may publish: which column identifies a row, which columns
-a consumer depends on, and how far a row count may move before a promotion waits for a human. All of
-it lived ONLY as environment on a stage runner Deployment, so moving a threshold meant editing a values file
-and running ``helm upgrade`` — an operation nobody could enumerate, review, or be gated on. This door
-makes a gate a record like every other governed artefact, exactly as ``transforms`` did for lanes.
+The gate decides whether a write into a tier may publish: which column identifies a row, which columns
+a consumer depends on, and how far a row count may move before a promotion waits for a human. A gate is
+a record like every other governed artefact, so it can be enumerated, reviewed and gated on. The catalog's
+own promotion hold (ADR 0155, LH-466) is what reads it.
 
-Admin-gated on ``project:<id>#can_administer``, checked EXPLICITLY and for the same reasons the lane
-door states: ``/v1/project`` is not a router-guarded resource prefix, and ``project`` defines no
-reader-tier relation, so describe gates at the admin tier too rather than checking a phantom relation
-(which 400s -> fail-closed 503 for everyone). The bar is also right on its own terms: relaxing a
-review band decides whether a human sees a promotion at all, which is an administrative act.
+Admin-gated on ``project:<id>#can_administer``, checked EXPLICITLY: ``/v1/project`` is not a
+router-guarded resource prefix, and ``project`` defines no reader-tier relation, so describe gates at
+the admin tier too rather than checking a phantom relation (which 400s -> fail-closed 503 for everyone).
+The bar is also right on its own terms: relaxing a review band decides whether a human sees a promotion
+at all, which is an administrative act.
 
-**CLEARING IS A DELETE, NOT A ZERO.** ``delete`` removes the record so the chart's settings govern
+**CLEARING IS A DELETE, NOT A ZERO.** ``delete`` removes the record so the defaults govern
 again; it never writes zeros. A band of 0.0 is a real, meaningful setting (every non-empty delta
 breaches), so "make it stop overriding" and "make it maximally strict" must not be the same call.
 """

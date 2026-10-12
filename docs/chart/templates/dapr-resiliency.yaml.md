@@ -59,25 +59,6 @@ SAME condition dapr-component.yaml uses to create it, so the two lists cannot di
 whether the lane exists. It also puts the app-id into `scopes:` below, which is the half a
 component-only entry would silently miss.
 
-## `{{- if and .Values.catalog.controlEmit .Values.medallion.enabled }}`
-
-The CASCADE CONTROL component, which $subscribers does NOT reach. `lance.subPubsub` renders
-`lance-pubsub-<appId>` — the lineage-topic component — while the `/publication-arrival`
-subscription rides `catalog-control-pubsub-<producer>` (dapr-component.yaml, the "CASCADE's view
-of the same control stream" block). The producer app-id is in $subscribers, so `scopes:` below
-already covers it and the CRD applied; only the component target was missing, which is exactly
-the shape that makes this invisible — the policy exists, the app is in scope, and the one
-subscription it was supposed to protect is not named.
-
-What the omission COST, and why this is not cosmetic: `bronze_arrival.py` declares a
-`dead_letter_topic` on that subscription, and Dapr sends to the DLT after the FIRST failure when
-no retry policy targets the component. So the most expensive trigger in the estate — a
-publication, the thing the durable+queue-group component above exists to guarantee delivery of —
-got zero retries and parked on one transient blip.
-
-Rendered from the same expression dapr-component.yaml:71 uses, under the same two conditions, so
-a rename of `pubsub.controlName` cannot leave the policy pointing at a component that is gone.
-
 ## `{{- if .Values.services.notifications }}`
 
 The NOTIFICATION plane's control-topic subscriber (v3 targeting), which `$subscribers` misses
@@ -133,11 +114,9 @@ Retrying a 403 is also pointless on its own terms: the answer will not change.
 ## `writeRetry:`
 
 THE WRITE DOORS GET A NARROWER MATCHER, and the difference is exactly 500.
-`medallion-producer` serves POST /train, which STARTS a training run, and the catalog's writes
-are what start a cascade (`/bronze-arrival` fires on their announcement). /train requires an
-`Idempotency-Key`, so a replay converges rather than duplicating; this is the other half of the same rule
-("pair retry with an idempotency key OR mark the operation non-retryable" — do both, because
-each covers what the other misses).
+The catalog's writes are announced on the bus and a pipeline acts on the announcement, so a replayed
+write is a second announcement ("pair retry with an idempotency key OR mark the operation non-retryable" —
+do both, because each covers what the other misses).
 502/503/504 mean the request never reached a working app, and these doors answer 503 with an
 explicit `Retry-After: 5` — a retry is what they ASK for. A bare 500 means the app WAS reached
 and something failed inside it, possibly after the door had already published its trigger.
@@ -190,7 +169,7 @@ front-door service the two drifted: compute rendered a pod the gateway invokes w
 target it, leaving it with no timeout, no retry and no circuit breaker — the identical call to
 catalog had all three. gateway is excluded because it is the CALLER, not a target.
 
-## `{{- $writeDoors := list .Values.medallion.producer.daprAppId .Values.services.catalog.daprAppId }}`
+## `{{- $writeDoors := list .Values.services.catalog.daprAppId }}`
 
 The write doors take `writeRetry` (no 500); everything else keeps `invokeRetry`. Derived from
 the app-id rather than listed twice, so a rename cannot leave a head on the wide policy.

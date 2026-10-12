@@ -155,7 +155,7 @@ class InputPin(BaseModel):
 
     The API-surface shape (catalog ``segments``, as any ``{id}`` route uses); ``emit_write_event`` resolves
     it to the canonical lineage/FGA id. A pinned ``version`` becomes a ``DatasetVersionDatasetFacet`` on the
-    input edge — the reproducibility handshake a derived write (a stage runner's merge_insert from ``source@N``)
+    input edge — the reproducibility handshake a derived write (a pipeline's merge_insert from ``source@N``)
     needs so its provenance names the precise input version, not just the dataset.
     """
 
@@ -439,7 +439,7 @@ _RESERVED_RUN_FACETS = frozenset({"lance", "author", "errorMessage", "progress",
 def shape_run_facets(raw: dict[str, Any]) -> dict[str, Any]:
     """Wrap caller-supplied run-facet payloads with the spec-required ``_producer`` / ``_schemaURL``.
 
-    The catalog stays un-opinionated about a producer's run metadata (e.g. a stage runner's merge carrying
+    The catalog stays un-opinionated about a producer's run metadata (e.g. a pipeline's merge carrying
     training ``params``): it does not interpret the payload, it only stamps each named facet spec-legal
     via :func:`custom_facet` so a strict OpenLineage consumer accepts the event. ``raw`` maps a facet
     name to its payload object. Guarded fail-closed: the facet NAME may not be a reserved catalog-owned /
@@ -871,8 +871,8 @@ class DaprEmitter(_BaseLineageEmitter):
             # STAGED, then published, then dropped on ack (#4). The emit is inline-awaited and
             # best-effort AFTER the Lance write commits, so an unstaged event is lost outright to a crash
             # between the write and the publish: the data exists on storage and the graph never learns of
-            # it. Worse than a provenance hole — the medallion `/bronze-arrival` subscription reacts to
-            # this announcement, so a lost one means the whole bronze->silver->gold run silently never
+            # it. Worse than a provenance hole — a user's pipeline reads this announcement off lineage's
+            # `GET /events` to start its next hop, so a lost one means the next tier's run silently never
             # happens. Staging narrows that window to commit→stage; it does not close it.
             #
             # Degrades to exactly the previous plain publish when `outbox_uri` is empty, which is the
@@ -973,7 +973,7 @@ async def emit_write_event(
     ``source_uri`` attaches the standard dataSource facet (the physical storage URI) so #23 reconcile can
     find the on-disk file — passed by ops that (re)attach a location, e.g. ``register``/``declare``.
     ``inputs`` names the source dataset(s) this write is DERIVED FROM, each optionally version-pinned (a
-    rename passes its source; a stage runner's merge passes ``source@N``); ``extra_run_facets`` rides caller-supplied
+    rename passes its source; a pipeline's merge passes ``source@N``); ``extra_run_facets`` rides caller-supplied
     run facets (e.g. training params). Ids come from ``fga`` so the lineage Dataset == the OpenFGA object.
     """
     refs = [

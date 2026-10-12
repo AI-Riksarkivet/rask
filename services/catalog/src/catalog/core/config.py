@@ -203,12 +203,10 @@ class CatalogControlBusSettings(BaseSettings):
     #: by a lane-specific relay that re-ingests what it finds, so sharing would feed each relay the
     #: other lane's events.
     #:
-    #: Why the control lane needs one at all: `table_published` is what wakes the next cascade hop.
-    #: The stage runner does not fire its own topic and the medallion plane runs no cron and no reconcile
-    #: binding, so it never re-reads the tag. `DaprControlEmitter.emit` swallows a publish failure by
+    #: Why the control lane needs one at all: `DaprControlEmitter.emit` swallows a publish failure by
     #: design — it is called after the change is already made and audited, so raising would turn a
-    #: delivered mutation into a 500 — which meant a NATS blip cancelled the cascade outright with
-    #: every pod green. Staged, the event survives to be re-published.
+    #: delivered mutation into a 500 — so unstaged, a NATS blip loses the event with every pod green.
+    #: Staged, the event survives to be re-published.
     control_outbox_uri: str = Field(default="", alias="LANCE_CONTROL_OUTBOX_URI")
     #: The cron binding that DRAINS `control_outbox_uri` — `catalog/api/control_relay.py`. Empty = the
     #: relay route is not mounted (staging still happens; nothing republishes it).
@@ -278,9 +276,9 @@ class CatalogLineageSettings(BaseSettings):
     #:
     #: Why it matters HERE specifically: the catalog's emit is inline-awaited and best-effort AFTER the
     #: Lance write commits, so a crash between the write and the publish loses the event. The data
-    #: exists and the graph never learns of it — and because the catalog's write announcement is what
-    #: the medallion `/bronze-arrival` subscription reacts to, a lost one does not merely under-report
-    #: provenance: the whole bronze->silver->gold run silently never happens.
+    #: exists and the graph never learns of it — and because the catalog's write announcement is what a
+    #: user's pipeline reads off lineage's `GET /events` to start its next hop, a lost one does not merely
+    #: under-report provenance: the next tier's run silently never happens.
     lineage_outbox_uri: str = Field(default="", alias="LANCE_LINEAGE_OUTBOX_URI")
 
 
@@ -387,32 +385,13 @@ class CatalogAuthzSettings(BaseSettings):
     #: unsigned. The services this catalog ACCEPTS at its door are the `RASK_SA_SUBJECTS` map (`OidcSettings`);
     #: this is the name it signs under.
     signing_identity: str = Field(default="", alias="RASK_SIGNING_IDENTITY")
-    #: Service identities the CASCADE runs as, granted ``owner`` on every warehouse this catalog creates.
-    #:
-    #: They need it because `publish` is guarded by ``can_update_tag`` and the model defines
-    #: ``can_update_tag: owner``. Without the grant a tenant is created, its tiers are created, rows land
-    #: in bronze, lineage records the run — and the promotion is refused with a 403 in a stage runner log nobody
-    #: is watching. Measured five times on the live estate before this existed, once AFTER a human had
-    #: already approved the promotion (the resume runs as the producer, which held nothing).
-    #:
-    #: Granted at the WAREHOUSE rather than per tier: ``namespace`` and ``table`` both define
-    #: ``owner ... or owner from parent``, so one tuple at the container reaches every tier and every
-    #: table under it. Per-tier grants would be three-plus tuples per tenant that the hierarchy implies.
-    #:
-    #: EMPTY BY DEFAULT, and deliberately: an estate that declares nothing keeps exactly today's tuples,
-    #: so enabling this is an operator's decision rather than a side effect of upgrading. Subjects are
-    #: written verbatim (``user:service-bronze-to-silver``), because the catalog must not invent the
-    #: naming convention of a plane it does not own.
-    fga_cascade_writers: list[str] = Field(default_factory=list, alias="LANCE_FGA_CASCADE_WRITERS")
     #: The MAINTENANCE identities — the sweep, and anything else that rewrites HOW a dataset is stored.
     #:
-    #: Separate from the cascade writers above because the rung is: a cascade identity moves data
-    #: between tiers and needs ``writer``/``publisher``/``validator``; maintenance compacts, optimizes
-    #: indices and reclaims versions, and must hold ``maintainer`` and nothing else. The model keeps the
-    #: two apart in both directions (``can_maintain`` neither implies nor is implied by
-    #: ``can_write_data``), so one list holding both would grant each of them the other's authority.
+    #: Maintenance compacts, optimizes indices and reclaims versions, and must hold ``maintainer`` and nothing
+    #: else. The model keeps it apart from the data rungs in both directions (``can_maintain`` neither implies
+    #: nor is implied by ``can_write_data``).
     #:
-    #: Granted at the WAREHOUSE for the same reason the cascade rungs are: ``namespace`` and ``table``
+    #: Granted at the WAREHOUSE: ``namespace`` and ``table``
     #: both define ``maintainer ... or maintainer from parent``, so one tuple per tenant reaches every
     #: tier and every table below it, and the sweep's reach stays enumerable.
     #:
@@ -568,7 +547,7 @@ class Settings(
     reserved_buckets: str = Field(default="", alias="LANCE_RESERVED_BUCKETS")
 
     # #17 model registry (candidate→blessed promotion). Each model's Lance registry dataset lives at
-    # ``<models_root>/<model>`` — the medallion trainer writes it DIRECTLY there (registry_uri_for), so the
+    # ``<models_root>/<model>`` — an explicit location rather than a namespace-resolved one, so the
     # catalog can NOT reach it through native namespace resolution (that would drop the ``/medallion/``
     # prefix): the promote/describe endpoints open it by EXPLICIT URI. Defaults to ``<root>/medallion/models``
     # so a single-bucket deploy needs no extra config; override only when the registry is zoned elsewhere.
@@ -614,8 +593,8 @@ class Settings(
 
     @property
     def model_artifacts_root(self) -> str:
-        """Root of the per-model artifact trees (``<root>/<model>/<token>/…``) — the byte-for-byte mirror
-        of medallion's ``artifact_base_for`` so the catalog reads exactly where the trainer writes: on s3,
+        """Root of the per-model artifact trees (``<root>/<model>/<token>/…``) — where a client writing the
+        registry lays the artifacts its rows point at: on s3,
         ``s3://<bucket>/models`` (the registry's bucket root — pointer targets must never sit inside a
         Lance dataset, see #92); locally, a ``model-artifacts`` sibling under the registry's parent."""
         if self.model_artifacts_base:

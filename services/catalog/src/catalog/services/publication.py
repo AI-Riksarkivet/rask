@@ -104,8 +104,7 @@ class EffectiveGate(BaseModel):
     """The assertions this publish actually runs, and on WHOSE authority.
 
     Two parties describe the gate at this door and they are not equals. The project's `GateSpec` is
-    POLICY — declared through an admin-gated door, readable by anyone, and the same record the
-    medallion's stage runners resolve for themselves. The request's `key_column`/`required_columns` are a
+    POLICY — declared through an admin-gated door and readable by anyone. The request's `key_column`/`required_columns` are a
     REQUEST, sent by whoever holds `can_update_tag`, up to and including an external writer the estate
     trusts least. A door that consulted only the request handed the least-trusted writer the weakest
     gate, which is exactly backwards.
@@ -142,14 +141,13 @@ class EffectiveGate(BaseModel):
 def declared_gate(registry_root: str, storage_options: dict[str, str], project: str) -> GateSpec | None:
     """This project's declared gate settings, or `None` when nobody declared any.
 
-    NEVER RAISES, and the stance is the medallion's, held deliberately: an unresolvable declaration
+    NEVER RAISES, and the stance is held deliberately: an unresolvable declaration
     falls back rather than refusing, because failing every publish for a tenant over a settings lookup
     takes an estate down for a config blip, while the request's own values remain a real gate. Logged
     at ERROR because it is still a defect — a declaration nobody can read is a policy nobody is under.
 
-    The two readers of this record (this door and `medallion.services.gate`) must not answer
-    differently, which is why both go through `service_kit.lakehouse.gate_specs` rather than either
-    growing its own reader.
+    Read through `service_kit.lakehouse.gate_specs`, the record's one format, rather than a reader of
+    its own.
     """
     if not project or not registry_root:
         return None
@@ -196,10 +194,9 @@ def refuse_a_tier_without_provenance(schema: Any, *, version: int, has_stable_ro
     contaminated, so I re-run only those?" must not answer confidently and wrongly. A fabricated
     parent id is worse than an absent one, because it is queryable.
 
-    AT THIS DOOR, because it is the one every publisher passes — the cascade's stage runners and an external
-    writer alike — and because the job-side contract has a hole this closes: it counts parentless rows
-    only `if SOURCE_ROWID_COLUMN in out.schema.names`, so a table that drops the column reports zero
-    and passes the check that exists to catch it.
+    AT THIS DOOR, because it is the one every publisher passes, and because a writer-side check that
+    counts parentless rows only `if SOURCE_ROWID_COLUMN in out.schema.names` reports zero for a table that
+    drops the column, and passes the check that exists to catch it.
 
     Refuses on CLAIM, never on absence: a table carrying none of the three columns is not a governed
     tier and is untouched. `tier_contract_violations` owns that rule; this function owns only the

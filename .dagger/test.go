@@ -42,7 +42,7 @@ func (m *Rask) TestPackage(
 	ctx context.Context,
 	// The workspace member, e.g. "service-kit". Comma-separate several when the path spans them:
 	// `tests/unit` is a CROSS-SERVICE directory, so `--pkg=catalog` alone collects it with 96
-	// ModuleNotFoundErrors for the siblings it also imports (annotator, medallion, lineage, …).
+	// ModuleNotFoundErrors for the siblings it also imports (annotator, lineage, …).
 	// One package is the common case and stays the fast one; the list is there so a shared path is
 	// runnable at all rather than silently under-collected.
 	pkg string,

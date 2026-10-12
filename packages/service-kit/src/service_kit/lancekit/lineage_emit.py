@@ -1,7 +1,7 @@
 """Emit a spec-2-0-2 OpenLineage RunEvent for an annotation write (pre-merge).
 
-At merge, lance-ns's stage runner emits lineage when the write routes through the catalog;
-until then we emit it ourselves from the write path, using the kernel's OpenLineage
+The catalog emits lineage for a write that routes through it; an annotation write that does
+not emits it itself from the write path, using the kernel's OpenLineage
 primitives (``service_kit.lancekit.openlineage``, whose spec constants match
 ``service_kit.openlineage``) so a pre-merge event and a merged event describe
 the same run identically. Configurable sink (``MEDIA_LINEAGE_SINK=log|none``)

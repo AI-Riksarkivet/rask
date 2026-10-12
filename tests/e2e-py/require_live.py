@@ -2,8 +2,8 @@
 
 Every suite under `tests/e2e-py` guards each test on the environment it needs, which is what keeps
 them runnable at all — and pytest reports a skip as success. So a drive against a half-forwarded
-estate reports green having proved nothing: `make e2e-dummy-lane` was measured at `3 passed, 4
-skipped` with a zero exit, from the estate's only GPU-free cascade prover.
+estate reports green having proved nothing: a live-drive target was measured at `3 passed, 4 skipped`
+with a zero exit.
 
 OPT-IN, because skipping is correct in every other context: an offline `make test` deselects these by
 marker, and a developer reaching for one suite wants the others to skip. It is the TARGET that knows

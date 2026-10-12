@@ -60,7 +60,6 @@ pytestmark = pytest.mark.nats_auth
 log = logging.getLogger(__name__)
 
 REPO = Path(__file__).resolve().parents[2]
-RUNNERS = ("bronze-to-silver", "silver-to-gold", "media-to-silver")
 #: The rig's own observer: it reads stream state and plants consumers for the Job's second pass, so no table user's
 #: call set carries the test's bookkeeping. It is minted beside the table and is not a row of it.
 RIG = "rask-test-rig"
@@ -69,78 +68,42 @@ RIG = "rask-test-rig"
 #: Who may publish each data subject; every other table user must be refused on it.
 #:
 #: lineage: catalog/core/lineage_emit.py, lineage/services/staged.py (recovered signed bytes), maintenance/core/
-#: lineage_emit.py, medallion/core/lineage_publish.py (producer and stage runners). control: catalog's control_emit
-#: and control_relay.py, medallion/workflow.py `request_approval`, which runs in the producer's promotion_review
-#: workflow, and each stage runner's plan announcement (stage_plans.py) while an engine is enabled. maintenance work:
-#: catalog/endpoints/maintenance.py and maintenance/services/work_queue.py; index: catalog only. medallion.<tier>: the
-#: producer (ingest_trigger, publication_trigger, rerun) and each stage runner's hand-off to its own
-#: topic (stage_plans.py); a stage runner never publishes downstream, promotion goes through
-#: the catalog (transform.py). medallion.promotion: promotion_hold.py in the stage runners. refused.<app>:
-#: transform.py. dlq.<app>: the `deadLetterTopic` of that app's subscriptions.
+#: lineage_emit.py. control: catalog's control_emit and control_relay.py, plus the flagged announcers below. maintenance
+#: work: catalog/endpoints/maintenance.py and maintenance/services/work_queue.py; index: catalog only. dlq.<app>: the
+#: `deadLetterTopic` of that app's subscriptions.
 def _values() -> Path:
     return Path(os.environ.get(VALUES_ENV) or REPO / "chart" / "values.yaml")
 
 
 def _control_emitters(values: Path) -> frozenset[str]:
     """Maintenance and the annotator announce on catalog.control.v1 only while the flag that renders their control
-    component is on (maintenance.controlEmit, explorer.controlEmit; both false in the chart's values), and the stage
-    runners only while an engine runs their stages (services.compute.engines.ray.enabled with medallion.compute; both true
-    in the chart's values)."""
+    component is on (maintenance.controlEmit, explorer.controlEmit; both false in the chart's values)."""
     chart = yaml.safe_load((REPO / "chart" / "values.yaml").read_text()) or {}
     given = yaml.safe_load(values.read_text()) or {}
 
     def on(section: str) -> bool:
         return bool((given.get(section) or {}).get("controlEmit", (chart.get(section) or {}).get("controlEmit")))
 
-    announcers = frozenset(app for app, section in (("maintenance", "maintenance"), ("annotator", "explorer")) if on(section))
-    medallion = {**(chart.get("medallion") or {}), **(given.get("medallion") or {})}
-
-    def engine_on(doc: dict) -> bool | None:
-        return ((((doc.get("services") or {}).get("compute") or {}).get("engines") or {}).get("ray") or {}).get("enabled")
-
-    given_engine = engine_on(given)
-    engine = engine_on(chart) if given_engine is None else given_engine
-    # Each stage runner announces its planned runs while an engine runs its stages (with medallion.compute).
-    return announcers | (frozenset(RUNNERS) if engine and medallion.get("compute") else frozenset())
+    return frozenset(app for app, section in (("maintenance", "maintenance"), ("annotator", "explorer")) if on(section))
 
 
 PUBLISHERS: dict[str, frozenset[str]] = {
-    "lineage.events.v1": frozenset({"catalog", "lineage", "maintenance", "medallion-producer", *RUNNERS}),
-    "catalog.control.v1": frozenset({"catalog", "medallion-producer", *_control_emitters(_values())}),
+    "lineage.events.v1": frozenset({"catalog", "lineage", "maintenance"}),
+    "catalog.control.v1": frozenset({"catalog", *_control_emitters(_values())}),
     "maintenance.work.v1": frozenset({"catalog", "maintenance"}),
     "maintenance.index.v1": frozenset({"catalog"}),
-    "medallion.bronze": frozenset({"medallion-producer", "bronze-to-silver"}),
-    "medallion.silver": frozenset({"medallion-producer", "silver-to-gold"}),
-    "medallion.media": frozenset({"medallion-producer", "media-to-silver"}),
-    "medallion.promotion": frozenset(RUNNERS),
-    "training.jobs": frozenset({"medallion-producer"}),
-    "refused.medallion-producer": frozenset({"medallion-producer"}),
-    **{f"refused.{runner}": frozenset({runner}) for runner in RUNNERS},
     "dlq.lineage.events": frozenset({"lineage"}),
     "dlq.notifications": frozenset({"notifications"}),
-    "dlq.medallion-producer": frozenset({"medallion-producer"}),
-    **{f"dlq.{runner}": frozenset({runner}) for runner in RUNNERS},
     "dlq.maintenance.work": frozenset({"maintenance"}),
     "dlq.maintenance.index": frozenset({"maintenance"}),
 }
 
 #: What each sidecar subscribes, as (durableName, topic); None is the catalog's ephemeral broadcast consumer.
-#: catalog/api/dapr.py; lineage/api/dapr.py; medallion/api/{bronze_arrival,train,promotions,events,dlq}.py;
+#: catalog/api/dapr.py; lineage/api/dapr.py;
 #: notifications/api/{subscriptions,dlq}.py; maintenance/api/{arrival,work,index_work}.py.
 DAPR_SUBSCRIPTIONS: dict[str, tuple[tuple[str | None, str], ...]] = {
     "catalog": ((None, "catalog.control.v1"),),
     "lineage": (("lineage-durable", "lineage.events.v1"), ("lineage-dlq-durable", "dlq.lineage.events")),
-    "medallion-producer": (
-        ("medallion-producer-durable", "lineage.events.v1"),
-        ("medallion-producer-durable", "training.jobs"),
-        ("medallion-producer-durable", "medallion.promotion"),
-        ("medallion-producer-durable", "dlq.medallion-producer"),
-        ("medallion-producer-control-durable", "catalog.control.v1"),
-    ),
-    **{
-        runner: ((f"{runner}-durable", topic), (f"{runner}-durable", f"dlq.{runner}"))
-        for runner, topic in zip(RUNNERS, ("medallion.bronze", "medallion.silver", "medallion.media"), strict=True)
-    },
     "notifications": (
         ("notifications-durable", "lineage.events.v1"),
         ("notifications-durable", "dlq.notifications"),

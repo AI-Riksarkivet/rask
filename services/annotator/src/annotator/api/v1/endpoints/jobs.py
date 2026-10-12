@@ -3,8 +3,8 @@
 The interactive modes (manual, AI-assist) write locally then merge_insert one version.
 Bulk / auto-labeling instead runs a producer over a CHUNK-LEVEL selection (a lasso /
 scope / corpus formed in the read plane) as a SILVER DERIVER — async, corpus-scale,
-replace-protects-humans. That deriver is lance-ns's engine (medallion-producer + the catalog
-stage runner); OUR job is the thin SEAM that submits it and reports status.
+replace-protects-humans. That deriver is the caller's own job; OUR job is the thin SEAM that
+submits it and reports status.
 
 Routes to a job runner (``MEDIA_JOBS_URL`` — a lance-ns RayJob submit endpoint) when set,
 else a deterministic in-repo MOCK so the submit/poll round-trip is wired + testable

@@ -164,19 +164,3 @@ def test_an_overwrite_keeps_the_tables_provenance(tier: tuple[TestClient, str], 
     assert after.schema.equals(before, check_metadata=True), (
         f"the overwrite rewrote the table's provenance: {after.schema.metadata} {after.schema.field('id').metadata}"
     )
-
-
-def test_a_stage_output_is_created_from_a_stamped_upstream_schema(real_ns_client: TestClient, tmp_path: Any) -> None:
-    """The cascade creates each tier from its UPSTREAM's schema, and every governed upstream carries the
-    stage stamp's `lineage.dataset_id`. The create must still succeed, against the real catalog door."""
-    from medallion.services.catalog_register import ensure_stage_output
-
-    assert real_ns_client.post("/v1/namespace/m/create", json={}).status_code == 200
-    token = tmp_path / "token"
-    token.write_text("t")
-    upstream = SCHEMA.with_metadata({b"lineage.dataset_id": b"m$bronze"})
-
-    location = ensure_stage_output(catalog_url="http://testserver", table_id="m$silver", schema=upstream, identity_token_file=str(token), client=real_ns_client)
-
-    assert location, "the catalog vended no location"
-    assert b"lineage.dataset_id" not in (lance.dataset(location).schema.metadata or {}), "the upstream's stamp landed on the new tier"

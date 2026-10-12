@@ -94,10 +94,9 @@ class LineageRun:
         self._emitter = emitter
         #: Custom run facets carried on EVERY event this run emits, START and terminal alike.
         #:
-        #: Per-run rather than per-call because that is what they describe. The medallion's `lance`
-        #: facet carries the tenant a write belongs to, and the cascade head reads it off the terminal
-        #: event (`ingest_trigger._cascade_project`) — but a START that omits it and a COMPLETE that
-        #: carries it are the same run described two different ways, and any consumer correlating the
+        #: Per-run rather than per-call because that is what they describe. A `lance` facet
+        #: carrying the tenant a write belongs to is read off the terminal event — but a START that
+        #: omits it and a COMPLETE that carries it are the same run described two different ways, and any consumer correlating the
         #: pair has to special-case which one to trust. Authored with `custom_facet()` so the payload
         #: stays spec-legal; `RunFacets` allows extras, so it reaches the wire verbatim.
         self._run_facets = dict(run_facets or {})
@@ -259,8 +258,8 @@ class LineageRun:
         was for. The estate's guard is the READER's `event_type = 'COMPLETE'` filter, which
         `lineage/services/repository.py` calls load-bearing for exactly this reason: "FAILed runs keep
         WROTE edges (producers() shows the attempt)". An ABORT edge is the same claim — this run
-        touched this dataset and did not finish — and the cascade head, which fires only on COMPLETE,
-        cannot be woken by it.
+        touched this dataset and did not finish — and a consumer that acts only on COMPLETE cannot be
+        woken by it.
         """
         facet = ErrorMessageRunFacet(message=reason) if reason else None
         return self._emit_terminal(RunState.ABORT, inputs=inputs, outputs=outputs, error=facet)

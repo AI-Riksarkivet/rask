@@ -6,16 +6,15 @@ while every producer signed the dict it publishes, and `RunEvent`'s facet fields
 dump grew bags the wire never carried and the signature failed for an honest producer. Nothing in either suite could see it.
 
 THE PRODUCERS' REAL BUILDERS, NOT A HAND-WRITTEN EVENT. What each service actually publishes is what has to verify: the
-medallion's `build_run_event` strips empty facet bags before it emits, the maintenance emitter builds its own shape, and the
-catalog's stamps a PERSON as the author. A fixture that carried the same facets for all three would prove they agree with the
-fixture. The signature is made by the root conftest's `EventSigner`, which writes the wire format from the contract alone, so
+maintenance emitter builds its own shape, and the catalog's stamps a PERSON as the author. A fixture that carried the same
+facets for both would prove they agree with the fixture. The signature is made by the root conftest's `EventSigner`, which writes the wire format from the contract alone, so
 the door is checked for conformance and not against the code that signs.
 
 THE DOOR'S REAL FUNCTION, driven as the bus drives it: `enforce_bus_authz` takes the parsed model AND the arrived mapping, and
 the arrived mapping is the one the signature covers. Public keys are read where the door reads them, through the Dapr secret
 API, stood in for by respx. FGA is off, so the signature is what answers.
 
-THREE SHAPES, because they are genuinely different: self-signed (maintenance, the medallion), and a declared delegation (the
+TWO SHAPES, because they are genuinely different: self-signed (maintenance), and a declared delegation (the
 catalog, acting for the person it authenticated).
 """
 
@@ -60,23 +59,6 @@ def _maintenance_event(identity: str) -> dict[str, Any]:
     )
 
 
-def _medallion_event(identity: str) -> dict[str, Any]:
-    """What `services/medallion` publishes, from its own builder: empty facet bags already stripped."""
-    from medallion.schemas.events import build_run_event
-
-    return build_run_event(
-        operation="stage_silver",
-        author="data_eng",
-        author_subject=identity,
-        job_namespace="lance-medallion",
-        inputs=[("lance", "bronze$events")],
-        output_namespace="lance",
-        output_name="silver$events",
-        token="a-token",
-        event_type="COMPLETE",
-    )
-
-
 def _catalog_event(author: str) -> dict[str, Any]:
     """What `services/catalog` publishes: authored by the signed-in PERSON, not by the service."""
     from catalog.core.lineage_emit import build_write_event
@@ -97,7 +79,6 @@ def _catalog_event(author: str) -> dict[str, Any]:
 #: rather than an inconsistency in the fixture.
 PRODUCERS = [
     ("maintenance", _maintenance_event, "service-maintenance", None),
-    ("medallion", _medallion_event, "service-bronze-to-silver", None),
     ("catalog", _catalog_event, CATALOG, PERSON),
 ]
 
@@ -120,7 +101,7 @@ async def _drive(event: dict[str, Any], settings: LineageSettings) -> None:
 @pytest.mark.parametrize(("name", "builder", "identity", "on_behalf_of"), [pytest.param(*p, id=p[0]) for p in PRODUCERS])
 @pytest.mark.asyncio
 async def test_the_door_admits_what_this_producer_signs(name: str, builder: Any, identity: str, on_behalf_of: str | None, event_signer: Any) -> None:
-    """IF THIS IS RED the producer and the door disagree about the document, and every sweep, cascade hop or catalog write from
+    """IF THIS IS RED the producer and the door disagree about the document, and every sweep or catalog write from
     that service is refused at the bus: an ack that discards the event, and on the outbox drain the deletion of its only copy."""
     signer = event_signer(identity)
     respx.get(f"{SECRETS}/signing-public-{identity}").mock(return_value=httpx.Response(200, json={"keys": signer.public}))
@@ -130,7 +111,7 @@ async def test_the_door_admits_what_this_producer_signs(name: str, builder: Any,
 
 
 @respx.mock
-@pytest.mark.parametrize(("name", "builder", "identity", "on_behalf_of"), [pytest.param(*p, id=p[0]) for p in PRODUCERS if p[0] != "medallion"])
+@pytest.mark.parametrize(("name", "builder", "identity", "on_behalf_of"), [pytest.param(*p, id=p[0]) for p in PRODUCERS])
 @pytest.mark.asyncio
 async def test_a_peers_key_is_refused_for_the_same_event(name: str, builder: Any, identity: str, on_behalf_of: str | None, event_signer: Any) -> None:
     """The control, per producer. Without it every admission above is equally consistent with a door that admits everything."""

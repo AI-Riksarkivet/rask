@@ -29,17 +29,16 @@ import pytest
 import respx
 from lance_namespace import PermissionDeniedError, ServiceUnavailableError, TransactionNotFoundError, UnsupportedOperationError
 
-from catalog.core.lineage_emit import build_write_event
+from catalog.core.lineage_emit import INSERT, build_write_event
 from lineage.api import fga_deps, reconcile_cron
 from lineage.api.v1.endpoints import dlq
 from lineage.core.config import LineageSettings, Signing
 from lineage.models import DatasetEvent, UnverifiedEventError
 from lineage_kit.signing import signature_of
-from medallion.schemas.events import build_run_event
 from service_kit.governed import fga
 from service_kit.governed.oidc import IDToken
 from service_kit.lakehouse import outbox, outbox_metrics
-from service_kit.openlineage import event_identity
+from service_kit.openlineage import event_identity, run_id_for
 
 
 _CATALOG = "service-catalog"
@@ -197,15 +196,15 @@ def _drain(settings: LineageSettings, repo: _Repo, publisher: _Publisher) -> rec
 
 def _stage_a_run_behind(settings: LineageSettings, create_key: str) -> str:
     """A run event staged AFTER the create, so the drain meets the create first and must still reach this."""
-    event = build_run_event(
-        operation="ingest_events",
+    event = build_write_event(
+        table_id="bronze$events",
+        namespace="bronze",
         author=_AUTHOR,
-        job_namespace="medallion",
-        inputs=[("bronze", "bronze$events")],
-        output_namespace="bronze",
-        output_name="bronze$events",
         version=2,
-        token="behind-the-create",
+        operation=INSERT,
+        run_id=run_id_for("behind-the-create"),
+        event_time="2026-10-12T00:00:00+00:00",
+        job_namespace="lance-catalog",
     )
     run_id = event["run"]["runId"]
     outbox.stage_event(settings.outbox_uri, {}, run_id, json.dumps(event))
@@ -361,15 +360,15 @@ def _stage_a_refusable_first(settings: LineageSettings, kind: str, catalog: Any)
     if kind == "create":
         key, _ = _stage_a_create(settings, catalog)
         return key, _stage_a_run_behind(settings, key)
-    event = build_run_event(
-        operation="ingest_events",
+    event = build_write_event(
+        table_id="bronze$events",
+        namespace="bronze",
         author=_AUTHOR,
-        job_namespace="medallion",
-        inputs=[("bronze", "bronze$events")],
-        output_namespace="bronze",
-        output_name="bronze$events",
         version=1,
-        token="refused-run",
+        operation=INSERT,
+        run_id=run_id_for("refused-run"),
+        event_time="2026-10-12T00:00:00+00:00",
+        job_namespace="lance-catalog",
     )
     outbox.stage_event(settings.outbox_uri, {}, event["run"]["runId"], json.dumps(event))
     [(key, _)] = list(outbox.list_events(settings.outbox_uri, {}))
@@ -589,17 +588,17 @@ def test_a_create_for_a_table_the_operator_cannot_see_is_neither_listed_nor_repl
 
 
 def test_the_dlq_replay_re_publishes_a_run_event(tmp_path: Path, catalog: Any) -> None:
-    """The re-announce that restarts a halted cascade: a replayed bronze-write RunEvent reaches the lineage topic byte-for-byte."""
+    """A replayed write RunEvent reaches the lineage topic byte-for-byte, so a pipeline polling the commit feed hears it again."""
     settings = _settings(tmp_path, fga_enabled=False)
-    event = build_run_event(
-        operation="ingest_events",
+    event = build_write_event(
+        table_id="bronze$events",
+        namespace="bronze",
         author=_AUTHOR,
-        job_namespace="medallion",
-        inputs=[("bronze", "bronze$events")],
-        output_namespace="bronze",
-        output_name="bronze$events",
         version=2,
-        token="replayed-head",
+        operation=INSERT,
+        run_id=run_id_for("replayed-head"),
+        event_time="2026-10-12T00:00:00+00:00",
+        job_namespace="lance-catalog",
     )
     event = catalog.sign(event, on_behalf_of=_AUTHOR)
     staged_json = json.dumps(event)
@@ -610,4 +609,4 @@ def test_the_dlq_replay_re_publishes_a_run_event(tmp_path: Path, catalog: Any) -
     out = asyncio.run(dlq.replay_dlq(key, _request(), cast("Any", _Repo()), settings, None, fga_deps.DatasetFilter(_request(), settings, None), publisher))
 
     assert out.status == "replayed"
-    assert publisher.published == [staged_json], "a replayed head run never reaches /bronze-arrival"
+    assert publisher.published == [staged_json], "a replayed run never reaches the lineage topic"

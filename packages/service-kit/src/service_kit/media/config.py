@@ -189,8 +189,8 @@ class MediaSettings(BaseSettings):
     # The catalog namespace annotation tables live under; unset → the dataset id.
     catalog_namespace: str | None = Field(default=None, alias="MEDIA_CATALOG_NAMESPACE")
 
-    # OpenLineage emission on annotation writes (pre-merge; lance-ns's stage runner emits at
-    # merge). "stdout"/"log" write a spec-2-0-2 RunEvent per save; "none" disables.
+    # OpenLineage emission on annotation writes that do not route through the catalog.
+    # "stdout"/"log" write a spec-2-0-2 RunEvent per save; "none" disables.
     lineage_sink: LineageSink = Field(default=LineageSink.log, alias="MEDIA_LINEAGE_SINK")
 
     # Interactive AI-assist model endpoint — a Ray Serve deployment (GroundingDINO/SAM),
@@ -229,8 +229,8 @@ class MediaSettings(BaseSettings):
     # Batch labeling job runner — a lance-ns RayJob submit endpoint (the silver-deriver
     # enqueue for bulk/auto-labeling over a read-plane selection). Unset ⇒ a deterministic
     # in-repo mock so the submit/poll round-trip is wired + testable (drop-in for the real
-    # submitter, like the assist + catalog transports). We only enqueue — the deriver runs
-    # in lance-ns (medallion-producer + the catalog stage runner), never in this process.
+    # submitter, like the assist + catalog transports). We only enqueue — the deriver is the
+    # caller's own job, never this process.
     jobs_url: str | None = Field(default=None, alias="MEDIA_JOBS_URL")
 
     def catalog_table_id(self, dataset_id: str, table: str) -> list[str]:

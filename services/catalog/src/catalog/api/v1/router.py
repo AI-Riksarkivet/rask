@@ -29,7 +29,6 @@ from catalog.api.v1.endpoints import (
     tables,
     tags,
     transactions,
-    transforms,
     user_state,
     versions,
     views,
@@ -72,7 +71,6 @@ for _module in (
     user_state,
     stores,
     gates,
-    transforms,
 ):
     api_router.include_router(_module.router)
     # A module may ALSO carry a `management_router`, mounted at `/management/v1/...`. That is the seam

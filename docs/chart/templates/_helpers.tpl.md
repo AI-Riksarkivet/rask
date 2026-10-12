@@ -57,7 +57,7 @@ The ONE store's root identity is minio.accessKey (a value) and the store's `mini
 
 Dapr sidecar pod annotations (no-op unless dapr.enabled) — the ONE annotation surface for the whole
 estate: the rask fleet + controlplane AND the lance planes (services.yaml catalog/lineage,
-medallion.yaml producer/stage runners, compaction.yaml, media.yaml viewer/search/annotator) all render
+maintenance.yaml, explorer.yaml viewer/search/annotator) all render
 THIS helper, so the sidecar contract can never drift between planes (DAPRIFY 2026-07-27). Carries the full union of what the two planes shipped:
   - enabled / app-id / app-port / log-level (the original rask surface)
   - max-body-size (when dapr.maxBodySize is set — Dapr's 4Mi default rejects multi-image batch uploads)
@@ -107,9 +107,9 @@ plane back into unparsed logfmt with no gate firing.
 THE SIDECAR MUST OUTLIVE THE APP'S DRAIN, not race it. This block emitted nothing about
 shutdown, so daprd took its 5s default while the app was still inside its own preStop sleep —
 and since the kubelet SIGTERMs every container simultaneously, the sidecar was gone before the
-app had begun draining. A stage runner mid-handler finished its Lance write and then published the
-next stage's trigger at a sidecar that had already stopped: the write landed, the cascade did
-not, and that is indistinguishable from a stage with no successor.
+app had begun draining. A handler that finished its Lance write and then published its event at a
+sidecar that had already stopped landed the write and lost the event, which is indistinguishable
+from a write that announces nothing.
 Derived from the same `lifecycle` block that feeds preStop and the grace period, so the three
 numbers cannot drift — see the arithmetic in values.yaml.
 
@@ -248,7 +248,7 @@ VALUES THEY REQUIRE (the values.yaml merge must land these or the render breaks)
   resources.{default,<component>} · minio.{bucket,port,externalEndpoint} · security.readOnlyRootFilesystem ·
   services.{catalog,lineage}.{port,daprAppId,reconcile.bindingName}
 `minio.bucket` (singular) is the one that is easy to lose: rask's values ship `minio.buckets` (a
-LIST) and lance's `lance.stageBucket` reads `minio.bucket` (a STRING) — both must exist.
+LIST) and lance's templates read `minio.bucket` (a STRING) — both must exist.
 ---------------------------------------------------------------------------------------------------
 
 Release name is the fullname (install as `helm install rask ./chart` → all names = rask-*).
@@ -334,7 +334,7 @@ to name is deleted, so fleet + lakehouse + observability all resolve the same en
 
 ## `{{- define "lance.catalogImage" -}}`
 
-The catalog-family image (catalog, lineage, medallion stage runners, maintenance, explorer, the bootstrap
+The catalog-family image (catalog, lineage, maintenance, explorer, the bootstrap
 job) — every one of them runs the SAME image with a different entrypoint.
 
 It DELEGATES to `rask.image`, which is the estate's one image contract: registry prefix, digest
@@ -353,15 +353,6 @@ CONSUMER endpoints — return the EXTERNAL override when set (the in-cluster com
 disabled, e.g. a managed S3 / Postgres / Vault / collector in prod), else the in-cluster address. The
 component's OWN Service/StatefulSet keeps the plain *Host helper above; only the apps that CONNECT switch.
 This is what makes the docs/DURABILITY.md tier-3 externalization real (values-prod.yaml sets the overrides).
-
-## `{{- define "lance.stageBucket" -}}`
-
-lance.stageBucket — the S3 bucket for a medallion stage NAMESPACE, honouring the medallion→sink zone
-model (R23: external raw is NOT a zone — ingest sources live outside the lakehouse). `medallion.buckets`
-maps a namespace to its bucket; anything unset falls back to the shared `minio.bucket`. So gold
-(SINK/output) can live in its own bucket/tenant while bronze/silver (the project's medallion internals)
-stay in the project bucket — and the DEFAULT (no override) is the single-bucket layout, unchanged.
-Call: {{ include "lance.stageBucket" (list $root "gold") }}.
 
 ## `{{- define "lance.otlpEndpoint" -}}`
 
@@ -392,7 +383,7 @@ Measured against the live cluster 2026-08-31.
 
 The per-SUBSCRIBER pubsub component name (call: include "lance.subPubsub" (list $root <appId>)).
 Each subscriber app-id gets its OWN pubsub.jetstream component carrying its queueGroupName — one shared
-component cannot: lineage AND medallion-producer both consume lineage.events.v1, so a single queue group would
+component cannot: lineage AND notifications both consume lineage.events.v1, so a single queue group would
 SPLIT those messages across the two apps instead of duplicating per app / competing per replica. The
 component (dapr-component.yaml) and the app's *_PUBSUB env must agree on this name — hence one helper.
 
@@ -541,7 +532,7 @@ which remain served as badges even though no probe asks for them any more.
 lineage-kit's HTTP transport (call: include "lance.lineageEmitEnv" $root).
 TWO INDEPENDENT lineage paths exist and they are easy to confuse:
 
-  1. Dapr pub/sub — what the medallion producer/stage runners, compaction and the catalog use TODAY
+  1. Dapr pub/sub — what maintenance and the catalog use TODAY
      (<APP>_LINEAGE_TOPIC → NATS → the lineage service's subscriber). Wired separately.
   2. lineage-kit's `LineageRun` / `@stage` / actor machinery — the DECORATABLE seam meant for the Ray
      Data pipeline (P7b). It resolves its transport through `LineageRun.emitter` → `default_emitter()`
@@ -580,7 +571,7 @@ values.yaml lifecycle. Arg: $root, or (list $root <pod grace>)
 
 ## `{{- define "lance.resources" -}}`
 
-HTTP health probes for the FastAPI app workloads (catalog/lineage/producer/stage runners/compaction). Two
+HTTP health probes for the FastAPI app workloads (catalog/lineage/maintenance). Two
 distinct signals: readiness (/readyz) is dependency-aware (503 until the pool/namespace is up AND again once
 draining) so k8s only routes traffic to a truly-ready pod; liveness (/livez) is process-up only (never
 checks a backend — a slow dependency must NOT trigger a restart loop). Liveness runs slower + more tolerant
@@ -658,7 +649,7 @@ Call: include "lance.tcpProbes" "<portName>" (the named container port to dial).
 
 ## `{{- define "lance.rootSecurityContext" -}}`
 
-Container hardening applied to every APP container (our images: catalog/lineage/web/stage runners/compaction).
+Container hardening applied to every APP container (our images: catalog/lineage/web/maintenance).
 runAsNonRoot enforces the image's non-root USER (catalog uid 10001, web `bun`) at admission — a manifest that
 regressed to root fails to start instead of running privileged. drop ALL caps + no privilege escalation +
 the RuntimeDefault seccomp profile = the restricted PodSecurity baseline. readOnlyRootFilesystem is on by
@@ -936,12 +927,6 @@ agreed when they were written. The estate already paid for this once in the othe
 state-store scope was derived from `stateStore.scopes` rather than restated for exactly this reason.
 
 Usage: {{ splitList "," (include "lance.secretScopes" .) }}
-
-## `{{- $scopes = append $scopes .Values.medallion.producer.daprAppId -}}`
-
-The medallion plane consumes the store too (MEDALLION_SECRETS_FROM_DAPR fetches the S3 secret at
-boot when a store is configured) — unscoped, every compute-on + openbao-on medallion pod
-fail-closed with ERR_SECRET_STORES_NOT_CONFIGURED (found live 2026-07-24).
 
 ## `{{- range $name, $svc := .Values.explorer.services -}}`
 
@@ -1253,17 +1238,3 @@ RayService or RayCluster creates, else empty; a cascade with Ray on and no head 
 
 Ray Serve's HTTP ingress on the same plane: `frontend.serveUrl` when Serve lives elsewhere; a RayService's
 load-balanced serve Service; else the dashboard itself, whose external host serves the apps too.
-
-## `{{- define "lance.outOfProcessEngine" -}}`
-
-An out-of-process engine is configured (CP-056): non-empty iff some `services.compute.engines.*` is enabled. It is the
-one predicate every lakehouse site gates the planned-run lane on: the plan, its outcome door, its sweep, its
-announcement. The lakehouse names no engine; an engine is an app it invokes by Dapr (`compute`, ADR 0140).
-
-## `{{- define "lance.medallionEngines" -}}`
-
-`MEDALLION_ENGINES`: each enabled engine as the planners invoke it (app-id `compute`, the `rask-compute` token), with
-its tasks minus their commands when the caller registers them (`include "lance.medallionEngines" (list $root
-<with-tasks>)`). An engine's `code_version` is its `codeVersion` value: the engine is bring-your-own (ADR 0153), so its
-owner names the build, and a rolled image is then a new run rather than a re-attach to the old build's; empty, a
-stage run keys on the lakehouse image.

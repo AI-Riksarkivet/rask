@@ -186,7 +186,7 @@ NO PutObject ANYWHERE, which no other plane here can say. Lineage opens datasets
 READ-ONLY to probe versions, schema and dangling blobs (`core/reconcile.py:58,76,93,108`,
 `demo.py:112`), and the only bytes it changes are DELETES of outbox objects the relay has
 already re-ingested (`outbox.drop_event`). `outbox.stage_event` — the write half — is
-called by the PRODUCERS (medallion, maintenance) and never here, so granting this
+called by the PRODUCERS (the catalog, maintenance) and never here, so granting this
 identity a write would grant a capability it has no code to use.
 
 THE READ IS DELIBERATELY UNSCOPED, for the reason the two policies above already record:

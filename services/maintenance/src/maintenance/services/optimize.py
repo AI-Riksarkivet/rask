@@ -201,8 +201,8 @@ class Discovery(BaseModel):
 #:
 #: The outbox is also the one that is DRAINED continuously, so walking it races the drain — a depth-4
 #: walk died `FileNotFoundError` on an entry that was gone by the time it was opened.
-#: `_staging` is where a DISTRIBUTED stage run lands its output before the one merge that converges it
-#: into the tier (LH-007, `scripts/ray_stage_job.py::_distributed_rows`). It is a real Lance dataset while it
+#: `_staging` is where a DISTRIBUTED write lands its output before the one merge that converges it
+#: into the tier (LH-007). It is a real Lance dataset while it
 #: exists, so without this it would be discovered, compacted and counted among the estate's governed
 #: tables. Once the destination exists the set is already unreachable — the walk descends a dataset
 #: root's children only into `tree/` — but on the run that CREATES the destination the parent is still a
@@ -537,8 +537,8 @@ def _optimize_indices(ds: lance.LanceDataset, result: DatasetResult, *, uri: str
     """STEP 2 — keep the secondary indices (vector ANN / scalar / FTS) covering the new fragments.
 
     WITHOUT this a freshly-written row is not in the index, so vector/filter queries either miss it or
-    fall back to a flat scan. Index optimize is a maintenance op exactly like compaction (Lance does it
-    distributed via the medallion producer; here single-process) and is idempotent. Its own guard, so a
+    fall back to a flat scan. Index optimize is a maintenance op exactly like compaction (Lance can run it
+    distributed on an engine; here single-process) and is idempotent. Its own guard, so a
     dataset with no index — or an unreadable one — cannot cost the compaction that just succeeded.
     """
     if not enabled:

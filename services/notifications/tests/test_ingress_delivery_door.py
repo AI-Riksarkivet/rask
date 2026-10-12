@@ -53,7 +53,7 @@ TOKEN = "the-sidecars-app-token"
 #: The sidecar's secret API for the store every signer publishes `signing-public-<identity>` in.
 SECRETS = "http://localhost:3500/v1.0/secrets/lance-secrets"
 CATALOG = "service-catalog"
-PRODUCER = "service-medallion-producer"
+MAINTENANCE = "service-maintenance"
 
 #: What the signature counters hold: metric name -> (door, reason) -> count.
 type Counts = dict[str, dict[tuple[str, str], int]]
@@ -71,8 +71,7 @@ RUN_EVENT: dict[str, Any] = {
 }
 
 #: The control envelopes as their producers publish them: the catalog's grant on a table for the person it
-#: authenticated, the medallion producer's review request (a service acting for itself), and the annotator's
-#: task assignment and grant on one of its own projects.
+#: authenticated, and the annotator's task assignment and grant on one of its own projects.
 GRANT: dict[str, Any] = {
     "event_id": "evt-grant",
     "occurred_at": "2026-10-04T12:00:00+00:00",
@@ -81,15 +80,6 @@ GRANT: dict[str, Any] = {
     "object_id": "table:acme$gold",
     "actor": "user:admin",
     "extra": {"relation": "reader", "subject": "user:alice"},
-}
-REVIEW: dict[str, Any] = {
-    "event_id": "promotion-review-tok-1",
-    "occurred_at": "2026-10-04T12:00:00+00:00",
-    "action": "promotion_review_requested",
-    "object_type": "table",
-    "object_id": "table:acme-gold$pages",
-    "actor": None,
-    "extra": {"subject": "user:vera", "reasons": ["row count fell by half"], "project": "acme", "token": "tok-1"},
 }
 TASK: dict[str, Any] = {
     "event_id": "evt-task",
@@ -150,22 +140,20 @@ def _run_event(case: str, *, catalog: Any, intruder: Any) -> dict[str, Any]:
     raise AssertionError(f"no run event for case {case!r}")
 
 
-def _control_event(case: str, *, catalog: Any, producer: Any) -> dict[str, Any]:
-    """The control envelope a case delivers. A grant's actor is a person, so the catalog signs it as a delegator; a
-    review request names no actor, so its signer signs it for itself, and only the producer's role may."""
+def _control_event(case: str, *, catalog: Any, maintenance: Any) -> dict[str, Any]:
+    """The control envelope a case delivers. A grant's actor is a person, so the catalog signs it as a delegator, and
+    only the catalog's role may: another signer's valid signature is no authority over it."""
     match case:
         case "unsigned-catalog-grant":
             return GRANT
-        case "review-signed-by-another-role":
-            return catalog.sign_control(REVIEW)
+        case "grant-signed-by-another-role":
+            return maintenance.sign_control(GRANT, on_behalf_of="user:admin")
         case "tampered-grant":
             signed = catalog.sign_control(GRANT, on_behalf_of="user:admin")
             signed["extra"]["subject"] = "user:mallory"
             return signed
         case "catalog-grant":
             return catalog.sign_control(GRANT, on_behalf_of="user:admin")
-        case "producer-review-request":
-            return producer.sign_control(REVIEW)
         case "unsigned-task":
             return TASK
         case "unsigned-annotation-grant":
@@ -221,9 +209,9 @@ def signing_door(
         "APP_API_TOKEN": TOKEN,
         "DAPR_HTTP_PORT": "3500",
         "RASK_SIGNATURE_DOORS": request.param,
-        "RASK_EVENT_SIGNERS": json.dumps([CATALOG, PRODUCER]),
+        "RASK_EVENT_SIGNERS": json.dumps([CATALOG, MAINTENANCE]),
         "RASK_EVENT_DELEGATORS": json.dumps([CATALOG]),
-        "RASK_CONTROL_SIGNER_ROLES": json.dumps({"catalog": [CATALOG], "medallion_producer": [PRODUCER]}),
+        "RASK_CONTROL_SIGNER_ROLES": json.dumps({"catalog": [CATALOG], "maintenance": [MAINTENANCE]}),
     }.items():
         monkeypatch.setenv(key, value)
     yield from _build(plane, monkeypatch)
@@ -326,10 +314,9 @@ def test_a_delivery_carrying_the_sidecars_token_reaches_an_inbox_only_when_a_lis
     ("signing_door", "case", "boxes", "counted"),
     [
         pytest.param("enforce", "unsigned-catalog-grant", {}, ("notifications.signature.refused", "unsigned"), id="enforce-an-unsigned-catalog-grant"),
-        pytest.param("enforce", "review-signed-by-another-role", {}, ("notifications.signature.refused", "signer"), id="enforce-a-review-the-catalog-signed"),
+        pytest.param("enforce", "grant-signed-by-another-role", {}, ("notifications.signature.refused", "signer"), id="enforce-a-grant-maintenance-signed"),
         pytest.param("enforce", "tampered-grant", {}, ("notifications.signature.refused", "signature"), id="enforce-a-grant-changed-after-it-was-signed"),
         pytest.param("enforce", "catalog-grant", {"alice": 1}, None, id="enforce-a-grant-the-catalog-signed-for-its-actor"),
-        pytest.param("enforce", "producer-review-request", {"vera": 1}, None, id="enforce-a-review-request-the-producer-signed"),
         pytest.param("enforce", "unsigned-task", {"bob": 1}, None, id="enforce-an-unsigned-task-is-exempt-r3"),
         pytest.param("enforce", "unsigned-annotation-grant", {"carol": 1}, None, id="enforce-an-unsigned-annotation-project-grant-is-exempt-r5"),
         pytest.param("enforce", "unsigned-unnamed-action", {}, None, id="enforce-an-action-the-route-ignores-is-not-checked"),
@@ -348,10 +335,10 @@ def test_a_control_event_reaches_an_inbox_only_when_the_role_its_action_names_si
     counted: tuple[str, str] | None,
 ) -> None:
     """A control event's actor is a claim too, and a valid signature from another service is no authority over the action."""
-    catalog, producer = event_signer(CATALOG), event_signer(PRODUCER)
+    catalog, maintenance = event_signer(CATALOG), event_signer(MAINTENANCE)
     respx.get(f"{SECRETS}/signing-public-{CATALOG}").mock(return_value=httpx.Response(200, json={"keys": catalog.public}))
-    respx.get(f"{SECRETS}/signing-public-{PRODUCER}").mock(return_value=httpx.Response(200, json={"keys": producer.public}))
-    event = _control_event(case, catalog=catalog, producer=producer)
+    respx.get(f"{SECRETS}/signing-public-{MAINTENANCE}").mock(return_value=httpx.Response(200, json={"keys": maintenance.public}))
+    event = _control_event(case, catalog=catalog, maintenance=maintenance)
 
     answered = signing_door.post("/control-events", headers={"dapr-api-token": TOKEN}, json=_cloud_event(event, topic="catalog.control.v1"))
 

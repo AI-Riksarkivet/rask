@@ -47,11 +47,7 @@ spec:
                 case "$err" in *[Aa]uthoriz*|*[Aa]uthentic*|*[Pp]ermission*) echo "!! NATS refused the stream Job's credential: $err"; exit 1 ;; esac
                 echo wait-nats; sleep 3
               done
-              # LINEAGE carries OpenLineage events; MEDALLION carries the stage triggers that cascade the
-              # event-driven pipeline (medallion.bronze/silver/media); TRAINING carries the train triggers
-              # (training.jobs — docs/RAY-TRAIN.md D1: its OWN stream, so the durable consumer names stay
-              # per-stream and a slow train path never shares limits with the stage cascade). Each created
-              # once (idempotent skip).
+              # LINEAGE carries OpenLineage events. Each stream is created once (idempotent skip).
               # streamReplicas > 1 (raft-replicated streams) needs a clustered bus of at least that many nodes.
               add_if_missing() {
                 if nats --server "$S" stream info "$1" >/dev/null 2>&1; then
@@ -104,7 +100,7 @@ spec:
               # value costs is not cosmetic:
               #
               #   work      on a stream with MULTIPLE per-app durables: the FIRST ack deletes the message,
-              #             so the apps steal deliveries from each other. The cascade silently under-runs —
+              #             so the apps steal deliveries from each other. A subscriber silently under-runs —
               #             every consumer looks healthy and each sees a fraction of the traffic.
               #   interest  deletes each message once every attached durable has acked it, so the retained
               #             history a lineage REBUILD replays (a new `deliverPolicy=all` durable) is gone.
@@ -145,14 +141,11 @@ spec:
                   echo "consumer $1/$2: max_ack_pending=$got (as intended)"
                 fi
               }
-              for stream in LINEAGE MEDALLION TRAINING DLQ{{ if .Values.catalog.controlEmit }} CATALOG_CONTROL{{ end }}; do
+              for stream in LINEAGE DLQ{{ if .Values.catalog.controlEmit }} CATALOG_CONTROL{{ end }}; do
                 assert_retention "$stream" limits
               done
-              assert_retention REFUSED limits
 
               add_if_missing LINEAGE "lineage.events.>"
-              add_if_missing MEDALLION "medallion.>"
-              add_if_missing TRAINING "training.>"
               # DLQ parks dead-lettered deliveries (dapr.resiliency — the sidecar publishes to dlq.*
               # after retry exhaustion). Its OWN stream for two load-bearing reasons: Dapr does NOT
               # auto-create streams (a parking publish with no stream FAILS, silently un-parking the
@@ -160,12 +153,6 @@ spec:
               # each app's durableName, which only avoids clashing with the app's main consumer
               # because the two live on different streams.
               add_if_missing DLQ "dlq.>"
-              # REFUSED retains the PAYLOAD of a deterministically refused trigger ([[LH-151]]).
-              # Its own stream rather than a subject space on DLQ, because the two answer different
-              # questions: DLQ holds deliveries the SIDECAR gave up on, REFUSED holds ones the HANDLER
-              # declined on purpose, and an alert that cannot tell them apart pages on governance. Same
-              # `limits`/168h shape as DLQ — a refusal is worth replaying for as long as a park is.
-              add_if_missing REFUSED "refused.>"
               {{- if .Values.catalog.controlEmit }}
               # Control-plane change-events (grants/warehouses/policies/tables) broadcast to EVERY catalog
               # replica's ring buffer (GET /v1/events). Its own stream so a parking-free broadcast publish
@@ -174,13 +161,10 @@ spec:
               # backlog rather than replaying it into memory.
               #
               # IT IS NOT THE ONLY CONSUMER, and this stream IS in the drift loop below because of the
-              # other two. `dapr-component.yaml` renders `medallion-producer-control-durable` (:88) and
-              # `notifications-control-durable` (:139) — chart-owned DURABLE subscriptions whose
-              # maxDeliver/backOff are templated from the same `dapr.resiliency.enabled` conditional as
-              # EXP_MAXD/EXP_BOFF, which is exactly the pair the loop repairs. `dapr-component.yaml:103`
-              # already promises that repair ("nats-stream-job reconcile compares (maxDeliver/backOff) and
-              # repairs"); walking the stream is what makes the promise true. Measured live 2026-09-14:
-              # both durables exist and both report Active Interest.
+              # other one. `dapr-component.yaml` renders `notifications-control-durable`, a chart-owned
+              # DURABLE subscription whose maxDeliver/backOff are templated from the same
+              # `dapr.resiliency.enabled` conditional as EXP_MAXD/EXP_BOFF, which is exactly the pair the
+              # loop repairs; walking the stream is what makes that repair reach it.
               add_if_missing CATALOG_CONTROL "catalog.control.>"
               {{- end }}
               {{- if .Values.maintenance.workTopic }}
@@ -223,7 +207,7 @@ spec:
               # change that alters consumer config (e.g. the resiliency flip's maxDeliver/backOff),
               # the pre-existing durable makes every subscribe fail forever with "consumer name
               # already in use" while pods stay Ready: a SILENT dead subscription (hit live
-              # 2026-07-13 — the whole cascade sat idle after the Batch-18 roll). Expected values
+              # 2026-07-13 — every subscriber sat idle after the Batch-18 roll). Expected values
               # are templated from the SAME conditional the pubsub components render, so the two
               # cannot drift apart. A drifted durable is deleted; the sidecar's subscribe-retry
               # recreates it with the new config within seconds. deliverPolicy=new means messages
@@ -232,24 +216,6 @@ spec:
               # (ordinary restarts re-attach as before). Backoff values are nanoseconds in the JSON.
               EXP_MAXD="{{ if .Values.dapr.resiliency.enabled }}3{{ else }}5{{ end }}"
               EXP_BOFF="{{ if .Values.dapr.resiliency.enabled }}720000000000,720000000000{{ else }}30000000000,60000000000,120000000000,300000000000{{ end }}"
-              # ONE-TIME MIGRATION (2026-08-08, the per-app DLQ rename): DLQ-stream durables created
-              # before MEDALLION_DLQ_TOPIC became dlq.<appId> hold filter subjects dlq.<subTopic>
-              # (dlq.medallion.*). The sidecar now requests the SAME durable name with the new filter,
-              # which is exactly the bind failure documented below — "consumer name already in use"
-              # forever, a SILENT dead subscription — and the config-drift loop cannot catch it: the
-              # stale durables' max_deliver/backoff still match EXP. Before the fix a park was
-              # double-counted but visible; after an upgrade WITHOUT this migration it is invisible.
-              # Filter-based, not name-based, so it is idempotent and touches nothing current: no
-              # post-rename consumer filters on dlq.medallion.* (new stage runner DLQs are dlq.<appId>;
-              # lineage's is dlq.lineage.events). deliverPolicy=new skips dead letters published
-              # inside the delete->recreate window — the same accepted trade as the drift loop.
-              for c in $(nats --server "$S" consumer ls DLQ --names 2>/dev/null | grep -- '-durable$'); do
-                filt=$(nats --server "$S" consumer info DLQ "$c" --json 2>/dev/null | tr -d ' \n' | sed -n 's/.*"filter_subject":"\([^"]*\)".*/\1/p')
-                case "$filt" in dlq.medallion.*)
-                  echo "MIGRATE DLQ/$c: filter=$filt is pre-rename (dlq.<subTopic>) — deleting (sidecar re-creates with dlq.<appId>)"
-                  nats --server "$S" consumer rm DLQ "$c" -f
-                esac
-              done
               # CATALOG_CONTROL joins only when its stream exists, under the SAME conditional that
               # creates it — a loop over a stream the release does not own would just log noise.
               #
@@ -270,7 +236,7 @@ spec:
               # deletes them. `lance.chartDurables` is the single derivation; the chart-owns-it test asserts
               # it against the rendered Components, so a new durable that forgets the list fails there.
               EXP_DURABLES="{{ include "lance.chartDurables" . }}"
-              for st in LINEAGE MEDALLION TRAINING DLQ{{ if .Values.catalog.controlEmit }} CATALOG_CONTROL{{ end }}; do
+              for st in LINEAGE DLQ{{ if .Values.catalog.controlEmit }} CATALOG_CONTROL{{ end }}; do
                 for c in $(nats --server "$S" consumer ls "$st" --names 2>/dev/null | grep -- '-durable$'); do
                   case " $EXP_DURABLES " in
                     *" $c "*) ;;
@@ -281,7 +247,7 @@ spec:
                   esac
                 done
               done
-              for st in LINEAGE MEDALLION TRAINING DLQ{{ if .Values.catalog.controlEmit }} CATALOG_CONTROL{{ end }}; do
+              for st in LINEAGE DLQ{{ if .Values.catalog.controlEmit }} CATALOG_CONTROL{{ end }}; do
                 for c in $(nats --server "$S" consumer ls "$st" --names 2>/dev/null | grep -- '-durable$'); do
                   info=$(nats --server "$S" consumer info "$st" "$c" --json 2>/dev/null | tr -d ' \n')
                   maxd=$(echo "$info" | sed -n 's/.*"max_deliver":\(-\{0,1\}[0-9]*\).*/\1/p')

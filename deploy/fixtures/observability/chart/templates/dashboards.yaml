@@ -146,19 +146,9 @@ data:
       "kind": "Dashboard",
       "metadata": { "name": "service-flow", "project": "rask" },
       "spec": {
-        "display": { "name": "Service Flow", "description": "How the event-driven services connect + move data — the medallion cascade edges + per-service activity, from GreptimeDB. (A node-topology graph would need the OTel Collector's servicegraph connector; this is the metrics view over the OTLP signals the Collector exports.)" },
+        "display": { "name": "Service Flow", "description": "How the event-driven services connect + move data — per-service activity, from GreptimeDB. (A node-topology graph would need the OTel Collector's servicegraph connector; this is the metrics view over the OTLP signals the Collector exports.)" },
         "duration": "30m",
         "panels": {
-          "medallionFlow": {
-            "kind": "Panel",
-            "spec": {
-              "display": { "name": "Medallion cascade /s (bronze→silver→gold edges)" },
-              "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
-              "queries": [ { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
-                "query": "sum by (lance_medallion_transition) (rate(medallion_stage_transitions_total[5m]))",
-                "seriesNameFormat": {{ "{{lance_medallion_transition}}" | quote }} } } } } ]
-            }
-          },
           "activeServices": {
             "kind": "Panel",
             "spec": {
@@ -217,13 +207,9 @@ data:
           "governanceGates": {
             "kind": "Panel",
             "spec": {
-              "display": { "name": "Blocked at the gates — FGA denials + quality blocks + dead-letters + catalog emit failures" },
+              "display": { "name": "Blocked at the gates — dead-letters + catalog emit failures" },
               "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
               "queries": [
-                { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
-                  "query": "sum(rate(medallion_stage_denied_total[5m]))", "seriesNameFormat": "stage denied /s" } } } },
-                { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
-                  "query": "sum(rate(medallion_stage_quality_blocked_total[5m]))", "seriesNameFormat": "quality blocked /s" } } } },
                 { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
                   "query": "sum(rate(lineage_events_processed_total{lance_lineage_outcome=\"dead_lettered\"}[5m]))", "seriesNameFormat": "dead-lettered /s" } } } },
                 { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
@@ -256,68 +242,13 @@ data:
             "spec": {
               "display": { "title": "Service flow" },
               "items": [
-                { "x": 0, "y": 0, "width": 12, "height": 8, "content": { "$ref": "#/spec/panels/medallionFlow" } },
-                { "x": 12, "y": 0, "width": 12, "height": 8, "content": { "$ref": "#/spec/panels/activeServices" } },
+                { "x": 0, "y": 0, "width": 24, "height": 8, "content": { "$ref": "#/spec/panels/activeServices" } },
                 { "x": 0, "y": 8, "width": 12, "height": 8, "content": { "$ref": "#/spec/panels/lineageOutcomes" } },
                 { "x": 12, "y": 8, "width": 12, "height": 8, "content": { "$ref": "#/spec/panels/compactionSweeps" } },
                 { "x": 0, "y": 16, "width": 8, "height": 8, "content": { "$ref": "#/spec/panels/errorRate" } },
                 { "x": 8, "y": 16, "width": 8, "height": 8, "content": { "$ref": "#/spec/panels/outboxDurability" } },
                 { "x": 16, "y": 16, "width": 8, "height": 8, "content": { "$ref": "#/spec/panels/governanceGates" } },
                 { "x": 0, "y": 24, "width": 24, "height": 8, "content": { "$ref": "#/spec/panels/authzLatency" } }
-              ]
-            }
-          }
-        ]
-      }
-    }
-  training.json: |
-    {
-      "kind": "Dashboard",
-      "metadata": { "name": "training", "project": "rask" },
-      "spec": {
-        "display": { "name": "Model Training — experiment metrics", "description": "Per-model training run metrics emitted by the Ray train job over OTLP → GreptimeDB (#18, not MLflow): completed runs and the latest run metrics (rows seen, feature count), by model." },
-        "duration": "6h",
-        "panels": {
-          "runsByModel": {
-            "kind": "Panel",
-            "spec": {
-              "display": { "name": "Training runs /s by model" },
-              "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
-              "queries": [ { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
-                "query": "sum by (lance_model) (rate(lance_training_runs_total[5m]))",
-                "seriesNameFormat": {{ "{{lance_model}}" | quote }} } } } } ]
-            }
-          },
-          "rowsSeen": {
-            "kind": "Panel",
-            "spec": {
-              "display": { "name": "Rows seen (latest run) by model" },
-              "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
-              "queries": [ { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
-                "query": "max by (lance_model) (lance_training_rows_seen)",
-                "seriesNameFormat": {{ "{{lance_model}}" | quote }} } } } } ]
-            }
-          },
-          "featuresUsed": {
-            "kind": "Panel",
-            "spec": {
-              "display": { "name": "Feature datasets used (latest run) by model" },
-              "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
-              "queries": [ { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
-                "query": "max by (lance_model) (lance_training_features)",
-                "seriesNameFormat": {{ "{{lance_model}}" | quote }} } } } } ]
-            }
-          }
-        },
-        "layouts": [
-          {
-            "kind": "Grid",
-            "spec": {
-              "display": { "title": "Model training" },
-              "items": [
-                { "x": 0, "y": 0, "width": 12, "height": 8, "content": { "$ref": "#/spec/panels/runsByModel" } },
-                { "x": 12, "y": 0, "width": 12, "height": 8, "content": { "$ref": "#/spec/panels/rowsSeen" } },
-                { "x": 0, "y": 8, "width": 12, "height": 8, "content": { "$ref": "#/spec/panels/featuresUsed" } }
               ]
             }
           }
@@ -444,7 +375,7 @@ data:
           "oomKills": {
             "kind": "Panel",
             "spec": {
-              "display": { "name": "Worker OOM kills", "description": "A real counter, so increase() is correct here — unlike ray_tasks above. This is the dominant silent cause of a dead stage." },
+              "display": { "name": "Worker OOM kills", "description": "A real counter, so increase() is correct here — unlike ray_tasks above. This is the dominant silent cause of a dead job." },
               "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
               "queries": [ { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
                 "query": "sum(increase(ray_memory_manager_worker_eviction_total[15m]))", "seriesNameFormat": "evictions / 15m" } } } } ]
@@ -612,8 +543,6 @@ data:
               "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
               "queries": [
                 { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
-                  "query": "sum by (lance_medallion_verdict) (rate(medallion_stage_outcome_total[15m]))", "seriesNameFormat": {{ "stage {{lance_medallion_verdict}}" | quote }} } } } },
-                { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
                   "query": "sum by (lance_flows_lane) (rate(flows_runs_total[15m]))", "seriesNameFormat": {{ "flows {{lance_flows_lane}}" | quote }} } } } }
               ]
             }
@@ -621,7 +550,7 @@ data:
           "executionLatency": {
             "kind": "Panel",
             "spec": {
-              "display": { "name": "Workflow execution latency p95", "description": "Free from the engine. A lane reading +Inf is NOT a broken panel: histogram_quantile returns +Inf when the quantile falls above the largest bucket, and Dapr's default buckets stop at 100s. promotion_review does that by design — it blocks on ctx.wait_for_external_event, i.e. a person approving a promotion. It cannot be fixed by widening the buckets, because spec.metrics.latencyDistributionBuckets is GLOBAL: workflow latency shares the HTTP distribution, so a ceiling wide enough for a human would wreck the resolution of every HTTP lane. Read +Inf here as 'longer than 100s', and read the other lanes normally." },
+              "display": { "name": "Workflow execution latency p95", "description": "Free from the engine. A lane reading +Inf is NOT a broken panel: histogram_quantile returns +Inf when the quantile falls above the largest bucket, and Dapr's default buckets stop at 100s. A workflow that blocks on ctx.wait_for_external_event (a person approving something) does that by design. It cannot be fixed by widening the buckets, because spec.metrics.latencyDistributionBuckets is GLOBAL: workflow latency shares the HTTP distribution, so a ceiling wide enough for a human would wreck the resolution of every HTTP lane. Read +Inf here as 'longer than 100s', and read the other lanes normally." },
               "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
               "queries": [ { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
                 "query": "histogram_quantile(0.95, sum by (le, workflow_name) (rate(dapr_runtime_workflow_execution_latency_bucket[5m])))", "seriesNameFormat": {{ "{{workflow_name}}" | quote }} } } } } ]
@@ -682,7 +611,7 @@ data:
       "kind": "Dashboard",
       "metadata": { "name": "storage", "project": "rask" },
       "spec": {
-        "display": { "name": "rask Storage \u2014 the object store under the lakehouse", "description": "lance_object_store_* has been emitted by five services and read by nothing. Every Lance read and write goes through here, so an S3 stall presents as a slow cascade with no cause anywhere else." },
+        "display": { "name": "rask Storage \u2014 the object store under the lakehouse", "description": "lance_object_store_* has been emitted by five services and read by nothing. Every Lance read and write goes through here, so an S3 stall presents as slow writes with no cause anywhere else." },
         "duration": "6h",
         "panels": {
           "requests": {
@@ -758,7 +687,7 @@ data:
           "ingress": {
             "kind": "Panel",
             "spec": {
-              "display": { "name": "Deliveries by process_status", "description": "`drop` is an ACK: Dapr does not retry it, but it DOES route to the declared dead-letter topic — so a drop reads as an exhausted delivery on the DLQ panels even when it was a deterministic decision. Read it beside medallion_stage_refused_total, which is what separates the two." },
+              "display": { "name": "Deliveries by process_status", "description": "`drop` is an ACK: Dapr does not retry it, but it DOES route to the declared dead-letter topic — so a drop reads as an exhausted delivery on the DLQ panels even when it was a deterministic decision. Read it beside the handler's own refusal counter, which is what separates the two." },
               "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
               "queries": [ { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
                 "query": "sum by (topic, process_status) (rate(dapr_component_pubsub_ingress_count_total[5m]))", "seriesNameFormat": {{ "{{topic}} {{process_status}}" | quote }} } } } } ]

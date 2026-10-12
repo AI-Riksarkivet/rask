@@ -1,4 +1,4 @@
-.PHONY: fga-store-check fga-estate-migrate sbom zone-sbom registry-gc dagger-gc dev-gc help install build test test-slow lint lint-imports fmt clean storybook typecheck knip comment-gate check coverage fga-test ci dev-micro dev-frontends dev-frontends-k3s dev-zone home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-fixtures k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge k9s bootstrap dev-registry e2e frontend-images prod-render-check chart-docs chart-docs-check alert-rules-check alert-rules-drill notifications-lanes notifications-rig audit smoke-rustfs rustfs-lifecycle auth-chain governance-chain nats-auth medallion-demo go-fmt scan-config scan-secrets scan-image scan-zone-image seed-corpus e2e-isolation e2e-container-deletes e2e-fga-model e2e-open-run
+.PHONY: fga-store-check fga-estate-migrate sbom zone-sbom registry-gc dagger-gc dev-gc help install build test test-slow lint lint-imports fmt clean storybook typecheck knip comment-gate check coverage fga-test ci dev-micro dev-frontends dev-frontends-k3s dev-zone home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-fixtures k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge k9s bootstrap dev-registry e2e frontend-images prod-render-check chart-docs chart-docs-check alert-rules-check alert-rules-drill notifications-lanes notifications-rig audit smoke-rustfs rustfs-lifecycle auth-chain governance-chain nats-auth medallion-demo go-fmt scan-config scan-secrets scan-image scan-zone-image seed-corpus e2e-isolation e2e-container-deletes e2e-fga-model
 
 help:
 	@echo "Targets:"
@@ -39,7 +39,7 @@ build:
 # target covers ONE plane, not that the other plane has nothing to cover.
 # `not e2e`: tests/e2e-py is collectable (so the collection gate in
 # tests/unit/test_e2e_collection_gate.py can see it) but its suites need a LIVE deployed
-# stack — run them via `make e2e-ci` / `make e2e-ray-ci` / the per-suite targets.
+# stack — run them via `make e2e-ci` / the per-suite targets.
 # PARALLEL BY DEFAULT, and it is the difference between a loop someone runs and a loop someone skips.
 # Measured 2026-09-24 on this host (nproc 64): the default testpaths take **854 s** in one process and
 # **102 s** at `-n 16` — 8.4x, with identical results (10,357 passed / 161 skipped / 2 xfailed both
@@ -493,7 +493,7 @@ RAY_DASHBOARD_PORT  ?= 8265
 # longer carries them (the Ray Jobs API echoes runtime_env to any reader — docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md
 # "The Python estate audit").
 # In-cluster the pods hold them via secretKeyRef; locally the head process env is the pod. The
-# rustfsadmin default is the same dev constant deploy/ray-lance-demo.yaml already commits.
+# rustfsadmin default is the dev store's published constant.
 ray-up:
 	@if ray status >/dev/null 2>&1; then \
 	  echo "Ray already running. ray-status / ray-down to inspect / stop."; \
@@ -678,7 +678,7 @@ KUBECONFIG ?= /etc/rancher/k3s/k3s.yaml
 # re-installs over a live estate WITHOUT erroring. Read-only subcommands pass straight through.
 HELM ?= KUBECONFIG=$(KUBECONFIG) ./scripts/helm.sh
 KUBECTL ?= KUBECONFIG=$(KUBECONFIG) kubectl
-# lance-rest-catalog is the ONE lakehouse image (catalog + lineage + medallion + maintenance +
+# lance-rest-catalog is the ONE lakehouse image (catalog + lineage + maintenance +
 # media trio — chart `image.catalog`); the default render runs 8 containers from it, so the
 # build/import set must carry it or kind/k3s deploys ImagePullBackOff on every lakehouse pod.
 # minio is the object store's server and the `mc` its scoped-users hook runs, compiled from pinned upstream
@@ -761,7 +761,7 @@ DEV_ORIGIN          ?= http://localhost:8080
 # and `null` is how Helm removes a key a values file supplies. The two lists name the same keys.
 DROP_CREDENTIAL_VALUES := --set dapr.appToken=null --set frontend.oidc.sessionSecret=null \
   --set secrets.hfToken=null --set ray.auth.token=null --set age.password=null --set minio.secretKey=null \
-  --set minio.rayComputeSecretKey=null --set minio.maintenanceSecretKey=null --set minio.medallionSecretKey=null \
+  --set minio.rayComputeSecretKey=null --set minio.maintenanceSecretKey=null \
   --set minio.catalogSecretKey=null --set minio.lineageSecretKey=null --set minio.viewerSecretKey=null
 
 # THE ONE BOOTSTRAP SECRET a dev estate is given by hand: the operator-supplied third-party credentials
@@ -773,8 +773,8 @@ DROP_CREDENTIAL_VALUES := --set dapr.appToken=null --set frontend.oidc.sessionSe
 # Ready before any pod that wants a sidecar exists; the NATS bus every pub/sub component dials follows. The CloudNativePG
 # operator serves the AGE-on-CNPG Cluster; its CRDs come from k3s-crds, which runs first. Dex is the dev OIDC issuer,
 # given the issuer and origin rask is given; minio and openbao are the dev object and secret stores, which start once
-# rask is installed: the object store's root credential and the secret store's seed scripts are rask's. The Ray engine the cascade
-# submits to is two of them, the operator first; observability is the store, dashboards and alerting rask's Collector
+# rask is installed: the object store's root credential and the secret store's seed scripts are rask's. The Ray engine compute
+# reads is two of them, the operator first; observability is the store, dashboards and alerting rask's Collector
 # exports to. A GPU node with no device plugin yet adds nvidia-device-plugin.
 FIXTURES ?= external-secrets dapr nats cloudnative-pg dex minio openbao kuberay-operator ray-cluster observability
 
@@ -842,13 +842,6 @@ k3s-up: k3s-crds k3s-fixtures k3s-deps k3s-stem-check ## Apply CRDs, install fix
 	$(KUBECTL) rollout status deploy/rask-gateway --timeout=300s
 	@echo "UI → http://<node-ip>/   (catch-all ingress; over VS Code/ssh -L forward port 80 → http://localhost:<port>/)"
 	@echo "API → http://<node-ip>/api/ray/health"
-
-seed-medallion-namespaces: ## Provision the cascade's TOP-LEVEL catalog namespaces (needs SEED_CATALOG_TOKEN when auth is on)
-	@# The cascade creates NESTED namespaces on its way down but deliberately never a top-level one --
-	@# that binds to a warehouse and `require_warehouse_scoped` refuses it from the table door. Meanwhile
-	@# scripts/seed_medallion_fga.sh grants on every cascade namespace, so authorization passed for
-	@# namespaces the catalog had never heard of and the media lane died 404 on silver-media$$features.
-	uv run python scripts/seed_medallion_namespaces.py --warehouse "$(SEED_WAREHOUSE)"
 
 seed-corpus: ## Seed the demo corpus into the volume the media plane actually READS
 	./scripts/seed-corpus.sh
@@ -929,9 +922,9 @@ k3s-purge: k3s-down ## Uninstall + delete PVCs (clean slate)
 
 # ---- kind (throwaway CI-shaped cluster; k3s above is the long-lived local deploy) ----
 # Same chart, same :dev image set, same release name (rask) as k3s — but on a disposable
-# kind cluster, which is what the CI live-proof jobs (e2e-stack / e2e-ray) boot. Toolchain
+# kind cluster, which is what the CI live-proof job (e2e-stack) boots. Toolchain
 # is pinned into .localbin by `make bootstrap` (kind/kubectl/fga; helm + docker from PATH).
-.PHONY: bootstrap kind-up kind-images kind-load kind-deploy kind-down e2e-ci e2e-ray-ci e2e-isolation e2e-container-deletes e2e-fga-model e2e-open-run
+.PHONY: bootstrap kind-up kind-images kind-load kind-deploy kind-down e2e-ci e2e-isolation e2e-container-deletes e2e-fga-model
 
 LOCALBIN     := $(CURDIR)/.localbin
 KIND         := $(LOCALBIN)/kind
@@ -1010,8 +1003,8 @@ kind-deploy: k3s-deps ## helm upgrade --install release `rask` into the kind clu
 kind-down: ## Delete the rask kind cluster
 	$(KIND) delete cluster --name $(KIND_CLUSTER)
 
-# THE guarded live proofs — identical to the CI `e2e-stack` / `e2e-ray` jobs (both shell out
-# to the same scripts, so "green in CI" and "green on my machine" cannot diverge). The
+# THE guarded live proof — identical to the CI `e2e-stack` job (both shell out
+# to the same script, so "green in CI" and "green on my machine" cannot diverge). The
 # scripts bring up their own governed kind stack, seed grants/buckets, run the suites, and
 # (in CI) tear the cluster down.
 e2e-live: ## Run the e2e suites against the DEPLOYED k3s release (discovers addresses + credentials from the cluster)
@@ -1019,9 +1012,6 @@ e2e-live: ## Run the e2e suites against the DEPLOYED k3s release (discovers addr
 
 e2e-ci: bootstrap ## Governed kind stack + the 5 live e2e suites (CAS/#2/#3-A/#3-B/#4) == CI e2e-stack
 	CLUSTER=$(KIND_CLUSTER) RELEASE=rask bash scripts/e2e_stack.sh
-
-e2e-ray-ci: bootstrap ## Governed ray-ON kind stack + real KubeRay + the Ray train suite == CI e2e-ray
-	CLUSTER=$(KIND_CLUSTER)-ray-e2e RELEASE=rask bash scripts/ray_e2e_stack.sh
 
 # The tenant-isolation attack (#74's live half), as a STANDALONE target against an already-deployed
 # estate. `e2e-ci`'s kind stack now runs the same suite itself: `scripts/e2e_stack.sh` provisions a
@@ -1046,14 +1036,6 @@ e2e-isolation: ## Cross-tenant credential attack vs a deployed vending-enabled s
 # picks one: bob is in `team:eng`, bound to `project:acme`, so he holds `can_administer` and would make
 # that leg allege a property the estate does not have. Prefer `bash scripts/e2e_live.sh <file>`, which
 # discovers the whole environment from the running release.
-e2e-open-run: ## A cascade hop is an OPEN run in the graph before it is a finished one
-	@# The dispatch branch used to ack having emitted nothing, so a hop was invisible in the graph for
-	@# its whole runtime and one that died before its terminal looked like one that never began
-	@# ([[LH-173]]). Asserted on the event stream rather than by catching a job mid-flight: a test that
-	@# sleeps into a window is a flake waiting for a faster machine.
-	@test -n "$(LANCE_E2E_LINEAGE_URL)" || { echo "  !! set LANCE_E2E_LINEAGE_URL + LANCE_E2E_TOKEN, or run: bash scripts/e2e_live.sh tests/e2e-py/test_a_cascade_hop_is_an_open_run_before_it_is_a_finished_one.py"; exit 1; }
-	uv run pytest tests/e2e-py/test_a_cascade_hop_is_an_open_run_before_it_is_a_finished_one.py -m e2e -v
-
 e2e-fga-model: ## The DEPLOYED OpenFGA model matches this repo's — the third copy `fga-test` cannot see
 	@# `make fga-test` diffs model.json against model.fga. The store is the third copy and was checked by
 	@# nothing, which is how it fell NINE relations behind without a test going red — until a Helm hook
@@ -1078,9 +1060,9 @@ e2e-container-deletes: ## Warehouse/project delete, cascade and the gate-before-
 #
 # All of them need a live deployed stack (that is what `e2e` means here); they are runnable proofs,
 # not a CI lane. `make e2e-ci` remains the governed-kind-stack entry point, and wiring the
-# security-shaped ones (governed-union, gateway, cas) into CI is the follow-up — it needs an edit to
+# security-shaped ones (gateway, cas) into CI is the follow-up — it needs an edit to
 # `.github/workflows/ci.yml`, which a concurrent session is holding.
-E2E_SUITES = cas chaos compaction dummy-lane gateway governed-union media-catalog observability spec-conformance track-a user-state ray-train
+E2E_SUITES = cas chaos compaction gateway media-catalog observability spec-conformance track-a user-state
 .PHONY: $(addprefix e2e-,$(E2E_SUITES))   # declared HERE, not up with the other .PHONY: make
                                           # expands a rule's prerequisites AS IT READS the line,
                                           # so referencing E2E_SUITES before this assignment
@@ -1126,17 +1108,6 @@ e2e-spec-conformance-incluster: ## The same suite as an in-cluster Job — prove
 check-fast: ## The pre-push suite in parallel — 1m17s against 9m57s serial
 	uv run pytest tests/unit tests/integration -q -n 16 --dist loadfile
 
-# THREE VARIABLES, NOT ONE, and `--require-live` behind them. This target guarded only the catalog URL
-# while the suite also reads an admin token and a lineage URL, so an operator with one port-forward
-# drove the estate's only GPU-free cascade prover and got `3 passed, 4 skipped` with a zero exit. The
-# guards name what is missing early; the flag catches the skips no variable explains — a token that is
-# not a project admin, an estate with no Ray head. Pinned by
-# `tests/unit/test_a_live_drive_cannot_report_success_on_skips.py` ([[LH-196]]).
-e2e-dummy-lane:     ## The GPU-free dummy medallion lane, end to end (needs LANCE_E2E_CATALOG_URL, LANCE_E2E_ADMIN_TOKEN, LANCE_E2E_LINEAGE_URL)
-	@test -n "$(LANCE_E2E_CATALOG_URL)" || { echo "  !! e2e-dummy-lane needs LANCE_E2E_CATALOG_URL, LANCE_E2E_ADMIN_TOKEN, LANCE_E2E_LINEAGE_URL — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
-	@test -n "$(LANCE_E2E_ADMIN_TOKEN)" || { echo "  !! e2e-dummy-lane needs LANCE_E2E_CATALOG_URL, LANCE_E2E_ADMIN_TOKEN, LANCE_E2E_LINEAGE_URL — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
-	@test -n "$(LANCE_E2E_LINEAGE_URL)" || { echo "  !! e2e-dummy-lane needs LANCE_E2E_CATALOG_URL, LANCE_E2E_ADMIN_TOKEN, LANCE_E2E_LINEAGE_URL — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
-	LANCE_E2E_CATALOG_URL=$(LANCE_E2E_CATALOG_URL) LANCE_E2E_ADMIN_TOKEN=$(LANCE_E2E_ADMIN_TOKEN) LANCE_E2E_LINEAGE_URL=$(LANCE_E2E_LINEAGE_URL) uv run pytest tests/e2e-py -m dummy_lane -v --require-live
 # REQUIRES its target, rather than skipping into a green. Every test in this suite is guarded on
 # LANCE_E2E_GATEWAY_URL, so without it the target collected 3 tests, skipped all 3 and exited 0 — a
 # routing proof that reported success having proved nothing, which is exactly what its docstring
@@ -1144,13 +1115,6 @@ e2e-dummy-lane:     ## The GPU-free dummy medallion lane, end to end (needs LANC
 e2e-gateway:        ## Dapr service-invocation gateway routing proof (needs LANCE_E2E_GATEWAY_URL)
 	@test -n "$(LANCE_E2E_GATEWAY_URL)" || { echo "set LANCE_E2E_GATEWAY_URL, e.g. make e2e-gateway LANCE_E2E_GATEWAY_URL=http://localhost:8888"; exit 1; }
 	LANCE_E2E_GATEWAY_URL=$(LANCE_E2E_GATEWAY_URL) uv run pytest tests/e2e-py -m gateway -v
-e2e-governed-union: ## Full governed-union proof (the estate's widest authz path) (needs LANCE_E2E_LANCERAY_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_FGA, LANCE_E2E_CATALOG_URL, LANCE_E2E_ADMIN_TOKEN)
-	@test -n "$(LANCE_E2E_LANCERAY_URL)" || { echo "  !! e2e-governed-union needs LANCE_E2E_LANCERAY_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_FGA, LANCE_E2E_CATALOG_URL, LANCE_E2E_ADMIN_TOKEN — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
-	@test -n "$(LANCE_E2E_LINEAGE_URL)" || { echo "  !! e2e-governed-union needs LANCE_E2E_LANCERAY_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_FGA, LANCE_E2E_CATALOG_URL, LANCE_E2E_ADMIN_TOKEN — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
-	@test -n "$(LANCE_E2E_FGA)" || { echo "  !! e2e-governed-union needs LANCE_E2E_LANCERAY_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_FGA, LANCE_E2E_CATALOG_URL, LANCE_E2E_ADMIN_TOKEN — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
-	@test -n "$(LANCE_E2E_CATALOG_URL)" || { echo "  !! e2e-governed-union needs LANCE_E2E_LANCERAY_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_FGA, LANCE_E2E_CATALOG_URL, LANCE_E2E_ADMIN_TOKEN — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
-	@test -n "$(LANCE_E2E_ADMIN_TOKEN)" || { echo "  !! e2e-governed-union needs LANCE_E2E_LANCERAY_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_FGA, LANCE_E2E_CATALOG_URL, LANCE_E2E_ADMIN_TOKEN — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
-	LANCE_E2E_LANCERAY_URL=$(LANCE_E2E_LANCERAY_URL) LANCE_E2E_LINEAGE_URL=$(LANCE_E2E_LINEAGE_URL) LANCE_E2E_FGA=$(LANCE_E2E_FGA) LANCE_E2E_CATALOG_URL=$(LANCE_E2E_CATALOG_URL) LANCE_E2E_ADMIN_TOKEN=$(LANCE_E2E_ADMIN_TOKEN) uv run pytest tests/e2e-py -m governed_union -v
 e2e-media-catalog:  ## Annotator/catalog live-mode proof (needs MEDIA_CATALOG_URL)
 	@test -n "$(MEDIA_CATALOG_URL)" || { echo "  !! e2e-media-catalog needs MEDIA_CATALOG_URL — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
 	MEDIA_CATALOG_URL=$(MEDIA_CATALOG_URL) uv run pytest tests/e2e-py -m media_catalog -v
@@ -1167,12 +1131,6 @@ e2e-track-a:        ## Track A acceptance: tier contract + gate/publish symmetry
 e2e-user-state:     ## Durable user-state (dock layouts, read state) proof (needs LANCE_E2E_CATALOG_URL)
 	@test -n "$(LANCE_E2E_CATALOG_URL)" || { echo "  !! e2e-user-state needs LANCE_E2E_CATALOG_URL — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
 	LANCE_E2E_CATALOG_URL=$(LANCE_E2E_CATALOG_URL) uv run pytest tests/e2e-py -m user_state -v
-e2e-ray-train:      ## Ray train proof (needs LANCE_E2E_LANCERAY_URL, LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_FGA)
-	@test -n "$(LANCE_E2E_LANCERAY_URL)" || { echo "  !! e2e-ray-train needs LANCE_E2E_LANCERAY_URL, LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_FGA — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
-	@test -n "$(LANCE_E2E_CATALOG_URL)" || { echo "  !! e2e-ray-train needs LANCE_E2E_LANCERAY_URL, LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_FGA — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
-	@test -n "$(LANCE_E2E_LINEAGE_URL)" || { echo "  !! e2e-ray-train needs LANCE_E2E_LANCERAY_URL, LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_FGA — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
-	@test -n "$(LANCE_E2E_FGA)" || { echo "  !! e2e-ray-train needs LANCE_E2E_LANCERAY_URL, LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_FGA — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
-	LANCE_E2E_LANCERAY_URL=$(LANCE_E2E_LANCERAY_URL) LANCE_E2E_CATALOG_URL=$(LANCE_E2E_CATALOG_URL) LANCE_E2E_LINEAGE_URL=$(LANCE_E2E_LINEAGE_URL) LANCE_E2E_FGA=$(LANCE_E2E_FGA) uv run pytest tests/e2e-py -m ray_train -v
 
 # ---- the local image path (registry + Dagger engine) ------------------------
 # `make dev-registry` once per host (a local registry on :5000, and k3s pointed at it), and

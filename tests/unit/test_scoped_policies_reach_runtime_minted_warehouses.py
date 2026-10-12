@@ -60,7 +60,6 @@ def _render() -> str:
     return _helm_template(
         "minio.maintenanceAccessKey=rask-maintenance",
         "minio.rayComputeAccessKey=rask-ray-compute",
-        "minio.medallionAccessKey=rask-medallion",
     )
 
 
@@ -184,15 +183,3 @@ def test_a_malformed_policy_fails_the_hook_instead_of_leaving_the_old_one_attach
     creates = re.findall(r"mc admin policy create rfs \S+ \S+( \|\| true)?", job)
     assert creates, "no policy is created at all"
     assert not any(creates), "a policy create still swallows its failure — a bad policy renders as a successful hook"
-
-
-# ---- the medallion plane: the producer and the three stage runners --------------------------------------
-#
-# A THIRD SHAPE, and it had to be. Reusing `rask-ray-compute` here would have broken the cascade on
-# contact: that policy denies the control prefixes TOTALLY, which is right for a Ray stage job (it
-# reads FROM_URI, writes TO_URI and consults nothing) and wrong for the SERVICES that drive it. The
-# medallion reaches those records directly over S3, not through the catalog door — measured
-# 2026-09-07: `task_register.register_tasks` WRITES `_tasks/`, and `transform_spec.resolve_task`
-# / `resolve_transform` / `gate_specs` / `project_root` READ `_tasks/`, `_transforms/`, `_gates/` and
-# the warehouse registry. So the deny is write-only like maintenance's, with `_tasks/` carved out
-# because this plane is that prefix's REGISTRAR rather than its consumer.

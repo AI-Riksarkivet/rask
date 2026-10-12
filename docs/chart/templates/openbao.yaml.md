@@ -127,25 +127,15 @@ halves of the pair are set, matching the Deployment's own `$scoped` test — a
 field the service is told to read and nothing writes is a fail-closed boot, since
 `fetch_required_secrets` raises rather than degrading.
 
-## `{{- if $.Values.minio.medallionAccessKey }}`
-
-THE MEDALLION PLANE'S SCOPED S3 SECRET, on the same terms as maintenance's: its own
-field rather than a second value on `minio-secret-key`, which IS the tenant root's
-secret that other services read. Seeded only when both halves of the pair are set,
-matching the Deployment's own `$medScoped` test — a field the service is told to
-read and nothing writes is a fail-closed boot, since `fetch_required_secrets`
-raises rather than degrading.
-
 ## `{{- if $.Values.minio.catalogAccessKey }}`
 
 THE CATALOG'S OWN GATE, matching the Deployment's own `$catalogScoped` test
-(`services.yaml:129`) exactly as the medallion block above matches `$medScoped`
-and the lineage block below matches `$linScoped`. It rode the MEDALLION's flag,
-so blanking `minio.medallionAccessKey` while keeping the catalog's own identity
+(`services.yaml:129`) exactly as the lineage block below matches `$linScoped`. It rode
+another plane's flag, so blanking that plane's access key while keeping the catalog's own identity
 left the catalog told to read `catalog-s3-secret-key` and nobody writing it —
 which the comment above already names as a fail-closed boot, since
 `fetch_required_secrets` raises rather than degrading. Measured 2026-09-24 by
-rendering `--set minio.medallionAccessKey=`: the catalog Deployment carries
+rendering with the other plane's access key blanked: the catalog Deployment carries
 `LANCE_DAPR_SECRET_S3_FIELD = "catalog-s3-secret-key"` while the seed writes
 only lineage's and maintenance's fields. One service's identity could take
 another service down at boot.

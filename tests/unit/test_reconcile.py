@@ -406,19 +406,20 @@ def test_the_outbox_DRAINS_BEFORE_the_storage_sweep(tmp_path: Any, monkeypatch: 
     the event itself, and reports a `backfilled` finding that would not exist had it simply waited. The
     outbox holds the better record: the FULL event, with inputs, author and columnLineage.
     """
-    from medallion.schemas.events import build_run_event
+    from catalog.core.lineage_emit import INSERT, build_write_event
     from service_kit.lakehouse import outbox
+    from service_kit.openlineage import run_id_for
 
     uri = f"file://{tmp_path}/_lineage_outbox"
-    event = build_run_event(
-        operation="ingest_events",
+    event = build_write_event(
+        table_id="bronze$events",
+        namespace="bronze",
         author="alice",
-        job_namespace="medallion",
-        inputs=[("bronze", "bronze$events")],
-        output_namespace="bronze",
-        output_name="bronze$events",
         version=1,
-        token="order",
+        operation=INSERT,
+        run_id=run_id_for("order"),
+        event_time="2026-10-12T00:00:00+00:00",
+        job_namespace="lance-catalog",
     )
     outbox.stage_event(uri, {}, event["run"]["runId"], json.dumps(event))
 

@@ -29,7 +29,6 @@ import threading
 from collections.abc import Awaitable, Callable, Iterator
 from enum import StrEnum
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import cast
 
 import jwt
 import pytest
@@ -37,15 +36,12 @@ from fastapi import FastAPI, Request
 from fastapi.security import HTTPAuthorizationCredentials
 from fastapi.testclient import TestClient
 from lance_namespace import ErrorCode
-from openfga_sdk import OpenFgaClient
 from pydantic import BaseModel, ConfigDict
 
 from catalog.api import security as catalog_security
 from catalog.core.config import Settings as CatalogSettings
 from lineage.api import security as lineage_security
 from lineage.core.config import LineageSettings
-from medallion.api import produce_auth
-from medallion.core.config import MedallionSettings
 from service_kit.exceptions import register_handlers
 from service_kit.governed import oidc
 from service_kit.governed.oidc import OIDCVerifier
@@ -77,22 +73,9 @@ async def _lineage(request: Request, issuer: str, bearer: str) -> object:
     return lineage_security.authenticate(request, settings, _credentials(bearer))
 
 
-async def _medallion_produce(request: Request, issuer: str, bearer: str) -> object:
-    # A configured service token, so the door is not the unconfigured refusal; none presented, so it reaches the bearer.
-    settings = MedallionSettings.model_validate({**_oidc_on(issuer), "APP_API_TOKEN": "s3cr3t"})
-    return await produce_auth.authorize_produce(request, settings, cast(OpenFgaClient, object()), authorization=f"Bearer {bearer}")
-
-
-async def _medallion_subject(request: Request, issuer: str, bearer: str) -> object:
-    settings = MedallionSettings.model_validate(_oidc_on(issuer))
-    return await produce_auth.authenticate_subject(request, settings, authorization=f"Bearer {bearer}")
-
-
 DOORS: dict[str, _Door] = {
     "catalog-authenticate": _catalog,
     "lineage-authenticate": _lineage,
-    "medallion-authorize-produce": _medallion_produce,
-    "medallion-authenticate-subject": _medallion_subject,
 }
 
 

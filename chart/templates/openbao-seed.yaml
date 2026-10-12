@@ -144,7 +144,7 @@ data:
       done
       root=$(cat "$G/minio-secret-key")
       (umask 077; printf 'postgres://%s:%s@%s:%s/%s?sslmode=disable' {{ .Values.age.user | squote }} "$(cat "$G/postgres-password")" {{ include "lance.ageConnectHost" . | squote }} {{ .Values.age.port | squote }} {{ .Values.age.stateDb | squote }} > "$HOME/seed/dapr-state-dsn")
-      {{- range $id := list .Values.minio.rayComputeAccessKey .Values.minio.maintenanceAccessKey .Values.minio.medallionAccessKey .Values.minio.catalogAccessKey .Values.minio.lineageAccessKey .Values.minio.viewerAccessKey | compact | uniq }}
+      {{- range $id := list .Values.minio.rayComputeAccessKey .Values.minio.maintenanceAccessKey .Values.minio.catalogAccessKey .Values.minio.lineageAccessKey .Values.minio.viewerAccessKey | compact | uniq }}
       scoped_secret {{ $id }} "$HOME/seed/scoped-{{ $id }}"
       {{- end }}
       {{- range $ref, $_ := $baseFixture }}
@@ -166,10 +166,6 @@ data:
 
       {{- if $.Values.minio.maintenanceAccessKey }}
       maintenance-s3-secret-key=@"$HOME/seed/scoped-{{ $.Values.minio.maintenanceAccessKey }}" \
-      {{- end }}
-
-      {{- if $.Values.minio.medallionAccessKey }}
-      medallion-s3-secret-key=@"$HOME/seed/scoped-{{ $.Values.minio.medallionAccessKey }}" \
       {{- end }}
 
       {{- if $.Values.minio.catalogAccessKey }}

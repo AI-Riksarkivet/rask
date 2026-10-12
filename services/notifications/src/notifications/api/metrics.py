@@ -153,8 +153,8 @@ def record_recipient(outcome: Outcome) -> None:
 def record_dead_letter(app_label: str) -> None:
     """Count one parked delivery, by the app that parked it.
 
-    Labelled by THIS app's id, taken from its own DLQ topic. A shared literal made two stage runners' parks
-    indistinguishable in the cascade's counter, and a shared per-subTopic DLQ had two apps subscribed
+    Labelled by THIS app's id, taken from its own DLQ topic. A shared literal makes two apps' parks
+    indistinguishable in one counter, and a shared per-subTopic DLQ had two apps subscribed
     to each other's dead letters double-counting every park — per-app naming is what avoids both.
     """
     _dlq_parked.add(1, {"lance.notifications.app": app_label})

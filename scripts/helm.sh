@@ -74,7 +74,7 @@ fi
 # MEASURED 2026-09-23: `scripts/e2e_stack.sh` creates a KIND cluster and then never points anything at
 # it — no KUBECONFIG, no context, no --kube-context anywhere in the file — so its
 # `helm upgrade --install rask ./chart` landed on the live release while the kind cluster sat unused.
-# `ray_e2e_stack.sh` has the same shape. Across scripts/, `--context` appeared zero times.
+# Across scripts/, `--context` appeared zero times.
 #
 # SO A MUTATING CALLER DECLARES AND THIS REFUSES. `RASK_EXPECT_CONTEXT` is the caller's statement of
 # which cluster it means; a mismatch exits non-zero rather than warning, because CI reads exit codes
@@ -107,7 +107,7 @@ fi
 # THE RULE IS "use the driver that actually HOLDS this release", not "prefer SQL". Anything simpler
 # is wrong for at least one real environment, and both were hit:
 #
-#   * "always require SQL" breaks a FRESH INSTALL and CI. `scripts/ray_e2e_stack.sh` installs the
+#   * "always require SQL" breaks a FRESH INSTALL and CI. `scripts/e2e_stack.sh` installs the
 #     chart into an empty kind cluster — where the Postgres this driver needs does not exist yet,
 #     because the chart itself creates it. Requiring the database would make the install that creates
 #     the database impossible.

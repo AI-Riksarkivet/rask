@@ -25,8 +25,8 @@ them survived the first extraction:
     authorization model becomes the source of truth for everyone else's permissions. They resolve read-only and fail closed against an estate
     that has not been bootstrapped. Reading which store exists is not authoring one, which is the
     distinction `fga.resolve` exists for.
-  * **`fatal`** — whether a failed build takes the pod down. `catalog`, `lineage` and both medallion
-    apps wrap neither construction in a `try` and therefore crash on boot; that is deliberate and it is
+  * **`fatal`** — whether a failed build takes the pod down. `catalog` and `lineage`
+    wrap neither construction in a `try` and therefore crash on boot; that is deliberate and it is
     the only signal an operator watches. Defaulting them into the swallowing posture would convert a
     CrashLoopBackOff into a fleet of pods serving 503, which looks healthy from every angle.
 
@@ -156,9 +156,8 @@ async def build_fga_client(
                 resolved = await fga.resolve(settings.fga_api_url, token_file=settings.fga_token_file, store_id=store_id)
                 if resolved is None:
                     # Fails CLOSED, and never by provisioning: the service that noticed must not be the
-                    # one that decides what everyone is allowed to do. A FATAL caller raises: the
-                    # medallion stage runner and the train trigger read a missing client as
-                    # "authorization off", so returning here would open them.
+                    # one that decides what everyone is allowed to do. A FATAL caller raises: it
+                    # crashes on boot rather than serving with no checker behind its doors.
                     if fatal:
                         raise ServiceUnavailableError(f"{service}: no OpenFGA store, or no model this image carries, within the resolve deadline")
                     log.warning(

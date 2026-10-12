@@ -7,22 +7,17 @@ wrong rewrite silently 404s — and that longest-prefix ordering holds (a
 httpx client for one on a MockTransport: no network, real ASGI path handling.
 """
 
-import functools
 import importlib
 import importlib.util
-import os
-from types import ModuleType
 from typing import TYPE_CHECKING
 
 import httpx
 import pytest
-from fastapi.routing import APIRoute, iter_route_contexts
 from fastapi.testclient import TestClient
-from starlette.types import ASGIApp, Receive, Scope, Send
 
 
 if TYPE_CHECKING:
-    from gateway import Route
+    pass
 
 
 @pytest.fixture
@@ -55,8 +50,6 @@ def proxied(gw):
         # catalog/lineage serve /v1/... and /runs at ROOT — the /api/<svc> prefix is stripped whole
         ("/api/catalog/v1/namespace", "catalog", "http://127.0.0.1:2333/v1/namespace"),
         ("/api/lineage/runs", "lineage", "http://127.0.0.1:8000/runs"),
-        # the medallion producer serves /train at root (strip /api only)
-        ("/api/train", "medallion-producer", "http://127.0.0.1:8002/train"),
         # the media trio serves /api/... internally — /media is dropped, /api kept
         # `/api/explorer/documents`, NOT `/api/explorer/transcripts`. The viewer serves 33 OpenAPI paths
         # and NONE of them is `/api/transcripts` — there is no transcript route at all. The row was
@@ -87,173 +80,3 @@ def test_media_search_does_not_hit_viewer(gw, proxied) -> None:
     assert url.port == 8102
     assert url.path == "/api/search"
     assert url.params["q"] == "kyrka"
-
-
-# ── The producer's doors, derived from the producer as the chart deploys it ─────────────────────────
-#
-# Every operation the producer serves is either reachable through a gateway row or named below with the
-# reason it has none. A new producer route fails here until it gets one or the other, instead of
-# answering `404 no upstream` at the edge with nothing saying so.
-_PRODUCER_APP_ID = "medallion-producer"
-
-#: The chart-default settings that MOUNT a producer route. A producer built on code defaults serves
-#: fewer routes than the deployed one, and a route only the deployed one serves would pass unseen.
-_DEPLOYED_ROUTE_SETTINGS = {
-    "MEDALLION_CONTROL_PUBSUB": "pubsub-control-medallion-producer",  # catalog.controlEmit
-    "MEDALLION_DLQ_TOPIC": "dlq.medallion-producer",  # dapr.resiliency.enabled
-    "MEDALLION_CASCADE_LAG_BINDING_NAME": "medallion-cascade-lag-cron",  # medallion.cascadeLag.bindingName
-    "MEDALLION_PLAN_SWEEP_BINDING_NAME": "medallion-plan-sweep-cron",  # medallion.planSweep.bindingName, while an engine is enabled
-}
-
-#: Producer operations with no gateway row, and why each has none.
-_NOT_PUBLISHED_AT_THE_EDGE: dict[tuple[str, str], str] = {
-    ("get", "/livez"): "kubelet probe at the pod root",
-    ("get", "/readyz"): "kubelet probe at the pod root",
-    ("get", "/dapr/subscribe"): "read by the sidecar to discover the pub/sub deliveries below",
-    ("post", "/bronze-arrival"): "pub/sub delivery of the lineage topic, behind require_dapr_token",
-    ("post", "/publication-arrival"): "pub/sub delivery of the catalog's control topic, behind require_dapr_token",
-    ("post", "/train-trigger"): "pub/sub delivery of the training topic, behind require_dapr_token",
-    ("post", "/promotion-held"): "pub/sub delivery of a held promotion, behind require_dapr_token",
-    ("post", "/dlq-event"): "pub/sub delivery of the producer's dead letters, behind require_dapr_token",
-    ("post", "/medallion-cascade-lag-cron"): "the lag cron's input binding, delivered by the sidecar at the pod root",
-    ("options", "/medallion-cascade-lag-cron"): "the sidecar's probe of that binding before it delivers",
-    ("post", "/runs/{action_id}/outcome"): "a training job's outcome report, from the compute head over the producer's ClusterIP",
-    ("post", "/medallion-plan-sweep-cron"): "the plan sweep's input binding, delivered by the sidecar at the pod root",
-    ("options", "/medallion-plan-sweep-cron"): "the sidecar's probe of that binding before it delivers",
-}
-
-
-@functools.cache
-def _producer_operations() -> frozenset[tuple[str, str]]:
-    """(method, path) for every route the deployed producer serves, schema-hidden ones included.
-
-    `medallion.producer` mounts its routes at import, from settings, so the deployed shape is a fresh
-    execution of the module under the chart's route-mounting settings. It runs under a private module
-    name, leaving `medallion.producer` (the default build other tests import) untouched.
-    """
-    import medallion.producer as default_build
-    from medallion.core.config import get_settings
-
-    saved = {name: os.environ.get(name) for name in _DEPLOYED_ROUTE_SETTINGS}
-    os.environ.update(_DEPLOYED_ROUTE_SETTINGS)
-    get_settings.cache_clear()
-    try:
-        spec = importlib.util.spec_from_file_location("_producer_as_deployed", default_build.__file__)
-        if spec is None or spec.loader is None:
-            raise RuntimeError(f"cannot load {default_build.__file__}")
-        deployed = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(deployed)
-    finally:
-        for name, value in saved.items():
-            if value is None:
-                os.environ.pop(name, None)
-            else:
-                os.environ[name] = value
-        get_settings.cache_clear()
-    # `iter_route_contexts` is FastAPI's own walk through included routers, with each route's effective
-    # (prefixed) path; `app.routes` alone holds the routers, not their routes.
-    return frozenset(
-        (method.lower(), context.path)
-        for context in iter_route_contexts(deployed.app.routes)
-        if isinstance(context.original_route, APIRoute) and context.path
-        for method in context.methods or ()
-    )
-
-
-def _public_operations() -> set[tuple[str, str]]:
-    return {operation for operation in _producer_operations() if operation not in _NOT_PUBLISHED_AT_THE_EDGE}
-
-
-def _row_reaching(gw: ModuleType, upstream_path: str, routes: list["Route"]) -> "Route | None":
-    """The producer row that forwards some public path to ``upstream_path``.
-
-    Decided by the proxy's own `_pick_route`, so a row shadowed by an earlier one reaches nothing, and so
-    does a sibling prefix: `/train` + `/` does not start `/trains/...`.
-    """
-    for route in routes:
-        upstream = route.upstream_prefix
-        if route.app_id != _PRODUCER_APP_ID or (upstream_path != upstream and not upstream_path.startswith(upstream + "/")):
-            continue
-        if gw._pick_route(route.public_prefix + upstream_path[len(upstream) :], routes) is route:
-            return route
-    return None
-
-
-def test_every_public_producer_operation_has_a_gateway_row(gw) -> None:
-    routes = gw._routes()
-    unrouted = sorted((method.upper(), path) for method, path in _public_operations() if _row_reaching(gw, path, routes) is None)
-    assert not unrouted, (
-        f"the producer serves {unrouted} and no gateway row forwards to them, so each answers 404 at the edge; "
-        f"give each a row, or name it in _NOT_PUBLISHED_AT_THE_EDGE with the reason it has none"
-    )
-
-
-def test_every_producer_row_reaches_a_producer_operation(gw) -> None:
-    routes = gw._routes()
-    reached = {_row_reaching(gw, path, routes) for _method, path in _public_operations()}
-    dangling = [route.public_prefix for route in routes if route.app_id == _PRODUCER_APP_ID and route not in reached]
-    assert not dangling, f"the gateway rows {dangling} reach no producer operation outside _NOT_PUBLISHED_AT_THE_EDGE"
-
-
-def test_no_gateway_row_publishes_an_exclusion(gw) -> None:
-    routes = gw._routes()
-    published = sorted(f"{method.upper()} {path}" for method, path in _NOT_PUBLISHED_AT_THE_EDGE if _row_reaching(gw, path, routes) is not None)
-    assert not published, f"{published} are named as not published at the edge, and a gateway row publishes them"
-
-
-def _as_daprd_delivers(app: ASGIApp, *, app_token: str) -> ASGIApp:
-    """``app`` behind the stamp daprd adds to an invocation from the gateway: the estate's app token and the
-    caller's app-id. The gateway strips both from the client, so these are the only copies that arrive."""
-
-    async def stamped(scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] == "http":
-            scope = {**scope, "headers": [*scope["headers"], (b"dapr-api-token", app_token.encode()), (b"dapr-caller-app-id", b"gateway")]}
-        await app(scope, receive, send)
-
-    return stamped
-
-
-@pytest.mark.parametrize(
-    ("method", "public"),
-    [
-        ("post", "/api/trains/ray-train-tok-1/terminate"),
-        ("get", "/api/cascade/stalled"),
-        ("get", "/api/stage-runners"),
-    ],
-)
-def test_a_public_caller_is_refused_by_the_door_behind_the_row(gw, monkeypatch: pytest.MonkeyPatch, method: str, public: str) -> None:
-    """The whole forward, as Dapr delivers it: the gateway's own proxy into the producer's own app.
-
-    The stamp carries a VALID app token, which names nobody ([[LH-220]]): a door that trusted it would serve an
-    anonymous caller from the internet. With authentication on, as the chart deploys the producer, the refusal
-    comes from the door, in its words; a row that reaches no route answers 404.
-    """
-    from medallion.core.config import MedallionSettings, get_settings
-    from medallion.producer import app as producer
-
-    deployed = MedallionSettings.model_validate({"RASK_OIDC_ENABLED": True, "RASK_OIDC_ISSUER": "https://idp.invalid", "RASK_OIDC_AUDIENCE": "rask"})
-    monkeypatch.setitem(producer.dependency_overrides, get_settings, lambda: deployed)
-    monkeypatch.setenv("APP_API_TOKEN", "the-estate-app-token")
-    with TestClient(gw.app) as client:
-        gw.app.state.http = httpx.AsyncClient(transport=httpx.ASGITransport(app=_as_daprd_delivers(producer, app_token="the-estate-app-token")))
-        response = client.request(method, public)
-
-    assert response.status_code == 403, response.text
-    assert "invalid or missing produce credential" in response.text, response.text
-
-
-def test_a_rerun_sent_to_the_gateway_is_answered_by_the_rerun_verb(gw) -> None:
-    """The whole forward: the gateway's own proxy carrying the request into the producer's own app.
-
-    Anonymous on purpose. `rerun_stage` refuses an unsigned caller in its body, after routing, in words
-    no other producer route uses — so this 403 can only come from the verb. A forward that reached no
-    route answers 404, and one that reached a sibling answers in the sibling's words.
-    """
-    from medallion.producer import app as producer
-
-    with TestClient(gw.app) as client:
-        gw.app.state.http = httpx.AsyncClient(transport=httpx.ASGITransport(app=producer))
-        response = client.post("/api/stage-runners/stages/rerun", json={"object_id": "table:acme-silver$features", "project": "acme", "to_version": 7})
-
-    assert response.status_code == 403, response.text
-    assert "re-running a cascade edge needs a signed-in caller" in response.text, response.text

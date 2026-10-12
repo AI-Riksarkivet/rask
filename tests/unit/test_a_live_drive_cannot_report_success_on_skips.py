@@ -2,15 +2,12 @@
 
 [[LH-196]]. Every suite under `tests/e2e-py` guards each test on the environment it needs, so a
 missing port-forward or an unseeded token turns a proof into a skip — and pytest reports skips as
-success. `make e2e-dummy-lane` is the case that was measured: it guards `LANCE_E2E_CATALOG_URL` and
-forwards only that, while the suite also reads `LANCE_E2E_ADMIN_TOKEN` and `LANCE_E2E_LINEAGE_URL`, so
-an operator with one variable set gets `3 passed, 4 skipped` and a zero exit from the estate's only
-GPU-free cascade prover.
+success: a target that forwards one variable while its suite also reads two others reports
+`3 passed, 4 skipped` and a zero exit (measured on a live-drive target).
 
 TWO HALVES, AND THE FIRST IS NOT ENOUGH ON ITS OWN. Guarding the variables makes the failure early and
-names what is missing — the pattern `e2e-governed-union` and `e2e-medallion` already follow — but it
-cannot reach the skips that are not about a variable at all: a token that is not a project admin, an
-estate with no Ray head. `--require-live` covers those, because it asks the only question that matters
+names what is missing — but it
+cannot reach the skips that are not about a variable at all: a token that is not a project admin. `--require-live` covers those, because it asks the only question that matters
 to a live drive: did every test it collected actually run?
 
 THE MECHANISM IS EXERCISED RATHER THAN READ. A source assertion that the flag appears in the Makefile

@@ -39,7 +39,7 @@ def setup_logging() -> None:
 
     This used to attach the handler to two logger names, ``core`` and ``backends``, and its docstring
     said why: it "mirrors core.main". That monolith is gone. Every module in every service now uses
-    ``logging.getLogger(__name__)`` — ``lineage.services.consumer``, ``medallion.services.transform``,
+    ``logging.getLogger(__name__)`` — ``lineage.services.consumer``, ``maintenance.services.optimize``,
     ``catalog.api.v1.endpoints.tables`` — and NONE of those names sit under ``core.*`` or
     ``backends.*``. So the handler decorated two trees nobody logs to, every record propagated to a
     root logger with no handlers, and was discarded. Only uvicorn's own logs (which carry their own
@@ -50,10 +50,7 @@ def setup_logging() -> None:
     * a malformed event POSTed to the running ingest answered ``{"status":"DROP"}`` — returned on the
       single line immediately AFTER ``log.error("lineage_event_invalid")``, so the branch demonstrably
       ran — and produced no log line at all. After this fix the identical request logs
-      ``ERROR lineage.services.consumer — lineage_event_invalid``;
-    * the medallion stage runner's ``ray_stage_job_submitted`` and ``medallion_stage_workflow_reattach`` were
-      equally invisible, which is why a running cascade read as an idle one and its Dapr Workflow had
-      to be found by querying the sidecar rather than by reading a log.
+      ``ERROR lineage.services.consumer — lineage_event_invalid``.
 
     The class this closes is the swallowed diagnostic — any handler that catches a failure by design
     and reports it with a WARNING instead. That warning had nowhere to go, so the one signal
@@ -103,18 +100,10 @@ def build_settings() -> Settings:
     return Settings.model_validate({})
 
 
-# THE DAPR CLIENT SEAM IS DELETED. It built `DaprClient("http://127.0.0.1:3500")`
-# — the sidecar's HTTP port handed to a gRPC client, which talks 50001 — and a test pinned that wrong
-# constant as if it were the contract. Two re-verifications found the same thing: NOTHING called it.
-# Every service that actually publishes builds its own client (`medallion.stage_runner` / `medallion.producer`
-# construct `dapr.aio.clients.DaprClient` in their own lifespans, with their own `get_dapr` and
-# `DaprClientDep` in `medallion.api.dependencies`), and the four `make_service_app` services never
-# touched `app.state.dapr` at all.
-#
-# So the wrong port was inert — but a broken seam that looks available is worse than no seam: the next
-# service to want a Dapr client would have reached for the one already wired into the app factory and
-# got a client pointed at the wrong port. Deleted rather than repaired to the gRPC port, because
-# repairing it would keep a shared abstraction alive that no caller has ever wanted.
+# NO DAPR CLIENT IS BUILT HERE. Every service that publishes constructs its own client in its own
+# lifespan (catalog, lineage, maintenance, annotator, notifications), and the `make_service_app`
+# services never touch `app.state.dapr`. A client wired into the app factory would be a shared seam no
+# caller wants, and one that looks available is the one the next service reaches for.
 
 
 def default_lifespan(settings: Settings) -> Callable[[FastAPI], AbstractAsyncContextManager[None]]:

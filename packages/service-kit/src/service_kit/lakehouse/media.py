@@ -2,16 +2,13 @@
 
 The heavy original image stays a referenced blob in bronze; a downstream (silver) stage derives small
 artifacts from it that are cheap to store *inline*: a thumbnail (downscaled PNG) and a fixed-size embedding
-(deterministic pixel features — no ML model). This is the realistic per-stage transform the generic cascade
-stage runner leaves to a distributed job (see ``compute.py``); here it runs in-process so the medallion demo shows
-a real multimodal pipeline end to end.
+(deterministic pixel features — no ML model). A user's pipeline would run this per-stage transform as a
+distributed job; here it runs in-process so the medallion demo (``scripts/medallion_demo.py``) shows a real
+multimodal pipeline end to end.
 
-**WHY THIS IS IN service-kit AND NOT THE MEDALLION SERVICE (B14).** The same three derivers were
-INLINED into ``scripts/ray_stage_job.py``, because that script is baked into the Ray cluster image
-and cannot import a service. A drift-pin test then asserted the two copies stayed byte-identical —
-which is a test comparing two behaviours after the fact, and is exactly what B14 records as the
-wrong fix. Both drivers can import ``service_kit``, so the implementation moved here and both now
-call ONE function. The script stays a thin entrypoint, which is the shape B14 asks for.
+**WHY THIS IS IN service-kit (B14).** Any driver can import ``service_kit``, so a script and a job call ONE
+function rather than each inlining a copy: a drift-pin test asserting two copies stay byte-identical compares
+two behaviours after the fact, which is what B14 records as the wrong fix.
 
 Pillow rides an OPTIONAL extra (``service-kit[media]``) rather than the base dependency set: this
 library is deliberately dependency-light, and an image codec has no business in the install of a

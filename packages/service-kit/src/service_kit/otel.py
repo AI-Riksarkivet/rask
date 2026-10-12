@@ -82,8 +82,8 @@ def server_request_hook(span: Span | None, scope: Mapping[str, Any]) -> None:
 #: service it exists to catch ran at 39.5 seconds.
 #:
 #: CHOSEN FROM MEASURED DURATIONS, not doubled arbitrarily. The same store at the same moment:
-#: notifications ~30 ms, catalog ~34 ms, lineage ~370 ms, medallion-producer ~1,070 ms, maintenance
-#: ~39,500 ms. So the sub-100 ms resolution four services depend on is kept exactly as it was, and the
+#: notifications ~30 ms, catalog ~34 ms, lineage ~370 ms, maintenance
+#: ~39,500 ms. So the sub-100 ms resolution the fast services depend on is kept exactly as it was, and the
 #: tail is extended past a sweep with room for one that degrades. Reaching further must not blind the
 #: estate to its fast services, which is the obvious wrong fix.
 HTTP_DURATION_BUCKETS_MS: Final[tuple[float, ...]] = (
