@@ -211,7 +211,9 @@ step "3/8 deploy the governed stack (auth ON, #3-A/#3-B/#4 flags ON, heavy extra
 JOB_LOGS="$(mktemp)"
 ( while sleep 5; do
     for p in $(kubectl get pods -l batch.kubernetes.io/job-name -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do
-      { echo "=== $p $(date -u +%T)"; kubectl logs "$p" --all-containers --previous --tail=40 2>/dev/null
+      { echo "=== $p $(date -u +%T)"
+        kubectl get pod "$p" -o jsonpath='{range .status.initContainerStatuses[*]}{.name} restarts={.restartCount} last={.lastState.terminated.reason}/{.lastState.terminated.exitCode} now={.state.terminated.reason}/{.state.terminated.exitCode}{"\n"}{end}{range .status.containerStatuses[*]}{.name} restarts={.restartCount} last={.lastState.terminated.reason}/{.lastState.terminated.exitCode} now={.state.terminated.reason}/{.state.terminated.exitCode}{"\n"}{end}' 2>/dev/null
+        kubectl logs "$p" --all-containers --previous --tail=40 2>/dev/null
         kubectl logs "$p" --all-containers --tail=40 2>/dev/null; } > "$JOB_LOGS.$p" 2>&1 || true
     done
   done ) & PF_PIDS+=($!)
