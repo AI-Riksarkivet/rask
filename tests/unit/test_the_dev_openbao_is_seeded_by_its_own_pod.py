@@ -249,6 +249,7 @@ def _arrange_nats(case: str, stores: Path, tmp_path: Path, env: dict[str, str]) 
         pytest.param(
             (*DEFAULT_ARGS, "--set", "secrets.hfTokenInStore=true"), "lacks", "rotate", True, "minted", id="a-rotated-credential-reaches-the-store-in-place"
         ),
+        pytest.param(DEFAULT_ARGS, "lacks", "rotate", True, "minted", id="a-rotated-credential-reaches-the-store-with-no-operator-token"),
         pytest.param(DEFAULT_ARGS, "lacks", "change", True, "minted", id="a-seed-rask-changes-runs-again-in-place-keeping-its-keys-and-bus-root"),
         pytest.param(DEFAULT_ARGS, "lacks", "", True, "carried", id="a-signing-pair-behind-the-service-is-carried"),
         pytest.param(DEFAULT_ARGS, "lacks", "", True, "rotated", id="a-list-without-its-key-is-a-rotation-that-keeps-one-previous"),
@@ -409,7 +410,8 @@ def test_the_dev_store_is_seeded_by_its_own_pod_and_keeps_its_signing_keys(  # n
     bundle = _store(stores, "local", "secret/lance")
     if local == "rotate":
         generated["postgres-password"] = (stores / "rotate").read_text()
-        assert _store(stores, "local", "secret/hf-token").get("token") == generated["postgres-password"], "a rotated hf-token never reached the store"
+        if "secrets.hfTokenInStore=true" in overlay:
+            assert _store(stores, "local", "secret/hf-token").get("token") == generated["postgres-password"], "a rotated hf-token never reached the store"
     assert {key: bundle.get(key) for key in _GENERATED} == generated, "the store does not hold the credentials ESO generated"
     assert f":{generated['postgres-password']}@" in bundle.get("dapr-state-connection-string", ""), (
         "the state store DSN is not built from the generated password"

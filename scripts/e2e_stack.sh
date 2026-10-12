@@ -51,11 +51,10 @@ cleanup() {
       esac
     done
     kubectl get jobs -o wide || true   # the OpenFGA migration is a post-install HOOK job — surface its state
-    # A failed hook Job's pod is Failed, not running, so the not-ready loop above never prints its log, and that log is
-    # the only account of why it failed.
-    for j in $(kubectl get jobs -o jsonpath='{range .items[?(@.status.failed)]}{.metadata.name}{"\n"}{end}' 2>/dev/null); do
-      echo "--- LOGS (failed job): $j"
-      kubectl logs "job/$j" --all-containers --tail=60 2>/dev/null || true
+    # A failed hook Job's pod is gone by now, so the not-ready loop above never prints its log, and that log is the only
+    # account of why it failed: the install recorded it.
+    for f in "${JOB_LOGS:-/nonexistent}".*; do
+      [ -f "$f" ] && { echo "--- LOGS (job pod, recorded during the install): ${f##*.}"; cat "$f"; }
     done
     # Every credential a pod mounts arrives through an ExternalSecret from the dev store: a Secret that never appeared is
     # a condition here, and the store's seed log says what it wrote.
@@ -207,6 +206,15 @@ step "3/8 deploy the governed stack (auth ON, #3-A/#3-B/#4 flags ON, heavy extra
 # far enough to reach a deploy.
 # A COMMENT CANNOT GO INSIDE THE INVOCATION: a `#` line inside a backslash continuation ends
 # the command and turns every following line into its own, which `bash -n` accepts.
+# A Job that exhausts its backoff has its pod deleted, and that pod's log with it: record every Job pod's log (the attempt
+# before a restart too) while the install runs, for the failure diagnostics to print.
+JOB_LOGS="$(mktemp)"
+( while sleep 5; do
+    for p in $(kubectl get pods -l batch.kubernetes.io/job-name -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do
+      { echo "=== $p $(date -u +%T)"; kubectl logs "$p" --all-containers --previous --tail=40 2>/dev/null
+        kubectl logs "$p" --all-containers --tail=40 2>/dev/null; } > "$JOB_LOGS.$p" 2>&1 || true
+    done
+  done ) & PF_PIDS+=($!)
 "$(dirname "$0")/helm.sh" upgrade --install "$RELEASE" ./chart --timeout 600s "${HELM_SET[@]}"
 
 # Recreate the app pods. Pod DELETE, not `rollout restart`: on a re-run against an existing cluster a rebuilt

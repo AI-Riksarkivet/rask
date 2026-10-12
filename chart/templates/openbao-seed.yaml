@@ -135,8 +135,8 @@ data:
     G=$DEV_CREDENTIALS
     {{- include "lance.scopedSecretFn" . | nindent 4 }}
     fingerprint() {
-      cat "$G/minio-secret-key" "$G/postgres-password" "$G/dapr-app-token" "$G/ray-auth-token" "$G/frontend-session-secret" \
-        {{- if .Values.secrets.hfTokenInStore }} "$SUPPLIED_CREDENTIALS/hf-token"{{ end }} 2>/dev/null | sha256sum | cut -d' ' -f1
+      cat "$G/minio-secret-key" "$G/postgres-password" "$G/dapr-app-token" "$G/ray-auth-token" "$G/frontend-session-secret"{{ if .Values.secrets.hfTokenInStore }} "$SUPPLIED_CREDENTIALS/hf-token"{{ end }} \
+        2>/dev/null | sha256sum | cut -d' ' -f1
     }
     derive() {
       for k in minio-secret-key postgres-password dapr-app-token ray-auth-token frontend-session-secret; do
