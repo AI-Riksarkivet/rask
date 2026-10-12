@@ -7,8 +7,9 @@ OpenLineage run, the numeric metrics in GreptimeDB over OTLP (#18, the MLflow re
 candidate→blessed registry move gated on the validator rung (writer denied). A run whose provenance
 does not fully land is a failure here, not a footnote.
 
-Env: LANCE_E2E_LANCERAY_URL, LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_DAPR_TOKEN,
-LANCE_E2E_FGA, LANCE_E2E_DEX(_SECRET); optional LANCE_E2E_GREPTIME_URL (the metrics-capture leg skips
+Env: LANCE_E2E_LANCERAY_URL, LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL,
+LANCE_E2E_FGA, LANCE_E2E_DEX(_SECRET), LANCE_E2E_ADMIN_TOKEN (a project-admin OIDC bearer: the producer's doors admit a
+person or a projected service-account token, never the shared `dapr-api-token`); optional LANCE_E2E_GREPTIME_URL (the metrics-capture leg skips
 without it, so CI can keep observability off without silently dropping the lineage+promote guard).
 """
 
@@ -38,7 +39,8 @@ FGA = os.environ.get("LANCE_E2E_FGA", "")
 STORE = os.environ.get("LANCE_E2E_FGA_STORE_ID", "")
 #: The `rask-openfga` token file the runner minted (`scripts/e2e_live.sh`); OpenFGA refuses a call without it ([[XC-077]]).
 FGA_TOKEN_FILE = os.environ.get("LANCE_E2E_FGA_TOKEN_FILE") or None
-DAPR_TOKEN = os.environ.get("LANCE_E2E_DAPR_TOKEN", "")
+#: The project admin who asks for the seed `/produce` and the `/train` run, as the models zone forwards a person's bearer.
+ADMIN_TOKEN = os.environ.get("LANCE_E2E_ADMIN_TOKEN", "")
 WAREHOUSE = "warehouse:lance_catalog"
 
 pytestmark = [pytest.mark.e2e, pytest.mark.ray_train]
@@ -81,8 +83,8 @@ def _tuples(store_model: tuple[str, str], *, writes: list[dict] | None = None, d
 
 @pytest.fixture(scope="module")
 def stack() -> tuple[str, str, str]:
-    if not (LANCERAY and CATALOG and LINEAGE and FGA and DAPR_TOKEN):
-        pytest.skip("set LANCE_E2E_LANCERAY_URL / CATALOG / LINEAGE / FGA / DAPR_TOKEN")
+    if not (LANCERAY and CATALOG and LINEAGE and FGA and ADMIN_TOKEN):
+        pytest.skip("set LANCE_E2E_LANCERAY_URL / CATALOG / LINEAGE / FGA / ADMIN_TOKEN")
     for name, url in (("medallion-producer", LANCERAY), ("catalog", CATALOG), ("lineage", LINEAGE)):
         try:
             probe = "readyz" if name == "catalog" else "livez"
@@ -167,7 +169,7 @@ def standing_features(stack: tuple[str, str, str], alice: dict[str, str]) -> Non
     # validation before auth, before the lane, before anything this suite means to exercise.
     resp = requests.post(
         f"{lance_ray}/produce",
-        headers={"dapr-api-token": DAPR_TOKEN, "Idempotency-Key": f"e2e-{uuid.uuid4().hex[:16]}"},
+        headers={"Authorization": f"Bearer {ADMIN_TOKEN}", "Idempotency-Key": f"e2e-{uuid.uuid4().hex[:16]}"},
         timeout=30,
     )
     assert resp.status_code == 202, f"/produce to seed silver$features failed: {resp.status_code} {resp.text}"
@@ -185,7 +187,7 @@ def test_train_to_blessed_with_full_reproducibility_capture(stack: tuple[str, st
     # 1. Request a governed training run against the standing silver features.
     r = requests.post(
         f"{lance_ray}/train",
-        headers={"dapr-api-token": DAPR_TOKEN, "content-type": "application/json", "Idempotency-Key": f"e2e-{uuid.uuid4().hex[:16]}"},
+        headers={"Authorization": f"Bearer {ADMIN_TOKEN}", "content-type": "application/json", "Idempotency-Key": f"e2e-{uuid.uuid4().hex[:16]}"},
         json={"model": model, "features": [{"dataset": "silver$features"}]},
         timeout=30,
     )

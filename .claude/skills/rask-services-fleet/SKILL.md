@@ -33,7 +33,7 @@ For FastAPI app/router/lifespan idioms see `fastapi`. This skill is *only* the t
 | Service | Port | Gateway override env | Lifespan builds |
 |---|---|---|---|
 | **gateway** | 8888 | — (it *is* the proxy) | `httpx.AsyncClient` + route table only |
-| **compute** | 8804 | `RASK_COMPUTE_URL` | dashboard httpx client + Ray Job SDK client |
+| **compute** | 8804 | `RASK_COMPUTE_URL` | dashboard httpx client + Ray Job SDK client; also the Ray engine door `/engine/runs`, reached only by Dapr invocation of app-id `compute` from the medallion planners (no gateway row; a public caller is refused) |
 | **controlplane** | 8820 | `RASK_CONTROLPLANE_URL` | k8s client (read-only Project CRs for the home picker) |
 | **explorer viewer** | 8101 | `RASK_EXPLORER_VIEWER_URL` | lazy `DatasetRegistry`; the S3 object browser builds its client **per store** from the catalog's storage registry (`RASK_STORES`) — a store declaring a `secret` gets those creds from the Dapr secret store, fail-closed and `lru_cache`d, never the process env (the old env-only `s3_client()` read the external raw tier against the warehouse and listed it as empty). FGA-gated since #90 — see invariant 10 |
 | **explorer search** | 8102 | `RASK_EXPLORER_SEARCH_URL` | descriptor-driven Lance search |
