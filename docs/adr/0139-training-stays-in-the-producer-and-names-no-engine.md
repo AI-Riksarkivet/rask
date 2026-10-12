@@ -1,5 +1,7 @@
 # 0139. Training stays in the lakehouse producer and names no engine (2026-10-10)
 
+**Status:** Superseded by [ADR 0155](0155-the-medallion-is-tier-governance-in-the-catalog.md): training is the user's pipeline; the model registry and its promote stay in the catalog.
+
 Source: owner decision, 2026-10-10 grilling session (CP-044 (2), CP-029, CP-056 #105; `docs/audits/2026-09-30/lakehouse-dataflow.md` weak point 19).
 
 ## Context
