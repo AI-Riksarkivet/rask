@@ -80,7 +80,11 @@ export RASK_EXPECT_CONTEXT="kind-$CLUSTER"
 # Dex, the dev OIDC issuer the lane mints its tokens from, the dev object store and the dev secret store are fixtures too
 # ([[XC-131]]). The two stores start once rask is installed (the object store's root credential and the secret store's
 # seed scripts are rask's), so fixtures.sh does not wait for them.
-"$(dirname "$0")/fixtures.sh" external-secrets dapr nats dex minio openbao
+"$(dirname "$0")/fixtures.sh" external-secrets dapr nats dex openbao
+# The object store runs rask's first-party image, which step 2 builds and side-loads under the name rask's own hooks use;
+# its pod pulls it once it is loaded. A `--set` beats the estate's values-live-pins.yaml, a tag in a registry this
+# cluster cannot reach.
+"$(dirname "$0")/fixtures.sh" minio -- --set-string image.repository=minio --set-string "image.tag=$TAG"
 # EVERY https REPOSITORY `chart/Chart.yaml` DECLARES, derived rather than listed. `helm dependency
 # build` needs each one even when the component is disabled, and a hand-written list is a second copy
 # of the chart's own dependency set: measured 2026-09-24, it named five of the nine, so the lane died
