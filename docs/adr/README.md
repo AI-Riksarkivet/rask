@@ -167,5 +167,4 @@ before they had a record here; each names its source document and the date of th
 | [0152](0152-service-kit-ships-py-typed-and-skips-report-zeros.md) | PS | service-kit ships py.typed, and skip attribution reports zeros (2026-10-10) |
 | [0153](0153-the-app-chart-is-the-product.md) | XC-085 | The app chart is the product; operators, compute and observability are prerequisites (2026-10-11) |
 | [0154](0154-the-lakehouse-runs-no-ingest-and-no-workflow-engine.md) | LH-461 | The lakehouse runs no ingest and no workflow engine; data enters through the catalog's namespace doors (2026-10-12) |
-| [0155](0155-the-lakehouse-is-the-catalog-and-its-governance.md) | LH-464 | The lakehouse is the catalog and its governance; pipelines, training and data rewrites are the user's (2026-10-12) |
 | [0155](0155-the-medallion-is-tier-governance-in-the-catalog.md) | LH-461 | The medallion is tier governance inside the catalog; the lakehouse runs no stage, no training and no engine (2026-10-12) |
