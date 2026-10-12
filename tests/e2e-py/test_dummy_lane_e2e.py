@@ -52,14 +52,9 @@ pytestmark = [pytest.mark.e2e, pytest.mark.dummy_lane]
 CATALOG = os.environ.get("LANCE_E2E_CATALOG_URL", "")
 ADMIN_TOKEN = os.environ.get("LANCE_E2E_ADMIN_TOKEN", "")
 PROJECT = os.environ.get("LANCE_E2E_PROJECT", "acme")
-#: The RayService whose ACTIVE cluster runs the job, WHEN there is one. The chart renders a
-#: RayService only under `singleTenant.enabled`; every other estate — including the k3s dev one —
-#: runs a plain Deployment, so this cannot be the only thing looked for. See `_head_pod`.
-RAY_SERVICE = os.environ.get("LANCE_E2E_RAY_SERVICE", "rask-ray")
-#: The fallback: the standalone head Deployment, spelled exactly as `deploy/ray-lance-demo.yaml`
-#: names it, because disagreeing with the manifest about its name is how a suite silently stops
-#: running.
-RAY_HEAD_DEPLOY = os.environ.get("LANCE_E2E_RAY_HEAD_DEPLOY", "ray-lance-head")
+#: The RayCluster whose head runs the job: the engine is bring-your-own (ADR 0153), and the dev estate's is the
+#: ray-cluster fixture's `rask-ray` (deploy/fixtures/ray-cluster).
+RAY_CLUSTER = os.environ.get("LANCE_E2E_RAY_CLUSTER", "rask-ray")
 #: Where the JOB posts its provenance (in-cluster, from the head pod) and where the TEST reads it
 #: back (port-forwarded). Two different addresses for one service, which is the whole reason they
 #: are separate knobs: the job cannot reach a localhost forward and the test cannot resolve a
@@ -120,56 +115,24 @@ def _kubectl() -> str:
 
 
 def _head_pod() -> str:
-    """The Ray head pod — from the RayService's ACTIVE cluster if there is one, else the Deployment.
+    """The head pod of the engine's RayCluster, by KubeRay's own labels.
 
-    THE RAYSERVICE PATH IS PREFERRED AND IS NOT THE ONLY PATH. Resolving through
-    `.status.activeServiceStatus.rayClusterName` rather than by grepping for a head pod matters
-    during a zero-downtime image upgrade, when there are TWO ready heads — the outgoing cluster and
-    the incoming one — and a selector matching both would run the job against whichever sorted
-    first. That is exactly the window someone runs this suite in: right after deploying a new image,
-    to check the new image. That reasoning is sound, and it is why the RayService is tried first.
-
-    What it got wrong was treating it as the ONLY shape. `chart/templates/rayservice.yaml` renders
-    only under `singleTenant.enabled`; the k3s dev estate runs the standalone `ray-lance-head`
-    Deployment that `deploy/ray-lance-demo.yaml` defines. So this suite asked for a
-    RayService named `rask-ray`, found none, and `pytest.skip`ped — reporting `3 passed, 4 skipped`
-    and exit 0 while the lane it exists to prove was in fact broken (the image baked
-    `ray_dummy_job.py` without `dummy_runner`, so every submission died `ModuleNotFoundError`).
-    A suite that cannot find its target must not be the thing that says the target is fine.
-
-    AND IT NO LONGER SKIPS WHEN A LIVE DRIVE WAS ASKED FOR. If `LANCE_E2E_CATALOG_URL` is set the
-    operator has named a live target, and finding no Ray head at all is a FAILED INVOCATION, not a
-    pass — the same rule every `make e2e-*` target already states in its own guard.
+    A live drive that finds no head fails rather than skips: an operator who named a live target (`LANCE_E2E_CATALOG_URL`)
+    asked for a drive, and a suite that cannot find its target must not report the target fine.
     """
     kubectl = _kubectl()
-    active = subprocess.run(
-        [kubectl, "get", "rayservice", RAY_SERVICE, "-o", "jsonpath={.status.activeServiceStatus.rayClusterName}"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if active.returncode != 0 or not active.stdout.strip():
-        deploy = subprocess.run(
-            [kubectl, "get", "pod", "-l", f"app={RAY_HEAD_DEPLOY}", "-o", "jsonpath={.items[0].metadata.name}"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if deploy.returncode == 0 and deploy.stdout.strip():
-            return deploy.stdout.strip()
-        reason = f"no Ray head: rayservice {RAY_SERVICE!r} has no active cluster and no pod matches app={RAY_HEAD_DEPLOY!r}"
-        if CATALOG:
-            pytest.fail(f"{reason} — a live drive with no live target is a failed invocation, not a pass")
-        pytest.skip(reason)
     pods = subprocess.run(
-        [kubectl, "get", "pod", "-l", f"ray.io/cluster={active.stdout.strip()},ray.io/node-type=head", "-o", "jsonpath={.items[0].metadata.name}"],
+        [kubectl, "get", "pod", "-l", f"ray.io/cluster={RAY_CLUSTER},ray.io/node-type=head", "-o", "jsonpath={.items[0].metadata.name}"],
         capture_output=True,
         text=True,
         check=False,
     )
-    if pods.returncode != 0 or not pods.stdout.strip():
-        pytest.skip(f"no head pod for active cluster {active.stdout.strip()!r}")
-    return pods.stdout.strip()
+    if pods.returncode == 0 and pods.stdout.strip():
+        return pods.stdout.strip()
+    reason = f"no Ray head: no pod is the head of RayCluster {RAY_CLUSTER!r}"
+    if CATALOG:
+        pytest.fail(f"{reason} — a live drive with no live target is a failed invocation, not a pass")
+    pytest.skip(reason)
 
 
 def _exec_on_head(script: str, *, timeout: int = 300) -> str:
