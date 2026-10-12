@@ -1,5 +1,7 @@
 # 0140. The engine adapter runs in the compute service (2026-10-10)
 
+**Status:** Superseded by [ADR 0155](0155-the-lakehouse-is-the-catalog-and-its-governance.md): the lakehouse dispatches no engine work, and compute ships as its own release.
+
 **Status:** Superseded by [ADR 0155](0155-the-medallion-is-tier-governance-in-the-catalog.md): the lakehouse dispatches no work, so it reaches no engine adapter; compute ships in its own chart.
 
 Source: owner decision, 2026-10-10 grilling session (CP-054 #363, CP-056 #105 and its reviewed plan, amendment A1).
