@@ -51,6 +51,18 @@ cleanup() {
       esac
     done
     kubectl get jobs -o wide || true   # the OpenFGA migration is a post-install HOOK job — surface its state
+    # A failed hook Job's pod is Failed, not running, so the not-ready loop above never prints its log, and that log is
+    # the only account of why it failed.
+    for j in $(kubectl get jobs -o jsonpath='{range .items[?(@.status.failed)]}{.metadata.name}{"\n"}{end}' 2>/dev/null); do
+      echo "--- LOGS (failed job): $j"
+      kubectl logs "job/$j" --all-containers --tail=60 2>/dev/null || true
+    done
+    # Every credential a pod mounts arrives through an ExternalSecret from the dev store: a Secret that never appeared is
+    # a condition here, and the store's seed log says what it wrote.
+    kubectl get externalsecrets -o custom-columns='NAME:.metadata.name,READY:.status.conditions[0].status,REASON:.status.conditions[0].reason,MESSAGE:.status.conditions[0].message' 2>/dev/null || true
+    kubectl get secretstores -o wide 2>/dev/null || true
+    echo "--- LOGS: the dev store's seed"
+    kubectl logs "deploy/${RELEASE}-openbao" -c seed --tail=60 2>/dev/null || true
     echo "::endgroup::"
   fi
   if [ "${KEEP_STACK:-0}" != "1" ] && [ "${CI:-}" = "true" ]; then
