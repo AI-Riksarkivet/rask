@@ -13,8 +13,7 @@ a `BaseHTTPMiddleware` layer is refused outright (`service_kit.media.middleware`
 THE HOOK'S REACH IS THE `setup_otel` FAMILY, not the estate. It is a Python callable passed to
 `FastAPIInstrumentor.instrument_app`, so only an app that wires the SDK in process can install it —
 the five `make_service_app` services and the gateway. The eight the chart launches under
-`opentelemetry-instrument` carry the id in their logs and on no span; which family takes which OTel
-path is pinned by `tests/unit/test_the_app_roster_has_no_fifth_shape.py`.
+`opentelemetry-instrument` carry the id in their logs and on no span.
 
 PII STAYS OFF THE SPAN. The reference is explicit: "Don't put PII (email, raw user id, auth tokens) in
 span attributes — those go to the trace backend forever." The estate is clean there today and this

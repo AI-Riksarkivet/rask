@@ -1,4 +1,4 @@
-"""The no-transport guarantee: lineage without an endpoint NEVER crashes compute."""
+"""The no-crash guarantee: a transport failure is logged, never raised into the producer."""
 
 from __future__ import annotations
 
@@ -7,26 +7,8 @@ from typing import cast
 
 import pytest
 
-from lineage_kit import ClientEmitter, RunState, job_run, stage
+from lineage_kit import ClientEmitter, RunState
 from lineage_kit.schemas import Job, Run, RunEvent
-
-
-def test_full_pipeline_shape_runs_unlineaged_without_crashing(caplog: pytest.LogCaptureFixture) -> None:
-    # No endpoint, no injected emitter — the whole job→stage cycle must be a logged no-op.
-    @stage("layout")
-    def do_layout(x: int) -> int:
-        return x * 2
-
-    with caplog.at_level(logging.DEBUG, logger="lineage_kit.emitter"), job_run("ingest"):
-        assert do_layout(21) == 42
-
-    assert any("lineage_noop_drop" in record.message for record in caplog.records)
-
-
-def test_failing_pipeline_still_reraises_the_real_error_without_transport() -> None:
-    with pytest.raises(ValueError, match="the real error"), job_run("ingest"):
-        msg = "the real error"
-        raise ValueError(msg)
 
 
 def test_transport_failure_is_swallowed_and_logged(caplog: pytest.LogCaptureFixture) -> None:

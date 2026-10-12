@@ -1,56 +1,26 @@
-"""lineage-kit — the one compute-lineage layer (ruling R21).
+"""lineage-kit — OpenLineage emission and event signing for rask's producers.
 
-A light wrapper over ``openlineage-python`` giving every Ray plane (Ray Data pipeline
-stages, Ray actors, offline ``ray job submit`` / lance-ray drivers, and online Ray Serve
-deployments) ONE emission shape and one job→stage→actor parent/child run seam.
-
-Offline shape::
-
-    with job_run("ingest", inputs=[("s3", "source-bucket")]) as run:
-        layout(batch)                      # @stage("layout") — child run, auto-linked
-        Actor.remote(lineage_context=run.context.model_dump_json())  # or runtime_env env_vars=run.context.as_env()
-
-Online shape (Ray Serve)::
-
-    class Transcriber(LineageActorMixin):
-        def __init__(self) -> None:
-            self.init_lineage("transcribe")            # root run — replica lifetime
-        async def __call__(self, req) -> ...:
-            with self.lineage_task("request"):         # child run per request
-                ...
+A light wrapper over ``openlineage-python``: pydantic models of the OpenLineage run event
+(:mod:`lineage_kit.schemas`), an emitter that never crashes the producer
+(:func:`build_emitter`), deterministic run ids (:func:`run_id_for`), and the Ed25519 signing and
+verifying seam the lineage door checks (:mod:`lineage_kit.signing`).
 
 Transport is env-driven (``RASK_LINEAGE_ENDPOINT`` → HTTP; unset → logged no-op that
-never crashes compute). See ``config.LineageSettings``.
+never crashes the producer). See ``config.LineageSettings``.
 """
 
 from lineage_kit import metrics as metrics
-from lineage_kit.actor import LineageActorMixin
 from lineage_kit.config import LineageSettings
-from lineage_kit.consume import (
-    AUTHOR_RUN_FACET,
-    LANCE_RUN_FACET,
-    LINEAGE_DOC_SCHEMA,
-    DatasetRef,
-    LineageDoc,
-    LineageEdge,
-    as_json_rows,
-    parse_doc,
-)
-from lineage_kit.context import CONTEXT_ENV_VAR, LineageContext, coerce_context, current_context, resolve_context, use_context
 from lineage_kit.door import DoorMode, DoorVerdict, judge
 from lineage_kit.emitter import (
     ClientEmitter,
     Emitter,
     NoopEmitter,
     RecordingEmitter,
-    ambient_emitter,
     build_emitter,
-    default_emitter,
-    set_default_emitter,
-    use_emitter,
 )
 from lineage_kit.keys import PublishedKeys
-from lineage_kit.runs import LineageRun, job_run, run_id_for
+from lineage_kit.runs import run_id_for
 from lineage_kit.schemas import (
     BASE_FACET_SCHEMA_URL,
     DATASET_VERSION_FACET_SCHEMA_URL,
@@ -103,19 +73,14 @@ from lineage_kit.signing import (
     verify_control_signature,
     verify_signature,
 )
-from lineage_kit.stage import stage
 
 
 __all__ = [
-    "AUTHOR_RUN_FACET",
     "BASE_FACET_SCHEMA_URL",
-    "CONTEXT_ENV_VAR",
     "DATASET_VERSION_FACET_SCHEMA_URL",
     "DATASOURCE_FACET_SCHEMA_URL",
     "ERROR_MESSAGE_FACET_SCHEMA_URL",
     "JOB_TYPE_FACET_SCHEMA_URL",
-    "LANCE_RUN_FACET",
-    "LINEAGE_DOC_SCHEMA",
     "OUTPUT_STATISTICS_FACET_SCHEMA_URL",
     "PARENT_RUN_FACET_SCHEMA_URL",
     "PRODUCER",
@@ -127,7 +92,6 @@ __all__ = [
     "CanonError",
     "ClientEmitter",
     "Dataset",
-    "DatasetRef",
     "DatasetVersionFacet",
     "DatasourceFacet",
     "DoorMode",
@@ -137,11 +101,6 @@ __all__ = [
     "Job",
     "JobTypeJobFacet",
     "KeySourceUnavailableError",
-    "LineageActorMixin",
-    "LineageContext",
-    "LineageDoc",
-    "LineageEdge",
-    "LineageRun",
     "LineageSettings",
     "NoopEmitter",
     "OutputDataset",
@@ -163,29 +122,17 @@ __all__ = [
     "UnsignedEventError",
     "VerifiedSignature",
     "WireModel",
-    "ambient_emitter",
-    "as_json_rows",
     "attach_control_signature",
     "attach_signature",
     "author_of",
     "build_emitter",
     "canon_1",
-    "coerce_context",
     "control_signature_of",
-    "current_context",
     "custom_facet",
-    "default_emitter",
-    "job_run",
     "judge",
-    "parse_doc",
     "parse_published_keys",
-    "resolve_context",
     "run_id_for",
-    "set_default_emitter",
     "signature_of",
-    "stage",
-    "use_context",
-    "use_emitter",
     "verify_control_signature",
     "verify_signature",
 ]

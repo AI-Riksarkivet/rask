@@ -66,7 +66,7 @@ def _event(*, inputs: list[Dataset] | None = None, outputs: list[Dataset] | None
 
 
 class _Principal:
-    sub = "service-ingest"
+    sub = "service-pipeline"
 
 
 class _FakeFGA:

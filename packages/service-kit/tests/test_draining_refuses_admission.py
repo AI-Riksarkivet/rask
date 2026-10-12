@@ -7,9 +7,9 @@ sidecar-delivered. Dapr's own pub/sub delivery does not consult a readiness prob
 rolling deploy a pod that has begun shutting down keeps accepting cascade triggers and run
 submissions, starts work it cannot finish, and takes the run down with it.
 
-`docs/architecture/batch-processing-invariants.md` B6, verbatim: "Refuse new runs while draining — the flag exists, nothing
-reads it on admission." §6 rejected only the `POST /drain` ENDPOINT (a process-local flag cannot mean
-"this deployment is draining" behind a multi-replica Service) and adopted the admission half.
+`docs/RESILIENCE.md` ("Refuse new work while draining") states the invariant this pins. The design rejected only the
+`POST /drain` ENDPOINT (a process-local flag cannot mean "this deployment is draining" behind a multi-replica Service)
+and adopted the admission half.
 
 THE TWO ANSWERS ARE NOT INTERCHANGEABLE, which is why this is a dependency and not an `if`:
 
@@ -53,7 +53,7 @@ class TestThePredicate:
         assert draining(_request(shutting_down=True)) is True
 
     def test_an_app_that_never_set_the_flag_is_not_draining(self) -> None:
-        """Three services (ingest, compute, flows) set no lifecycle flags at all. They must read as
+        """An app that sets no lifecycle flags at all must read as
         SERVING — defaulting an unset flag to "draining" would take them permanently out of service
         the moment this dependency was applied."""
         app = FastAPI()

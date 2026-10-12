@@ -92,7 +92,7 @@ def _window_seconds(policy: dict[str, Any]) -> float:
 @pytest.fixture(scope="module")
 def rendered() -> list[dict[str, Any]]:
     """Every chart document, with the pub/sub resiliency plane switched on."""
-    raw = _helm_template("dapr.enabled=true", "dapr.resiliency.enabled=true", "medallion.enabled=true")
+    raw = _helm_template("dapr.enabled=true", "dapr.resiliency.enabled=true")
     return [doc for doc in yaml.safe_load_all(raw) if doc]
 
 
@@ -121,17 +121,17 @@ def test_a_policy_that_sets_duration_uses_the_policy_that_READS_it(retry_policie
     assert not mismatched, f"these policies set `duration` under a policy that ignores it: {mismatched}"
 
 
-def test_the_cascade_retry_window_survives_a_dependency_restart(retry_policies: dict[str, dict[str, Any]]) -> None:
+def test_the_pubsub_retry_window_survives_a_dependency_restart(retry_policies: dict[str, dict[str, Any]]) -> None:
     """The pub/sub window must outlive the restart of something the handler depends on.
 
-    This is the row's own measurement in gate form. A delivery that gives up in 3.5 seconds parks a
-    cascade trigger for any blip longer than a blink — and parking is terminal: `/dlq-event` ERROR-logs
-    and ACKs, deliberately never re-queues, so the stage only runs again if a human replays it.
+    This is the row's own measurement in gate form. A delivery that gives up in 3.5 seconds parks an
+    event for any blip longer than a blink — and parking is terminal: the dead-letter route ERROR-logs
+    and ACKs, deliberately never re-queues, so the event is handled again only if a human replays it.
     """
     window = _window_seconds(retry_policies["pubsubDeliveryRetry"])
 
     assert window >= MINIMUM_USEFUL_WINDOW_SECONDS, (
-        f"the cascade retry window is {window:.2f}s, under the {MINIMUM_USEFUL_WINDOW_SECONDS:.0f}s a dependency restart needs; "
+        f"the pub/sub retry window is {window:.2f}s, under the {MINIMUM_USEFUL_WINDOW_SECONDS:.0f}s a dependency restart needs; "
         f"rendered policy: {retry_policies['pubsubDeliveryRetry']}"
     )
 

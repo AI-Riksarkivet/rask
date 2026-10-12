@@ -523,18 +523,16 @@ TWO INDEPENDENT lineage paths exist and they are easy to confuse:
 
   1. Dapr pub/sub — what maintenance and the catalog use TODAY
      (<APP>_LINEAGE_TOPIC → NATS → the lineage service's subscriber). Wired separately.
-  2. lineage-kit's `LineageRun` / `@stage` / actor machinery — the DECORATABLE seam meant for the Ray
-     Data pipeline (P7b). It resolves its transport through `LineageRun.emitter` → `default_emitter()`
-     → `build_emitter()`, which reads RASK_LINEAGE_ENDPOINT.
+  2. lineage-kit's HTTP transport — a producer builds its emitter with `build_emitter()`, which reads
+     RASK_LINEAGE_ENDPOINT.
 
 Path 2's failure mode is silent by construction: with no endpoint, `build_emitter` logs ONE
 `log.warning("lineage_http_without_endpoint …")` at startup and returns `NoopEmitter`, which then
 drops every event at DEBUG. A pipeline emitting into a no-op is indistinguishable, from outside,
 from a pipeline that never emitted — the graph is simply empty and everything reports success.
 
-So the transport is rendered BEFORE anything emits through it, for the same reason the `parent` facet
-is parsed before anything emits one: the arrival of the first real actor run must not be the moment
-we discover the wire was never connected. Points at the lineage service's HTTP ingest
+So the transport is rendered BEFORE anything emits through it: the first real run must not be the
+moment we discover the wire was never connected. Points at the lineage service's HTTP ingest
 (`POST /api/v1/lineage` — services/lineage/api/v1/endpoints/ingest.py), which is the same graph the
 Dapr subscriber writes to, so both paths converge.
 

@@ -8,20 +8,12 @@ behind the small ``SourceAdapter`` protocol so no provider code leaks into the p
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
-
-if TYPE_CHECKING:
-    import lance
-
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, Protocol
 
 import pyarrow.fs as pafs
 from pydantic import BaseModel
-
-from service_kit.lancekit.arrow_ipc import encode_arrow_stream
 
 
 class SourceObject(BaseModel):
@@ -165,76 +157,3 @@ class S3FileSystemSource:
             except OSError as exc:  # name the object so a single unreadable key is diagnosable
                 raise RuntimeError(f"failed to read source object {info.path!r}") from exc
             yield SourceObject(uri=f"s3://{info.path}", data=data)
-
-
-class LanceFragmentSource:
-    """A :class:`VersionedKeyedSourceAdapter` over an UNGOVERNED ``.lance`` dataset — one unit per FRAGMENT.
-
-    The ingest-run form of "land an existing Lance table": ``POST /v1/table/{id}/register`` already makes
-    an existing table governed in place, so this exists for the other case — reading an ungoverned dataset
-    THROUGH the bronze plane, so the rows arrive with provenance, an anti-join and a cascade behind them.
-
-    **The unit is a fragment, and that is a correctness choice, not a convenience.** The obvious grain is
-    a row range, and the Lance docs refuse it: offsets "are not stable — a row with an offset of N may
-    have a different offset in a different version of the table (e.g. if an earlier row is deleted)"
-    (``lance_sdk.md``). This plane folds a unit key into the bronze row identity precisely so a re-run
-    CONVERGES, so offset keys would re-land a table's whole tail after any early delete — the duplication
-    the anti-join exists to prevent. Fragment ids are the stable alternative the format guarantees:
-    ``row_address = (fragment_id << 32) | local_row_offset`` and ``ReserveFragments`` "only changes the
-    max fragment id" (``file_format.md``), so ids are reserved and monotonic and never renumbered.
-
-    The payload is the fragment's rows as an **Arrow IPC stream** — opaque bytes in bronze's blob column.
-    That is what keeps the platform ignorant of the source's schema: any table, any modality, no column
-    name known here. The reader is whatever consumes bronze, exactly as for a TIFF or a WAV.
-
-    ``lance`` is imported lazily on purpose: ``service-kit`` is the dependency-light platform library, and
-    a module-level import would put pylance in every service that imports anything from it.
-    """
-
-    def __init__(self, uri: str, storage_options: dict[str, str] | None = None, *, session: lance.Session | None = None) -> None:
-        self._uri = uri
-        self._storage_options = storage_options
-        # INJECTED, never fetched: `shared_lance_session()` is defined once per SERVICE from that
-        # service's own caps, and this library has no settings to read. `None` is pylance's own default,
-        # so a caller without one behaves exactly as before.
-        self._session = session
-
-    def _dataset(self) -> Any:  # noqa: ANN401 — lance.LanceDataset, unimportable at module scope by design
-        import lance
-
-        return lance.dataset(self._uri, storage_options=self._storage_options, session=self._session)
-
-    def _key(self, fragment_id: int) -> str:
-        """``<uri>#fragment=<id>`` — the dataset names the provenance, the fragment names the unit."""
-        return f"{self._uri}#fragment={fragment_id}"
-
-    def probe(self) -> int:
-        """Open the dataset and count its fragments; raises if it cannot be read.
-
-        The ACCEPT-time half of the plan's second guard. A source that cannot be opened must be refused
-        while the caller is still holding the request, not discovered by a worker that has already
-        claimed a unit and then has nothing to fetch.
-        """
-        return len(self._dataset().get_fragments())
-
-    def iter_keys(self) -> Iterator[str]:
-        """One key per fragment, in the dataset's own fragment order — no data read."""
-        for fragment in self._dataset().get_fragments():
-            yield self._key(fragment.fragment_id)
-
-    def iter_versioned_keys(self) -> Iterator[tuple[str, str | None]]:
-        """``(key, dataset_version)``.
-
-        A fragment's id is stable but its CONTENT is not — a delete rewrites its deletion vector and
-        leaves the id alone — so the key cannot identify what was ingested. The dataset version can, and
-        it is free: one read of the manifest already open.
-        """
-        dataset = self._dataset()
-        token = str(dataset.version)
-        for fragment in dataset.get_fragments():
-            yield self._key(fragment.fragment_id), token
-
-    def iter_objects(self) -> Iterator[SourceObject]:
-        for fragment in self._dataset().get_fragments():
-            table = fragment.to_table()
-            yield SourceObject(uri=self._key(fragment.fragment_id), data=encode_arrow_stream(table))

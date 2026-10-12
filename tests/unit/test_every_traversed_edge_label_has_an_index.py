@@ -25,11 +25,6 @@ grows with the node's own degree. `age.py` names exactly this (an unbounded walk
 why a pooled connection cannot be pinned, and an unbounded correlated walk OOM-killed the AGE container
 on 2026-09-15.
 
-THE ASSERTION IS DERIVED, NOT LITERAL — it reads the traversed labels out of `cypher.py`'s own source,
-so a NEW edge label fails here rather than silently shipping a full-table walk, and renaming one cannot
-leave a stale literal passing. This mirrors `test_a_sorted_run_property_has_an_index.py`, which is the
-same gate for the vertex half.
-
 INDEXED ON THE ENDPOINT COLUMNS, NOT ON A PROPERTY: `start_id`/`end_id` are real Postgres columns on
 AGE's edge tables, so these are plain btree indexes rather than the `agtype_access_operator` functional
 form the vertex keys need. Both directions are indexed because the traversals go both ways — `/upstream`

@@ -1,7 +1,7 @@
 [project]
 name = "lineage-kit"
 version = "0.1.0"
-description = "The one compute-lineage layer (R21): pydantic OpenLineage emission shapes + job→stage→actor run seams for Ray Data pipelines, Ray actors, and Ray Serve deployments."
+description = "OpenLineage emission and event signing for rask's producers: pydantic run-event models, a never-raising emitter, deterministic run ids and the Ed25519 signing seam."
 requires-python = ">=3.13"
 license = "Apache-2.0"
 dependencies = [

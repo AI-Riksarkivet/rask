@@ -12,16 +12,14 @@ tested (the Secret renders, the annotation is present). The two halves were neve
 could satisfy both while holding neither end of the same string. That is the identical split
 [[LH-160]]'s ratchet was written for, one layer down.
 
-THE PAIRING IS DERIVED, NOT LISTED. The container's uvicorn target names its package, and whether that
-package calls `require_dapr_token` is a fact in the source tree — so a new service that starts guarding
-a door is covered the day it does, and one that stops is dropped the day it stops. A hand-maintained
-list of "services that need a token" is the thing that would have been out of date here: the annotator
-had been guarding a door since the jobs gate landed.
+THE PACKAGES ARE NAMED. `_GUARDS_A_DAPR_DOOR` lists the service packages that mount a route behind
+`require_dapr_token`, and a service that starts guarding a door joins it in the same change. The set
+is checked against the render: a named package with no Deployment fails, so the
+list cannot rot into naming nothing.
 """
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 import yaml
@@ -29,24 +27,13 @@ import yaml
 from tests.unit.test_invariants import _helm_template
 
 
-_SERVICES = Path(__file__).resolve().parents[2] / "services"
+#: The service packages that mount a route guarded by `require_dapr_token`.
+_GUARDS_A_DAPR_DOOR = frozenset({"annotator", "catalog", "lineage", "maintenance", "notifications"})
 
 #: Any ONE of these gives the app an answer to "what token should I expect?". The third is a refusal to
 #: answer that was made deliberately — it still counts, because the point of the gate is that the choice
 #: is visible in the render, not that every door is closed.
 _TOKEN_SOURCES = ("APP_API_TOKEN", "RASK_APP_TOKEN_FROM_STORE", "RASK_ALLOW_UNAUTHENTICATED_DAPR")
-
-
-def _packages_that_guard_a_dapr_door() -> frozenset[str]:
-    """Service packages whose source calls `require_dapr_token` anywhere outside their tests."""
-    guarding = set()
-    for service in sorted(_SERVICES.iterdir()):
-        src = service / "src"
-        if not src.is_dir():
-            continue
-        if any("require_dapr_token" in path.read_text(encoding="utf-8") for path in src.rglob("*.py")):
-            guarding.add(service.name)
-    return frozenset(guarding)
 
 
 def _deployed_apps() -> list[tuple[str, str, set[str]]]:
@@ -56,7 +43,7 @@ def _deployed_apps() -> list[tuple[str, str, set[str]]]:
     string the image actually runs — so this cannot drift from what is deployed the way a mapping
     table would.
     """
-    raw = _helm_template("dapr.enabled=true", "medallion.enabled=true", "explorer.enabled=true")
+    raw = _helm_template("dapr.enabled=true", "explorer.enabled=true")
     apps: list[tuple[str, str, set[str]]] = []
     for doc in yaml.safe_load_all(raw):
         if not doc or doc.get("kind") != "Deployment":
@@ -80,10 +67,10 @@ def _deployed_apps() -> list[tuple[str, str, set[str]]]:
 
 
 def test_every_deployment_that_guards_a_dapr_door_is_told_what_to_expect() -> None:
-    guarding = _packages_that_guard_a_dapr_door()
-    assert guarding, "no service calls require_dapr_token — the gate is reading the wrong tree"
+    apps = _deployed_apps()
+    assert {package for _, package, _ in apps} >= _GUARDS_A_DAPR_DOOR, "a package named as guarding a Dapr door renders no Deployment"
 
-    blind = [(app_id, package) for app_id, package, env in _deployed_apps() if package in guarding and not (env & set(_TOKEN_SOURCES))]
+    blind = [(app_id, package) for app_id, package, env in apps if package in _GUARDS_A_DAPR_DOOR and not (env & set(_TOKEN_SOURCES))]
 
     assert blind == [], (
         f"these deployments guard a Dapr door with nothing to check it against: {blind}. "

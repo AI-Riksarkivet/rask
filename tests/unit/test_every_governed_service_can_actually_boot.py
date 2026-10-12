@@ -11,10 +11,9 @@ change that is documented as safe. Measured while writing this: the first pass g
 and the medallion producer and missed lineage, which inlines its own copy of `governedOidcEnv`
 instead of including the helper, so a grep for the helper could not see it.
 
-THE SERVICE LIST IS DISCOVERED, NOT WRITTEN DOWN. A hand-maintained list is exactly what fails here:
-the next service wired to the assertion is the one nobody adds, and it fails only under the profile
-nobody renders in CI. So this greps the sources for the call and demands the chart answer for each —
-wiring a new service without its env now reds this test rather than the estate.
+THE SERVICES ARE NAMED. `REFUSE_TO_BOOT_UNAUTHENTICATED` lists the services whose boot calls the
+assertion, and a service wired to it joins the list in the same change. A named service with no
+Deployment in the render fails, so the list cannot rot into naming nothing.
 
 WHAT IT DOES NOT ASSERT: which answer. A service may be authenticated or may be declared open; both
 are legitimate and the choice belongs to the values. What is never legitimate is neither.
@@ -33,20 +32,11 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from test_invariants import _rendered_docs  # noqa: E402
 
 
-REPO = pathlib.Path(__file__).resolve().parents[2]
 #: The env either of which lets a governed service start. `assert_authentication_configured` accepts
 #: OIDC being on, or an explicit acknowledgement that it is deliberately off.
 SATISFIES = ("RASK_OIDC_ENABLED", "RASK_INSECURE_ALLOW_UNAUTHENTICATED")
-
-
-def _services_that_refuse_to_boot_unauthenticated() -> set[str]:
-    """The services whose boot calls the assertion, read off the source rather than a list."""
-    found: set[str] = set()
-    for path in (REPO / "services").rglob("*.py"):
-        if "/tests/" in str(path) or "assert_authentication_configured(" not in path.read_text():
-            continue
-        found.add(path.relative_to(REPO / "services").parts[0])
-    return found
+#: The services whose boot calls `assert_authentication_configured`.
+REFUSE_TO_BOOT_UNAUTHENTICATED = ("catalog", "lineage")
 
 
 def _deployments_of(service: str, docs: list[dict]) -> list[dict]:
@@ -59,8 +49,10 @@ def test_every_such_service_is_given_an_answer_by_the_chart(auth_enabled: str) -
     docs = _rendered_docs(f"auth.enabled={auth_enabled}")
     unanswered: list[str] = []
 
-    for service in sorted(_services_that_refuse_to_boot_unauthenticated()):
-        for deployment in _deployments_of(service, docs):
+    for service in REFUSE_TO_BOOT_UNAUTHENTICATED:
+        deployments = _deployments_of(service, docs)
+        assert deployments, f"{service} renders no Deployment"
+        for deployment in deployments:
             env = {e["name"] for container in deployment["spec"]["template"]["spec"]["containers"] for e in (container.get("env") or [])}
             if not env & set(SATISFIES):
                 unanswered.append(deployment["metadata"]["name"])

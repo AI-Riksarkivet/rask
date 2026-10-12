@@ -63,16 +63,15 @@ class RunState(StrEnum):
     OTHER = "OTHER"
 
 
-#: States after which a run must not emit again (enforced by ``LineageRun``).
+#: The terminal run states: a run emits at most one of them.
 TERMINAL_STATES = frozenset({RunState.COMPLETE, RunState.ABORT, RunState.FAIL})
 
 
 class WireModel(BaseModel):
     """Base: alias-tolerant (wire keys OR pythonic names), ignores unknown wire keys.
 
-    PUBLIC, because it is inherited across a module boundary: :mod:`lineage_kit.consume`'s exported
-    models are built on it, and an adopter authoring its own consume-side shape needs the same wire
-    tolerance. It was ``WireModel``, whose underscore promised a privacy the package did not keep.
+    PUBLIC, because it is inherited across a module boundary: an adopter authoring its own
+    consume-side shape needs the same wire tolerance.
     """
 
     model_config = ConfigDict(populate_by_name=True, extra="ignore")

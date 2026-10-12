@@ -41,8 +41,7 @@ from lineage_kit import (
     custom_facet,
     run_id_for,
 )
-from lineage_kit.context import LineageContext
-from lineage_kit.schemas import DatasetFacets, OutputDatasetFacets, RunFacets
+from lineage_kit.schemas import DatasetFacets, JobRef, OutputDatasetFacets, ParentRunFacet, RootRef, RunFacets, RunRef
 
 
 _JOB_RUN_ID = "3f2504e0-4f89-11d3-9a0c-0305e82c3301"
@@ -52,9 +51,10 @@ _EVENT_TIME = "2026-07-27T09:00:00+00:00"
 
 def _full_event() -> RunEvent:
     """An event exercising every first-class facet plus a custom passthrough facet."""
-    parent = LineageContext.root(namespace="rask", job_name="ingest", run_id=_JOB_RUN_ID)
+    job = JobRef(namespace="rask", name="ingest")
+    parent = ParentRunFacet(run=RunRef(run_id=_JOB_RUN_ID), job=job, root=RootRef(run=RunRef(run_id=_JOB_RUN_ID), job=job))
     facets = RunFacets(
-        parent=parent.parent_facet(),
+        parent=parent,
         error_message=ErrorMessageRunFacet(message="ValueError: boom"),
         rask=custom_facet(chunk_id="c-17"),  # extra="allow" carries custom facets through
     )
@@ -118,7 +118,7 @@ def test_round_trip_through_the_official_serializer() -> None:
 def test_job_facets_survive_to_wire_and_back() -> None:
     # The lineage consumer reads job facets today (sourceCodeLocation, ownership) —
     # the shape must carry them verbatim, never silently drop them.
-    source = custom_facet(type="git", url="https://github.com/Borg93/rask", path="services/medallion")
+    source = custom_facet(type="git", url="https://github.com/Borg93/rask", path="runners/dummy")
     event = RunEvent(
         event_type=RunState.COMPLETE,
         event_time=_EVENT_TIME,

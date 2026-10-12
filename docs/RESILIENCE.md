@@ -193,7 +193,9 @@ test that fails without it:
 - **Randomise iteration order.** The maintenance sweep shuffles its dataset list and its failure-retry list
   (`maintenance/services/sweep.py`), so a dataset that fails every pass cannot starve the ones listed after it.
   Deleting the shuffle passes every functional test, which is why
-  `tests/unit/test_batch_invariants_are_actually_guarded.py` pins it.
+  `services/maintenance/tests/test_the_planner_does_not_hand_out_datasets_in_listing_order.py` (the dataset list) and
+  `tests/unit/test_maintenance_lineage.py::test_emit_sweep_lineage_caps_fail_emits_and_logs_the_drop` (the capped
+  failure list) pin it.
 
 ## Prod hardening backlog (delegate-to-platform — NOT dev-blocking)
 

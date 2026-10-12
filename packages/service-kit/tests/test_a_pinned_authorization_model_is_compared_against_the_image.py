@@ -40,7 +40,7 @@ from service_kit.governed.auth_lifespan import build_fga_client
 IMAGE_MODEL: dict[str, Any] = {
     "schema_version": "1.1",
     "type_definitions": [
-        {"type": "warehouse", "relations": {"owner": {"this": {}}, "event_stager": {"this": {}}}},
+        {"type": "warehouse", "relations": {"owner": {"this": {}}, "maintainer": {"this": {}}}},
         {"type": "table", "relations": {"owner": {"this": {}}}},
     ],
     "conditions": {},
@@ -84,15 +84,15 @@ def _image(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.mark.asyncio
 async def test_a_relation_the_image_defines_and_the_pin_does_not_is_NAMED() -> None:
-    """THE LIVE SHAPE, from the pinned side: `warehouse#event_stager` ships in the image and the store
-    is pinned to a model without it. Under a pin nothing writes, so the relation simply never exists and
+    """THE MEASURED SHAPE, from the pinned side: a relation ships in the image and the store is pinned
+    to a model without it. Under a pin nothing writes, so the relation simply never exists and
     every door that needs it errors."""
     _PinnedClient.model = _pinned(_typedef("warehouse", {"owner": {"this": {}}}), _typedef("table", {"owner": {"this": {}}}))
 
     drift = await fga.audit_pinned_model(cast(OpenFgaClient, _PinnedClient()), store_id="store-1", model_id="model-PINNED")
 
     assert drift.drifted
-    assert "warehouse#event_stager" in drift.absent_from_pin, drift
+    assert "warehouse#maintainer" in drift.absent_from_pin, drift
     assert drift.absent_from_image == (), "the image defines everything the pin does here — reporting a loss would be a false alarm"
 
 
@@ -102,14 +102,14 @@ async def test_a_relation_REDEFINED_in_place_is_reported_even_though_both_names_
     silently redefined relation is the change most likely to alter who may do what without altering any
     name. `_body_changes` is the half that sees it."""
     _PinnedClient.model = _pinned(
-        _typedef("warehouse", {"owner": {"this": {}}, "event_stager": {"computedUserset": {"relation": "owner"}}}),
+        _typedef("warehouse", {"owner": {"this": {}}, "maintainer": {"computedUserset": {"relation": "owner"}}}),
         _typedef("table", {"owner": {"this": {}}}),
     )
 
     drift = await fga.audit_pinned_model(cast(OpenFgaClient, _PinnedClient()), store_id="store-1", model_id="model-PINNED")
 
     assert drift.drifted
-    assert "warehouse#event_stager" in drift.redefined, drift
+    assert "warehouse#maintainer" in drift.redefined, drift
     assert drift.absent_from_pin == () and drift.absent_from_image == (), "the names all match — only the body differs"
 
 
