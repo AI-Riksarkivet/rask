@@ -560,10 +560,14 @@ securityContext:
 {{- if and $v.medallion.enabled (eq $door "catalog" "lineage") -}}
 {{- range $v.medallion.stageRunners }}{{- $_ := set $m (printf "%s%s" $sa .name) (required (printf "medallion.stageRunners[%s].serviceIdentity is blank" .name) .serviceIdentity) }}{{- end -}}
 {{- end -}}
+{{- if and $v.medallion.enabled (eq $door "compute") (include "lance.outOfProcessEngine" $root) -}}
+{{- $_ := set $m (printf "%smedallion-producer" $sa) $v.medallion.producer.serviceIdentity -}}
+{{- range $v.medallion.stageRunners }}{{- $_ := set $m (printf "%s%s" $sa .name) .serviceIdentity }}{{- end -}}
+{{- end -}}
 {{- if and $v.maintenance.enabled (eq $door "catalog") -}}
 {{- $_ := set $m (printf "%smaintenance" $sa) (required "maintenance.catalogServiceIdentity is blank" $v.maintenance.catalogServiceIdentity) -}}
 {{- end -}}
-{{- if or (eq $door "lineage") (and (eq $door "stage" "producer") $v.medallion.enabled $v.medallion.ray) -}}
+{{- if or (eq $door "lineage") (and (eq $door "stage" "producer") $v.medallion.enabled (include "lance.outOfProcessEngine" $root)) -}}
 {{- with $v.ray.engineServiceAccount }}{{- $_ := set $m (printf "system:serviceaccount:%s:%s" $root.Release.Namespace .) (required "medallion.train.trainerIdentity is blank" $v.medallion.train.trainerIdentity) }}{{- end -}}
 {{- end -}}
 {{- if eq $door "lineage" -}}
@@ -842,7 +846,7 @@ scoped_secret() {
 {{- if $v.maintenance.enabled }}{{- $s = append $s (dict "id" $v.maintenance.catalogServiceIdentity "app" $v.maintenance.daprAppId "role" "maintenance") }}{{- end -}}
 {{- if $v.medallion.enabled }}
 {{- $s = append $s (dict "id" $v.medallion.producer.serviceIdentity "app" $v.medallion.producer.daprAppId "role" "medallion_producer") }}
-{{- range $v.medallion.stageRunners }}{{- $s = append $s (dict "id" .serviceIdentity "app" .daprAppId "role" (ternary "medallion_stage_runner" "" (and $v.medallion.ray $v.medallion.compute $v.catalog.controlEmit))) }}{{- end }}
+{{- range $v.medallion.stageRunners }}{{- $s = append $s (dict "id" .serviceIdentity "app" .daprAppId "role" (ternary "medallion_stage_runner" "" (and (not (not (include "lance.outOfProcessEngine" $))) $v.medallion.compute $v.catalog.controlEmit))) }}{{- end }}
 {{- end -}}
 {{- with (get (($v.services.ingest).env | default dict) "RASK_LINEAGE_SERVICE_IDENTITY") }}
 {{- if or ($v.services.ingest).frontDoor $v.singleTenant.enabled }}{{- $s = append $s (dict "id" . "app" "ingest") }}{{- end }}
@@ -926,8 +930,8 @@ keys_shaped() { case "$1" in *,) return 1 ;; *,*) pub_shaped "${1%%,*}" && pub_s
 {{- define "rask.rayDashboardUrl" -}}
 {{- if .Values.ray.dashboardUrl -}}
 {{- .Values.ray.dashboardUrl -}}
-{{- else if and .Values.medallion.enabled .Values.medallion.ray -}}
-{{- fail "medallion.ray submits to a Ray engine this render does not name: set ray.dashboardUrl to the engine's Ray dashboard. rask installs no Ray (ADR 0153); in development the ray-cluster fixture serves http://rask-ray-head-svc:8265 (deploy/fixtures)." -}}
+{{- else if include "lance.outOfProcessEngine" . -}}
+{{- fail "services.compute.engines enables an engine on a Ray cluster this render does not name: set ray.dashboardUrl to the engine's Ray dashboard. rask installs no Ray (ADR 0153); in development the ray-cluster fixture serves http://rask-ray-head-svc:8265 (deploy/fixtures)." -}}
 {{- end -}}
 {{- end -}}
 
@@ -937,4 +941,23 @@ keys_shaped() { case "$1" in *,) return 1 ;; *,*) pub_shaped "${1%%,*}" && pub_s
 {{- else -}}
 {{- include "rask.rayDashboardUrl" . -}}
 {{- end -}}
+{{- end -}}
+
+{{/* CP-056: "an out-of-process engine is configured" — non-empty iff some `services.compute.engines.*` is enabled. The
+one predicate every lakehouse site gates the planned-run lane on (the plan, its outcome door, its sweep, its announcement). */}}
+{{- define "lance.outOfProcessEngine" -}}
+{{- range $n, $e := ((.Values.services.compute).engines | default dict) }}{{ if $e.enabled }}{{ $n }}{{ end }}{{ end -}}
+{{- end -}}
+
+{{/* MEDALLION_ENGINES: each enabled engine as the planners invoke it (app-id `compute`, the `rask-compute` token), with
+its tasks minus their commands when the caller registers them. A Ray engine's build is the Ray image.
+Call: include "lance.medallionEngines" (list $root <with-tasks>). */}}
+{{- define "lance.medallionEngines" -}}
+{{- $root := index . 0 -}}{{- $out := dict -}}
+{{- range $n, $e := (($root.Values.services.compute).engines | default dict) }}{{- if $e.enabled }}
+{{- $b := dict "app_id" "compute" "token_file" "/var/run/secrets/rask/identity/rask-compute/token" "capabilities" ($e.capabilities | default list) "code_version" ($e.codeVersion | default "") }}
+{{- if index $ 1 }}{{- $t := list }}{{- range $e.tasks }}{{- $t = append $t (omit . "command") }}{{- end }}{{- $_ := set $b "tasks" $t }}{{- end }}
+{{- $_ := set $out $n $b }}
+{{- end }}{{- end -}}
+{{- toJson $out -}}
 {{- end -}}

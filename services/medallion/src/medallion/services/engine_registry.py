@@ -1,108 +1,85 @@
-"""Name -> adapter. The seam that turns a chosen engine into the thing that runs it.
+"""Name -> adapter: the seam that turns a chosen engine into the thing that runs it (CP-056).
 
-`engine_choice.engine_for` answers with a STRING, and until this module landed nothing turned that
-string into an `Executor`: measured 2026-09-07, `InProcessExecutor` was constructed by hand at one call
-site, the port's Ray adapter was constructed nowhere outside tests, and the deployed lane reached Ray
-through a second, older submission seam the port did not sit in front of. Choice and execution were two
-mechanisms that happened to agree.
+Two kinds of engine and no third. The in-process reference engine is this plane's own; every other engine is a key
+of the deployment's `MEDALLION_ENGINES`, reached through `service_kit.lakehouse.engine_door.InvokedExecutor`, which
+names no engine. So a new engine is a new deployment entry and a new app, never an edit here, and the lakehouse
+imports no engine adapter (the `the-lakehouse-knows-no-engine` import contract).
 
-A REGISTRY RATHER THAN A CONDITIONAL, because a conditional is the thing a port exists to stop: with
-one, adding an engine means editing a branch every caller shares. Here a new engine is a new adapter
-and a new row, and `resolve_task_registration` already refuses a task registered for an engine this
-deployment does not host — the refusal path existed and only the resolution was missing.
-
-CONSTRUCTION ARGUMENTS DIFFER PER ADAPTER AND THAT IS NOT A LEAK. `InProcessExecutor` needs the
-credential resolver because it holds the Lance handle itself; `RayJobsApiExecutor` needs neither — it
-addresses one dashboard host and carries no credential, because the Ray pods hold their own. Its only
-constructor argument is an optional `httpx.AsyncClient`, injected for tests and pooled in production so
-a client per submission cannot leak connections. So each adapter is built from what IT needs.
+ONE POOLED HTTP CLIENT PER PROCESS for every invoked engine (`production-patterns.md`: one client per process). It is
+built on first use, on the planner's own loop, and closed by `close_executors` from each planner's shutdown.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
-from typing import Any
+import asyncio
+from contextlib import suppress
+from typing import TYPE_CHECKING
 
-from medallion.services.engine_names import IN_PROCESS_ENGINE, RAY_ENGINE
-from service_kit.lakehouse.executor import Executor
+import httpx
+
+from medallion.services.engine_names import IN_PROCESS_ENGINE
+from service_kit.lakehouse.engine_door import InvokedExecutor
+
+
+if TYPE_CHECKING:
+    from medallion.core.config import MedallionSettings
+    from service_kit.lakehouse.executor import Executor
 
 
 class UnknownEngineError(RuntimeError):
-    """A declared engine no adapter answers to.
+    """A declared engine this deployment hosts no adapter for.
 
-    RAISED, never defaulted: falling back to whichever engine happens to be configured is how a
-    declaration meant for another executor gets silently run here, which is the failure
-    `engine_choice` already refuses at declaration time. A default would reopen it at resolution time.
+    RAISED, never defaulted: falling back to whichever engine happens to be configured is how a declaration meant for
+    another plane gets silently run here, which `engine_choice` already refuses at declaration time.
     """
 
 
-def _as_callable(storage_options: Callable[[], dict[str, str]] | Mapping[str, str]) -> Callable[[], dict[str, str]]:
-    """A resolver, from either a resolver or a fixed mapping.
+_client: httpx.AsyncClient | None = None
+_client_loop: asyncio.AbstractEventLoop | None = None
 
-    The in-process adapter takes a CALLABLE on purpose — credentials are resolved per run, and a value
-    captured at construction would be as old as the process. A mapping is accepted for a caller that
-    genuinely has no vending step (a test, a local drive) and is wrapped rather than special-cased.
+
+def _engine_client(timeout_seconds: float) -> httpx.AsyncClient:
+    """The process's one client to the engine apps, rebuilt only if its event loop is not the running one.
+
+    A client's pooled connections belong to the loop that opened them, so one carried onto another loop fails with
+    "Event loop is closed"; a service runs one loop, so this builds once. No await between the check and the set.
     """
-    if isinstance(storage_options, Mapping):
-        # Narrowed on the MAPPING, not on `callable()`: a Mapping may itself be callable, so the
-        # negative test leaves the union intact and the resolver's type becomes a guess.
-        fixed = dict(storage_options)
-        return lambda: fixed
-    return storage_options
+    global _client, _client_loop
+    try:
+        loop: asyncio.AbstractEventLoop | None = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+    if _client is None or _client.is_closed or _client_loop is not loop:
+        _client = httpx.AsyncClient(timeout=timeout_seconds)
+        _client_loop = loop
+    return _client
 
 
-def executor_for(
-    engine: str,
-    *,
-    storage_options: Callable[[], dict[str, str]] | Mapping[str, str],
-    config: Mapping[str, Any] | None = None,
-) -> Executor:
-    """The adapter that runs `engine`, or `UnknownEngineError`.
+def hosted_engines(settings: MedallionSettings) -> frozenset[str]:
+    """The engines THIS DEPLOYMENT runs: the in-process one, and every engine its configuration names."""
+    return frozenset({IN_PROCESS_ENGINE, *settings.engines})
 
-    `config` carries the engine's DEPLOYMENT facts (for Ray: which cluster, which namespace, which
-    Kueue queue). It is per-engine by nature and this module does not interpret it.
-    """
+
+def executor_for(settings: MedallionSettings, engine: str) -> Executor:
+    """The adapter that runs ``engine``, or `UnknownEngineError`."""
     if engine == IN_PROCESS_ENGINE:
         from medallion.services.inprocess_executor import InProcessExecutor
 
-        return InProcessExecutor(_as_callable(storage_options))
-    if engine == RAY_ENGINE:
-        from medallion.services.rayjobs_api_executor import RayJobsApiExecutor
-
-        # `config` is not forwarded: this adapter submits to the STANDING cluster the lane's pooled
-        # client already addresses, so there is no per-engine deployment fact to interpret. A CR-shaped
-        # adapter would need one (namespace, queue, cluster selector) — this one does not, and taking a
-        # config it ignores would advertise a knob that does nothing.
-        return RayJobsApiExecutor()
-    raise UnknownEngineError(
-        f"no executor is registered for engine {engine!r}; this deployment hosts {sorted(hosted_engines())}. "
-        "A task registered for another engine belongs to another deployment and is refused rather than run here."
-    )
+        return InProcessExecutor(settings.storage_options)
+    binding = settings.engines.get(engine)
+    if binding is None:
+        raise UnknownEngineError(
+            f"no executor is registered for engine {engine!r}; this deployment hosts {sorted(hosted_engines(settings))}. "
+            "A task registered for another engine belongs to another deployment and is refused rather than run here."
+        )
+    return InvokedExecutor(engine, binding, _engine_client(settings.engine_request_timeout_seconds), dapr_http_port=settings.dapr_http_port)
 
 
 async def close_executors() -> None:
-    """Release what the adapters hold for the process; a planner's lifespan calls it once, at shutdown.
-
-    THE REGISTRY CLOSES WHAT IT RESOLVES, so a planner names no adapter to shut one down: the Ray adapter pools one
-    dashboard client per process (`ray_submit.ray_client`), used on the planner's own loop by dispatch, the sweep and
-    the operator routes. The in-process adapter holds nothing.
-    """
-    from medallion.services import rayjobs_api_executor
-
-    await rayjobs_api_executor.close()
-
-
-def hosted_engines() -> frozenset[str]:
-    """Which engines this registry resolves to an `Executor` — a code fact about the adapters present.
-
-    Both engines resolve here again, and by a different route than before. A `RayJobExecutor` that
-    submitted a `RayJob` CR was deleted (owner decision 2026-09-15) because it had ZERO production
-    callers and the CR's purpose — provisioning a cluster per job — does not apply to a standing shared
-    cluster. `RayJobsApiExecutor` replaces it by wrapping the submission path the cascade ACTUALLY uses,
-    so the port is honoured by the lane that runs rather than by one that never did.
-
-    Still deliberately separate from `engine_choice`, which asks what a stage may CHOOSE:
-    `engine_choice.hosted_engines(settings)` narrows the build's ceiling to what the DEPLOYMENT runs,
-    which is how a Ray-OFF deployment stays representable.
-    """
-    return frozenset({IN_PROCESS_ENGINE, RAY_ENGINE})
+    """Release the pooled engine client; a planner's lifespan calls it once, at shutdown. Idempotent and tolerant."""
+    global _client, _client_loop
+    if _client is not None:
+        with suppress(Exception):
+            await _client.aclose()
+    _client = None
+    _client_loop = None

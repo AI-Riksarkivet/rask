@@ -228,7 +228,7 @@ REDELIVERY_WINDOW = 30.0
 #:
 #: Gold is asserted the way the medallion suite asserts it instead: by its UPSTREAM CHAIN, which is
 #: identity-free and true however the token was minted.
-OPERATIONS = ("lance_ray_ingest", "embed_features")
+OPERATIONS = ("ingest_bronze", "embed_features")
 
 pytestmark = [pytest.mark.e2e, pytest.mark.governed_union]
 
@@ -474,7 +474,7 @@ def _producer_for(lineage: str, headers: dict[str, str], dataset: str, run_id: s
 #: `medallion.cascadeViaPublish` on, the cascade is driven by `publication_trigger`, which ALWAYS
 #: carries a project because the stage runner cannot resolve its tiers without one. A PROJECTLESS produce
 #: therefore publishes silver and GOLD NEVER FIRES — measured here 2026-08-25 as
-#: {'lance_ray_ingest': 'COMPLETE', 'embed_features': 'COMPLETE', 'aggregate_gold': None}, which the
+#: {'ingest_bronze': 'COMPLETE', 'embed_features': 'COMPLETE', 'aggregate_gold': None}, which the
 #: bare message reported as a broken cascade against a cascade working perfectly for a tenant. The
 #: medallion suite names the same signature in `_projectless_diagnosis`.
 PROJECT = os.environ.get("LANCE_E2E_PROJECT", "")
@@ -652,7 +652,7 @@ def test_fga_deny_drops_promotion_and_regrant_restores(stack: tuple[str, str], a
             f"namespace:{_ds('silver')}, so anything below would be measuring an ungated cascade"
         )
         w_token = _produce(lance_ray)
-        bronze_rid = _run_id_for("lance_ray_ingest", w_token)
+        bronze_rid = _run_id_for("ingest_bronze", w_token)
         denied_silver_rid = _run_id_for("embed_features", w_token)
         _poll(
             lambda: _run_states(lineage, alice).get(bronze_rid) == "COMPLETE",
@@ -959,7 +959,7 @@ def test_train_lineage_lands_attributed_under_governance(stack: tuple[str, str],
         timeout=30,
     )
     if resp.status_code == 409:
-        pytest.skip("train head not configured (needs medallion.ray + a running Ray cluster)")
+        pytest.skip("train head not configured (needs an enabled engine that runs task train + a running Ray cluster)")
     assert resp.status_code == 202, resp.text
     token = resp.json()["token"]
 

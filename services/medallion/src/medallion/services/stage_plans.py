@@ -1,4 +1,4 @@
-"""A Ray stage job is PLANNED before it is submitted, and reaches exactly one terminal (CP-029 S1).
+"""An out-of-process stage job is PLANNED before it is submitted, and reaches exactly one terminal (CP-029 S1).
 
 Pass 1 writes a plan (`service_kit.lakehouse.run_plans`) under the job's content-addressed key, publishes it on the
 control lane, submits the order, and acks, so nothing waits on the job and no deadline turns a long run into a guessed
@@ -7,8 +7,8 @@ outcome. The job reports its own terminal state through this stage runner's outc
 (`run_outcomes.resolve`), with this module's :class:`StageOutcomeLane` deciding what each terminal does:
 
 * succeeded: re-wake this stage runner's own pass 2 (the trigger, re-published to its own subscription with
-  ``ray_job_done``), which measures the destination, emits the COMPLETE and promotes. A hand-off that cannot be
-  published leaves the plan open for the next tick, so a job Ray says SUCCEEDED never produces a FAIL.
+  ``run_done``), which measures the destination, emits the COMPLETE and promotes. A hand-off that cannot be
+  published leaves the plan open for the next tick, so a job the engine says SUCCEEDED never produces a FAIL.
 * failed: a FAIL through the lineage outbox, naming the version the run's commit marker records when it committed
   before it failed (the destination's Lance history, `commit_marker.marked_version`), bare otherwise.
 
@@ -43,11 +43,12 @@ from medallion.core.config import MedallionSettings, project_namespace
 from medallion.core.lineage_publish import emit_lineage
 from medallion.core.metrics import record_outcome_conflict, record_stage_outcome
 from medallion.schemas.events import build_run_event
-from medallion.services.planned_runs import FAIL_MESSAGE_CAP, MAX_UNSEEN_TICKS, destination_version, publish_plan, ray_executor, run_handle
+from medallion.services.engine_registry import executor_for
+from medallion.services.planned_runs import FAIL_MESSAGE_CAP, MAX_UNSEEN_TICKS, destination_version, executor_for_plan, publish_plan, run_handle
 from medallion.services.stage_submit import build_stage_order, submit_stage_order
 from service_kit import dapr_publish
 from service_kit.lakehouse.commit_marker import marked_version
-from service_kit.lakehouse.executor import Capability, Executor, RunState
+from service_kit.lakehouse.executor import Capability, Executor, OrderRefusedError, RunState
 from service_kit.lakehouse.naming import CATALOG_DELIMITER
 from service_kit.lakehouse.run_outcomes import OutcomeNotRecordedError, OutcomeReport, SweepReport, SweepVisit, resolve, sweep_plans
 from service_kit.lakehouse.run_plans import OutcomeConflictError, OutcomeStatus, PlanDocument, PlanKind, PlanStore, RunOutcome
@@ -150,12 +151,12 @@ class StageOutcomeLane:
         """
         trigger = {
             **plan.trigger,
-            "ray_job_done": True,
-            "ray_submission_id": plan.action_id,
-            "ray_duration_seconds": _seconds(plan, outcome.recorded_at),
+            "run_done": True,
+            "run_action_id": plan.action_id,
+            "run_duration_seconds": _seconds(plan, outcome.recorded_at),
         }
         if outcome.committed_version is not None:
-            trigger["ray_committed_version"] = outcome.committed_version
+            trigger["run_committed_version"] = outcome.committed_version
         landed = await dapr_publish.publish_json(
             self._dapr,
             pubsub_name=self._settings.pubsub,
@@ -196,6 +197,7 @@ async def dispatch(
     settings: MedallionSettings,
     dapr: object,
     *,
+    engine: str,
     trigger: StageTrigger,
     from_uri: str,
     to_uri: str,
@@ -206,7 +208,7 @@ async def dispatch(
     pre_row_count: int | None,
     project: str,
 ) -> str:
-    """Plan this run, announce it, submit it, and answer its action id (D-7). Pass 1 acks on return.
+    """Plan this run on ``engine``, announce it, submit it, and answer its action id (D-7). Pass 1 acks on return.
 
     The plan is written first and idempotently: a redelivery finds it. A key naming a run that SUCCEEDED submits
     nothing new; one naming a run that FAILED reopens it for another attempt, which is what makes a re-run with a
@@ -222,6 +224,7 @@ async def dispatch(
     """
     order, registration = await build_stage_order(
         settings,
+        engine=engine,
         from_uri=from_uri,
         to_uri=to_uri,
         stage=settings.to_namespace,
@@ -253,16 +256,24 @@ async def dispatch(
     plan = await publish_plan(settings, dapr, store, plan)
     stored = plan.order if plan.order is not None else order
     try:
-        await submit_stage_order(stored, _registration(plan))
+        await submit_stage_order(stored, _registration(plan), executor=executor_for(settings, plan.engine))
+    except OrderRefusedError as exc:
+        await _close_refused(plan, exc, plan_store(settings), StageOutcomeLane(settings, dapr))
     except Exception as exc:  # noqa: BLE001 — the plan is open, and the sweep's resubmit budget owns a lost submit
         log.warning("medallion_stage_submit_deferred", extra={"action_id": plan.action_id, "plan_created": created, "error": str(exc)[:300]})
     return plan.action_id
 
 
+async def _close_refused(plan: PlanDocument, exc: OrderRefusedError, store: PlanStore, lane: StageOutcomeLane) -> None:
+    """The engine refused the order: no resubmit can change that, so the run closes failed with the engine's reason."""
+    log.error("medallion_stage_order_refused", extra={"action_id": plan.action_id, "error": str(exc)[:300]})
+    await resolve(store, plan, OutcomeReport(status="failed", error=f"the engine refused the stage order: {exc}"[:FAIL_MESSAGE_CAP]), lane, source="engine")
+
+
 async def _failure_text(executor: Executor, plan: PlanDocument, state: RunState) -> str:
-    """Why the engine says the job ended, bounded: Ray's own classification and message when it can be read."""
+    """Why the engine says the job ended, bounded: the engine's own classification and message when it can be read."""
     wire = "STOPPED" if state is RunState.CANCELLED else "FAILED"
-    reason = f"the Ray stage job {plan.action_id} ended {wire}"
+    reason = f"the stage job {plan.action_id} ended {wire}"
     cause = None
     with best_effort("read_stage_failure", action_id=plan.action_id):
         cause = await executor.failure(run_handle(plan))
@@ -302,13 +313,17 @@ async def _tick(store: PlanStore, plan: PlanDocument, executor: Executor, lane: 
         )
         log.warning("medallion_stage_resubmitting", extra={"action_id": plan.action_id, "attempt": resubmitted.resubmits, "vanished": vanished})
         if resubmitted.order is not None:
-            await submit_stage_order(resubmitted.order, _registration(resubmitted), executor=executor)
+            try:
+                await submit_stage_order(resubmitted.order, _registration(resubmitted), executor=executor)
+            except OrderRefusedError as exc:
+                await _close_refused(resubmitted, exc, store, lane)
+                return "resolved"
         return "resubmitted"
     lost = "vanished" if vanished else "never registered"
     if durable:
         error = f"the stage job {plan.action_id} {lost} on an engine that keeps a durable record, and its destination carries no commit marker"
     else:
-        error = f"the Ray stage job {plan.action_id} {lost} after {plan.resubmits} resubmit(s), and its destination carries no commit marker"
+        error = f"the stage job {plan.action_id} {lost} after {plan.resubmits} resubmit(s), and its destination carries no commit marker"
     await resolve(store, plan, OutcomeReport(status="failed", error=error), lane, source="sweep")
     return "resolved"
 
@@ -316,11 +331,10 @@ async def _tick(store: PlanStore, plan: PlanDocument, executor: Executor, lane: 
 async def sweep(settings: MedallionSettings, dapr: object, *, executor: Executor | None = None) -> SweepReport:
     """One tick over this stage runner's open plans, then the retention prune. One plan's failure never stops the rest."""
     store = plan_store(settings)
-    engine = executor or ray_executor()
     lane = StageOutcomeLane(settings, dapr)
 
     async def visit(plan: PlanDocument) -> SweepVisit:
-        return await _tick(store, await publish_plan(settings, dapr, store, plan), engine, lane)
+        return await _tick(store, await publish_plan(settings, dapr, store, plan), executor or executor_for_plan(settings, plan), lane)
 
     return await sweep_plans(store, kind=PlanKind.STAGE, visit=visit)
 
@@ -358,16 +372,16 @@ async def show(settings: MedallionSettings, action_id: str, *, executor: Executo
         # failing the status question the plan itself can answer.
         status = "UNREADABLE"
         with best_effort("read_stage_status", action_id=plan.action_id):
-            status = (await (executor or ray_executor()).status(run_handle(plan))).value.upper()
+            status = (await (executor or executor_for_plan(settings, plan)).status(run_handle(plan))).value.upper()
     return StageRunView(instance_id=action_id, status=status, submission_id=plan.action_id, attempt=plan.attempt, project=plan.project, outcome=plan.outcome)
 
 
 async def terminate(settings: MedallionSettings, dapr: object, action_id: str, *, executor: Executor | None = None) -> PlanDocument | None:
     """Stop the run's job through the executor port, then resolve the plan on the state the engine reports after the stop.
 
-    THE STOP ASKS, THE ENGINE'S STATE DECIDES, because no path may emit a FAIL for a job Ray says SUCCEEDED (D-4). A
-    job can finish between its last report and an operator's stop (its report lost, the sweep's tick not yet come),
-    and Ray answers the stop of a job that already ended with ``stopped: false``. So the state is read again after the
+    THE STOP ASKS, THE ENGINE'S STATE DECIDES, because no path may emit a FAIL for a job the engine says SUCCEEDED
+    (D-4). A job can finish between its last report and an operator's stop (its report lost, the sweep's tick not yet
+    come), and an engine answers the stop of a job that already ended without stopping anything. So the state is read again after the
     stop and resolved as the sweep resolves it:
 
     * SUCCEEDED hands the run off and the next tier wakes; so does a job the engine no longer knows whose destination
@@ -390,8 +404,8 @@ async def terminate(settings: MedallionSettings, dapr: object, action_id: str, *
         return None
     if plan.outcome is not None:
         return plan
-    engine = executor or ray_executor()
     try:
+        engine = executor or executor_for_plan(settings, plan)
         await engine.cancel(run_handle(plan))
     except Exception as exc:
         raise StageStopError(f"the compute engine could not stop the job of {plan.action_id}: {exc}") from exc
@@ -407,7 +421,7 @@ async def terminate(settings: MedallionSettings, dapr: object, action_id: str, *
     elif state is RunState.FAILED:
         report = OutcomeReport(status="failed", error=await _failure_text(engine, plan, state))
     else:
-        report = OutcomeReport(status="failed", error=f"the Ray stage job {plan.action_id} ended STOPPED by an operator")
+        report = OutcomeReport(status="failed", error=f"the stage job {plan.action_id} ended STOPPED by an operator")
     try:
         return await resolve(store, plan, report, lane, source="operator")
     except OutcomeConflictError as exc:  # the job's own report closed the run first; its terminal stands

@@ -1,6 +1,6 @@
 """The two fields that steer the Ray lane's two passes are untrusted input, refused rather than coerced.
 
-`ray_job_done` routes a delivery to pass 2 (measure the destination the job wrote) and `event_time` is pass 1's
+`run_done` routes a delivery to pass 2 (measure the destination the job wrote) and `event_time` is pass 1's
 instant, carried so the dataset's lineage document and the published COMPLETE name one eventTime (R26). Both ride a
 trigger re-parsed through `parse_stage_trigger` like any bus arrival.
 """
@@ -16,13 +16,13 @@ def _event(**data: Any) -> dict[str, Any]:
     return {"data": {"token": "tok-1", **data}}
 
 
-def test_a_NON_BOOL_ray_job_done_is_refused_rather_than_coerced() -> None:
+def test_a_NON_BOOL_run_done_is_refused_rather_than_coerced() -> None:
     """`extra="ignore"` tolerates unknown fields; it does not tolerate a known field of the wrong type.
 
     A string "false" coercing to True is the classic version of this bug, and it would silently route
     every trigger down the measure branch.
     """
-    assert parse_stage_trigger(_event(ray_job_done="not-a-bool")) is None
+    assert parse_stage_trigger(_event(run_done="not-a-bool")) is None
 
 
 def test_the_carried_instant_is_REFUSED_if_malformed() -> None:

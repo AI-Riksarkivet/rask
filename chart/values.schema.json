@@ -1160,6 +1160,10 @@
                 "compute": {
                     "type": "boolean"
                 },
+                "defaultEngine": {
+                    "description": "Engine a stage runner that declares no transform runs on (MEDALLION_DEFAULT_ENGINE): empty = the first enabled `services.compute.engines` entry, else in-process.",
+                    "type": "string"
+                },
                 "enabled": {
                     "description": "Deploy the medallion cascade: the medallion-producer head and the stage runners in `stageRunners`, with their pubsub components and crons.",
                     "type": "boolean"
@@ -1226,7 +1230,7 @@
                     "type": "object",
                     "properties": {
                         "author": {
-                            "description": "Author the producer stamps on its bronze-write lineage (MEDALLION_PRODUCER_AUTHOR).",
+                            "description": "Author role the producer stamps on its bronze-write lineage (MEDALLION_PRODUCER_AUTHOR).",
                             "type": "string"
                         },
                         "bronzeDataset": {
@@ -1295,31 +1299,6 @@
                     "description": "Hours a promotion review stays open before the promotion is EXPIRED and not promoted.",
                     "type": "integer"
                 },
-                "ray": {
-                    "description": "Stage runners submit their transform as a Ray job (MEDALLION_RAY_ENABLED) to the estate's one Ray dashboard; the render fails if no Ray address is configured.",
-                    "type": "boolean"
-                },
-                "rayTasks": {
-                    "description": "Tasks the Ray plane can run, registered by the producer at boot (MEDALLION_RAY_TASKS): `task`, baked `command`, optional `cardinalities` (empty = all). Rendered with `ray`.",
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "cardinalities": {
-                                "type": "array",
-                                "items": {
-                                    "type": "string"
-                                }
-                            },
-                            "command": {
-                                "type": "string"
-                            },
-                            "task": {
-                                "type": "string"
-                            }
-                        }
-                    }
-                },
                 "stageRunnerReplicas": {
                     "description": "Replica count of each stage-runner Deployment (default 1); replicas form a competing-consumer queue group.",
                     "type": "integer"
@@ -1375,14 +1354,6 @@
                 "train": {
                     "type": "object",
                     "properties": {
-                        "entrypoint": {
-                            "description": "Ray job entrypoint the trainer submits (MEDALLION_TRAIN_ENTRYPOINT); the script must be baked into the Ray cluster image.",
-                            "type": "string"
-                        },
-                        "lineageUrl": {
-                            "description": "Lineage URL the training job emits its RunEvents to (MEDALLION_TRAIN_LINEAGE_URL). Empty = the release's own lineage Service.",
-                            "type": "string"
-                        },
                         "modelsNamespace": {
                             "description": "Catalog namespace the model registry writes trained models into (MEDALLION_MODELS_NAMESPACE).",
                             "type": "string"
@@ -1513,7 +1484,7 @@
                                         }
                                     }
                                 },
-                                "medallion.ray": {
+                                "services.compute.engines.ray.enabled": {
                                     "type": "object",
                                     "properties": {
                                         "bronze-to-silver": {
@@ -2529,6 +2500,50 @@
                         "daprIngest": {
                             "description": "Renders APP_API_TOKEN for compute, whose boot refuses to start with Dapr on and no token (it hosts the prune cron route).",
                             "type": "boolean"
+                        },
+                        "engines": {
+                            "description": "Engines compute serves by Dapr invocation (CP-056, ADR 0140): per engine, `enabled`, `capabilities`, and the `tasks` it runs (`task`, the `command` its cluster image bakes, optional `cardinalities`, empty = all). Any enabled engine needs `ray.dashboardUrl`.",
+                            "type": "object",
+                            "properties": {
+                                "ray": {
+                                    "type": "object",
+                                    "properties": {
+                                        "capabilities": {
+                                            "type": "array",
+                                            "items": {
+                                                "type": "string"
+                                            }
+                                        },
+                                        "codeVersion": {
+                                            "description": "The build the engine runs (its image), the second axis of a run's key, so a rolled image is a new run: the engine is bring-your-own (ADR 0153), so its owner names it; empty keys runs on stage, token and URIs alone.",
+                                            "type": "string"
+                                        },
+                                        "enabled": {
+                                            "type": "boolean"
+                                        },
+                                        "tasks": {
+                                            "type": "array",
+                                            "items": {
+                                                "type": "object",
+                                                "properties": {
+                                                    "cardinalities": {
+                                                        "type": "array",
+                                                        "items": {
+                                                            "type": "string"
+                                                        }
+                                                    },
+                                                    "command": {
+                                                        "type": "string"
+                                                    },
+                                                    "task": {
+                                                        "type": "string"
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         },
                         "frontDoor": {
                             "description": "Renders compute outside singleTenant, because the gateway routes /api/ray and /api/serve to it.",

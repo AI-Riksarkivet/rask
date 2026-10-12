@@ -30,12 +30,13 @@ from typing import Any, cast
 
 import httpx
 import pytest
+from engine_door_double import ENGINES, route_engine_to_compute
 from fastapi import Request
 from openfga_sdk import OpenFgaClient
 
 from medallion.api import produce_auth
 from medallion.core.config import MedallionSettings
-from medallion.services import ray_submit, train
+from medallion.services import train
 
 
 _JOB_PATH = Path(__file__).parents[2] / "scripts" / "ray_train_job.py"
@@ -53,7 +54,7 @@ def _load_job() -> ModuleType:
 
 def _settings(**overrides: Any) -> MedallionSettings:
     values: dict[str, Any] = {
-        "MEDALLION_RAY_ENABLED": "true",
+        "MEDALLION_ENGINES": ENGINES,
         "MEDALLION_COMPUTE_ENABLED": "true",
         "MEDALLION_S3_ENDPOINT": "http://rustfs:9000",
         "MEDALLION_S3_SECRET_ACCESS_KEY": "k",
@@ -141,7 +142,7 @@ def test_the_head_omits_the_originator_when_there_is_no_person(monkeypatch: pyte
 
 
 class _Ray:
-    """The Ray Jobs API behind the Ray adapter: accepts every submission and keeps its body."""
+    """The Ray Jobs API behind compute's engine door: accepts every submission and keeps its body."""
 
     def __init__(self) -> None:
         self.posts: list[dict[str, Any]] = []
@@ -154,12 +155,7 @@ class _Ray:
 def _consume(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, **trigger: Any) -> dict[str, Any]:
     """One training trigger through the producer's consumer; the body its order reached Ray with."""
     ray = _Ray()
-    client = httpx.AsyncClient(base_url="http://ray-head:8265", transport=httpx.MockTransport(ray.handle))
-
-    async def _client() -> httpx.AsyncClient:
-        return client
-
-    monkeypatch.setattr(ray_submit, "ray_client", _client)
+    route_engine_to_compute(monkeypatch, ray.handle)
     event = {"data": {"token": "t1", "model": "churn", "features": [{"dataset": "silver$features", "version": 7}], **trigger}}
     local = _settings(MEDALLION_BRONZE_URI=f"{tmp_path}/medallion/bronze", MEDALLION_CONTROL_ROOT=f"{tmp_path}/control", MEDALLION_PRODUCE_ADMIN_PROJECT="acme")
     assert asyncio.run(train.handle_train_trigger(local, event, dapr=_FakeDapr())) == {"status": "SUCCESS"}

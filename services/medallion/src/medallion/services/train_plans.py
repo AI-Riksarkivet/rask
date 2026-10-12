@@ -1,4 +1,4 @@
-"""A Ray training job is PLANNED before it is submitted, and reaches exactly one terminal (CP-029).
+"""A training job is PLANNED before it is submitted, and reaches exactly one terminal (CP-029).
 
 A durable record, not a watcher, carries the run, so a job the head loses still reaches a terminal and no deadline
 guesses an outcome. The training consumer builds the run's `WorkOrder` (:func:`train_order`), writes a plan
@@ -15,7 +15,8 @@ terminal does:
 
 THE SWEEP, one tick per cron firing over the producer's open training plans, through the executor port only. A RUNNING
 or PENDING job is left alone at any age: a running job is not failed, however long it trains. FAILED or STOPPED is one
-FAIL with Ray's own cause. SUCCEEDED without a report, or a job the engine no longer knows (seen and then gone, or
+FAIL with the engine's own cause. An engine that cannot be reached is not asked again until the next tick, and the plan
+is left as it stands: silence is never read as a lost run (CP-056). SUCCEEDED without a report, or a job the engine no longer knows (seen and then gone, or
 never registered within `planned_runs.MAX_UNSEEN_TICKS`), is decided by the registry's Lance history: a commit marker
 above the plan's base version is a COMPLETE naming that version, its absence one FAIL. NOTHING IS RESUBMITTED (D2:
 training compute is expensive, so a run that did not land stays terminal until a person asks again with a new token).
@@ -41,12 +42,11 @@ from medallion.core.config import MedallionSettings
 from medallion.core.lineage_publish import emit_lineage
 from medallion.core.metrics import record_outcome_conflict, record_train_outcome
 from medallion.schemas.events import build_train_outcome_event
-from medallion.services.engine_names import RAY_ENGINE
 from medallion.services.engine_registry import executor_for
-from medallion.services.planned_runs import FAIL_MESSAGE_CAP, MAX_UNSEEN_TICKS, destination_version, outcome_url, publish_plan, ray_executor, run_handle
+from medallion.services.planned_runs import FAIL_MESSAGE_CAP, MAX_UNSEEN_TICKS, destination_version, executor_for_plan, outcome_url, publish_plan, run_handle
 from medallion.services.stage_submit import build_stage_order_observability
 from service_kit.lakehouse.commit_marker import marked_version
-from service_kit.lakehouse.executor import Executor, RunState, SubmitOutcome
+from service_kit.lakehouse.executor import EngineError, Executor, OrderRefusedError, RunState, SubmitOutcome
 from service_kit.lakehouse.naming import CATALOG_DELIMITER
 from service_kit.lakehouse.run_outcomes import OutcomeNotRecordedError, OutcomeReport, SweepReport, SweepVisit, resolve, sweep_plans
 from service_kit.lakehouse.run_plans import OutcomeConflictError, OutcomeStatus, PlanDocument, PlanKind, PlanStore, RunOutcome
@@ -57,7 +57,7 @@ from service_kit.openlineage import run_id_for
 
 log = logging.getLogger(__name__)
 
-#: The task a training plan names, the registry key `MEDALLION_RAY_TASKS` registers the train entrypoint under.
+#: The task a training plan names: the key an engine's task list registers its training job under.
 TRAIN_TASK: Final = "train"
 
 #: What `dispatch` did: the engine's answer to the submit, or the plan's own when the run had already ended.
@@ -110,7 +110,7 @@ def train_outcome_event(settings: MedallionSettings, plan: PlanDocument, outcome
         author_subject=settings.fga_service_identity,
         registry_uri=plan.to_uri,
         committed_version=outcome.committed_version,
-        error_message=None if outcome.status == "succeeded" else outcome.error or f"the Ray training job {plan.action_id} failed",
+        error_message=None if outcome.status == "succeeded" else outcome.error or f"the training job {plan.action_id} failed",
         originator=plan.originator or None,
         project=plan.project or None,
     )
@@ -223,12 +223,14 @@ async def dispatch(
 
     The plan is written first and idempotently, so a redelivered trigger finds it and submits the order the plan
     stored, re-attaching under the same key. A plan that has already ENDED submits nothing (D2): one that succeeded
-    answers ``already_landed``, one that failed ``already_failed``, which the consumer drops. The engine is resolved BY
-    NAME from the plan, unless the caller already holds it.
+    answers ``already_landed``, one that failed ``already_failed``, which the consumer drops. The run goes to the engine
+    whose task list registers ``train`` (`MedallionSettings.train_engine`), resolved BY NAME, unless the caller already
+    holds an executor.
 
     Raises:
-        EngineError: the engine could not be reached or refused the submission; the plan stays open, so a redelivery
-            re-attaches and the sweep fails a submission that never registers.
+        EngineError: the engine could not be reached; the plan stays open, so a redelivery re-attaches and the sweep
+            fails a submission that never registers. An engine that REFUSES the order closes the run failed, answered
+            ``already_failed``.
         ServiceUnavailableError: no control root is configured.
     """
     order = train_order(
@@ -242,13 +244,16 @@ async def dispatch(
         originator=originator,
         project=project,
     )
+    engine_name = settings.train_engine()
+    if engine_name is None:
+        raise EngineError(f"no engine this deployment configures registers task {TRAIN_TASK!r}")
     store = plan_store(settings)
     base_version = await asyncio.to_thread(destination_version, registry_uri, settings.storage_options())
     planned = PlanDocument.for_order(
         order,
         kind=PlanKind.TRAIN,
-        engine=RAY_ENGINE,
-        command=settings.train_entrypoint,
+        engine=engine_name,
+        command="",
         base_version=base_version,
         trigger={"token": token, "model": model, "features": features},
         submitted_at=datetime.now(UTC),
@@ -259,16 +264,23 @@ async def dispatch(
         return "already_landed" if plan.outcome.status == "succeeded" else "already_failed"
     plan = await publish_plan(settings, dapr, store, plan)
     registration = TaskRegistration(task=plan.task, engine=plan.engine, command=plan.command, code_version=plan.code_version)
-    engine = executor or executor_for(plan.engine, storage_options={})
-    _handle, submitted = await engine.submit(plan.order if plan.order is not None else order, registration)
+    engine = executor or executor_for(settings, plan.engine)
+    try:
+        _handle, submitted = await engine.submit(plan.order if plan.order is not None else order, registration)
+    except OrderRefusedError as exc:
+        # No redelivery changes a refusal, so the run closes failed now rather than waiting out the sweep.
+        log.error("medallion_train_order_refused", extra={"action_id": plan.action_id, "error": str(exc)[:300]})
+        failed = OutcomeReport(status="failed", error=f"the engine refused the training order: {exc}"[:FAIL_MESSAGE_CAP])
+        await resolve(store, plan, failed, TrainOutcomeLane(settings, dapr), source="engine")
+        return "already_failed"
     log.info("medallion_train_run_planned", extra={"action_id": plan.action_id, "plan_created": created, "submitted": submitted.value})
     return _DISPATCHED[submitted]
 
 
 async def _failure_text(executor: Executor, plan: PlanDocument, state: RunState) -> str:
-    """Why the engine says the job ended, bounded: Ray's own classification and message when it can be read."""
+    """Why the engine says the job ended, bounded: the engine's own classification and message when it can be read."""
     wire = "STOPPED" if state is RunState.CANCELLED else "FAILED"
-    reason = f"the Ray training job {plan.action_id} ended {wire}"
+    reason = f"the training job {plan.action_id} ended {wire}"
     cause = None
     with best_effort("read_train_failure", action_id=plan.action_id):
         cause = await executor.failure(run_handle(plan))
@@ -306,7 +318,7 @@ async def _tick(store: PlanStore, plan: PlanDocument, executor: Executor, lane: 
     if await lane.committed_version(plan) is not None:
         await resolve(store, plan, OutcomeReport(status="succeeded"), lane, source="sweep")
         return "resolved"
-    error = f"the Ray training job {plan.action_id} {how}, and its registry carries no commit marker"
+    error = f"the training job {plan.action_id} {how}, and its registry carries no commit marker"
     await resolve(store, plan, OutcomeReport(status="failed", error=error), lane, source="sweep")
     return "resolved"
 
@@ -314,11 +326,10 @@ async def _tick(store: PlanStore, plan: PlanDocument, executor: Executor, lane: 
 async def sweep(settings: MedallionSettings, dapr: object, *, executor: Executor | None = None) -> SweepReport:
     """One tick over the producer's open training plans, then the retention prune. One plan's failure never stops the rest."""
     store = plan_store(settings)
-    engine = executor or ray_executor()
     lane = TrainOutcomeLane(settings, dapr)
 
     async def visit(plan: PlanDocument) -> SweepVisit:
-        return await _tick(store, await publish_plan(settings, dapr, store, plan), engine, lane)
+        return await _tick(store, await publish_plan(settings, dapr, store, plan), executor or executor_for_plan(settings, plan), lane)
 
     return await sweep_plans(store, kind=PlanKind.TRAIN, visit=visit)
 
@@ -347,7 +358,7 @@ class TrainRunState(BaseModel):
     outcome: RunOutcome | None = None
 
 
-async def state(plan: PlanDocument, *, executor: Executor | None = None) -> TrainRunState:
+async def state(settings: MedallionSettings, plan: PlanDocument, *, executor: Executor | None = None) -> TrainRunState:
     """The run's state: its outcome once closed, ONE engine read while it is open."""
     if plan.outcome is not None:
         status = plan.outcome.status.upper()
@@ -356,16 +367,16 @@ async def state(plan: PlanDocument, *, executor: Executor | None = None) -> Trai
         # failing the status question the plan itself can answer.
         status = "UNREADABLE"
         with best_effort("read_train_status", action_id=plan.action_id):
-            status = (await (executor or ray_executor()).status(run_handle(plan))).value.upper()
+            status = (await (executor or executor_for_plan(settings, plan)).status(run_handle(plan))).value.upper()
     return TrainRunState(instance_id=plan.action_id, status=status, submission_id=plan.action_id, outcome=plan.outcome)
 
 
 async def terminate(settings: MedallionSettings, dapr: object, plan: PlanDocument, *, executor: Executor | None = None) -> PlanDocument:
     """Stop the run's job through the executor port, then resolve the plan on the state the engine reports after the stop.
 
-    THE STOP ASKS, THE ENGINE'S STATE DECIDES, as on the stage lane (D-4: no path emits a FAIL for a job Ray says
-    SUCCEEDED). A job can commit its model and emit its COMPLETE between its last report and an operator's stop, and Ray
-    answers the stop of a job that already ended with ``stopped: false``. So the state is read again after the stop:
+    THE STOP ASKS, THE ENGINE'S STATE DECIDES, as on the stage lane (D-4: no path emits a FAIL for a job the engine says
+    SUCCEEDED). A job can commit its model and emit its COMPLETE between its last report and an operator's stop, and an
+    engine answers the stop of a job that already ended without stopping anything. So the state is read again after the stop:
 
     * SUCCEEDED, or a job the engine no longer knows, is decided by the registry's commit marker: found is a COMPLETE
       naming that version, absent a FAIL stopped by an operator.
@@ -380,8 +391,8 @@ async def terminate(settings: MedallionSettings, dapr: object, plan: PlanDocumen
     """
     if plan.outcome is not None:
         return plan
-    engine = executor or ray_executor()
     try:
+        engine = executor or executor_for_plan(settings, plan)
         await engine.cancel(run_handle(plan))
     except Exception as exc:
         raise TrainStopError(f"the compute engine could not stop the training job {plan.action_id}: {exc}") from exc
@@ -392,7 +403,7 @@ async def terminate(settings: MedallionSettings, dapr: object, plan: PlanDocumen
     if state in (RunState.RUNNING, RunState.PENDING):
         return plan
     lane = TrainOutcomeLane(settings, dapr)
-    stopped = f"the Ray training job {plan.action_id} ended STOPPED by an operator"
+    stopped = f"the training job {plan.action_id} ended STOPPED by an operator"
     if state in (RunState.SUCCEEDED, RunState.UNKNOWN):
         report = OutcomeReport(status="succeeded") if await lane.committed_version(plan) is not None else OutcomeReport(status="failed", error=stopped)
     elif state is RunState.FAILED:

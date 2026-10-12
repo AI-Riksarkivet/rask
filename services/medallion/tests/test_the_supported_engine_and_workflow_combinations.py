@@ -6,9 +6,9 @@ the plan sweep (`stage_plans`, CP-029), so **Ray without a workflow engine is th
 and the compute axis below is decided by the chart default and the declaration alone. (The producer hosts one
 for the promotion review alone, which decides no stage's engine; a training run is a plan too, `train_plans`.)
 
-`ray_enabled` does two jobs here: the chart's default engine when nothing is declared, and whether this
-deployment hosts the Ray lane (`engine_choice.hosted_engines`). A declaration overrides the chart in the
-direction that needs no runtime — in-process on a Ray-ON deployment — which is the decoupling's cell.
+Two settings decide it: `MEDALLION_DEFAULT_ENGINE`, the engine when nothing is declared, and `MEDALLION_ENGINES`, which
+engines this deployment hosts (`engine_registry.hosted_engines`). A declaration overrides the default in the direction
+that needs no runtime — in-process on a deployment whose default is an engine app — which is the decoupling's cell.
 """
 
 from __future__ import annotations
@@ -19,13 +19,15 @@ import pytest
 
 from medallion.core.config import MedallionSettings
 from medallion.services import engine_choice
+from medallion.services.engine_names import IN_PROCESS_ENGINE
 from service_kit.lakehouse import task_registry, transform_specs
 from service_kit.lakehouse.task_registry import TaskRegistration
 from service_kit.lakehouse.transform_specs import TransformSpec
 
 
 def _settings(tmp_path: Path, *, ray_enabled: bool) -> MedallionSettings:
-    return MedallionSettings.model_validate({"control_root": str(tmp_path), "to_namespace": "silver", "compute_enabled": True, "ray_enabled": ray_enabled})
+    hosted = {"engines": {"ray": {"app_id": "compute"}}, "default_engine": "ray"} if ray_enabled else {}
+    return MedallionSettings.model_validate({"control_root": str(tmp_path), "to_namespace": "silver", "compute_enabled": True} | hosted)
 
 
 def _declared(tmp_path: Path, engine: str) -> TransformSpec:
@@ -38,13 +40,12 @@ def _declared(tmp_path: Path, engine: str) -> TransformSpec:
 @pytest.mark.parametrize(
     ("ray_enabled", "declared", "engine"),
     [
-        pytest.param(False, None, engine_choice.IN_PROCESS_ENGINE, id="ray-off-nothing-declared"),
-        pytest.param(True, None, engine_choice.RAY_ENGINE, id="ray-on-nothing-declared"),
-        pytest.param(False, engine_choice.IN_PROCESS_ENGINE, engine_choice.IN_PROCESS_ENGINE, id="ray-off-in-process-declared"),
+        pytest.param(False, None, IN_PROCESS_ENGINE, id="ray-off-nothing-declared"),
+        pytest.param(True, None, "ray", id="ray-on-nothing-declared"),
         # THE CELL THAT CARRIES THE DECOUPLING. A declaration overrides the chart in the direction that
         # needs no runtime, so a Ray-ON deployment can still run a task its author chose to keep in-process.
-        pytest.param(True, engine_choice.IN_PROCESS_ENGINE, engine_choice.IN_PROCESS_ENGINE, id="ray-on-in-process-declared"),
-        pytest.param(True, engine_choice.RAY_ENGINE, engine_choice.RAY_ENGINE, id="ray-on-ray-declared"),
+        pytest.param(True, IN_PROCESS_ENGINE, IN_PROCESS_ENGINE, id="ray-on-in-process-declared"),
+        pytest.param(True, "ray", "ray", id="ray-on-ray-declared"),
     ],
 )
 def test_each_supported_cell_of_the_matrix_runs_its_engine(tmp_path: Path, ray_enabled: bool, declared: str | None, engine: str) -> None:

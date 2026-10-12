@@ -23,12 +23,15 @@ failed behind one that claims it.
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict
 
-from service_kit.lakehouse.task_registry import TaskRegistration
-from service_kit.lakehouse.work_order import WorkOrder
+
+if TYPE_CHECKING:
+    # Type-only, so an engine app imports the port without the lakehouse extra the registry's object store needs.
+    from service_kit.lakehouse.task_registry import TaskRegistration
+    from service_kit.lakehouse.work_order import WorkOrder
 
 
 class RunState(StrEnum):
@@ -118,6 +121,11 @@ class EngineError(RuntimeError):
     retries a delivery on this error and lets anything else fail loudly needs one type every adapter raises. An
     adapter's own transport error subclasses it.
     """
+
+
+class OrderRefusedError(ValueError):
+    """The engine answered that it will not run this order. No redelivery or resubmit changes that answer, so the run
+    is terminal: the caller closes its plan failed with the engine's reason. Not an `EngineError`, whose runs stay open."""
 
 
 class RunHandle(BaseModel):

@@ -105,10 +105,10 @@ async def train(
 ) -> dict[str, Any] | JSONResponse:
     """Request a training run: pin feature versions (omitted → LATEST, resolved HERE) and publish the
     training trigger — 202 with the correlation ``token`` and the run's ``instance_id``. Token-guarded like ``/produce``; a disabled
-    head (no Ray path / S3 / bronze URI) is an explicit 409, a lost trigger an explicit 503 — never a 202
+    head (no training engine / S3 / bronze URI) is an explicit 409, a lost trigger an explicit 503 — never a 202
     that silently trains nothing."""
     if not train_head_enabled(settings):
-        return _problem(409, "Conflict", "train head not configured (needs ray_enabled + S3 + bronze URI)")
+        return _problem(409, "Conflict", "train head not configured (needs an engine that registers task train + S3 + bronze URI)")
     result = await submit_train_request(
         dapr,
         settings,
@@ -208,7 +208,7 @@ async def show_train(instance_id: str, settings: SettingsDep, fga_client: FgaCli
     on `flows.get_run` and `ingest.get_ingest`.
     """
     plan = await _authorized_run(settings, fga_client, caller, instance_id)
-    return await train_plans.state(plan)
+    return await train_plans.state(settings, plan)
 
 
 @router.post("/trains/{instance_id}/terminate", status_code=202)

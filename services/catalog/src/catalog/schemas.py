@@ -1089,6 +1089,7 @@ class TransformSpecRequest(BaseModel):
     from_id: str
     to_id: str
     task: str
+    engine: str = ""
     params: dict[str, str] = Field(default_factory=dict)
     code_version: str = ""
     #: Row cardinality. Validated by `TransformSpec`, not here — one definition, two services — so an
@@ -1171,6 +1172,7 @@ class TransformSpecResponse(BaseModel):
     from_id: str
     to_id: str
     task: str
+    engine: str = ""
     params: dict[str, str] = Field(default_factory=dict)
     code_version: str = ""
     #: Read back so an operator can audit which contract governs a lane. A declared value that cannot

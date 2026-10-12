@@ -122,19 +122,19 @@ class StageTrigger(BaseModel):
     cascade_id: str | None = None
     from_uri: str | None = None
 
-    #: The Ray stage job for this trigger SUCCEEDED, so the destination is written and the stage runner
+    #: The out-of-process stage job for this trigger SUCCEEDED, so the destination is written and the stage runner
     #: may measure it. Set ONLY by the run's resolved outcome (`stage_plans.StageOutcomeLane.hand_off`),
     #: never by an upstream producer, which has no way to know.
     #:
     #: This is a CLAIM like every other field on this model, and it is deliberately not treated as
     #: privileged: the re-published trigger re-enters through this same guard, and the worst a forged
-    #: `ray_job_done` can do is make the stage runner measure a destination early, not an escalation.
+    #: `run_done` can do is make the stage runner measure a destination early, not an escalation.
     #: What it must NOT do is skip the submit silently, which is why the handler logs the branch it took.
-    ray_job_done: bool = False
-    #: Rows the DESTINATION held before the Ray job was dispatched — pass 1's answer to a question
-    #: pass 2 can no longer ask. The Ray job writes out-of-process, so by the time the stage runner measures,
+    run_done: bool = False
+    #: Rows the DESTINATION held before the job was dispatched — pass 1's answer to a question
+    #: pass 2 can no longer ask. The job writes out-of-process, so by the time the stage runner measures,
     #: the predecessor is gone and `WriteResult.previous_row_count` is None; the band then reads that
-    #: as FIRST_PROMOTION and asks about EVERY Ray promotion, forever. Carried here for the same
+    #: as FIRST_PROMOTION and asks about EVERY such promotion, forever. Carried here for the same
     #: reason `event_time` is (R26): pass 1 owns a fact pass 2 needs and hands it forward.
     #:
     #: A CLAIM like every other field, and harmless if forged: the worst a wrong value does is ask
@@ -149,17 +149,17 @@ class StageTrigger(BaseModel):
     pre_row_count: int | None = None
     #: Seconds from the run's plan to its outcome, handed back on the pass-2 trigger. Pass 2 records
     #: THIS as the stage duration rather than its own elapsed time, which would measure only the
-    #: measure/emit tail and report a multi-hour Ray job as a few seconds. One recording site, one number.
+    #: measure/emit tail and report a multi-hour job as a few seconds. One recording site, one number.
     #:
     #: BOUNDED because the trigger is untrusted input: a negative or absurd value is discarded rather
     #: than recorded, so a malformed payload cannot poison the series. 30 days is far beyond any real
     #: stage.
-    ray_duration_seconds: float | None = Field(default=None, ge=0.0, le=2_592_000.0)
-    ray_submission_id: str | None = None
+    run_duration_seconds: float | None = Field(default=None, ge=0.0, le=2_592_000.0)
+    run_action_id: str | None = None
     #: The destination version the run's commit marker named when its outcome found one (CP-029): pass 2
     #: measures THAT commit, so a commit landing after the job is not described as this run's write.
     #: A claim like the rest; a wrong one makes pass 2 measure another existing version or fail its open.
-    ray_committed_version: int | None = Field(default=None, ge=0)
+    run_committed_version: int | None = Field(default=None, ge=0)
 
     #: R26's ONE INSTANT, carried from the dispatch pass to the completed pass. `transform.py` stamps
     #: `datetime.now(UTC)` at the top of the handler, so the two-pass Ray lane stamped TWICE: pass 1's

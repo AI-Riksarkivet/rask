@@ -3,7 +3,7 @@
 The estate's distributed trace went dark at ``ray job submit``: neither submission site propagated W3C
 context, so the Ray-side spans were orphans or absent. Covers both halves + the degradation contract:
 
-- SUBMITTER (``medallion.services.ray_jobs_api.trace_env``, used by medallion's wrappers): the span's traceparent is injected
+- SUBMITTER (``medallion.services.stage_submit.trace_env``, carried by the work order): the span's traceparent is injected
   into the submitted ``runtime_env`` at both sites (stage + train), and nothing is injected when no span
   is active — the trace is continued, never fabricated.
 - JOB (``scripts/ray_stage_job.py`` + ``ray_train_job.py``): the inlined ``_traced_root`` extracts the
@@ -16,29 +16,17 @@ Job scripts are standalone files baked into the ray image, so they load here by 
 
 from __future__ import annotations
 
-import asyncio
 import importlib.util
-import json
 from pathlib import Path
 from types import ModuleType
-from typing import Any
 
-import httpx
 import pytest
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from medallion.core.config import MedallionSettings
-from medallion.services import ray_submit, stage_submit, train_plans
-
-
-async def _submit_stage_job(settings: Any, **kwargs: Any) -> None:
-    """The stage lane's submission: the order it builds, posted through the port."""
-    from medallion.services import stage_submit as _stage_submit
-
-    order, registration = await _stage_submit.build_stage_order(settings, **kwargs)
-    await _stage_submit.submit_stage_order(order, registration)
+from medallion.services import stage_submit, train_plans
 
 
 _SCRIPTS = Path(__file__).parents[2] / "scripts"
@@ -69,46 +57,17 @@ def test_trace_env_is_empty_without_an_active_span() -> None:
     assert stage_submit.trace_env() == {}
 
 
-def _capture_submits(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
-    """Stub the Ray Jobs API (the test_ray_submit MockTransport shape) and capture POSTed bodies."""
-    captured: list[dict[str, Any]] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        if request.method == "POST":
-            captured.append(json.loads(request.content))
-            return httpx.Response(200, json={"submission_id": "s"})
-        return httpx.Response(200, json={"status": "SUCCEEDED"})
-
-    real = httpx.AsyncClient
-
-    def factory(**kwargs: Any) -> httpx.AsyncClient:
-        kwargs["transport"] = httpx.MockTransport(handler)
-        return real(**kwargs)
-
-    monkeypatch.setattr(ray_submit.httpx, "AsyncClient", factory)
-    return captured
-
-
-def test_stage_submission_carries_the_active_spans_traceparent(monkeypatch: pytest.MonkeyPatch) -> None:
-    captured = _capture_submits(monkeypatch)
-    settings = MedallionSettings.model_validate(
-        {
-            "ray_enabled": True,
-            "compute_enabled": True,
-            "ray_poll_interval_seconds": 0.001,
-            "ray_job_timeout_seconds": 0.05,
-        }
-    )
+def test_stage_order_carries_the_active_spans_traceparent() -> None:
+    """The stage run's order, which the engine posts as the job's env through `to_env` (CP-056)."""
     tracer = TracerProvider().get_tracer("test")
     with tracer.start_as_current_span("stage-runner") as span:
-        asyncio.run(_submit_stage_job(settings, from_uri="a", to_uri="b", stage="bronze", token="t"))
-    env = captured[0]["runtime_env"]["env_vars"]
+        order = stage_submit.build_work_order(MedallionSettings(), engine="ray", spec=None, from_uri="a", to_uri="b", stage="bronze", token="t")
     ctx = span.get_span_context()
-    assert env["TRACEPARENT"].startswith(f"00-{ctx.trace_id:032x}-{ctx.span_id:016x}-")
+    assert order.to_env()["TRACEPARENT"].startswith(f"00-{ctx.trace_id:032x}-{ctx.span_id:016x}-")
 
 
 def test_train_order_carries_the_active_spans_traceparent() -> None:
-    """The training run's order, which the Ray adapter posts as `runtime_env` through `to_env` (CP-044)."""
+    """The training run's order, which the engine posts as the job's env through `to_env` (CP-044)."""
     tracer = TracerProvider().get_tracer("test")
     with tracer.start_as_current_span("trainer") as span:
         order = train_plans.train_order(

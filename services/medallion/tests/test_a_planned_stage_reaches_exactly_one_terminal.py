@@ -1,15 +1,16 @@
-"""A planned Ray stage run reaches exactly one terminal (CP-029 S1: clauses b, d and e; D-6's resubmit budget, which
-the sweep spends only behind an engine that withholds `Capability.DURABLE_RECORD`, CP-044).
+"""A planned stage run travels to its engine by invocation and reaches exactly one terminal (CP-029 S1: clauses b, d
+and e; D-6's resubmit budget, which the sweep spends only behind an engine that withholds `Capability.DURABLE_RECORD`,
+CP-044; CP-056).
 
-Driven on real collaborators end to end. The stage runner's own pass 1 (`handle_stage`) plans and submits the run into
-a plan store on `tmp_path`; the REAL Ray stage job (`scripts/ray_stage_job.py`) writes the destination on real pylance
+Driven on real collaborators end to end. The stage runner's own pass 1 (`handle_stage`) plans the run into a plan store
+on `tmp_path` and submits it by service invocation of compute's REAL engine door over uvicorn; the REAL stage job (`scripts/ray_stage_job.py`) writes the destination on real pylance
 and stamps its commit marker; a job's report reaches the real outcome door (`api/stage_outcomes`) through a FastAPI
 app running its lifespan, with the compute head's projected token verified offline against the loopback issuer; the
 sweep resolves what no report closed; and pass 2 is `handle_stage` again on the trigger the hand-off published.
 
-What stands in, and only that: the Dapr sidecar (a bus that records each publish and can refuse a topic), the Ray
-dashboard that accepts pass 1's submission (an httpx transport), and the engine the sweep reads status from (the
-executor port, one scripted state per tick and the failure Ray recorded).
+What stands in, and only that: the Dapr sidecar (a bus that records each publish and can refuse a topic; the engine is
+invoked at a direct URL), the Ray dashboard behind compute (an httpx transport), and, where a case scripts the engine's
+answers tick by tick, the executor the sweep reads (one scripted state per tick and the failure Ray recorded).
 """
 
 from __future__ import annotations
@@ -18,6 +19,8 @@ import asyncio
 import importlib.util
 import json
 import logging
+import os
+import time
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -33,17 +36,18 @@ from fastapi.testclient import TestClient
 
 from medallion.api.stage_outcomes import mount_stage_outcomes
 from medallion.core.config import MedallionSettings, get_settings
-from medallion.services import ray_submit, stage_plans
+from medallion.services import stage_plans
 from medallion.services.compute import seed_bronze
+from medallion.services.engine_registry import executor_for
 from medallion.services.transform import handle_stage
 from service_kit.exceptions import register_handlers
 from service_kit.governed.machine_identity import ServiceAccountVerifier
 from service_kit.lakehouse.commit_marker import CommitMarker, marked_version
-from service_kit.lakehouse.executor import Capability, Executor, RunFailure, RunHandle, RunState, SubmitOutcome
+from service_kit.lakehouse.executor import Capability, EngineError, Executor, RunFailure, RunHandle, RunState, SubmitOutcome
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 from service_kit.lakehouse.outbox import list_events
 from service_kit.lakehouse.run_outcomes import OutcomeReport
-from service_kit.lakehouse.run_plans import PlanDocument
+from service_kit.lakehouse.run_plans import CLOSED_RETENTION, PLANS_PREFIX, PlanDocument
 from service_kit.lakehouse.stage_stamp import ONE_TO_ONE
 from service_kit.lakehouse.task_registry import TaskRegistration
 from service_kit.lakehouse.tier_write import StageContractError
@@ -125,34 +129,14 @@ class _Engine:
 
 
 @pytest.fixture
-def dashboard(monkeypatch: pytest.MonkeyPatch) -> list[str]:
-    """The Ray Jobs API pass 1 submits through: accepts every submission and records its id."""
-    posted: list[str] = []
-
-    def handle(request: httpx.Request) -> httpx.Response:
-        if request.method == "POST" and request.url.path == "/api/jobs/":
-            sub_id = json.loads(request.content)["submission_id"]
-            posted.append(sub_id)
-            return httpx.Response(200, json={"submission_id": sub_id})
-        return httpx.Response(404)
-
-    client = httpx.AsyncClient(base_url="http://ray-head:8265", transport=httpx.MockTransport(handle))
-
-    async def _client() -> httpx.AsyncClient:
-        return client
-
-    monkeypatch.setattr(ray_submit, "ray_client", _client)
-    return posted
-
-
-@pytest.fixture
-def settings(tmp_path: Path) -> MedallionSettings:
+def settings(tmp_path: Path, compute_engine: Any) -> MedallionSettings:
     bronze, silver = tmp_path / "bronze", tmp_path / "silver"
     seed_bronze(str(bronze), {}, rows=4)
     return MedallionSettings.model_validate(
         {
             "compute_enabled": True,
-            "ray_enabled": True,
+            "engines": {"ray": compute_engine.binding("rask-sa-bronze-to-silver")},
+            "default_engine": "ray",
             "control_root": str(tmp_path / "control"),
             "lineage_outbox_uri": str(tmp_path / "outbox"),
             "from_uri": str(bronze),
@@ -249,7 +233,7 @@ def _report(client: TestClient, sa_issuer: Any, plan: PlanDocument, report: Outc
 
 
 def test_an_unnotified_run_publishes_no_FAIL_and_keeps_its_input_to_output_edge(
-    settings: MedallionSettings, dashboard: list[str], door: tuple[TestClient, _Bus], sa_issuer: Any
+    settings: MedallionSettings, door: tuple[TestClient, _Bus], sa_issuer: Any
 ) -> None:
     """Clause b. The job SUCCEEDED and its data landed, but the pass-2 hand-off could not be published.
 
@@ -282,9 +266,7 @@ def test_an_unnotified_run_publishes_no_FAIL_and_keeps_its_input_to_output_edge(
     assert complete["eventTime"] == written["event_time"]
 
 
-def test_an_abandoned_stage_whose_destination_carries_the_marker_wakes_the_next_tier(
-    settings: MedallionSettings, dashboard: list[str], door: tuple[TestClient, _Bus]
-) -> None:
+def test_an_abandoned_stage_whose_destination_carries_the_marker_wakes_the_next_tier(settings: MedallionSettings, door: tuple[TestClient, _Bus]) -> None:
     """Clause d. The job landed and reported nothing, and the head then lost its record (seen RUNNING, then unknown).
 
     The destination's Lance history is the durable record: the marker above the plan's base version resolves the run
@@ -301,13 +283,13 @@ def test_an_abandoned_stage_whose_destination_carries_the_marker_wakes_the_next_
     closed = _plan(settings, plan)
     assert closed.outcome is not None and closed.outcome.status == "succeeded"
     (handed_off,) = bus.on(OWN_TOPIC)
-    assert handed_off["ray_job_done"] is True
-    assert handed_off["ray_committed_version"] == _marked(plan)
+    assert handed_off["run_done"] is True
+    assert handed_off["run_committed_version"] == _marked(plan)
     assert engine.submitted == [], "a run whose marker landed was submitted again"
 
 
 def test_a_job_that_commits_and_then_fails_names_the_version_its_marker_records(
-    settings: MedallionSettings, dashboard: list[str], door: tuple[TestClient, _Bus], sa_issuer: Any, tmp_path: Path
+    settings: MedallionSettings, door: tuple[TestClient, _Bus], sa_issuer: Any, tmp_path: Path
 ) -> None:
     """Clause e. A tenant's run: the job's last commit landed, then its contract check failed.
 
@@ -359,7 +341,6 @@ def test_a_job_that_commits_and_then_fails_names_the_version_its_marker_records(
 )
 def test_a_lost_job_with_no_marker_is_resubmitted_only_where_the_engine_can_lose_its_record(
     settings: MedallionSettings,
-    dashboard: list[str],
     door: tuple[TestClient, _Bus],
     capabilities: frozenset[Capability],
     losses: int,
@@ -383,3 +364,83 @@ def test_a_lost_job_with_no_marker_is_resubmitted_only_where_the_engine_can_lose
     fail = next(event for event in bus.on(LINEAGE_TOPIC) if event["eventType"] == "FAIL")
     assert "facets" not in fail["outputs"][0], "a run that wrote nothing named a version"
     assert reason in fail["run"]["facets"]["errorMessage"]["message"]
+
+
+def test_a_stage_run_travels_to_its_engine_and_its_killed_driver_closes_it_failed_as_oom(
+    settings: MedallionSettings, compute_engine: Any, door: tuple[TestClient, _Bus], sa_issuer: Any
+) -> None:
+    """CP-056. Pass 1 invokes compute, which submits the stage job to Ray under the run's key, as the command its own
+    table names for the lane's task, with the order as the job's env and nothing the lakehouse chose as a command. The
+    sweep then reads the run through the same door: RUNNING leaves it open, and a driver SIGKILLed by the host closes
+    it failed with the engine's cause classified `oom`. A caller compute's door does not map is refused."""
+    _client, bus = door
+    jobs = compute_engine.jobs
+    plan = _pass_one(settings, bus, {"token": "tok-1", "from_version": 1})
+    body = jobs.bodies[plan.action_id]
+    assert (body["submission_id"], body["entrypoint"]) == (plan.action_id, "python /home/ray/jobs/ray_stage_job.py")
+    env = body["runtime_env"]["env_vars"]
+    assert plan.order is not None and env == plan.order.to_env()
+    # What the stage runner resolved at dispatch reaches the job: the tables it moves, the run it is, its delta floor.
+    assert (env["RASK_SOURCE_TABLE"], env["RASK_DEST_TABLE"], env["RASK_RUN_ID"], env["RASK_VERSION_FLOOR"]) == (
+        "bronze$events",
+        "silver$features",
+        plan.run_id,
+        "1",
+    )
+    assert plan.engine == "ray" and plan.command == ""
+    jobs.states = {plan.action_id: ["RUNNING", "FAILED", "FAILED"]}
+    jobs.causes = {plan.action_id: {"error_type": "JOB_SUPERVISOR_ACTOR_DIED", "message": "the driver was killed", "driver_exit_code": 137}}
+
+    asyncio.run(stage_plans.sweep(settings, bus))
+    assert _plan(settings, plan).outcome is None, "a running stage job was closed"
+    asyncio.run(stage_plans.sweep(settings, bus))
+
+    closed = _plan(settings, plan)
+    assert closed.outcome is not None and closed.outcome.status == "failed"
+    assert closed.outcome.error == f"the stage job {plan.action_id} ended FAILED — oom: the driver was killed (driver exit 137)"
+    stranger = settings.model_copy(
+        update={"engines": {"ray": settings.engines["ray"].model_copy(update={"token_file": compute_engine.token_file("rask-sa-gateway")})}}
+    )
+    with pytest.raises(EngineError, match="answered 401"):
+        asyncio.run(executor_for(stranger, "ray").status(RunHandle(engine="ray", handle=plan.action_id)))
+
+
+def _plan_files(settings: MedallionSettings, child: str) -> list[Path]:
+    return sorted((Path(settings.control_root) / PLANS_PREFIX / settings.fga_service_identity / child).glob("*"))
+
+
+def test_an_order_the_engine_app_refuses_closes_its_run_failed_in_pass_one(settings: MedallionSettings, compute_engine: Any) -> None:
+    """CP-056. The submission names the engine its task is registered under, and compute resolves the task through that
+    engine's own table: an engine compute does not serve is refused 422 with nothing reaching Ray. No redelivery changes a
+    refusal, so pass 1 closes the run failed with the engine's reason rather than leaving it to the sweep's budget."""
+    unserved = settings.model_copy(update={"engines": {"flink": settings.engines["ray"]}, "default_engine": "flink"})
+
+    acked = asyncio.run(handle_stage(cast(DaprClient, _Bus()), unserved, {"data": {"token": "tok-refused", "from_version": 1}}))
+
+    assert acked == {"status": "SUCCESS"}
+    ((document,),) = [_plan_files(unserved, "runs")]
+    closed = stage_plans.plan_store(unserved).read(document.stem)
+    assert closed is not None and closed.outcome is not None and (closed.outcome.status, closed.outcome.source) == ("failed", "engine")
+    assert "engine 'flink' is not one this door serves" in (closed.outcome.error or "")
+    assert compute_engine.jobs.bodies == {}
+
+
+def test_a_plan_no_longer_parsing_is_counted_unreadable_and_pruned_past_retention(settings: MedallionSettings) -> None:
+    """A plan stored under an earlier schema (here the order's dropped OTLP map) can be read by no one, so no tick can
+    resolve it. The sweep counts it `unreadable` rather than as an outage, and once its object is older than the plans'
+    retention the prune removes it with its open-index entry, so the store's lifecycle ends for every document."""
+    bus = _Bus()
+    plan = _pass_one(settings, bus, {"token": "tok-old-schema", "from_version": 1})
+    (document,) = _plan_files(settings, "runs")
+    stored = json.loads(document.read_text())
+    stored["order"]["observability"]["otlp"] = {"OTEL_EXPORTER_OTLP_ENDPOINT": "http://collector:4318"}
+    document.write_text(json.dumps(stored))
+
+    young = asyncio.run(stage_plans.sweep(settings, bus))
+    aged = time.time() - CLOSED_RETENTION.total_seconds() - 60
+    os.utime(document, (aged, aged))
+    old = asyncio.run(stage_plans.sweep(settings, bus))
+
+    assert (young.unreadable, young.errors, young.pruned) == (1, 0, 0)
+    assert (old.unreadable, old.pruned) == (1, 1)
+    assert _plan_files(settings, "runs") == [] and _plan_files(settings, "open") == [], f"{plan.action_id} outlived its retention"

@@ -1,4 +1,4 @@
-"""What the medallion's two planned lanes share (CP-029): the stage runners' Ray stage runs and the producer's training runs.
+"""What the medallion's two planned lanes share (CP-029): the stage runners' out-of-process stage runs and the producer's training runs.
 
 Both lanes keep their runs as plans in `service_kit.lakehouse.run_plans`, resolve them through
 `service_kit.lakehouse.run_outcomes`, and differ only in what a terminal does (`stage_plans`, `train_plans`). What
@@ -17,7 +17,6 @@ import lance
 
 from medallion.core.config import MedallionSettings, shared_lance_session
 from medallion.core.lineage_publish import signed_control_event
-from medallion.services.engine_names import RAY_ENGINE
 from medallion.services.engine_registry import executor_for
 from service_kit import dapr_publish
 from service_kit.control_events import CONTROL_TOPIC, CatalogControlEvent
@@ -61,9 +60,9 @@ def run_handle(plan: PlanDocument) -> RunHandle:
     return RunHandle(engine=plan.engine, handle=plan.action_id)
 
 
-def ray_executor() -> Executor:
-    """The Ray engine, resolved BY NAME through the registry ([[LH-159]]); it needs no storage options."""
-    return executor_for(RAY_ENGINE, storage_options={})
+def executor_for_plan(settings: MedallionSettings, plan: PlanDocument) -> Executor:
+    """The engine the plan names, resolved BY NAME through the registry (CP-056); `UnknownEngineError` when unhosted."""
+    return executor_for(settings, plan.engine)
 
 
 async def publish_plan(settings: MedallionSettings, dapr: object, store: PlanStore, plan: PlanDocument) -> PlanDocument:

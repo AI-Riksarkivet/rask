@@ -15,10 +15,8 @@ import time
 from pathlib import Path
 from typing import Any, cast
 
-import httpx
 import pytest
 
-import medallion.services.ray_submit as ray_submit
 import medallion.services.transform as stage_runner
 from lineage_kit.consume import LineageDoc
 from medallion.core.config import MedallionSettings
@@ -27,6 +25,8 @@ from medallion.services import inprocess_executor, stage_plans, stage_submit
 from medallion.services.compute import UpstreamFacts, WriteResult
 from medallion.services.ingest_trigger import handle_bronze_arrival
 from medallion.services.produce import produce
+from service_kit.lakehouse.task_registry import TaskRegistration
+from service_kit.lakehouse.work_order import WorkOrder
 from service_kit.openlineage import run_id_for
 
 
@@ -78,7 +78,16 @@ _BRONZE_TO_SILVER = MedallionSettings.model_validate(
 )
 # The same stage with the EVENT-DRIVEN Ray path on (compute + ray + from/to URIs). model_copy skips the
 # validators, matching what the deployed pod resolves; a local path keeps storage_options() creds-free.
-_RAY_STAGE_RUNNER = _BRONZE_TO_SILVER.model_copy(update={"compute_enabled": True, "ray_enabled": True, "from_uri": "/tmp/from", "to_uri": "/tmp/to"})
+_RAY_STAGE_RUNNER = MedallionSettings.model_validate(
+    _BRONZE_TO_SILVER.model_dump(by_alias=True)
+    | {
+        "MEDALLION_COMPUTE_ENABLED": True,
+        "MEDALLION_ENGINES": {"ray": {"app_id": "compute"}},
+        "MEDALLION_DEFAULT_ENGINE": "ray",
+        "MEDALLION_FROM_URI": "/tmp/from",
+        "MEDALLION_TO_URI": "/tmp/to",
+    }
+)
 
 
 def test_stage_runner_emits_lineage_and_fires_NO_next_stage_trigger() -> None:
@@ -112,7 +121,7 @@ def test_stage_runner_emits_lineage_and_fires_NO_next_stage_trigger() -> None:
 
 
 def test_stage_runner_ray_branch_submits_job_then_emits_measured_lineage(monkeypatch: pytest.MonkeyPatch) -> None:
-    """ray_enabled: handle_stage submits the Ray job, measures the written dataset, and emits the SAME
+    """An out-of-process default engine: handle_stage submits the job, measures the written dataset, and emits the SAME
     lineage (measured version AND column edges) and fires NO trigger — the in-process contract, via Ray.
 
     The Ray branch must read back with ``measure_stage``, not a bare ``measure``: the transform happened
@@ -127,6 +136,7 @@ def test_stage_runner_ray_branch_submits_job_then_emits_measured_lineage(monkeyp
         _settings: Any,
         _dapr: object,
         *,
+        engine: str,
         trigger: Any,
         from_uri: str,
         to_uri: str,
@@ -145,6 +155,7 @@ def test_stage_runner_ray_branch_submits_job_then_emits_measured_lineage(monkeyp
         # that matches no grant) if the dispatch hands them over.
         dispatched.update(
             {
+                "engine": engine,
                 "from": from_uri,
                 "to": to_uri,
                 "token": trigger.token,
@@ -175,7 +186,7 @@ def test_stage_runner_ray_branch_submits_job_then_emits_measured_lineage(monkeyp
     status = asyncio.run(stage_runner.handle_stage(cast(Any, first), _RAY_STAGE_RUNNER, {"data": {"token": "tok"}}))
 
     assert status == {"status": "SUCCESS"}
-    assert {k: dispatched[k] for k in ("from", "to", "token")} == {"from": "/tmp/from", "to": "/tmp/to", "token": "tok"}
+    assert {k: dispatched[k] for k in ("engine", "from", "to", "token")} == {"engine": "ray", "from": "/tmp/from", "to": "/tmp/to", "token": "tok"}
     assert (dispatched["from_id"], dispatched["to_id"]) == (_RAY_STAGE_RUNNER.from_dataset, _RAY_STAGE_RUNNER.to_dataset), (
         "the job would name its datasets by their URI stems, which match no grant"
     )
@@ -189,10 +200,10 @@ def test_stage_runner_ray_branch_submits_job_then_emits_measured_lineage(monkeyp
     kinds = [c["data"]["eventType"] for c in first.calls if c["topic"] == _RAY_STAGE_RUNNER.lineage_topic]
     assert kinds == ["START"], f"dispatch emitted {kinds or 'nothing'} — it must open the run and emit no terminal for a job that has not run"
 
-    # PASS 2 — the run's outcome resolved SUCCEEDED and re-published the trigger with `ray_job_done`. NOW
+    # PASS 2 — the run's outcome resolved SUCCEEDED and re-published the trigger with `run_done`. NOW
     # the destination exists, so the measure is a question about this run's output rather than a race.
     dapr = _FakeDapr()
-    status = asyncio.run(stage_runner.handle_stage(cast(Any, dapr), _RAY_STAGE_RUNNER, {"data": {"token": "tok", "ray_job_done": True}}))
+    status = asyncio.run(stage_runner.handle_stage(cast(Any, dapr), _RAY_STAGE_RUNNER, {"data": {"token": "tok", "run_done": True}}))
 
     assert status == {"status": "SUCCESS"}
     # The measure reads BOTH ends — it needs the upstream schema to reconstruct the edges.
@@ -299,7 +310,7 @@ def _bronze_write_cloudevent(token: str = "tok123") -> dict[str, Any]:
     """A Dapr CloudEvent whose data is a bronze-dataset write (what /bronze-arrival reacts to)."""
     return {
         "data": build_run_event(
-            operation="lance_ray_ingest",
+            operation="ingest_bronze",
             author="ray",
             job_namespace="lance-medallion",
             inputs=[],
@@ -488,31 +499,9 @@ def test_bronze_arrival_carries_the_originator_onto_the_trigger() -> None:
     assert trigger["data"]["originator"] == "alice"
 
 
-class _FakeJobsAPI:
-    """Captures the submitted job body. A fake rather than a mock: the assertion is about the exact
-    `runtime_env.env_vars` dict that reaches Ray, so the shape must survive the round trip."""
-
-    def __init__(self) -> None:
-        self.posts: list[dict[str, Any]] = []
-
-    async def __aenter__(self) -> _FakeJobsAPI:
-        return self
-
-    async def __aexit__(self, *_exc: object) -> None:
-        return None
-
-    async def get(self, _url: str, **_kw: Any) -> Any:
-        return httpx.Response(404, request=httpx.Request("GET", "http://ray"))
-
-    async def post(self, _url: str, json: dict[str, Any]) -> Any:
-        self.posts.append(json)
-        return httpx.Response(200, json={"submission_id": "sub-1"}, request=httpx.Request("POST", "http://ray"))
-
-
-async def _submit_stage(settings: MedallionSettings, **kwargs: Any) -> None:
-    """The stage lane's submission: the order it builds, posted through the port."""
-    order, registration = await stage_submit.build_stage_order(settings, **kwargs)
-    await stage_submit.submit_stage_order(order, registration)
+async def _stage_order(settings: MedallionSettings, **kwargs: Any) -> tuple[WorkOrder, TaskRegistration]:
+    """The order a stage runner hands its engine, and its registration: what the engine runs the job on (CP-056)."""
+    return await stage_submit.build_stage_order(settings, engine="ray", **kwargs)
 
 
 def test_a_lane_cannot_reach_a_platform_variable_by_colliding_on_its_name(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -524,18 +513,15 @@ def test_a_lane_cannot_reach_a_platform_variable_by_colliding_on_its_name(monkey
     trusted from config: every key a workload supplies is rewritten before it is sent, and the
     platform's own keys are therefore unreachable by construction.
     """
-    api = _FakeJobsAPI()
-    monkeypatch.setattr(ray_submit.httpx, "AsyncClient", lambda **_kw: api)
     settings = MedallionSettings.model_validate(
         {
             "compute_enabled": True,
-            "ray_enabled": True,
             "s3_secret_access_key": "the-real-secret",
-            "ray_job_params": {"S3_SECRET": "stolen", "RASK_LINEAGE_DOCUMENT": "forged", "OTEL_SERVICE_NAME": "spoofed"},
+            "stage_params": {"S3_SECRET": "stolen", "RASK_LINEAGE_DOCUMENT": "forged", "OTEL_SERVICE_NAME": "spoofed"},
         }
     )
-    asyncio.run(_submit_stage(settings, from_uri="s3://lake/b", to_uri="s3://lake/s", stage="silver", token="t", lineage_json="{}"))
-    env = api.posts[0]["runtime_env"]["env_vars"]
+    order, _registration = asyncio.run(_stage_order(settings, from_uri="s3://lake/b", to_uri="s3://lake/s", stage="silver", token="t", lineage_json="{}"))
+    env = order.to_env()
     # STRONGER than the original assertion. This checked the real credential SURVIVED the collision
     # (`env["S3_SECRET"] == "the-real-secret"`); since the Jobs-API-echo P0 fix the credential does
     # not ride the submission at all — the pod holds it — so the lane's collision target simply does
@@ -555,23 +541,19 @@ def test_a_lane_cannot_reach_a_platform_variable_by_colliding_on_its_name(monkey
 def test_no_blank_value_rides_the_submission(monkeypatch: pytest.MonkeyPatch) -> None:
     """[[XC-066]] asserted where the row asks for it: the SUBMITTED `runtime_env`, not the helper.
 
-    `stage_submit.otlp_env()` is unit-tested on its own, and that is one level short of the claim. What
-    reaches Ray is `{**order.to_env(), **otlp_env(), **trace_env(), ...}`, and Ray merges that dict OVER
-    the target pod's process env — so a blank from ANY of those spreads makes this submitter the owner
+    What reaches Ray is `order.to_env()`, and Ray merges that dict OVER the target pod's process env — so a blank from ANY of those spreads makes this submitter the owner
     of that key and silently overrides the pod's own value. The same shape gave every job
     `SignatureDoesNotMatch` when an S3 pair had two owners, measured twice on the live estate.
 
     So the invariant is about the whole body: no key rides it carrying `""`.
     """
-    api = _FakeJobsAPI()
-    monkeypatch.setattr(ray_submit.httpx, "AsyncClient", lambda **_kw: api)
     for name in ("OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_PROTOCOL", "OTEL_EXPORTER_OTLP_HEADERS", "OTEL_SERVICE_NAME", "OTEL_RESOURCE_ATTRIBUTES"):
         monkeypatch.delenv(name, raising=False)
-    settings = MedallionSettings.model_validate({"compute_enabled": True, "ray_enabled": True})
+    settings = MedallionSettings.model_validate({"compute_enabled": True})
 
-    asyncio.run(_submit_stage(settings, from_uri="s3://lake/b", to_uri="s3://lake/s", stage="silver", token="t", lineage_json="{}"))
+    order, _registration = asyncio.run(_stage_order(settings, from_uri="s3://lake/b", to_uri="s3://lake/s", stage="silver", token="t", lineage_json="{}"))
 
-    env = api.posts[0]["runtime_env"]["env_vars"]
+    env = order.to_env()
     blank = sorted(k for k, v in env.items() if v == "")
     assert not blank, f"these keys ride the submission blank and will override the Ray pod's own values: {blank}"
 
@@ -606,27 +588,23 @@ def test_a_DECLARED_lane_overrides_the_charts_entrypoint_and_params(monkeypatch:
             }
         ),
     )
-    api = _FakeJobsAPI()
-    monkeypatch.setattr(ray_submit.httpx, "AsyncClient", lambda **_kw: api)
     settings = MedallionSettings.model_validate(
         {
             "compute_enabled": True,
-            "ray_enabled": True,
             "to_namespace": "silver",
             "transform": "dummy",
             "control_root": str(tmp_path),
             # The chart's half, all of which the declaration must beat.
-            "ray_entrypoint": "python /home/ray/jobs/ray_stage_job.py",
-            "ray_job_params": {"FROM_THE_CHART": "1"},
-            "ray_code_version": "main-fromchart",
+            "stage_task": "stage-transform",
+            "stage_params": {"FROM_THE_CHART": "1"},
+            "code_version": "main-fromchart",
         }
     )
 
-    asyncio.run(_submit_stage(settings, from_uri="s3://lake/b", to_uri="s3://lake/s", stage="silver", token="t", project="acme"))
+    order, registration = asyncio.run(_stage_order(settings, from_uri="s3://lake/b", to_uri="s3://lake/s", stage="silver", token="t", project="acme"))
 
-    body = api.posts[0]
-    assert body["entrypoint"] == "python /home/ray/jobs/ray_dummy_job.py", "the REGISTERED command for the declared task must win over the chart's"
-    env = body["runtime_env"]["env_vars"]
+    assert (order.task, registration.command) == ("dummy-lane", "python /home/ray/jobs/ray_dummy_job.py"), "the DECLARED task must win over the chart's"
+    env = order.to_env()
     assert env["RASK_PARAM_EMBED_DIM"] == "8"
     assert "RASK_PARAM_FROM_THE_CHART" not in env, "the chart's params must not leak in alongside the declaration"
 
@@ -640,23 +618,17 @@ def test_a_NAMED_but_UNDECLARED_lane_SUBMITS_NOTHING(monkeypatch: pytest.MonkeyP
     """
     from medallion.services.transform_spec import UndeclaredTransformError
 
-    api = _FakeJobsAPI()
-    monkeypatch.setattr(ray_submit.httpx, "AsyncClient", lambda **_kw: api)
     settings = MedallionSettings.model_validate(
         {
             "compute_enabled": True,
-            "ray_enabled": True,
             "to_namespace": "silver",
             "transform": "never-declared",
             "control_root": str(tmp_path),
-            "ray_entrypoint": "python /home/ray/jobs/ray_stage_job.py",
         }
     )
 
     with pytest.raises(UndeclaredTransformError, match="never-declared"):
-        asyncio.run(_submit_stage(settings, from_uri="s3://lake/b", to_uri="s3://lake/s", stage="silver", token="t", project="acme"))
-
-    assert api.posts == [], "a job was submitted for a lane nobody declared"
+        asyncio.run(_stage_order(settings, from_uri="s3://lake/b", to_uri="s3://lake/s", stage="silver", token="t", project="acme"))
 
 
 def test_the_stage_job_gets_the_ORIGINATOR_in_its_OWN_env_not_only_ray_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -668,24 +640,21 @@ def test_the_stage_job_gets_the_ORIGINATOR_in_its_OWN_env_not_only_ray_metadata(
     events it emits itself. The stage path sent identity to `metadata` only, and its comment said
     env_vars "hands the job code an identity it has no reason to hold" — an assumption that stopped
     being true the moment a stage job emitted its own OpenLineage (the dummy lane does; the train
-    path has always done it, which is why train already carries ORIGINATOR at ray_submit.py:218).
+    path has always done it).
 
     The consequence is the silent one: the job builds its event with no principal, `notifiable()`
     discards it, and the ack is SUCCESS. Caught by an audit of every producer, not by any test —
     the dummy lane only appeared to work because its e2e harness sets ORIGINATOR by hand.
     """
-    api = _FakeJobsAPI()
-    monkeypatch.setattr(ray_submit.httpx, "AsyncClient", lambda **_kw: api)
-    settings = MedallionSettings.model_validate({"compute_enabled": True, "ray_enabled": True, "to_namespace": "silver"})
+    settings = MedallionSettings.model_validate({"compute_enabled": True, "to_namespace": "silver"})
 
-    asyncio.run(_submit_stage(settings, from_uri="s3://lake/b", to_uri="s3://lake/s", stage="silver", token="t", originator="alice-sub", project="acme"))
+    order, _registration = asyncio.run(
+        _stage_order(settings, from_uri="s3://lake/b", to_uri="s3://lake/s", stage="silver", token="t", originator="alice-sub", project="acme")
+    )
 
-    env = api.posts[0]["runtime_env"]["env_vars"]
+    env = order.to_env()
     assert env["RASK_ORIGINATOR"] == "alice-sub", "the job cannot name the person in its own events without this"
     assert env["RASK_PROJECT"] == "acme", "no lance.project means zero watchers, silently"
-    # The post-mortem copy must SURVIVE — this is an addition, not a move.
-    assert api.posts[0]["metadata"]["rask.originator"] == "alice-sub"
-    assert api.posts[0]["metadata"]["rask.project"] == "acme"
 
 
 def test_a_service_triggered_stage_sends_NO_blank_identity(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -693,19 +662,16 @@ def test_a_service_triggered_stage_sends_NO_blank_identity(monkeypatch: pytest.M
     than an empty one a reader could mistake for one — the same rule `metadata` already follows.
 
     Absent and blank are different claims on the wire. Ray merges `runtime_env.env_vars` OVER the pod's
-    process env (`stage_submit.otlp_env`), so a key this body carries is owned by the submission even
+    process env, so a key this body carries is owned by the submission even
     when it is empty; and a job that asks "was I told who this is for?" by testing the key's PRESENCE
     reads a blank as yes (`WorkOrder.to_env`). So the only passing shape is the key's absence.
 
     `originator=""` is passed explicitly because it is exactly what the plan dispatch hands the
     submitter when the trigger names nobody (`stage_plans.dispatch`).
     """
-    api = _FakeJobsAPI()
-    monkeypatch.setattr(ray_submit.httpx, "AsyncClient", lambda **_kw: api)
-    settings = MedallionSettings.model_validate({"compute_enabled": True, "ray_enabled": True, "to_namespace": "silver"})
+    settings = MedallionSettings.model_validate({"compute_enabled": True, "to_namespace": "silver"})
 
-    asyncio.run(_submit_stage(settings, from_uri="s3://lake/b", to_uri="s3://lake/s", stage="silver", token="t", originator=""))
+    order, _registration = asyncio.run(_stage_order(settings, from_uri="s3://lake/b", to_uri="s3://lake/s", stage="silver", token="t", originator=""))
 
-    env = api.posts[0]["runtime_env"]["env_vars"]
+    env = order.to_env()
     assert "RASK_ORIGINATOR" not in env, f"a service-run cascade must send no principal, neither blank nor fabricated: {env.get('RASK_ORIGINATOR')!r}"
-    assert "rask.originator" not in api.posts[0]["metadata"]

@@ -47,7 +47,7 @@ scopes:
 {{- include "lance.publishPubsub" (list . (printf "%s-%s" (.Values.pubsub.controlName | default "catalog-control-pubsub") .Values.explorer.services.annotator.daprAppId) .Values.explorer.services.annotator.daprAppId) }}
 {{- end }}
 
-{{- if and .Values.medallion.enabled .Values.medallion.ray .Values.medallion.compute }}
+{{- if and .Values.medallion.enabled (include "lance.outOfProcessEngine" .) .Values.medallion.compute }}
 {{- range .Values.medallion.stageRunners }}
 {{- include "lance.publishPubsub" (list $ (printf "%s-%s" ($.Values.pubsub.controlName | default "catalog-control-pubsub") .daprAppId) .daprAppId) }}
 {{- end }}

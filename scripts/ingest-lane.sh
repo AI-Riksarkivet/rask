@@ -94,9 +94,10 @@ lane_values() {
 		# bronze write into `medallion.bronze`), and its stage runners carry bronze->silver->gold. Disabled,
 		# the ingest lane passes every one of its own gates while nothing above bronze moves — which is
 		# exactly the gap that leaves. Its compute is the in-process fake-Ray path, so the cascade can
-		# be witnessed without a Ray cluster: `ray: false`, since with Ray off the chart names no Ray
-		# for the lane to submit to and refuses the render.
-		medallion: {enabled: true, ray: false}
+		# be witnessed without a Ray cluster: no engine on compute, since with Ray off the chart names no
+		# Ray for an engine to submit to and refuses the render.
+		medallion: {enabled: true}
+		services: {compute: {engines: {ray: {enabled: false}}}}
 		compaction: {enabled: false}
 		media: {enabled: false}
 		dev: {reload: false}

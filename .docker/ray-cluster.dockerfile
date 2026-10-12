@@ -124,8 +124,8 @@ RUN --network=none --mount=from=builder,source=/opt/uv/python,target=/tmp/uvpy \
 RUN --network=none --mount=from=builder,source=/opt/venv,target=/tmp/venv \
     cp -a /tmp/venv /opt/venv
 
-# The medallion Ray lane submits `python /home/ray/jobs/<job>.py` — the defaults of `ray_entrypoint`
-# and `train_entrypoint` in services/medallion/src/medallion/core/config.py. `ray-lance.dockerfile`
+# compute's engine door submits `python /home/ray/jobs/<job>.py` — the commands of the task table
+# `services.compute.engines.ray.tasks` (compute's RASK_COMPUTE_ENGINE_TASKS). `ray-lance.dockerfile`
 # baked these for the SEPARATE ray-lance demo cluster; this is the image the chart's KubeRay cluster
 # actually runs, and it did not, so every submitted stage job died with
 #   python: can't open file '/home/ray/jobs/ray_stage_job.py': No such file or directory

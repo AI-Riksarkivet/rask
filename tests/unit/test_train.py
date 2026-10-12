@@ -4,7 +4,7 @@ Covers the DONE WHEN unit items: the head publishes the pinned trigger (LATEST r
 the token guard is wired on /train, the consumer gates as the trainer identity (deny → DROP, outage →
 RETRY), submit-and-ack semantics through the executor port (re-attach on redelivery, NO resubmit of a
 terminally FAILED prior job), and transport failure → RETRY. The Ray Jobs API is the one stand-in: the
-consumer's order reaches it through the real Ray adapter (CP-044).
+consumer's order reaches it by invocation of compute's real engine door (CP-056).
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ from typing import Any, cast
 
 import httpx
 import pytest
+from engine_door_double import ENGINES, route_engine_to_compute
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from lance_namespace import ServiceUnavailableError
@@ -29,7 +30,7 @@ from openfga_sdk.models.check_response import CheckResponse
 from medallion.api.dependencies import get_dapr, get_settings
 from medallion.api.train import router
 from medallion.core.config import MedallionSettings
-from medallion.services import ray_submit, train, train_plans
+from medallion.services import train, train_plans
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 
@@ -45,7 +46,7 @@ def _local_estate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
 def _settings(**overrides: Any) -> MedallionSettings:
     values: dict[str, Any] = {
-        "MEDALLION_RAY_ENABLED": "true",
+        "MEDALLION_ENGINES": ENGINES,
         "MEDALLION_COMPUTE_ENABLED": "true",
         "MEDALLION_S3_ENDPOINT": "http://rustfs:9000",
         "MEDALLION_S3_SECRET_ACCESS_KEY": "k",
@@ -65,7 +66,7 @@ class _FakeDapr:
 
 
 class _Ray:
-    """The Ray Jobs API behind the Ray adapter: each POST answered by the next ``(status, existing job state)`` of
+    """The Ray Jobs API behind compute's engine door: each POST answered by the next ``(status, existing job state)`` of
     ``answers`` (a fresh 200 once they run out), every body kept, and a DELETE refused — the train lane never deletes
     a prior job (D2)."""
 
@@ -92,12 +93,7 @@ class _Ray:
 
 def _ray(monkeypatch: pytest.MonkeyPatch, ray: _Ray | None = None) -> _Ray:
     fake = ray or _Ray()
-    client = httpx.AsyncClient(base_url="http://ray-head:8265", transport=httpx.MockTransport(fake.handle))
-
-    async def _client() -> httpx.AsyncClient:
-        return client
-
-    monkeypatch.setattr(ray_submit, "ray_client", _client)
+    route_engine_to_compute(monkeypatch, fake.handle)
     return fake
 
 

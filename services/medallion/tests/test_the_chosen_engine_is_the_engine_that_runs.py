@@ -24,7 +24,7 @@ a rename in one is a stage that chooses an engine no adapter answers to, and the
 WHY A REGISTRY RATHER THAN AN `if`. Two adapters and a conditional would work and would not be BYO:
 adding a third engine would mean editing the conditional, which is the thing a port exists to stop.
 A registry keyed on the declared name means a new engine is a new adapter and a new registration,
-and `resolve_task_registration` already refuses a task registered for an engine this deployment does
+and `engine_choice.engine_for` already refuses a task registered for an engine this deployment does
 not host — so the refusal path exists and only the resolution is missing.
 
 This asserts the seam, not the transport: `Executor` is `runtime_checkable`, so conformance is ASKED.
@@ -39,8 +39,9 @@ import pytest
 def test_an_unknown_engine_is_REFUSED_rather_than_defaulted() -> None:
     """Falling back to whichever engine is configured is how a declaration for another executor gets
     silently run here — the exact failure `engine_choice` already refuses at declaration time."""
+    from medallion.core.config import MedallionSettings
     from medallion.services.engine_registry import UnknownEngineError, executor_for
 
     with pytest.raises(UnknownEngineError) as excinfo:
-        executor_for("some-engine-nobody-hosts", storage_options={})
+        executor_for(MedallionSettings(), "some-engine-nobody-hosts")
     assert "some-engine-nobody-hosts" in str(excinfo.value), "the refusal does not name the engine, so an operator cannot act on it"

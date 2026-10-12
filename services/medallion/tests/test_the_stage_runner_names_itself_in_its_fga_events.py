@@ -48,8 +48,7 @@ def _boot() -> None:
 def test_the_stage_runners_fga_events_name_the_service(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     # Unpinned, so the bootstrap resolves by name and emits `openfga_resolved_by_name`. Explicit values beat
     # the environment: a set RASK_FGA_STORE_ID/RASK_FGA_MODEL_ID takes the pinned path, which emits no such
-    # event, and MEDALLION_RAY_ENABLED starts a real workflow runtime.
-    settings = MedallionSettings.model_validate({"fga_enabled": True, "fga_store_id": None, "fga_model_id": None, "ray_enabled": False})
+    settings = MedallionSettings.model_validate({"fga_enabled": True, "fga_store_id": None, "fga_model_id": None})
     monkeypatch.setattr(stage_runner, "get_settings", lambda: settings)
     monkeypatch.setattr(stage_runner, "DaprClient", _Sidecar)
     monkeypatch.setattr(stage_runner, "instrument_lance_if_available", lambda: None)

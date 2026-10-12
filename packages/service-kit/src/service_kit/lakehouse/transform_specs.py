@@ -42,6 +42,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from service_kit.lakehouse.objectfs import StorageOptions, fs_and_base
 from service_kit.lakehouse.stage_stamp import CARDINALITIES, ONE_TO_ONE
+from service_kit.lakehouse.work_order import invalid_param_keys
 
 
 log = logging.getLogger(__name__)
@@ -75,6 +76,9 @@ class TransformSpec(BaseModel):
     #: to this library and to the catalog, which is what keeps an engine's name out of the published
     #: OpenAPI and lets a second engine be declared without a catalog change.
     task: str = Field(min_length=1, description="a task registered in <control_root>/_tasks/")
+    #: Which registration of the task runs it, when more than one engine registered it. Opaque like `task`. Empty
+    #: takes the task's one registration, or the deployment's default engine among several.
+    engine: str = Field(default="", max_length=64, description="the engine whose registration of the task runs it; empty: the deployment chooses")
     params: dict[str, str] = Field(default_factory=dict, description="opaque workload parameters; never secrets")
     #: How many output rows this lane may emit per input row. DECLARED, never inferred: a stage
     #: driver cannot tell a deliberate fan-out from a transform that lost rows, and guessing in
@@ -109,6 +113,9 @@ class TransformSpec(BaseModel):
         offending = sorted(key for key in value if key.startswith(_RESERVED_PARAM_PREFIX))
         if offending:
             raise ValueError(f"param keys {offending} carry the reserved {_RESERVED_PARAM_PREFIX!r} prefix, which the submit path adds")
+        unnamed = invalid_param_keys(value)
+        if unnamed:
+            raise ValueError(f"param keys {unnamed} are not variable names; each is delivered to the job as RASK_PARAM_<key>")
         return value
 
 

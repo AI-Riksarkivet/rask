@@ -421,7 +421,7 @@ if grep -qE "[1-9][0-9]* skipped" /tmp/e2e-stack.log; then
 fi
 
 # The Ray-path suite (#53, test_ray_train_e2e.py) is NOT run here on purpose. It needs a
-# real KubeRay cluster AND medallion.ray/compute flipped on — and flipping ray-on rolls the medallion
+# real KubeRay cluster AND services.compute.engines.ray/medallion.compute flipped on — and flipping ray-on rolls the medallion
 # stage runners into stage-compute-via-ray mode, which on a fresh CI stack races the OpenBao secret-store
 # readiness and hangs the stage runners (secret 500 + "waiting on port 8000"). Forcing that into the shared,
 # ray-OFF core-suite job destabilises the whole run for no isolation benefit. Its home is the ray-ON

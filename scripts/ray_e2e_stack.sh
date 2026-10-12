@@ -4,7 +4,7 @@
 # Ray-ON recipe and a real KubeRay head, then runs the Ray train suite and the governance suite so they
 # cannot silently regress.
 #
-# WHY A SEPARATE JOB (not folded into e2e_stack.sh): the train head shares MEDALLION_RAY_ENABLED with
+# WHY A SEPARATE JOB (not folded into e2e_stack.sh): the train head shares the Ray engine (services.compute.engines.ray) with
 # the stage runners, so enabling it flips the whole cascade into stage-compute-via-ray. Flipping that ON mid-run
 # against the openbao-ON core stack races the OpenBao secret store and hangs the stage runners (secret 500 →
 # "waiting on port 8000"). This job instead deploys the Ray-ON recipe FROM THE START, and uses the
@@ -122,9 +122,9 @@ HELM_SET=(
   --set auth.enabled=true
   --set medallion.fgaEnabled=true
   --set medallion.compute=true
-  --set medallion.ray=true
+  --set services.compute.engines.ray.enabled=true
   # The one Ray plane ([[CP-041]]): this lane's head is deploy/ray-lance-demo.yaml's `ray-lance-head`
-  # Service (dashboard :8265), so the cascade submits to it and compute prunes it.
+  # Service (dashboard :8265), so compute submits the cascade's jobs to it and prunes it.
   --set-string ray.dashboardUrl=http://ray-lance-head:8265
   --set medallion.quality=true
   --set catalog.warehouses.enabled=true

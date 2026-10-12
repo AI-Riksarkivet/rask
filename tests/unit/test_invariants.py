@@ -616,7 +616,7 @@ def test_every_ray_consumer_names_one_cluster_or_the_render_refuses(overlay: tup
     submits) — and a default render gave compute an external host while four medallion pods submitted to a
     head Service nothing rendered. A head grown to 81,155 jobs OOMKilled compute that way. Every consumer now
     renders `rask.rayDashboardUrl`; the local case passes a stale `medallion.rayAddress` to prove no second
-    key can split the plane, and a render that names no Ray with the cascade's lane on refuses.
+    key can split the plane, and a render that names no Ray with an engine enabled refuses.
 
     The engine is bring-your-own ([[XC-125]], ADR 0153): no render holds a `ray.io` object or the KubeRay operator, so
     the address is always one the estate names (the local overlay names the ray-cluster fixture's head Service).
@@ -624,7 +624,7 @@ def test_every_ray_consumer_names_one_cluster_or_the_render_refuses(overlay: tup
     if address is None:
         with pytest.raises(subprocess.CalledProcessError) as refused:
             chart_render.render_chart_text(CHART, "--set", "explorer.enabled=true", *overlay, base=chart_render.UNNAMED_RAY_ARGS)
-        assert "medallion.ray submits to a Ray engine this render does not name" in refused.value.stderr
+        assert "services.compute.engines enables an engine on a Ray cluster this render does not name" in refused.value.stderr
         return
 
     text = chart_render.render_chart_text(CHART, "--set", "explorer.enabled=true", *overlay, base=chart_render.UNNAMED_RAY_ARGS)
@@ -635,10 +635,10 @@ def test_every_ray_consumer_names_one_cluster_or_the_render_refuses(overlay: tup
             named.setdefault("RAY_DASHBOARD_URL", set()).add(doc["data"]["RAY_DASHBOARD_URL"])
     for _, _, container in chart_render.containers(tuple(docs)):
         for name, value in chart_render.env_of(container).items():
-            if name in {"MEDALLION_RAY_ADDRESS", "MEDIA_SERVE_DISCOVERY_URL"}:
+            if name == "MEDIA_SERVE_DISCOVERY_URL" or "RAY_ADDRESS" in name:
                 named.setdefault(name, set()).add(value)
 
-    assert named == {"RAY_DASHBOARD_URL": {address}, "MEDALLION_RAY_ADDRESS": {address}, "MEDIA_SERVE_DISCOVERY_URL": {address}}
+    assert named == {"RAY_DASHBOARD_URL": {address}, "MEDIA_SERVE_DISCOVERY_URL": {address}}
     engine = sorted(
         f"{doc['kind']}/{doc['metadata']['name']}"
         for doc in docs

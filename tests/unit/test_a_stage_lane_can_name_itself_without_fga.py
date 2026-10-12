@@ -62,7 +62,7 @@ def _stage_runner_env(rendered: str) -> dict[str, dict[str, str]]:
 
 def test_a_stage_runner_names_itself_with_fga_off() -> None:
     """The identity is who the runner IS. FGA decides what it may DO."""
-    runners = _stage_runner_env(_render("--set", "medallion.ray=true", "--set", "auth.fgaEnabled=false"))
+    runners = _stage_runner_env(_render("--set", "services.compute.engines.ray.enabled=true", "--set", "auth.fgaEnabled=false"))
     assert runners, "no stage runner Deployments rendered — this pin is asserting nothing"
     for name, env in runners.items():
         claimed = env.get("MEDALLION_FGA_SERVICE_IDENTITY")

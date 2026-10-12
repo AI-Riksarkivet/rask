@@ -12,8 +12,7 @@ from typing import Any
 import httpx
 import pytest
 
-from medallion.services.ray_job_failure import RayJobFailure
-from medallion.services.ray_jobs_api import RayJobError, job_failure
+from ray_kit.jobs_api import RayJobError, job_failure
 
 
 def _client(handler: Any) -> httpx.AsyncClient:
@@ -62,10 +61,3 @@ async def test_an_unreachable_dashboard_RAISES() -> None:
     async with _client(lambda _r: httpx.Response(503)) as client:
         with pytest.raises(RayJobError):
             await job_failure(client, "sub")
-
-
-def test_a_cause_ray_did_not_report_renders_EMPTY_rather_than_a_blank_line() -> None:
-    """So a caller can tell "no cause available" from "the cause is blank" — the medallion watcher
-    appends nothing at all rather than a dangling em-dash."""
-    assert RayJobFailure().summary(800) == ""
-    assert RayJobFailure(driver_exit_code=137).summary(800) == "driver exit 137"

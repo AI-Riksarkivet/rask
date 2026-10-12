@@ -28,6 +28,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from service_kit.control_events import CONTROL_TOPIC
 from service_kit.governed.settings import FgaSettings, OidcSettings, SignatureDoorSettings
+from service_kit.lakehouse.engine_door import EngineBinding
 from service_kit.lakehouse.naming import CATALOG_DELIMITER
 from service_kit.lakehouse.objectfs import lance_storage_options
 
@@ -38,30 +39,38 @@ from service_kit.lakehouse.warehouse_registry import project_namespace as projec
 
 
 class TaskDeclaration(BaseModel):
-    """One task a plane of this estate can run, as the CHART declares it.
+    """One task an engine of this estate can run, as the CHART declares it.
 
-    ENGINE-NEUTRAL, and named so: the same shape declares what the Ray plane runs and what the
-    in-process engine runs, because the only thing that differs between them is which plane writes
-    the registration. The engine is deliberately absent from the row — the registering plane stamps
-    its own. Letting the chart supply it would make a typo register a task no executor here answers
-    to: a declaration that validates at the catalog door and then resolves to nothing at dispatch,
+    ENGINE-NEUTRAL, and named so: the same shape declares what the in-process engine runs and what an
+    out-of-process engine runs. The engine is deliberately absent from the row — the registering plane stamps
+    the engine whose list holds it. Letting the chart supply it would make a typo register a task no executor
+    answers to: a declaration that validates at the catalog door and then resolves to nothing at dispatch,
     which is the failure the registry exists to move earlier.
 
-    ``command`` is the ENGINE's business and the platform never parses it. For Ray it is the Jobs
-    API entrypoint, and the script it names must be baked into the image the cluster runs, which
-    `tests/unit/test_ray_job_images.py` checks against the dockerfile's own COPY list. For the
-    in-process engine it names a callable that plane already hosts.
+    ``command`` is the ENGINE's business and the platform never parses it. The in-process engine names a callable
+    this plane hosts; an out-of-process engine resolves the task to its own command and declares none here.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     task: str = Field(min_length=1, description="the key a TransformSpec names")
-    command: str = Field(min_length=1, description="the Ray Jobs entrypoint")
+    command: str = ""
     #: EMPTY MEANS ALL — a task that constrains nothing need not enumerate the vocabulary.
     cardinalities: list[str] = Field(default_factory=list)
     #: Which of O1..O12 this task CLAIMS. A claim, never a proof: the platform re-derives them.
     obligations: list[str] = Field(default_factory=list)
-    #: Defaults to the stage runner's own ``ray_code_version`` when empty, so one build stamp governs both.
+    #: Empty takes the code version of the engine that registers it.
+    code_version: str = ""
+
+
+class EngineDeclaration(EngineBinding):
+    """One out-of-process engine as this deployment configures it: the app to invoke, and what it runs.
+
+    ``code_version`` names the build the engine runs (its image), so a roll of that image is a new run under a new
+    key rather than a re-attach to the previous build's job. ``tasks`` are registered stamped with this engine's name.
+    """
+
+    tasks: list[TaskDeclaration] = Field(default_factory=list)
     code_version: str = ""
 
 
@@ -96,8 +105,8 @@ class MedallionSettings(OidcSettings, FgaSettings, SignatureDoorSettings, BaseSe
     """
 
     # `populate_by_name` also teaches the env source the bare FIELD NAME as a second lookup, so
-    # every alias below silently gained an un-namespaced twin (MedallionSettings.ray_address
-    # answered to Ray's own $RAY_ADDRESS). `env_prefix` redirects that fallback onto the
+    # every alias below silently gained an un-namespaced twin (a bare field name answered to
+    # another program's variable). `env_prefix` redirects that fallback onto the
     # namespace the aliases already declare; an explicit alias bypasses it, so the
     # deliberately-bare ones (DAPR_HTTP_PORT, RAY_DASHBOARD_URL) still land.
     # See tests/unit/test_settings_env_namespace.py.
@@ -324,74 +333,40 @@ class MedallionSettings(OidcSettings, FgaSettings, SignatureDoorSettings, BaseSe
     from_uri: str = Field(default="", alias="MEDALLION_FROM_URI")  # upstream Lance dataset (stage runner input)
     to_uri: str = Field(default="", alias="MEDALLION_TO_URI")  # downstream Lance dataset (stage runner output)
 
-    # --- EVENT-DRIVEN real-Ray compute (opt-in, requires compute_enabled). When on, the stage runner submits its
-    # stage transform as a `ray job submit` to the ray-lance cluster (via the Ray Jobs REST API, httpx-only —
-    # no ray package in the stage runner image) IN RESPONSE TO its Dapr trigger, instead of the in-process fake-Ray
-    # write. The submitted job (scripts/ray_stage_job.py, baked in the ray-lance image) reads upstream, stamps
-    # the stage column across Ray workers, and writes downstream at 2.2 + stable row ids; the stage runner then reads
-    # the written version/stats for the same lineage emit. OFF by default — fake-Ray stays the default path.
-    # This is the production shape (KubeRay RayCluster at the rask merge; a raw Ray head on kind here).
-    ray_enabled: bool = Field(default=False, alias="MEDALLION_RAY_ENABLED")
-    ray_address: str = Field(default="http://ray-lance-head:8265", alias="MEDALLION_RAY_ADDRESS")
-    ray_entrypoint: str = Field(default="python /home/ray/jobs/ray_stage_job.py", alias="MEDALLION_RAY_ENTRYPOINT")
-    #: WHAT THIS ESTATE'S RAY PLANE CAN RUN — registered into ``<control_root>/_tasks/`` at producer
-    #: boot, and consulted by the catalog when a transform is declared.
+    # --- WHICH ENGINE runs a stage, and where the out-of-process ones are (CP-056). The lakehouse names no engine:
+    # each out-of-process engine is a Dapr app-id in `engines`, reached through `service_kit.lakehouse.engine_door`.
+    #: The engines this deployment hosts beside the in-process one, keyed by the name a task registration stamps.
+    engines: dict[str, EngineDeclaration] = Field(default_factory=dict, alias="MEDALLION_ENGINES")
+    #: The engine a stage runner with no declared transform runs on: `inprocess`, or a key of `engines`.
+    default_engine: str = Field(default="inprocess", alias="MEDALLION_DEFAULT_ENGINE")
+    #: The task a stage runner with no declared transform runs, as the engine's own table names it.
+    stage_task: str = Field(default="stage-transform", min_length=1, alias="MEDALLION_STAGE_TASK")
+    #: This pod's sidecar HTTP port: an engine with no direct URL is invoked through it.
+    dapr_http_port: int = Field(default=3500, ge=1, le=65535, alias="DAPR_HTTP_PORT")
+    #: The bound on one call to an engine app.
+    engine_request_timeout_seconds: float = Field(default=10.0, ge=0.1, alias="MEDALLION_ENGINE_REQUEST_TIMEOUT_SECONDS")
+    #: What the IN-PROCESS plane can run, registered into ``<control_root>/_tasks/`` at producer boot.
     #:
-    #: The registry is written by the plane that can run the task rather than by the catalog, which
-    #: is what keeps an engine's name out of the published OpenAPI: a second engine registers its own
-    #: tasks under the same prefix and the declaration door learns nothing new. Empty leaves the
-    #: registry untouched — an estate that declares no transforms needs none.
-    ray_tasks: list[TaskDeclaration] = Field(default_factory=list, alias="MEDALLION_RAY_TASKS")
-    #: What the IN-PROCESS plane can run, declared exactly like the Ray list above.
-    #:
-    #: Without it a Ray-less estate registers NOTHING, so `_tasks/` is empty and the catalog's
-    #: declaration door answers 422 for every transform — a catalog door failing for a compute reason,
-    #: which is the coupling the registry exists to remove. The in-process engine is a real second
-    #: engine (`engine_choice` says so in those words), and a real engine registers what it hosts.
+    #: Without it an estate with no out-of-process engine registers NOTHING, so `_tasks/` is empty and the catalog's
+    #: declaration door answers 422 for every transform — a catalog door failing for a compute reason, which is the
+    #: coupling the registry exists to remove.
     inprocess_tasks: list[TaskDeclaration] = Field(default_factory=list, alias="MEDALLION_INPROCESS_TASKS")
-    #: THE WORKLOAD'S OWN PARAMETERS — the channel that makes ``ray_entrypoint`` usable.
-    #:
-    #: A per-lane JSON object, forwarded into the job's ``runtime_env.env_vars`` under the
-    #: ``RASK_PARAM_`` prefix. Without it a stage runner row can name a workload's entrypoint and then has no
-    #: way to configure it: the submit built a FIXED env dict, so a second workload either reused the
-    #: first one's variables or required a platform edit — which is exactly the coupling the agnostic
-    #: ruling forbids.
-    #:
-    #: NAMESPACED ON PURPOSE. The prefix is what keeps this a workload channel rather than a hole in
-    #: the platform: a lane cannot reach ``S3_SECRET``, ``LINEAGE_JSON`` or an ``OTEL_*`` key by
-    #: choosing a colliding name, because every key it supplies is rewritten before it is sent.
-    #:
-    #: The platform never reads these values and never validates them beyond "it is a JSON object of
-    #: strings". Their meaning belongs to the workload, which is the whole point.
-    #:
-    #: NEVER A SECRET. These values come from a chart values file — plaintext, in git, readable by
-    #: anyone who can read the repo or run `helm get values`. A workload that needs a credential (a
-    #: model-hub token, an inference API key) resolves it the SAME way the platform resolves its own S3
-    #: credentials: from the Dapr secret store, fetched at boot through ``fetch_required_secrets``
-    #: (``secrets_from_dapr``), never from an env var and never from here. There is no "just this once"
-    #: exemption — a secret in a values file is a leaked secret the moment the repo is cloned.
-    ray_job_params: dict[str, str] = Field(default_factory=dict, alias="MEDALLION_RAY_JOB_PARAMS")
-    #: WHICH BUILD is submitting — the second axis of the Ray submission id (B3).
-    #:
-    #: Re-attach is only correct while the thing being re-attached to is the same program. During a
-    #: rolling deploy a redelivered trigger landing on the NEW pod re-attached to a job the OLD pod
-    #: submitted — old entrypoint, old runtime_env, old transform — and reported success. The run then
-    #: carried the new build's provenance over the old build's output, which is worse than a failure
-    #: because nothing anywhere is red.
-    #:
-    #: The chart sets this to the image tag it deployed. EMPTY BY DEFAULT and that is deliberate: an
-    #: empty value reproduces the previous submission id byte-for-byte, so a deployment that has not
-    #: wired it is unchanged rather than quietly re-attaching across builds under a new scheme.
-    ray_code_version: str = Field(default="", alias="MEDALLION_RAY_CODE_VERSION")
+    #: THE WORKLOAD'S OWN PARAMETERS for a stage runner with no declared transform: a JSON object of strings, carried in
+    #: the order's ``params`` and delivered to the job under the ``RASK_PARAM_`` prefix, so a lane cannot name its way to
+    #: a platform variable. NEVER A SECRET: the values come from a chart values file.
+    stage_params: dict[str, str] = Field(default_factory=dict, alias="MEDALLION_STAGE_PARAMS")
+    #: WHICH BUILD declared an in-process run (the lakehouse image): one axis of the run's key, so a redelivery after a
+    #: deploy names the new build's run rather than re-attaching to the old one. Empty leaves the axis out.
+    code_version: str = Field(default="", alias="MEDALLION_CODE_VERSION")
     #: WHICH DECLARED LANE this stage runner runs — the name of a ``TransformSpec`` in the catalog.
     #:
-    #: Set it, and the DECLARED record supplies ``ray_entrypoint``, ``ray_job_params`` and
-    #: ``ray_code_version`` instead of the three settings above: what a lane runs then changes through
+    #: Set it, and the DECLARED record supplies the task, the params and the code version
+    #: instead of the settings above: what a lane runs then changes through
     #: the catalog's admin-gated, audited door rather than by editing this Deployment. That is the
     #: whole point of the record — a lane that only ever lived in env could not be listed, reviewed or
     #: gated, and an undeclared one failed at the Ray submit seam with an error naming the image.
     #:
-    #: EMPTY BY DEFAULT, deliberately, exactly like ``ray_code_version``: an estate that has declared
+    #: EMPTY BY DEFAULT, deliberately, exactly like ``code_version``: an estate that has declared
     #: nothing behaves byte-for-byte as before rather than quietly running under a new scheme.
     #:
     #: Named-but-UNDECLARED is a REFUSAL, never a fallback to the settings above — see
@@ -457,14 +432,6 @@ class MedallionSettings(OidcSettings, FgaSettings, SignatureDoorSettings, BaseSe
     # The catalog id delimiter (`gold$catalog`) — matches LANCE_DELIMITER's default, same rationale as
     # MAINTENANCE_DELIMITER: a mismatch addresses a DIFFERENT table rather than failing.
     delimiter: str = Field(default=CATALOG_DELIMITER, alias="MEDALLION_DELIMITER")
-    ray_request_timeout_seconds: float = Field(default=10.0, ge=0.1, alias="MEDALLION_RAY_REQUEST_TIMEOUT_SECONDS")
-    ray_poll_interval_seconds: float = Field(default=2.0, gt=0, alias="MEDALLION_RAY_POLL_INTERVAL_SECONDS")
-    # The stage runner BLOCKS its Dapr handler until the job finishes. Redelivery is safe (the submission id is
-    # deterministic per (stage, token), so a redelivered trigger re-attaches to the same job — not a second
-    # one), but a job that outlives the trigger stream's ack window (dapr-component backOff first value, 30s)
-    # WILL be concurrently redelivered; that only wastes a duplicate poll (re-attach), it does not double-run
-    # the job. For jobs expected to run much longer than the ack window, raise both together.
-    ray_job_timeout_seconds: float = Field(default=180.0, gt=0, alias="MEDALLION_RAY_JOB_TIMEOUT_SECONDS")
 
     # --- Optional quality GATE — when on, after the compute writes the downstream dataset the stage runner runs
     # data-quality assertions on it (row_count > 0, key column non-null) and BLOCKS promotion on a failure:
@@ -507,6 +474,15 @@ class MedallionSettings(OidcSettings, FgaSettings, SignatureDoorSettings, BaseSe
     def required_column_list(self) -> list[str]:
         """The declared consumer-dependency columns (parsed from the comma-separated env)."""
         return [c.strip() for c in self.quality_required_columns.split(",") if c.strip()]
+
+    def engine_code_version(self, engine: str) -> str:
+        """The build an undeclared lane's run on ``engine`` names: the engine's own image, else this lakehouse image."""
+        declared = self.engines.get(engine)
+        return declared.code_version if declared is not None and declared.code_version else self.code_version
+
+    def train_engine(self) -> str | None:
+        """The out-of-process engine whose task list registers `train`, or ``None`` when no engine trains."""
+        return next((name for name, engine in sorted(self.engines.items()) if any(task.task == "train" for task in engine.tasks)), None)
 
     def storage_options(self) -> dict[str, str]:
         """Lance ``storage_options`` for the compute write — empty for a local path; S3 config otherwise."""
@@ -558,13 +534,15 @@ class MedallionSettings(OidcSettings, FgaSettings, SignatureDoorSettings, BaseSe
                 "MEDALLION_SECRETS_FROM_DAPR — every Lance write would 403. Provide the secret, or enable "
                 "the OpenBao store path (helm default when openbao.enabled=true)."
             )
-        if self.ray_enabled and not self.compute_enabled:
-            # ray submits the STAGE transform (from_uri -> to_uri); with compute off there is no data path and
-            # the stage runner would silently fall through to the dummy version-1 emit. Fail fast, don't degrade.
+        if self.default_engine != "inprocess" and not self.compute_enabled:
+            # An out-of-process engine runs the STAGE transform (from_uri -> to_uri); with compute off there is no data
+            # path and the stage runner would silently fall through to the dummy version-1 emit. Fail fast.
             raise ValueError(
-                "MEDALLION_RAY_ENABLED requires MEDALLION_COMPUTE_ENABLED — the Ray path submits the stage's "
-                "read->transform->write, which the compute config (from/to URIs + S3) provides."
+                f"MEDALLION_DEFAULT_ENGINE={self.default_engine!r} requires MEDALLION_COMPUTE_ENABLED — the engine runs the "
+                "stage's read->transform->write, which the compute config (from/to URIs + S3) provides."
             )
+        if self.default_engine != "inprocess" and self.default_engine not in self.engines:
+            raise ValueError(f"MEDALLION_DEFAULT_ENGINE={self.default_engine!r} names no engine in MEDALLION_ENGINES {sorted(self.engines)}")
         return self
 
     # --- producer (medallion-producer) config — the BRONZE ingest head (R23: writes the first governed tier
@@ -577,8 +555,8 @@ class MedallionSettings(OidcSettings, FgaSettings, SignatureDoorSettings, BaseSe
     silver) and the model registry live. The trainer resolves feature + model URIs from HERE, not from
     ``bronze_uri`` — so it stays correct when gold (sink) is zoned into its OWN bucket. Empty → derive
     from ``bronze_uri`` (the single-bucket default, unchanged)."""
-    producer_operation: str = Field(default="lance_ray_ingest", alias="MEDALLION_PRODUCER_OPERATION")
-    producer_author: str = Field(default="ray", alias="MEDALLION_PRODUCER_AUTHOR")
+    producer_operation: str = Field(default="ingest_bronze", alias="MEDALLION_PRODUCER_OPERATION")
+    producer_author: str = Field(default="data_eng", alias="MEDALLION_PRODUCER_AUTHOR")
     bronze_topic: str = Field(default="medallion.bronze", alias="MEDALLION_BRONZE_TOPIC")
 
     # The catalog's control channel, where `table_published` lands (§ D2 B8). Empty DISABLES the
@@ -590,24 +568,19 @@ class MedallionSettings(OidcSettings, FgaSettings, SignatureDoorSettings, BaseSe
     # already import the same constant. A second literal is a second source of truth that a rename
     # would silently leave behind — this subscription would keep listening to a topic nobody publishes.
     control_topic: str = Field(default=CONTROL_TOPIC, alias="MEDALLION_CONTROL_TOPIC")
-    # --- Ray TRAIN head (#115a, docs/RAY-TRAIN.md): OWN topic (D1 — long-running, terminal-on-failure;
+    # --- TRAIN head (#115a, docs/RAY-TRAIN.md): OWN topic (D1 — long-running, terminal-on-failure;
     # never a field on the stage trigger) + submit-and-ack consumer (D2). The trainer has its OWN service
-    # identity + rung (D5): reader on the feature namespaces, writer on namespace:<models> ONLY.
+    # identity + rung (D5): reader on the feature namespaces, writer on namespace:<models> ONLY. A run goes to
+    # the engine whose task list registers `train`.
     train_topic: str = Field(default="training.jobs", alias="MEDALLION_TRAIN_TOPIC")
-    train_entrypoint: str = Field(
-        # Must match where ray-lance.dockerfile bakes the jobs (/home/ray/jobs/, like ray_entrypoint).
-        default="python /home/ray/jobs/ray_train_job.py",
-        alias="MEDALLION_TRAIN_ENTRYPOINT",
-    )
     #: The compute head's ONE subject (LH-220 D1: every job on the shared head is the head's account), named for the
     #: train lane that first authenticated as it. A stage runner's outcome door admits it and nothing else.
     trainer_identity: str = Field(default="service-trainer", alias="MEDALLION_TRAINER_IDENTITY")
     models_namespace: str = Field(default="models", alias="MEDALLION_MODELS_NAMESPACE")
     # The lineage service this producer READS: the cascade-lag reader asks it which runs wrote a dataset
-    # (`cascade_lag_readers`). No job is sent it: a training job emits to the lineage ingest its own pod names
-    # (`RASK_LINEAGE_ENDPOINT` on the Ray head, CP-044), because a submitted endpoint would outvote the pod's.
-    # Default = the chart's in-cluster service for the standard `lance-ns` release.
-    train_lineage_url: str = Field(default="http://lance-ns-lineage:8000", alias="MEDALLION_TRAIN_LINEAGE_URL")
+    # (`cascade_lag_readers`). No job is sent it: a job emits to the lineage ingest its own pod names, because a
+    # submitted endpoint would outvote the pod's. Default = the chart's in-cluster service for the `lance-ns` release.
+    lineage_url: str = Field(default="http://lance-ns-lineage:8000", alias="MEDALLION_LINEAGE_URL")
 
     # --- media ingest head (multimodal §9) — POST /ingest-media lands external media as bronze blobs and
     # triggers the media chain. The head reads an external S3 source prefix through the provider-agnostic
@@ -627,9 +600,6 @@ class MedallionSettings(OidcSettings, FgaSettings, SignatureDoorSettings, BaseSe
     # Seed two deterministic sample PNGs into the source prefix before ingesting (the demo's stand-in for
     # an external media drop). Prod points the bucket/prefix at real media and turns this off.
     media_seed_samples: bool = Field(default=True, alias="MEDALLION_MEDIA_SEED_SAMPLES")
-
-    # The Ray branch (requires ray_enabled): the self-contained harvest job baked into the unified ray
-    # image, submitted via the Ray Jobs REST API exactly like the stage transforms.
 
 
 @lru_cache

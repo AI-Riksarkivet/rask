@@ -28,8 +28,12 @@ runtimeClassName: nvidia
 authSecretName: ""
 rayStartParams:
   dashboard-host: "0.0.0.0"
-# Extra environment on the head, beside what the template derives from `rask.release`.
-env: []
+# Extra environment on the head, beside what the template derives from `rask.release`. The head runs the lakehouse's
+# own stage write (service_kit.lakehouse.tier_write) and its training job, so it takes rask's allocator bounds
+# (values.yaml `allocator`): two glibc arenas and Arrow on the system allocator, which kept the lakehouse pods' RSS flat.
+env:
+  - {name: MALLOC_ARENA_MAX, value: "2"}
+  - {name: ARROW_DEFAULT_MEMORY_POOL, value: system}
 # Projected service-account tokens the head's jobs present to rask, one per audience, mounted at
 # /var/run/secrets/rask/identity/<audience>/token.
 identityAudiences: [rask-lineage, rask-medallion]

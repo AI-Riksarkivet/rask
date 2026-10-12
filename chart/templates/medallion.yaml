@@ -75,20 +75,16 @@ spec:
             {{- end }}
             {{- $transformsDeclared := false }}
             {{- range .Values.medallion.stageRunners }}{{- if .transform }}{{- $transformsDeclared = true }}{{- end }}{{- end }}
-            {{- if or .Values.medallion.projectsEnabled $transformsDeclared .Values.medallion.ray }}
+            {{- $engine := include "lance.outOfProcessEngine" . }}
+            {{- if or .Values.medallion.projectsEnabled $transformsDeclared $engine }}
             - { name: MEDALLION_CONTROL_ROOT, value: "s3://{{ .Values.minio.bucket }}" }
             {{- end }}
             - { name: MEDALLION_TRAIN_TOPIC, value: {{ .Values.medallion.train.topic | quote }} }
-            - { name: MEDALLION_TRAIN_ENTRYPOINT, value: {{ .Values.medallion.train.entrypoint | quote }} }
             - { name: MEDALLION_TRAINER_IDENTITY, value: {{ .Values.medallion.train.trainerIdentity | quote }} }
             - { name: MEDALLION_MODELS_NAMESPACE, value: {{ .Values.medallion.train.modelsNamespace | quote }} }
-            - { name: MEDALLION_TRAIN_LINEAGE_URL, value: {{ .Values.medallion.train.lineageUrl | default (printf "http://%s-lineage:%v" (include "lance.fullname" .) .Values.services.lineage.port) | quote }} }
-            {{- if .Values.medallion.ray }}
-            - { name: MEDALLION_RAY_ENABLED, value: "true" }
-            - { name: MEDALLION_RAY_ADDRESS, value: {{ include "rask.rayDashboardUrl" . | quote }} }
-            {{- if .Values.medallion.rayTasks }}
-            - { name: MEDALLION_RAY_TASKS, value: {{ .Values.medallion.rayTasks | toJson | quote }} }
-            {{- end }}
+            - { name: MEDALLION_LINEAGE_URL, value: {{ printf "http://%s-lineage:%v" (include "lance.fullname" .) .Values.services.lineage.port | quote }} }
+            {{- if $engine }}
+            - { name: MEDALLION_ENGINES, value: {{ include "lance.medallionEngines" (list . true) | quote }} }
             - { name: MEDALLION_OUTCOME_URL_BASE, value: "http://{{ include "lance.fullname" . }}-medallion-producer:{{ $port }}" }
             {{- if and .Values.dapr.enabled .Values.medallion.planSweep.bindingName }}
             - { name: MEDALLION_PLAN_SWEEP_BINDING_NAME, value: {{ .Values.medallion.planSweep.bindingName | quote }} }
@@ -189,12 +185,12 @@ spec:
           resources: {{- include "lance.resources" (dict "root" . "comp" "medallion-producer") | nindent 12 }}
           volumeMounts:
             {{- include "lance.tmpMount" . | nindent 12 }}
-            {{- include "lance.identityTokens" (list "mounts" "rask-catalog" "rask-lineage" "rask-medallion") | nindent 12 }}
+            {{- include "lance.identityTokens" (concat (list "mounts" "rask-catalog" "rask-lineage" "rask-medallion") (ternary (list "rask-compute") list (not (not $engine)))) | nindent 12 }}
             {{- include "lance.saVerifier" (list . "mounts" "producer") | nindent 12 }}
             {{- if or .Values.medallion.fgaEnabled .Values.auth.enabled }}{{ include "lance.fgaToken" (list "mounts") | nindent 12 }}{{ end }}
       volumes:
         {{- include "lance.tmpVolume" . | nindent 8 }}
-        {{- include "lance.identityTokens" (list "volumes" "rask-catalog" "rask-lineage" "rask-medallion") | nindent 8 }}
+        {{- include "lance.identityTokens" (concat (list "volumes" "rask-catalog" "rask-lineage" "rask-medallion") (ternary (list "rask-compute") list (not (not $engine)))) | nindent 8 }}
         {{- include "lance.saVerifier" (list . "volumes" "producer") | nindent 8 }}
         {{- if or .Values.medallion.fgaEnabled .Values.auth.enabled }}{{ include "lance.fgaToken" (list "volumes") | nindent 8 }}{{ end }}
 ---
@@ -286,8 +282,9 @@ spec:
             {{- if .transform }}
             - { name: MEDALLION_TRANSFORM, value: {{ .transform | quote }} }
             {{- end }}
+            {{- $engine := include "lance.outOfProcessEngine" $root }}
 
-            {{- if or $root.Values.medallion.projectsEnabled .transform $root.Values.medallion.ray }}
+            {{- if or $root.Values.medallion.projectsEnabled .transform $engine }}
             - { name: MEDALLION_CONTROL_ROOT, value: "s3://{{ $root.Values.minio.bucket }}" }
             {{- if and $root.Values.medallion.goldWarehouse (eq .toNamespace "gold") }}
             - { name: MEDALLION_GOLD_WAREHOUSE_ENABLED, value: "true" }
@@ -313,11 +310,11 @@ spec:
             {{- if $medScoped }}
             - { name: MEDALLION_DAPR_SECRET_S3_FIELD, value: "medallion-s3-secret-key" }
             {{- end }}
-            {{- if $root.Values.medallion.ray }}
-            - { name: MEDALLION_RAY_ENABLED, value: "true" }
-            - { name: MEDALLION_RAY_ADDRESS, value: {{ include "rask.rayDashboardUrl" $root | quote }} }
-            {{- if .stageJob }}
-            - { name: MEDALLION_RAY_ENTRYPOINT, value: {{ .stageJob | quote }} }
+            {{- if $engine }}
+            - { name: MEDALLION_ENGINES, value: {{ include "lance.medallionEngines" (list $root false) | quote }} }
+            - { name: MEDALLION_DEFAULT_ENGINE, value: {{ $root.Values.medallion.defaultEngine | default (first (keys (include "lance.medallionEngines" (list $root false) | fromJson) | sortAlpha)) | quote }} }
+            {{- with .task }}
+            - { name: MEDALLION_STAGE_TASK, value: {{ . | quote }} }
             {{- end }}
             - { name: MEDALLION_OUTCOME_URL_BASE, value: "http://{{ include "lance.fullname" $root }}-{{ .name }}:{{ $port }}" }
             - { name: MEDALLION_TRAINER_IDENTITY, value: {{ $root.Values.medallion.train.trainerIdentity | quote }} }
@@ -329,7 +326,7 @@ spec:
             {{- end }}
             {{- end }}
             {{- end }}
-            - { name: MEDALLION_RAY_CODE_VERSION, value: {{ include "lance.catalogImage" $root | quote }} }
+            - { name: MEDALLION_CODE_VERSION, value: {{ include "lance.catalogImage" $root | quote }} }
             - { name: MEDALLION_CATALOG_URL, value: {{ printf "http://%s-catalog:%v" (include "lance.fullname" $root) $root.Values.services.catalog.port | quote }} }
             - { name: MEDALLION_CATALOG_ROOT, value: {{ printf "s3://%s" $root.Values.minio.bucket | quote }} }
             {{- if $root.Values.medallion.quality }}
@@ -363,12 +360,12 @@ spec:
           resources: {{- include "lance.resources" (dict "root" $root "comp" .name) | nindent 12 }}
           volumeMounts:
             {{- include "lance.tmpMount" $root | nindent 12 }}
-            {{- include "lance.identityTokens" (list "mounts" "rask-catalog" "rask-lineage") | nindent 12 }}
+            {{- include "lance.identityTokens" (concat (list "mounts" "rask-catalog" "rask-lineage") (ternary (list "rask-compute") list (not (not $engine)))) | nindent 12 }}
             {{- include "lance.saVerifier" (list $root "mounts" "stage") | nindent 12 }}
             {{- if $root.Values.medallion.fgaEnabled }}{{ include "lance.fgaToken" (list "mounts") | nindent 12 }}{{ end }}
       volumes:
         {{- include "lance.tmpVolume" $root | nindent 8 }}
-        {{- include "lance.identityTokens" (list "volumes" "rask-catalog" "rask-lineage") | nindent 8 }}
+        {{- include "lance.identityTokens" (concat (list "volumes" "rask-catalog" "rask-lineage") (ternary (list "rask-compute") list (not (not $engine)))) | nindent 8 }}
         {{- include "lance.saVerifier" (list $root "volumes" "stage") | nindent 8 }}
         {{- if $root.Values.medallion.fgaEnabled }}{{ include "lance.fgaToken" (list "volumes") | nindent 8 }}{{ end }}
 ---

@@ -317,6 +317,25 @@ services:
     # reading as sidecar-only.
     # -- Renders APP_API_TOKEN for compute, whose boot refuses to start with Dapr on and no token (it hosts the prune cron route).
     daprIngest: true
+    # THE ENGINES compute hosts (CP-056). Each enabled entry is an out-of-process engine the lakehouse planners invoke
+    # by Dapr service invocation of app-id `compute` (`/engine/runs`, `compute.engine`), naming it by this key; the
+    # lakehouse holds no command, address or image for it. `tasks` is compute's table (task -> the command its jobs
+    # run, each script baked into the Ray image — `.docker/ray-cluster.dockerfile`) and, without the commands, what
+    # the producer registers in `_tasks/` stamped with this engine. `capabilities` is what the engine promises the
+    # planners' sweep: no `durable_record`, because a head restart takes Ray's job history with it, so a lost run is
+    # resubmitted under its key. Off, nothing names Ray in a lakehouse pod and stages run in process.
+    # -- Engines compute serves by Dapr invocation (CP-056, ADR 0140): per engine, `enabled`, `capabilities`, and the `tasks` it runs (`task`, the `command` its cluster image bakes, optional `cardinalities`, empty = all). Any enabled engine needs `ray.dashboardUrl`.
+    engines:
+      ray:
+        enabled: true
+        # -- The build the engine runs (its image), the second axis of a run's key, so a rolled image is a new run: the engine is bring-your-own (ADR 0153), so its owner names it; empty keys runs on stage, token and URIs alone.
+        codeVersion: ""
+        capabilities: [cancel, failure_detail]
+        tasks:
+          - { task: stage-transform, command: "python /home/ray/jobs/ray_stage_job.py", cardinalities: ["1:1", "1:N"] }
+          - { task: dummy-lane, command: "python /home/ray/jobs/ray_dummy_job.py", cardinalities: ["1:1"] }
+          # A training job reads a governed table and emits a MODEL: it constrains no row cardinality.
+          - { task: train, command: "python /home/ray/jobs/ray_train_job.py" }
   # The studio flow-builder's server half: the node catalog, graph validation, and runs on two lanes
   # (inline, or the Dapr Workflow orchestrator when a sidecar is injected). It needs NOTHING to boot —
   # no store, no cluster — so it is part of the default install: the builder's client-side lane works
@@ -1444,93 +1463,15 @@ medallion:
   mediaBronzeNamespace: bronze-media
   # -- Have /ingest-media write two sample PNGs into the source prefix before ingesting (MEDALLION_MEDIA_SEED_SAMPLES); set false when the source is real media.
   mediaSeedSamples: true
-  # Event-driven REAL-Ray compute (requires compute + a running Ray cluster — deploy/ray-lance-demo.yaml).
-  # When true, each stage runner submits its stage transform as a `ray job submit` to the ray-lance cluster IN
-  # RESPONSE TO its Dapr trigger (Ray Jobs REST API, httpx-only — no ray package in the stage runner image), instead
-  # of the in-process fake-Ray write. Default off. Production is KubeRay (the RayService this chart already
-  # renders under ray.enabled); the raw Ray head here is the on-kind proof.
-  # OFF by default again (2026-08-15), and the reason is measured rather than a preference.
-  #
-  # It was flipped ON so S1's watcher would not be dead code in the shipped configuration. That
-  # argument is still right, and the configuration it produced now works. It could not until
-  # 2026-08-18: `ray-cluster` was built from `runners/htr`'s sealed lock, which carries torch and
-  # htrflow and NO lance, so every stage job died `ModuleNotFoundError: No module named 'lance'`.
-  # That image now builds `packages/ray-cluster-env` from the ROOT lock — ray + pylance + lance-ray + pyarrow at
-  # the fleet's own versions, and no workload stack at all (verified in the built image: torch,
-  # htrflow, ultralytics and cv2 all absent). The HTR workload moved to `.docker/ray-htr.dockerfile`.
-  #
-  # The lane is designed against `.docker/ray-lance.dockerfile` — "a thin CPU Ray image for the
-  # medallion compute seam: official Ray + the lance-ray Data integration" — deployed by
-  # `deploy/ray-lance-demo.yaml` as a SEPARATE `ray-lance-head`. The chart does not deploy that, so
-  # ON-by-default pointed every stage runner at a cluster that cannot run the work.
-  #
-  # Turning it off restored the documented default and the cascade completed end to end on the first
-  # drive: bronze -> silver -> gold, all three COMPLETE in the lineage graph (2026-08-15 20:59). That
-  # is the first time the SUCCESS path has ever run; before this only the FAIL path had.
-  #
-  # HOW TO TURN IT ON, verified end to end 2026-08-16. Give the estate a Lance-capable Ray cluster
-  # FIRST, then enable the lane and point at it IN THE SAME `helm upgrade`:
-  #
-  #     kubectl apply -f deploy/ray-lance-demo.yaml     # after correcting image + S3 for your estate
-  #     ./scripts/helm.sh upgrade rask ./chart -f <live values> --set medallion.ray=true --set-string ray.dashboardUrl=http://ray-lance-head:8265
-  #
-  # No stage runner restart is part of it: a Ray stage is planned and resolved without a workflow runtime (CP-029), so
-  # the flag moves no stage runner into `lance-statestore`'s scopes and no sidecar caches a scope it would miss. The
-  # flag's own env (MEDALLION_RAY_ENABLED, the outcome door, the plan sweep's binding) reaches a pod by its rollout.
-  #
-  # `ray-cluster` is lance-capable since 2026-08-18 (pylance + lance_ray from the ROOT LOCK — named by
-  # source rather than by version on purpose, because that is what keeps the image and the fleet on the
-  # same Lance by construction; a version written here drifts on every bump and a split between the two
-  # is a correctness bug, not a currency preference). The dummy lane was verified running inside the
-  # built image. `ray-lance` pins its own trio in the dockerfile and bakes all four job scripts. With it, the full cascade ran on real Ray — both jobs SUCCEEDED and
-  # bronze -> silver -> gold all COMPLETE, with S1's watcher doing exactly its job
-  # (dispatched_to_workflow -> ray_stage_job_submitted -> job_terminal -> wake the stage runner).
-  #
-  # ON by default since 2026-08-24. It was `false` on the argument that the chart deploys no
-  # Lance-capable cluster — a default aimed at a cluster the chart does not create. That argument is
-  # now FALSE, and it was falsified by reading the running estate rather than the file: the chart's
-  # OWN KubeRay head (`rask-ray-*-head-svc`, image `ray-cluster`) answers `import lance` and carries
-  # `lance_ray`. It never was the HTR image the old comment described.
-  #
-  # The second blocker is closed too, and it is the one that mattered. `ray_submit.py` shipped a FIXED
-  # env dict, so a stage runner could reach a working cluster and still not describe its own work; it now
-  # resolves `entrypoint`/`params`/`code_version` from the lane declaration and namespaces the
-  # workload's half as `RASK_PARAM_*` (the prefix applied at the submitter, so a lane cannot name its
-  # way to S3_SECRET). Measured end to end 2026-08-24: a real stage job
-  # (`stage-ray-silver-3beb0dd2…`) ran as a Dapr Workflow, the watcher polled the head's
-  # `/api/jobs/<id>` 200, the orchestration COMPLETED and the stage runner moved the stage.
-  #
-  # The cluster the lane submits to has NO key here ([[CP-041]]): it is `rask.rayDashboardUrl`, the one
-  # address `compute` also prunes job history on, from `ray.dashboardUrl` or the in-cluster head. With
-  # this on and neither present the render fails, rather than submitting to a Service nothing creates.
-  # -- Stage runners submit their transform as a Ray job (MEDALLION_RAY_ENABLED) to the estate's one Ray dashboard; the render fails if no Ray address is configured.
-  ray: true
-  # WHAT THIS ESTATE'S RAY PLANE CAN RUN. The producer registers each of these into
-  # `<control_root>/_tasks/` at boot, and the catalog's transform door refuses a declaration naming a
-  # task nobody registered — so an unrunnable transform is a 422 at declaration instead of an
-  # `exit 2` on the cluster hours later, with an error that names the image rather than the key.
-  #
-  # `engine` is deliberately ABSENT: the registering plane stamps its own (`ray`), so a typo here
-  # cannot register a task no submitter answers to. `command` is the engine's business and the
-  # platform never parses it — but the script it names must be baked into the image the cluster runs,
-  # which `tests/unit/test_ray_job_images.py` checks against `.docker/ray-cluster.dockerfile`'s own
-  # COPY list. Adding a job to that dockerfile without a row here (or the reverse) fails that test.
-  #
-  # `cardinalities` is what a path-shaped allowlist could never express. EMPTY MEANS ALL. The generic
-  # stage job reads `STAGE_CARDINALITY` and enforces both shapes; the dummy lane merge-inserts and is
-  # 1:1 only, so declaring it 1:N is refused at the door rather than passing a count check the job
-  # was told the answer to.
-  # -- Tasks the Ray plane can run, registered by the producer at boot (MEDALLION_RAY_TASKS): `task`, baked `command`, optional `cardinalities` (empty = all). Rendered with `ray`.
-  rayTasks:
-    - { task: stage-transform, command: "python /home/ray/jobs/ray_stage_job.py", cardinalities: ["1:1", "1:N"] }
-    - { task: dummy-lane, command: "python /home/ray/jobs/ray_dummy_job.py", cardinalities: ["1:1"] }
-    # The training job is not a row transform — it reads a governed table and emits a MODEL — so it
-    # constrains no cardinality rather than claiming one the vocabulary cannot express.
-    - { task: train, command: "python /home/ray/jobs/ray_train_job.py" }
-  # WHAT THE IN-PROCESS PLANE CAN RUN. Declared separately from `rayTasks` and rendered OUTSIDE the
-  # `ray` guard, because this is the plane an estate that brings no Ray cluster runs on — and a plane
-  # that registers nothing leaves `_tasks/` empty, which makes the catalog's declaration door answer
-  # 422 for every transform. The engine is stamped by the registering plane, never by this list.
+  # WHICH ENGINE a stage runner that declares no transform runs on (CP-056): empty takes the first engine
+  # `services.compute.engines` enables, and `inprocess` with none. The lakehouse names no engine of its own beyond the
+  # in-process one: an out-of-process engine is an app it invokes (`service_kit.lakehouse.engine_door`), and every
+  # Ray fact (the address, the task commands, the image) is compute's configuration.
+  # -- Engine a stage runner that declares no transform runs on (MEDALLION_DEFAULT_ENGINE): empty = the first enabled `services.compute.engines` entry, else in-process.
+  defaultEngine: ""
+  # WHAT THE IN-PROCESS PLANE CAN RUN. Rendered whatever engine is enabled, because this is the plane an estate
+  # that brings no engine runs on — and a plane that registers nothing leaves `_tasks/` empty, which makes the
+  # catalog's declaration door answer 422 for every transform. The engine is stamped by the registering plane.
   # -- Tasks the in-process plane can run, registered at boot (MEDALLION_INPROCESS_TASKS) whether or not Ray is on: `task`, `command`, optional `cardinalities`.
   inprocessTasks:
     - { task: stage-transform, command: "medallion.transform_stage", cardinalities: ["1:1", "1:N"] }
@@ -1593,23 +1534,16 @@ medallion:
   # stage runner's withheld only the next TRIGGER — a refused batch was already committed into the tier and
   # visible to anyone reading `latest`. Only the tag is a boundary.
   #
-  # Ray TRAIN head (#115): values-wired passthrough for the /train head + the submit-and-ack trainer
-  # consumer (both live in the medallion-producer app). Defaults mirror services/medallion/core/config.py so a
-  # deployment can retarget topic/entrypoint/identity/registry namespace without an image rebuild.
-  # lineageUrl empty = release-derived (http://<release>-lineage:<port>) — set it only to point the
-  # training job's self-emitted RunEvents elsewhere ("" in the CODE default disables emission; the chart
-  # always renders a URL).
+  # TRAIN head (#115): values-wired passthrough for the /train head + the submit-and-ack trainer consumer (both
+  # live in the medallion-producer app). A run goes to the engine whose task list names `train`
+  # (`services.compute.engines.<name>.tasks`); the head answers 409 while no enabled engine does.
   train:
     # -- Topic the /train head publishes training requests on and the trainer consumer subscribes to (MEDALLION_TRAIN_TOPIC).
     topic: training.jobs
-    # -- Ray job entrypoint the trainer submits (MEDALLION_TRAIN_ENTRYPOINT); the script must be baked into the Ray cluster image.
-    entrypoint: "python /home/ray/jobs/ray_train_job.py"
     # -- Service identity training runs act and emit as (MEDALLION_TRAINER_IDENTITY).
     trainerIdentity: service-trainer
     # -- Catalog namespace the model registry writes trained models into (MEDALLION_MODELS_NAMESPACE).
     modelsNamespace: models
-    # -- Lineage URL the training job emits its RunEvents to (MEDALLION_TRAIN_LINEAGE_URL). Empty = the release's own lineage Service.
-    lineageUrl: ""
   producer:
     # -- Dapr app-id of the medallion-producer; also names its derived pubsub components, durable consumers and state-store scope.
     daprAppId: medallion-producer
@@ -1647,9 +1581,9 @@ medallion:
     # -- Bronze namespace the producer writes (MEDALLION_BRONZE_NAMESPACE), declared unqualified; on a projects estate it becomes `<project>-bronze` at runtime.
     bronzeNamespace: bronze
     # -- Operation name the producer stamps on its bronze-write lineage (MEDALLION_PRODUCER_OPERATION).
-    operation: lance_ray_ingest
-    # -- Author the producer stamps on its bronze-write lineage (MEDALLION_PRODUCER_AUTHOR).
-    author: ray
+    operation: ingest_bronze
+    # -- Author role the producer stamps on its bronze-write lineage (MEDALLION_PRODUCER_AUTHOR).
+    author: data_eng
     # -- Topic the producer's /bronze-arrival publishes the first cascade trigger on (MEDALLION_BRONZE_TOPIC); the first stage runner's `subTopic`.
     bronzeTopic: medallion.bronze
   # The 3 stage runners run medallion.stage_runner:app, differing only by env. order = the DAG. (R23: there is
@@ -1662,10 +1596,8 @@ medallion:
   # tests/unit/test_fga_model_contract.py::test_chart_medallion_required_actions_exist_on_namespace.
   # -- The stage runners, one Deployment each in DAG order: name, daprAppId, from/to namespace and dataset, operation, author, sub/pub topics, requiredAction, serviceIdentity, requiredColumns.
   stageRunners:
-    # Optional per-stage runner `stageJob: "python /home/ray/jobs/<job>.py"` — the Ray stage-job entrypoint
-    # this stage runner submits when medallion.ray is on (MEDALLION_RAY_ENTRYPOINT). This is the P7b seam:
-    # the HTR lanes select the layout/lines + transcribe stage jobs here (runner re-cut gate); unset
-    # falls back to the shared ray_stage_job.py default.
+    # Optional per-stage runner `task: <name>` — the task an undeclared lane runs (MEDALLION_STAGE_TASK, default
+    # `stage-transform`), resolved by the ENGINE to its own command (`services.compute.engines.<name>.tasks`).
     # serviceIdentity is a BARE subject — common.fga.check prefixes `user:` itself (a `user:` here would
     # double-prefix and always deny). The seeded FGA tuples grant these `user:service-*` identities.
     # Optional per-stage runner `requiredColumns: "id,embedding"` — declared consumer dependencies
@@ -1684,13 +1616,13 @@ medallion:
     # (`htr_stage`/`htr_parse`/`htr_transcribe` + an HTR-shaped `schemas/htr.py`) and was dispatched by
     # a `operation == transcribe_pages` branch in transform.py, so the generic cascade named one
     # workload in its own control flow. The platform is workload-agnostic: a workload reaches the
-    # cascade as CONFIGURATION — an operation name, requiredColumns, a Ray `stageJob` entrypoint —
+    # cascade as CONFIGURATION — an operation name, requiredColumns, an engine task —
     # never as a code branch.
     #
     # The stage runner row goes with the code, deliberately. Leaving it would route `transcribe_pages` into
     # the GENERIC transform, which knows nothing of the workload and would write silently wrong gold
-    # — worse than the lane being absent. Re-landing it means a Ray job entrypoint baked into the
-    # ray-cluster image plus `stageJob:` on a stage runner row; no change to the cascade.
+    # — worse than the lane being absent. Re-landing it means a job baked into the engine's image, a task row
+    # for it under `services.compute.engines`, and `task:` on a stage runner row; no change to the cascade.
     #
     # The lane was already non-functional: `htrflowUrl` shipped empty and the stage runner dead-lettered
     # every trigger it received.
@@ -2716,9 +2648,9 @@ ray:
   # -- rask talks to a Ray engine: the NetworkPolicy admits the pods KubeRay marks `ray.io/is-ray-node`, and the Collector scrapes them.
   enabled: true
   # THE ONE RAY PLANE ([[CP-041]]): every Ray consumer renders its address from `rask.rayDashboardUrl`
-  # — compute's RAY_DASHBOARD_URL (job-history prune, jobs board, /api/serve), the cascade's
-  # MEDALLION_RAY_ADDRESS, the annotator's Serve discovery and the zones' Serve origin. Empty with
-  # `medallion.ray` on fails the render: an estate names its engine, as it names its OIDC issuer.
+  # — compute's RAY_DASHBOARD_URL (the cascade's submits, job-history prune, jobs board, /api/serve),
+  # the annotator's Serve discovery and the zones' Serve origin. Empty with an engine enabled in
+  # `services.compute.engines` fails the render: an estate names its engine, as it names its OIDC issuer.
   # -- Address of the engine's Ray dashboard, used verbatim by every Ray consumer; the ray-cluster fixture serves http://rask-ray-head-svc:8265.
   dashboardUrl: ""
   # Ray token auth (RAY_AUTH_MODE=token). The token is the store's `ray-auth-token`, written by ESO into
@@ -2836,7 +2768,7 @@ nats:
   #     a consumer, no app holds $JS.API.>, and monitor reads stream and consumer state but no message and publishes nothing.
   # catalog.control.v1 is published by the catalog, by the medallion PRODUCER (promotion_review's request_approval runs in the
   # workflow engine the producer hosts, and its training runs' plans, CP-029), by maintenance under maintenance.controlEmit, by the annotator under
-  # explorer.controlEmit, and by each stage runner under medallion.ray (its runs' plans, CP-029). A stage runner never
+  # explorer.controlEmit, and by each stage runner while an engine is enabled (its runs' plans, CP-029). A stage runner never
   # publishes its downstream topic (MEDALLION_PUB_TOPIC only gates promotion; the catalog's table_published wakes the next
   # tier). A grant that only a flag's component uses sits under
   # `flagged`, keyed by that flag's value path, and is issued only while the flag is on (lance.natsTable), so with every flag
@@ -2890,7 +2822,7 @@ nats:
         annotator:
           publish: [catalog.control.v1]
           subscribe: [_INBOX.>]
-      medallion.ray:
+      services.compute.engines.ray.enabled:
         bronze-to-silver:
           publish: [catalog.control.v1]
         silver-to-gold:
@@ -3544,7 +3476,7 @@ signing:
   # catalog, maintenance -> maintenance (its purge, under maintenance.controlEmit), medallion_producer -> the producer (it
   # hosts the promotion_review workflow that asks for a review, and announces its training runs' plans, run_planned on a
   # train_run: object), medallion_stage_runner -> every stage runner (each
-  # announces its Ray runs' plans, run_planned, under medallion.ray with medallion.compute). The keys are
+  # announces its planned runs, run_planned, while an engine is enabled with medallion.compute). The keys are
   # exactly service_kit.control_events.ControlSigner, which the services type, so a key they do not know fails their boot;
   # every key is present, and a role whose service is not deployed is an empty list. A door's per-action policy
   # (control_signer_role) resolves an action's allowed signers from it; task_* actions and grants on an annotation project

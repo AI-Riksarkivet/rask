@@ -190,7 +190,7 @@ def test_train_to_blessed_with_full_reproducibility_capture(stack: tuple[str, st
         timeout=30,
     )
     if r.status_code == 409:
-        pytest.skip("train head not configured (needs medallion.ray + a running Ray cluster)")
+        pytest.skip("train head not configured (needs an enabled engine that runs task train + a running Ray cluster)")
     assert r.status_code == 202, r.text
     assert r.json().get("token"), "the train head must return a correlation token"
 

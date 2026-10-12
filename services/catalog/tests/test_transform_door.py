@@ -178,10 +178,21 @@ def test_a_cardinality_the_TASK_cannot_honour_is_422_at_the_DOOR(client: TestCli
     assert "dummy-lane" in response.text, "the message must name the task that cannot honour it"
 
 
-def test_an_unsafe_lane_key_is_422(client: TestClient) -> None:
-    response = client.post("/v1/project/acme/transform/set", json={**VALID, "name": "../escape"})
+@pytest.mark.parametrize(
+    ("override", "named"),
+    [
+        pytest.param({"name": "../escape"}, "../escape", id="an-unsafe-lane-key"),
+        # Every order built from this lane would refuse the key (`work_order.invalid_param_keys`), so storing it would
+        # poison each trigger the lane receives; the door refuses it instead.
+        pytest.param({"params": {"batch-size": "8"}}, "batch-size", id="a-param-no-order-can-carry"),
+    ],
+)
+def test_a_declaration_no_run_can_carry_is_422(client: TestClient, control_root: str, override: dict[str, Any], named: str) -> None:
+    response = client.post("/v1/project/acme/transform/set", json={**VALID, **override})
 
     assert response.status_code == 422, response.text
+    assert named in response.text
+    assert transform_specs.list_specs(control_root, {}, "acme") == []
 
 
 # --- the gate ------------------------------------------------------------------------------------
