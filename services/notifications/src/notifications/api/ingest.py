@@ -97,8 +97,8 @@ async def ingest_run_event(
     written onto an already-validated delivery, so the copy needs no revalidation, and it is what
     makes an inbox row say which lane first told this subject about this run.
 
-    `first_sight` is false only for a row the FEED lane's overlap is deliberately RE-OFFERING (see
-    `FEED_OVERLAP`). It changes no outcome — delivery is idempotent and a drop is terminal either way
+    `first_sight` is false only for a row the FEED lane is offering AGAIN after it asked for a retry
+    (see `reconciler._walk`). It changes no outcome — delivery is idempotent and a drop is terminal either way
     — and exists solely so that a permanent fault is REPORTED once instead of once per tick. The bus
     lane has no such window and leaves it at the default.
     """

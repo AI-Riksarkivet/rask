@@ -263,7 +263,7 @@ def test_an_observed_drop_is_recorded_at_the_location_it_read(repository: repo_m
 
     assert recorded
     assert asyncio.run(repository.dropped_at(_TABLE)) is not None
-    [(_sql, params)] = pool.conn.executed
+    [(_sql, params)] = [(sql, params) for sql, params in pool.conn.executed if "INSERT INTO public.lineage_events" in str(sql)]
     assert "absent on storage" in json.dumps(params, default=str), "the feed row does not carry the observation"
 
 

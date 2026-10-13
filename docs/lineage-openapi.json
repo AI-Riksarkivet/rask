@@ -782,7 +782,7 @@
         "type": "object"
       },
       "Events": {
-        "description": "The most-recent ingested OpenLineage events (newest first).\n\n``next_cursor`` (additive, 2026-07-11): pass back as ``?after=`` to page OLDER events (keyset\nover ``seq``). ``None`` = the feed is exhausted.",
+        "description": "A page of the ingested OpenLineage events: oldest first after ``since``, else newest first.\n\n``next_cursor`` after ``?since=``: the ``since`` to pass next, never ``None``; equal to the one sent when\nnothing new is visible. Without ``since`` it pages OLDER as ``?after=`` (keyset over ``seq``), and\n``None`` means no rows below this page.",
         "properties": {
           "events": {
             "items": {
@@ -821,7 +821,7 @@
         "type": "object"
       },
       "FeedProjection": {
-        "description": "A page of the run feed with no per-dataset filter, newest first ([[CTL-021]]).\n\nThe keyset cursor and the floor mean exactly what they mean on :class:`Events`, so a walk over either\nbehaves the same; what differs is reach (every warehouse) and width (``ProjectedEvent.event``).",
+        "description": "A page of the run feed with no per-dataset filter ([[CTL-021]]).\n\nThe cursors and the floor mean exactly what they mean on :class:`Events`, so a walk over either\nbehaves the same; what differs is reach (every warehouse) and width (``ProjectedEvent.event``).",
         "properties": {
           "events": {
             "items": {
@@ -3625,7 +3625,7 @@
     },
     "/events": {
       "get": {
-        "description": "The most-recent ingested OpenLineage events (newest first) \u2014 the Marquez-style event feed.\n\n**Durable** (read from Postgres, survives restart / replica-shared) and **governed**: when auth is\non the feed is filtered like the per-dataset reads \u2014 an event is shown only if the caller\n``can_get_metadata`` on *every* dataset it references (and a dataset-less event is hidden), so the\naudit feed never discloses a table outside the caller's reach. Auth off \u2192 pass-through. (#22)\n\nPagination (additive, defaults = the old behavior): ``after`` = keyset cursor (the previous\npage's ``next_cursor``); ``limit`` \u2264 500 (server-capped); ``summary=true`` drops the full-JSONB\n``event`` payload at the SQL layer. The governance filter ALWAYS runs before the slice \u2014\npagination can never disclose a hidden row's CONTENT. ``next_cursor`` is a WINDOW FLOOR, not\nnecessarily a visible row's seq (on a hidden-dense page it is the fetch window's last seq \u2014\nexclusive, so the hidden row itself is never returned; bare seq numbers were already inferable\nfrom gaps in the pre-pagination feed, so this adds no new disclosure class \u2014 reviewed\n2026-07-11).",
+        "description": "The ingested OpenLineage events \u2014 newest first, or FORWARD from ``since`` for a follower.\n\n**Following (LH-472).** ``since=<seq>`` returns the events with a larger seq, oldest first, and\n``next_cursor`` is always the ``since`` to pass next; it equals the one passed when nothing new has\ncommitted. Seq order is commit order (``pg.FEED_ORDER_LOCK_KEY``), so a follower that always passes\n``next_cursor`` back reads every row it may see exactly once. ``table=`` keeps the rows whose inputs or\noutputs name that table id; ``namespace=`` the rows naming a table under it. The contract a pipeline\npolls is ``docs/COMMIT-EVENTS.md``.\n\n**Durable** (read from Postgres, survives restart / replica-shared) and **governed**: when auth is\non the feed is filtered like the per-dataset reads \u2014 an event is shown only if the caller\n``can_get_metadata`` on *every* dataset it references (and a dataset-less event is hidden), so the\naudit feed never discloses a table outside the caller's reach. Auth off \u2192 pass-through. (#22)\n\nPagination (additive, defaults = the old behavior): ``after`` = keyset cursor (the previous\npage's ``next_cursor``); ``limit`` \u2264 500 (server-capped); ``summary=true`` drops the full-JSONB\n``event`` payload at the SQL layer. The governance filter ALWAYS runs before the slice \u2014\npagination can never disclose a hidden row's CONTENT. ``next_cursor`` is a WINDOW FLOOR, not\nnecessarily a visible row's seq (on a hidden-dense page it is the fetch window's last seq \u2014\nexclusive, so the hidden row itself is never returned; bare seq numbers were already inferable\nfrom gaps in the pre-pagination feed, so this adds no new disclosure class \u2014 reviewed\n2026-07-11).",
         "operationId": "get_events_events_get",
         "parameters": [
           {
@@ -3643,6 +3643,57 @@
                 }
               ],
               "title": "After"
+            }
+          },
+          {
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Since"
+            }
+          },
+          {
+            "in": "query",
+            "name": "table",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Table"
+            }
+          },
+          {
+            "in": "query",
+            "name": "namespace",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Namespace"
             }
           },
           {
@@ -3719,7 +3770,7 @@
     },
     "/events/projection": {
       "get": {
-        "description": "The run feed WITHOUT the per-dataset filter, for the notifications reconciler ([[CTL-021]]).\n\nWHY A SECOND DOOR RATHER THAN A FLAG ON THE FIRST. `/events` is governed per dataset, which is\nright for a person: an event naming a table you cannot see must not disclose it. It is wrong for a\nSERVICE that has to reconcile the whole estate, and the wrongness is silent in both directions:\nmeasured on this estate 2026-09-09, a run that demonstrably exists answered **404** to a service\nprincipal, and its inputs answered **200 with an empty list**. A walker sees \"nothing here\", and an\nestate with no work looks identical to an estate it cannot see.\n\nTHE SERVICE IS NOT THE DISCLOSURE BOUNDARY, and that is what makes this sound rather than a hole.\nA reconciler reads the feed to decide whom to TELL; the telling is gated per subject at delivery\n(`can_be_notified`) and again at render (`can_get_metadata`), which are the checks that protect a\nperson's inbox. Filtering the reconciler's own view protects nobody and only guarantees it cannot\nfind the events it exists to catch.\n\nGATED ON `can_read_event_feed` AT THE ROOT OBJECT, a rung of its own: `event_reader`, which the\nchart grants the reconciler by name, or the estate owner. Each row carries only\n:func:`targeting_view`, because the holder reads the feed to address people and needs nothing more.\n\nThe cursor is the `/events` keyset (`after` pages OLDER, `next_cursor` is the last row's seq on a full\npage), so a walk behaves as it does there. `oldest_seq` is reported here too: a walker whose cursor\nfalls below it lost a window to the prune, which is the one signal that distinguishes \"caught up\"\nfrom \"rows went past me\". There is no `summary`: the summary drops the payload, and the payload is\nthe only place a run id lives.",
+        "description": "The run feed WITHOUT the per-dataset filter, for the notifications reconciler ([[CTL-021]]).\n\nWHY A SECOND DOOR RATHER THAN A FLAG ON THE FIRST. `/events` is governed per dataset, which is\nright for a person: an event naming a table you cannot see must not disclose it. It is wrong for a\nSERVICE that has to reconcile the whole estate, and the wrongness is silent in both directions:\nmeasured on this estate 2026-09-09, a run that demonstrably exists answered **404** to a service\nprincipal, and its inputs answered **200 with an empty list**. A walker sees \"nothing here\", and an\nestate with no work looks identical to an estate it cannot see.\n\nTHE SERVICE IS NOT THE DISCLOSURE BOUNDARY, and that is what makes this sound rather than a hole.\nA reconciler reads the feed to decide whom to TELL; the telling is gated per subject at delivery\n(`can_be_notified`) and again at render (`can_get_metadata`), which are the checks that protect a\nperson's inbox. Filtering the reconciler's own view protects nobody and only guarantees it cannot\nfind the events it exists to catch.\n\nGATED ON `can_read_event_feed` AT THE ROOT OBJECT, a rung of its own: `event_reader`, which the\nchart grants the reconciler by name, or the estate owner. Each row carries only\n:func:`targeting_view`, because the holder reads the feed to address people and needs nothing more.\n\nThe cursors are `/events`' own: `since` follows FORWARD, oldest first, and `next_cursor` is the\n`since` to pass next; `after` pages OLDER. `oldest_seq` is reported here too: a follower whose cursor\nfalls below it lost a window to the prune, which is the one signal that distinguishes \"caught up\"\nfrom \"rows went past me\". There is no `summary`: the summary drops the payload, and the payload is\nthe only place a run id lives.",
         "operationId": "get_events_projection_events_projection_get",
         "parameters": [
           {
@@ -3737,6 +3788,23 @@
                 }
               ],
               "title": "After"
+            }
+          },
+          {
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Since"
             }
           },
           {

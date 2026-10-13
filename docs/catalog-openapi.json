@@ -15889,7 +15889,7 @@
     },
     "/management/v1/projects": {
       "get": {
-        "description": "Enumerate the estate's tenants, derived from the warehouse registry. Estate-observer gated.\n\nFail-closed via FGA on the read: a non-estate-observer gets 403, an OpenFGA outage 503, and the gate\nis a no-op only when FGA is off (parity with every ``require_*`` site). ``admins`` degrades to ``[]``\nwhen FGA is off or the ``list_users`` lookup is unavailable \u2014 the registry facts still serve.",
+        "description": "The caller's tenants: every tenant for an estate observer, else the ones the caller is a member of.\n\n``admins`` degrades to ``[]`` when FGA is off or the ``list_users`` lookup is unavailable \u2014 the registry\nfacts still serve; the visibility decision itself fails closed (``_visible_projects``).",
         "operationId": "list_projects_management_v1_projects_get",
         "parameters": [
           {
@@ -20535,7 +20535,7 @@
     },
     "/management/v1/warehouse/{id}/access/my-permissions": {
       "post": {
-        "description": "What the caller may do on this warehouse \u2014 the self-view the UI needs to render a DISABLED\naction with its reason instead of a button that 403s on click.\n\nGATED EXPLICITLY, unlike its table/namespace siblings. Warehouse is not in `fga_deps._RESOURCES`\n(`namespace`, `table`, `materialized_view`, `transaction`), so the router-level `authorize`\nreturns early for every `/v1/warehouse/\u2026` path and a route mounted here that forgets its own check\nis simply ungated \u2014 the hazard this module's own header comment names.\n\nReader tier (`can_get_metadata`), matching `_my_permissions`' rule rather than the owner bar its\ntwo siblings on this router use: \"what may I do here\" discloses nothing about any other principal,\nand gating it at the owner bar would mean only the people who already know the answer could ask.",
+        "description": "What the caller may do on this warehouse \u2014 the self-view the UI needs to render a DISABLED\naction with its reason instead of a button that 403s on click.\n\nGATED EXPLICITLY, unlike its table/namespace siblings. Warehouse is not in `fga_deps._RESOURCES`\n(`namespace`, `table`, `materialized_view`, `transaction`), so the router-level `authorize`\nreturns early for every `/management/v1/warehouse/\u2026` path and a route mounted here that forgets its own check\nis simply ungated \u2014 the hazard this module's own header comment names.\n\nReader tier (`can_get_metadata`), matching `_my_permissions`' rule rather than the owner bar its\ntwo siblings on this router use: \"what may I do here\" discloses nothing about any other principal,\nand gating it at the owner bar would mean only the people who already know the answer could ask.",
         "operationId": "my_warehouse_permissions_management_v1_warehouse__id__access_my_permissions_post",
         "parameters": [
           {

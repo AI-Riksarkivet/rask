@@ -143,7 +143,7 @@ class _MemoryCursor:
     async def get(self) -> LineageCursor | None:
         return None if self.seq is None else LineageCursor(seq=self.seq, updated_at="2026-08-09T12:00:00Z")
 
-    async def set(self, seq: int, *, resume_from: int | None = None, pending_high: int | None = None, floor: int | None = None, stalls: int = 0) -> None:
+    async def set(self, seq: int, *, stalls: int = 0) -> None:
         self.seq = seq
         self.writes.append(seq)
 
@@ -168,7 +168,7 @@ async def test_a_row_whose_event_is_garbage_is_dropped_and_the_walk_carries_on(p
     """The contrast that makes the test above a gap rather than a preference: when the ROW parses, a
     payload that will never parse costs exactly that one notification."""
     respx.get(f"{LINEAGE}/events/projection").mock(
-        return_value=httpx.Response(200, json={"events": [_row(9), {"seq": 8, "event": {"nonsense": True}}, _row(7)], "next_cursor": None})
+        return_value=httpx.Response(200, json={"events": [_row(7), {"seq": 8, "event": {"nonsense": True}}, _row(9)], "next_cursor": 9})
     )
     memory = _MemoryCursor(5)
 
@@ -214,10 +214,10 @@ async def test_a_lineage_that_answers_slowly_fails_this_tick_instead_of_stacking
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_a_feed_whose_cursor_never_advances_is_bounded_by_the_page_budget(plane: _Plane) -> None:
-    """A feed that keeps handing back the same `next_cursor` is a loop with no exit of its own. The page
-    budget is the exit, and the walk says it truncated rather than pretending it finished."""
-    route = respx.get(f"{LINEAGE}/events/projection").mock(return_value=httpx.Response(200, json={"events": [_row(9), _row(8)], "next_cursor": 9}))
+async def test_a_feed_that_repeats_itself_ends_the_walk(plane: _Plane) -> None:
+    """A feed that keeps handing back the same rows is a loop with no exit of its own. Rows at or behind
+    the mark are never offered again, so the second page brings nothing new and the walk ends there."""
+    route = respx.get(f"{LINEAGE}/events/projection").mock(return_value=httpx.Response(200, json={"events": [_row(8), _row(9)], "next_cursor": 9}))
     memory = _MemoryCursor(1)
 
     result = await reconcile(
@@ -229,5 +229,4 @@ async def test_a_feed_whose_cursor_never_advances_is_bounded_by_the_page_budget(
         budget_seconds=10,
     )
 
-    assert route.call_count == 3
-    assert result.truncated
+    assert (route.call_count, result.scanned, result.behind, memory.seq) == (2, 2, False, 9)

@@ -217,8 +217,9 @@ def test_reconcile_observed_drop_event_conforms(monkeypatch: pytest.MonkeyPatch)
         async def __aexit__(self, *_a: object) -> bool:
             return False
 
-        async def execute(self, _statement: object, params: tuple[object, ...]) -> None:
-            written.append(params)
+        async def execute(self, statement: object, params: tuple[object, ...]) -> None:
+            if "INSERT INTO public.lineage_events" in str(statement):
+                written.append(params)
 
     class _Pool:
         def connection(self) -> _Conn:

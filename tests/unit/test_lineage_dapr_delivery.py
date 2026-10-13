@@ -278,7 +278,8 @@ def test_redelivery_acks_and_writes_the_identical_idempotent_statements(
     assert second == first, "redelivery is not a pure function of the event — convergence is unproven"
     # The feed row rides the same transaction and must converge on the same terms — it is what makes a
     # redelivery safe to fail into: ON CONFLICT DO NOTHING on the natural key, issued identically twice.
-    assert first_sql and all("ON CONFLICT DO NOTHING" in q for q, _ in first_sql), f"the feed INSERT is not idempotent: {first_sql}"
+    inserts = [q for q, _ in first_sql if q.startswith("INSERT")]
+    assert inserts and all("ON CONFLICT DO NOTHING" in q for q in inserts), f"the feed INSERT is not idempotent: {first_sql}"
     assert second_sql == first_sql, "the durable feed row is not a pure function of the event either"
 
 

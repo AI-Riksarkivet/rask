@@ -123,7 +123,7 @@ async def on_reconcile_cron(feed: FeedClientDep, cursor: CursorStoreDep, visibil
             "retried": result.retried,
             "cursor": result.cursor,
             "primed": result.primed,
-            "truncated": result.truncated,
+            "behind": result.behind,
             "gapped": result.gapped,
         },
     )
