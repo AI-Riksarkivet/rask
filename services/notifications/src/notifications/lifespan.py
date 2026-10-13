@@ -12,7 +12,7 @@ defect this service is deliberately not repeating.
 """
 
 import logging
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncGenerator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager, suppress
 
 import httpx
@@ -68,7 +68,7 @@ async def actor_plane_ready(request: Request) -> Readiness:
 
 def make_lifespan(settings: Settings) -> Callable[[FastAPI], AbstractAsyncContextManager[None]]:
     @asynccontextmanager
-    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         app.state.settings = settings
         # The SAME cached instance the InboxActor reads: an actor is constructed by the Dapr runtime and
         # cannot be handed a dependency, so `get_notifications_settings` is its only route to config.

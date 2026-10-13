@@ -17,7 +17,7 @@ the top of the factory's. Dead, and dead code goes in the change that kills it.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 
 import pytest
@@ -36,7 +36,7 @@ class _Body(BaseModel):
 
 
 @contextmanager
-def _probe_route(app: FastAPI) -> Iterator[None]:
+def _probe_route(app: FastAPI) -> Generator[None]:
     """Add a probe route to a REAL, module-level app and take it away again.
 
     These apps are process-wide singletons, so a route added here and left behind changes what

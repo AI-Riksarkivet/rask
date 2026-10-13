@@ -4,7 +4,7 @@ on app.state. No DB/Lance/S3/orchestrator. Tolerant of an unreachable dashboard
 
 import logging
 import time
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncGenerator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 
 import httpx
@@ -24,7 +24,7 @@ log = logging.getLogger(__name__)
 
 def make_lifespan(settings: Settings) -> Callable[[FastAPI], AbstractAsyncContextManager[None]]:
     @asynccontextmanager
-    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         app.state.settings = settings
         # auth_headers(): Bearer token as client-default headers when the cluster runs
         # RAY_AUTH_MODE=token (RASK_RAY_AUTH_TOKEN / RAY_AUTH_TOKEN); {} otherwise. The

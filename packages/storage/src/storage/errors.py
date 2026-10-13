@@ -27,7 +27,7 @@ otherwise would hide an outage behind a 404.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 
 
@@ -92,7 +92,7 @@ def _error_code(exc: BaseException) -> str | None:
 
 
 @contextmanager
-def s3_errors(*, bucket: str, key: str | None = None) -> Iterator[None]:
+def s3_errors(*, bucket: str, key: str | None = None) -> Generator[None]:
     """Translate S3 not-found errors raised inside the block into :class:`StorageError`.
 
     `key` is optional: a listing has no key, so a `404` inside a listing block is

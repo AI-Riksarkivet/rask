@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import json
 import os
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, cast
@@ -131,7 +131,7 @@ def _catalog_key(pair: Any | None) -> SigningKeyHolder[SigningKey]:
 
 
 @contextmanager
-def _sidecar_serving_the_catalogs_keys(status: int | None, pair: Any | None = None) -> Iterator[None]:
+def _sidecar_serving_the_catalogs_keys(status: int | None, pair: Any | None = None) -> Generator[None]:
     """The catalog's sidecar answering a read of `signing-public-<catalog>` with `status`, listing `pair`'s key on a 200.
 
     None is a catalog that does not sign, which reads no keys.

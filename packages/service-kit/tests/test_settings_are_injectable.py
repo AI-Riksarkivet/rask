@@ -11,7 +11,7 @@ The seam is a parameter. `settings=` supplied ⇒ that object IS the app's setti
 Omitted ⇒ `build_settings()` exactly as before, so no caller changes.
 """
 
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncGenerator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 
 from fastapi import APIRouter, FastAPI
@@ -52,7 +52,7 @@ def test_the_injected_settings_reach_a_service_lifespan() -> None:
         seen.append(settings)
 
         @asynccontextmanager
-        async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
+        async def _lifespan(app: FastAPI) -> AsyncGenerator[None]:
             app.state.settings = settings
             yield
 

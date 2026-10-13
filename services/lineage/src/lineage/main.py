@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
@@ -42,7 +42,7 @@ def _no_disarm() -> None:
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     settings = get_settings()
     # Readiness flags (mirrors the catalog): /readyz returns 503 until startup_complete and again once
     # shutting_down, so k8s pulls the pod from rotation during boot and graceful drain.

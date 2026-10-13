@@ -20,7 +20,7 @@ silently 404s (the dev-micro.sh warning). The nginx `lance.lineageSidecarOnlyRou
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from http import HTTPStatus
 from typing import Any, NamedTuple
@@ -372,7 +372,7 @@ async def _merged_openapi(client: httpx.AsyncClient, prefix: str, targets: list[
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     # ONE read for the whole process. Every per-request lookup below — the prefix, the route table,
     # the Dapr lane, the sidecar-only blocklist — is now an attribute on this object.
     settings = build_gateway_settings()

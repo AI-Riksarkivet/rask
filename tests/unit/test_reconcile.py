@@ -6,7 +6,7 @@ import asyncio
 import json
 import logging
 import time
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, cast
@@ -361,7 +361,7 @@ class _LockRepo(_FakeRepo):
         self.swept = False
 
     @asynccontextmanager
-    async def reconcile_lock(self) -> AsyncIterator[bool]:
+    async def reconcile_lock(self) -> AsyncGenerator[bool]:
         yield self._acquired
 
     async def list_datasets(self, namespace: str | None = None, tag: str | None = None) -> list[DatasetSummary]:

@@ -22,7 +22,7 @@ import sys
 import textwrap
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -172,7 +172,7 @@ def _free_port() -> int:
 
 
 @contextmanager
-def _uvicorn(tmp_path: Path, loop: str, source: str = _APP) -> Iterator[_Server]:
+def _uvicorn(tmp_path: Path, loop: str, source: str = _APP) -> Generator[_Server]:
     (tmp_path / "armed_app.py").write_text(source, encoding="utf-8")
     port = _free_port()
     env = {key: value for key, value in os.environ.items() if not key.startswith(("RASK_", "OTEL_"))}

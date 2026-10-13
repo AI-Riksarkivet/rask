@@ -112,7 +112,7 @@ clean:
 
 # ---- python (uv workspace) -------------------------------------------------
 typecheck:
-	uvx ty check
+	uv run --frozen ty check
 
 # ---- OpenAPI contract (docs/*-openapi.json) --------------------------------
 # The committed specs ARE the reviewable contract, generated from the live FastAPI

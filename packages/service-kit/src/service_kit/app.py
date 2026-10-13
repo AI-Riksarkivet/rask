@@ -17,7 +17,7 @@ lazily; `from service_kit import make_service_app` is unchanged.
 import logging
 import os
 import sys
-from collections.abc import AsyncIterator, Callable, Sequence
+from collections.abc import AsyncGenerator, Callable, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 
 from dotenv import load_dotenv
@@ -113,7 +113,7 @@ def default_lifespan(settings: Settings) -> Callable[[FastAPI], AbstractAsyncCon
     """
 
     @asynccontextmanager
-    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         app.state.settings = settings
         yield
 
@@ -196,7 +196,7 @@ def make_service_app(
         base = base_factory(s)
 
         @asynccontextmanager
-        async def wrapped(app: FastAPI) -> AsyncIterator[None]:
+        async def wrapped(app: FastAPI) -> AsyncGenerator[None]:
             # THE LIFECYCLE FLAGS `/readyz` READS ARE SET HERE, for every app this factory builds.
             #
             # `service_kit.probes` gates readiness on `startup_complete` / `shutting_down`, and those

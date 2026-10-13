@@ -37,7 +37,7 @@ Two bounds, both measured on pylance 12.0.0:
 from __future__ import annotations
 
 import re
-from collections.abc import Iterator, Sequence
+from collections.abc import Generator, Sequence
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Final, cast
 
@@ -124,7 +124,7 @@ def joinable(rows: pa.Table, keys: Sequence[str]) -> bool:
 
 
 @contextmanager
-def _refusing_held_keys(door: str) -> Iterator[None]:
+def _refusing_held_keys(door: str) -> Generator[None]:
     """Answer Lance's `when_matched_fail` refusal as the caller's mistake it is, naming the held key."""
     try:
         yield
