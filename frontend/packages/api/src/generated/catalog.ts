@@ -2135,8 +2135,9 @@ export interface paths {
          *     Order (fail-closed): the project must EXIST (``require_project_exists`` — 404 naming
          *     ``POST /management/v1/projects`` as the fix; existence is the registry's answer, identical for every caller, so
          *     it runs before authz), THEN authorize ``can_create_warehouse`` on the project, THEN provision the
-         *     bucket (idempotent), write the registry record, and grant the caller ``owner`` on ``warehouse:<id>``
-         *     with its ``project`` edge. A re-run with the same id is idempotent (bucket + record overwrite-safe).
+         *     bucket (idempotent), probe its store, write the registry record, and grant the caller ``owner`` on
+         *     ``warehouse:<id>`` with its ``project`` edge. The probe refuses a store that ignores credential scope or a
+         *     conditional put (400) and one it cannot reach (503), so no such warehouse becomes routable ([[LH-481]]). A re-run with the same id is idempotent (bucket + record overwrite-safe).
          *
          *     The estate-admin bootstrap exception is GONE (Decision 1): tenants are minted explicitly at
          *     ``POST /management/v1/projects``, which seeds the project's admin — so by the time this runs the project has

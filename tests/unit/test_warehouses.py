@@ -19,6 +19,7 @@ from lance_namespace import InvalidInputError, PermissionDeniedError, ServiceUna
 
 from catalog.api import dependencies, fga_deps
 from catalog.core.config import Settings
+from catalog.core.vending import ModeBVendor
 from catalog.services import projects as proj_svc
 from catalog.services import warehouses
 from service_kit.governed import fga as fga_module
@@ -240,6 +241,7 @@ def _create_as(settings: Settings, sub: str, body: Any) -> Any:
             token=IDToken(iss="i", sub=sub, aud="lance", exp=1, iat=1),
             client=MagicMock(),
             control=NoopControlEmitter(),
+            vendor=ModeBVendor(),  # the default `get_vendor` falls back to: no direct credentials, so the probe skips
             body=body,
         )
     )
@@ -514,6 +516,7 @@ def test_create_warehouse_rejects_models_and_multibase_buckets(tmp_path: Any, mo
                     token=None,  # FGA off → the admin gate is a no-op; the reserved guard must still fire
                     client=None,
                     control=cast(Any, None),  # only used after a successful create
+                    vendor=ModeBVendor(),  # the default `get_vendor` falls back to: no direct credentials, so the probe skips
                     body=CreateWarehouseRequest(id="wh-evil", project="evil", bucket=bucket),
                 )
             )
@@ -554,6 +557,7 @@ def _create(settings: Settings, body: Any) -> Any:
             token=None,  # FGA off → the admin gate + seed are no-ops (unit scope is the record contract)
             client=None,
             control=NoopControlEmitter(),
+            vendor=ModeBVendor(),  # the default `get_vendor` falls back to: no direct credentials, so the probe skips
             body=body,
         )
     )

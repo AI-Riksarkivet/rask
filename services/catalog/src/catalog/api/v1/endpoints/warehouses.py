@@ -29,7 +29,7 @@ import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
 from functools import partial
-from typing import Any
+from typing import Any, Final
 
 from fastapi import APIRouter, Request, Response
 from fastapi.concurrency import run_in_threadpool
@@ -89,6 +89,11 @@ from storage import s3_client, split_s3_uri
 
 log = logging.getLogger(__name__)
 
+#: The probe checks whose failure is a verdict on the STORE: it ignored a credential's scope, or a conditional
+#: put. Every other failing check (`issue`, `write_inside`, `read_inside`, `cleanup`) means the probe could not
+#: reach the store or its STS, which says nothing about the store.
+_CONFORMANCE_CHECKS: Final = frozenset({SCOPE_CHECK, CAS_RESERVE, CAS_CHECK})
+
 router = APIRouter(prefix="/management/v1/warehouses", tags=["warehouse"])
 
 # A bucket/warehouse id must be a DNS-safe S3 bucket name fragment — validated here so a malformed id
@@ -132,6 +137,7 @@ async def create_warehouse(
     token: CurrentToken,
     client: FgaClientDep,
     control: ControlEmitterDep,
+    vendor: VendorDep,
     body: CreateWarehouseRequest,
 ) -> WarehouseResponse:
     """Provision a warehouse: create its physical bucket + register it + seed FGA. Admin-gated.
@@ -139,8 +145,9 @@ async def create_warehouse(
     Order (fail-closed): the project must EXIST (``require_project_exists`` — 404 naming
     ``POST /management/v1/projects`` as the fix; existence is the registry's answer, identical for every caller, so
     it runs before authz), THEN authorize ``can_create_warehouse`` on the project, THEN provision the
-    bucket (idempotent), write the registry record, and grant the caller ``owner`` on ``warehouse:<id>``
-    with its ``project`` edge. A re-run with the same id is idempotent (bucket + record overwrite-safe).
+    bucket (idempotent), probe its store, write the registry record, and grant the caller ``owner`` on
+    ``warehouse:<id>`` with its ``project`` edge. The probe refuses a store that ignores credential scope or a
+    conditional put (400) and one it cannot reach (503), so no such warehouse becomes routable ([[LH-481]]). A re-run with the same id is idempotent (bucket + record overwrite-safe).
 
     The estate-admin bootstrap exception is GONE (Decision 1): tenants are minted explicitly at
     ``POST /management/v1/projects``, which seeds the project's admin — so by the time this runs the project has
@@ -221,6 +228,28 @@ async def create_warehouse(
 
     root_uri = f"s3://{bucket}"
     await run_in_threadpool(warehouses.provision_bucket, bucket, so)
+    # [[LH-481]] THE STORE IS PROVED BEFORE THE RECORD MAKES IT ROUTABLE (ADR 0089). Every Lance commit rests on
+    # the store refusing a second conditional put, and every vended credential on it honouring the session
+    # policy; a store that accepts either and ignores it fails silently, with a 200 on every write. The probe
+    # `POST …/validate` runs is run here too, so such a warehouse is refused rather than found later by a
+    # client. A `skip` (this deployment vends no direct credentials) proves nothing and refuses nothing. The
+    # bucket claim above stays: it names this project and id, so the same create retried converges.
+    #
+    # TWO ANSWERS, because the two failures need different things from the caller. A store that broke a
+    # guarantee is the request's problem, 400, and retrying changes nothing. A probe that could not reach the
+    # store or its STS learned nothing about it, 503, and the retry is the right move; a GitOps re-POST of a
+    # live warehouse must not read a store blip as a verdict on its store.
+    report = summarize_probe(await run_in_threadpool(_run_scope_probe, root_uri, vendor, so))
+    failed = [c.name for c in report.checks if c.outcome == "fail"]
+    if broken := [name for name in failed if name in _CONFORMANCE_CHECKS]:
+        log.warning("warehouse_store_failed_probe", extra={"warehouse": warehouse_id, "bucket": bucket, "failed": broken})
+        raise InvalidInputError(
+            f"warehouse {warehouse_id!r} was not registered: its object store failed the storage probe ({', '.join(broken)}). "
+            "A Lance warehouse needs a store that enforces vended-credential scope and refuses a second conditional write."
+        )
+    if failed:
+        log.warning("warehouse_store_unprobed", extra={"warehouse": warehouse_id, "bucket": bucket, "failed": failed})
+        raise ServiceUnavailableError(f"warehouse {warehouse_id!r} was not registered: its object store could not be probed ({', '.join(failed)}); retry")
     record = {
         "id": warehouse_id,
         "bucket": bucket,
