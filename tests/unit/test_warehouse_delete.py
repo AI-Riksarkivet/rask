@@ -28,6 +28,7 @@ from lance_namespace import (
 )
 
 from catalog.core.config import Settings
+from catalog.core.vending import ModeBVendor
 from catalog.services import warehouses
 from service_kit.control_emit import NoopControlEmitter
 from service_kit.governed import fga as fga_module
@@ -361,6 +362,7 @@ def test_an_idempotent_re_create_does_not_silently_disarm_the_protection_flag(tm
             token=None,
             client=None,
             control=NoopControlEmitter(),
+            vendor=ModeBVendor(),  # the default `get_vendor` falls back to: no direct credentials, so the probe skips
             body=CreateWarehouseRequest(id="acme-wh", project="acme"),
         )
 
