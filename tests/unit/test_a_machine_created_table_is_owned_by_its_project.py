@@ -56,13 +56,18 @@ async def _tuples_written(token: Principal, monkeypatch: pytest.MonkeyPatch) -> 
     async def _capture(_client: object, tuples: Any, **_kw: Any) -> None:
         written.extend((t.user, t.relation, t.object) for t in tuples)
 
+    async def _no_previous_incarnation(_client: object, _obj: str, **_kw: Any) -> list[Any]:
+        return []
+
     monkeypatch.setattr(fga, "write_tuples", _capture)
+    monkeypatch.setattr(fga, "revoke_object_tuples", _no_previous_incarnation)
     await fga_deps.seed_ownership(
         cast("OpenFgaClient", object()),  # the capture never touches the client
         _settings(),
         token,
         resource="table",
         segments=["acme-silver", "features"],
+        created=True,
         parent_object="namespace:acme-silver",
     )
     return written

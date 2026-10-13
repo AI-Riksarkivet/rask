@@ -223,6 +223,7 @@ async def create_namespace(
             resource="namespace",
             segments=segments,
             undo=_undo_create,
+            created=True,
             # A bound top-level namespace hangs off its warehouse, as the warehouse door seeds it.
             parent_object=f"warehouse:{binding['warehouse_id']}" if binding is not None else None,
         )

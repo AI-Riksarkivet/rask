@@ -1397,10 +1397,20 @@ async def seed_ownership(
     *,
     resource: str,
     segments: list[str],
+    created: bool,
     parent_object: str | None = None,
     may_grant_owner: bool = True,
 ) -> None:
     """Grant the creator ``owner`` + the ``parent`` edge on a just-created object.
+
+    ``created`` says THIS request brought the object into being, so any tuple already on its id belongs to a
+    previous incarnation: a drop revokes after its irreversible native mutation, and an OpenFGA outage there
+    leaves the tuples behind. They are revoked before the seed, or the new object would hand the dropped one's
+    grantees its data with nobody having granted it (ADR 0146, [[LH-480]]). False when the door cannot prove
+    the id was free: an object it kept or adopted, or a table written under ExistOk or Overwrite, whose
+    tuples may be another caller's live grants. Required, not defaulted, so a new create door has to say
+    which it is. The revoke is audited per tuple with origin ``stale_on_create``; it emits no
+    ``grant_revoked``, as the drop that orphaned the tuples emits none either.
 
     ``may_grant_owner=False`` writes the EDGE ALONE. The caller uses it when this request did not
     create the object — an ExistOk that kept an existing table — where granting ``owner`` would seize
@@ -1421,6 +1431,11 @@ async def seed_ownership(
     """
     if not (settings.fga_enabled and token is not None and client is not None):
         return
+    if created:
+        obj = f"{resource}:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}"
+        stale = await fga.revoke_object_tuples(client, obj, actor=token.sub, origin="stale_on_create")  # noqa: TID251
+        if stale:
+            log.warning("fga_stale_tuples_revoked_on_create", extra={"object": obj, "removed": len(stale)})
     # A MACHINE DOES NOT OWN WHAT IT REGISTERS (owner ruling 2026-09-10, zero trust). A service principal
     # registering its own output would become that table's owner, keeping `can_drop`, `can_deregister`,
     # `can_restore` and `manage_grants` on every governed tier of every tenant it ever wrote to.
@@ -1489,6 +1504,7 @@ async def seed_ownership_or_compensate(
     resource: str,
     segments: list[str],
     undo: Callable[[], Awaitable[None]] | None,
+    created: bool,
     parent_object: str | None = None,
     may_grant_owner: bool = True,
 ) -> None:
@@ -1524,7 +1540,9 @@ async def seed_ownership_or_compensate(
     what the caller is told.
     """
     try:
-        await seed_ownership(client, settings, token, resource=resource, segments=segments, parent_object=parent_object, may_grant_owner=may_grant_owner)
+        await seed_ownership(
+            client, settings, token, resource=resource, segments=segments, created=created, parent_object=parent_object, may_grant_owner=may_grant_owner
+        )
     except Exception:
         if undo is not None:
             obj = fga.canonical_object_id(segments, delimiter=settings.delimiter)

@@ -644,6 +644,7 @@ async def create_warehouse_namespace(
         segments=segments,
         parent_object=f"warehouse:{warehouse_id}",
         undo=None if adopted else _undo_create,
+        created=not adopted,
     )
     log.info("warehouse_namespace_created", extra={"warehouse": warehouse_id, "namespace": ns_name})
     await emit_control(

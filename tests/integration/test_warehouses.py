@@ -446,6 +446,7 @@ def test_warehouse_namespace_create_converges_after_a_failed_grant(client: TestC
     succeeds instead of needing a migration flag."""
     fake = _wh_with_fake_backend(client, tmp_path, monkeypatch, "wh-f3")
 
+    monkeypatch.setattr(fga_module, "revoke_object_tuples", AsyncMock(return_value=[]))  # no previous incarnation at the id
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(fga_module, "grant_on_create", _failing_grant)
         failed = client.post("/management/v1/warehouses/wh-f3/namespaces", json={"namespace": "f3ns"}, headers=_BEARER)
