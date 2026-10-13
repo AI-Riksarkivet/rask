@@ -14,12 +14,14 @@ from __future__ import annotations
 from typing import Annotated, Any, Final
 
 from fastapi import APIRouter, HTTPException, Query, Request
+from lance_namespace import InvalidInputError
 
 from lineage.api.dependencies import RepositoryDep, SettingsDep
 from lineage.api.fga_deps import FilterDep, governed, is_external_source, require_event_feed_reader
 from lineage.api.security import CurrentToken
 from lineage.schemas import Events, FeedProjection, ProjectedEvent, RunInputs, Runs, RunStatus
 from lineage.services.repository import EventRecord
+from service_kit.lakehouse.naming import CATALOG_DELIMITER
 
 
 router = APIRouter(tags=["query"])
@@ -214,6 +216,37 @@ def targeting_view(event: dict[str, Any]) -> dict[str, Any]:
     return view
 
 
+def _one_direction(after: int | None, since: int | None) -> None:
+    """``after`` pages backward and ``since`` forward; a request naming both has no single order."""
+    if after is not None and since is not None:
+        raise InvalidInputError("pass `after` (page older) or `since` (follow forward), not both")
+
+
+def _names_the_scope(record: EventRecord, table: str | None, namespace: str | None) -> bool:
+    """True when the row's inputs or outputs name ``table``, or a table under ``namespace``.
+
+    A dataset's name is its catalog table id joined by the catalog delimiter, so a namespace contains
+    the names that start with ``<namespace><delimiter>``.
+    """
+    names = {*record.inputs, *record.outputs}
+    if table is not None and table not in names:
+        return False
+    return namespace is None or any(name.startswith(f"{namespace}{CATALOG_DELIMITER}") for name in names)
+
+
+def _forward_cursor(returned: list[EventRecord], records: list[EventRecord], *, limit: int, since: int) -> int:
+    """The ``since`` a follower passes next: the last seq this page COVERED, never behind ``since``.
+
+    A full page ends at its last returned row, so the rows after it in the fetch window are read next
+    time. A short page covered the whole window, rows the filters or the caller's grants dropped
+    included, so the cursor moves to the window's last seq. An empty window leaves the cursor where it
+    was, which is how a follower knows it has caught up.
+    """
+    if len(returned) == limit and returned:
+        return returned[-1].seq
+    return records[-1].seq if records else since
+
+
 @router.get("/events/projection")
 async def get_events_projection(
     request: Request,
@@ -221,6 +254,7 @@ async def get_events_projection(
     settings: SettingsDep,
     token: CurrentToken,
     after: Annotated[int | None, Query(ge=1)] = None,
+    since: Annotated[int | None, Query(ge=0)] = None,
     limit: Annotated[int, Query(ge=1, le=_EVENTS_RETURN)] = _EVENTS_RETURN,
 ) -> FeedProjection:
     """The run feed WITHOUT the per-dataset filter, for the notifications reconciler ([[CTL-021]]).
@@ -242,15 +276,19 @@ async def get_events_projection(
     chart grants the reconciler by name, or the estate owner. Each row carries only
     :func:`targeting_view`, because the holder reads the feed to address people and needs nothing more.
 
-    The cursor is the `/events` keyset (`after` pages OLDER, `next_cursor` is the last row's seq on a full
-    page), so a walk behaves as it does there. `oldest_seq` is reported here too: a walker whose cursor
+    The cursors are `/events`' own: `since` follows FORWARD, oldest first, and `next_cursor` is the
+    `since` to pass next; `after` pages OLDER. `oldest_seq` is reported here too: a follower whose cursor
     falls below it lost a window to the prune, which is the one signal that distinguishes "caught up"
     from "rows went past me". There is no `summary`: the summary drops the payload, and the payload is
     the only place a run id lives.
     """
+    _one_direction(after, since)
     await require_event_feed_reader(request, settings, token)
-    records = await repository.list_events(limit=limit, after=after, summary=False)
-    next_cursor = records[-1].seq if len(records) == limit and records else None
+    records = await repository.list_events(limit=limit, after=after, since=since, summary=False)
+    if since is not None:
+        next_cursor: int | None = _forward_cursor(records, records, limit=limit, since=since)
+    else:
+        next_cursor = records[-1].seq if len(records) == limit and records else None
     return FeedProjection(
         events=[ProjectedEvent(seq=record.seq, event=targeting_view(record.event)) for record in records],
         next_cursor=next_cursor,
@@ -264,10 +302,20 @@ async def get_events(
     datasets: FilterDep,
     settings: SettingsDep,
     after: Annotated[int | None, Query(ge=1)] = None,
+    since: Annotated[int | None, Query(ge=0)] = None,
+    table: Annotated[str | None, Query(min_length=1)] = None,
+    namespace: Annotated[str | None, Query(min_length=1)] = None,
     limit: Annotated[int, Query(ge=1, le=_EVENTS_RETURN)] = _EVENTS_RETURN,
     summary: bool = False,
 ) -> Events:
-    """The most-recent ingested OpenLineage events (newest first) — the Marquez-style event feed.
+    """The ingested OpenLineage events — newest first, or FORWARD from ``since`` for a follower.
+
+    **Following (LH-472).** ``since=<seq>`` returns the events with a larger seq, oldest first, and
+    ``next_cursor`` is always the ``since`` to pass next; it equals the one passed when nothing new has
+    committed. Seq order is commit order (``pg.FEED_ORDER_LOCK_KEY``), so a follower that always passes
+    ``next_cursor`` back reads every row it may see exactly once. ``table=`` keeps the rows whose inputs or
+    outputs name that table id; ``namespace=`` the rows naming a table under it. The contract a pipeline
+    polls is ``docs/COMMIT-EVENTS.md``.
 
     **Durable** (read from Postgres, survives restart / replica-shared) and **governed**: when auth is
     on the feed is filtered like the per-dataset reads — an event is shown only if the caller
@@ -283,10 +331,12 @@ async def get_events(
     from gaps in the pre-pagination feed, so this adds no new disclosure class — reviewed
     2026-07-11).
     """
-    # Auth off → governed() is pass-through, so no over-fetch headroom is needed: read exactly
-    # `limit` rows. Auth on → keep the wide window so dropped rows don't starve the page.
-    fetch = _EVENTS_FETCH if settings.fga_enabled else limit
-    records = await repository.list_events(limit=fetch, after=after, summary=summary)
+    _one_direction(after, since)
+    # Unfiltered with auth off, every fetched row is returned, so read exactly `limit` rows. A scope
+    # filter or the governance filter drops rows, so keep the wide window then, or a page starves.
+    scoped = table is not None or namespace is not None
+    fetch = _EVENTS_FETCH if settings.fga_enabled or scoped else limit
+    records = await repository.list_events(limit=fetch, after=after, since=since, summary=summary)
     # Govern on EVERY dataset the returned payload discloses — not just top-level inputs/outputs. The full
     # raw ``event`` JSONB (present when summary=False) carries columnLineage facets that name SOURCE datasets
     # + column schemas NOT in the top-level inputs; without unioning them in, a caller who can see the output
@@ -295,11 +345,13 @@ async def get_events(
     visible = await governed(
         datasets,
         settings.fga_enabled,
-        records,
+        [record for record in records if _names_the_scope(record, table, namespace)],
         _governed_datasets,
     )
     returned = visible[:limit]
-    if len(returned) == limit and returned:
+    if since is not None:
+        next_cursor: int | None = _forward_cursor(returned, records, limit=limit, since=since)
+    elif len(returned) == limit and returned:
         next_cursor = returned[-1].seq  # continue right below the last VISIBLE row we returned
     elif len(records) == fetch and records:
         # The fetch window filled up but visibility filtering left a short page — more rows exist

@@ -896,11 +896,10 @@ export interface paths {
         };
         /**
          * List Projects
-         * @description Enumerate the estate's tenants, derived from the warehouse registry. Estate-observer gated.
+         * @description The caller's tenants: every tenant for an estate observer, else the ones the caller is a member of.
          *
-         *     Fail-closed via FGA on the read: a non-estate-observer gets 403, an OpenFGA outage 503, and the gate
-         *     is a no-op only when FGA is off (parity with every ``require_*`` site). ``admins`` degrades to ``[]``
-         *     when FGA is off or the ``list_users`` lookup is unavailable — the registry facts still serve.
+         *     ``admins`` degrades to ``[]`` when FGA is off or the ``list_users`` lookup is unavailable — the registry
+         *     facts still serve; the visibility decision itself fails closed (``_visible_projects``).
          */
         get: operations["list_projects_management_v1_projects_get"];
         put?: never;
@@ -2041,7 +2040,7 @@ export interface paths {
          *
          *     GATED EXPLICITLY, unlike its table/namespace siblings. Warehouse is not in `fga_deps._RESOURCES`
          *     (`namespace`, `table`, `materialized_view`, `transaction`), so the router-level `authorize`
-         *     returns early for every `/v1/warehouse/…` path and a route mounted here that forgets its own check
+         *     returns early for every `/management/v1/warehouse/…` path and a route mounted here that forgets its own check
          *     is simply ungated — the hazard this module's own header comment names.
          *
          *     Reader tier (`can_get_metadata`), matching `_my_permissions`' rule rather than the owner bar its

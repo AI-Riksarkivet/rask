@@ -539,7 +539,14 @@ export interface paths {
         };
         /**
          * Get Events
-         * @description The most-recent ingested OpenLineage events (newest first) — the Marquez-style event feed.
+         * @description The ingested OpenLineage events — newest first, or FORWARD from ``since`` for a follower.
+         *
+         *     **Following (LH-472).** ``since=<seq>`` returns the events with a larger seq, oldest first, and
+         *     ``next_cursor`` is always the ``since`` to pass next; it equals the one passed when nothing new has
+         *     committed. Seq order is commit order (``pg.FEED_ORDER_LOCK_KEY``), so a follower that always passes
+         *     ``next_cursor`` back reads every row it may see exactly once. ``table=`` keeps the rows whose inputs or
+         *     outputs name that table id; ``namespace=`` the rows naming a table under it. The contract a pipeline
+         *     polls is ``docs/COMMIT-EVENTS.md``.
          *
          *     **Durable** (read from Postgres, survives restart / replica-shared) and **governed**: when auth is
          *     on the feed is filtered like the per-dataset reads — an event is shown only if the caller
@@ -592,8 +599,8 @@ export interface paths {
          *     chart grants the reconciler by name, or the estate owner. Each row carries only
          *     :func:`targeting_view`, because the holder reads the feed to address people and needs nothing more.
          *
-         *     The cursor is the `/events` keyset (`after` pages OLDER, `next_cursor` is the last row's seq on a full
-         *     page), so a walk behaves as it does there. `oldest_seq` is reported here too: a walker whose cursor
+         *     The cursors are `/events`' own: `since` follows FORWARD, oldest first, and `next_cursor` is the
+         *     `since` to pass next; `after` pages OLDER. `oldest_seq` is reported here too: a follower whose cursor
          *     falls below it lost a window to the prune, which is the one signal that distinguishes "caught up"
          *     from "rows went past me". There is no `summary`: the summary drops the payload, and the payload is
          *     the only place a run id lives.
@@ -1175,10 +1182,11 @@ export interface components {
         };
         /**
          * Events
-         * @description The most-recent ingested OpenLineage events (newest first).
+         * @description A page of the ingested OpenLineage events: oldest first after ``since``, else newest first.
          *
-         *     ``next_cursor`` (additive, 2026-07-11): pass back as ``?after=`` to page OLDER events (keyset
-         *     over ``seq``). ``None`` = the feed is exhausted.
+         *     ``next_cursor`` after ``?since=``: the ``since`` to pass next, never ``None``; equal to the one sent when
+         *     nothing new is visible. Without ``since`` it pages OLDER as ``?after=`` (keyset over ``seq``), and
+         *     ``None`` means no rows below this page.
          */
         Events: {
             /** Events */
@@ -1190,9 +1198,9 @@ export interface components {
         };
         /**
          * FeedProjection
-         * @description A page of the run feed with no per-dataset filter, newest first ([[CTL-021]]).
+         * @description A page of the run feed with no per-dataset filter ([[CTL-021]]).
          *
-         *     The keyset cursor and the floor mean exactly what they mean on :class:`Events`, so a walk over either
+         *     The cursors and the floor mean exactly what they mean on :class:`Events`, so a walk over either
          *     behaves the same; what differs is reach (every warehouse) and width (``ProjectedEvent.event``).
          */
         FeedProjection: {
@@ -2450,6 +2458,9 @@ export interface operations {
         parameters: {
             query?: {
                 after?: number | null;
+                since?: number | null;
+                table?: string | null;
+                namespace?: string | null;
                 limit?: number;
                 summary?: boolean;
             };
@@ -2485,6 +2496,7 @@ export interface operations {
         parameters: {
             query?: {
                 after?: number | null;
+                since?: number | null;
                 limit?: number;
             };
             header?: {

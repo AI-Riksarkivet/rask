@@ -277,7 +277,7 @@ class _FakeRepo:
     async def record_event(self, **_kwargs: object) -> None:
         return None
 
-    async def list_events(self, limit: int = 500, *, after: int | None = None, summary: bool = False) -> list[EventRecord]:
+    async def list_events(self, limit: int = 500, *, after: int | None = None, since: int | None = None, summary: bool = False) -> list[EventRecord]:
         self.list_events_calls.append({"limit": limit, "after": after, "summary": summary})
         return self.events
 

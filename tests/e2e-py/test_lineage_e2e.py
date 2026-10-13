@@ -712,6 +712,70 @@ def test_events_feed_and_read_audit_against_postgres(dsn: str) -> None:
     assert mine is not None and mine.reads == 2 and mine.last_read, audited
 
 
+def test_a_follower_never_reads_past_a_seq_that_has_not_committed(dsn: str) -> None:
+    """LH-472: `list_events(since=)` pages forward, and seq order is commit order.
+
+    Writer A draws a seq inside an open transaction; writer B starts while A is still open. Without the
+    feed-order lock B commits a LARGER seq first, a follower reading forward sees it, moves its cursor
+    past A's seq, and never reads A. With the lock B waits for A, so while A is open a forward read sees
+    neither, and afterwards it sees A then B, one page each, with no repeat.
+
+    Non-destructive: it only inserts two rows with run ids of its own and reads rows after its own start.
+    """
+    import uuid
+
+    from lineage.core.age import make_pool
+    from lineage.services.repository import LineageRepository
+
+    run_a, run_b = str(uuid.uuid4()), str(uuid.uuid4())
+    ours = {run_a, run_b}
+
+    def row(run_id: str) -> dict:
+        return {
+            "run_id": run_id,
+            "event_type": "COMPLETE",
+            "event_time": "2026-10-13T00:00:00+00:00",
+            "job": "e2e/feed.order",
+            "author": "e2e",
+            "inputs": [],
+            "outputs": ["e2e$feed_order"],
+            "event": {"run": {"runId": run_id}},
+        }
+
+    async def run() -> tuple[bool, list[str], list[list[str]]]:
+        pool = make_pool(dsn)
+        await pool.open()
+        try:
+            repo = LineageRepository(pool, "lineage")
+            await repo.ensure_events_table()
+            newest = await repo.list_events(limit=1)
+            start = newest[0].seq if newest else 0
+            async with pool.connection() as conn, conn.transaction():
+                await repo._insert_feed_row(conn, **row(run_a))
+                writer_b = asyncio.create_task(repo.record_event(**row(run_b)))
+                await asyncio.sleep(1.0)
+                b_waited = not writer_b.done()
+                seen_while_a_open = [r.event["run"]["runId"] for r in await repo.list_events(since=start) if r.event.get("run", {}).get("runId") in ours]
+            await writer_b
+            pages: list[list[str]] = []
+            cursor = start
+            for _ in range(10):
+                page = await repo.list_events(since=cursor, limit=1)
+                if not page:
+                    break
+                cursor = page[-1].seq
+                pages.append([r.event.get("run", {}).get("runId") for r in page])
+            return b_waited, seen_while_a_open, [p for p in pages if set(p) & ours]
+        finally:
+            await pool.close()
+
+    b_waited, seen_while_a_open, pages = asyncio.run(run())
+
+    assert seen_while_a_open == [], f"a forward read saw a later write while an earlier seq was uncommitted: {seen_while_a_open}"
+    assert b_waited, "writer B committed while A held an earlier seq open"
+    assert pages == [[run_a], [run_b]], f"the forward walk did not read A then B once each: {pages}"
+
+
 def test_terminal_lifecycle_and_column_gc_against_age(dsn: str) -> None:
     """The lifecycle statements and the column GC on real AGE, which unit tests can only simulate: AGE
     1.5.0 has a history of quirks only a live run catches ([[LH-144]]).

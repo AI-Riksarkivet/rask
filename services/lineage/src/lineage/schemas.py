@@ -313,10 +313,11 @@ class EventRecord(BaseModel):
 
 
 class Events(BaseModel):
-    """The most-recent ingested OpenLineage events (newest first).
+    """A page of the ingested OpenLineage events: oldest first after ``since``, else newest first.
 
-    ``next_cursor`` (additive, 2026-07-11): pass back as ``?after=`` to page OLDER events (keyset
-    over ``seq``). ``None`` = the feed is exhausted.
+    ``next_cursor`` after ``?since=``: the ``since`` to pass next, never ``None``; equal to the one sent when
+    nothing new is visible. Without ``since`` it pages OLDER as ``?after=`` (keyset over ``seq``), and
+    ``None`` means no rows below this page.
     """
 
     events: list[EventRecord]
@@ -324,12 +325,10 @@ class Events(BaseModel):
     #: The oldest seq the feed still RETAINS (additive, 2026-08-16). ``None`` = an empty feed, or a
     #: lineage build predating the field.
     #:
-    #: `next_cursor is None` says "no more rows below this page"; it does NOT say "you have seen
-    #: everything since your cursor". The feed self-prunes on every ingest, so a consumer whose mark
-    #: has fallen below this number lost rows before reading them — and without this field that loss
-    #: is indistinguishable from being caught up. Lineage cannot make the comparison itself: the
-    #: consumer's cursor lives in its own service's state store. So the floor is published and each
-    #: reader draws its own conclusion.
+    #: The feed self-prunes on every ingest, so a consumer whose cursor has fallen below this number may
+    #: have lost rows before reading them; a seq the feed never filled looks the same, so it is a
+    #: possible loss, not proof. Lineage cannot make the comparison itself: the consumer's cursor lives in
+    #: its own service's state store. So the floor is published and each reader draws its own conclusion.
     oldest_seq: int | None = None
 
 
@@ -341,9 +340,9 @@ class ProjectedEvent(BaseModel):
 
 
 class FeedProjection(BaseModel):
-    """A page of the run feed with no per-dataset filter, newest first ([[CTL-021]]).
+    """A page of the run feed with no per-dataset filter ([[CTL-021]]).
 
-    The keyset cursor and the floor mean exactly what they mean on :class:`Events`, so a walk over either
+    The cursors and the floor mean exactly what they mean on :class:`Events`, so a walk over either
     behaves the same; what differs is reach (every warehouse) and width (``ProjectedEvent.event``).
     """
 

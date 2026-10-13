@@ -92,13 +92,16 @@ DEFAULT_RUN = {
 
 
 class _Feed:
-    """Lineage's durable feed as the repository serves it: newest first, keyset-paged on `seq < after`."""
+    """Lineage's durable feed as the repository serves it: oldest first after `since`, else newest first."""
 
     def __init__(self, rows: list[EventRecord]) -> None:
-        self._rows = sorted(rows, key=lambda row: row.seq, reverse=True)
+        self._rows = sorted(rows, key=lambda row: row.seq)
 
-    async def list_events(self, limit: int = 500, *, after: int | None = None, summary: bool = False) -> list[EventRecord]:
-        rows = [row for row in self._rows if after is None or row.seq < after][:limit]
+    async def list_events(self, limit: int = 500, *, after: int | None = None, since: int | None = None, summary: bool = False) -> list[EventRecord]:
+        if since is not None:
+            rows = [row for row in self._rows if row.seq > since][:limit]
+        else:
+            rows = [row for row in reversed(self._rows) if after is None or row.seq < after][:limit]
         return [row.model_copy(update={"event": {}}) for row in rows] if summary else rows
 
     async def oldest_event_seq(self) -> int | None:
@@ -138,13 +141,13 @@ class _Cursor:
     """The cursor store's contract in memory, holding a mark below every row of the feed."""
 
     def __init__(self) -> None:
-        self.cursor = LineageCursor(seq=0, floor=0, updated_at=datetime.now(UTC))
+        self.cursor = LineageCursor(seq=0, updated_at=datetime.now(UTC))
 
     async def get(self) -> LineageCursor | None:
         return self.cursor
 
-    async def set(self, seq: int, *, resume_from: int | None = None, pending_high: int | None = None, floor: int | None = None, stalls: int = 0) -> None:
-        self.cursor = LineageCursor(seq=seq, updated_at=datetime.now(UTC), resume_from=resume_from, pending_high=pending_high, floor=floor, stalls=stalls)
+    async def set(self, seq: int, *, stalls: int = 0) -> None:
+        self.cursor = LineageCursor(seq=seq, updated_at=datetime.now(UTC), stalls=stalls)
 
 
 @pytest.fixture
@@ -217,5 +220,5 @@ async def test_the_walk_reaches_a_tenant_warehouse_run_and_is_sent_only_what_tar
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=lineage)) as http:
         stranger = LineageFeedClient(client=http, base_url="http://lineage.test", token_file=str(token), timeout_seconds=5.0, page_limit=500)
         with pytest.raises(httpx.HTTPStatusError) as refused:
-            await stranger.page(after=None)
+            await stranger.page(since=None)
     assert refused.value.response.status_code == 403

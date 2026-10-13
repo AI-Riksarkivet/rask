@@ -76,8 +76,8 @@ class _FakeFeed:
         self._page = page
         self.calls: list[int | None] = []
 
-    async def page(self, *, after: int | None) -> FeedPage:
-        self.calls.append(after)
+    async def page(self, *, since: int | None) -> FeedPage:
+        self.calls.append(since)
         return self._page
 
 
@@ -87,15 +87,13 @@ class _FakeCursor:
     def __init__(self, stored: LineageCursor | None = None) -> None:
         self.stored = stored
         self.writes: list[int] = []
-        self.parked: list[tuple[int | None, int | None]] = []
 
     async def get(self) -> LineageCursor | None:
         return self.stored
 
-    async def set(self, seq: int, *, resume_from: int | None = None, pending_high: int | None = None, floor: int | None = None, stalls: int = 0) -> None:
+    async def set(self, seq: int, *, stalls: int = 0) -> None:
         # Mirrors the real signature so a fake cannot silently diverge from the store it stands in for.
         self.writes.append(seq)
-        self.parked.append((resume_from, pending_high))
 
 
 def _app(*, feed: _FakeFeed | None, cursor: _FakeCursor | None, actors: bool = True) -> FastAPI:
@@ -343,9 +341,9 @@ def test_the_tick_hands_reconcile_its_configured_bounds(wired: tuple[TestClient,
 
 
 def test_a_catch_up_walk_runs_through_the_route(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Not the priming branch: a stored cursor makes the route drive the real downward walk."""
+    """Not the priming branch: a stored cursor makes the route drive the real forward walk."""
     monkeypatch.setattr("notifications.api.reconciler.ingest_run_event", _count_ingest())
-    feed = _FakeFeed(FeedPage(events=[FeedRecord(seq=9, event=RUN_EVENT), FeedRecord(seq=8, event=RUN_EVENT)], next_cursor=None))
+    feed = _FakeFeed(FeedPage(events=[FeedRecord(seq=8, event=RUN_EVENT), FeedRecord(seq=9, event=RUN_EVENT)], next_cursor=9))
     cursor = _FakeCursor(stored=LineageCursor(seq=7, updated_at=datetime.now(UTC)))
     client = TestClient(_app(feed=feed, cursor=cursor))
 

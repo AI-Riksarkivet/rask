@@ -1450,20 +1450,29 @@ class LineageRepository:
     ) -> None:
         """Append one row to the durable feed ON THE CALLER'S connection, so the write can join whatever
         transaction the caller already holds. ``ON CONFLICT DO NOTHING`` makes it idempotent under the
-        redelivery that transaction's failure would provoke."""
-        await conn.execute(
-            pg.INSERT_EVENT,
-            (
-                run_id,
-                event_type,
-                event_time,
-                job,
-                author,
-                json.dumps(inputs),
-                json.dumps(outputs),
-                json.dumps(event),
-            ),
-        )
+        redelivery that transaction's failure would provoke.
+
+        The feed-order lock comes first and is held to commit, so a forward follower never sees a seq
+        while a smaller one is still uncommitted (``pg.FEED_ORDER_LOCK_KEY``). Both run inside
+        ``conn.transaction()`` because the pool's connections are autocommit: on a caller with no
+        transaction the lock would otherwise end with its own statement, before the INSERT draws a seq.
+        Inside a caller's transaction this is a savepoint, and an advisory xact lock lives to the
+        top-level commit."""
+        async with conn.transaction():
+            await conn.execute(pg.TAKE_FEED_ORDER_LOCK, (pg.FEED_ORDER_LOCK_KEY,))
+            await conn.execute(
+                pg.INSERT_EVENT,
+                (
+                    run_id,
+                    event_type,
+                    event_time,
+                    job,
+                    author,
+                    json.dumps(inputs),
+                    json.dumps(outputs),
+                    json.dumps(event),
+                ),
+            )
 
     async def record_event(
         self,
@@ -1554,16 +1563,22 @@ class LineageRepository:
             readers=[ReaderInfo(reader=r[0], last_read=r[1].isoformat() if r[1] else None, reads=r[2]) for r in rows],
         )
 
-    async def list_events(self, limit: int = 500, *, after: int | None = None, summary: bool = False) -> list[EventRecord]:
-        """The most-recent ingested events, newest first (durable — read from Postgres, not memory).
+    async def list_events(self, limit: int = 500, *, after: int | None = None, since: int | None = None, summary: bool = False) -> list[EventRecord]:
+        """Ingested events from the durable feed: newest first, or oldest first after ``since``.
 
-        ``after`` = keyset cursor (rows with ``seq < after`` — the previous page's last seq);
-        ``summary`` skips the full-JSONB ``event`` column at the SQL layer (projection, not
-        post-fetch stripping) for pollers that render only the summary fields.
+        ``after`` = backward keyset cursor (rows with ``seq < after`` — the previous page's last seq);
+        ``since`` = forward cursor (rows with ``seq > since``, oldest first), the read a follower polls
+        (LH-472). Passing both is a caller error. ``summary`` skips the full-JSONB ``event`` column at the
+        SQL layer for pollers that render only the summary fields.
         """
-        if after is not None:
+        if after is not None and since is not None:
+            raise ValueError("list_events takes `after` or `since`, not both")
+        if since is not None:
+            query = pg.LIST_EVENTS_SUMMARY_SINCE if summary else pg.LIST_EVENTS_SINCE
+            params: tuple[int, ...] = (since, limit)
+        elif after is not None:
             query = pg.LIST_EVENTS_SUMMARY_AFTER if summary else pg.LIST_EVENTS_AFTER
-            params: tuple[int, ...] = (after, limit)
+            params = (after, limit)
         else:
             query = pg.LIST_EVENTS_SUMMARY if summary else pg.LIST_EVENTS
             params = (limit,)

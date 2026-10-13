@@ -94,6 +94,22 @@ LIST_EVENTS_SUMMARY: Final = "SELECT seq, event_type, event_time, job, author, i
 LIST_EVENTS_SUMMARY_AFTER: Final = (
     "SELECT seq, event_type, event_time, job, author, inputs, outputs FROM public.lineage_events WHERE seq < %s ORDER BY seq DESC LIMIT %s"
 )
+# Forward keyset (LH-472): `seq > %s ORDER BY seq` is the follower's read, oldest first. It is sound only
+# because seq order is commit order — `FEED_ORDER_LOCK_KEY` below is what makes it so.
+LIST_EVENTS_SINCE: Final = (
+    "SELECT seq, event_type, event_time, job, author, inputs, outputs, event FROM public.lineage_events WHERE seq > %s ORDER BY seq ASC LIMIT %s"
+)
+LIST_EVENTS_SUMMARY_SINCE: Final = (
+    "SELECT seq, event_type, event_time, job, author, inputs, outputs FROM public.lineage_events WHERE seq > %s ORDER BY seq ASC LIMIT %s"
+)
+# Taken with `pg_advisory_xact_lock` immediately before every feed INSERT and held until that
+# transaction commits. A `bigserial` is drawn at INSERT and becomes visible at COMMIT, and those two
+# orders differ between concurrent writers: B can draw 11 and commit while A still holds 10. A follower
+# reading `seq > 9` then sees 11, moves its cursor past 10, and never reads 10. Serialising the
+# draw-to-commit window makes every committed seq smaller than every seq not yet visible. The INSERT is
+# the last statement of each feed-writing transaction, so the window it serialises is the commit alone.
+FEED_ORDER_LOCK_KEY: Final = 0x1A9CE_FEED
+TAKE_FEED_ORDER_LOCK: Final = "SELECT pg_advisory_xact_lock(%s)"
 # Retention prune — drop rows the estate RECEIVED longer ago than the configured window.
 #
 # TIME IS THE UNIT BECAUSE IT IS THE ONE THE CONSUMERS REASON IN. The notifications reconciler walks

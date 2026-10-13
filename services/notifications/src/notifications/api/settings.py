@@ -85,15 +85,12 @@ class IngressSettings(SignatureDoorSettings, BaseSettings):
     lineage_identity_token_file: str = Field(default="/var/run/secrets/rask/identity/rask-lineage/token", alias="RASK_LINEAGE_IDENTITY_TOKEN_FILE")
 
     #: Rows per `GET /events/projection` page. 500 is the server's own hard cap (`runs.py` `_EVENTS_RETURN`), so a
-    #: larger value here would be silently truncated and the walk would think it had reached the floor.
+    #: larger value here would be refused at the door.
     feed_page_limit: int = Field(default=500, ge=1, le=500, alias="RASK_NOTIFICATIONS_FEED_PAGE_LIMIT")
 
-    #: How far back one tick will walk. The feed pages OLDER (`seq < after`), so catching up after an
-    #: outage is a walk DOWN from the newest row toward the cursor — and the product of this and
-    #: `feed_page_limit` is how far that walk can reach. The default covers the feed's whole 20 000-row
-    #: retention, so a walk that runs out of pages has reached rows the feed has already pruned: the
-    #: gap is unrecoverable rather than merely unread, which is why exhausting it is an ERROR and not a
-    #: reason to stall. Pages are processed one at a time, so this bounds the WALK, never memory.
+    #: How many pages one tick reads forward from the mark. A tick that uses them all is `behind`, not
+    #: lossy: the mark records every row it handled and the next tick continues from there. Pages are
+    #: processed one at a time, so this bounds one tick's work, never memory.
     feed_max_pages: int = Field(default=40, ge=1, alias="RASK_NOTIFICATIONS_FEED_MAX_PAGES")
 
     #: Per-request timeout on the feed poll. Must stay BELOW the cron tick period, or a stalled lineage

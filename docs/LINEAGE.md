@@ -328,7 +328,7 @@ Layered like the catalog (`api/` · `core/` · `services/` + a thin entrypoint),
 | `GET /datasets/{name}/columns/{field}/downstream` | **Column-level impact** — the columns transitively derived from `name.field` |
 | `GET /datasets/{name}/columns` | The **column-lineage subgraph** around `name` (typed column nodes + field-to-field edges with transformation kind + `masking`) — the column analogue of `/graph` |
 | `GET /runs` | Live run-status board (state folded onto each `(:Run)` node; durable, governed) |
-| `GET /events` | The durable commit feed: every ingested OpenLineage event, newest first, keyset-paged by `after`, governed per dataset. It is the contract a pipeline polls with its own token to learn a tier changed (see below) |
+| `GET /events` | The durable commit feed: every ingested OpenLineage event, governed per dataset. `since=<seq>` follows it forward, oldest first, filterable by `table` or `namespace`; without it the feed pages newest first by `after`. It is the contract a pipeline polls with its own token to learn a tier changed (`docs/COMMIT-EVENTS.md`) |
 | `GET /events/projection` | The same feed with no per-dataset filter, cut to the fields that decide whom to notify; gated on `can_read_event_feed`, for the notifications reconciler |
 | `GET /livez` | Liveness |
 
@@ -351,11 +351,12 @@ pointed here with `OPENLINEAGE_URL` ingests with no glue.
 The catalog announces every committed write as an OpenLineage event (a `RunEvent` for a data write, a `DatasetEvent`
 for a definition change) naming the table, the Lance version it produced, its branch, the project and the verified
 author. A pipeline outside the estate learns a tier changed by reading those events from `GET /events` with its own
-token; the NATS topics they travel on are internal. Today the feed pages newest-first with an `after` keyset cursor
-(`next_cursor`, plus `oldest_seq` so a caller can tell a page went missing) and filters each event by
-`can_get_metadata` on every dataset it names. ADR 0156 C7 adds a forward cursor (`since=<seq>`, oldest first,
-filterable by table or namespace), a documented commit-event shape, and makes the catalog's emission mandatory on
-governed tiers: LH-472 (#598).
+token; the NATS topics they travel on are internal. The feed follows forward with `since=<seq>`, oldest first and
+filterable by table or namespace, and filters each event by `can_get_metadata` on every dataset it names (ADR 0156 C7,
+LH-472). Seq order is the order rows become visible, because every feed insert takes a transaction-scoped advisory
+lock held to commit (`FEED_ORDER_LOCK_KEY` in `lineage/services/postgres.py`). The contract a pipeline polls, the row
+kinds and the cursor rule, is `docs/COMMIT-EVENTS.md`. Making the catalog's emission mandatory on governed tiers is
+LH-225 (#180).
 
 ## Mock medallion data (a real OpenLineage producer)
 
