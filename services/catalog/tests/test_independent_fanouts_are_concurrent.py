@@ -106,7 +106,7 @@ def test_the_trash_subtree_describes_every_table_concurrently(tmp_path: Path, mo
         calls.append(op)
         if op == "describe_table":
             return _slow(tracker, described)()
-        return SimpleNamespace()
+        return SimpleNamespace(properties=None)
 
     monkeypatch.setattr(n_ep.native, "call", native_call)
     monkeypatch.setattr(n_ep.trash, "put", lambda *_a, **_kw: None)

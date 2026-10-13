@@ -464,6 +464,9 @@ class _CascadableNamespace(_TrashableNamespace):
         self.calls.append(f"deregister_table:{'$'.join(request.id)}")
         return type("R", (), {"model_fields_set": set()})()
 
+    def describe_namespace(self, request: Any) -> Any:
+        return type("R", (), {"properties": None, "model_fields_set": set()})()
+
     def drop_namespace(self, request: Any) -> Any:
         self.calls.append(f"drop_namespace:{'$'.join(request.id)}:{(request.behavior or 'restrict').lower()}")
         return type("R", (), {"model_fields_set": set()})()

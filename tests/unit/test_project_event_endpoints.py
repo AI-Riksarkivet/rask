@@ -131,7 +131,7 @@ def wired(monkeypatch: pytest.MonkeyPatch) -> Any:
     return build
 
 
-ALL_PUBLISH_DOORS = {"can_publish", "can_create_table", "can_promote"}
+ALL_PUBLISH_DOORS = {"can_publish", "can_create_table"}
 
 
 # --------------------------------------------------------------------------------------------------
@@ -146,7 +146,7 @@ def test_publish_needs_every_door(wired: Any) -> None:
 
     assert r.status_code == 200, r.text
     relations = [c["relation"] for c in seen]
-    assert relations == ["can_publish", "can_create_table", "can_promote"], "the doors must be crossed in order"
+    assert relations == ["can_publish", "can_create_table"], "the doors must be crossed in order"
     assert seen[0]["obj"] == "annotation_project:p1", "door 1 is the annotator's own domain"
     assert seen[1]["obj"] == "namespace:silver", "door 2 is the TARGET NAMESPACE, not the project"
     assert project.fired, "the transition never reached the actor"
@@ -155,9 +155,8 @@ def test_publish_needs_every_door(wired: Any) -> None:
 @pytest.mark.parametrize(
     ("held", "closed"),
     [
-        ({"can_create_table", "can_promote"}, "can_publish"),
-        ({"can_publish", "can_promote"}, "can_create_table"),
-        ({"can_publish", "can_create_table"}, "can_promote"),
+        ({"can_create_table"}, "can_publish"),
+        ({"can_publish"}, "can_create_table"),
     ],
 )
 def test_holding_only_some_doors_is_403(wired: Any, held: set[str], closed: str) -> None:
@@ -171,9 +170,9 @@ def test_holding_only_some_doors_is_403(wired: Any, held: set[str], closed: str)
     assert project.fired == [], "the publish reached the actor despite a closed door"
 
 
-def test_an_ungated_namespace_skips_the_promote_door(wired: Any) -> None:
-    """Door 3 is conditional — only a validator-gated medallion stage. A publish into a plain
-    namespace must not demand a rung that namespace does not have."""
+def test_the_doors_are_checked_wherever_the_publish_points(wired: Any) -> None:
+    """Door 2 names the namespace the publish targets. Its tier is the catalog's tier judge's question
+    (ADR 0160), so no door here depends on what that namespace is called."""
     client, _p, _t, seen = wired({"can_publish", "can_create_table"})
 
     r = client.post("/projects/p1/events", json={"event": "publish", "tenant": "acme", "target_namespace": "scratch"})
@@ -220,7 +219,7 @@ def test_a_system_only_project_edge_is_refused_over_http(wired: Any, event: str)
     """These are fired by the publish saga. Exposed unauthenticated — which is what "permission is
     None" produced before — anyone could mark another operator\'s publish succeeded, or fail one
     that was mid-flight."""
-    client, project, _t, _seen = wired({"can_manage", "can_publish", "can_create_table", "can_promote"})
+    client, project, _t, _seen = wired({"can_manage", "can_publish", "can_create_table"})
 
     r = client.post("/projects/p1/events", json={"event": event})
 

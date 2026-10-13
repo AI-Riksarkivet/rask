@@ -110,9 +110,23 @@ sit under `/management/v1` (protection, policies, access, publish, erasure, `/co
 every rask-only route still under the spec's `/v1` there, with projects on `/management/v1/projects`
 (LH-476, #596).
 
-**The tier is read from the namespace name today.** ADR 0156 C8 makes it the reserved namespace property
-`rask.tier`, set only by a project admin, with every write door asking one `tier_policy.judge(op, table,
-caller, run)` (LH-470, #595). Neither exists at HEAD; do not write code that assumes them.
+**A table's tier is the `rask.tier` property of the nearest enclosing namespace that declares one** (ADR 0156 C8,
+ADR 0160, LH-470). `catalog/core/tier_policy.py` holds it:
+- **Declared once.** Only the namespace's project admin (`can_administer` on `project:<p>`, resolved through the
+  warehouse binding) declares it, or the estate admin (`can_observe_events` on the root) where no project owns the
+  namespace. It is declared at create, on `POST /v1/namespace/{id}/create` or the warehouse door's `properties`.
+  The catalog's own Overwrite is the only way to change or drop it, and it asks the same admin; no Lance operation
+  alters a namespace's properties.
+- **What a declaration may say.** A value outside bronze/silver/gold, a deeper namespace declaring a different tier
+  from an ancestor's, and any other `rask.*` / `lineage.*` namespace key are all refused 400.
+- **Every write is judged.** `fga_deps.authorize` hands each non-read `table` / `materialized_view` door and each
+  create of one to `tier_policy.judge`, with FGA on or off. The judge asks the route's declared rung first, then
+  reads the tier, and audits `tier_judge` with it.
+- **Pinned by tests.** `services/catalog/tests/test_an_undeclared_door_is_refused.py` walks every mounted route and
+  fails on a write that skips the judge; `tests/integration/test_a_tier_is_declared_by_its_admin_and_judged_on_every_write.py`
+  covers the admin gate and the judged tier over HTTP.
+- **Not here yet.** The tier's own rules (run and inputs on silver/gold, the hold, the staged manifest's file
+  versions) land with LH-225, LH-466 and LH-471. Nothing anywhere reads a tier from a name.
 
 ## Storage — what state lives where (and why there is NO app database)
 
@@ -236,54 +250,10 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   every committing catalog door disarms the ref first (`core/namespace.disarm_commit_path_cleanup`; erasure
   every ref), the restore door refuses an armed version, and `compact_one` deletes every such key before its refusal gates
   as the backstop for a table nobody commits on (LH-245).
-- **A dataset URI encodes its TIER in SIX different places, and they do not agree on which end it
-  sits.** `maintenance/services/tiers.py` sizes fragments per tier (bronze 512 / silver 262 144 / gold
-  524 288 rows — bronze rows are ~1.8 MB page images, silver/gold ~2 KB records, so one row count
-  cannot serve all three). Reading the tier from the wrong segment does not error, it returns `None`
-  and silently falls back to Lance's own sizing:
-  `<bucket>/<project>-<tier>/<table>` (nested — tier TRAILS, reduce from the right);
-  `<bucket>/medallion/<tier>[-<lane>]` (a tier dataset under a `medallion/` parent directory — a path
-  layout `tiers.py` reads; no lakehouse service writes it, a user's pipeline may; the child IS the namespace, and lanes are
-  `<tier>-<lane>` like `bronze-<lane>` / `gold-<lane>`, so the tier LEADS, reduce from the left);
-  `<bucket>/<uuid8>_<namespace>$<table>` (the `dir` backend's FLAT layout — namespace and table share
-  ONE directory name, so the tier is in `parts[-1]`, not a parent directory; a NESTED namespace makes
-  it `<uuid8>_<parent>$<ns>$<table>`);
-  `<bucket>/medallion/<project>$<tier>` (a tier under a PROJECT — `project_root` reroutes the
-  medallion base per tenant, so the promoted child is project-qualified);
-  `<bucket>/<uuid8>_<tier>-<lane>$<table>` (a tier LANE vended through the catalog — the flat
-  layout carrying the `<tier>-<lane>` order rather than the catalog's);
-  `<bucket>/medallion/<namespace>/<table>` (a TABLE under a `medallion/` namespace — e.g.
-  `medallion/models/<model>`, or a table beneath a lane).
-  A sizer that handles only the first layout reads every other governed tier as untiered (measured live
-  2026-08-16: the per-tier defaults had never once applied). The branch ORDER is load-bearing:
-  `medallion` has to be asked before the delimiter test, or a
-  project's `acme$bronze` reads as the flat layout, reduces to the namespace `acme`, and the widest
-  rows in the estate get Lance's default row count. Only `medallion` may promote its child; widening
-  that would let a table NAMED `gold` size itself as gold.
-  **Every branch reads the tier from a NAMESPACE PATH, never from a table.** The `dir` backend names a
-  table's directory `<hash>_<object_id>` (`lance_docs/ns_catalog/catalog/dir/index.md` § Manifest
-  Table Directory), and a nested `object_id` is the namespace path joined by `$` (§ Manifest Table
-  Schema, the `object_id` row) — so in the flat layout everything before the leaf's LAST `$` is
-  namespace, and the last segment is the table. The catalog reaches that nested shape through its own
-  door: `require_warehouse_scoped` tells a caller to nest (`'<parent>$<ident>'`) and
-  `MAX_NAMESPACE_DEPTH` allows seven levels. Under `medallion/`, a table's namespace is `parts[-2]`
-  and nothing else. `tiers.py::_tier_from_namespace_path` ignores segment ORDER: a segment that IS a
-  tier outranks one that only derives a tier from an end (`medallion/gold-standard$bronze/pages` is
-  bronze, and so is `medallion/acme$bronze$gold-exports/pages`); two different exact tiers, or derived
-  tiers that disagree with no exact one (`aa3bed10_acme-bronze$gold-exports$t`), answer None, because
-  a wrong explicit tier is worse than Lance's default. The flat leaf's object id comes from
-  `table_locations.table_id_from_location`, the same crossing credential vending and lineage use,
-  which strips the prefix only when it is hex (`x_gold$t` names the namespace `x_gold`, which is no
-  tier), and a leaf it refuses (`aa3bed10_bronze$`) names no tier.
-  `tests/unit/test_tier_fragment_sizing.py` pins both directions:
-  `test_a_NESTED_namespace_and_a_table_under_a_LANE_resolve_to_their_tier` (`aa3bed10_acme$bronze$events`,
-  `medallion/bronze-media/pages` and `medallion/acme$bronze/pages` are bronze),
-  `test_a_TABLE_named_after_a_tier_never_sets_the_tier` (`deadbeef_acme$plain$gold` and
-  `medallion/models/gold` stay untiered — a model named `gold` is not gold-sized),
-  `test_a_segment_that_IS_a_tier_outranks_one_that_only_derives_one`,
-  `test_namespace_segments_that_DISAGREE_on_the_tier_name_none` and `test_each_BRANCH_boundary_of_tier_of`.
-  All six readings are guesses from a name, which is why ADR 0156 C8 replaces them with the `rask.tier`
-  namespace property (LH-470, #595); whether per-tier fragment sizing survives that is an open owner question.
+- **Maintenance does not read a tier.** Compaction's fragment size is the #50 policy's
+  `target_rows_per_fragment`, else Lance's own sizing. There are no per-tier defaults: a tier is the
+  namespace's `rask.tier` property, which a dataset path does not carry, and a size guessed from a path is
+  applied silently forever (ADR 0160).
 - The reconciler reports cross-store drift and deletes nothing until its report runs clean. It runs on
   its OWN Dapr cron binding (`maintenance-reconcile-cron`), separate from the sweep's — a read-only
   drift report must not inherit the data-rewriting sweep's cadence.

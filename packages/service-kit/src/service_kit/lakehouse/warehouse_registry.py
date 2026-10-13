@@ -24,7 +24,6 @@ import time
 from service_kit.lakehouse.naming import CONTROL_ID_PATTERN, CONTROL_ID_RE
 from service_kit.lakehouse.objectfs import StorageOptions
 from service_kit.lakehouse.record_store import list_records
-from service_kit.schemas.storage import GOVERNED_TIERS
 
 
 log = logging.getLogger(__name__)
@@ -194,32 +193,6 @@ def project_namespace(project: str, name: str) -> str:
     needs it: a naming convention that two services must agree on cannot live inside one of them.
     """
     return f"{project}-{name}" if project else name
-
-
-def namespace_tiers(qualified: str) -> frozenset[str]:
-    """Which governed tiers a namespace name contains, as hyphen-delimited segments.
-
-    THE COMPLEMENT of :func:`project_namespace`, and deliberately only its SOUND half. The obvious
-    inverse — recovering the PROJECT — is ruled out by the estate's own canon
-    (``catalog/core/lineage_emit.py``, the ``ProjectResolver`` note): ``PROJECT_PATTERN`` permits
-    hyphens, so ``acme-bronze-silver`` is genuinely ambiguous between project ``acme`` and project
-    ``acme-bronze``, "and guessing wrong notifies the wrong tenant's watchers. The registry binding is
-    the only sound answer." The TIER half carries no such ambiguity because the vocabulary is CLOSED —
-    ``GOVERNED_TIERS`` is exactly bronze/silver/gold (R23) — so membership is a fact rather than a guess.
-
-    Returns a SET, not "the" tier, because a name may honestly contain more than one and this refuses
-    to pick. That matters where the answer gates an authorization door: a caller asking
-    ``namespace_tiers(ns) & {"silver", "gold"}`` fails CLOSED on the ambiguous shape, which is the
-    direction a gate must fail. Picking the leftmost would let ``acme-bronze-gold`` (project
-    ``acme-bronze``, tier ``gold``) read as bronze and skip a gate it must cross.
-
-    Segment-wise, so ``goldfish`` is not gold. Lanes work by construction: the cascade names them
-    ``<tier>-<lane>`` (``acme-gold-htr``, ``chart/values.yaml``), and reading such a name from the RIGHT
-    yields the LANE instead — the failure ``maintenance/services/tiers.py`` documents hitting live on
-    ``bronze-pages``.
-    """
-    tiers = {tier.value for tier in GOVERNED_TIERS}
-    return frozenset(segment for segment in qualified.split("-") if segment in tiers)
 
 
 def clear_cache() -> None:

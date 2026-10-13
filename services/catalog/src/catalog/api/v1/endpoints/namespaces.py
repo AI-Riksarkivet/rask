@@ -46,6 +46,7 @@ from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, LineageEmi
 from catalog.api.pagination import paginate
 from catalog.api.rask_params import RaskFlag
 from catalog.api.security import CurrentToken, Principal
+from catalog.core import tier_policy
 from catalog.core.config import Settings
 from catalog.core.formats import reject_unsupported_properties
 from catalog.core.identifiers import MAX_NAMESPACE_DEPTH, parse_identifier, reconcile_body_id, require_safe_segments
@@ -140,6 +141,7 @@ async def create_namespace(
     # where a client sets a DEFAULT format for the tables created under it — so accepting one here
     # would let the ruling be bypassed one level up from the door that enforces it.
     reject_unsupported_properties(body.properties if body else None)
+    declared = tier_policy.declared_tier(body.properties if body else None)
     # WHAT `mode` MEANS HERE, from spec.yaml's CreateNamespaceRequest: "Create: the operation fails
     # with 409. ExistOk: the operation succeeds and the existing namespace is kept. Overwrite: the
     # existing namespace is dropped and a new empty namespace with this name is created." The backend
@@ -178,12 +180,17 @@ async def create_namespace(
     await fga_deps.require_no_live_trash(settings, segments, kind="namespace")
     req = body or CreateNamespaceRequest()
     req.id = reconcile_body_id(segments, req.id)
+    await _judge_tier_declaration(ns, settings, token, client, segments, declared=declared, overwrite=create_mode is CreateMode.OVERWRITE)
     # RACE-FREE BY CATCHING RATHER THAN PRE-CHECKING. An `exists?` read followed by a create leaves a
     # window in which another caller creates the namespace, and on THIS door the loser of that race
     # would go on to seed ownership over somebody else's object. The backend's own refusal is the only
     # answer that cannot be stale.
     if create_mode is CreateMode.EXIST_OK:
         response, kept_existing = await create_or_keep_namespace(ns, segments, req)
+        if kept_existing and declared is not None and (kept := (response.properties or {}).get(tier_policy.TIER_PROPERTY)) != declared:
+            # ExistOk keeps the namespace as it is, so a tier it does not already have would not land. A tier
+            # is declared once (ADR 0160): saying so beats a 200 that quietly ignored the declaration.
+            raise NamespaceAlreadyExistsError(f"namespace {id!r} already exists with {tier_policy.TIER_PROPERTY}={kept!r}; a tier is declared once, at create")
     elif create_mode is CreateMode.OVERWRITE:
         response = await _create_or_replace_empty_namespace(ns, settings, token, client, segments, req)
         kept_existing = False
@@ -317,6 +324,43 @@ async def _forget_namespace(settings: Settings, client: OpenFgaClient | None, to
     if unbind and len(segments) == 1:
         await run_in_threadpool(warehouses.unbind_namespace, settings.registry_root, so, segments[0])
     await fga_deps.revoke_ownership(client, settings, resource="namespace", segments=segments, token=token)
+
+
+async def _judge_tier_declaration(
+    ns: LanceNamespace,
+    settings: Settings,
+    token: Principal | None,
+    client: OpenFgaClient | None,
+    segments: list[str],
+    *,
+    declared: str | None,
+    overwrite: bool,
+) -> None:
+    """Refuse a create that declares a tier, or an Overwrite that would replace one, unless an admin asks (ADR 0160).
+
+    A tier is declared once: no Lance operation alters a namespace's properties, so the catalog's own
+    Overwrite is the only way to change one, and it needs the same admin as the declaration. A deeper
+    namespace may repeat its ancestors' tier and nothing else, which is what lets the judge stop at the
+    shallowest declaration. The ancestors are read only after the admin check, so a refused caller learns
+    nothing about them. An Overwrite reads the namespace's own declaration first, to know whether it
+    replaces one; a caller who may create beside it already reads it as a reader of the parent.
+
+    Raises:
+        PermissionDeniedError: The caller is not the namespace's project admin (or the estate admin).
+        InvalidInputError: ``declared`` differs from the tier an ancestor declares.
+    """
+    replaced = await tier_policy.declared_on(ns, segments) if overwrite else None
+    if declared is None and replaced is None:
+        return
+    project = (
+        await run_in_threadpool(warehouses.project_for_namespace, settings.registry_root, settings.storage_options(), segments[0])
+        if settings.warehouses_enabled
+        else None
+    )
+    await fga_deps.require_tier_authority(client, settings, token, project=project)
+    inherited = await tier_policy.tier_of(ns, segments[:-1])
+    if declared is not None and inherited is not None and inherited != declared:
+        raise InvalidInputError(f"namespace {segments!r} lies under a {inherited} namespace, so it cannot declare {tier_policy.TIER_PROPERTY}={declared!r}")
 
 
 async def _create_or_replace_empty_namespace(
@@ -524,6 +568,8 @@ async def _trash_subtree(
         if live:
             binding = {"warehouse_id": str(live["warehouse_id"]), "root_uri": str(live["root_uri"])}
     for child in [*child_namespaces, segments]:
+        # Read before the drop removes the `__manifest` row that is their only copy.
+        described = await run_in_threadpool(native.call, ns, "describe_namespace", DescribeNamespaceRequest(id=child))
         await run_in_threadpool(native.call, ns, "drop_namespace", DropNamespaceRequest(id=child))
         record = trash.make_record(
             fga.canonical_object_id(child, delimiter=settings.delimiter),
@@ -534,6 +580,7 @@ async def _trash_subtree(
             # Only the ROOT carries it — `child is segments` is identity on the same list object, and
             # the root is the last iteration by construction.
             binding=binding if child is segments else None,
+            properties=described.properties,
         )
         await run_in_threadpool(trash.put, settings.registry_root, so, record)
     # UNBIND LAST, and only once the root's record — carrying the binding — is durably written
@@ -947,7 +994,8 @@ async def undrop_namespace(
         # tables and false of namespaces. And the false half gated the true one: namespaces are rebuilt
         # shallowest-FIRST, so a rerun aborted before it ever reached the tolerant loop.
         n_segments = parse_identifier(n_id, settings.delimiter)
-        created, _kept = await create_or_keep_namespace(ns, n_segments, CreateNamespaceRequest(id=n_segments, mode="exist_ok"))
+        rebuilt = CreateNamespaceRequest(id=n_segments, mode="exist_ok", properties=n_rec.get("properties"))
+        created, _kept = await create_or_keep_namespace(ns, n_segments, rebuilt)
         if n_id == canonical:
             response = created
         # Clear only AFTER the create commits — a failed rebuild must leave the subtree recoverable.

@@ -45,7 +45,6 @@ from maintenance.core.metrics import (
 )
 from maintenance.services import catalog_compaction, compaction_executor, credentials, purge
 from maintenance.services.optimize import DatasetResult, Rewriter, compact_one, discover_datasets, summarize_refusals
-from maintenance.services.tiers import target_rows_for
 from service_kit.governed import fga
 from service_kit.governed.audit import SUCCESS, audit
 from service_kit.lakehouse import auto_cleanup, base_refs, base_registry, maintenance_policies, trash, warehouse_records
@@ -513,13 +512,11 @@ def _resolve_plan(
     now: datetime,
     older_than: timedelta,
 ) -> DatasetPlan:
-    """Resolve this dataset's tier default, then its #50/#84 policy record, into one plan.
+    """Resolve this dataset's #50/#84 policy record into one plan.
 
-    #61 per-TIER default, before any policy is read. One row count cannot serve a ~1.8 MB bronze
-    page-image row and a ~2 KB gold row: the same number is a ~1.8 GB fragment in one and a few MB in
-    the other. A #50 policy record still overrides it, so retuning a tier stays a config change. ``None``
-    for a URI whose tier cannot be read — deferring to Lance beats inventing a number that is then
-    applied silently forever.
+    Fragment size is Lance's own unless a policy names ``target_rows_per_fragment``. A dataset's tier is
+    not read here: it is a namespace property the catalog judges (ADR 0160), and a size read from the
+    dataset's path would be a guess applied silently forever.
 
     ``scan_batch_size`` starts at the SETTINGS default (#93) rather than ``None``, so an estate with no
     policy anywhere is still bounded; a policy that names the field overrides it.
@@ -534,7 +531,6 @@ def _resolve_plan(
     """
     plan = DatasetPlan(
         older_than=older_than,
-        target_rows_per_fragment=target_rows_for(uri),
         scan_batch_size=settings.scan_batch_size,
         max_source_bytes=settings.max_source_bytes,
         repack_mode=settings.repack_mode,

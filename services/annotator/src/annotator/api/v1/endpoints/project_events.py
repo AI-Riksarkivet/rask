@@ -5,19 +5,20 @@ a ladder written here. Adding an edge to the machine gates it with no route chan
 cannot drift from the model.
 
 **Publish is the one operation with more than one door (§6.2), and that is the design's most important
-authz consequence.** Three checks, all of which must pass:
+authz consequence.** Two checks, both of which must pass:
 
 1. `can_publish` on `annotation_project:<project_id>` — the annotator's own domain.
 2. `can_create_table` on the TARGET NAMESPACE — the governed plane's own rung.
-3. `can_promote` on the target namespace, *conditionally*, when it is a validator-gated medallion
-   stage — the same rung stage promotion already uses.
+
+The target's tier is not a door here: the write reaches the catalog, whose tier judge decides it under
+the tier the namespace declares (ADR 0160).
 
 Nobody moves labels into the lakehouse by holding annotator rights alone, and nobody is forced to
 publish by holding table rights alone. The crossing between the two planes is explicit, which is what
 "its own domain, synced only when we choose" means in authz terms. Collapsing these into one check
 would let either plane's admin quietly acquire the other's authority.
 
-The fourth precondition — every task terminal — is NOT checked here. It lives in the project actor
+The third precondition — every task terminal — is NOT checked here. It lives in the project actor
 (`fire`), so it holds for any caller, including the publish workflow retrying after a crash.
 """
 
@@ -50,7 +51,7 @@ from annotator.projects.project_actor import AnnotationProjectActorInterface
 from service_kit.control_emit import emit_control
 from service_kit.exceptions import ConflictError, ForbiddenError, NotFoundError
 from service_kit.governed.audit import FAILURE, SUCCESS, audit
-from service_kit.lakehouse.warehouse_registry import namespace_for, namespace_tiers
+from service_kit.lakehouse.warehouse_registry import namespace_for
 from service_kit.media.deps import StateDep
 
 
@@ -70,8 +71,6 @@ ProjectId = Annotated[str, Path(min_length=1, max_length=64, pattern=r"^[A-Za-z0
 
 #: §6.2 door 2 — the governed plane's rung on the target namespace.
 CREATE_TABLE_RELATION: Final[str] = "can_create_table"
-#: §6.2 door 3 — only when the target namespace is a validator-gated medallion stage.
-PROMOTE_RELATION: Final[str] = "can_promote"
 
 #: The TIER human labels are curated into (§6.2) — the NAME is composed per project, because a bare
 #: literal put every tenant's labels in one namespace with one FGA parent and one set of grants.
@@ -82,18 +81,6 @@ DEFAULT_TARGET_TIER: Final[str] = "silver"
 #: surface: `TASK_EDGES`/`PROJECT_EDGES` giving them no permission means "no principal fires this",
 #: and exposing them unauthenticated would let anyone mark another operator's publish succeeded.
 SYSTEM_ONLY_EVENTS: Final[frozenset[str]] = frozenset(e for (_s, e), (_t, p) in PROJECT_EDGES.items() if p is None)
-
-#: TIERS whose promotion is validator-gated. `silver` and `gold` are medallion stages; a publish into
-#: one crosses the same gate a stage promotion does, so door 3 applies. Bronze is deliberately absent:
-#: it is the first governed tier rather than a promotion target, and gating it would demand the
-#: validator rung for an ordinary ingest write.
-#:
-#: MATCHED AGAINST THE NAMESPACE'S TIERS, NOT ITS NAME. This was `namespace in _VALIDATOR_GATED`, an
-#: exact-string test, and every namespace the estate actually has is project-QUALIFIED
-#: (`scripts/seed_estate.py` creates `acme-silver`/`acme-gold`), so it was False for all of them and
-#: door 3 never fired. `target_namespace` is caller-supplied, so this was reachable by naming the
-#: namespace you would have to name anyway — the normal path, not a crafted input.
-_VALIDATOR_GATED: Final[frozenset[str]] = frozenset({"silver", "gold"})
 
 #: How many task-actor calls this service keeps in flight at once. Every fan-out here addresses one
 #: actor id PER CALL, so the calls genuinely parallelise; the bound exists because the alternative is
@@ -202,19 +189,14 @@ async def _check(checker: FgaChecker, subject: str, relation: str, obj: str, wha
 
 
 async def _authorize_publish(checker: FgaChecker, subject: str, project_id: str, namespace: str) -> None:
-    """The two-door crossing of §6.2 (three when the target is validator-gated).
+    """The two-door crossing of §6.2.
 
     Checked in order and short-circuiting, so the audit trail names the FIRST door that closed rather
-    than a composite verdict nobody can act on.
+    than a composite verdict nobody can act on. The target's tier is not asked here: the write reaches
+    the catalog, whose tier judge decides it under the tier the namespace declares (ADR 0160).
     """
     await _check(checker, subject, "can_publish", f"annotation_project:{project_id}", "project.publish")
     await _check(checker, subject, CREATE_TABLE_RELATION, f"namespace:{namespace}", "project.publish")
-    # An INTERSECTION, so the ambiguous shape fails closed. `namespace_tiers` returns a set rather than
-    # "the" tier because a project may itself contain hyphens: `acme-bronze-gold` is either project
-    # `acme` with a `bronze-gold` lane or project `acme-bronze` promoting into gold, and picking the
-    # leftmost would let the second skip a door it must cross.
-    if namespace_tiers(namespace) & _VALIDATOR_GATED:
-        await _check(checker, subject, PROMOTE_RELATION, f"namespace:{namespace}", "project.publish")
 
 
 @router.post("/{project_id}/events", status_code=status.HTTP_200_OK)

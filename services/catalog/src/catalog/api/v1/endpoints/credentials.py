@@ -6,17 +6,18 @@ data on object storage itself (LanceDB SDK / lance-ray / pylance). The vendor pl
 (``LANCE_VENDING_MODE``): ``sts`` (AssumeRole + a per-table session policy — the recommended path),
 ``static`` (per-bucket keys), or ``mode_b`` (vends nothing → the client uses the data endpoints).
 
-Authz: the router-level :func:`catalog.api.fga_deps.authorize` already required ``can_read_data`` (or, for
-a maintainer, ``can_maintain``) on the table; a ``tier=write`` request additionally requires
-``can_write_data`` here and a ``tier=maintain`` request ``can_maintain``. Each tier's session policy then
-grants at the object store only what that rung may change (``vending.build_session_policy``, [[LH-202]]).
+Authz: the router-level :func:`catalog.api.fga_deps.authorize` decides before this door runs. A read-tier
+vend needs ``can_read_data`` (or, for a maintainer, ``can_maintain``); a writing tier is a write, so the
+tier judge asks the rung that tier opens (``fga_deps.VEND_TIER_RUNGS``, ADR 0160). Each tier's session
+policy then grants at the object store only what that rung may change (``vending.build_session_policy``,
+[[LH-202]]).
 """
 
 from __future__ import annotations
 
 import logging
 from functools import partial
-from typing import Annotated, Final
+from typing import Annotated
 
 from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import APIRouter, Query
@@ -24,7 +25,6 @@ from fastapi.concurrency import run_in_threadpool
 from lance_namespace import (
     DescribeTableRequest,
     DescribeTableResponse,
-    PermissionDeniedError,
     ServiceUnavailableError,
     TableBranchNotFoundError,
     UnauthenticatedError,
@@ -38,7 +38,7 @@ from catalog.core.vending import Tier, dataset_facts, require_vendable_bases, ta
 from catalog.schemas import CredentialResponse
 from catalog.services import native
 from service_kit.governed import fga
-from service_kit.governed.audit import ALLOW, DENY, FAILURE, SUCCESS, audit
+from service_kit.governed.audit import SUCCESS, audit
 
 
 log = logging.getLogger(__name__)
@@ -48,9 +48,6 @@ log = logging.getLogger(__name__)
 #: a spec client discovering them on `/v1/table` meets verbs the document never defines. They mount at
 #: `/management/v1` and inherit the same authn/authz and delimiter guard from `api/v1/router.py`.
 router = APIRouter(prefix="/management/v1/table", tags=["credentials"])
-
-#: The relation each writing tier requires, checked on its own.
-_TIER_RUNG: Final[dict[Tier, str]] = {"write": "can_write_data", "maintain": "can_maintain"}
 
 
 @router.post("/{id}/credentials", response_model_exclude_none=True)
@@ -86,31 +83,6 @@ async def vend_credentials(
     object store for the web_identity flow (AssumeRoleWithWebIdentity exchanges it); other vendors ignore it.
     """
     segments = parse_identifier(id, settings.delimiter)
-    # A writing tier needs ITS rung on top of the one the router guard enforced.
-    if tier != "read" and settings.fga_enabled and token is not None and client is not None:
-        obj = f"table:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}"
-        # ONE RUNG PER TIER, never either-of ([[LH-202]]). `can_write_data` is a LOGICAL writer — it may
-        # change what the table says, by appending files `/commit` folds in. `can_maintain` is a PHYSICAL
-        # one: compaction, index optimization and version reclamation rewrite and delete files while
-        # preserving content, and the model keeps the two apart (a maintainer is denied read, write, drop
-        # and promote). The policies differ to match: a writer's reaches `data/` only, a maintainer's the
-        # whole prefix. Accepting either rung for either tier would hand a writer the maintainer's
-        # policy, which can commit any transaction around the door.
-        #
-        # The maintainer's whole-prefix credential, scoped to this table for 900 s, is the trade the owner
-        # ruled on 2026-09-08; the alternative measured before it was 207 of 285 rewrites a tick signed by
-        # the deployment's ROOT key, because a refused vend falls back to the ambient credential
-        # (`credentials.write_options_for`).
-        relation = _TIER_RUNG[tier]
-        try:
-            granted = await fga.check(client, user=token.sub, relation=relation, obj=obj)
-        except ServiceUnavailableError:  # authz outage during a WRITE-credential request — audit, fail closed
-            audit(relation, FAILURE, subject=token.sub, resource=obj, reason="authz_unavailable")
-            raise
-        # #41 audit the authz decision — a denied attempt to obtain writing creds is high-value.
-        audit(relation, ALLOW if granted else DENY, subject=token.sub, resource=obj, tier=tier)
-        if not granted:
-            raise PermissionDeniedError(f"{relation} required on {obj} for a {tier}-tier credential")
     described: DescribeTableResponse = await run_in_threadpool(native.call, ns, "describe_table", DescribeTableRequest(id=segments))
     if described.location is None:  # no object-store location to scope to → fall back to server-mediated
         return CredentialResponse(mode="server_mediated")

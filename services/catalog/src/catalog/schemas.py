@@ -772,6 +772,10 @@ class CreateWarehouseNamespaceRequest(BaseModel):
     #: guards (write-once binding; default-root collision) apply IDENTICALLY — this flag never
     #: bypasses them, it only accepts that the physical namespace preceded its governance record.
     adopt_existing: bool = False
+    #: The namespace's properties, as `CreateNamespace` takes them. `rask.tier` declares its tier and is
+    #: refused unless the warehouse's project admin asks (ADR 0160). Refused with `adopt_existing`: an
+    #: adopted namespace keeps the properties it was created with, so these would silently not land.
+    properties: dict[str, str] | None = None
 
 
 # --------------------------------------------------------------------------- #

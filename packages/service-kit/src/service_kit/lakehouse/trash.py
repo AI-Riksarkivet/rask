@@ -53,6 +53,7 @@ def make_record(
     now: datetime | None = None,
     kind: str = "table",
     binding: dict[str, str] | None = None,
+    properties: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """The trash record. ``expires_at`` is stamped HERE — at drop time — so a later change to the
     estate's grace period cannot retroactively shorten a window someone is still inside.
@@ -75,6 +76,11 @@ def make_record(
 
     Absent on every other record, and absent on records written before this landed — read it with
     `.get("binding")` and treat absence as "there was never a binding to restore".
+
+    ``properties`` is a namespace's properties map, set on a namespace record that had any. A namespace's
+    properties live only in its ``__manifest`` row, which the drop removes, so this is their only copy;
+    undrop recreates the namespace with them. Among them is ``rask.tier``, which only an admin may set, so
+    an undrop that lost them would let the namespace's owner shed its tier.
     """
     at = now or datetime.now(UTC)
     record: dict[str, Any] = {
@@ -87,6 +93,8 @@ def make_record(
     }
     if binding:
         record["binding"] = dict(binding)
+    if properties:
+        record["properties"] = dict(properties)
     return record
 
 
