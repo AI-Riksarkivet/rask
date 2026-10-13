@@ -133,7 +133,7 @@ def _client_for(name: str) -> Any:  # noqa: ANN401 — boto3 client, same as sto
 #: The dependency every route uses in place of the deleted union.
 BucketName = Annotated[
     str,
-    Query(description="A store registered in the catalog's storage registry (GET /v1/stores)."),
+    Query(description="A store registered in the catalog's storage registry (GET /management/v1/stores)."),
 ]
 
 

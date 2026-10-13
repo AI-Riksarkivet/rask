@@ -58,7 +58,7 @@ def catalog() -> str:
 def warehouse(catalog: str) -> Iterator[str]:
     """A warehouse this test owns outright, in its own bucket, removed on the way out."""
     name = f"e2edel-{uuid.uuid4().hex[:8]}"
-    created = requests.post(f"{catalog}/v1/warehouses", json={"id": name, "project": PROJECT}, headers=_auth(), timeout=30)
+    created = requests.post(f"{catalog}/management/v1/warehouses", json={"id": name, "project": PROJECT}, headers=_auth(), timeout=30)
     if created.status_code not in (200, 201, 409):
         pytest.skip(f"cannot provision a warehouse to delete ({created.status_code}): {created.text[:200]}")
     yield name
@@ -75,15 +75,15 @@ def _purge(catalog: str, name: str) -> None:
     404 as success was the bug; re-creating a record over the same bucket so the purge has something to
     delete through is the fix, and it uses only the doors this suite already drives.
     """
-    removed = requests.delete(f"{catalog}/v1/warehouses/{name}?cascade=true&purge_bucket=true&force=true", headers=_auth(), timeout=90)
+    removed = requests.delete(f"{catalog}/management/v1/warehouses/{name}?cascade=true&purge_bucket=true&force=true", headers=_auth(), timeout=90)
     if removed.status_code == 200:
         return
     # The record went with a leg's own delete; the bucket did not. Re-register it just long enough to
     # purge through the door, so no leg has to know whether it was the one that deleted the record.
-    again = requests.post(f"{catalog}/v1/warehouses", json={"id": name, "project": PROJECT, "bucket": name}, headers=_auth(), timeout=30)
+    again = requests.post(f"{catalog}/management/v1/warehouses", json={"id": name, "project": PROJECT, "bucket": name}, headers=_auth(), timeout=30)
     if again.status_code not in (200, 201, 409):
         return
-    final = requests.delete(f"{catalog}/v1/warehouses/{name}?cascade=true&purge_bucket=true&force=true", headers=_auth(), timeout=90)
+    final = requests.delete(f"{catalog}/management/v1/warehouses/{name}?cascade=true&purge_bucket=true&force=true", headers=_auth(), timeout=90)
     assert final.status_code == 200, f"the fixture leaked bucket {name!r}: {final.status_code} {final.text[:300]}"
 
 
@@ -118,7 +118,7 @@ def test_a_cascade_dropped_SUBTREE_undrops_at_every_old_id(catalog: str, warehou
     """
     top = f"e2eundrop{uuid.uuid4().hex[:6]}"
     child = f"{top}{DELIM}kids"
-    bound = requests.post(f"{catalog}/v1/warehouses/{warehouse}/namespaces", json={"namespace": top}, headers=_auth(), timeout=30)
+    bound = requests.post(f"{catalog}/management/v1/warehouses/{warehouse}/namespaces", json={"namespace": top}, headers=_auth(), timeout=30)
     assert bound.status_code in (200, 201), f"cannot bind the subtree's root: {bound.status_code} {bound.text[:300]}"
     made = requests.post(f"{catalog}/v1/namespace/{quote(child, safe='')}/create", json={"id": [top, "kids"]}, headers=_auth(), timeout=30)
     assert made.status_code in (200, 201), f"cannot nest a child namespace: {made.status_code} {made.text[:300]}"

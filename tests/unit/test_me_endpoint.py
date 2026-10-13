@@ -1,4 +1,4 @@
-"""Unit tests for the caller self-describe endpoint (``GET /v1/me``, endpoints/me.py).
+"""Unit tests for the caller self-describe endpoint (``GET /management/v1/me``, endpoints/me.py).
 
 Drives the handler directly (no TestClient) with fake settings + FGA wrappers, mirroring the repo's
 direct-call style (``test_projects_endpoint.py``). Pins the frozen contract: any VERIFIED token → 200
@@ -71,7 +71,7 @@ def _wire(
     async def _fake_check(_client: Any, *, user: str, relation: str, obj: str, **kw: Any) -> bool:
         if calls is not None:
             calls.append((relation, obj))
-        assert kw == {"retry_attempts": 1}  # single attempt under the tight budget (the /v1/projects rule)
+        assert kw == {"retry_attempts": 1}  # single attempt under the tight budget (the /management/v1/projects rule)
         if isinstance(estate, Exception):
             raise estate
         return bool(estate)
@@ -128,7 +128,7 @@ def test_non_admin_gets_estate_admin_false(monkeypatch: pytest.MonkeyPatch) -> N
 
 def test_estate_check_outage_degrades_to_false(monkeypatch: pytest.MonkeyPatch) -> None:
     # Fail-safe: a broken authz layer must never paint admin surfaces — and never 5xx the self-describe
-    # (the real gates on /v1/events / /v1/projects still fail closed on their own).
+    # (the real gates on /management/v1/events / /management/v1/projects still fail closed on their own).
     _wire(monkeypatch, estate=ServiceUnavailableError("down"), lists={"can_administer": ["project:acme"]})
     result = _me(_settings(fga_enabled=True), token=_token(), client=object())
     assert result.estate_admin is False

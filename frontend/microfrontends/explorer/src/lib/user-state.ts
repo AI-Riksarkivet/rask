@@ -3,8 +3,8 @@
  *
  * The workflow canvas and saved views lived in `localStorage`, so the same signed-in person opening the
  * estate on another machine found an empty canvas. The catalog now serves both documents at
- * `/v1/user-state/<document>`, keyed on the VERIFIED token subject (never a path or body parameter), and
- * this zone reaches them through its own scoped `capi/v1/user-state/[document]` proxy.
+ * `/management/v1/user-state/<document>`, keyed on the VERIFIED token subject (never a path or body parameter), and
+ * this zone reaches them through its own scoped `capi/management/v1/user-state/[document]` proxy.
  *
  * Three outcomes, and keeping them distinct is the whole point:
  *

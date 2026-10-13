@@ -28,7 +28,7 @@ model
 #     warehouse -> namespace / table / mat.view     `can_create_namespace` / `_table` / `_materialized_view`
 #     namespace -> namespace / table / mat.view     same three, so a nested create is gated by its enclosing stage
 #     team      -> project                          NO `can_create_project`, ON PURPOSE: minting a TENANT is an
-#         estate-admin operation, not a team one. `POST /v1/projects` gates on `can_observe_events` on the
+#         estate-admin operation, not a team one. `POST /management/v1/projects` gates on `can_observe_events` on the
 #         ROOT object (services/catalog/.../projects.py) — the same owner-tier door the estate-wide feed
 #         uses — and then seeds the creator's `admin` tuple. A `can_create_project` on `team` would let a
 #         team lead mint tenants, which is a different (and larger) product decision than it looks.
@@ -148,13 +148,13 @@ type estate
         # **THE NAME UNDERSTATES IT, AND THAT IS THE THING TO KNOW BEFORE GRANTING IT** — "grant this
         # and someone can watch a feed" is what it reads like, and it is not what it does. Measured
         # across the estate 2026-09-15, holding it also grants:
-        #   * `GET /v1/events` — every project's governance changes (`endpoints/events.py:59`)
-        #   * `POST /v1/projects` + the project list/get — i.e. CREATING TENANTS (`endpoints/projects.py:184,246`)
+        #   * `GET /management/v1/events` — every project's governance changes (`endpoints/events.py:59`)
+        #   * `POST /management/v1/projects`, the whole-estate project list and one project's detail — i.e. CREATING TENANTS and enumerating them (`endpoints/projects.py`)
         #   * the raw-tuple admin route — reading and MUTATING the authorization graph itself
         #     (`endpoints/access_admin.py:199`)
-        #   * `POST /v1/stores` and its attach/detach siblings — naming a host the estate will talk to
+        #   * `POST /management/v1/stores` and its attach/detach siblings — naming a host the estate will talk to
         #     (`endpoints/stores.py:105,135,197`)
-        #   * the `estate_admin` flag `/v1/me` reports (`endpoints/me.py:62`) — a display lookup rather
+        #   * the `estate_admin` flag `/management/v1/me` reports (`endpoints/me.py:62`) — a display lookup rather
         #     than a door, listed because it is a consumer
         # The viewer and controlplane gate their own estate reads on their own relations and merely CITE
         # this one for contrast, so they are deliberately absent.
@@ -170,7 +170,7 @@ type estate
         # root object, and owner-tier for the same reason: the registry's buckets include the external
         # RAW tier and the observability bucket, which sit outside the medallion entirely (R23), so a
         # per-tenant admin must not reach them. Registering a store is already an estate-admin door
-        # (`POST /v1/stores` gates on can_observe_events), and this makes browsing one consistent with
+        # (`POST /management/v1/stores` gates on can_observe_events), and this makes browsing one consistent with
         # that rather than strictly weaker.
         #
         # DELIBERATELY NOT a `store` type with per-store grants, and the reason is not simplicity. A
@@ -348,15 +348,15 @@ type warehouse
     # per-project admin must not reach an estate-wide surface.
     #
     # **THE NAME UNDERSTATES IT, AND THAT IS THE THING TO KNOW BEFORE GRANTING IT.** This comment used
-    # to describe only `GET /v1/events`, which reads as "grant this and someone can watch a feed".
+    # to describe only `GET /management/v1/events`, which reads as "grant this and someone can watch a feed".
     # Measured across the estate 2026-09-15, holding it also grants:
-    #   * `GET /v1/events` — every project's governance changes (`endpoints/events.py:59`)
-    #   * `POST /v1/projects` + the project list/get — i.e. CREATING TENANTS (`endpoints/projects.py:184,246`)
+    #   * `GET /management/v1/events` — every project's governance changes (`endpoints/events.py:59`)
+    #   * `POST /management/v1/projects`, the whole-estate project list and one project's detail — i.e. CREATING TENANTS and enumerating them (`endpoints/projects.py`)
     #   * the raw-tuple admin route — reading and MUTATING the authorization graph itself
     #     (`endpoints/access_admin.py:199`)
-    #   * `POST /v1/stores` and its attach/detach siblings — naming a host the estate will talk to
+    #   * `POST /management/v1/stores` and its attach/detach siblings — naming a host the estate will talk to
     #     (`endpoints/stores.py:105,135,197`)
-    #   * the `estate_admin` flag `/v1/me` reports (`endpoints/me.py:62`) — a display lookup rather than
+    #   * the `estate_admin` flag `/management/v1/me` reports (`endpoints/me.py:62`) — a display lookup rather than
     #     a door, listed because it is a consumer
     # The viewer and controlplane gate their own estate reads on their own relations and merely CITE
     # this one for contrast, so they are deliberately absent.

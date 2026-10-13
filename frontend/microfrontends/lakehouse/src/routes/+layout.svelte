@@ -15,7 +15,7 @@
 
 	let { children, data }: { children: Snippet; data: LayoutData } = $props();
 
-	// The frozen /v1/me identity for the navbar, fetched browser-side through this zone's
+	// The frozen /management/v1/me identity for the navbar, fetched browser-side through this zone's
 	const me = $derived(data.me);
 
 	const area = $derived(areaOf(page.url.pathname));
@@ -105,7 +105,7 @@
 	});
 
 	// The ADMIN area's door, which used to be the admin zone's own root layout. Fail-closed on a
-	// governed stack: admin content renders ONLY once /v1/me resolves WITH the estate-admin privilege —
+	// governed stack: admin content renders ONLY once /management/v1/me resolves WITH the estate-admin privilege —
 	// an unresolved lookup shows the checking state, and null (signed out, catalog unreachable, contract
 	// drift) is a denial, never a default-open. An auth-off stack has no identities to gate on (the
 	// backend answers estate_admin=true for dev parity anyway), so it stays open — the same posture as

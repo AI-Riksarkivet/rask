@@ -7,7 +7,7 @@ import { catalogJSON, parsed } from '$lib/server/doors';
 // Transport: the zone's ONE catalog door (#93) — implementation in @rask/api/upstream.
 // The warehouse + project registry, in the zone's remote-function dialect — same
 // names, same `ApiResult` shapes as the /capi client this replaces, transport only. The three narrow
-// BFF routes it retires (`capi/v1/warehouses`, `capi/v1/warehouses/[id]/[action]`) existed to keep the
+// BFF routes it retires (`capi/management/v1/warehouses`, `capi/management/v1/warehouses/[id]/[action]`) existed to keep the
 // catalog's project-admin gate enforced against a REAL user rather than a service credential; that
 // stance is unchanged here — a remote function runs on the zone server and forwards only the signed-in
 // session's bearer, and the action allowlist dissolves into three named commands.
@@ -48,12 +48,12 @@ const DeleteWarehouseSchema = v.object({
 
 /** Warehouse admin reads: whatever the catalog shows this caller (any signed-in user). */
 export const fetchWarehouses = query(async (): Promise<ApiResult<WarehouseRecord[]>> =>
-	parsed(await catalogJSON('/v1/warehouses'), v.array(WarehouseSchema)),
+	parsed(await catalogJSON('/management/v1/warehouses'), v.array(WarehouseSchema)),
 );
 
 /** One warehouse record — the hierarchy drill-down's warehouse page (can_get_metadata gated). */
 export const fetchWarehouse = query(v.string(), async (id): Promise<ApiResult<WarehouseRecord>> =>
-	parsed(await catalogJSON(`/v1/warehouses/${enc(id)}`), WarehouseSchema),
+	parsed(await catalogJSON(`/management/v1/warehouses/${enc(id)}`), WarehouseSchema),
 );
 
 /** `EstateBindingsResponse` — `{namespace: warehouse_id}` for the whole estate, in ONE catalog read.
@@ -65,7 +65,7 @@ const EstateBindingsSchema = v.object({ bindings: v.record(v.string(), v.string(
 
 export const fetchEstateBindings = query(
 	async (): Promise<ApiResult<{ bindings: Record<string, string> }>> =>
-		parsed(await catalogJSON('/v1/warehouses/-/bindings'), EstateBindingsSchema),
+		parsed(await catalogJSON('/management/v1/warehouses/-/bindings'), EstateBindingsSchema),
 );
 
 /** `WarehouseNamespacesResponse` — the spec's ListNamespaces shape (`{"namespaces": [...]}`). */
@@ -78,7 +78,7 @@ const WarehouseNamespacesSchema = v.object({ namespaces: v.array(v.string()) });
 export const fetchWarehouseNamespaces = query(
 	v.string(),
 	async (id): Promise<ApiResult<{ namespaces: string[] }>> =>
-		parsed(await catalogJSON(`/v1/warehouses/${enc(id)}/namespaces`), WarehouseNamespacesSchema),
+		parsed(await catalogJSON(`/management/v1/warehouses/${enc(id)}/namespaces`), WarehouseNamespacesSchema),
 );
 
 // The PROJECT reads are GONE from this zone, both of them. `fetchProject` (one tenant) went with
@@ -116,7 +116,7 @@ export const createWarehouse = command(
 	}),
 	async (body: CreateWarehouseBody): Promise<ApiResult<WarehouseRecord>> => {
 		const result = parsed(
-			await catalogJSON('/v1/warehouses', { method: 'POST', body: JSON.stringify(body) }),
+			await catalogJSON('/management/v1/warehouses', { method: 'POST', body: JSON.stringify(body) }),
 			WarehouseSchema,
 		);
 		if (result.ok) {
@@ -131,7 +131,7 @@ export const setWarehouseActive = command(
 	v.object({ id: v.string(), active: v.boolean() }),
 	async ({ id, active }): Promise<ApiResult<WarehouseRecord>> => {
 		const result = parsed(
-			await catalogJSON(`/v1/warehouses/${enc(id)}/${active ? 'activate' : 'deactivate'}`, {
+			await catalogJSON(`/management/v1/warehouses/${enc(id)}/${active ? 'activate' : 'deactivate'}`, {
 				method: 'POST',
 			}),
 			WarehouseSchema,
@@ -143,7 +143,7 @@ export const setWarehouseActive = command(
 	},
 );
 
-/** Delete a warehouse — the bottom-up destroy door (`DELETE /v1/warehouses/{id}`).
+/** Delete a warehouse — the bottom-up destroy door (`DELETE /management/v1/warehouses/{id}`).
  *
  *  Three SEPARATE opt-ins that never share a default, sent only when the caller actually asked:
  *
@@ -182,7 +182,7 @@ export const deleteWarehouse = command(
 		if (force) q.set('force', 'true');
 		const qs = q.toString();
 		const result = parsed(
-			await catalogJSON(`/v1/warehouses/${enc(id)}${qs ? `?${qs}` : ''}`, { method: 'DELETE' }),
+			await catalogJSON(`/management/v1/warehouses/${enc(id)}${qs ? `?${qs}` : ''}`, { method: 'DELETE' }),
 			DeleteWarehouseSchema,
 		);
 		if (result.ok) {
@@ -199,7 +199,7 @@ export const deleteWarehouse = command(
 export const bindWarehouseNamespace = command(
 	v.object({ id: v.string(), namespace: v.string() }),
 	async ({ id, namespace }): Promise<ApiResult<unknown>> => {
-		const result = await catalogJSON(`/v1/warehouses/${enc(id)}/namespaces`, {
+		const result = await catalogJSON(`/management/v1/warehouses/${enc(id)}/namespaces`, {
 			method: 'POST',
 			body: JSON.stringify({ namespace }),
 		});

@@ -61,7 +61,7 @@ describe('whose items are in the stream', () => {
 
 	it('walks EVERY claimed item when auth is OFF — one anonymous principal', () => {
 		// The bug the first cut shipped. Gating purely on `me` made the stream permanently empty on an
-		// ungoverned stack, because `capi/v1/me` 404s when auth is disabled — the feature would have
+		// ungoverned stack, because `capi/management/v1/me` 404s when auth is disabled — the feature would have
 		// been invisible on exactly the stack it was demonstrated on, indistinguishable from never
 		// having been built. "No identity" is two conditions and only one is dangerous.
 		expect(claimedStream(QUEUE, null, false).map((t) => t.task_id)).toEqual(['a', 'b', 'c', 'e']);

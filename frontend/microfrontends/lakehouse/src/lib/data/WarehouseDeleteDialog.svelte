@@ -1,5 +1,5 @@
 <script lang="ts">
-	// The warehouse DESTROY door's confirmation (`DELETE /v1/warehouses/{id}`), and the shape of it is
+	// The warehouse DESTROY door's confirmation (`DELETE /management/v1/warehouses/{id}`), and the shape of it is
 	// the point: the catalog's three opt-ins never share a default, so neither does this dialog.
 	//
 	//   1. It opens with NOTHING selected and tries the plain delete — the recoverable one. A warehouse

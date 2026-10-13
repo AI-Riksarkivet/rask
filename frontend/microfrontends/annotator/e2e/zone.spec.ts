@@ -71,7 +71,7 @@ test.beforeEach(async ({ page }) => {
 	// Zone-scoped globs on purpose: a bare **/api/** also matches Vite /@fs module URLs
 	// (…/packages/api/…) and would kill hydration. Registration order is LIFO — the
 	// generic 404 first, the specific mocks after so they win.
-	await page.route('**/annotator/capi/v1/me', (route) => json(route, { detail: 'anon' }, 401));
+	await page.route('**/annotator/capi/management/v1/me', (route) => json(route, { detail: 'anon' }, 401));
 	await page.route('**/annotator/api/**', (route) => {
 		const req = route.request();
 		const u = new URL(req.url());

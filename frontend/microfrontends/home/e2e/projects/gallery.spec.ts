@@ -3,8 +3,8 @@ import { ME_ADMIN, ME_MEMBER, signIn, TOKEN } from '../session';
 import { seed as seedFor } from '../mock-client';
 
 // The gallery's DEGRADE contract — the behaviour `$lib/gallery.ts` exists for and that nothing tested
-// anywhere before this file. Memberships come from the frozen `/v1/me`; an estate admin ALSO gets the
-// estate-wide listing through this zone's `/capi/v1/projects` pass-through; and when that listing
+// anywhere before this file. Memberships come from the frozen `/management/v1/me`; an estate admin ALSO gets the
+// estate-wide listing through this zone's `/capi/management/v1/projects` pass-through; and when that listing
 // fails, the caller still sees their own projects. "Degrade, never 500" is only a claim until a run
 // proves the page still answers 200 with the right rows on the failing path.
 //
@@ -37,10 +37,10 @@ test('a 403 on the estate listing degrades to the caller’s own memberships —
 	page,
 }) => {
 	await seed(page, {
-		'GET /v1/me': ME_ADMIN_WITH_MEMBERSHIPS,
+		'GET /management/v1/me': ME_ADMIN_WITH_MEMBERSHIPS,
 		// estate_admin is `can_observe_events`; the estate LISTING is gated separately, so an identity
 		// can hold the first and be refused the second. That is the fallback's real trigger.
-		'GET /v1/projects': { status: 403, body: { detail: 'forbidden' } },
+		'GET /management/v1/projects': { status: 403, body: { detail: 'forbidden' } },
 	});
 	const res = await page.goto('/projects');
 	// The failing upstream must not reach the user as a 500 or an error boundary…
@@ -63,16 +63,16 @@ test('an EMPTY estate listing still shows the caller’s memberships — the liv
 	// THE ONE THAT SHIPPED. `200 []` is not the same claim as "you belong to nothing", and the admin
 	// branch used to substitute the listing for the membership list outright — so an estate admin with
 	// three memberships was told "You are not a member of any project yet. Ask a project admin for
-	// access." while holding admin on all three. Observed on the running cluster: /v1/me returned
-	// acme/research/default, /capi/v1/projects returned [], the gallery rendered the empty state.
+	// access." while holding admin on all three. Observed on the running cluster: /management/v1/me returned
+	// acme/research/default, /capi/management/v1/projects returned [], the gallery rendered the empty state.
 	//
 	// It is the LIVE shape, not a contrived one: the catalog derives its project registry from
 	// registered WAREHOUSES, so a project that exists in authz but has no warehouse yet is absent from
 	// the listing and present in the identity. The rule pinned here is the one that cannot produce
 	// that outcome — you are never shown FEWER projects than you belong to.
 	await seed(page, {
-		'GET /v1/me': ME_ADMIN_WITH_MEMBERSHIPS,
-		'GET /v1/projects': [],
+		'GET /management/v1/me': ME_ADMIN_WITH_MEMBERSHIPS,
+		'GET /management/v1/projects': [],
 	});
 	const res = await page.goto('/projects');
 	expect(res?.status()).toBe(200);
@@ -93,8 +93,8 @@ test('the estate listing ADDS to memberships rather than replacing them', async 
 	// the warehouse counts only it has), memberships cover what it has not caught up with. Neither
 	// list may swallow the other, and a project in both must appear ONCE, carrying its role.
 	await seed(page, {
-		'GET /v1/me': ME_ADMIN_WITH_MEMBERSHIPS,
-		'GET /v1/projects': [
+		'GET /management/v1/me': ME_ADMIN_WITH_MEMBERSHIPS,
+		'GET /management/v1/projects': [
 			{ project: 'acme', warehouses: [{ id: 'acme-wh' }, { id: 'acme-gold' }] },
 			{ project: 'someone-elses', warehouses: [] },
 		],
@@ -113,13 +113,13 @@ test('the estate listing ADDS to memberships rather than replacing them', async 
 	await expect(beta).toContainText('member');
 });
 
-test('an unreachable catalog degrades the same way — the memberships /v1/me already resolved', async ({
+test('an unreachable catalog degrades the same way — the memberships /management/v1/me already resolved', async ({
 	page,
 }) => {
-	// No seed for `GET /v1/projects` at all → the mock answers 404, standing in for any non-ok listing.
+	// No seed for `GET /management/v1/projects` at all → the mock answers 404, standing in for any non-ok listing.
 	// The load's `res.ok` branch and its `catch` are the same fallback, and both must reach the user as
 	// their projects rather than as an error.
-	await seed(page, { 'GET /v1/me': ME_ADMIN_WITH_MEMBERSHIPS });
+	await seed(page, { 'GET /management/v1/me': ME_ADMIN_WITH_MEMBERSHIPS });
 	const res = await page.goto('/projects');
 	expect(res?.status()).toBe(200);
 	await expect(page.locator('a[href="/projects/acme"]')).toContainText('admin');
@@ -130,8 +130,8 @@ test('a non-estate-admin never reads the estate listing at all', async ({ page }
 	// Seeded with a tenant bob is NOT a member of. If the listing were consulted for a non-estate-admin
 	// it would leak straight onto his gallery, so its ABSENCE is the assertion.
 	await seed(page, {
-		'GET /v1/me': ME_MEMBER,
-		'GET /v1/projects': [{ project: 'tenant-b', warehouses: [{ id: 'tenant-b-wh' }] }],
+		'GET /management/v1/me': ME_MEMBER,
+		'GET /management/v1/projects': [{ project: 'tenant-b', warehouses: [{ id: 'tenant-b-wh' }] }],
 	});
 	await page.goto('/projects');
 	await expect(page.locator('a[href="/projects/acme"]')).toContainText('member');
@@ -142,8 +142,8 @@ test('/projects mounts the same gallery as / — one implementation, two surface
 	page,
 }) => {
 	await seed(page, {
-		'GET /v1/me': ME_ADMIN,
-		'GET /v1/projects': [
+		'GET /management/v1/me': ME_ADMIN,
+		'GET /management/v1/projects': [
 			{ project: 'acme', warehouses: [{ id: 'acme-wh' }, { id: 'acme-gold' }] },
 			{ project: 'beta', warehouses: [{ id: 'beta-wh' }] },
 		],

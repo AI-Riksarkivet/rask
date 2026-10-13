@@ -46,9 +46,9 @@ export const RUNS = {
 
 /** The signed-in developer: estate admin, so privileged surfaces render rather than fail closed.
  *
- *  Seeded here unlike in the lakehouse's fixture: that zone's mock owns a dedicated `/v1/me` handler
+ *  Seeded here unlike in the lakehouse's fixture: that zone's mock owns a dedicated `/management/v1/me` handler
  *  which derives the identity from the bearer, so a seed is shadowed. This zone's `mock-upstreams.ts`
- *  has no identity path — `/v1/me` is just another seeded route. */
+ *  has no identity path — `/management/v1/me` is just another seeded route. */
 export const DEV_ME = {
 	sub: 'user:dev',
 	name: 'Dev',
@@ -62,7 +62,7 @@ type Model = { model: string; latest_version: number; blessed_version: number | 
 const DEMO: Model = { model: 'demo', latest_version: 3, blessed_version: 2 };
 const FRAUD: Model = { model: 'fraud', latest_version: 1, blessed_version: null };
 
-/** The `/v1/model/<m>` describe body — the frozen contract `registry.spec.ts` pins, artifacts included. */
+/** The `/management/v1/model/<m>` describe body — the frozen contract `registry.spec.ts` pins, artifacts included. */
 const describeOf = (m: Model, artifacts: unknown[]) => ({
 	model: m.model,
 	latest_version: m.latest_version,
@@ -92,13 +92,13 @@ export const UPSTREAMS_SEED: Record<string, unknown> = {
 	'GET /events?limit=1&summary=true': CURSOR_PROBE,
 	'GET /runs': RUNS,
 
-	'GET /v1/me': DEV_ME,
-	'GET /v1/model': { models: [DEMO, FRAUD] },
-	'GET /v1/model/demo': describeOf(DEMO, [
+	'GET /management/v1/me': DEV_ME,
+	'GET /management/v1/model': { models: [DEMO, FRAUD] },
+	'GET /management/v1/model/demo': describeOf(DEMO, [
 		{ path: '3/weights.json', size_bytes: 2048, updated_at: '2026-07-24T09:00:00Z' },
 		{ path: '3/scaler.json', size_bytes: 512, updated_at: null },
 	]),
-	'GET /v1/model/fraud': describeOf(FRAUD, []),
+	'GET /management/v1/model/fraud': describeOf(FRAUD, []),
 	'GET /v1/prometheus/api/v1/query_range': promRange([
 		[1786000000, 0.42],
 		[1786000600, 0.19],

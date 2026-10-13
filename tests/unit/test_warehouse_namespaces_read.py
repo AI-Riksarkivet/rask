@@ -1,4 +1,4 @@
-"""``GET /v1/warehouses/{id}/namespaces`` — the bindings READ (#66).
+"""``GET /management/v1/warehouses/{id}/namespaces`` — the bindings READ (#66).
 
 This endpoint exists so no surface has to INFER what a warehouse holds: the lakehouse warehouse
 page used to derive its namespace list by grouping the TABLE registry, which made an empty

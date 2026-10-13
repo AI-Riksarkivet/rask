@@ -163,7 +163,7 @@ def list_table_versions(
     2026-09-13 on a seven-version table: `limit=3` serves three rows and answers `page_token: None`,
     and a token it is handed changes nothing. `None` is what a client stops on, so forwarding `limit`
     told a caller asking for three of seven that it had seen everything — truncation wearing
-    pagination's clothes, the shape `GET /v1/model` already names.
+    pagination's clothes, the shape `GET /management/v1/model` already names.
 
     So the native call is made UNPAGINATED — the same rule `catalog.api.pagination` states for the name
     listings — and the cursor is this layer's. The full list is what the backend returns unbounded

@@ -19,7 +19,7 @@ type Model = { model: string; latest_version: number | null; blessed_version: nu
 let token: string;
 
 /** Pre-seed exact upstream responses for THIS test's bearer ("METHOD /path" → body). One helper for both
- *  upstreams: the catalog's `/v1/model*` and Greptime's `/v1/prometheus/*` never collide, so they share a
+ *  upstreams: the catalog's `/management/v1/model*` and Greptime's `/v1/prometheus/*` never collide, so they share a
  *  server and therefore a seed map (see e2e/mock-upstreams.ts). */
 const seed = async (page: Page, routes: Record<string, unknown>): Promise<void> => {
 	await page.request.post(`${MOCK_UPSTREAMS}/__mock/seed`, { data: { bearer: token, routes } });
@@ -83,9 +83,9 @@ test.beforeEach(async ({ context, page }, testInfo) => {
 	token = `${TOKEN.admin}:${testInfo.testId}`;
 	await signIn(context, { token });
 	await seed(page, {
-		'GET /v1/model': { models: [DEMO, FRAUD] },
-		'GET /v1/model/demo': describeOf(DEMO, DEMO_ARTIFACTS),
-		'GET /v1/model/fraud': describeOf(FRAUD, []),
+		'GET /management/v1/model': { models: [DEMO, FRAUD] },
+		'GET /management/v1/model/demo': describeOf(DEMO, DEMO_ARTIFACTS),
+		'GET /management/v1/model/fraud': describeOf(FRAUD, []),
 		// Default: the metrics store is up and has NOTHING for these models. Every detail-panel test
 		// expands a row, so without this each one would render "metrics store unreachable" — a state that
 		// is not what it is testing.
@@ -175,9 +175,9 @@ test('bless promotes the candidate and the row updates', async ({ page }) => {
 	// per key, so "what changed" has to be stated rather than simulated.
 	const blessed: Model = { ...DEMO, blessed_version: 3 };
 	await seed(page, {
-		'POST /v1/model/demo/promote': { model: 'demo', blessed_version: 3, tag: 'blessed' },
-		'GET /v1/model': { models: [blessed, FRAUD] },
-		'GET /v1/model/demo': describeOf(blessed, DEMO_ARTIFACTS),
+		'POST /management/v1/model/demo/promote': { model: 'demo', blessed_version: 3, tag: 'blessed' },
+		'GET /management/v1/model': { models: [blessed, FRAUD] },
+		'GET /management/v1/model/demo': describeOf(blessed, DEMO_ARTIFACTS),
 	});
 	await bless.click();
 	await expect(page.locator('.banner.ok')).toContainText('demo v3 is now blessed');
@@ -185,7 +185,7 @@ test('bless promotes the candidate and the row updates', async ({ page }) => {
 	await expect(demoRow.getByRole('button')).toHaveCount(0); // nothing left to bless
 	// the wire body is the version, on the model's own promote path
 	expect(await calls(page)).toEqual([
-		{ method: 'POST', path: '/v1/model/demo/promote', body: { version: 3 } },
+		{ method: 'POST', path: '/management/v1/model/demo/promote', body: { version: 3 } },
 	]);
 });
 

@@ -5,7 +5,7 @@ import { MOCK_CATALOG } from '../ports';
 // The live control-plane activity feed (query.live). The generator polls the mock catalog (mock-catalog.ts,
 // the second webServer) server-side, so we drive it by POSTing to the mock's __mock/* control endpoints —
 // a governance mutation elsewhere == an event appearing on the feed. Proves the UI wiring end to end; the
-// real mutation → bus → buffer → /v1/events pipeline is proven separately by scripts/verify_control_events.sh.
+// real mutation → bus → buffer → /management/v1/events pipeline is proven separately by scripts/verify_control_events.sh.
 
 // Serial: all three tests share the ONE mock-catalog instance (module-level events + mode), so they must
 // not run in parallel — else the 403 test's `mode:forbidden` leaks into the OK tests (fullyParallel is on).

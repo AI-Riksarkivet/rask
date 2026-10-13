@@ -130,7 +130,7 @@ tuples:
   # grace: an editor-only grant on a standalone (parentless) transaction — may edit properties, NOT commit
   - { user: user:grace, relation: editor, object: transaction:standalone_txn }
   # root_admin: owner of the ROOT warehouse (fga_root_object). ONLY this estate/platform tier reads the
-  # estate-wide control-plane event feed (can_observe_events, GET /v1/events) — a per-project admin cannot.
+  # estate-wide control-plane event feed (can_observe_events, GET /management/v1/events) — a per-project admin cannot.
   - { user: user:root_admin, relation: owner, object: warehouse:lance_catalog }
   # The estate's first owner, concentric with every rung on that type.
   - { user: user:root_admin, relation: owner, object: estate:rask }
@@ -1585,7 +1585,7 @@ tests:
           can_browse_storage: false
           can_create_project: false
       # THE RECONCILER READS THE WHOLE RUN FEED AND NOTHING ELSE ON THE ROOT ([[CTL-021]]). The two
-      # refusals that matter are the doors that mint a tenant (`POST /v1/projects` checks
+      # refusals that matter are the doors that mint a tenant (`POST /management/v1/projects` checks
       # `can_observe_events`; `can_create_project` is the model's own verb) and the raw tuple editor
       # (`can_observe_events` too). Each flips if `event_reader` is folded into a rung that carries them.
       - user: user:notifications

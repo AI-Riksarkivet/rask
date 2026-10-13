@@ -513,7 +513,7 @@
 			     A grant that expires on its own. The failure this kills is the contractor who still has
 			     `writer` on bronze eight months after the engagement ended, because revoking was a
 			     separate task nobody owned. The condition list and its parameters come from the MODEL
-			     (GET /v1/access/model), so an unsupported condition or a missing operand is
+			     (GET /management/v1/access/model), so an unsupported condition or a missing operand is
 			     unrepresentable here rather than a 400 one round trip later. -->
 					{#if conditionChoices.length}
 						<div class="flex flex-col gap-1 rounded-md border border-border p-2">

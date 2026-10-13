@@ -30,7 +30,7 @@ const seed = async (page: Page, routes: Record<string, unknown>): Promise<void> 
 	await page.request.post(`${MOCK_CATALOG}/__mock/seed`, { data: { bearer: token, routes } });
 };
 
-/** The catalog derives `/v1/stores/tiers` itself — so does the fixture, from whatever registry the
+/** The catalog derives `/management/v1/stores/tiers` itself — so does the fixture, from whatever registry the
  *  test says the catalog holds at that moment. */
 const tiersOf = (stores: Array<{ role: string }>): Record<string, unknown[]> => {
 	const tiers: Record<string, unknown[]> = {};
@@ -53,7 +53,7 @@ const openAttachForm = async (page: Page): Promise<void> => {
 test('attaching a store lands the draft on the catalog and re-renders from its answer', async ({
 	page,
 }) => {
-	await seed(page, { 'GET /v1/stores/tiers': tiersOf(STORES) });
+	await seed(page, { 'GET /management/v1/stores/tiers': tiersOf(STORES) });
 	await page.goto('/lakehouse/catalog/storage/tiers');
 	await openAttachForm(page);
 	await page.getByLabel('name', { exact: true }).fill('scans-2024');
@@ -61,7 +61,7 @@ test('attaching a store lands the draft on the catalog and re-renders from its a
 	await page.getByLabel('description').fill('external scan drop');
 
 	// The catalog's world AFTER the attach. Seeded once the pre-attach registry is on screen, so the
-	// re-read the form triggers lands on the MOVED registry — the mock's built-in `/v1/stores/tiers`
+	// re-read the form triggers lands on the MOVED registry — the mock's built-in `/management/v1/stores/tiers`
 	// is derived from a static fixture and cannot express "and then this arrived".
 	const landed = {
 		name: 'scans-2024',
@@ -70,7 +70,7 @@ test('attaching a store lands the draft on the catalog and re-renders from its a
 		description: 'external scan drop',
 		read_only: true,
 	};
-	await seed(page, { 'GET /v1/stores/tiers': tiersOf([...STORES, landed]) });
+	await seed(page, { 'GET /management/v1/stores/tiers': tiersOf([...STORES, landed]) });
 	await page.getByRole('button', { name: 'Attach', exact: true }).click();
 
 	await expect.poll(async () => (await attached(page)).length).toBe(1);

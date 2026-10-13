@@ -25,7 +25,7 @@ store ignoring Deny.
 * a prefix condition must match both `<p>` and `<p>/*` (the base policies below list both): Lance
 lists with `prefix=<p>/`, and `StringLike` does not match a trailing-slash pattern against it.
 * a bucket-NAME allow-list cannot govern this estate at all, because the buckets that hold tenant
-data are minted at runtime by `POST /v1/warehouses`. See the long note above the policies.
+data are minted at runtime by `POST /management/v1/warehouses`. See the long note above the policies.
 
 IDEMPOTENT — AND RE-VERIFY IT, because the probe behind this predates the store. `mc admin policy
 create` OVERWRITES an existing policy: a second create with different content returned exit 0 and the
@@ -128,7 +128,7 @@ THE BUCKET SET IS NOT KNOWABLE AT RENDER TIME, so the maintenance policy enumera
 
 The sweep opens buckets that no value in this chart names. `catalog.warehouses.enabled`
 (on by default) provisions one physically separate bucket per warehouse at
-`POST /v1/warehouses`, with an operator-chosen name, and the sweep enumerates those buckets itself
+`POST /management/v1/warehouses`, with an operator-chosen name, and the sweep enumerates those buckets itself
 out of the registry (`sweep.py::_buckets_to_sweep`). An allow-list built from `minio.bucket` +
 `medallion.buckets` + `catalog.multibase.dataBases` covers none of them: those three name the
 shared bucket, the tier storage zones and the fragment-spreading allowlist, and a per-warehouse
@@ -188,7 +188,7 @@ did until LH-133 made a scoped vend possible at all: measured 2026-09-11, RustFS
 assumes AND has the session policy enforced, so the requirement is gone.
 
 The DATA grant cannot be narrowed by bucket: warehouse buckets are minted at RUNTIME by
-`POST /v1/warehouses`, so a render-time list is stale by construction — the same reason
+`POST /management/v1/warehouses`, so a render-time list is stale by construction — the same reason
 recorded above for the maintenance and lineage policies. `s3:CreateBucket`/`s3:DeleteBucket` are here because provisioning and purge
 are this service's own doors, and no other identity in the estate holds them.
 

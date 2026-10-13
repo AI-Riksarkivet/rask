@@ -20,7 +20,7 @@ import {
 //     absent.
 //   · auth-ON  (`e2e/projects/*.spec.ts` and `e2e/settings/*.spec.ts`) — both surfaces only exist for a
 //     signed-in caller: the estate-admin create door, the membership gallery, the project overview AND
-//     the platform settings pages all key off `/v1/me`, and `/v1/me` needs a bearer. One zone cannot be
+//     the platform settings pages all key off `/management/v1/me`, and `/management/v1/me` needs a bearer. One zone cannot be
 //     auth-ON and auth-OFF at once. Two playwright PROJECTS share that one server, because they share
 //     its compile — a third dev server would double the cold-start for nothing.
 //
@@ -134,7 +134,7 @@ export default defineConfig({
 			dependencies: ['warmup-settings'],
 		},
 		// NOTIFICATIONS — watch enrolment. Auth-ON like the two above and for the same reason: the page
-		// lists the projects you may watch, that list is `me.projects`, and `/v1/me` needs a bearer.
+		// lists the projects you may watch, that list is `me.projects`, and `/management/v1/me` needs a bearer.
 		// It reuses the PROJECTS warm-up rather than adding a third: both compile the same auth-ON
 		// server, and this route is a single card list — nothing like the Svelte Flow canvas that
 		// earned settings its own.

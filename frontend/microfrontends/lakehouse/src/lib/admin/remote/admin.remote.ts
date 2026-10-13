@@ -10,7 +10,7 @@ const WINDOW = 200; // the recent window the console renders (older events fall 
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-// The estate-wide control-plane change-event feed (GET /v1/events), as a LIVE query. The generator runs on
+// The estate-wide control-plane change-event feed (GET /management/v1/events), as a LIVE query. The generator runs on
 // the zone (SvelteKit/Bun) server: it holds the cursor + an accumulated recent window + event_id dedup,
 // polls the catalog with the signed-in admin's bearer, and yields the window WHENEVER it changes. SvelteKit
 // streams each yield to the browser and owns reconnect (exponential backoff + on `navigator.onLine`) — no
@@ -29,7 +29,7 @@ export const controlEvents = query.live(async function* (): AsyncGenerator<Contr
 	const seen = new Set<string>();
 
 	for (;;) {
-		const res = await fetch(`${CATALOG_API}/v1/events?since=${cursor}`, { headers });
+		const res = await fetch(`${CATALOG_API}/management/v1/events?since=${cursor}`, { headers });
 		if (res.status === 403) error(403, 'not authorized to observe the control-plane event feed');
 		if (res.ok) {
 			const page = parse(EventsPageSchema, await res.json());

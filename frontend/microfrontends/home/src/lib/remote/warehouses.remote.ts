@@ -54,10 +54,10 @@ const ProjectSchema = v.object({
 /** One tenant: its warehouses + effective admins — what `/projects/[project]` renders. Gated by the
  *  catalog (401/403/404 are all honest states the page branches on). */
 export const fetchProject = query(v.string(), async (project): Promise<ApiResult<ProjectSummary>> =>
-	parsed(await catalogJSON(`/v1/projects/${enc(project)}`), ProjectSchema),
+	parsed(await catalogJSON(`/management/v1/projects/${enc(project)}`), ProjectSchema),
 );
 
-/** One control event, as `/v1/events` reports it — the fields the project page renders. */
+/** One control event, as `/management/v1/events` reports it — the fields the project page renders. */
 const ProjectEventSchema = v.object({
 	event_id: v.string(),
 	occurred_at: v.string(),
@@ -78,14 +78,14 @@ export type ProjectEvent = v.InferOutput<typeof ProjectEventSchema>;
 export const projectEvents = query(
 	v.string(),
 	async (project): Promise<ApiResult<ProjectEvent[]>> => {
-		const rec = await catalogJSON(`/v1/projects/${enc(project)}`);
+		const rec = await catalogJSON(`/management/v1/projects/${enc(project)}`);
 		const mine = new Set<string>([`project:${project}`]);
 		if (rec.ok) {
 			const parsedRec = v.safeParse(ProjectSchema, rec.data);
 			if (parsedRec.success)
 				for (const w of parsedRec.output.warehouses) mine.add(`warehouse:${w.id}`);
 		}
-		const res = await catalogJSON('/v1/events?since=0');
+		const res = await catalogJSON('/management/v1/events?since=0');
 		if (!res.ok) return res;
 		const parsedPage = v.safeParse(EventsPageSchema, res.data);
 		if (!parsedPage.success)
@@ -98,7 +98,7 @@ export const projectEvents = query(
 	},
 );
 
-/** Register a project — `POST /v1/projects`. The FIRST rung of the hierarchy, and it must be climbed
+/** Register a project — `POST /management/v1/projects`. The FIRST rung of the hierarchy, and it must be climbed
  *  explicitly: the catalog refuses a warehouse whose project has no registry record with a 404 that
  *  says so verbatim ("A warehouse must belong to an existing project (project > warehouse > namespace
  *  > table) — create it first"). A warehouse create no longer mints its project as a side effect, so
@@ -106,7 +106,7 @@ export const projectEvents = query(
 export const createProject = command(
 	v.object({ id: v.string(), name: v.optional(v.nullable(v.string())) }),
 	async (body): Promise<ApiResult<unknown>> =>
-		catalogJSON('/v1/projects', { method: 'POST', body: JSON.stringify(body) }),
+		catalogJSON('/management/v1/projects', { method: 'POST', body: JSON.stringify(body) }),
 );
 
 /** Provision a warehouse under an EXISTING project. Project-admin gated by the catalog
@@ -145,12 +145,12 @@ export const createWarehouse = command(
 	}),
 	async (body: CreateWarehouseBody): Promise<ApiResult<WarehouseRecord>> =>
 		parsed(
-			await catalogJSON('/v1/warehouses', { method: 'POST', body: JSON.stringify(body) }),
+			await catalogJSON('/management/v1/warehouses', { method: 'POST', body: JSON.stringify(body) }),
 			WarehouseSchema,
 		),
 );
 
-/** Retire a tenant — `DELETE /v1/projects/{id}`. Gated at the catalog on the project's OWN
+/** Retire a tenant — `DELETE /management/v1/projects/{id}`. Gated at the catalog on the project's OWN
  *  `can_administer` bar, and every refusal is a state the dialog renders rather than an exception:
  *
  *  · **409** is the interesting one, and it comes in two flavours the `detail` distinguishes. Either the
@@ -162,7 +162,7 @@ export const createWarehouse = command(
  *  **`force` is the ONLY parameter, and there is no `cascade` on this route at all.** A project cascade
  *  would reach warehouses, and a warehouse's own delete can purge a bucket — one request must never be
  *  able to destroy a tenant's storage transitively. Emptying goes one rung at a time through
- *  `DELETE /v1/warehouses/{id}`, which is exactly what the 409's blocker links point at.
+ *  `DELETE /management/v1/warehouses/{id}`, which is exactly what the 409's blocker links point at.
  *
  *  No `.refresh()`: the thing this deletes is what `fetchProject` reads, so refreshing it would re-read a
  *  project that no longer exists purely to watch it 404. The caller navigates back to `/projects`
@@ -177,7 +177,7 @@ export const deleteProject = command(
 	}),
 	async ({ project, force }): Promise<ApiResult<{ project: string; tuples_revoked: number }>> =>
 		parsed(
-			await catalogJSON(`/v1/projects/${enc(project)}${force ? '?force=true' : ''}`, {
+			await catalogJSON(`/management/v1/projects/${enc(project)}${force ? '?force=true' : ''}`, {
 				method: 'DELETE',
 			}),
 			DeleteProjectSchema,
@@ -191,7 +191,7 @@ export const warehouseNamespaces = query(
 	v.string(),
 	async (warehouseId): Promise<ApiResult<{ namespaces: string[] }>> =>
 		parsed(
-			await catalogJSON(`/v1/warehouses/${enc(warehouseId)}/namespaces`),
+			await catalogJSON(`/management/v1/warehouses/${enc(warehouseId)}/namespaces`),
 			WarehouseNamespacesSchema,
 		),
 );

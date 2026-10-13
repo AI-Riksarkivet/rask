@@ -42,7 +42,7 @@
 	// Return here after the OIDC round-trip (the shell's ?redirect= contract, nav-user.svelte).
 	const loginHref = $derived(`/auth/login?redirect=${encodeURIComponent(page.url.pathname)}`);
 
-	// The registry read is estate-wide (`GET /v1/warehouses` shows the caller what they may see) and
+	// The registry read is estate-wide (`GET /management/v1/warehouses` shows the caller what they may see) and
 	// filtered to the active project HERE. The per-project catalog read deliberately does not live in
 	// this zone — `fetchProject` moved to home with the project surface — and re-adding it would put a
 	// second project reader in a zone whose whole remit is what sits BELOW a project.

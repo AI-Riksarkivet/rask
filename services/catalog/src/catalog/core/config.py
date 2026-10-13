@@ -196,7 +196,7 @@ class CatalogControlBusSettings(BaseSettings):
     # catalog's own subscription is a BROADCAST — every replica receives every event → each replica's ring
     # buffer stays complete. The chart renders it (dapr-component.yaml) + a NATS stream (nats-stream-job).
     control_pubsub: str = Field(default="catalog-control-pubsub", alias="LANCE_CONTROL_PUBSUB")
-    # The bounded per-replica ring buffer size (events retained for `GET /v1/events`); a client whose cursor
+    # The bounded per-replica ring buffer size (events retained for `GET /management/v1/events`); a client whose cursor
     # fell off the end (overflow) gets `reset: true` → the console `invalidateAll()`s.
     control_buffer_size: int = Field(default=512, ge=1, alias="LANCE_CONTROL_BUFFER_SIZE")
     #: The CONTROL lane's outbox prefix — and it must NOT be the lineage one. Each prefix is drained
@@ -335,7 +335,7 @@ class CatalogUserStateSettings(BaseSettings):
     every one of its fields, aliases and defaults.
     """
 
-    # Per-subject user state (`GET/PUT/DELETE /v1/user-state/*`) on the Dapr state store. The default names
+    # Per-subject user state (`GET/PUT/DELETE /management/v1/user-state/*`) on the Dapr state store. The default names
     # the component the chart already renders (`stateStore.name` in chart/values.yaml) and that the catalog
     # app-id is already in the `scopes` of, so this needs NO new chart value; tests/unit/test_invariants.py
     # asserts that agreement so a rename or a dropped scope reddens rather than 503ing in production.
@@ -523,7 +523,7 @@ class Settings(
         return parsed
 
     # #3-A per-warehouse physical multi-tenancy (admin control plane). When enabled, an admin API
-    # (POST /v1/warehouses) provisions a physically separate S3 bucket per warehouse and binds top-level
+    # (POST /management/v1/warehouses) provisions a physically separate S3 bucket per warehouse and binds top-level
     # namespaces to it, so a table under a bound namespace lands in that warehouse's bucket (not the shared
     # `root`). Default OFF: the request path is unchanged (no binding lookups) for single-bucket deployments;
     # the chart turns it on for the catalog. Additive + backward-compatible — an unbound namespace always

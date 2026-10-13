@@ -1,4 +1,4 @@
-"""Per-subject user state on the Dapr state store (``service_kit/governed/user_state.py``, ``/v1/user-state/*``).
+"""Per-subject user state on the Dapr state store (``service_kit/governed/user_state.py``, ``/management/v1/user-state/*``).
 
 Three things are being pinned, and only the first is ordinary:
 
@@ -216,7 +216,7 @@ def test_an_unparseable_record_is_unreadable_not_absent(store: UserStateStore, s
     """The data-loss path: schema drift must never read as "you have no saved work".
 
     Reproduced live before this raised — one field of a real row changed from ``str`` to ``int`` (an
-    ordinary schema evolution), the row entirely intact, and ``GET /v1/user-state/saved-views`` answered
+    ordinary schema evolution), the row entirely intact, and ``GET /management/v1/user-state/saved-views`` answered
     ``exists: false``. A client told the document is empty seeds a fresh one, and its next autosave
     overwrites the record that was still there. The module's own docstring already forbids this shape for
     an outage ("must look unavailable, never empty, or the next autosave would overwrite the real
@@ -300,11 +300,11 @@ def _as(client: TestClient, who: str) -> dict[str, str]:
     ],
 )
 def test_alice_writes_and_reads_her_own_document(app_client: TestClient, document: str, value: Any) -> None:
-    put = app_client.put(f"/v1/user-state/{document}", json=value, headers=_as(app_client, "alice"))
+    put = app_client.put(f"/management/v1/user-state/{document}", json=value, headers=_as(app_client, "alice"))
     assert put.status_code == 200, put.text
     assert put.json()["subject"] == "alice"
 
-    got = app_client.get(f"/v1/user-state/{document}", headers=_as(app_client, "alice"))
+    got = app_client.get(f"/management/v1/user-state/{document}", headers=_as(app_client, "alice"))
     assert got.status_code == 200
     body = got.json()
     assert body["exists"] is True and body["subject"] == "alice"
@@ -319,9 +319,9 @@ def test_bob_cannot_read_alices_state(app_client: TestClient) -> None:
     address alice's document, because the endpoint offers no place to put an identity.
     """
     alice_graph = _graph("alice's canvas").model_dump(mode="json", by_alias=True, exclude_none=True)
-    assert app_client.put("/v1/user-state/workflow-graph", json=alice_graph, headers=_as(app_client, "alice")).status_code == 200
+    assert app_client.put("/management/v1/user-state/workflow-graph", json=alice_graph, headers=_as(app_client, "alice")).status_code == 200
 
-    bob = app_client.get("/v1/user-state/workflow-graph", headers=_as(app_client, "bob"))
+    bob = app_client.get("/management/v1/user-state/workflow-graph", headers=_as(app_client, "bob"))
     assert bob.status_code == 200
     body = bob.json()
     assert body["subject"] == "bob"
@@ -330,30 +330,30 @@ def test_bob_cannot_read_alices_state(app_client: TestClient) -> None:
 
     # And bob writing his own must not touch hers.
     bob_graph = _graph("bob's canvas").model_dump(mode="json", by_alias=True, exclude_none=True)
-    app_client.put("/v1/user-state/workflow-graph", json=bob_graph, headers=_as(app_client, "bob"))
-    still_hers = app_client.get("/v1/user-state/workflow-graph", headers=_as(app_client, "alice"))
+    app_client.put("/management/v1/user-state/workflow-graph", json=bob_graph, headers=_as(app_client, "bob"))
+    still_hers = app_client.get("/management/v1/user-state/workflow-graph", headers=_as(app_client, "alice"))
     assert still_hers.json()["value"]["config"]["q1"]["q"] == "alice's canvas"
-    assert app_client.get("/v1/user-state/workflow-graph", headers=_as(app_client, "bob")).json()["value"]["config"]["q1"]["q"] == "bob's canvas"
+    assert app_client.get("/management/v1/user-state/workflow-graph", headers=_as(app_client, "bob")).json()["value"]["config"]["q1"]["q"] == "bob's canvas"
 
 
 def test_bob_cannot_delete_alices_state(app_client: TestClient) -> None:
     graph = _graph().model_dump(mode="json", by_alias=True, exclude_none=True)
-    app_client.put("/v1/user-state/workflow-graph", json=graph, headers=_as(app_client, "alice"))
-    assert app_client.delete("/v1/user-state/workflow-graph", headers=_as(app_client, "bob")).status_code == 204
-    assert app_client.get("/v1/user-state/workflow-graph", headers=_as(app_client, "alice")).json()["exists"]
+    app_client.put("/management/v1/user-state/workflow-graph", json=graph, headers=_as(app_client, "alice"))
+    assert app_client.delete("/management/v1/user-state/workflow-graph", headers=_as(app_client, "bob")).status_code == 204
+    assert app_client.get("/management/v1/user-state/workflow-graph", headers=_as(app_client, "alice")).json()["exists"]
 
 
 def test_anonymous_is_401(app_client: TestClient) -> None:
     for method in ("get", "delete"):
-        assert getattr(app_client, method)("/v1/user-state/saved-views").status_code == 401
-    assert app_client.put("/v1/user-state/saved-views", json=[]).status_code == 401
+        assert getattr(app_client, method)("/management/v1/user-state/saved-views").status_code == 401
+    assert app_client.put("/management/v1/user-state/saved-views", json=[]).status_code == 401
 
 
 def test_unwired_store_is_503_not_an_empty_document(app_client: TestClient) -> None:
     from catalog.main import app
 
     app.dependency_overrides[dependencies.get_user_state_store] = lambda: None
-    resp = app_client.get("/v1/user-state/workflow-graph", headers=_as(app_client, "alice"))
+    resp = app_client.get("/management/v1/user-state/workflow-graph", headers=_as(app_client, "alice"))
     assert resp.status_code == 503
     assert resp.headers["content-type"].startswith("application/problem+json")
 
@@ -363,7 +363,7 @@ def test_a_document_past_the_ceiling_is_refused(app_client: TestClient) -> None:
     # sized for Arrow-IPC (256 MiB) and would wave this through.
     fat = _graph().model_dump(mode="json", by_alias=True, exclude_none=True)
     fat["tags"] = {"s1": ["x" * 600_000]}
-    resp = app_client.put("/v1/user-state/workflow-graph", json=fat, headers=_as(app_client, "alice"))
+    resp = app_client.put("/management/v1/user-state/workflow-graph", json=fat, headers=_as(app_client, "alice"))
     assert resp.status_code == 400
     assert "per-document limit" in resp.json()["detail"]
 
@@ -376,7 +376,7 @@ def test_nulls_are_omitted_so_the_zone_can_still_parse_it(app_client: TestClient
     """
     graph = _graph().model_dump(mode="json", by_alias=True, exclude_none=True)
     graph["edges"][0].pop("targetHandle", None)
-    body = app_client.put("/v1/user-state/workflow-graph", json=graph, headers=_as(app_client, "alice")).json()
+    body = app_client.put("/management/v1/user-state/workflow-graph", json=graph, headers=_as(app_client, "alice")).json()
     edge = body["value"]["edges"][0]
     assert "targetHandle" not in edge and "label" not in edge
     config = body["value"]["config"]["q1"]
@@ -385,7 +385,7 @@ def test_nulls_are_omitted_so_the_zone_can_still_parse_it(app_client: TestClient
 
 def test_a_malformed_document_is_422_not_a_stored_surprise(app_client: TestClient) -> None:
     resp = app_client.put(
-        "/v1/user-state/workflow-graph",
+        "/management/v1/user-state/workflow-graph",
         json={"nodes": [{"id": "q1", "type": "teleport", "position": {"x": 0, "y": 0}}]},
         headers=_as(app_client, "alice"),
     )
@@ -394,7 +394,7 @@ def test_a_malformed_document_is_422_not_a_stored_surprise(app_client: TestClien
 
 def test_the_document_set_is_closed(app_client: TestClient) -> None:
     # The key space is ours, not the caller's: there is no route that turns caller input into a key.
-    assert app_client.get("/v1/user-state/anything-else", headers=_as(app_client, "alice")).status_code == 404
+    assert app_client.get("/management/v1/user-state/anything-else", headers=_as(app_client, "alice")).status_code == 404
 
 
 # ── dock workbench layouts ───────────────────────────────────────────────────────────────────────────
@@ -441,8 +441,8 @@ def test_a_dock_layout_round_trips_losslessly(app_client: TestClient) -> None:
     what catches a field lost between pydantic and the sidecar.
     """
     sent = _dock()
-    assert app_client.put("/v1/user-state/dock-layout", json=sent, headers=_as(app_client, "alice")).status_code == 200
+    assert app_client.put("/management/v1/user-state/dock-layout", json=sent, headers=_as(app_client, "alice")).status_code == 200
 
-    got = app_client.get("/v1/user-state/dock-layout", headers=_as(app_client, "alice")).json()
+    got = app_client.get("/management/v1/user-state/dock-layout", headers=_as(app_client, "alice")).json()
     assert got["exists"] is True
     assert got["value"] == sent, "a dock layout must survive the catalog byte-for-byte"

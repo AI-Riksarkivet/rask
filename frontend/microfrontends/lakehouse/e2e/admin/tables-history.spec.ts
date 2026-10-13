@@ -25,7 +25,7 @@ type Body = Record<string, unknown>;
 const TABLE = 'db1%24t';
 
 // MY sub is the signed-in e2e identity itself, so the "(you)" resolution is asserted against the same
-// identity the shell reads — whichever side serves `/v1/me`.
+// identity the shell reads — whichever side serves `/management/v1/me`.
 const MY_SUB = ME_ADMIN.sub;
 const BOB_SUB = 'CiQxYjZlMmY1YS03YzRkLTRlOWItOWYxYS0yZDNjNGI1YTZlN2YSBWxvY2Fs';
 

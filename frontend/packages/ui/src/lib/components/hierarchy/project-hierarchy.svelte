@@ -12,7 +12,7 @@
 	 *  richer record (with `status`, `serving`, …) passes without an adapter. */
 	export type HierarchyWarehouse = { id: string; bucket: string };
 
-	/** The warehouse→namespace rung. The catalog's `GET /v1/warehouses/{id}/namespaces` shape. */
+	/** The warehouse→namespace rung. The catalog's `GET /management/v1/warehouses/{id}/namespaces` shape. */
 	export type FetchHierarchyNamespaces = (
 		warehouseId: string,
 	) => Promise<HierarchyResult<{ namespaces: string[] }>>;

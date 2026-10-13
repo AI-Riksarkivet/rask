@@ -38,7 +38,7 @@ test.beforeEach(async ({ context, page }, testInfo) => {
 	token = `${TOKEN.admin}:${testInfo.testId}`;
 	await signIn(context, { token });
 	await mockMe(page);
-	await seed(page, { 'GET /v1/warehouses': WAREHOUSES });
+	await seed(page, { 'GET /management/v1/warehouses': WAREHOUSES });
 });
 
 test('a warehouse row opens the full record with the serving marker + project jump link', async ({

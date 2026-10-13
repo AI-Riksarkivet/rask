@@ -4,7 +4,7 @@
 // The pytest suite beside this drives the catalog directly with a bearer. That is the complete backend
 // proof, and it is not the same claim: it does not exercise the ingress, the zone's `/capi` BFF, or the
 // sealed session cookie the browser actually carries. This does — alice and bob each sign in at Dex
-// through :8090 and read `/lakehouse/capi/v1/user-state/workflow-graph` with nothing but their session.
+// through :8090 and read `/lakehouse/capi/management/v1/user-state/workflow-graph` with nothing but their session.
 //
 // Read half only, and deliberately: the lakehouse zone's catch-all `capi/[...path]/+server.ts` exports
 // GET and nothing else, so the browser cannot PUT yet. Writing from a zone is the frontend half of this
@@ -17,7 +17,7 @@ import { chromium } from '@playwright/test';
 
 const ORIGIN = process.env.ORIGIN ?? 'http://localhost:8090';
 const SHOT_DIR = process.env.SHOT_DIR ?? 'docs/audits/shots';
-const API = '/lakehouse/capi/v1/user-state/workflow-graph';
+const API = '/lakehouse/capi/management/v1/user-state/workflow-graph';
 const ARGS = ['--host-resolver-rules=MAP lance-ns-dex:5556 127.0.0.1:5556'];
 
 let failures = 0;

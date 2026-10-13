@@ -16,7 +16,7 @@ repeat it.
 WHAT THAT COSTS A SPEC CLIENT, and it is worse than looping. A caller asking for `limit=3` on a
 seven-version table is served three rows and told the listing is COMPLETE, because a `None` token means
 "that was everything". It does not page forever; it stops early and silently, having seen three of
-seven. Its sibling `GET /v1/model` already calls this out — "a slice that reports neither a total nor a
+seven. Its sibling `GET /management/v1/model` already calls this out — "a slice that reports neither a total nor a
 continuation is truncation wearing pagination's clothes".
 
 THE FIX IS THE HELPER THIS SERVICE ALREADY SHIPS, one layer up from the backend that cannot page.

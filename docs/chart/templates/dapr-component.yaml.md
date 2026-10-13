@@ -21,7 +21,7 @@ Maintenance publishes its lineage through its own component; one is rendered for
 
 BROADCAST component for the catalog's OWN control-plane change-events (grants/warehouses/policies/tables).
 DEDICATED (not the shared lineage-pubsub) and with NO queueGroupName → jetstream sets no DeliverGroup, so
-EVERY catalog replica receives EVERY event and appends it to its per-replica ring buffer (GET /v1/events).
+EVERY catalog replica receives EVERY event and appends it to its per-replica ring buffer (GET /management/v1/events).
 The catalog is BOTH publisher (core/control_emit.py) and subscriber (api/dapr.py) on this one component.
 Ephemeral (no durableName) + deliverPolicy=new: a booting/redeployed replica must NOT replay 168h of past
 governance events into a fresh in-memory buffer — the buffer is a live-refresh hint window, not a log.

@@ -54,7 +54,7 @@ export interface DockLayoutStoreOptions {
 	workbenchId: string;
 	/**
 	 * The zone's own path to the catalog's user-state document — e.g.
-	 * `/lakehouse/capi/v1/user-state/dock-layout`. Zone-shaped by necessity: each zone reaches the
+	 * `/lakehouse/capi/management/v1/user-state/dock-layout`. Zone-shaped by necessity: each zone reaches the
 	 * catalog through its own base path and its own BFF proxy.
 	 */
 	endpoint: string;

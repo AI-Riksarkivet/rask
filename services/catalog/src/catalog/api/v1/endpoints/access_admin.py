@@ -1,10 +1,10 @@
-"""Estate-admin FGA administration API (``/v1/access``): raw tuples, the model text, and a check.
+"""Estate-admin FGA administration API (``/management/v1/access``): raw tuples, the model text, and a check.
 
 The RAW-tuple counterpart of the per-object ``…/access/*`` surfaces (#51/#68/#72/#81): where those answer
 questions about ONE table/namespace at the owner bar, this browses and edits the authorization store
-itself — every tuple, any type — so it is gated exactly like ``/v1/events``: the surface is estate-wide,
+itself — every tuple, any type — so it is gated exactly like ``/management/v1/events``: the surface is estate-wide,
 therefore observing (or mutating) it is a PLATFORM privilege, ``can_observe_events`` on the fixed root
-object (``settings.fga_root_object``), decided explicitly per handler because ``/v1/access`` matches no
+object (``settings.fga_root_object``), decided explicitly per handler because ``/management/v1/access`` matches no
 resource prefix in ``fga_deps.authorize`` (the router gate only sets the 401/503 floor).
 
 Fail-closed and model-true throughout: FGA off → 501 (nothing to administer), an unwired client → 503,
@@ -177,7 +177,7 @@ EstateFgaClient = Annotated[OpenFgaClient, Depends(_require_fga_client)]
 
 
 async def estate_gate(client: FgaClientDep, settings: SettingsDep, token: CurrentToken) -> None:
-    """The estate-admin door every ``/v1/access`` route clears (mirrors ``/v1/events``).
+    """The estate-admin door every ``/management/v1/access`` route clears (mirrors ``/management/v1/events``).
 
     ON THE ROUTER, not called nine times by hand. This used to be `_estate_gate`, opened explicitly at
     the top of all nine handlers — every one of them correct, which is exactly the hazard: the tenth
@@ -200,7 +200,7 @@ async def estate_gate(client: FgaClientDep, settings: SettingsDep, token: Curren
 
 #: ONE DOOR for the whole router. See `estate_gate` — this replaces nine hand-written calls, and is
 #: declared here rather than at the top of the file only because it must follow the function it names.
-router = APIRouter(prefix="/v1/access", tags=["access"], dependencies=[Depends(estate_gate)])
+router = APIRouter(prefix="/management/v1/access", tags=["access"], dependencies=[Depends(estate_gate)])
 
 
 @router.get("/tuples")

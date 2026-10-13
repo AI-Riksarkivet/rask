@@ -10,9 +10,9 @@ import { postsTo, seed as seedFor } from '../mock-client';
 // run on the zone SERVER through remote functions, so all three land on the mock catalog: reads seeded
 // per bearer, writes read back from `/__mock/calls`.
 //
-// The one mechanical difference from the lakehouse original: `/v1/me` is seeded on the mock rather than
+// The one mechanical difference from the lakehouse original: `/management/v1/me` is seeded on the mock rather than
 // `page.route`d. Home's `+layout.server.ts` calls `fetchMe` against CATALOG_API directly — there is no
-// `/capi/v1/me` browser hop to intercept — so the identity has to ride in something the SERVER sees,
+// `/capi/management/v1/me` browser hop to intercept — so the identity has to ride in something the SERVER sees,
 // which is the bearer. Each test signs in with a per-test bearer, so the fullyParallel suite shares no
 // mutable mock state.
 
@@ -29,11 +29,11 @@ const seed = (page: Page, routes: Record<string, unknown>): Promise<void> =>
 	seedFor(page, token, routes);
 
 /** The warehouse creates the mock catalog recorded for THIS test's bearer, in order. */
-const warehousePosts = (page: Page): Promise<unknown[]> => postsTo(page, token, '/v1/warehouses');
+const warehousePosts = (page: Page): Promise<unknown[]> => postsTo(page, token, '/management/v1/warehouses');
 
 /** The tuple writes the mock catalog recorded for THIS test's bearer. Recorded even when unseeded, so
  *  "no grant ever fired" is a fact about the app, not about the seed. */
-const writtenTuples = (page: Page): Promise<unknown[]> => postsTo(page, token, '/v1/access/tuples');
+const writtenTuples = (page: Page): Promise<unknown[]> => postsTo(page, token, '/management/v1/access/tuples');
 
 test.beforeEach(async ({ context, page }, testInfo) => {
 	token = `${TOKEN.admin}:${testInfo.testId}`;
@@ -41,37 +41,37 @@ test.beforeEach(async ({ context, page }, testInfo) => {
 	// The estate starts empty; each test seeds the create's outcome, and the one that asserts the
 	// gallery re-seeds the list its post-create re-read lands on.
 	await seed(page, {
-		'GET /v1/me': ME_ADMIN,
-		'GET /v1/projects': [],
+		'GET /management/v1/me': ME_ADMIN,
+		'GET /management/v1/projects': [],
 		// The project registry is the FIRST rung the dialog climbs (ca0c059): a warehouse create no
 		// longer mints its parent, so every one of these flows now POSTs the project before the
 		// warehouse. Seeded here rather than per-test — it is a precondition of the flow, not a
 		// variable of it; the tests that exercise a FAILING create override the step they mean to fail.
-		'POST /v1/projects': { project: 'acme', warehouses: [], admins: [] },
+		'POST /management/v1/projects': { project: 'acme', warehouses: [], admins: [] },
 		// The FGA write door answers OK by default — the real catalog echoes the tuple it wrote, and a
 		// static stand-in only has to PARSE (the wire body that matters is read back from the ledger,
 		// not from this). Left unseeded it 404s, and the flow then honestly reports a partial outcome
 		// where the test meant to exercise the whole-success path. The partial test overrides it.
-		'POST /v1/access/tuples': { user: 'user:alice', relation: 'admin', object: 'project:acme' },
+		'POST /management/v1/access/tuples': { user: 'user:alice', relation: 'admin', object: 'project:acme' },
 	});
 });
 
 test('creates work + gold warehouses and grants the initial admin, with the exact wire bodies', async ({
 	page,
 }) => {
-	await seed(page, { 'POST /v1/warehouses': created('acme-wh', 'acme', 'acme-wh') });
+	await seed(page, { 'POST /management/v1/warehouses': created('acme-wh', 'acme', 'acme-wh') });
 	await page.goto('/projects');
 	await page.getByRole('button', { name: 'New project' }).click();
 	const dialog = page.getByRole('dialog');
 	await dialog.getByLabel('Project name').fill('acme');
 	await dialog.getByLabel('Warehouse id', { exact: true }).fill('acme-wh');
 	await dialog.getByLabel('Gold serving warehouse id').fill('acme-gold');
-	// the admin subject prefilled from /v1/me (user:alice) is kept
+	// the admin subject prefilled from /management/v1/me (user:alice) is kept
 	await expect(dialog.getByLabel('Initial admin')).toHaveValue('user:alice');
 	// The estate AFTER the creates — the create makes the project visible on the next estate list,
 	// which is what the dialog's `oncreated` invalidateAll re-reads.
 	await seed(page, {
-		'GET /v1/projects': [
+		'GET /management/v1/projects': [
 			{
 				project: 'acme',
 				warehouses: [
@@ -111,7 +111,7 @@ test('creates work + gold warehouses and grants the initial admin, with the exac
 });
 
 test('gold warehouse and admin grant are optional — one create, no tuple', async ({ page }) => {
-	await seed(page, { 'POST /v1/warehouses': created('solo-wh', 'solo', 'solo-bucket') });
+	await seed(page, { 'POST /management/v1/warehouses': created('solo-wh', 'solo', 'solo-bucket') });
 	await page.goto('/projects');
 	await page.getByRole('button', { name: 'New project' }).click();
 	const dialog = page.getByRole('dialog');
@@ -133,7 +133,7 @@ test('gold warehouse and admin grant are optional — one create, no tuple', asy
 test('a denied first create toasts the failure and keeps the dialog open for a retry', async ({
 	page,
 }) => {
-	await seed(page, { 'POST /v1/warehouses': { status: 403, body: { detail: 'forbidden' } } });
+	await seed(page, { 'POST /management/v1/warehouses': { status: 403, body: { detail: 'forbidden' } } });
 	await page.goto('/projects');
 	await page.getByRole('button', { name: 'New project' }).click();
 	const dialog = page.getByRole('dialog');
@@ -152,8 +152,8 @@ test('a failed admin grant is a NAMED partial outcome, not a fake success', asyn
 	// The failure lever is the seed itself (the write is server-side — page.route cannot reach it):
 	// this test's bearer gets a 403 on the tuple write, nobody else's does.
 	await seed(page, {
-		'POST /v1/warehouses': created('acme-wh', 'acme', 'acme-wh'),
-		'POST /v1/access/tuples': { status: 403, body: { detail: 'forbidden' } },
+		'POST /management/v1/warehouses': created('acme-wh', 'acme', 'acme-wh'),
+		'POST /management/v1/access/tuples': { status: 403, body: { detail: 'forbidden' } },
 	});
 	await page.goto('/projects');
 	await page.getByRole('button', { name: 'New project' }).click();
@@ -169,8 +169,8 @@ test('a failed admin grant is a NAMED partial outcome, not a fake success', asyn
 	await expect(page.getByText(/^Project acme created — /)).toHaveCount(0);
 });
 
-test('the creation flow is invisible to a non-estate-admin (the /v1/me gate)', async ({ page }) => {
-	await seed(page, { 'GET /v1/me': ME_MEMBER });
+test('the creation flow is invisible to a non-estate-admin (the /management/v1/me gate)', async ({ page }) => {
+	await seed(page, { 'GET /management/v1/me': ME_MEMBER });
 	await page.goto('/projects');
 	// the gallery renders (bob's own membership) but the admin affordance never does
 	await expect(page.locator('a[href="/projects/acme"]')).toBeVisible();

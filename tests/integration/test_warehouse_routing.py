@@ -120,7 +120,7 @@ def test_deactivate_quarantines_then_activate_restores(routing: tuple[TestClient
     assert _create("t_before") == 200
 
     # Deactivate → the resolver quarantines EVERY op on the bound namespace (403), so no new table lands.
-    d = client.post("/v1/warehouses/wh-a/deactivate")
+    d = client.post("/management/v1/warehouses/wh-a/deactivate")
     assert d.status_code == 200, d.text
     assert d.json()["status"] == "deactivated"
     blocked = client.post(
@@ -132,7 +132,7 @@ def test_deactivate_quarantines_then_activate_restores(routing: tuple[TestClient
     assert "deactivated" in blocked.text.lower()
 
     # Activate → routing is restored; a create succeeds again (status is read live, no stale cache).
-    a = client.post("/v1/warehouses/wh-a/activate")
+    a = client.post("/management/v1/warehouses/wh-a/activate")
     assert a.status_code == 200 and a.json()["status"] == "active"
     assert _create("t_after") == 200
 
@@ -161,7 +161,7 @@ def test_binding_collides_with_existing_default_namespace_409(
 
     # Binding "shared" to the warehouse would route shared$* to the warehouse bucket and ORPHAN the
     # default-root tables — the collision guard must reject it with 409.
-    r = client.post("/v1/warehouses/wh-a/namespaces", json={"namespace": "shared"})
+    r = client.post("/management/v1/warehouses/wh-a/namespaces", json={"namespace": "shared"})
     assert r.status_code == 409, r.text
     assert "orphan" in r.text.lower()
 

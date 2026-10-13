@@ -141,7 +141,7 @@ def test_create_refuses_an_endpoint_that_is_not_the_estates(
     )
     before = _estate_buckets(moto_url)
 
-    response = catalog.post("/v1/warehouses", json={"id": warehouse, "project": "acme", "endpoint": named})
+    response = catalog.post("/management/v1/warehouses", json={"id": warehouse, "project": "acme", "endpoint": named})
 
     recorded = warehouses.get_warehouse(_control(tmp_path), {}, warehouse) is not None
     created = _estate_buckets(moto_url) - before
@@ -154,12 +154,12 @@ def test_create_refuses_an_endpoint_that_is_not_the_estates(
     [
         pytest.param("far-open", "POST", "/v1/table/fns$t/describe", {}, id="open"),
         pytest.param("far-vend", "POST", "/management/v1/table/fns$t/credentials", None, id="vend"),
-        pytest.param("far-probe", "POST", "/v1/warehouses/{warehouse}/validate", None, id="vend-probe"),
-        pytest.param("far-provision", "POST", "/v1/warehouses", {"id": "{warehouse}", "project": "acme"}, id="provision"),
-        pytest.param("far-purge", "DELETE", "/v1/warehouses/{warehouse}?cascade=true&purge_bucket=true", None, id="purge"),
-        pytest.param("far-cascade", "DELETE", "/v1/warehouses/{warehouse}?cascade=true", None, id="cascade"),
-        pytest.param("far-bind", "POST", "/v1/warehouses/{warehouse}/namespaces", {"namespace": "fresh"}, id="create-namespace"),
-        pytest.param("far-unbind", "DELETE", "/v1/warehouses/{warehouse}/namespaces/fns", None, id="unbind"),
+        pytest.param("far-probe", "POST", "/management/v1/warehouses/{warehouse}/validate", None, id="vend-probe"),
+        pytest.param("far-provision", "POST", "/management/v1/warehouses", {"id": "{warehouse}", "project": "acme"}, id="provision"),
+        pytest.param("far-purge", "DELETE", "/management/v1/warehouses/{warehouse}?cascade=true&purge_bucket=true", None, id="purge"),
+        pytest.param("far-cascade", "DELETE", "/management/v1/warehouses/{warehouse}?cascade=true", None, id="cascade"),
+        pytest.param("far-bind", "POST", "/management/v1/warehouses/{warehouse}/namespaces", {"namespace": "fresh"}, id="create-namespace"),
+        pytest.param("far-unbind", "DELETE", "/management/v1/warehouses/{warehouse}/namespaces/fns", None, id="unbind"),
         pytest.param("far-list", "GET", "/v1/namespace/fns/table/list", None, id="table-list"),
     ],
 )

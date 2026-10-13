@@ -17,7 +17,7 @@ import { MOCK_CATALOG } from '../ports';
 // Hermetic via the MOCK CATALOG, not page.route: the surface reads through remote functions
 // (`remote/access.remote.ts`), so every request happens on the zone SERVER, where page.route cannot
 // reach. The fixtures live in `access-fixtures.ts`
-// (shared with `../mock-catalog.ts`), and the REQUEST shapes — still the frozen /v1/access contract — are
+// (shared with `../mock-catalog.ts`), and the REQUEST shapes — still the frozen /management/v1/access contract — are
 // recorded by the mock per bearer and asserted through `/__mock/access`. Each test signs in with a
 // per-test bearer so its ledger on the fullyParallel suite's one shared mock is its own.
 
@@ -30,7 +30,7 @@ type AccessState = {
 	listUsersBodies: Body[];
 	listObjectsBody: Body | null;
 	simulateBodies: Body[];
-	/** How many times this bearer's control cursor has polled `/v1/events` — the live spec's settle gate. */
+	/** How many times this bearer's control cursor has polled `/management/v1/events` — the live spec's settle gate. */
 	eventProbes: number;
 };
 
@@ -42,7 +42,7 @@ test.beforeEach(async ({ context, page }, testInfo) => {
 	// The estate-admin identity the `/settings` layout door reads. SEEDED on the mock catalog rather
 	// than page.route'd: this zone's layout calls `fetchMe` against CATALOG_API directly, so there is no
 	// browser hop to intercept.
-	await seedFor(page, token, { 'GET /v1/me': ME_ADMIN });
+	await seedFor(page, token, { 'GET /management/v1/me': ME_ADMIN });
 });
 
 /** What the mock catalog recorded for THIS test's bearer — the replacement for the capture variables
@@ -331,7 +331,7 @@ test('the grant dialog offers time-boxing, driven by the model', async ({ page }
 	await page.getByRole('button', { name: 'Grant' }).click();
 
 	await expect(page.getByText('Time-box this grant')).toBeVisible();
-	// The control appears because GET /v1/access/model SAID so. With no conditions in the model there
+	// The control appears because GET /management/v1/access/model SAID so. With no conditions in the model there
 	// is no checkbox at all — the option is unrepresentable rather than offered and then rejected.
 	await page.getByLabel('Time-box this grant').check();
 

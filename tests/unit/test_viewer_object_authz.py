@@ -13,7 +13,7 @@ everyone is an outage, not a gate.
 
 Owner tier is not incidental either: the registry's buckets include the external RAW tier and the
 observability bucket, both deliberately outside the medallion (R23), so a per-tenant admin must not
-reach them. `POST /v1/stores` is already estate-admin gated; this makes reading a store consistent
+reach them. `POST /management/v1/stores` is already estate-admin gated; this makes reading a store consistent
 with registering one rather than strictly weaker.
 """
 

@@ -1,9 +1,9 @@
-"""``/v1/projects`` — first-class tenants: an explicit registry record, created in ONE operation with its tuples.
+"""``/management/v1/projects`` — first-class tenants: an explicit registry record, created in ONE operation with its tuples.
 
 A *project* is the FGA model's tenant type (``service_kit/governed/auth/model.fga``): warehouses hang off it
 via their ``project`` field, and every grant cascades down from it. A project EXISTS when its registry
 record does (``catalog/services/projects.py`` — ``_projects/<id>.json`` on the control root, no DB), and
-``POST /v1/projects`` writes that record AND the creator's ``admin`` tuple in one operation, so existence
+``POST /management/v1/projects`` writes that record AND the creator's ``admin`` tuple in one operation, so existence
 and permission cannot drift (`open_hierarchy_lifecycle.md`, Decision 1 — the live estate once held three
 tenants in authz the catalog had never heard of, seeded FGA-only).
 
@@ -17,13 +17,15 @@ tenants (a fresh project legitimately has zero warehouses), while a warehouse cl
 record still surfaces — that is pre-registry legacy the reconciler reports, and hiding it would make the
 drift invisible instead of fixable.
 
-**Estate-observer gated.** The create/list/get routes check ``can_observe_events`` on the fixed root object
-(``settings.fga_root_object``) — the estate-OBSERVER action: it gates the estate-wide reads (the
-``/v1/events`` feed AND this tenant enumeration), because listing every tenant's name, buckets and admins
-is the same whole-estate disclosure as watching every tenant's governance changes. A mere project admin
-gets a 403 (authorization scope == data scope, the ``/v1/events`` #12 rationale). ``/v1/projects`` matches
-no resource prefix in ``fga_deps.authorize``, so the router-wide gate only sets the 401/503 floor; the
-decision is made here explicitly via ``fga_deps.require_relation`` (audited allow/deny/outage, #41).
+**The list is the caller's projects.** An estate observer (``can_observe_events`` on the fixed root object,
+``settings.fga_root_object``) lists every tenant; anyone else lists the projects they are a ``member`` of
+(the model folds ``admin`` into ``member``), from OpenFGA ``list_objects`` intersected with the tenant map
+above, so a membership FGA holds for a project no registry knows lists nothing. Authorization scope ==
+data scope (the ``/management/v1/events`` #12 rationale): a member sees their own tenants' names,
+buckets and admins and no one else's. Create and one tenant's detail stay estate-observer gated through
+``fga_deps.require_relation``. ``/management/v1/projects`` matches no resource prefix in
+``fga_deps.authorize``, so the router-wide gate only sets the 401/503 floor; every decision here is
+audited (allow/deny/outage, #41), and an OpenFGA outage fails the list closed with 503.
 
 **DELETE is gated differently, on purpose: ``project:<id>#can_administer``.** Retiring a tenant is an act
 INSIDE it, so the tenant's own admins must be able to do it without holding estate-wide privilege — and an
@@ -64,14 +66,14 @@ from catalog.services import projects as project_registry
 from catalog.services import warehouses
 from service_kit.control_emit import emit_control
 from service_kit.governed import fga
-from service_kit.governed.audit import SUCCESS, audit
+from service_kit.governed.audit import ALLOW, DENY, FAILURE, SUCCESS, audit
 from service_kit.lakehouse.naming import CONTROL_ID_RE
 from service_kit.lakehouse.records import RecordExistsError, RecordMissingError
 
 
 log = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/v1/projects", tags=["projects"])
+router = APIRouter(prefix="/management/v1/projects", tags=["projects"])
 
 # The DNS-safe id shape the whole control plane enforces — a project id doubles as an FGA object id and a
 # registry filename, so a malformed one is rejected up front. SHARED (`catalog.core.identifiers`): this
@@ -236,22 +238,41 @@ async def create_project(
     return ProjectResponse(project=project_id, warehouses=[], admins=await _admins_for(client, settings, project_id))
 
 
+async def _visible_projects(client: OpenFgaClient | None, settings: Settings, token: CurrentToken) -> set[str] | None:
+    """The project ids this caller may list, or ``None`` for every tenant.
+
+    ``None`` for an estate observer, and when FGA is off / unwired / unauthenticated (parity with every
+    ``require_*`` gate). Fail-closed: an OpenFGA outage raises, so a caller is never shown more, or less,
+    than their memberships by accident.
+    """
+    if not (settings.fga_enabled and client is not None and token is not None):
+        return None
+    root = settings.fga_root_object
+    try:
+        observer = await fga.check(client, user=token.sub, relation="can_observe_events", obj=root)
+        objects = None if observer else (await fga.list_objects(client, user=token.sub, relation="member", object_type="project")).objects
+    except ServiceUnavailableError:
+        audit("list_projects", FAILURE, subject=token.sub, resource=root, reason="authz_unavailable")
+        raise
+    # The estate-wide listing is the disclosure the root object guards, so its decision is audited like
+    # every gate; a member's listing is scoped to their own tenants.
+    audit("can_observe_events", ALLOW if observer else DENY, subject=token.sub, resource=root, reason="list_projects")
+    return None if objects is None else {o.removeprefix("project:") for o in objects}
+
+
 @router.get("")
 async def list_projects(settings: SettingsDep, token: CurrentToken, client: FgaClientDep) -> list[ProjectResponse]:
-    """Enumerate the estate's tenants, derived from the warehouse registry. Estate-observer gated.
+    """The caller's tenants: every tenant for an estate observer, else the ones the caller is a member of.
 
-    Fail-closed via FGA on the read: a non-estate-observer gets 403, an OpenFGA outage 503, and the gate
-    is a no-op only when FGA is off (parity with every ``require_*`` site). ``admins`` degrades to ``[]``
-    when FGA is off or the ``list_users`` lookup is unavailable — the registry facts still serve."""
-    # Estate gate: can_observe_events on the fixed root object — the estate-OBSERVER action shared with
-    # /v1/events (whole-estate disclosure ⇒ whole-estate privilege; no caller-supplied object id).
-    await fga_deps.require_relation(client, settings, token, relation="can_observe_events", obj=settings.fga_root_object)
+    ``admins`` degrades to ``[]`` when FGA is off or the ``list_users`` lookup is unavailable — the registry
+    facts still serve; the visibility decision itself fails closed (``_visible_projects``)."""
+    visible = await _visible_projects(client, settings, token)
     grouped = await _load_grouped(settings)
     # The per-project admins lookups run CONCURRENTLY: sequential awaits would stack N × the per-call
     # budget on a slow OpenFGA (a brownout, not an outage) and blow past the BFF's request deadline;
     # gathered, the worst case is ONE _ADMINS_TIMEOUT_SECONDS regardless of tenant count (each call
     # still degrades to [] on its own expiry — see _admins_for).
-    projects = sorted(grouped)
+    projects = sorted(p for p in grouped if visible is None or p in visible)
     admins = await asyncio.gather(*(_admins_for(client, settings, project) for project in projects))
     return [
         ProjectResponse(project=project, warehouses=grouped[project], admins=project_admins) for project, project_admins in zip(projects, admins, strict=True)
@@ -302,7 +323,7 @@ async def delete_project(
     user. **There is deliberately no ``cascade`` parameter on this route at all.** A project cascade would
     reach warehouses, and a warehouse's own delete can purge a bucket; one request must never be able to
     destroy a tenant's storage transitively. Emptying goes one rung at a time through
-    ``DELETE /v1/warehouses/{id}``, where the purge is its own separate opt-in.
+    ``DELETE /management/v1/warehouses/{id}``, where the purge is its own separate opt-in.
 
     ``force=true`` overrides deletion PROTECTION only (Decision 5) — the FGA gate above ran first and runs
     identically with or without it, so forcing cannot delete a project the caller may not administer."""
@@ -314,7 +335,7 @@ async def delete_project(
     #
     # NO EXISTENCE ORACLE (audit #4 — the rule `_set_warehouse_status` established and
     # `delete_warehouse` follows): without the collapse, any authenticated caller could enumerate the
-    # estate's tenants by the 404-vs-403 difference alone, and `GET /v1/projects` is estate-observer
+    # estate's tenants by the 404-vs-403 difference alone, and `GET /management/v1/projects` is estate-observer
     # gated precisely so they cannot. A create door legitimately answers 404 ("make the tenant first")
     # because that is a fix the caller needs; a DESTRUCTIVE door has no such teaching to do.
     record = await run_in_threadpool(project_registry.get_project, settings.registry_root, so, project_id)
@@ -329,12 +350,12 @@ async def delete_project(
     fga_deps.require_not_protected(record, kind="project", obj_id=project_id, force=force)
 
     # A project's contents ARE its warehouse records — the same registry the listing derives tenants from,
-    # so what the 409 names is exactly what GET /v1/projects/{id} shows.
+    # so what the 409 names is exactly what GET /management/v1/projects/{id} shows.
     held = sorted(str(r["id"]) for r in await run_in_threadpool(warehouses.list_warehouses, settings.registry_root, so) if r.get("project") == project_id)
     if held:
         raise NamespaceNotEmptyError(
             f"project '{project_id}' still holds {len(held)} warehouse(s): {', '.join(held)}. "
-            f"Delete each one first — DELETE /v1/warehouses/{{id}} (its own bucket purge is a separate "
+            f"Delete each one first — DELETE /management/v1/warehouses/{{id}} (its own bucket purge is a separate "
             f"opt-in) — then delete the project. There is deliberately no cascade here: retiring a tenant "
             f"must never be able to destroy its buckets transitively in one request."
         )

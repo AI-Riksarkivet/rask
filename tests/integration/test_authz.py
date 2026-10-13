@@ -1107,7 +1107,7 @@ def test_table_policy_describe_is_reader_tier(client: TestClient, monkeypatch) -
 
 def test_project_policy_set_requires_project_admin(client: TestClient, monkeypatch) -> None:
     """CONTRACT (#84): the project-level policy is TENANT-ADMIN tier — ``can_administer`` on
-    ``project:<id>`` (checked explicitly; ``/v1/project`` is not a router-guarded resource prefix) —
+    ``project:<id>`` (checked explicitly; ``/management/v1/project`` is not a router-guarded resource prefix) —
     and on a deny the warehouse registry is never consulted."""
     _wire(client)
     captured: list[dict] = []
@@ -1141,7 +1141,7 @@ def test_project_policy_describe_and_delete_require_project_admin(client: TestCl
 
 def test_project_policies_list_requires_project_admin(client: TestClient, monkeypatch) -> None:
     """CONTRACT (#65): the project-scoped policy LISTING gates on the SAME bar as the set/describe/delete
-    trio — ``can_administer`` on ``project:<id>``, checked explicitly (``/v1/projects`` is not a
+    trio — ``can_administer`` on ``project:<id>``, checked explicitly (``/management/v1/projects`` is not a
     router-guarded resource prefix). A second, estate-observer door for the same information would split
     the tier: a tenant admin could be shown one of their records and denied the list of all of them.
 

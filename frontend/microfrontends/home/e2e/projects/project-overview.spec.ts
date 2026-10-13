@@ -31,11 +31,11 @@ const seed = (page: Page, routes: Record<string, unknown>): Promise<void> =>
 test.beforeEach(async ({ context, page }, testInfo) => {
 	token = `${TOKEN.admin}:${testInfo.testId}`;
 	await signIn(context, { token });
-	await seed(page, { 'GET /v1/me': ME_ADMIN });
+	await seed(page, { 'GET /management/v1/me': ME_ADMIN });
 });
 
 test('renders the project’s warehouse rows and effective admins', async ({ page }) => {
-	await seed(page, { 'GET /v1/projects/acme': DETAIL });
+	await seed(page, { 'GET /management/v1/projects/acme': DETAIL });
 	await page.goto('/projects/acme');
 	await expect(page.getByRole('heading', { name: 'acme', exact: true })).toBeVisible();
 
@@ -57,7 +57,7 @@ test('renders the project’s warehouse rows and effective admins', async ({ pag
 test('each warehouse row crosses INTO the lakehouse zone with data-sveltekit-reload', async ({
 	page,
 }) => {
-	await seed(page, { 'GET /v1/projects/acme': DETAIL });
+	await seed(page, { 'GET /management/v1/projects/acme': DETAIL });
 	await page.goto('/projects/acme');
 	for (const id of ['acme-wh', 'acme-gold']) {
 		const link = page.locator(`a[href="/lakehouse/catalog/warehouses/${id}"]`);
@@ -73,7 +73,7 @@ test('each warehouse row crosses INTO the lakehouse zone with data-sveltekit-rel
 });
 
 test('a project the catalog refuses is named as denied, not rendered empty', async ({ page }) => {
-	await seed(page, { 'GET /v1/projects/secret': { status: 403, body: { detail: 'forbidden' } } });
+	await seed(page, { 'GET /management/v1/projects/secret': { status: 403, body: { detail: 'forbidden' } } });
 	await page.goto('/projects/secret');
 	await expect(
 		page.getByText("You don't have access to this project's registry facts."),

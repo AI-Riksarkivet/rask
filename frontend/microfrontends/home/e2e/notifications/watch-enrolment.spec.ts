@@ -16,7 +16,7 @@ import { seed as seedFor } from '../mock-client';
 // outage in the CONTROLPLANE reported as an outage in NOTIFICATIONS, on the one surface a person uses
 // to turn watching on. Nobody could enrol, and the message pointed at the wrong service.
 //
-// Memberships now come from `me.projects`, the frozen `/v1/me` contract the layout already resolves
+// Memberships now come from `me.projects`, the frozen `/management/v1/me` contract the layout already resolves
 // for every zone, which is the same source `$lib/gallery.ts` reads. These tests exercise the page with
 // NO controlplane answer of any kind seeded — the mock catalog 404s anything unstubbed — so a
 // regression that reintroduces the dependency fails here rather than in a cluster.
@@ -42,9 +42,9 @@ test.beforeEach(async ({ context }, testInfo) => {
 test('a member can see their projects to watch while the controlplane is unreachable', async ({
 	page,
 }) => {
-	// Only `/v1/me` is seeded. `/v1/projects` and every controlplane path stay unstubbed and 404 —
+	// Only `/management/v1/me` is seeded. `/management/v1/projects` and every controlplane path stay unstubbed and 404 —
 	// standing in for the 503 the live estate returns. If the page still consults them, it breaks.
-	await seed(page, { 'GET /v1/me': ME_WITH_MEMBERSHIPS });
+	await seed(page, { 'GET /management/v1/me': ME_WITH_MEMBERSHIPS });
 	const res = await page.goto('/notifications');
 
 	expect(res?.status()).toBe(200);
@@ -58,7 +58,7 @@ test('a member can see their projects to watch while the controlplane is unreach
 test('a member of nothing is told that membership is what makes a project watchable', async ({
 	page,
 }) => {
-	await seed(page, { 'GET /v1/me': { ...ME_MEMBER, projects: [] } });
+	await seed(page, { 'GET /management/v1/me': { ...ME_MEMBER, projects: [] } });
 	await page.goto('/notifications');
 
 	await expect(page.getByText('You are not a member of any project yet.')).toBeVisible();
@@ -67,9 +67,9 @@ test('a member of nothing is told that membership is what makes a project watcha
 
 test('a session whose identity cannot be resolved is NOT told to sign in', async ({ page }) => {
 	// The third state, taken from `gallery.ts`. `me` is null for BOTH "signed out" and "signed in but
-	// /v1/me failed", and those are opposite situations: one is fixed by signing in and the other
+	// /management/v1/me failed", and those are opposite situations: one is fixed by signing in and the other
 	// cannot be. Sending this user round the sign-in loop is the failure being prevented.
-	await seed(page, { 'GET /v1/me': { status: 503, body: { detail: 'catalog unavailable' } } });
+	await seed(page, { 'GET /management/v1/me': { status: 503, body: { detail: 'catalog unavailable' } } });
 	await page.goto('/notifications');
 
 	await expect(page.locator('[data-slot="identity-unavailable"]')).toBeVisible();

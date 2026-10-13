@@ -3,9 +3,9 @@ import { signIn, TOKEN } from './session';
 import { MOCK_CATALOG } from '../ports';
 
 // The hierarchy drill-down (goal cond 3): project → warehouse → namespace → table, driven with an
-// alice-shaped /v1/me. The project/warehouse/registry reads ride `warehouses.remote.ts` and
+// alice-shaped /management/v1/me. The project/warehouse/registry reads ride `warehouses.remote.ts` and
 // `catalog.remote.ts` now — they run on the ZONE SERVER, so they are seeded on the mock catalog per
-// bearer rather than intercepted at the browser boundary. `/capi/v1/me` is the one read still crossing
+// bearer rather than intercepted at the browser boundary. `/capi/management/v1/me` is the one read still crossing
 // the browser (the OIDC/BFF identity plane is deliberately kept there), so it stays `page.route`d.
 //
 // The table-DETAIL rung of the old file stayed in `e2e/catalog/hierarchy.spec.ts`: its aggregate route
@@ -50,15 +50,15 @@ const seed = async (page: Page, routes: Record<string, unknown>): Promise<void> 
 test.beforeEach(async ({ context, page }, testInfo) => {
 	token = `${TOKEN.admin}:${testInfo.testId}`;
 	await signIn(context, { token });
-	await page.route('**/capi/v1/me', (route) => json(route, ME_ALICE));
+	await page.route('**/capi/management/v1/me', (route) => json(route, ME_ALICE));
 	await seed(page, {
-		'GET /v1/projects': PROJECTS,
-		// No `GET /v1/projects/acme` seed: the only page that read it was `/catalog/projects/<p>`,
+		'GET /management/v1/projects': PROJECTS,
+		// No `GET /management/v1/projects/acme` seed: the only page that read it was `/catalog/projects/<p>`,
 		// which is deleted (see the drill test below).
 		// Wrapped in the seed's explicit {status, body} form ON PURPOSE: a bare object carrying its own
 		// `status` key — which every warehouse record does — is otherwise read as that form, and the
 		// record's `"active"` becomes the HTTP status.
-		'GET /v1/warehouses/acme-wh': { status: 200, body: WAREHOUSE },
+		'GET /management/v1/warehouses/acme-wh': { status: 200, body: WAREHOUSE },
 		'GET /v1/table': { tables: TABLES },
 	});
 });
@@ -99,8 +99,8 @@ test('drills warehouse → namespace with tier badges along the way', async ({ p
 
 // DELETED WITH ITS SURFACE, and the gap is named rather than quietly closed: this file used to end
 // with 'a member without the estate privilege still gets their membership gallery', which drove the
-// projects LIST page — a 403 from /v1/projects had to degrade to the caller's own memberships from
-// /v1/me rather than 500. That page is gone by the ruling above, and the estate's project gallery is
+// projects LIST page — a 403 from /management/v1/projects had to degrade to the caller's own memberships from
+// /management/v1/me rather than 500. That page is gone by the ruling above, and the estate's project gallery is
 // the HOME zone's landing (`home/src/routes/+page.svelte`, which already branches on
 // `data.estateAdmin` for exactly this reason).
 //

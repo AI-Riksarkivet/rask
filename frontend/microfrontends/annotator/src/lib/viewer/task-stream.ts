@@ -51,7 +51,7 @@ export function claimedStream(
 	// AUTH OFF — there is one anonymous principal, so every claimed item IS yours.
 	//
 	// This distinction is load-bearing and the first cut got it wrong: gating purely on `me` meant the
-	// stream was permanently empty on an ungoverned stack, because `capi/v1/me` 404s when auth is
+	// stream was permanently empty on an ungoverned stack, because `capi/management/v1/me` 404s when auth is
 	// disabled. The feature would have been invisible on exactly the stack it was being demonstrated
 	// on — indistinguishable from not having been built. "No identity" is not one condition; it is
 	// two, and only one of them is dangerous.

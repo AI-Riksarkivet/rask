@@ -1,7 +1,7 @@
-"""Unit tests for the estate-admin FGA administration API (``/v1/access``, endpoints/access_admin.py).
+"""Unit tests for the estate-admin FGA administration API (``/management/v1/access``, endpoints/access_admin.py).
 
 Drives the handlers directly (no TestClient) with fake settings + monkeypatched ``fga`` wrappers,
-mirroring ``test_events_endpoint.py``. Pins the frozen contract: the ``/v1/events``-style estate gate
+mirroring ``test_events_endpoint.py``. Pins the frozen contract: the ``/management/v1/events``-style estate gate
 (``can_observe_events`` on the fixed root object), the OpenFGA Read filter combos (object type REQUIRED
 whenever any tuple filter is sent — a user-only filter is a clean 400), pagination pass-through, the
 model-true write validation (only directly-assignable relations; a derived ``can_*`` write must never
@@ -110,7 +110,7 @@ def _read(monkeypatch: pytest.MonkeyPatch, **kwargs: Any) -> tuple[dict[str, Any
     return seen, response
 
 
-# ── the estate gate (mirrors /v1/events) ─────────────────────────────────────────────────────────────
+# ── the estate gate (mirrors /management/v1/events) ─────────────────────────────────────────────────────────────
 
 
 def test_gate_is_can_observe_events_on_the_root_object(gate_seen: dict[str, Any], rec: _AuditRecorder) -> None:
@@ -142,7 +142,7 @@ def _routes() -> list[APIRoute]:
 def test_every_access_route_is_covered_by_that_gate() -> None:
     """The enumeration half: counted, not read.
 
-    `/v1/access` reads and WRITES the raw tuple store, the authorization state of the whole estate, so
+    `/management/v1/access` reads and WRITES the raw tuple store, the authorization state of the whole estate, so
     the gate is ONE router-level dependency that a new route inherits instead of having to remember.
     A router-level dependency is inherited at include time, so this asserts the property every route
     actually has rather than trusting that the declaration reaches them: a route added to a different
@@ -260,7 +260,7 @@ def test_write_outage_audits_failure_and_raises(gate_seen: dict[str, Any], rec: 
 # ── control-plane emission: raw tuple mutations must tick the live cursor ─────────────────────────────
 #
 # The control feed documents that GRANTS move it, and the per-object grant surface (access.py) emits —
-# so the raw-tuple path staying silent made /v1/access/tuples the one grant door live surfaces could
+# so the raw-tuple path staying silent made /management/v1/access/tuples the one grant door live surfaces could
 # not see. These pin the emission (and that an outage emits NOTHING — a change that did not happen must
 # never be announced).
 

@@ -100,7 +100,7 @@ def owned_output_table(namespace: str, table: str) -> str:
     table_id = f"{namespace}${table}"
     if WAREHOUSE:
         requests.post(
-            f"{CATALOG}/v1/warehouses/{WAREHOUSE}/namespaces",
+            f"{CATALOG}/management/v1/warehouses/{WAREHOUSE}/namespaces",
             json={"namespace": namespace, "adopt_existing": True},
             headers=auth,
             timeout=30,

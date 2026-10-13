@@ -44,7 +44,7 @@ def measurable_projects(records: list[dict[str, Any]]) -> list[str]:
     must measure.
 
     Beside :func:`maintainable_buckets` because it is the same question asked of the same records: what
-    does this estate actually hold right now? A project is minted by ``POST /v1/projects`` at runtime
+    does this estate actually hold right now? A project is minted by ``POST /management/v1/projects`` at runtime
     with an operator-chosen id, so a statically configured tenant list is stale the moment a tenant is
     onboarded — and a cascade nobody measures is indistinguishable from a cascade with no lag.
 

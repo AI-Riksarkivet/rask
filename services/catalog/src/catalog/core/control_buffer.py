@@ -1,7 +1,7 @@
 """A bounded, per-replica in-memory ring buffer of control-plane change-events.
 
 Each catalog replica subscribes to `catalog.control.v1` WITHOUT a queueGroupName (broadcast), so every
-replica sees every event and appends it here. The poll endpoint (`GET /v1/events?since=<cursor>`) reads
+replica sees every event and appends it here. The poll endpoint (`GET /management/v1/events?since=<cursor>`) reads
 events after a client's cursor. In-memory + bounded (drop-oldest) is correct because events are **hints**,
 not the durable record (that's the audit trail): the buffer only needs to cover a poll gap, and a client
 whose cursor fell off the end gets `reset=True` → the console `invalidateAll()`s and re-reads authoritative

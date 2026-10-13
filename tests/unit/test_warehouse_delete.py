@@ -1,4 +1,4 @@
-"""``DELETE /v1/warehouses/{id}`` — the bottom-up delete door (`open_hierarchy_lifecycle.md` Decision 3).
+"""``DELETE /management/v1/warehouses/{id}`` — the bottom-up delete door (`open_hierarchy_lifecycle.md` Decision 3).
 
 The registry round-trips against a LOCAL filesystem control root (``service_kit.lakehouse.objectfs.fs_and_base``
 falls back to the local FS for a non-``s3://`` uri), so no object storage is needed; the warehouse's

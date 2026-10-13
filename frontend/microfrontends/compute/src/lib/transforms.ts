@@ -36,7 +36,7 @@ export const TransformSpecSchema = v.object({
 });
 export type TransformSpec = v.InferOutput<typeof TransformSpecSchema>;
 
-/** One task the estate can run, as `GET /v1/projects/{id}/tasks` answers it.
+/** One task the estate can run, as `GET /management/v1/projects/{id}/tasks` answers it.
  *
  * `command` is shown and never parsed — an operator choosing a task needs to see what it will
  * actually run, and displaying a string is not the same act as interpreting one. `cardinalities`
@@ -53,7 +53,7 @@ export const RegisteredTaskSchema = v.object({
 });
 export type RegisteredTask = v.InferOutput<typeof RegisteredTaskSchema>;
 
-/** `GET /v1/projects/{id}/tasks`. Absent, not `[]`, when nothing is registered
+/** `GET /management/v1/projects/{id}/tasks`. Absent, not `[]`, when nothing is registered
  *  (`response_model_exclude_none=True`), so the fallback is load-bearing. */
 export const RegisteredTasksSchema = v.object({
 	tasks: v.optional(v.array(RegisteredTaskSchema), []),
@@ -70,7 +70,7 @@ export const TransformDeleteSchema = v.object({
 });
 export type TransformDelete = v.InferOutput<typeof TransformDeleteSchema>;
 
-/** `GET /v1/projects/{id}/transforms`. The key is absent, not `[]`, on an estate that has declared
+/** `GET /management/v1/projects/{id}/transforms`. The key is absent, not `[]`, on an estate that has declared
  *  nothing — `response_model_exclude_none=True` — so the fallback is load-bearing. */
 export const TransformListSchema = v.object({
 	transforms: v.optional(v.array(TransformSpecSchema), []),

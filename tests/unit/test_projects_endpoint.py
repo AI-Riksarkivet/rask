@@ -1,9 +1,10 @@
-"""Unit tests for the derived-tenant endpoints (``GET /v1/projects[/{id}]``, endpoints/projects.py).
+"""Unit tests for the derived-tenant endpoints (``GET /management/v1/projects[/{id}]``, endpoints/projects.py).
 
 Drives the handlers directly (no TestClient) with fake registry records + settings, mirroring the repo's
-direct-call style (``test_events_endpoint.py``). Pins the design decisions: the estate gate is
-``can_observe_events`` on the fixed root object (the estate-OBSERVER action shared with ``/v1/events`` —
-tenant enumeration is a whole-estate disclosure); grouping tolerates a corrupt record (skip-with-warning,
+direct-call style (``test_events_endpoint.py``). Pins the design decisions: the list is the caller's
+projects (every tenant for an estate observer, ``can_observe_events`` on the fixed root object; otherwise
+the registry's projects the caller is a ``member`` of), while one tenant's detail stays estate-observer
+gated; grouping tolerates a corrupt record (skip-with-warning,
 never a 500); ``admins`` degrades to ``[]`` when FGA is off or the ``list_users`` lookup is unavailable;
 an unknown project is a 404 domain error.
 """
@@ -101,11 +102,40 @@ def test_get_project_returns_list_shape(monkeypatch: pytest.MonkeyPatch) -> None
     assert [w.id for w in result.warehouses] == ["wh-a", "wh-b"] and result.admins == []
 
 
-# ── the estate gate: can_observe_events on the fixed root object, on BOTH routes ─────────────────────
+# ── the gates: the list is the CALLER's projects; one tenant's detail stays estate-observer gated ────────
 
 
-@pytest.mark.parametrize("call", ["list", "get"])
-def test_gate_uses_can_observe_events_on_root_object(monkeypatch: pytest.MonkeyPatch, call: str) -> None:
+@pytest.mark.parametrize(("estate_observer", "expected"), [(True, ["acme", "fresh", "globex"]), (False, ["fresh", "globex"])])
+def test_the_list_is_the_callers_projects(monkeypatch: pytest.MonkeyPatch, estate_observer: bool, expected: list[str]) -> None:
+    """An estate observer lists every tenant; anyone else lists the registry's projects they are a member of.
+
+    `fresh` has a registry record and no warehouse, so it comes from the project registry; `ghost` is a
+    membership FGA holds for a project no registry knows, which lists nothing.
+    """
+    _patch_records(monkeypatch, _RECORDS)
+    monkeypatch.setattr(ep.project_registry, "list_projects", lambda _root, _so: [{"id": "fresh"}])
+    checks: list[tuple[str, str, str]] = []
+
+    async def _fake_check(_client: Any, *, user: str, relation: str, obj: str, **_kw: Any) -> bool:
+        checks.append((user, relation, obj))
+        return estate_observer
+
+    async def _fake_list_objects(_client: Any, *, user: str, relation: str, object_type: str, **_kw: Any) -> Any:
+        assert (user, relation, object_type) == ("bob", "member", "project")
+        return SimpleNamespace(objects=["project:globex", "project:fresh", "project:ghost"])
+
+    async def _no_admins(*_a: Any, **_k: Any) -> list[str]:
+        return []
+
+    monkeypatch.setattr(ep.fga, "check", _fake_check)
+    monkeypatch.setattr(ep.fga, "list_objects", _fake_list_objects)
+    monkeypatch.setattr(ep.fga, "list_users", _no_admins)
+    result = _list(_settings(fga_enabled=True), token=SimpleNamespace(sub="bob"), client=object())
+    assert [p.project for p in result] == expected
+    assert checks == [("bob", "can_observe_events", "warehouse:lance_catalog")]
+
+
+def test_one_tenants_detail_is_estate_observer_gated(monkeypatch: pytest.MonkeyPatch) -> None:
     seen: dict[str, Any] = {}
 
     async def _fake_require(_client: Any, _settings: Any, _token: Any, *, relation: str, obj: str) -> None:
@@ -114,13 +144,7 @@ def test_gate_uses_can_observe_events_on_root_object(monkeypatch: pytest.MonkeyP
 
     monkeypatch.setattr(ep.fga_deps, "require_relation", _fake_require)
     _patch_records(monkeypatch, _RECORDS)
-    settings = _settings(fga_enabled=False)  # keep _admins_for a no-op; the gate call itself is captured
-    if call == "list":
-        _list(settings)
-    else:
-        _get("acme", settings)
-    # The estate-OBSERVER action on the fixed root object — NOT a per-project can_administer: enumerating
-    # every tenant is a whole-estate disclosure, so authz scope == data scope (the /v1/events #12 rule).
+    _get("acme", _settings(fga_enabled=False))  # keep _admins_for a no-op; the gate call itself is captured
     assert seen == cast(Any, {"relation": "can_observe_events", "obj": "warehouse:lance_catalog"})
 
 

@@ -111,11 +111,11 @@ def test_round_trip_against_the_real_state_store(catalog: str, alice: str) -> No
     parsed its own partial one. ``tests/unit/test_user_state.py`` pins the default table itself.
     """
     graph = _graph("alice's live canvas")
-    put = requests.put(f"{catalog}/v1/user-state/workflow-graph", json=graph, headers=_auth(alice), timeout=15)
+    put = requests.put(f"{catalog}/management/v1/user-state/workflow-graph", json=graph, headers=_auth(alice), timeout=15)
     assert put.status_code == 200, put.text
     assert put.json()["subject"] == _sub(alice)
 
-    got = requests.get(f"{catalog}/v1/user-state/workflow-graph", headers=_auth(alice), timeout=15)
+    got = requests.get(f"{catalog}/management/v1/user-state/workflow-graph", headers=_auth(alice), timeout=15)
     assert got.status_code == 200, got.text
     body = got.json()
     assert body["exists"] is True
@@ -140,7 +140,7 @@ def test_the_work_survives_the_pod_that_wrote_it(catalog: str, alice: str) -> No
     """
     marker = f"survives-{int(time.time())}"
     requests.put(
-        f"{catalog}/v1/user-state/workflow-graph",
+        f"{catalog}/management/v1/user-state/workflow-graph",
         json=_graph(marker),
         headers=_auth(alice),
         timeout=15,
@@ -176,7 +176,7 @@ def test_the_work_survives_the_pod_that_wrote_it(catalog: str, alice: str) -> No
     assert forward.poll() is None, "the replacement port-forward exited immediately"
     for _ in range(60):
         try:
-            got = requests.get(f"{catalog}/v1/user-state/workflow-graph", headers=_auth(alice), timeout=5)
+            got = requests.get(f"{catalog}/management/v1/user-state/workflow-graph", headers=_auth(alice), timeout=5)
             if got.status_code == 200:
                 break
         except requests.RequestException:

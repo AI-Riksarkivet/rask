@@ -73,7 +73,7 @@
 		authEnabled?: boolean;
 		/** The CURRENT zone's own sidebar routes; null renders an empty sidebar (pre-wiring). */
 		zoneNav?: ZoneNav | null;
-		/** The frozen /v1/me identity for the navbar (null = signed out / unresolved). */
+		/** The frozen /management/v1/me identity for the navbar (null = signed out / unresolved). */
 		me?: Me | null;
 		/** True while the zone's fetchMe() is in flight — the navbar renders skeletons. */
 		meLoading?: boolean;

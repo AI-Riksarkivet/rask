@@ -103,7 +103,7 @@ async def test_a_check_may_still_name_its_own_clock_in_the_request_context() -> 
 
 @pytest.mark.asyncio
 async def test_a_check_that_names_no_clock_is_evaluated_at_the_servers_now() -> None:
-    """What the estate-admin `/v1/access/check` docstring promises: an omitted clock is not a DENY."""
+    """What the estate-admin `/management/v1/access/check` docstring promises: an omitted clock is not a DENY."""
     store = _Store()
     before = datetime.now(UTC)
     await fga.check(cast(OpenFgaClient, store), user="user:alice", relation="writer", obj="namespace:bronze", qualify=False)

@@ -45,7 +45,7 @@ const EnvelopeSchema = v.object({
  * rather than to a broken page. There is nothing here worth an error state.
  */
 export const readProjectsView = query(async (): Promise<ProjectsView | null> => {
-	const result = await catalogJSON('/v1/user-state/dock-layout');
+	const result = await catalogJSON('/management/v1/user-state/dock-layout');
 	if (!result.ok) return null;
 	const parsed = v.safeParse(EnvelopeSchema, result.data);
 	if (!parsed.success) return null;
@@ -66,11 +66,11 @@ export const readProjectsView = query(async (): Promise<ProjectsView | null> => 
  * is a real outcome and the caller decides whether to say so.
  */
 export const writeProjectsView = command(ViewSchema, async (view): Promise<ApiResult<unknown>> => {
-	const current = await catalogJSON('/v1/user-state/dock-layout');
+	const current = await catalogJSON('/management/v1/user-state/dock-layout');
 	const existing = current.ok ? v.safeParse(EnvelopeSchema, current.data) : null;
 	const workbenches = { ...(existing?.success ? (existing.output.value?.workbenches ?? {}) : {}) };
 	workbenches[VIEW_KEY] = view;
-	return catalogJSON('/v1/user-state/dock-layout', {
+	return catalogJSON('/management/v1/user-state/dock-layout', {
 		method: 'PUT',
 		body: JSON.stringify({ workbenches }),
 	});

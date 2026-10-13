@@ -65,7 +65,7 @@ export interface BffClient {
 		contentType?: string,
 	) => Promise<ApiResult<unknown>>;
 	/**
-	 * Browser-side `/v1/me` through THIS zone's bearer-forwarding BFF pass-through (`/capi/v1/me`).
+	 * Browser-side `/management/v1/me` through THIS zone's bearer-forwarding BFF pass-through (`/capi/management/v1/me`).
 	 * Same degrade posture as the server-side `fetchMe`: `null` on ANY failure (signed out, 401,
 	 * outage, timeout, contract drift) — the navbar then renders the base entry set, fail-closed on
 	 * the admin surfaces. Browser-side on purpose: the session bearer lives in the sealed cookie the
@@ -169,7 +169,7 @@ export function createBffClient(base: string): BffClient {
 
 	const fetchMeViaBff = async (): Promise<Me | null> => {
 		try {
-			const res = await fetch(bffPath('/capi/v1/me'), { signal: timeoutSignal(FETCH_TIMEOUT_MS) });
+			const res = await fetch(bffPath('/capi/management/v1/me'), { signal: timeoutSignal(FETCH_TIMEOUT_MS) });
 			if (!res.ok) return null;
 			return parse(MeSchema, await res.json());
 		} catch {

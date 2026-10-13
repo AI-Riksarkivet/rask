@@ -9,9 +9,9 @@ export RASK_EXPECT_CONTEXT
 
 # Live proof (kind `lance`) of the control-plane change-event pipeline, end to end:
 #   a governance mutation → best-effort emit → DEDICATED broadcast Dapr topic (catalog.control.v1, no
-#   queueGroupName) → every replica's ring buffer → GET /v1/events → the admin console's query.live feed.
+#   queueGroupName) → every replica's ring buffer → GET /management/v1/events → the admin console's query.live feed.
 # Asserts the whole chain by driving the REAL catalog with real OIDC tokens + FGA tuples:
-#   - alice (ESTATE admin = owner of the root warehouse, fga_root_object) → GET /v1/events 200, and after she
+#   - alice (ESTATE admin = owner of the root warehouse, fga_root_object) → GET /management/v1/events 200, and after she
 #     creates a namespace the poll returns a namespace_created event whose actor is her verified subject;
 #   - bob (a PROJECT admin, NOT an estate admin) → 403 (the #12 fix: authz scope == data scope);
 #   - anon (no bearer) → 401.
@@ -47,7 +47,7 @@ trap cleanup EXIT
 fail() { echo "!! FAIL: $*"; exit 1; }
 ok() { echo "OK: $*"; }
 
-# Port-forward the catalog (serves /v1/events + the mutation endpoints), Dex (mint user tokens), OpenFGA
+# Port-forward the catalog (serves /management/v1/events + the mutation endpoints), Dex (mint user tokens), OpenFGA
 # (seed the estate-admin + project-admin tuples).
 kubectl port-forward "svc/$RELEASE-catalog" "$CAT_PORT:2333" >/tmp/pf-cat.log 2>&1 & PIDS+=($!)
 kubectl port-forward "svc/$RELEASE-dex" 5556:5556 >/tmp/pf-dex.log 2>&1 & PIDS+=($!)
@@ -112,12 +112,12 @@ CAT="http://localhost:$CAT_PORT"
 code() { curl -s -o /dev/null -w '%{http_code}' "$@"; }
 
 # 1) authz on the feed: anon 401, project-admin bob 403, estate-admin alice 200.
-[ "$(code "$CAT/v1/events?since=0")" = "401" ] || fail "anon GET /v1/events expected 401"
+[ "$(code "$CAT/management/v1/events?since=0")" = "401" ] || fail "anon GET /management/v1/events expected 401"
 ok "anon → 401"
-[ "$(code -H "Authorization: Bearer $BOB" "$CAT/v1/events?since=0")" = "403" ] || fail "project-admin bob expected 403 (estate feed is not per-project)"
+[ "$(code -H "Authorization: Bearer $BOB" "$CAT/management/v1/events?since=0")" = "403" ] || fail "project-admin bob expected 403 (estate feed is not per-project)"
 ok "project-admin bob → 403 (#12 authz scope == data scope)"
-BASE="$(curl -s -H "Authorization: Bearer $ALICE" "$CAT/v1/events?since=0")"
-echo "$BASE" | python3 -c "import sys,json;d=json.load(sys.stdin);assert 'cursor' in d and d['events']==[]" || fail "alice baseline GET /v1/events malformed"
+BASE="$(curl -s -H "Authorization: Bearer $ALICE" "$CAT/management/v1/events?since=0")"
+echo "$BASE" | python3 -c "import sys,json;d=json.load(sys.stdin);assert 'cursor' in d and d['events']==[]" || fail "alice baseline GET /management/v1/events malformed"
 CURSOR="$(echo "$BASE" | python3 -c "import sys,json;print(json.load(sys.stdin)['cursor'])")"
 ok "estate-admin alice → 200 (baseline cursor=$CURSOR)"
 
@@ -127,17 +127,17 @@ mc="$(code -X POST -H "Authorization: Bearer $ALICE" -H 'Content-Type: applicati
 [ "$mc" = "200" ] || [ "$mc" = "201" ] || fail "alice namespace create expected 2xx, got $mc"
 ok "drove mutation: alice created namespace:$NS"
 
-# 3) poll after the mutation → the event pipeline (emit → catalog.control.v1 → buffer → /v1/events) delivered
+# 3) poll after the mutation → the event pipeline (emit → catalog.control.v1 → buffer → /management/v1/events) delivered
 #    a namespace_created event whose ACTOR is alice's verified subject (never a body value). Poll a few times
 #    (the emit is best-effort + the bus is async).
 for i in $(seq 1 10); do
-  P="$(curl -s -H "Authorization: Bearer $ALICE" "$CAT/v1/events?since=$CURSOR")"
+  P="$(curl -s -H "Authorization: Bearer $ALICE" "$CAT/management/v1/events?since=$CURSOR")"
   hit="$(echo "$P" | python3 -c "import sys,json;d=json.load(sys.stdin);print(any(e['action']=='namespace_created' and e['actor']=='user:$ALICE_SUB' for e in d['events']))" 2>/dev/null || echo False)"
-  [ "$hit" = "True" ] && { ok "GET /v1/events delivered namespace_created by user:$ALICE_SUB (the live pipeline)"; break; }
-  [ "$i" = "10" ] && { echo "$P"; fail "namespace_created never reached /v1/events (check catalog.control.v1 stream + the subscription)"; }
+  [ "$hit" = "True" ] && { ok "GET /management/v1/events delivered namespace_created by user:$ALICE_SUB (the live pipeline)"; break; }
+  [ "$i" = "10" ] && { echo "$P"; fail "namespace_created never reached /management/v1/events (check catalog.control.v1 stream + the subscription)"; }
   sleep 2
 done
 
 echo
-echo "PASS: control-plane change-events proven live — mutation → catalog.control.v1 → ring buffer → GET /v1/events,"
+echo "PASS: control-plane change-events proven live — mutation → catalog.control.v1 → ring buffer → GET /management/v1/events,"
 echo "      estate-admin gated (alice 200 / project-admin bob 403 / anon 401), actor = the verified subject."

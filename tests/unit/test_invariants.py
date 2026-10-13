@@ -132,7 +132,7 @@ def test_every_first_party_deployment_is_hardened() -> None:
 
 
 def test_user_state_store_default_matches_the_component_the_catalog_is_scoped_to() -> None:
-    """The `/v1/user-state/*` routes work only if THREE facts agree, and none of them is in the code.
+    """The `/management/v1/user-state/*` routes work only if THREE facts agree, and none of them is in the code.
 
     The catalog's `user_state_store` default names a Dapr component; that component must exist; and the
     catalog app-id must be in its `scopes` — an unscoped app-id gets "component not found" from the
@@ -154,7 +154,7 @@ def test_user_state_store_default_matches_the_component_the_catalog_is_scoped_to
     )
     assert component is not None, (
         f"the catalog defaults LANCE_USER_STATE_STORE to {default!r}, but the chart renders no Dapr "
-        "Component by that name — every /v1/user-state call would 503"
+        "Component by that name — every /management/v1/user-state call would 503"
     )
     assert re.search(r"type: state\.", component), f"{default} is not a state store"
     scopes = component.split("scopes:", 1)

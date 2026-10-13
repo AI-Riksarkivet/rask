@@ -485,12 +485,12 @@ export interface UserStateEnvelope {
 export const readUserStateDoc = query(
 	UserStateArg,
 	async ({ document }): Promise<ApiResult<UserStateEnvelope>> =>
-		typedAs<UserStateEnvelope>(await catalogJSON(`/v1/user-state/${document}`)),
+		typedAs<UserStateEnvelope>(await catalogJSON(`/management/v1/user-state/${document}`)),
 );
 
 /** Save the caller's own document. A refused write is reported as such — never flattened to ok. */
 export const writeUserStateDoc = command(
 	v.object({ ...UserStateArg.entries, value: v.unknown() }),
 	async ({ document, value }): Promise<ApiResult<unknown>> =>
-		catalogJSON(`/v1/user-state/${document}`, { method: 'PUT', body: JSON.stringify(value) }),
+		catalogJSON(`/management/v1/user-state/${document}`, { method: 'PUT', body: JSON.stringify(value) }),
 );

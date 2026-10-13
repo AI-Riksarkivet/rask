@@ -1,7 +1,7 @@
 import { test, expect, type Page, type Route } from '@playwright/test';
 
-// The estate shell in the LINEAGE zone: the cross-zone TopNavbar fed by a mocked /v1/me (hermetic —
-// the layout fetches it through this zone's /capi/v1/me pass-through), the zone-scoped sidebar
+// The estate shell in the LINEAGE zone: the cross-zone TopNavbar fed by a mocked /management/v1/me (hermetic —
+// the layout fetches it through this zone's /capi/management/v1/me pass-through), the zone-scoped sidebar
 // carrying exactly this zone's views (Datasets / Jobs / Runs / Columns + the Graph at the root), and
 // the two-row header — navbar row above, breadcrumb bar below.
 //
@@ -40,7 +40,7 @@ test.beforeEach(async ({ page }) => {
 	await page.route('**/lakehouse/api/**', (route) => json(route, {}));
 	await page.route('**/capi/**', (route) => {
 		const path = new URL(route.request().url()).pathname;
-		if (path.endsWith('/v1/me')) return route.fallback();
+		if (path.endsWith('/management/v1/me')) return route.fallback();
 		return json(route, {});
 	});
 });
@@ -48,7 +48,7 @@ test.beforeEach(async ({ page }) => {
 test('an estate admin gets the zone triggers + the Marquez-parity sidebar leaves', async ({
 	page,
 }) => {
-	await page.route('**/capi/v1/me', (route) =>
+	await page.route('**/capi/management/v1/me', (route) =>
 		json(route, {
 			sub: 'user:alice',
 			name: 'Alice',
@@ -100,7 +100,7 @@ test('an estate admin gets the zone triggers + the Marquez-parity sidebar leaves
 test('the Datasets leaf lights on its list page and stays lit on a nested detail page', async ({
 	page,
 }) => {
-	await page.route('**/capi/v1/me', (route) => json(route, { detail: 'anon' }, 401));
+	await page.route('**/capi/management/v1/me', (route) => json(route, { detail: 'anon' }, 401));
 	await page.goto('/lakehouse/lineage/datasets');
 	await expect(page.locator('[data-active="true"]').filter({ hasText: 'Datasets' })).toBeVisible();
 	await page.goto('/lakehouse/lineage/datasets/silver%24features');
@@ -110,7 +110,7 @@ test('the Datasets leaf lights on its list page and stays lit on a nested detail
 test('a signed-out / unresolved identity gets NO governance column (fail-closed)', async ({
 	page,
 }) => {
-	await page.route('**/capi/v1/me', (route) => json(route, { detail: 'anon' }, 401));
+	await page.route('**/capi/management/v1/me', (route) => json(route, { detail: 'anon' }, 401));
 	await page.goto('/lakehouse/lineage');
 	const nav = page.getByRole('navigation', { name: 'Zones' });
 	// The bar never advertises privilege — the same triggers whoever is looking…
@@ -141,7 +141,7 @@ test('an estate admin gets Operations in the Lakehouse panel and Governance unde
 	// may do what — access, tenants, audit — is estate-wide configuration and moved to its own
 	// Settings entry. Both halves are asserted here, in the same test, because the thing worth pinning
 	// is the SPLIT: each surface in exactly one panel, and never in both.
-	await page.route('**/capi/v1/me', (route) =>
+	await page.route('**/capi/management/v1/me', (route) =>
 		json(route, {
 			sub: 'user:alice',
 			name: 'Alice',
@@ -185,7 +185,7 @@ test('an estate admin gets Operations in the Lakehouse panel and Governance unde
 test('a domain trigger opens a panel of its rows — pointer and keyboard, same-zone rows soft-navigating', async ({
 	page,
 }) => {
-	await page.route('**/capi/v1/me', (route) => json(route, { detail: 'anon' }, 401));
+	await page.route('**/capi/management/v1/me', (route) => json(route, { detail: 'anon' }, 401));
 	await page.goto('/lakehouse/lineage');
 	const nav = page.getByRole('navigation', { name: 'Zones' });
 	const lakehouse = nav.getByRole('button', { name: 'Lakehouse', exact: true });
@@ -237,7 +237,7 @@ test('a row that genuinely leaves the zone still hard-navigates', async ({ page 
 	// Cross-zone links must force a document load: a soft nav would route into a manifest this zone
 	// does not own, i.e. a 404. Two shapes to pin, because the bar now has both: a panel ROW (Search's
 	// media rows) and a top-level plain LINK (Annotate, whose zone has a single surface).
-	await page.route('**/capi/v1/me', (route) => json(route, { detail: 'anon' }, 401));
+	await page.route('**/capi/management/v1/me', (route) => json(route, { detail: 'anon' }, 401));
 	await page.goto('/lakehouse/lineage');
 	const nav = page.getByRole('navigation', { name: 'Zones' });
 	// The href carries a TRAILING SLASH (1fe9439, pinned by @rask/zone-contract's nav-truth suite):
@@ -259,7 +259,7 @@ test('a panel reaches its own zone root exactly once — the trigger is a button
 	// The trigger opens a panel instead of navigating, so a reachable root has to be a ROW. Lineage is
 	// a column of Lakehouse's panel and its Graph row IS the area root (/lakehouse/lineage), so the
 	// panel must not also synthesize a header row for it — exactly one link, no duplicate.
-	await page.route('**/capi/v1/me', (route) => json(route, { detail: 'anon' }, 401));
+	await page.route('**/capi/management/v1/me', (route) => json(route, { detail: 'anon' }, 401));
 	await page.goto('/lakehouse/lineage');
 	const panel = await openPanel(page, 'Lakehouse');
 	await expect(panel.locator('a[href="/lakehouse/lineage"]')).toHaveCount(1);
@@ -280,7 +280,7 @@ test('a panel reaches its own zone root exactly once — the trigger is a button
 	}
 });
 
-test('the loading skeleton reserves the resolved entry widths — no shift when /v1/me lands', async ({
+test('the loading skeleton reserves the resolved entry widths — no shift when /management/v1/me lands', async ({
 	page,
 }) => {
 	// The 4b2af0e no-CLS contract, re-proven against the NavigationMenu chrome: the skeleton pills
@@ -289,16 +289,16 @@ test('the loading skeleton reserves the resolved entry widths — no shift when 
 	//
 	// Resolved as a NON-ADMIN, and the contract is whole again for BOTH identities. It briefly could
 	// not be: while Settings rode the zone bar, an admin's row genuinely grew by one trigger when
-	// /v1/me landed. The two-level ruling moved Settings to the main menu, so the in-project bar is
+	// /management/v1/me landed. The two-level ruling moved Settings to the main menu, so the in-project bar is
 	// identity-independent once more and nothing is earned by privilege here at all.
 	//
 	// The shift this now catches is the TIER GAP: the skeleton must reserve it exactly as the resolved
-	// bar renders it. It did not, at first — the row measured 26px narrower while /v1/me was in flight
+	// bar renders it. It did not, at first — the row measured 26px narrower while /management/v1/me was in flight
 	// and snapped wider the instant it resolved. Chrome is chrome whether or not the identity has
 	// landed.
 	let release = () => {};
 	const gate = new Promise<void>((resolve) => (release = resolve));
-	await page.route('**/capi/v1/me', async (route) => {
+	await page.route('**/capi/management/v1/me', async (route) => {
 		await gate;
 		return json(route, {
 			sub: 'user:bob',
@@ -336,7 +336,7 @@ test('the loading skeleton reserves the resolved entry widths — no shift when 
 	release();
 	await expect(nav.getByRole('button', { name: 'Lakehouse', exact: true })).toBeVisible();
 	// The resolved bar carries exactly the triggers the skeleton reserved: for THIS identity no entry
-	// is earned, so the row cannot grow when /v1/me lands — which is the shift this test measures.
+	// is earned, so the row cannot grow when /management/v1/me lands — which is the shift this test measures.
 	for (const trigger of ['Lakehouse', 'Compute', 'Search']) {
 		await expect(nav.getByRole('button', { name: trigger, exact: true })).toBeVisible();
 	}
@@ -354,7 +354,7 @@ test('the breadcrumb bar is its OWN row below the zone links — never overlappi
 	// The regression this guards: both used to share one header row, so on a narrow viewport the
 	// trail and the zone links collided. Geometry, not markup: the breadcrumb row must start at or
 	// below the navbar row's bottom edge, and the two must not intersect vertically.
-	await page.route('**/capi/v1/me', (route) => json(route, { detail: 'anon' }, 401));
+	await page.route('**/capi/management/v1/me', (route) => json(route, { detail: 'anon' }, 401));
 	await page.setViewportSize({ width: 820, height: 800 });
 	await page.goto('/lakehouse/lineage/datasets');
 	const zones = page.getByRole('navigation', { name: 'Zones' });
@@ -370,7 +370,7 @@ test('the breadcrumb bar is its OWN row below the zone links — never overlappi
 });
 
 test('the breadcrumb trail links back up the path and marks the current page', async ({ page }) => {
-	await page.route('**/capi/v1/me', (route) => json(route, { detail: 'anon' }, 401));
+	await page.route('**/capi/management/v1/me', (route) => json(route, { detail: 'anon' }, 401));
 	await page.goto('/lakehouse/lineage/datasets/silver%24features');
 	const trail = page.getByRole('navigation', { name: 'Breadcrumb' });
 	// Every crumb but the last is a link to its own path prefix…

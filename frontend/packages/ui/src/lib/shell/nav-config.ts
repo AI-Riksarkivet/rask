@@ -152,10 +152,10 @@ export type Project = { name: string; subtitle?: string };
 /** The navbar profile identity — populated from the OIDC session (per-zone +layout). */
 export type NavUser = { name: string; email?: string; initials?: string };
 
-/** One project membership row from `/v1/me` — the tenant and the caller's role in it. */
+/** One project membership row from `/management/v1/me` — the tenant and the caller's role in it. */
 export type MeProject = { project: string; role: 'admin' | 'member' };
 
-/** The frozen `GET /v1/me` identity contract, mirrored structurally from @rask/api (the shared shell
+/** The frozen `GET /management/v1/me` identity contract, mirrored structurally from @rask/api (the shared shell
  *  never imports app data — same seam as `NavUser`): any verified caller's sub/name/email, whether
  *  they hold the estate-admin privilege, and their project memberships. */
 export type Me = {
@@ -456,7 +456,7 @@ const OPERATIONS_ITEMS: TopNavItem[] = [
  * a panel — so the estate's shape is reachable from any zone in one hop instead of landing on a
  * zone root and hunting through its sidebar. Zones with a single surface stay plain links.
  *
- * The Operations column appends ONLY for an estate admin (`me.estate_admin` from the frozen `/v1/me`
+ * The Operations column appends ONLY for an estate admin (`me.estate_admin` from the frozen `/management/v1/me`
  * contract) — fail-closed: an unresolved/absent `me` renders the base entries. Access is NOT a
  * top-level entry and never was: it is one row of the Settings panel (`/settings/access`), which is
  * where the surface itself now lives.

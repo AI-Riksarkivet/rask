@@ -859,7 +859,7 @@ auth:
   # TWO tuples by the bootstrap-admin post-install/upgrade hook Job, because they are two authorities —
   # `owner` on the default warehouse (warehouse:lance_catalog), which cascades into every namespace and
   # table it parents, and `admin` on the estate root (estate:rask), which every estate-wide surface
-  # (GET /v1/events, the object browser, the admin console) gates on. Empty (default) = the human grants
+  # (GET /management/v1/events, the object browser, the admin console) gates on. Empty (default) = the human grants
   # stay out-of-band (seed scripts / the UI) while the SERVICE grants below still render.
   # Requires auth.enabled.
   # -- Dex subject (id_token `sub`) the bootstrap-admin hook grants `owner` on the default warehouse and `admin` on estate:rask. Empty = human grants are made out of band.
@@ -970,12 +970,12 @@ catalog:
   # the knob as if it worked. 0 restores the old destroy-immediately behaviour.
   # -- Days a dropped table or namespace stays undroppable before the trash purge may reclaim it (LANCE_TRASH_GRACE_DAYS). 0 destroys immediately.
   trashGraceDays: 7
-  # #3-A per-warehouse physical multi-tenancy (admin control plane). On → POST /v1/warehouses provisions a
+  # #3-A per-warehouse physical multi-tenancy (admin control plane). On → POST /management/v1/warehouses provisions a
   # physically separate bucket per warehouse (Lakekeeper parity) and binds top-level namespaces to it, so a
   # table under a bound namespace lands in that warehouse's bucket. Additive + backward-compatible: an
   # unbound namespace always routes to the shared minio.bucket, so single-tenant flows are untouched.
   warehouses:
-    # -- Per-warehouse physical multi-tenancy: POST /v1/warehouses provisions a bucket per warehouse and binds top-level namespaces to it. Unbound namespaces use `minio.bucket`.
+    # -- Per-warehouse physical multi-tenancy: POST /management/v1/warehouses provisions a bucket per warehouse and binds top-level namespaces to it. Unbound namespaces use `minio.bucket`.
     enabled: true
   # #3-B Lance multi-base DATA distribution: the ALLOWLIST of bucket URIs a single table's fragments may be
   # spread across (?data_base=s3://... per create, round-robin write, fan-out read — the Uber pattern). A
@@ -1018,7 +1018,7 @@ catalog:
   # Control-plane change-events: every governance/metadata mutation (grants/warehouses/policies/tables)
   # publishes a CatalogControlEvent onto a DEDICATED broadcast Dapr topic (catalog.control.v1, no
   # queueGroupName) that EVERY catalog replica buffers, so the admin console live-refreshes via
-  # GET /v1/events. ON renders the catalog-control-pubsub Dapr component + the CATALOG_CONTROL NATS
+  # GET /management/v1/events. ON renders the catalog-control-pubsub Dapr component + the CATALOG_CONTROL NATS
   # stream + the broadcast subscription, and turns emission on. On by default (parity with lineage emit)
   # — best-effort + fail-open, so a bus outage degrades to "no live refresh + the audit trail still
   # records it", never a failed mutation.

@@ -1,5 +1,5 @@
 // A tiny in-memory stand-in for the catalog endpoints the admin area reaches SERVER-SIDE, where
-// page.route cannot reach: `GET /v1/events` (the control-events feed's query.live poll), `GET /v1/me`
+// page.route cannot reach: `GET /management/v1/events` (the control-events feed's query.live poll), `GET /management/v1/me`
 // (the estate-admin door in admin/+layout.server.ts), the stores registry and `/v1/table`. Runs as a
 // second Playwright `webServer`; the dev server's CATALOG_API points here. Test-control endpoints
 // (`__mock/*`) seed events, simulate a governance mutation, toggle 403, and expose what the store
@@ -37,7 +37,7 @@ type ControlEvent = {
 // it vacuously with a foreign event.
 const eventsByBearer = new Map<string, ControlEvent[]>();
 const modeByBearer = new Map<string, 'ok' | 'forbidden'>();
-/** How many times each bearer's server has polled `/v1/events`. The live-update spec waits for ≥1
+/** How many times each bearer's server has polled `/management/v1/events`. The live-update spec waits for ≥1
  *  before injecting its event: the control cursor SWALLOWS whatever its first successful probe sees
  *  (that read is the baseline, not a move — feeds.remote.ts), so an event injected before the first
  *  probe lands would be absorbed and the spec would time out flakily instead of testing the tick. */
@@ -65,7 +65,7 @@ type Body = Record<string, unknown>;
 /** What one test's WRITES did — request shapes recorded per bearer, replacing the page.route capture
  *  variables the spec held while the transport was still browser-side. */
 type AccessState = {
-	/** Store drafts POSTed to /v1/stores by this bearer (the attach-store flow). */
+	/** Store drafts POSTed to /management/v1/stores by this bearer (the attach-store flow). */
 	attachedStores: Body[];
 	/** Set via `__mock/access/config`: the next store WRITE 403s — the partial-outcome / denied-form
 	 *  lever (a failed write must be NAMED, never rolled into a fake success). */
@@ -129,7 +129,7 @@ Bun.serve({
 
 		// The estate-admin door's identity lookup. `TOKEN.down` models a catalog outage, which must
 		// fail CLOSED at the door rather than default open.
-		if (url.pathname === '/v1/me') {
+		if (url.pathname === '/management/v1/me') {
 			if (bearer === TOKEN.down) return json({ detail: 'catalog unavailable' }, 502);
 			const me = identityOf(bearer);
 			return me ? json(me) : json({ detail: 'not authenticated' }, 401);
@@ -138,7 +138,7 @@ Bun.serve({
 		// The endpoint the query.live generator polls. since=N is a cursor == "events already seen"; we hand
 		// back everything after it + the new head (== count), matching ControlEventBuffer.since semantics.
 		// The generator polls with the signed-in session's bearer, which selects the bucket.
-		if (url.pathname === '/v1/events') {
+		if (url.pathname === '/management/v1/events') {
 			if ((modeByBearer.get(bearer) ?? 'ok') === 'forbidden') {
 				return json({ detail: 'not authorized' }, 403);
 			}
@@ -180,16 +180,16 @@ Bun.serve({
 		// EMPTY by default, deliberately: `ok` with no bindings keeps the degraded banner off (the
 		// point of serving it at all) while adding no row to fixtures that never mentioned one. A
 		// static `db1` here silently appended a phantom namespace to every other spec's world.
-		if (url.pathname === '/v1/warehouses/-/bindings') return json({ bindings: {} });
+		if (url.pathname === '/management/v1/warehouses/-/bindings') return json({ bindings: {} });
 		// The stores registry (the storage area's remote functions). Reads are STATIC; the write is
 		// per-bearer and failWrites-aware, echoing the whole registry exactly like the real catalog.
-		if (url.pathname === '/v1/stores' && req.method === 'GET') return json({ stores: STORES });
-		if (url.pathname === '/v1/stores/tiers') {
+		if (url.pathname === '/management/v1/stores' && req.method === 'GET') return json({ stores: STORES });
+		if (url.pathname === '/management/v1/stores/tiers') {
 			const tiers: Record<string, unknown[]> = {};
 			for (const s of STORES) (tiers[s.role] ??= []).push(s);
 			return json(tiers);
 		}
-		if (url.pathname === '/v1/stores' && req.method === 'POST') {
+		if (url.pathname === '/management/v1/stores' && req.method === 'POST') {
 			const state = accessStateOf(bearer);
 			if (state.failWrites) return json({ detail: 'forbidden' }, 403);
 			const body = (await req.json()) as Body;

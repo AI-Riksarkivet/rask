@@ -96,7 +96,7 @@ def grants(real_ns_client: TestClient, tmp_path: Path) -> Iterator[_Grants]:
 
 def _top_level(client: TestClient, name: str, properties: dict[str, str] | None = None) -> int:
     body: dict[str, object] = {"namespace": name} | ({"properties": properties} if properties is not None else {})
-    return client.post(f"/v1/warehouses/{WAREHOUSE}/namespaces", json=body, headers=AUTH).status_code
+    return client.post(f"/management/v1/warehouses/{WAREHOUSE}/namespaces", json=body, headers=AUTH).status_code
 
 
 def _tier(client: TestClient, namespace: str) -> str | None:
@@ -115,7 +115,9 @@ def test_only_the_projects_admin_declares_or_drops_a_tier(real_ns_client: TestCl
     """On the warehouse door, the nested door and an Overwrite: bob is refused PermissionDenied (15), alice lands it."""
     client = real_ns_client
     _act_as(client, "bob")
-    _refused(client.post(f"/v1/warehouses/{WAREHOUSE}/namespaces", json={"namespace": "sales", "properties": {"rask.tier": "silver"}}, headers=AUTH), 15)
+    _refused(
+        client.post(f"/management/v1/warehouses/{WAREHOUSE}/namespaces", json={"namespace": "sales", "properties": {"rask.tier": "silver"}}, headers=AUTH), 15
+    )
     assert _top_level(client, "sales") == 200, "bob may still create the namespace without declaring a tier"
     grants.grant("bob", ("can_create_namespace", "namespace:sales"))
     _refused(client.post("/v1/namespace/sales$lane/create", json={"properties": {"rask.tier": "silver"}}, headers=AUTH), 15)
@@ -137,7 +139,9 @@ def test_a_declaration_names_a_tier_its_ancestors_agree_with(real_ns_client: Tes
     an ExistOk naming a tier the kept namespace does not have is NamespaceAlreadyExists (2)."""
     client = real_ns_client
     _act_as(client, "alice")
-    _refused(client.post(f"/v1/warehouses/{WAREHOUSE}/namespaces", json={"namespace": "sales", "properties": {"rask.tier": "platinum"}}, headers=AUTH), 13)
+    _refused(
+        client.post(f"/management/v1/warehouses/{WAREHOUSE}/namespaces", json={"namespace": "sales", "properties": {"rask.tier": "platinum"}}, headers=AUTH), 13
+    )
     assert _top_level(client, "sales", {"rask.tier": "silver"}) == 200
     grants.grant("alice", ("can_create_namespace", "namespace:sales"))
 

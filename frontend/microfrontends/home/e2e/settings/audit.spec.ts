@@ -70,7 +70,7 @@ test.beforeEach(async ({ context, page }, testInfo) => {
 	// The estate-admin identity the `/settings` layout door reads. SEEDED on the mock catalog rather
 	// than page.route'd: this zone's layout calls `fetchMe` against CATALOG_API directly, so there is no
 	// browser hop to intercept.
-	await seedFor(page, token, { 'GET /v1/me': ME_ADMIN });
+	await seedFor(page, token, { 'GET /management/v1/me': ME_ADMIN });
 	await page.request.post(`${MOCK_OBS}/__mock/seed`, {
 		data: { bearer: token, routes: { [SQL_KEY]: sqlResponse(EVENTS) } },
 	});

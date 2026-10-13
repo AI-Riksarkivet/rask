@@ -18,7 +18,7 @@ of `warehouse:acme-wh#owner` and be unable to say who granted any of them.
 rask records provenance at the door, so **no timestamp correlation against the OpenFGA changelog is
 needed** — the audit row carries all four coordinates of the grant, and a review joins on those.
 
-`POST /v1/access/{type}/{id}/grant` (`catalog/api/v1/endpoints/access.py`) emits:
+`POST /management/v1/{type}/{id}/access/grant` (`catalog/api/v1/endpoints/access.py`) emits:
 
 | audit field | meaning |
 | --- | --- |

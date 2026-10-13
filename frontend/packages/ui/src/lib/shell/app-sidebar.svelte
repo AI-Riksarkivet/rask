@@ -21,7 +21,7 @@
 		pathname?: string;
 		zoneNav?: ZoneNavConfig | null;
 		project?: Project;
-		/** The caller's project memberships (/v1/me) — the switcher's dropdown list. */
+		/** The caller's project memberships (/management/v1/me) — the switcher's dropdown list. */
 		projects?: MeProject[];
 		footer?: Snippet;
 		/** Zone-owned rail content rendered UNDER the zone nav — e.g. the workbench's saved-views

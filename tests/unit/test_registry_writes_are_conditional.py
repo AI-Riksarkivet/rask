@@ -7,7 +7,7 @@ race: a deactivated warehouse is a quarantined one, and it could be reactivated 
 call, no authorization check for reactivation, and no audit signal.
 
     t0  a GitOps re-POST of `acme-wh` reads the record            status=active
-    t1  an operator POSTs /v1/warehouses/acme-wh/deactivate       status=deactivated
+    t1  an operator POSTs /management/v1/warehouses/acme-wh/deactivate       status=deactivated
     t2  the re-POST's put lands, carrying what it read at t0      status=active
 
 Nobody in that sequence made a wrong decision. The re-POST is stale in a field it never meant to
@@ -157,7 +157,7 @@ def _seed_project(control_root: str, **overrides: str) -> dict[str, str]:
 def test_a_protection_arm_that_lands_mid_recreate_is_not_reverted(control_root: str, monkeypatch: pytest.MonkeyPatch) -> None:
     """THE ACCEPTANCE CRITERION for F1(c). Final `protected` MUST be "true".
 
-    `POST /v1/projects` is idempotent: a re-POST carries `created_at`/`created_by`/`protected` forward
+    `POST /management/v1/projects` is idempotent: a re-POST carries `created_at`/`created_by`/`protected` forward
     from a read taken earlier in the handler, then wrote the whole record back unconditionally. So an
     admin arming deletion protection in that window was silently disarmed — no `/protection` call, no
     audit signal, and `protected` is precisely the flag the delete door's `force` rule turns on.
@@ -207,7 +207,7 @@ def test_primary_arms_through_the_write_and_survives_a_plain_re_post(control_roo
     `serving` and `protected` are honoured as explicit REQUESTS inside the merge; every other field
     comes from `live` or from `_CALLER_OWNED`. A field that is neither is silently dropped — which is
     what happened on 2026-09-06: the endpoint set `record["primary"]`, the write returned 200, and the
-    flag was not there. Measured against the deployed catalog, `POST /v1/warehouses {primary: true}`
+    flag was not there. Measured against the deployed catalog, `POST /management/v1/warehouses {primary: true}`
     answered 200 with `primary=None` on the read-back.
 
     Losing this one does not disable a safety catch, it makes the project UNROUTABLE: `_resolve_root`

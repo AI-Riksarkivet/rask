@@ -1,4 +1,4 @@
-"""P6 — the tenant membership API (``/v1/projects/{id}/members``).
+"""P6 — the tenant membership API (``/management/v1/projects/{id}/members``).
 
 The gap: ``project#admin``/``member`` were writable only by ``seed_project_admin`` at create time and
 by the estate-gated raw tuple editor, so a project admin could not invite anyone into their own

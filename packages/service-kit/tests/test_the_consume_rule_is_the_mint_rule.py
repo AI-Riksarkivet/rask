@@ -10,7 +10,7 @@ namespace qualifier. Anything the loose rule admitted and the strict one refuses
 would accept and the control plane could never have issued — an id with no project behind it.
 
 MEASURED BEFORE TIGHTENING, because a shape rule is only safe to narrow against the ids that exist:
-all 93 projects registered on the deployed estate (2026-09-19, ``GET /v1/projects``) already satisfy
+all 93 projects registered on the deployed estate (2026-09-19, ``GET /management/v1/projects``) already satisfy
 the mint rule, and none of them exercises the difference. The row was parked on an owner decision to
 "adopt or revoke the pre-registry ghost ids"; the measurement is what dissolved it — there are none.
 

@@ -1,4 +1,4 @@
-"""Unit tests for the control-plane poll endpoint (``GET /v1/events``, endpoints/events.py).
+"""Unit tests for the control-plane poll endpoint (``GET /management/v1/events``, endpoints/events.py).
 
 Drives the handler directly (no TestClient) with a fake buffer + settings, mirroring the repo's direct-call
 style. Pins the two design-review fixes: #10 (``event_stream_opened`` is audited ONLY on a meaningful poll —

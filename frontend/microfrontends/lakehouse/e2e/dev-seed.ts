@@ -13,7 +13,7 @@
  * risk to the suite: nothing reads it but the launcher.
  *
  * SHAPES ARE HARVESTED, NOT INVENTED. Every body below is the shape a spec already seeds for the same
- * route (`'GET /v1/table': { tables: [...] }` from `tables-preview-action.spec.ts`, the `/v1/me`
+ * route (`'GET /v1/table': { tables: [...] }` from `tables-preview-action.spec.ts`, the `/management/v1/me`
  * contract from `admin/session.ts`), so this file cannot drift into describing an API the estate does
  * not serve. When a route's real shape changes, its spec fails first — that is the intended order.
  *
@@ -23,9 +23,9 @@
 
 /** Seeds for the CATALOG mock (`CATALOG_API`).
  *
- *  NO `/v1/me` HERE, deliberately. The catalog mock owns a dedicated `/v1/me` handler that resolves the
+ *  NO `/management/v1/me` HERE, deliberately. The catalog mock owns a dedicated `/management/v1/me` handler that resolves the
  *  identity from the BEARER (`identityOf`, prefix-matched) and 401s an unknown one — so a seeded
- *  `GET /v1/me` is shadowed and never read. The dev loop gets its identity by handing the mock
+ *  `GET /management/v1/me` is shadowed and never read. The dev loop gets its identity by handing the mock
  *  `MOCK_DEV_BEARER=e2e-token:admin` instead, which resolves to that mock's own estate-admin identity.
  *  A seed here would look authoritative and do nothing, which is worse than its absence. */
 export const CATALOG_SEED: Record<string, unknown> = {
@@ -45,7 +45,7 @@ export const CATALOG_SEED: Record<string, unknown> = {
 	// returns and two the schema demands were missing — so valibot answered 502 "catalog contract
 	// drift" and `make dev-zone ZONE=lakehouse` rendered the warehouses page broken. A seed is a
 	// CONTRACT claim; getting it wrong is not a cosmetic fixture problem.
-	'GET /v1/warehouses': [
+	'GET /management/v1/warehouses': [
 		{
 			id: 'acme-wh',
 			project: 'acme',
@@ -55,7 +55,7 @@ export const CATALOG_SEED: Record<string, unknown> = {
 			status: 'active',
 		},
 	],
-	// NO `GET /v1/stores/tiers` either: the mock DERIVES it from STORES and serves the real grouped
+	// NO `GET /management/v1/stores/tiers` either: the mock DERIVES it from STORES and serves the real grouped
 	// shape (`{role: Store[]}`, admin/mock-catalog.ts:187-191). A flat `{tiers: [...]}` seed would
 	// shadow the correct shape with one the catalog never sends.
 };

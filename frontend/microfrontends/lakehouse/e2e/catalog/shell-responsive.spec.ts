@@ -45,7 +45,7 @@ const COLLAPSE_AT = 1024;
 test.beforeEach(async ({ page }) => {
 	await page.route('**/capi/**', (route) => {
 		const path = new URL(route.request().url()).pathname.replace(/^.*\/capi/, '');
-		if (path === '/v1/me') return json(route, ME_ADMIN);
+		if (path === '/management/v1/me') return json(route, ME_ADMIN);
 		return json(route, { detail: 'unstubbed' }, 404);
 	});
 	// The registry read is a remote function now (server-side, invisible to page.route). This is the

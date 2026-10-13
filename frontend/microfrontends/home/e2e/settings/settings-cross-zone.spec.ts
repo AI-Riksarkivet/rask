@@ -69,7 +69,7 @@ test.beforeEach(async ({ context }, testInfo) => {
 });
 
 test('no settings row leaves the estate — every one is served by this app', async ({ page }) => {
-	await seed(page, { 'GET /v1/me': ME_ADMIN, 'GET /v1/projects': [] });
+	await seed(page, { 'GET /management/v1/me': ME_ADMIN, 'GET /management/v1/projects': [] });
 	await page.goto('/settings');
 	await expect(page.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible();
 
@@ -115,10 +115,10 @@ test('no settings row leaves the estate — every one is served by this app', as
 
 test('the Users & roles row is a SOFT navigation — the document survives it', async ({ page }) => {
 	await seed(page, {
-		'GET /v1/me': ME_ADMIN,
-		'GET /v1/projects': [],
-		'GET /v1/access/model': { dsl: 'type user\n', authorization_model_id: '01MODEL' },
-		'GET /v1/access/tuples': { tuples: [], continuation: null },
+		'GET /management/v1/me': ME_ADMIN,
+		'GET /management/v1/projects': [],
+		'GET /management/v1/access/model': { dsl: 'type user\n', authorization_model_id: '01MODEL' },
+		'GET /management/v1/access/tuples': { tuples: [], continuation: null },
 		'GET /v1/table': { tables: [] },
 	});
 	await page.goto('/settings');
@@ -161,7 +161,7 @@ test('the Users & roles row is a SOFT navigation — the document survives it', 
 });
 
 test('the unwired rows read as decisions, not as broken controls', async ({ page }) => {
-	await seed(page, { 'GET /v1/me': ME_ADMIN, 'GET /v1/projects': [] });
+	await seed(page, { 'GET /management/v1/me': ME_ADMIN, 'GET /management/v1/projects': [] });
 	await page.goto('/settings');
 
 	// Notifications LEFT this list when its page landed: it is a real route now (`/settings/notifications`,

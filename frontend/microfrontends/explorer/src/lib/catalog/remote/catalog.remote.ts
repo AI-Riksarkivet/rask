@@ -7,7 +7,7 @@ import { CATALOG_API, catalogJSON } from '$lib/server/doors';
 import type { UserStateEnvelope } from '$lib/user-state';
 
 // This zone's CATALOG plane, in the remote-function dialect (the transport ruling, area 3) — the two
-// `makeCatalogProxy` routes (`capi/v1/me`, `capi/v1/user-state/[document]`) collapse into the three
+// `makeCatalogProxy` routes (`capi/management/v1/me`, `capi/management/v1/user-state/[document]`) collapse into the three
 // named functions below. Transport only: same credential (the signed-in user's bearer and NOTHING
 // else — the catalog is OIDC-only, it has no service-token door), same upstream paths, same outcomes.
 //
@@ -45,7 +45,7 @@ const UserStateEnvelopeSchema: v.GenericSchema<unknown, UserStateEnvelope> = v.l
 });
 
 /**
- * The navbar's frozen `/v1/me` identity.
+ * The navbar's frozen `/management/v1/me` identity.
  *
  * Same degrade posture as before — `null` on ANY failure (signed out, 401, outage, timeout, contract
  * drift) — because identity is chrome: the navbar renders the base entry set and stays fail-closed on
@@ -67,7 +67,7 @@ export const fetchMeViaBff = query(async (): Promise<Me | null> => {
 export const readUserStateDoc = query(
 	DocumentArg,
 	async ({ document }): Promise<ApiResult<UserStateEnvelope>> =>
-		parsed(await catalogJSON(`/v1/user-state/${document}`), UserStateEnvelopeSchema, 'catalog'),
+		parsed(await catalogJSON(`/management/v1/user-state/${document}`), UserStateEnvelopeSchema, 'catalog'),
 );
 
 /** Save the caller's own document. A refused write is reported as such — a mirror write is not a save.
@@ -78,5 +78,5 @@ export const readUserStateDoc = query(
 export const writeUserStateDoc = command(
 	v.object({ ...DocumentArg.entries, value: v.unknown() }),
 	async ({ document, value }): Promise<ApiResult<unknown>> =>
-		catalogJSON(`/v1/user-state/${document}`, { method: 'PUT', body: JSON.stringify(value) }),
+		catalogJSON(`/management/v1/user-state/${document}`, { method: 'PUT', body: JSON.stringify(value) }),
 );

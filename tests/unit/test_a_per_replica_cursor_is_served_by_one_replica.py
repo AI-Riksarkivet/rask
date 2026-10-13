@@ -17,7 +17,7 @@ are hints and the audit trail is the durable record, so nothing is lost that can
 is wrong is that the console cannot tell a quiet estate from a replica it is not talking to.
 
 THE CALLER IS A POD, which is what makes `ClientIP` the right key here and is worth pinning because
-it is the assumption the whole fix rests on. The console's `/v1/events` poll runs in a SvelteKit
+it is the assumption the whole fix rests on. The console's `/management/v1/events` poll runs in a SvelteKit
 remote function (`feeds.remote.ts`), server-side, and the home zone reaches
 `CATALOG_API=http://<release>-catalog:<port>` — the catalog Service DIRECTLY, not through the
 gateway. So the source address the Service sees is a stable zone pod, and every other caller (stage
@@ -64,5 +64,5 @@ def test_the_catalog_service_pins_a_caller_to_one_replica() -> None:
 
     assert spec.get("sessionAffinity") == "ClientIP", (
         "the catalog Service load-balances a poll whose cursor is per-replica, so the console's "
-        f"`/v1/events` resets on every replica change: {spec.get('sessionAffinity')!r}"
+        f"`/management/v1/events` resets on every replica change: {spec.get('sessionAffinity')!r}"
     )

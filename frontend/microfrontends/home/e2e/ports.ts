@@ -16,13 +16,13 @@ export const AUTH_OFF_PORT = 5293;
 /**
  * The auth-ON dev server: the PROJECTS surface (`e2e/projects/*.spec.ts`), which only exists for a
  * signed-in caller — the estate-admin create flow, the membership gallery and one project's overview
- * all key off `/v1/me`, and `/v1/me` needs a bearer. One zone cannot be auth-ON and auth-OFF at once,
+ * all key off `/management/v1/me`, and `/management/v1/me` needs a bearer. One zone cannot be auth-ON and auth-OFF at once,
  * so this is a second dev server, exactly as the lakehouse zone runs one for its admin area.
  */
 export const AUTH_ON_PORT = 5288;
 /** The mock CATALOG standing in for every `/v1/*` read and write this zone makes SERVER-side, where
  *  `page.route` cannot reach — the projects surface AND, since #105, the platform settings pages
- *  (`/v1/access/*`, `/v1/events`). NOT a zone dev-server port. */
+ *  (`/management/v1/access/*`, `/management/v1/events`). NOT a zone dev-server port. */
 export const MOCK_CATALOG_PORT = 5287;
 /** The mock GREPTIMEDB standing in for the audit trail's `/v1/sql` reads (`$lib/server/audit-core.ts`
  *  runs on the zone server). Arrived with `/settings/audit` in #105; 5286 is the next port BELOW this

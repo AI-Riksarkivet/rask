@@ -1,6 +1,6 @@
 """A warehouse cascade delete revokes the tuples of the TABLES it destroys, not only the namespace's.
 
-[[LH-148]]. `DELETE /v1/warehouses/{id}?cascade=true` drops each bound namespace through the NATIVE
+[[LH-148]]. `DELETE /management/v1/warehouses/{id}?cascade=true` drops each bound namespace through the NATIVE
 `drop_namespace`, which destroys its child tables inside one call — and then revoked
 `namespace:<id>` and nothing else. Every table under it kept its FGA tuples while its dataset was
 gone.

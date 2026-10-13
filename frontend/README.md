@@ -44,7 +44,7 @@ frontend/
                     #   missing from the exports map are reachable at last (that gap is what kept the
                     #   second package alive).
     api/            # @rask/api — the cross-cutting seam, by subpath:
-                    #     .                  gateway rewrite · valibot parse · the frozen /v1/me contract
+                    #     .                  gateway rewrite · valibot parse · the frozen /management/v1/me contract
                     #     /client            the browser-side BFF client, bound per zone in $lib/http
                     #     /lineage           lineage domain types + the typed lineage-plane client
                     #     /generated/*       the OpenAPI output (bun run gen:types) — never hand-edited

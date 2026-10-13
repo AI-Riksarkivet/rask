@@ -34,9 +34,9 @@ export type AccessKind = 'table' | 'namespace';
 export type PermissionKind = AccessKind | 'warehouse' | 'project';
 
 /** kind -> URL segment. NOT the identity function, and that is the whole reason this exists: the
- * catalog mounts the warehouse access router at `/v1/warehouse` (SINGULAR) and the project one at
- * `/v1/projects` (PLURAL, matching the projects module's own prefix). Deriving the path from the
- * kind directly yields `/v1/project/...`, which 404s — a failure that would read as "you have no
+ * catalog mounts the warehouse access router at `/management/v1/warehouse` (SINGULAR) and the project one at
+ * `/management/v1/projects` (PLURAL, matching the projects module's own prefix). Deriving the path from the
+ * kind directly yields `/management/v1/project/...`, which 404s — a failure that would read as "you have no
  * permissions here" rather than as a wrong URL, i.e. it would render every action disabled. */
 export const PERMISSION_SEGMENT: Record<PermissionKind, string> = {
 	table: 'table',

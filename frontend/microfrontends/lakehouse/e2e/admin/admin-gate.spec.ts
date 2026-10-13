@@ -23,7 +23,7 @@ const openPanel = async (page: Page, name: string) => {
 // The admin area's estate-admin door — now TWO doors, and this pins both.
 //
 //  1. admin/+layout.server.ts throws 403 before a single admin component is rendered or sent. It reads
-//     /v1/me from the catalog with the session bearer, so it is driven here by WHICH TOKEN signIn mints
+//     /management/v1/me from the catalog with the session bearer, so it is driven here by WHICH TOKEN signIn mints
 //     (page.route cannot reach a server-side fetch — that is the point of it being server-side).
 //  2. the root +layout.svelte still refuses to render admin content client-side, driven by mockMe.
 //
@@ -142,10 +142,10 @@ test('an unresolvable identity (catalog outage) fails CLOSED, never open', async
 	context,
 	page,
 }) => {
-	// Both doors see the outage: the server's /v1/me 502s (TOKEN.down) and the browser's does too.
+	// Both doors see the outage: the server's /management/v1/me 502s (TOKEN.down) and the browser's does too.
 	// fetchMe returns null for ANY failure, and null is a denial — never a default-open.
 	await signIn(context, { token: TOKEN.down });
-	await page.route('**/capi/v1/me', (route) =>
+	await page.route('**/capi/management/v1/me', (route) =>
 		route.fulfill({ status: 502, contentType: 'application/json', body: '{"detail":"down"}' }),
 	);
 	await page.goto('/lakehouse/admin/dlq');

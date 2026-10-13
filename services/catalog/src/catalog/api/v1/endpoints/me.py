@@ -1,25 +1,25 @@
-"""``GET /v1/me`` — the signed-in caller's self-describe: verified identity claims + effective standing.
+"""``GET /management/v1/me`` — the signed-in caller's self-describe: verified identity claims + effective standing.
 
 The console shell needs one cheap call to render *who am I and what am I* — the verified subject, the
 display claims, whether the caller is an estate admin, and which tenants they belong to (and at what
 role). Everything here is DERIVED from the verified token + OpenFGA; nothing is caller-supplied, and the
-response never discloses anything about *other* principals (unlike ``/v1/projects``, which is
+response never discloses anything about *other* principals (unlike ``/management/v1/projects``, which is
 estate-observer gated for exactly that reason — this route needs no FGA gate because its data scope is
 the caller themself).
 
 **Authenticated-only, no authorization gate.** Any VERIFIED token gets a 200; anonymous is 401 (there is
-no self to describe). ``/v1/me`` matches no resource prefix in ``fga_deps.authorize``, so the router-wide
+no self to describe). ``/management/v1/me`` matches no resource prefix in ``fga_deps.authorize``, so the router-wide
 gate contributes only its 401/503 pre-path checks when FGA is on — the 401 floor is enforced here
 explicitly so it also holds with FGA off.
 
 **Display-only FGA lookups, degrading — never a 5xx.** ``estate_admin`` is ``can_observe_events`` on the
 fixed root object (``settings.fga_root_object``) — the same estate-OBSERVER action that gates
-``/v1/events`` + ``/v1/projects``, so the shell can decide whether those surfaces are even reachable.
+``/management/v1/events`` + ``/management/v1/projects``, so the shell can decide whether those surfaces are even reachable.
 ``projects`` comes from the #51 ``fga.list_objects`` wrapper on the ``project`` type — ``can_administer``
 first, then ``member`` (the model folds admins into members, so the admin-first pass wins the dedupe).
 All lookups share one 2s wall-clock budget and each degrades on its own outage/expiry: an OpenFGA
 brownout costs display fidelity, never the whole self-describe. None of them are audited — the #41 trail
-records authorization *decisions* (allow/deny gates), and these gate nothing (the ``/v1/projects``
+records authorization *decisions* (allow/deny gates), and these gate nothing (the ``/management/v1/projects``
 ``_admins_for`` precedent). FGA off → ``estate_admin=true``, ``projects=[]`` (dev parity: every
 ``require_*`` gate is a no-op there, so the caller genuinely can do everything).
 """
@@ -42,10 +42,10 @@ from service_kit.governed import fga
 
 log = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/v1/me", tags=["me"])
+router = APIRouter(prefix="/management/v1/me", tags=["me"])
 
 # ONE wall-clock budget for all the display-only FGA lookups (estate check + the two project lists,
-# sequential). Same rationale as /v1/projects' _ADMINS_TIMEOUT_SECONDS: the BFF gives the whole request
+# sequential). Same rationale as /management/v1/projects' _ADMINS_TIMEOUT_SECONDS: the BFF gives the whole request
 # ~8s, and the wrapper's default bounded-retry ladder alone can exceed it — so each call runs a single
 # attempt (retry_attempts=1) under the shared deadline and degrades on expiry.
 _LOOKUP_BUDGET_SECONDS = 2.0
@@ -62,7 +62,7 @@ async def _estate_admin(client: OpenFgaClient, settings: Settings, sub: str, dea
 
     Display-only (gates nothing here), so it is not audited and degrades to ``False`` on an OpenFGA
     outage or budget expiry — fail-safe: a broken authz layer must never paint admin surfaces onto the
-    shell (the real gates on /v1/events//v1/projects still fail closed on their own).
+    shell (the real gates on /management/v1/events//management/v1/projects still fail closed on their own).
     """
     try:
         async with asyncio.timeout_at(deadline):

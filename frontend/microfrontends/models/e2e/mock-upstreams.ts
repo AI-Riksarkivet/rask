@@ -2,7 +2,7 @@
 //
 // Three env vars point here (playwright.config.ts) because their paths never collide:
 //
-//   CATALOG_API   → /v1/model, /v1/model/<m>, /v1/model/<m>/promote   (models.remote.ts)
+//   CATALOG_API   → /management/v1/model, /management/v1/model/<m>, /management/v1/model/<m>/promote   (models.remote.ts)
 //   GREPTIME_API  → /v1/prometheus/api/v1/query[_range]               (experiments.remote.ts)
 //   LINEAGE_API   → /events                                            (feeds.remote.ts — the shell's bell)
 //

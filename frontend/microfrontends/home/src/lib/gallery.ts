@@ -7,7 +7,7 @@ import { parse, type Me } from '@rask/api';
 // hierarchy — project › warehouse › namespace › table — so the estate's list of projects belongs to
 // the main menu, never inside one project-scoped zone's catalog).
 
-// The /v1/projects rows the estate-admin gallery reads (unknown keys stripped — only what the
+// The /management/v1/projects rows the estate-admin gallery reads (unknown keys stripped — only what the
 // cards render is parsed).
 const EstateProjectsSchema = v.array(
 	v.object({
@@ -41,8 +41,8 @@ const subjectOf = (me: Me | null): string =>
 	me === null ? '' : me.sub.includes(':') ? me.sub : `user:${me.sub}`;
 
 /** The signed-in landing = the caller's project gallery. Memberships come straight from `me`
- *  (the frozen /v1/me contract, resolved in the layout); an estate admin instead sees ALL tenants
- *  via the /capi/v1/projects pass-through (estate-observer gated upstream), annotated with their
+ *  (the frozen /management/v1/me contract, resolved in the layout); an estate admin instead sees ALL tenants
+ *  via the /capi/management/v1/projects pass-through (estate-observer gated upstream), annotated with their
  *  own role where they hold one. Degrade, never 500: a failed estate listing falls back to the
  *  membership list. */
 export async function loadGallery(event: {
@@ -70,7 +70,7 @@ export async function loadGallery(event: {
 
 	if (me.estate_admin) {
 		try {
-			const res = await event.fetch('/capi/v1/projects');
+			const res = await event.fetch('/capi/management/v1/projects');
 			if (res.ok) {
 				const roleOf = new Map(me.projects.map((p) => [p.project, p.role]));
 				const listed = parse(EstateProjectsSchema, await res.json()).map((p): GalleryProject => ({

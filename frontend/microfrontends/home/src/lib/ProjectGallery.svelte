@@ -143,7 +143,7 @@
 							{/each}
 						</div>
 					{/if}
-					<!-- Estate-admin only (the /v1/me gate), and SHOWN disabled to everyone else (#143). The
+					<!-- Estate-admin only (the /management/v1/me gate), and SHOWN disabled to everyone else (#143). The
 					     create MINTS a project by provisioning its first warehouse; the gallery reflects it via
 					     the invalidate `oncreated` triggers. Hiding the button taught a non-admin that projects
 					     are not creatable in this product, when the truth is that THEY cannot create one — and

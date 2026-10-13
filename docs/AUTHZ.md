@@ -1,6 +1,6 @@
 # Who can see and do what, per zone
 
-The estate has **two** identity facts, both from the frozen `GET /v1/me` contract
+The estate has **two** identity facts, both from the frozen `GET /management/v1/me` contract
 (`frontend/packages/api/src/me.ts`), both derived from FGA by the catalog:
 
 | Fact                         | Type                       | Means                                                                 |
@@ -21,7 +21,7 @@ decides authorization — it decides **disclosure**.
    `403` on the SERVER for a non-`estate_admin`, before any admin component is rendered or sent. The
    root `+layout.svelte` repeats the check client-side so a soft navigation cannot outrun it.
    Fail-closed on every ambiguity: no token, a 401/403, a timeout, an unreachable catalog, or a
-   `/v1/me` response that drifted from the contract all land in the same branch as "not an admin".
+   `/management/v1/me` response that drifted from the contract all land in the same branch as "not an admin".
 3. **The backend** — every read and write goes through the zone's BFF to the catalog or the lineage
    plane, which run the real FGA check against the forwarded user bearer. **This is the only layer
    that cannot be bypassed**, and it is the one that actually authorizes.
@@ -61,7 +61,7 @@ The BFF is a bearer-forwarding proxy, not a policy engine. Its own rules:
 - **The data plane's destructive controls are not hidden by role.** Drop, deregister, grant and revoke
   render for any signed-in user; the catalog's owner-tier gate (`can_drop`) refuses the call. That is
   authorization-correct and disclosure-loose: the button tells you the operation exists. Hiding it
-  would need a per-object capability in `/v1/me`, which the contract does not carry — adding one is a
+  would need a per-object capability in `/management/v1/me`, which the contract does not carry — adding one is a
   backend change, not a frontend one.
 - **`projects[].role` drives display only.** The gallery and the projects list label a membership
   `admin` or `member`; nothing in the UI gates on it. Per-project authorization is FGA's, per request.
@@ -72,5 +72,5 @@ The BFF is a bearer-forwarding proxy, not a policy engine. Its own rules:
 
 `microfrontends/lakehouse/e2e/admin/admin-gate.spec.ts` — a member is refused on every admin
 route by the server door, an admin passes, a catalog outage fails closed, and a browser that lies about
-its own identity (a member's session plus a mocked `/v1/me` claiming `estate_admin`) still gets `403`,
+its own identity (a member's session plus a mocked `/management/v1/me` claiming `estate_admin`) still gets `403`,
 because the door that decides never asked the browser.

@@ -1,6 +1,6 @@
-// @rask/api/me — the frozen `GET /v1/me` identity contract + the shared BFF-side fetch helper.
+// @rask/api/me — the frozen `GET /management/v1/me` identity contract + the shared BFF-side fetch helper.
 //
-// The catalog serves `/v1/me` for any VERIFIED bearer: `{ sub, name, email, estate_admin, projects }`
+// The catalog serves `/management/v1/me` for any VERIFIED bearer: `{ sub, name, email, estate_admin, projects }`
 // (estate_admin = can_observe_events on the FGA root object; projects via the #51 list wrappers, each
 // relation degrading to [] on an FGA outage). Anon is a 401, and with FGA off the backend answers
 // `estate_admin: true, projects: []` (dev parity). Both sides code against THIS shape — no drift.
@@ -10,13 +10,13 @@
 // where the sealed session's access token lives.
 import * as v from 'valibot';
 
-/** One project membership row from `/v1/me` — the tenant and the caller's role in it. */
+/** One project membership row from `/management/v1/me` — the tenant and the caller's role in it. */
 export const MeProjectSchema = v.object({
 	project: v.string(),
 	role: v.picklist(['admin', 'member']),
 });
 
-/** The frozen `/v1/me` response. Parsed ONCE at the fetch boundary (parse-don't-validate). */
+/** The frozen `/management/v1/me` response. Parsed ONCE at the fetch boundary (parse-don't-validate). */
 export const MeSchema = v.object({
 	sub: v.string(),
 	name: v.nullable(v.string()),
@@ -32,7 +32,7 @@ export type Me = v.InferOutput<typeof MeSchema>;
 const ME_TIMEOUT_MS = 5000;
 
 /**
- * Fetch the caller's identity from `GET <catalogUrl>/v1/me`, forwarding the session bearer.
+ * Fetch the caller's identity from `GET <catalogUrl>/management/v1/me`, forwarding the session bearer.
  *
  * BFF-side (call it from a zone's `+layout.server.ts` with `locals.session?.accessToken`): resolves to
  * the parsed `Me`, or `null` on ANY failure — no token, a 401/403, a network error, a timeout
@@ -49,7 +49,7 @@ export async function fetchMe(opts: {
 	const { catalogUrl, accessToken, fetchFn = fetch, timeoutMs = ME_TIMEOUT_MS } = opts;
 	if (!accessToken) return null;
 	try {
-		const res = await fetchFn(`${catalogUrl.replace(/\/$/, '')}/v1/me`, {
+		const res = await fetchFn(`${catalogUrl.replace(/\/$/, '')}/management/v1/me`, {
 			headers: { authorization: `Bearer ${accessToken}` },
 			signal: AbortSignal.timeout(timeoutMs),
 		});

@@ -5,7 +5,7 @@ a consumer depends on, and how far a row count may move before a promotion waits
 a record like every other governed artefact, so it can be enumerated, reviewed and gated on. The catalog's
 own promotion hold (ADR 0155, LH-466) is what reads it.
 
-Admin-gated on ``project:<id>#can_administer``, checked EXPLICITLY: ``/v1/project`` is not a
+Admin-gated on ``project:<id>#can_administer``, checked EXPLICITLY: ``/management/v1/project`` is not a
 router-guarded resource prefix, and ``project`` defines no reader-tier relation, so describe gates at
 the admin tier too rather than checking a phantom relation (which 400s -> fail-closed 503 for everyone).
 The bar is also right on its own terms: relaxing a review band decides whether a human sees a promotion
@@ -37,7 +37,7 @@ from service_kit.lakehouse.naming import CONTROL_ID_RE
 
 log = logging.getLogger(__name__)
 
-project_router = APIRouter(prefix="/v1/project", tags=["gate"])
+project_router = APIRouter(prefix="/management/v1/project", tags=["gate"])
 
 
 def _validated_project(id: str) -> str:

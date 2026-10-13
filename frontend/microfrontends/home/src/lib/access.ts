@@ -1,13 +1,13 @@
 import * as v from 'valibot';
 
 // Wire CONTRACTS for the FGA workbench (`/settings/access`) — the frozen shapes of the catalog's
-// estate-admin-gated /v1/access API. The transport lives in `remote/access.remote.ts` (the zone's
+// estate-admin-gated /management/v1/access API. The transport lives in `remote/access.remote.ts` (the zone's
 // remote-function dialect: the calls run on the zone server with the session bearer and parse THESE
 // schemas at that boundary). Hand-written against the contract because the catalog OpenAPI dump has
 // not yet caught up; swap to the generated types once `bun run gen:types:catalog` carries them.
 //
 // `TupleConditionSchema`/`TupleSchema` are also the project-creation flow's write contract — the
-// initial-admin grant goes through the SAME door (`POST /v1/access/tuples`) the workbench writes with.
+// initial-admin grant goes through the SAME door (`POST /management/v1/access/tuples`) the workbench writes with.
 // One set of shapes for one door, which is why the workbench's contracts landed here rather than
 // beside it: this file was already half of them.
 
@@ -47,7 +47,7 @@ export const AccessModelSchema = v.object({
 });
 export type AccessModel = v.InferOutput<typeof AccessModelSchema>;
 
-/** The type names declared by the model DSL's `type <name>` lines. GET /v1/access/tuples rejects a
+/** The type names declared by the model DSL's `type <name>` lines. GET /management/v1/access/tuples rejects a
  * bare `user` filter by design (an OpenFGA Read needs an object type), so user-scoped readers fan
  * out one {user, objectType} request per model type — bounded by the model itself. */
 export const parseModelTypes = (dsl: string): string[] => [
@@ -65,7 +65,7 @@ export const CheckVerdictSchema = v.object({
 });
 export type CheckVerdict = v.InferOutput<typeof CheckVerdictSchema>;
 
-// ── the derivation surfaces (POST /v1/access/{list-objects,list-users,expand}) ───────────────────────
+// ── the derivation surfaces (POST /management/v1/access/{list-objects,list-users,expand}) ───────────────────────
 //
 // The three questions a tuple table structurally cannot answer. Read needs an object type per call and
 // returns only STORED tuples, so "what can alice reach" used to mean one audited read per model type —

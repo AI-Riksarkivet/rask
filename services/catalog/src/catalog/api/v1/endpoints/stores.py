@@ -12,7 +12,7 @@ endpoint module to share a fact would be a layering violation.
 
 **Two sources, one registry.** DECLARED stores come from deployment config (``RASK_STORES``, or the
 built-in defaults) and cannot be edited at runtime — they are what the chart shipped. ATTACHED stores
-are added through ``POST /v1/stores`` and persist in the estate's state document. Both are served as
+are added through ``POST /management/v1/stores`` and persist in the estate's state document. Both are served as
 one list, because a caller browsing buckets does not care which mechanism registered one.
 """
 
@@ -41,7 +41,7 @@ from service_kit.schemas.storage import (
 )
 
 
-router = APIRouter(prefix="/v1", tags=["stores"])
+router = APIRouter(prefix="/management/v1", tags=["stores"])
 
 #: Compiled once — validating the persisted document is per-request work; building the validator is not.
 _ATTACHED = TypeAdapter(list[Store])
@@ -98,7 +98,7 @@ async def list_stores(
 
     The router-level ``authorize`` cannot cover this: it authorizes ``{id}`` routes under
     ``_RESOURCES`` and lets id-less collection routes through on authentication alone, which is right
-    for a listing the endpoint then FILTERS (``/v1/warehouses``, ``/v1/model``) and wrong for one it
+    for a listing the endpoint then FILTERS (``/management/v1/warehouses``, ``/management/v1/model``) and wrong for one it
     does not. This registry is estate-wide config with no per-item FGA object to filter on, so the
     honest gate is the estate rung rather than a per-store one.
     """
@@ -122,7 +122,7 @@ async def attach_store(
 
     Estate-admin gated on ``can_observe_events`` against the root object: attaching names a host and a
     bucket the whole estate will then see, which is estate-wide disclosure and so takes the estate-wide
-    privilege — the same gate ``/v1/projects`` and ``/v1/events`` use.
+    privilege — the same gate ``/management/v1/projects`` and ``/management/v1/events`` use.
 
     Names are unique across BOTH sources, and a declared store cannot be shadowed. The object browser
     resolves a store by NAME, so a duplicate would make which bucket you get depend on list order — the

@@ -51,12 +51,12 @@ const PromoteResponseSchema = v.object({
 
 /** Every registered model with its candidate (latest) and blessed versions. */
 export const fetchModels = query(async (): Promise<ApiResult<ModelsList>> =>
-	parsed(await catalogJSON('/v1/model'), ModelsListSchema),
+	parsed(await catalogJSON('/management/v1/model'), ModelsListSchema),
 );
 
 /** One model's detail: the candidate-vs-blessed metrics and its artifact listing. */
 export const fetchModel = query(v.string(), async (model): Promise<ApiResult<ModelDescribe>> =>
-	parsed(await catalogJSON(`/v1/model/${enc(model)}`), ModelDescribeSchema),
+	parsed(await catalogJSON(`/management/v1/model/${enc(model)}`), ModelDescribeSchema),
 );
 
 /** Bless `version` of `model` (candidate→blessed). Validator-gated by the catalog (can_promote)
@@ -66,7 +66,7 @@ export const promoteModel = command(
 	v.object({ model: v.string(), version: v.number() }),
 	async ({ model, version }): Promise<ApiResult<PromoteResponse>> => {
 		const result = parsed(
-			await catalogJSON(`/v1/model/${enc(model)}/promote`, {
+			await catalogJSON(`/management/v1/model/${enc(model)}/promote`, {
 				method: 'POST',
 				body: JSON.stringify({ version }),
 			}),

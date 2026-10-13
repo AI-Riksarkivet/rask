@@ -155,7 +155,7 @@ spec:
               add_if_missing DLQ "dlq.>"
               {{- if .Values.catalog.controlEmit }}
               # Control-plane change-events (grants/warehouses/policies/tables) broadcast to EVERY catalog
-              # replica's ring buffer (GET /v1/events). Its own stream so a parking-free broadcast publish
+              # replica's ring buffer (GET /management/v1/events). Its own stream so a parking-free broadcast publish
               # can't fail for want of a stream. The CATALOG's own consumer is ephemeral (no durableName)
               # and deliverPolicy=new, so retention isn't load-bearing for it — a booting replica skips the
               # backlog rather than replaying it into memory.

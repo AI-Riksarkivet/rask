@@ -76,7 +76,7 @@ export const fetchTuples = query(
 		if (filter.pageSize) q.set('page_size', String(filter.pageSize));
 		if (filter.continuation) q.set('continuation', filter.continuation);
 		const qs = q.toString();
-		return parsed(await catalogJSON(`/v1/access/tuples${qs ? `?${qs}` : ''}`), TuplesPageSchema);
+		return parsed(await catalogJSON(`/management/v1/access/tuples${qs ? `?${qs}` : ''}`), TuplesPageSchema);
 	},
 );
 
@@ -88,7 +88,7 @@ export const fetchStore = query(
 		for (let page = 0; page < MAX_GRAPH_PAGES; page++) {
 			const q = new URLSearchParams({ page_size: '100' });
 			if (continuation) q.set('continuation', continuation);
-			const result = parsed(await catalogJSON(`/v1/access/tuples?${q}`), TuplesPageSchema);
+			const result = parsed(await catalogJSON(`/management/v1/access/tuples?${q}`), TuplesPageSchema);
 			if (!result.ok) return result;
 			tuples.push(...result.data.tuples);
 			continuation = result.data.continuation;
@@ -105,7 +105,7 @@ export const fetchStore = query(
  *  call site instead. */
 export const writeTuple = command(TupleInputSchema, async (tuple): Promise<ApiResult<Tuple>> => {
 	const result = parsed(
-		await catalogJSON('/v1/access/tuples', { method: 'POST', body: JSON.stringify(tuple) }),
+		await catalogJSON('/management/v1/access/tuples', { method: 'POST', body: JSON.stringify(tuple) }),
 		TupleSchema,
 	);
 	if (result.ok) void fetchStore().refresh();
@@ -115,7 +115,7 @@ export const writeTuple = command(TupleInputSchema, async (tuple): Promise<ApiRe
 /** Revoke: delete one raw tuple (the tuple IS the identity — same body as the write). */
 export const deleteTuple = command(TupleInputSchema, async (tuple): Promise<ApiResult<Tuple>> => {
 	const result = parsed(
-		await catalogJSON('/v1/access/tuples', { method: 'DELETE', body: JSON.stringify(tuple) }),
+		await catalogJSON('/management/v1/access/tuples', { method: 'DELETE', body: JSON.stringify(tuple) }),
 		TupleSchema,
 	);
 	if (result.ok) void fetchStore().refresh();
@@ -134,7 +134,7 @@ export const checkAccess = query(
 	}),
 	async ({ context, ...tuple }): Promise<ApiResult<CheckVerdict>> =>
 		parsed(
-			await catalogJSON('/v1/access/check', {
+			await catalogJSON('/management/v1/access/check', {
 				method: 'POST',
 				body: JSON.stringify(
 					context && Object.keys(context).length ? { ...tuple, context } : tuple,
@@ -146,7 +146,7 @@ export const checkAccess = query(
 
 /** The authorization model (read-only — model changes are code migrations). */
 export const fetchAccessModel = query(async (): Promise<ApiResult<AccessModel>> =>
-	parsed(await catalogJSON('/v1/access/model'), AccessModelSchema),
+	parsed(await catalogJSON('/management/v1/access/model'), AccessModelSchema),
 );
 
 /** The catalog registry (`<ns>$<table>` ids) — one-click graph seeds. */
@@ -170,7 +170,7 @@ export const listObjects = query(
 	v.object({ user: v.string(), relation: v.string(), type: v.string() }),
 	async (body): Promise<ApiResult<ListObjectsResult>> =>
 		parsed(
-			await catalogJSON('/v1/access/list-objects', { method: 'POST', body: JSON.stringify(body) }),
+			await catalogJSON('/management/v1/access/list-objects', { method: 'POST', body: JSON.stringify(body) }),
 			ListObjectsResultSchema,
 		),
 );
@@ -185,7 +185,7 @@ export const listUsers = query(
 	}),
 	async (body): Promise<ApiResult<ListUsersResult>> =>
 		parsed(
-			await catalogJSON('/v1/access/list-users', {
+			await catalogJSON('/management/v1/access/list-users', {
 				method: 'POST',
 				body: JSON.stringify({
 					object: body.object,
@@ -203,7 +203,7 @@ export const expand = query(
 	v.object({ object: v.string(), relation: v.string(), depth: v.optional(v.number()) }),
 	async (body): Promise<ApiResult<ExpandResult>> =>
 		parsed(
-			await catalogJSON('/v1/access/expand', {
+			await catalogJSON('/management/v1/access/expand', {
 				method: 'POST',
 				body: JSON.stringify({
 					object: body.object,
@@ -225,7 +225,7 @@ export const simulate = query(
 	}),
 	async (body): Promise<ApiResult<SimulateResult>> =>
 		parsed(
-			await catalogJSON('/v1/access/simulate', { method: 'POST', body: JSON.stringify(body) }),
+			await catalogJSON('/management/v1/access/simulate', { method: 'POST', body: JSON.stringify(body) }),
 			SimulateResultSchema,
 		),
 );

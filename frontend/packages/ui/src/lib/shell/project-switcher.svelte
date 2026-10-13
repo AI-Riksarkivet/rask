@@ -82,7 +82,7 @@
 	</DropdownMenu.Trigger>
 	<DropdownMenu.Content class="min-w-56 rounded-lg" align="start" side="bottom" sideOffset={4}>
 		<DropdownMenu.Label class="text-muted-foreground text-xs">Projects</DropdownMenu.Label>
-		<!-- YOUR projects, from /v1/me — the memberships every zone already holds. Picking one opens
+		<!-- YOUR projects, from /management/v1/me — the memberships every zone already holds. Picking one opens
 		     its overview (/projects/<id> stamps the active-project cookie, #103). The active one is
 		     checked. An empty list degrades to one Browse row rather than a dropdown that says
 		     "select" while offering nothing to select. -->

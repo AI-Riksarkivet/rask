@@ -2,7 +2,7 @@
 
 Proves the completion condition end to end: an admin provisions warehouse A→bucket-a and B→bucket-b
 (distinct buckets, created at RUNTIME by the API — not the Helm mc-mb loop); a namespace bound to A + a
-table created under it physically land in bucket-a and are ABSENT from bucket-b; and ``POST /v1/warehouses``
+table created under it physically land in bucket-a and are ABSENT from bucket-b; and ``POST /management/v1/warehouses``
 as a non-admin is denied 403.
 
 Skipped unless ``LANCE_E2E_CATALOG_URL`` + ``LANCE_E2E_TOKEN`` are set (the stack deployed with
@@ -76,7 +76,7 @@ def catalog() -> str:
 def test_per_warehouse_physical_isolation(catalog: str) -> None:
     wh_a, wh_b = "e2e-wh-a", "e2e-wh-b"
     for wid in (wh_a, wh_b):
-        r = requests.post(f"{catalog}/v1/warehouses", json={"id": wid, "project": PROJECT}, headers=_auth(), timeout=30)
+        r = requests.post(f"{catalog}/management/v1/warehouses", json={"id": wid, "project": PROJECT}, headers=_auth(), timeout=30)
         assert r.status_code == 200, r.text
         assert r.json()["root_uri"] == f"s3://{wid}"  # distinct physical bucket per warehouse
 
@@ -94,7 +94,7 @@ def test_per_warehouse_physical_isolation(catalog: str) -> None:
     #
     # So the 409 is READ rather than swallowed. A hijack fails loudly and names the holder.
     r = requests.post(
-        f"{catalog}/v1/warehouses/{wh_a}/namespaces",
+        f"{catalog}/management/v1/warehouses/{wh_a}/namespaces",
         json={"namespace": NS},
         headers=_auth(),
         timeout=30,

@@ -89,7 +89,7 @@ test('a reopened task SHOWS its links, and the next draft save still CARRIES the
 			},
 		},
 	});
-	await page.route('**/annotator/capi/v1/me', (route) => json(route, { detail: 'anon' }, 401));
+	await page.route('**/annotator/capi/management/v1/me', (route) => json(route, { detail: 'anon' }, 401));
 	await page.route('**/annotator/api/**', (route) => json(route, { detail: 'unstubbed' }, 404));
 	await page.route('**/annotator/api/chunk-frame/**', (route) =>
 		route.fulfill({ status: 200, contentType: 'image/png', body: PNG }),

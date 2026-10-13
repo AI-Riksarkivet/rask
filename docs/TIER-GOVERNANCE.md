@@ -47,7 +47,7 @@ default path) for the work it does, and notifications target a person from those
   (`POST /management/v1/table/{id}/publish`, `catalog/services/publication.py`) runs it and, when it passes, moves the table's
   `published` tag to that version.
 - **The model registry.** `models$<name>` are governed tables, promoted candidate → blessed on the catalog's
-  `POST /v1/model/{name}/promote`, at the validator rung.
+  `POST /management/v1/model/{name}/promote`, at the validator rung.
 
 ## What ADR 0156 adds, and where each piece is tracked
 

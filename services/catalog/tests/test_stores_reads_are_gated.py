@@ -1,6 +1,6 @@
 """Reading the estate's object stores takes the same privilege as attaching one.
 
-docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit" `catalog-api-02` (E1, HIGH) — "GET /v1/stores and /v1/stores/tiers disclose the
+docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit" `catalog-api-02` (E1, HIGH) — "GET /management/v1/stores and /management/v1/stores/tiers disclose the
 whole estate's buckets and hosts with no authorization gate, while the sibling POST calls that same
 registry estate-admin gated".
 
@@ -20,9 +20,9 @@ FILTERS, and a hole for one it does not.
 That distinction is invisible at the call site, so the second test below makes it visible: it
 enumerates every route the router guard lets through on authn alone and holds the set against an
 allowlist that says, per route, WHY authentication is sufficient. Three answers are legitimate — the
-endpoint FGA-filters its result per item (`/v1/model`, `/v1/table`), the document is keyed on the
-caller's own subject (`/v1/user-state/*`), or the endpoint gates inside a helper
-(`/v1/warehouses/{id}/activate` via `_set_warehouse_status`). `/v1/stores` had no answer.
+endpoint FGA-filters its result per item (`/management/v1/model`, `/v1/table`), the document is keyed on the
+caller's own subject (`/management/v1/user-state/*`), or the endpoint gates inside a helper
+(`/management/v1/warehouses/{id}/activate` via `_set_warehouse_status`). `/management/v1/stores` had no answer.
 """
 
 from __future__ import annotations
@@ -81,7 +81,7 @@ def decide(monkeypatch: pytest.MonkeyPatch):
     return _set
 
 
-@pytest.mark.parametrize("path", ["/v1/stores", "/v1/stores/tiers"])
+@pytest.mark.parametrize("path", ["/management/v1/stores", "/management/v1/stores/tiers"])
 def test_a_non_estate_admin_cannot_read_the_store_registry(path: str, decide) -> None:
     """The defect, at the wire: an authenticated project member enumerated every bucket and host."""
     decide(False)
@@ -89,7 +89,7 @@ def test_a_non_estate_admin_cannot_read_the_store_registry(path: str, decide) ->
     assert response.status_code == 403, f"{path} disclosed the estate's stores to a non-estate-admin ({response.status_code})"
 
 
-@pytest.mark.parametrize("path", ["/v1/stores", "/v1/stores/tiers"])
+@pytest.mark.parametrize("path", ["/management/v1/stores", "/management/v1/stores/tiers"])
 def test_an_estate_admin_still_reads_it(path: str, decide) -> None:
     """The gate must refuse the wrong caller, not the route."""
     decide(True)
@@ -97,7 +97,7 @@ def test_an_estate_admin_still_reads_it(path: str, decide) -> None:
     assert response.status_code == 200, f"{path} refused an estate admin ({response.status_code}): {response.text[:200]}"
 
 
-@pytest.mark.parametrize("path", ["/v1/stores"])
+@pytest.mark.parametrize("path", ["/management/v1/stores"])
 def test_dev_is_unchanged_when_fga_is_off(path: str) -> None:
     """`require_relation` is a no-op with FGA off and must stay one: a local run browses as before."""
     response = TestClient(_app(fga_enabled=False, allow=True, subject=None), raise_server_exceptions=False).get(path)
@@ -110,17 +110,18 @@ def test_dev_is_unchanged_when_fga_is_off(path: str) -> None:
 #: Every route `authorize` lets through on authn alone, with the reason authn IS the right gate.
 #: A new entry here is a claim someone has to justify; a new route NOT here fails the test.
 _AUTHN_IS_ENOUGH: dict[str, str] = {
-    "/v1/me": "describes the caller's OWN identity, and 401s an anonymous call itself",
-    "/v1/model": "FGA-filtered per model (can_get_metadata), like the governed table listing",
+    "/management/v1/me": "describes the caller's OWN identity, and 401s an anonymous call itself",
+    "/management/v1/model": "FGA-filtered per model (can_get_metadata), like the governed table listing",
+    "/management/v1/projects": "FGA-filtered to the caller's own projects (member), every tenant only for an estate observer",
     "/v1/table": "FGA-filtered per table (can_read_data)",
-    "/v1/warehouses": "FGA-filtered per warehouse (can_get_metadata), and reports X-Authorization-Truncated",
-    "/v1/warehouses/-/bindings": "FGA-filtered per warehouse (can_get_metadata) — a binding names another tenant's bucket",
-    "/v1/user-state/dock-layout": "keyed on the caller's own subject",
-    "/v1/user-state/dock-layout-library": "keyed on the caller's own subject",
-    "/v1/user-state/saved-views": "keyed on the caller's own subject",
-    "/v1/user-state/workflow-graph": "keyed on the caller's own subject",
-    "/v1/warehouses/{warehouse_id}/activate": "gated inside _set_warehouse_status on the warehouse's own project",
-    "/v1/warehouses/{warehouse_id}/deactivate": "gated inside _set_warehouse_status on the warehouse's own project",
+    "/management/v1/warehouses": "FGA-filtered per warehouse (can_get_metadata), and reports X-Authorization-Truncated",
+    "/management/v1/warehouses/-/bindings": "FGA-filtered per warehouse (can_get_metadata) — a binding names another tenant's bucket",
+    "/management/v1/user-state/dock-layout": "keyed on the caller's own subject",
+    "/management/v1/user-state/dock-layout-library": "keyed on the caller's own subject",
+    "/management/v1/user-state/saved-views": "keyed on the caller's own subject",
+    "/management/v1/user-state/workflow-graph": "keyed on the caller's own subject",
+    "/management/v1/warehouses/{warehouse_id}/activate": "gated inside _set_warehouse_status on the warehouse's own project",
+    "/management/v1/warehouses/{warehouse_id}/deactivate": "gated inside _set_warehouse_status on the warehouse's own project",
 }
 
 
@@ -204,7 +205,7 @@ def test_every_route_the_router_guard_waves_through_has_a_reason() -> None:
 def test_the_attach_refusal_carries_the_spec_code() -> None:
     """Witnessed RED: this exact request answered a 4-key `about:blank#serviceunavailableerror`."""
     response = TestClient(_app(fga_enabled=False, allow=True, subject=None), raise_server_exceptions=False).post(
-        "/v1/stores",
+        "/management/v1/stores",
         json={"name": "x", "bucket": "b", "role": "bronze", "description": "", "read_only": False},
     )
     assert response.status_code == 503
@@ -220,7 +221,7 @@ def test_membership_without_authz_is_a_503_in_the_spec_envelope() -> None:
     anything; `access.py` already answers 503 for the identical condition, and two doors giving two
     statuses for one condition is how a client learns the wrong lesson."""
     response = TestClient(_app(fga_enabled=False, allow=True, subject="carol"), raise_server_exceptions=False).put(
-        "/v1/projects/proj1/members",
+        "/management/v1/projects/proj1/members",
         json={"user": "user:bob", "relation": "member"},
     )
     assert response.status_code == 503, f"authz-off membership answered {response.status_code}"

@@ -10,7 +10,7 @@ other promotion tag survive any policy.
 
 The #84 PROJECT policy is the tenant-wide fallback below both: it matches by the project's warehouse
 BUCKETS (resolved from the warehouse registry at set time), so it covers every dataset in the project's
-buckets that no table/namespace record shadows. ``/v1/project`` is not a router-guarded resource prefix,
+buckets that no table/namespace record shadows. ``/management/v1/project`` is not a router-guarded resource prefix,
 so — like the #17 model routes — these endpoints gate EXPLICITLY, on ``project:<id>#can_administer``
 (the model's tenant-admin action; ``project`` defines no reader-tier relation, so describe gates there
 too rather than checking a phantom relation, which would 400 → fail-closed 503 for everyone).
@@ -69,7 +69,7 @@ table_router = APIRouter(prefix="/management/v1/table", tags=["policy"])
 namespace_router = APIRouter(prefix="/management/v1/namespace", tags=["policy"])
 project_router = APIRouter(prefix="/management/v1/project", tags=["policy"])
 # PLURAL, and deliberately not a fourth spelling: the LIST is a collection read on the control-plane
-# ``projects`` resource (``endpoints/projects.py``'s prefix), while the singular ``/v1/project`` keeps the
+# ``projects`` resource (``endpoints/projects.py``'s prefix), while the singular ``/management/v1/project`` keeps the
 # spec's ``POST /v1/<object>/{id}/<action>`` grammar for the set/describe/delete trio.
 projects_router = APIRouter(prefix="/management/v1/projects", tags=["policy"])
 

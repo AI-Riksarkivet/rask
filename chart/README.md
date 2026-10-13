@@ -84,7 +84,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | catalog.multibase.devSeed | bool | `false` | Local fixture: create each referenced base's bucket, scoped MinIO user and dev-OpenBao secret. Refused on a real deployment, without MinIO or without the dev OpenBao. |
 | catalog.serviceIdentity | string | `"service-catalog"` | The identity the catalog presents and signs its emitted lineage as (the one delegator). Empty = the catalog emits unsigned lineage. |
 | catalog.trashGraceDays | int | `7` | Days a dropped table or namespace stays undroppable before the trash purge may reclaim it (LANCE_TRASH_GRACE_DAYS). 0 destroys immediately. |
-| catalog.warehouses.enabled | bool | `true` | Per-warehouse physical multi-tenancy: POST /v1/warehouses provisions a bucket per warehouse and binds top-level namespaces to it. Unbound namespaces use `minio.bucket`. |
+| catalog.warehouses.enabled | bool | `true` | Per-warehouse physical multi-tenancy: POST /management/v1/warehouses provisions a bucket per warehouse and binds top-level namespaces to it. Unbound namespaces use `minio.bucket`. |
 | config.AWS_REGION | string | `"us-east-1"` | AWS region written to the fleet ConfigMap for S3 clients; any value works against RustFS/MinIO. |
 | config.HCP_INSECURE | string | `"true"` | Skips TLS verification for the S3 client (`storage.client` reads it as an alias of RASK_S3_INSECURE). String "true" or "false". |
 | config.RASK_API_PREFIX | string | `"/api"` | Path prefix the fleet apps mount their API under, via the shared fleet ConfigMap. |

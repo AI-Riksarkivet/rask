@@ -88,7 +88,7 @@
 		allHref: '/lakehouse/lineage/runs',
 	});
 
-	// The frozen /v1/me identity for the navbar, read through this zone's bearer-forwarding
+	// The frozen /management/v1/me identity for the navbar, read through this zone's bearer-forwarding
 	// `fetchMeViaBff` remote function (skeleton pills while in flight; null = signed out /
 	// unreachable → base entries only, fail-closed on the admin surfaces). ON MOUNT, never at init:
 	// the shell's identity is chrome, and a slow catalog must not hold the server-rendered page.

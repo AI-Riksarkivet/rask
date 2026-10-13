@@ -10,7 +10,7 @@ not be re-asserted, or swallow it and boot with the drift still there. It would 
 replica and every rollout, racing itself. A post-upgrade hook runs once, at exactly the moment the
 writer list can change, and fails visibly.
 
-WHY NOT RE-POST /v1/warehouses. A same-id create converges the record and calls `seed_warehouse`
+WHY NOT RE-POST /management/v1/warehouses. A same-id create converges the record and calls `seed_warehouse`
 unconditionally, so it *would* land the tuples — while granting the CALLER `owner` on every tenant it
 touched, re-provisioning each bucket, and re-emitting `warehouse_created`. It also needs
 `can_create_warehouse` on every project. Repair must not require becoming an owner of what you repair.

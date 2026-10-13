@@ -87,7 +87,7 @@ async function openQueue(page: Page, details = MANY): Promise<void> {
 
 test.beforeEach(async ({ page }) => {
 	await page.request.post(`${MOCK_ANNOTATOR}/__mock/reset`);
-	await page.route('**/annotator/capi/v1/me', (route) => json(route, { detail: 'anon' }, 401));
+	await page.route('**/annotator/capi/management/v1/me', (route) => json(route, { detail: 'anon' }, 401));
 	// The frame endpoint the tiles request. 404 on purpose: a tile whose image fails must still
 	// render as a tile, which is the `onerror` fallback doing its job.
 	await page.route('**/annotator/api/**', (route) => json(route, { detail: 'unstubbed' }, 404));

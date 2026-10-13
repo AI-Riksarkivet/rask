@@ -111,7 +111,7 @@
 	});
 
 	// The estate-constant top navbar: cross-zone IA + identity, identical in every MFE. `me` comes
-	// browser-side from this zone's bearer-forwarding /capi/v1/me pass-through (null = signed out /
+	// browser-side from this zone's bearer-forwarding /capi/management/v1/me pass-through (null = signed out /
 	// unreachable → base entries only, fail-closed on the admin surfaces). The annotator's own
 	// canvas shell fills the content area below.
 	// `me` arrives RESOLVED from the server layout (#107): the navbar's final entry set is in

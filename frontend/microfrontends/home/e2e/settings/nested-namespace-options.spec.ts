@@ -32,7 +32,7 @@ test.beforeEach(async ({ context, page }, testInfo) => {
 	token = `${TOKEN.admin}:${testInfo.testId}`;
 	await signIn(context, { token });
 	await seedFor(page, token, {
-		'GET /v1/me': ME_ADMIN,
+		'GET /management/v1/me': ME_ADMIN,
 		// The registry the picker is built from. Both shapes on purpose: the flat one is the case that
 		// always worked, and it must KEEP working — a fix that reads the last segment everywhere would
 		// break `db1$t` if it were wrong in the other direction.

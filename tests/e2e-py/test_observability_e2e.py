@@ -135,7 +135,7 @@ def _create_table(table_id: str, namespace: str, auth: dict[str, str]) -> None:
     # suite produced nothing".
     if WAREHOUSE:
         created = requests.post(
-            f"{CATALOG}/v1/warehouses/{WAREHOUSE}/namespaces",
+            f"{CATALOG}/management/v1/warehouses/{WAREHOUSE}/namespaces",
             json={"namespace": namespace, "adopt_existing": True},
             headers=auth,
             timeout=30,

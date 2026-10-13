@@ -232,7 +232,7 @@ describe('a remote function declared in two zones declares the same input schema
 	 *
 	 * A name collision is not drift. `createProject` exists in `explorer` and `home` and they are
 	 * genuinely different operations — explorer POSTs `/projects` on the projects API with
-	 * `{tenant, slug, title}`, home POSTs `/v1/projects` on the catalog with `{id, name}`. Keying on
+	 * `{tenant, slug, title}`, home POSTs `/management/v1/projects` on the catalog with `{id, name}`. Keying on
 	 * the name alone reported that as a violation, which would have pushed someone to "reconcile" two
 	 * schemas that were each already right.
 	 *
@@ -247,7 +247,7 @@ describe('a remote function declared in two zones declares the same input schema
 	 * The search used to be `body.slice(0, 600)` over the RAW source, and both halves of that were
 	 * wrong in the same direction — quietly, and on the one function the file exists for. 600 chars
 	 * is shorter than a documented remote function: this estate comments heavily, so `createWarehouse`
-	 * reaches its `catalogJSON('/v1/warehouses', …)` at roughly char 800 in BOTH zones, past the
+	 * reaches its `catalogJSON('/management/v1/warehouses', …)` at roughly char 800 in BOTH zones, past the
 	 * window. And on the raw source the pattern read prose: home's comment contains
 	 * "`query.live`/`command`", whose backtick-slash-backtick matched as a path of `/`.
 	 *

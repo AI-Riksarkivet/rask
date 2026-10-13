@@ -23,18 +23,13 @@
 	// reason, not omitted. Today there is no such case on this page — the memberships below are exactly
 	// what you can see — so the shape is stated rather than exercised.
 
-	// MEMBERSHIPS COME FROM `me`, NOT FROM THE CONTROLPLANE. This page used to call `getProjects()`,
-	// which fetched `/api/projects/` — the gateway row for the CONTROLPLANE, which reads
-	// `platform.rask.io` Project CRs from the Kubernetes API. (NOT `/capi/v1/projects`, as this
-	// comment said until 2026-08-29: that path proxies to the CATALOG and never touched the
-	// controlplane.) It fails on every estate where the CRD is not installed — verified live, and
-	// since 2026-08-29 it says so in those words, `501 project operator not installed`, rather than
-	// the `503 cannot reach kubernetes api` it answered here.
-	// The `Promise.all` then rejected, `watches` stayed `null`, and the page blamed
-	// the NOTIFICATION service for an outage in a service it never needed: the whole surface for
-	// enrolling in watches was unreachable, estate-wide, for a reason it did not name.
+	// MEMBERSHIPS COME FROM `me`. The catalog is the only project store (its registry and FGA, served on
+	// `/management/v1/projects`), and the memberships a person holds are already in `me`. A second
+	// fetch here would put a second service on this page's path: when it failed, the `Promise.all`
+	// rejected, `watches` stayed `null`, and the page blamed the NOTIFICATION service for an outage it
+	// never needed.
 	//
-	// `me.projects` is the frozen `/v1/me` contract, already resolved in the layout for every zone, and
+	// `me.projects` is the frozen `/management/v1/me` contract, already resolved in the layout for every zone, and
 	// it is the SAME source the project gallery reads (`$lib/gallery.ts`). Conforming to it rather than
 	// re-inventing keeps one answer to "which projects am I in".
 	//

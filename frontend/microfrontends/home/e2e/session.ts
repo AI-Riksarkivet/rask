@@ -2,13 +2,13 @@ import type { BrowserContext } from '@playwright/test';
 import { AUTH_ON } from './ports';
 
 // Sign the e2e browser context in. The projects dev server runs auth-ON (OIDC env in
-// playwright.config.ts) because the whole surface keys off `/v1/me`: the estate-admin create door, the
+// playwright.config.ts) because the whole surface keys off `/management/v1/me`: the estate-admin create door, the
 // membership gallery and one project's overview all read an identity, and an identity needs a bearer.
 // The server has no SESSION_SECRET, so the BFF accepts the documented dev-grade UNSEALED base64url
 // session cookie, which we mint here.
 //
 // UNLIKE the lakehouse's session helper, this mock derives NO identity from the token: home's layout
-// calls `fetchMe` against CATALOG_API directly (no `/capi/v1/me` browser hop to `page.route`), so the
+// calls `fetchMe` against CATALOG_API directly (no `/capi/management/v1/me` browser hop to `page.route`), so the
 // identity is SEEDED per bearer on the mock catalog and each spec states the `me` it is testing. The
 // prefixes below are therefore naming, not behaviour — they keep a ledger dump readable.
 export const TOKEN = {
@@ -23,7 +23,7 @@ const SESSION = {
 	expiresAt: 0, // no expiry claim → treated live
 };
 
-/** The frozen `/v1/me` shape of an ESTATE ADMIN — the only identity the create affordance renders for.
+/** The frozen `/management/v1/me` shape of an ESTATE ADMIN — the only identity the create affordance renders for.
  *  `projects: []` on purpose: an estate admin's gallery comes from the estate listing, not memberships,
  *  so a spec that wants memberships states them itself (`{...ME_ADMIN, projects: [...]}`). */
 export const ME_ADMIN = {

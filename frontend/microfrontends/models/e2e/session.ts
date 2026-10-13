@@ -26,10 +26,10 @@ import { APP } from './ports';
 export const TOKEN = { admin: 'e2e-token:admin' } as const;
 
 /**
- * The frozen `/v1/me` identity, seeded on the mock catalog by the specs that care.
+ * The frozen `/management/v1/me` identity, seeded on the mock catalog by the specs that care.
  *
  * The zone layout contract resolves `me` SERVER-SIDE now (`makeZoneLayoutLoad` → `fetchMe` against
- * CATALOG_API, #107) rather than the browser fetching `/capi/v1/me` — so `page.route` cannot stand in for
+ * CATALOG_API, #107) rather than the browser fetching `/capi/management/v1/me` — so `page.route` cannot stand in for
  * it and the identity has to be seeded like every other server-side read. `fetchMe` degrades to `null` on
  * ANY failure, so a spec that seeds nothing gets the UNRESOLVED-identity navbar, which is a real state
  * worth asserting rather than an accident of the harness.

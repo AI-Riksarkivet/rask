@@ -171,7 +171,7 @@ test.beforeEach(async ({ page }) => {
 	// entered. Specs that need the estate level clear it themselves.
 	await enterProject(page, 'default');
 	// Identity stays a BFF pass-through (keep-flow), so it is still mocked at the browser boundary.
-	await page.route('**/annotator/capi/v1/me', (route) => json(route, { detail: 'anon' }, 401));
+	await page.route('**/annotator/capi/management/v1/me', (route) => json(route, { detail: 'anon' }, 401));
 	// The media plane still rides `+server.ts` bytes routes; nothing on these pages should reach one.
 	// Zone-scoped glob on purpose: a bare **/api/** also matches Vite /@fs module URLs.
 	await page.route('**/annotator/api/**', (route) => json(route, { detail: 'unstubbed' }, 404));
@@ -201,8 +201,8 @@ test('A1: the landing follows the ACTIVE PROJECT, not the caller’s first proje
 	// that reads position instead of the active project lists, and creates into, a project nobody
 	// chose — while the shell's own chrome, reading the cookie, names `acme`.
 	await enterProject(page, 'acme');
-	await page.unroute('**/annotator/capi/v1/me');
-	await page.route('**/annotator/capi/v1/me', (route) =>
+	await page.unroute('**/annotator/capi/management/v1/me');
+	await page.route('**/annotator/capi/management/v1/me', (route) =>
 		json(route, {
 			sub: 'gina',
 			name: 'Gina',
@@ -274,7 +274,7 @@ test('A2: claim takes the lease, Annotate routes into the EXISTING canvas, submi
 }) => {
 	// Signed in as `anon` (LIFO: this registration wins over the beforeEach 401) — the lease chip's
 	// "yours" reads ME against the assignee, and a signed-out UI honestly can't say "yours".
-	await page.route('**/annotator/capi/v1/me', (route) =>
+	await page.route('**/annotator/capi/management/v1/me', (route) =>
 		json(route, { sub: 'anon', name: null, email: null, estate_admin: true, projects: [] }),
 	);
 	await snapshot(

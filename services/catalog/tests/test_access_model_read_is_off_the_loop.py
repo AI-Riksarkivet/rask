@@ -1,6 +1,6 @@
 """catalog-api-18 — reading the authorization-model DSL never blocks the event loop, and happens once.
 
-``GET /v1/access/model`` is ``async def`` and called ``fga.load_model_dsl()`` directly. That resolves
+``GET /management/v1/access/model`` is ``async def`` and called ``fga.load_model_dsl()`` directly. That resolves
 to a blocking ``Path.read_text()``, uncached — so every request for the model text stalled the WHOLE
 worker for a filesystem read, k8s probes included, on the estate's highest-privilege router. The file
 is baked into the image and cannot change while the process runs, so the read is both avoidable and

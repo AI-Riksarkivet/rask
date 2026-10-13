@@ -309,7 +309,7 @@ test('a consumer row click opens the drawer with the full record and diagnosis',
 
 test('an estate-admin denial renders the forbidden state', async ({ page }) => {
 	// The gate is the server-side estate-admin probe against the catalog now — flip THIS bearer's
-	// /v1/events to 403 on the mock catalog and the remote function answers the denial.
+	// /management/v1/events to 403 on the mock catalog and the remote function answers the denial.
 	await page.request.post(`${MOCK_CATALOG}/__mock/mode`, {
 		data: { bearer: token, mode: 'forbidden' },
 	});

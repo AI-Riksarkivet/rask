@@ -38,6 +38,215 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/management/v1/access/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Check Access
+         * @description One ``(user, relation, object)`` OpenFGA Check over ANY model type — the estate-wide extension of
+         *     the per-object ``…/access/check`` playground (#68), which stays as-is for table/namespace owners.
+         *
+         *     Any relation the compiled model defines on the type may be probed (base rungs included — an admin
+         *     debugging a cascade asks about ``writer``, not just ``can_write_data``); an unknown one is a clean 400.
+         *     ``checked`` echoes the resolved tuple so the verdict is unambiguous.
+         *
+         *     ``context`` supplies the runtime values a CONDITION needs — ``current_time`` for the model's
+         *     ``non_expired_grant``. An omitted ``current_time`` defaults to the server's now; an explicit one
+         *     wins, which is how the explorer asks "was this true at 14:00?".
+         */
+        post: operations["check_access_management_v1_access_check_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/access/expand": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Expand Access
+         * @description WHY a relation resolves — the userset tree, optionally followed through the cascade.
+         *
+         *     Check answers yes/no and list-users answers who; neither says through WHICH rung or WHICH parent hop,
+         *     so a permission derived over three objects is indistinguishable from a direct grant — and they have
+         *     very different blast radii. This returns the derivation itself, keeping OpenFGA's own operators
+         *     (``union`` / ``intersection`` / ``difference``) rather than flattening them away: the operator is
+         *     frequently the whole explanation for a surprising grant.
+         *
+         *     ``depth`` is server-side on purpose. Walking the chain client-side costs one estate-gated, audited
+         *     round trip per hop under the browser client's fixed timeout; here it is one gate, one audit row, and
+         *     one response.
+         */
+        post: operations["expand_access_management_v1_access_expand_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/access/list-objects": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * List Access Objects
+         * @description "What can this subject reach?" — every ``type`` object on which ``user`` holds ``relation``.
+         *
+         *     The forward half of the explorer, and the answer ``GET /tuples`` structurally cannot give: Read needs
+         *     an object type per call and returns only STORED tuples, so enumerating a subject meant one audited
+         *     read per model type and still missed everything derived. ListObjects expands the model, so a table
+         *     reached through team → project → warehouse → namespace shows up here and nowhere else.
+         *
+         *     The subject may be a userset (``team:eng#member``, ``role:validators#assignee``), which matters
+         *     because this model deliberately refuses ``team#member`` on resource rungs — a team reaches data
+         *     through a role, and only the userset question shows that.
+         */
+        post: operations["list_access_objects_management_v1_access_list_objects_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/access/list-users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * List Access Users
+         * @description "Who can do this?" — every subject holding ``relation`` on ``object``, effective access included.
+         *
+         *     The inverse of list-objects and the primitive a revoke needs BEFORE it writes: a tuple sitting high in
+         *     the hierarchy can revoke access for many principals at once, and "are you sure?" is not an answer to
+         *     "how many". Subjects come back fully qualified so a userset is never mistaken for a user.
+         */
+        post: operations["list_access_users_management_v1_access_list_users_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/access/model": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Access Model
+         * @description The authorization model — the checked-in ``model.fga`` DSL text plus the pinned model id.
+         *
+         *     Read-only and estate-admin gated: the model reveals the whole privilege topology (which rungs derive
+         *     which actions), the same platform-tier disclosure as the tuple listing.
+         */
+        get: operations["get_access_model_management_v1_access_model_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/access/simulate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Simulate Access
+         * @description "Would this grant do what I think?" — a Check evaluated as if ``hypothetical`` existed.
+         *
+         *     Nothing is written. OpenFGA's contextual tuples are per-request, so the store is untouched and the
+         *     simulation owes no cleanup. This exists because the model is CONCENTRIC: a grant three levels up
+         *     cascades to every child, and predicting that by reading the DSL is exactly the reasoning humans get
+         *     wrong. The only way to find out today is to write the tuple and look — which on an authorization
+         *     store is a change you then have to remember to undo.
+         *
+         *     Returns the DELTA. ``allowed`` alone cannot be acted on: a grant that changes nothing and a grant
+         *     that unlocks access both answer true. ``baseline`` is the same Check WITHOUT the hypothesis, so the
+         *     caller can distinguish "this is what changes the answer" from "this grant is a no-op" — and the
+         *     second is the more common finding.
+         *
+         *     Every hypothetical tuple is validated exactly like a real write (``_validated_write_tuple``): a
+         *     derived ``can_*`` or an unknown type is a clean 400 here rather than a confusing OpenFGA rejection,
+         *     and — more importantly — a hypothesis this API would refuse to write must not be simulatable, or
+         *     the answer describes a grant that cannot exist.
+         */
+        post: operations["simulate_access_management_v1_access_simulate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/access/tuples": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read Access Tuples
+         * @description One page of the raw tuple store, estate-admin gated.
+         *
+         *     Filter combos follow OpenFGA Read's contract — the object side must carry at least a TYPE whenever any
+         *     filter is sent: ``object_type`` alone (whole-type scan), ``object`` alone (one object's tuples),
+         *     ``user`` combined with either (that subject's tuples there). A user-only filter is a 400 — OpenFGA's
+         *     Read API cannot answer it (add ``object_type`` or ``object``; per-subject enumeration across all types
+         *     is a ListObjects question, not a Read). No filter reads the whole store, paginated.
+         */
+        get: operations["read_access_tuples_management_v1_access_tuples_get"];
+        put?: never;
+        /**
+         * Write Access Tuple
+         * @description Write ONE raw tuple (idempotent — a duplicate write is success), echoing the tuple as stored.
+         *
+         *     Only a directly-assignable relation the compiled model defines on the object's type is accepted (a
+         *     derived ``can_*`` action or an unknown type/relation is a 400) — the raw-tuple analog of the
+         *     per-object grant surface's grantable-rung guard, without its table/namespace restriction.
+         */
+        post: operations["write_access_tuple_management_v1_access_tuples_post"];
+        /**
+         * Delete Access Tuple
+         * @description Delete ONE raw tuple (idempotent — an already-absent tuple is success), echoing the tuple removed.
+         */
+        delete: operations["delete_access_tuple_management_v1_access_tuples_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/management/v1/classification/{id}/access/grant": {
         parameters: {
             query?: never;
@@ -99,6 +308,133 @@ export interface paths {
          *     on table and namespace: taking a rung back is administration, never delegation.
          */
         post: operations["revoke_classification_access_management_v1_classification__id__access_revoke_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Poll Control Events
+         * @description Return control-plane change-events after ``since`` for a platform (estate) administrator.
+         *
+         *     Fail-closed via FGA: a non-estate-admin gets 403, an OpenFGA outage 503, and the gate is a no-op only
+         *     when FGA is off (parity with every other ``require_*`` site). The ring buffer is per-replica + in-memory,
+         *     so ``cursor`` is a per-replica monotonic counter and ``reset`` means the client missed the buffer window
+         *     (scaling the catalog past one replica needs session affinity or a shared buffer — see
+         *     docs/adr/0028-control-events-per-replica-cursor-boundary.md).
+         */
+        get: operations["poll_control_events_management_v1_events_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Me
+         * @description Describe the signed-in caller: verified claims, estate standing, and tenant memberships.
+         *
+         *     Any verified token → 200; anonymous → 401. FGA off → ``estate_admin=true`` + ``projects=[]`` (dev
+         *     parity). With FGA on, the lookups are display-only and DEGRADE per relation on an OpenFGA
+         *     outage/brownout — this endpoint never 5xxes over authz-lookup health.
+         */
+        get: operations["get_me_management_v1_me_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/model": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Models
+         * @description List the model registry: every model with its candidate (latest) + blessed versions.
+         *
+         *     Mirrors the governed table listing: enumerate storage, then — when FGA is on — return only the models
+         *     the caller holds the reader rung (``can_get_metadata``) on, the same relation the per-model describe
+         *     enforces. Name-shape filtering runs before authz so a stray directory can never reach an FGA object id.
+         *     Metrics are deliberately absent here (see :func:`catalog.services.models.summarize`) — the per-model
+         *     describe carries them. ``limit`` bounds the per-request dataset opens (one per listed model);
+         *     truncation is deterministic (name-sorted first ``limit``).
+         */
+        get: operations["list_models_management_v1_model_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/model/{model}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Describe Model
+         * @description Registry summary: the latest (candidate) version, the blessed version (or null), both metrics, and
+         *     the model's plain-path artifact objects (path/size/mtime under ``models/<model>/<token>/…`` — the
+         *     #17/#92 layout; ``[]`` when none are laid out).
+         *
+         *     Reader-gated (``can_get_metadata``) — a reader may see which version is blessed and compare metrics; only
+         *     a validator may move the pointer.
+         */
+        get: operations["describe_model_management_v1_model__model__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/model/{model}/promote": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Promote Model
+         * @description Move the ``blessed`` tag to model ``version`` — validator-gated, metrics-gated, lineage-emitting.
+         *
+         *     Authorization is the VALIDATOR rung (``can_promote``), a deliberately higher bar than a plain writer:
+         *     training PUBLISHES candidates (writer), a validator BLESSES one (the model analog of silver→gold). The
+         *     metrics gate runs inside the fail-closed promote op BEFORE the irreversible tag move; the promotion
+         *     RunEvent is best-effort AFTER (a lineage outage never fails a promotion).
+         */
+        post: operations["promote_model_management_v1_model__model__promote_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -413,6 +749,69 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/management/v1/project/{id}/gate/delete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Delete Gate
+         * @description Stop overriding — the chart's settings govern again. Never writes zeros; see the module note.
+         */
+        post: operations["delete_gate_management_v1_project__id__gate_delete_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/project/{id}/gate/describe": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Describe Gate
+         * @description This project's declared gate, or ``null`` when the chart's settings still govern.
+         *
+         *     ``null`` rather than a populated default: a caller must be able to tell "nothing is declared" —
+         *     where a `helm upgrade` is still the only lever — from "declared, and these are the values".
+         */
+        post: operations["describe_gate_management_v1_project__id__gate_describe_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/project/{id}/gate/set": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Set Gate
+         * @description Declare (or re-declare) this project's gate settings — admin-gated; idempotent.
+         */
+        post: operations["set_gate_management_v1_project__id__gate_set_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/management/v1/project/{id}/policy/delete": {
         parameters: {
             query?: never;
@@ -488,6 +887,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/management/v1/projects": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Projects
+         * @description Enumerate the estate's tenants, derived from the warehouse registry. Estate-observer gated.
+         *
+         *     Fail-closed via FGA on the read: a non-estate-observer gets 403, an OpenFGA outage 503, and the gate
+         *     is a no-op only when FGA is off (parity with every ``require_*`` site). ``admins`` degrades to ``[]``
+         *     when FGA is off or the ``list_users`` lookup is unavailable — the registry facts still serve.
+         */
+        get: operations["list_projects_management_v1_projects_get"];
+        put?: never;
+        /**
+         * Create Project
+         * @description Mint a tenant: registry record + the creator's ``admin`` tuple, in one operation. Estate-admin gated.
+         *
+         *     The gate is ``can_observe_events`` on the fixed root object — the estate-admin bar every whole-estate
+         *     surface uses. Idempotent: re-POSTing an existing id carries ``created_at``/``created_by``/``protected``
+         *     forward and re-asserts the admin tuple (a duplicate FGA write is a no-op), so a partial-failure retry
+         *     (record written, tuple write failed) converges instead of erroring. The grant is audited and published
+         *     like any other ACL change, only when it was actually written.
+         */
+        post: operations["create_project_management_v1_projects_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/management/v1/projects/{id}/access/my-permissions": {
         parameters: {
             query?: never;
@@ -500,9 +933,9 @@ export interface paths {
         /**
          * My Project Permissions
          * @description What the caller may do on this project — same self-view, same explicit gate as the warehouse
-         *     rung (``/v1/projects/…`` is likewise outside ``_RESOURCES``).
+         *     rung (``/management/v1/projects/…`` is likewise outside ``_RESOURCES``).
          *
-         *     The project rung is where the estate's most irreversible action lives (`DELETE /v1/projects/{id}`
+         *     The project rung is where the estate's most irreversible action lives (`DELETE /management/v1/projects/{id}`
          *     has no cascade at all), so this is the one whose absence forced the UI to show a delete button and
          *     discover the answer from a 403.
          *
@@ -557,6 +990,164 @@ export interface paths {
          *     operation.
          */
         get: operations["list_project_policies_management_v1_projects__id__policies_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/projects/{project_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Project
+         * @description One derived tenant — the same shape as the list. Estate-observer gated; unknown project → 404.
+         */
+        get: operations["get_project_management_v1_projects__project_id__get"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete Project
+         * @description Retire a tenant: refuse while it still holds warehouses, else revoke its tuples and drop its record.
+         *
+         *     Gated on ``project:<id>#can_administer`` — the tenant's OWN admin bar, not the estate-observer gate the
+         *     read routes use (module docstring). Order, fail-closed and each step earning the next:
+         *     id shape (400) → existence (404) → authz (403) → deletion protection (409) → emptiness (409) →
+         *     revoke tuples → delete record → audit + event.
+         *
+         *     **Emptiness is bottom-up** (`open_hierarchy_lifecycle.md` Decision 3): a project holding warehouses
+         *     refuses 409 and NAMES them — a refusal that does not say what blocks it just moves the search to the
+         *     user. **There is deliberately no ``cascade`` parameter on this route at all.** A project cascade would
+         *     reach warehouses, and a warehouse's own delete can purge a bucket; one request must never be able to
+         *     destroy a tenant's storage transitively. Emptying goes one rung at a time through
+         *     ``DELETE /management/v1/warehouses/{id}``, where the purge is its own separate opt-in.
+         *
+         *     ``force=true`` overrides deletion PROTECTION only (Decision 5) — the FGA gate above ran first and runs
+         *     identically with or without it, so forcing cannot delete a project the caller may not administer.
+         */
+        delete: operations["delete_project_management_v1_projects__project_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/projects/{project_id}/members": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Members
+         * @description Who holds which rung directly on this tenant — gated on ``can_read_assignments``.
+         *
+         *     DIRECT grants only. An admin who holds it through ``member from team`` is not listed, because they
+         *     are not revocable here and a remove button that cannot work is worse than no row. The team edge is
+         *     where that access lives and where it is removed.
+         */
+        get: operations["list_members_management_v1_projects__project_id__members_get"];
+        /**
+         * Grant Member
+         * @description Grant one tenant rung to one subject — gated PER RUNG (``can_grant_admin`` / ``can_grant_member``).
+         *
+         *     Idempotent: re-granting what someone already holds is a no-op. That is not an optimisation — an
+         *     OpenFGA Write is transactional and REJECTS an existing tuple, so without the read this would 400
+         *     on the second call.
+         */
+        put: operations["grant_member_management_v1_projects__project_id__members_put"];
+        post?: never;
+        /**
+         * Revoke Member
+         * @description Revoke one tenant rung — gated identically to granting it.
+         *
+         *     REFUSES the last ``admin``. Removing it leaves a tenant nobody inside can administer, grant on, or
+         *     delete — recoverable only by estate intervention, which is exactly the state the API exists to
+         *     avoid. Named rather than discovered later.
+         *
+         *     Revoking a rung that is not there is a no-op, not a 404: the caller asked for a state and that
+         *     state already holds.
+         */
+        delete: operations["revoke_member_management_v1_projects__project_id__members_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/stores": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Every registered object store
+         * @description The whole registry in one response — it is estate config, and the tier view needs all of it.
+         *
+         *     ESTATE-ADMIN GATED, on the same relation and object ``attach_store`` uses. Its docstring already
+         *     states the reason and it applies to the read at least as strongly: a store record names a host
+         *     and a bucket the whole estate would then see, which is estate-wide disclosure — and reading the
+         *     list IS the disclosure, where attaching is only the cause of it. Ungated, any authenticated
+         *     principal (any project member) enumerated every bucket the estate knows, including the
+         *     ``endpoint`` hosts of third-party buckets someone attached.
+         *
+         *     The router-level ``authorize`` cannot cover this: it authorizes ``{id}`` routes under
+         *     ``_RESOURCES`` and lets id-less collection routes through on authentication alone, which is right
+         *     for a listing the endpoint then FILTERS (``/management/v1/warehouses``, ``/management/v1/model``) and wrong for one it
+         *     does not. This registry is estate-wide config with no per-item FGA object to filter on, so the
+         *     honest gate is the estate rung rather than a per-store one.
+         */
+        get: operations["list_stores_management_v1_stores_get"];
+        put?: never;
+        /**
+         * Attach an object store for browsing
+         * @description Attach a bucket so it can be BROWSED. Registers only — reads nothing, ingests nothing.
+         *
+         *     Estate-admin gated on ``can_observe_events`` against the root object: attaching names a host and a
+         *     bucket the whole estate will then see, which is estate-wide disclosure and so takes the estate-wide
+         *     privilege — the same gate ``/management/v1/projects`` and ``/management/v1/events`` use.
+         *
+         *     Names are unique across BOTH sources, and a declared store cannot be shadowed. The object browser
+         *     resolves a store by NAME, so a duplicate would make which bucket you get depend on list order — the
+         *     failure would look like the wrong data rather than a bad registration.
+         *
+         *     Attached stores are forced ``read_only``. A bucket someone attached to LOOK at is not a bucket the
+         *     cascade may write to, and nothing here can know whether the caller's credentials should carry write
+         *     authority on another host.
+         */
+        post: operations["attach_store_management_v1_stores_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/stores/tiers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Stores grouped by medallion tier
+         * @description The tier -> store view, DERIVED from the registry rather than transcribed.
+         *
+         *     Gated identically to ``list_stores`` — it is the same disclosure in a different shape, and gating
+         *     only the flat view would leave the grouped one as the way around it.
+         *
+         *     Every governed tier appears even when empty: a bronze row with nothing in it says "no store
+         *     backs bronze here", which is a fact worth showing. Roles outside the medallion (raw, derived,
+         *     observability) are grouped under their own names — raw is deliberately not a tier (R23).
+         */
+        get: operations["stores_by_tier_management_v1_stores_tiers_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1322,6 +1913,118 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/management/v1/user-state/dock-layout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Dock Layout
+         * @description The caller's dock workbench layouts, or ``exists: false`` if they have never saved one.
+         */
+        get: operations["get_dock_layout_management_v1_user_state_dock_layout_get"];
+        /**
+         * Put Dock Layout
+         * @description Replace the caller's dock layouts wholesale — the client owns which workbenches it keeps.
+         */
+        put: operations["put_dock_layout_management_v1_user_state_dock_layout_put"];
+        post?: never;
+        /**
+         * Delete Dock Layout
+         * @description Discard the caller's dock layouts — the escape hatch from an unreadable document.
+         */
+        delete: operations["delete_dock_layout_management_v1_user_state_dock_layout_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/user-state/dock-layout-library": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Dock Layout Library
+         * @description The caller's saved views, or ``exists: false`` if they have never saved one.
+         */
+        get: operations["get_dock_layout_library_management_v1_user_state_dock_layout_library_get"];
+        /**
+         * Put Dock Layout Library
+         * @description Replace the caller's saved views wholesale — the client owns which views it keeps.
+         */
+        put: operations["put_dock_layout_library_management_v1_user_state_dock_layout_library_put"];
+        post?: never;
+        /**
+         * Delete Dock Layout Library
+         * @description Discard the caller's saved views — the escape hatch from an unreadable library.
+         */
+        delete: operations["delete_dock_layout_library_management_v1_user_state_dock_layout_library_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/user-state/saved-views": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Saved Views
+         * @description The caller's named read-plane selections, in the order the client stored them.
+         */
+        get: operations["get_saved_views_management_v1_user_state_saved_views_get"];
+        /**
+         * Put Saved Views
+         * @description Replace the caller's saved-view list wholesale — the client owns the ordering and the dedupe.
+         */
+        put: operations["put_saved_views_management_v1_user_state_saved_views_put"];
+        post?: never;
+        /**
+         * Delete Saved Views
+         * @description Discard the caller's saved views.
+         */
+        delete: operations["delete_saved_views_management_v1_user_state_saved_views_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/user-state/workflow-graph": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Workflow Graph
+         * @description The caller's saved workflow canvas, or ``exists: false`` if they have never saved one.
+         */
+        get: operations["get_workflow_graph_management_v1_user_state_workflow_graph_get"];
+        /**
+         * Put Workflow Graph
+         * @description Save the caller's workflow canvas, replacing whatever they had.
+         */
+        put: operations["put_workflow_graph_management_v1_user_state_workflow_graph_put"];
+        post?: never;
+        /**
+         * Delete Workflow Graph
+         * @description Discard the caller's saved canvas.
+         */
+        delete: operations["delete_workflow_graph_management_v1_user_state_workflow_graph_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/management/v1/warehouse/{id}/access/my-permissions": {
         parameters: {
             query?: never;
@@ -1412,6 +2115,289 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/management/v1/warehouses": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Warehouses
+         * @description Every warehouse the caller can read. Governed like the metadata feeds: with FGA on, filtered to the
+         *     warehouses the caller has ``can_get_metadata`` on (never discloses another tenant's bucket names).
+         */
+        get: operations["list_warehouses_management_v1_warehouses_get"];
+        put?: never;
+        /**
+         * Create Warehouse
+         * @description Provision a warehouse: create its physical bucket + register it + seed FGA. Admin-gated.
+         *
+         *     Order (fail-closed): the project must EXIST (``require_project_exists`` — 404 naming
+         *     ``POST /management/v1/projects`` as the fix; existence is the registry's answer, identical for every caller, so
+         *     it runs before authz), THEN authorize ``can_create_warehouse`` on the project, THEN provision the
+         *     bucket (idempotent), write the registry record, and grant the caller ``owner`` on ``warehouse:<id>``
+         *     with its ``project`` edge. A re-run with the same id is idempotent (bucket + record overwrite-safe).
+         *
+         *     The estate-admin bootstrap exception is GONE (Decision 1): tenants are minted explicitly at
+         *     ``POST /management/v1/projects``, which seeds the project's admin — so by the time this runs the project has
+         *     admins of its own and one door is enough.
+         */
+        post: operations["create_warehouse_management_v1_warehouses_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/warehouses/-/bindings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Estate Bindings
+         * @description Every binding the caller may see, from ONE ``list_bindings`` pass (#86).
+         *
+         *     ``/-/`` rather than a bare ``/bindings``: the sibling routes are ``/{warehouse_id}/…`` and
+         *     ``bindings`` is a VALID warehouse id, so a literal segment there would shadow a real tenant's
+         *     warehouse. ``-`` can never be an id (``CONTROL_ID_RE`` requires ≥3 chars with alphanumeric ends),
+         *     which makes the collision impossible rather than merely unlikely. This is the FIRST ``/-/`` route
+         *     in the estate and it is our own convention, borrowed from GitLab — the Lance spec's own root
+         *     placeholder is the delimiter, which is not available here.
+         *
+         *     Governed exactly like the warehouse listing it complements: with FGA on, filtered to the
+         *     warehouses the caller can ``can_get_metadata`` — a binding names a namespace AND the tenant
+         *     bucket it lives in, so leaking one leaks another tenant's shape.
+         */
+        get: operations["list_estate_bindings_management_v1_warehouses___bindings_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/warehouses/{warehouse_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Warehouse
+         * @description One warehouse record — reader-gated on ``warehouse:<id>`` (fail-closed on an OpenFGA outage).
+         */
+        get: operations["get_warehouse_management_v1_warehouses__warehouse_id__get"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete Warehouse
+         * @description Delete a warehouse: its bindings, its tuples and its registry record — and its BUCKET only if asked.
+         *
+         *     Gated on ``project#can_administer`` (`open_hierarchy_lifecycle.md` Decision 3), NOT on a relation of the
+         *     warehouse itself: destroying a tenant's storage is a tenant-level act, so it clears the tenant's own
+         *     admin bar rather than a rung someone could hold on this one warehouse.
+         *
+         *     Order, and every step is load-bearing:
+         *
+         *     1. The record must exist (404).
+         *     2. **Authorize first.** The gate runs before the protection and emptiness checks, so an unauthorized
+         *        caller never learns whether the warehouse is protected or what it holds — a 409 listing another
+         *        tenant's namespace names is a disclosure a 403 must beat to.
+         *     3. Deletion protection (Decision 5) refuses 409 unless ``force=true``. ``force`` overrides the
+         *        PROTECTION ONLY — step 2 has already run, identically, with or without it.
+         *     4. Emptiness: a warehouse still holding namespaces refuses 409 **naming them**; a refusal that does not
+         *        say what blocks it just moves the search to the user. ``?cascade=true`` drops exactly those.
+         *     5. The cascade drops each bound namespace through the REAL native path, against the warehouse's OWN
+         *        bucket-rooted connection (so it drops in the right bucket), then revokes its tuples and removes its
+         *        binding — one namespace fully finished before the next, so a mid-cascade failure leaves a consistent
+         *        prefix and a retry converges (every primitive is idempotent). A namespace that still holds TABLES
+         *        refuses on its own rung: the request omits ``behavior``, so the native drop is Restrict and the level
+         *        below is emptied first. Do NOT reach for ``behavior="Cascade"`` here — measured against the directory
+         *        backend, it does not reject the value, it IGNORES it and drops Restrict-style anyway, so the field
+         *        would read as a working cascade while doing nothing.
+         *     6. Tuples on ``warehouse:<id>``, then the registry record.
+         *     7. **Bytes only on ``?purge_bucket=true``.** A catalog entry is recoverable, a customer's bucket is not,
+         *        so the two never share a default; a record-less bucket is reported by the reconciler, not lost. And a
+         *        purge that would take bytes this warehouse does not solely own — a bucket a same-project sibling
+         *        still claims, or reserved platform storage — refuses BEFORE the cascade
+         *        (:func:`_require_bucket_purgeable`).
+         *
+         *     The routing cache is evicted for every dropped namespace: ``_resolve_warehouse_root`` caches bindings
+         *     POSITIVELY and forever (they are immutable while they exist), so a binding deleted here but left in the
+         *     cache would keep routing that namespace into a warehouse that no longer exists.
+         */
+        delete: operations["delete_warehouse_management_v1_warehouses__warehouse_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/warehouses/{warehouse_id}/activate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Activate Warehouse
+         * @description Reactivate a quarantined warehouse (#3-A lifecycle) — restores routing to its bound namespaces.
+         *     Admin-gated on the warehouse's project. Idempotent.
+         */
+        post: operations["activate_warehouse_management_v1_warehouses__warehouse_id__activate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/warehouses/{warehouse_id}/deactivate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Deactivate Warehouse
+         * @description Quarantine a warehouse (#3-A lifecycle): the resolver then refuses EVERY op on its bound namespaces
+         *     (403), so no new tables are created and existing ones are suspended — the tenant-offboarding first step.
+         *     Admin-gated on the warehouse's project. Idempotent (re-deactivating is a no-op).
+         */
+        post: operations["deactivate_warehouse_management_v1_warehouses__warehouse_id__deactivate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/warehouses/{warehouse_id}/namespaces": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Warehouse Namespaces
+         * @description The namespaces bound to this warehouse, read from the REGISTRY — the same source the delete
+         *     door consults. This read exists so no surface has to INFER the answer: the lakehouse warehouse
+         *     page used to derive its namespace list by grouping the table registry, which made an EMPTY
+         *     namespace structurally invisible — the page said "no namespaces" while the delete door refused
+         *     409 naming one (observed live, #66). Reader-gated like the record itself (``can_get_metadata``);
+         *     a missing warehouse is the same 404 as everywhere else.
+         */
+        get: operations["list_warehouse_namespaces_management_v1_warehouses__warehouse_id__namespaces_get"];
+        put?: never;
+        /**
+         * Create Warehouse Namespace
+         * @description Create a top-level namespace INSIDE this warehouse's bucket and bind it, so all its tables route
+         *     there (#3-A physical isolation). Gated on ``can_create_namespace`` (writer) on ``warehouse:<id>``.
+         *
+         *     The namespace is created via the warehouse's bucket-rooted connection (not the default), the binding is
+         *     persisted + cached (so subsequent table ops resolve without a registry read), and FGA is seeded with the
+         *     namespace's ``parent`` edge pointing at the warehouse — so the owner's grant cascades into the tables.
+         */
+        post: operations["create_warehouse_namespace_management_v1_warehouses__warehouse_id__namespaces_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/warehouses/{warehouse_id}/namespaces/{top_ns}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Unbind Warehouse Namespace
+         * @description Detach a top-level namespace from its warehouse WITHOUT dropping either.
+         *
+         *     THE REPAIR A BINDING NEEDS WHEN IT OUTLIVES WHAT IT POINTED AT. A binding is a routing record —
+         *     `top_ns -> warehouse_id -> root_uri` — and until this door existed the only way to remove one was
+         *     `POST /v1/namespace/{id}/drop`, which destroys the namespace and its tables to reach a JSON file.
+         *     Three such records were found stranded on this estate (§ Q15-1), naming warehouses that hold no
+         *     bytes, and the repair was blocked on having no non-destructive door.
+         *
+         *     THE ORDER IS `delete_warehouse`'s, scaled to one binding, and every step carries its reason:
+         *
+         *     1. the warehouse record must exist (404);
+         *     2. **authorize first** on ``project#can_administer`` — detaching a namespace's storage routing is a
+         *        tenant-level act, the same reasoning that put the warehouse delete on the tenant's admin bar
+         *        rather than a rung someone holds on this one warehouse. A denial collapses to the same 404 the
+         *        missing warehouse gets (the NO EXISTENCE ORACLE class rule, audit #4), so nobody probes ids here
+         *        that the louder doors protect;
+         *     3. the binding must name THIS warehouse (404 otherwise) — a tenant may not unbind a namespace
+         *        through a warehouse id that does not hold it;
+         *     4. **emptiness**: a namespace still holding tables refuses 409 NAMING them. Unbinding a live
+         *        namespace does not delete a byte and is still the worst outcome available — every table in it
+         *        becomes unresolvable, because routing no longer knows which bucket holds it. Silent
+         *        unreachability beats a loud refusal for nobody;
+         *     5. remove the record, then broadcast ``warehouse_unbound`` so every replica evicts. The binding
+         *        cache is positive-and-forever, so without the broadcast the registry says unbound while running
+         *        pods keep routing — the repair would report success and change nothing.
+         */
+        delete: operations["unbind_warehouse_namespace_management_v1_warehouses__warehouse_id__namespaces__top_ns__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/warehouses/{warehouse_id}/validate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Validate Warehouse Credentials
+         * @description Prove this warehouse's vended credentials are actually SCOPED, by using one.
+         *
+         *     THE CONTROL THIS ASSERTS IS THE WHOLE STORAGE POSTURE. `core/vending.py::build_session_policy`
+         *     restricts every credential to one bucket + prefix, and the goal names STS as the answer for
+         *     storage — so if the object store ACCEPTS the inline session policy and IGNORES it, every credential
+         *     the estate has ever vended reached the whole bucket, every log line reads normal, and no audit
+         *     record could reconstruct which of them over-reached. Nothing asserted it: every vending defect in
+         *     this estate's history was found by a client failing later, never by the catalog.
+         *
+         *     IT WRITES, and that is the point — a policy document can be inspected without learning anything
+         *     about the store that receives it. The probe vends a real credential for `_validate/<uuid4>` under
+         *     the warehouse's own root, writes and reads inside it, then attempts a write to the PARENT prefix
+         *     which MUST be refused, and removes what it made. The failure of that last write is the finding.
+         *
+         *     Admin-gated on the warehouse's own project and collapsing denied → 404, the same
+         *     no-existence-oracle rule the lifecycle doors follow (audit #4): this door writes to a tenant's
+         *     bucket, so its gate is the create/lifecycle rung and not a read one.
+         *
+         *     Reports every check even after one fails (see :func:`summarize_probe`) — an over-permissive store
+         *     and an unreachable one need different answers, and a first-failure exit cannot tell them apart.
+         */
+        post: operations["validate_warehouse_credentials_management_v1_warehouses__warehouse_id__validate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/readyz": {
         parameters: {
             query?: never;
@@ -1421,241 +2407,6 @@ export interface paths {
         };
         /** Readyz */
         get: operations["readyz_readyz_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/access/check": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Check Access
-         * @description One ``(user, relation, object)`` OpenFGA Check over ANY model type — the estate-wide extension of
-         *     the per-object ``…/access/check`` playground (#68), which stays as-is for table/namespace owners.
-         *
-         *     Any relation the compiled model defines on the type may be probed (base rungs included — an admin
-         *     debugging a cascade asks about ``writer``, not just ``can_write_data``); an unknown one is a clean 400.
-         *     ``checked`` echoes the resolved tuple so the verdict is unambiguous.
-         *
-         *     ``context`` supplies the runtime values a CONDITION needs — ``current_time`` for the model's
-         *     ``non_expired_grant``. An omitted ``current_time`` defaults to the server's now; an explicit one
-         *     wins, which is how the explorer asks "was this true at 14:00?".
-         */
-        post: operations["check_access_v1_access_check_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/access/expand": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Expand Access
-         * @description WHY a relation resolves — the userset tree, optionally followed through the cascade.
-         *
-         *     Check answers yes/no and list-users answers who; neither says through WHICH rung or WHICH parent hop,
-         *     so a permission derived over three objects is indistinguishable from a direct grant — and they have
-         *     very different blast radii. This returns the derivation itself, keeping OpenFGA's own operators
-         *     (``union`` / ``intersection`` / ``difference``) rather than flattening them away: the operator is
-         *     frequently the whole explanation for a surprising grant.
-         *
-         *     ``depth`` is server-side on purpose. Walking the chain client-side costs one estate-gated, audited
-         *     round trip per hop under the browser client's fixed timeout; here it is one gate, one audit row, and
-         *     one response.
-         */
-        post: operations["expand_access_v1_access_expand_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/access/list-objects": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * List Access Objects
-         * @description "What can this subject reach?" — every ``type`` object on which ``user`` holds ``relation``.
-         *
-         *     The forward half of the explorer, and the answer ``GET /tuples`` structurally cannot give: Read needs
-         *     an object type per call and returns only STORED tuples, so enumerating a subject meant one audited
-         *     read per model type and still missed everything derived. ListObjects expands the model, so a table
-         *     reached through team → project → warehouse → namespace shows up here and nowhere else.
-         *
-         *     The subject may be a userset (``team:eng#member``, ``role:validators#assignee``), which matters
-         *     because this model deliberately refuses ``team#member`` on resource rungs — a team reaches data
-         *     through a role, and only the userset question shows that.
-         */
-        post: operations["list_access_objects_v1_access_list_objects_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/access/list-users": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * List Access Users
-         * @description "Who can do this?" — every subject holding ``relation`` on ``object``, effective access included.
-         *
-         *     The inverse of list-objects and the primitive a revoke needs BEFORE it writes: a tuple sitting high in
-         *     the hierarchy can revoke access for many principals at once, and "are you sure?" is not an answer to
-         *     "how many". Subjects come back fully qualified so a userset is never mistaken for a user.
-         */
-        post: operations["list_access_users_v1_access_list_users_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/access/model": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Access Model
-         * @description The authorization model — the checked-in ``model.fga`` DSL text plus the pinned model id.
-         *
-         *     Read-only and estate-admin gated: the model reveals the whole privilege topology (which rungs derive
-         *     which actions), the same platform-tier disclosure as the tuple listing.
-         */
-        get: operations["get_access_model_v1_access_model_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/access/simulate": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Simulate Access
-         * @description "Would this grant do what I think?" — a Check evaluated as if ``hypothetical`` existed.
-         *
-         *     Nothing is written. OpenFGA's contextual tuples are per-request, so the store is untouched and the
-         *     simulation owes no cleanup. This exists because the model is CONCENTRIC: a grant three levels up
-         *     cascades to every child, and predicting that by reading the DSL is exactly the reasoning humans get
-         *     wrong. The only way to find out today is to write the tuple and look — which on an authorization
-         *     store is a change you then have to remember to undo.
-         *
-         *     Returns the DELTA. ``allowed`` alone cannot be acted on: a grant that changes nothing and a grant
-         *     that unlocks access both answer true. ``baseline`` is the same Check WITHOUT the hypothesis, so the
-         *     caller can distinguish "this is what changes the answer" from "this grant is a no-op" — and the
-         *     second is the more common finding.
-         *
-         *     Every hypothetical tuple is validated exactly like a real write (``_validated_write_tuple``): a
-         *     derived ``can_*`` or an unknown type is a clean 400 here rather than a confusing OpenFGA rejection,
-         *     and — more importantly — a hypothesis this API would refuse to write must not be simulatable, or
-         *     the answer describes a grant that cannot exist.
-         */
-        post: operations["simulate_access_v1_access_simulate_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/access/tuples": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Read Access Tuples
-         * @description One page of the raw tuple store, estate-admin gated.
-         *
-         *     Filter combos follow OpenFGA Read's contract — the object side must carry at least a TYPE whenever any
-         *     filter is sent: ``object_type`` alone (whole-type scan), ``object`` alone (one object's tuples),
-         *     ``user`` combined with either (that subject's tuples there). A user-only filter is a 400 — OpenFGA's
-         *     Read API cannot answer it (add ``object_type`` or ``object``; per-subject enumeration across all types
-         *     is a ListObjects question, not a Read). No filter reads the whole store, paginated.
-         */
-        get: operations["read_access_tuples_v1_access_tuples_get"];
-        put?: never;
-        /**
-         * Write Access Tuple
-         * @description Write ONE raw tuple (idempotent — a duplicate write is success), echoing the tuple as stored.
-         *
-         *     Only a directly-assignable relation the compiled model defines on the object's type is accepted (a
-         *     derived ``can_*`` action or an unknown type/relation is a 400) — the raw-tuple analog of the
-         *     per-object grant surface's grantable-rung guard, without its table/namespace restriction.
-         */
-        post: operations["write_access_tuple_v1_access_tuples_post"];
-        /**
-         * Delete Access Tuple
-         * @description Delete ONE raw tuple (idempotent — an already-absent tuple is success), echoing the tuple removed.
-         */
-        delete: operations["delete_access_tuple_v1_access_tuples_delete"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/events": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Poll Control Events
-         * @description Return control-plane change-events after ``since`` for a platform (estate) administrator.
-         *
-         *     Fail-closed via FGA: a non-estate-admin gets 403, an OpenFGA outage 503, and the gate is a no-op only
-         *     when FGA is off (parity with every other ``require_*`` site). The ring buffer is per-replica + in-memory,
-         *     so ``cursor`` is a per-replica monotonic counter and ``reset`` means the client missed the buffer window
-         *     (scaling the catalog past one replica needs session affinity or a shared buffer — see
-         *     docs/adr/0028-control-events-per-replica-cursor-boundary.md).
-         */
-        get: operations["poll_control_events_v1_events_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1706,107 +2457,6 @@ export interface paths {
          * @description Rematerialize a materialized view via the native backend's ``refresh_materialized_view``.
          */
         post: operations["refresh_materialized_view_v1_materialized_view__id__refresh_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/me": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Me
-         * @description Describe the signed-in caller: verified claims, estate standing, and tenant memberships.
-         *
-         *     Any verified token → 200; anonymous → 401. FGA off → ``estate_admin=true`` + ``projects=[]`` (dev
-         *     parity). With FGA on, the lookups are display-only and DEGRADE per relation on an OpenFGA
-         *     outage/brownout — this endpoint never 5xxes over authz-lookup health.
-         */
-        get: operations["get_me_v1_me_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/model": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Models
-         * @description List the model registry: every model with its candidate (latest) + blessed versions.
-         *
-         *     Mirrors the governed table listing: enumerate storage, then — when FGA is on — return only the models
-         *     the caller holds the reader rung (``can_get_metadata``) on, the same relation the per-model describe
-         *     enforces. Name-shape filtering runs before authz so a stray directory can never reach an FGA object id.
-         *     Metrics are deliberately absent here (see :func:`catalog.services.models.summarize`) — the per-model
-         *     describe carries them. ``limit`` bounds the per-request dataset opens (one per listed model);
-         *     truncation is deterministic (name-sorted first ``limit``).
-         */
-        get: operations["list_models_v1_model_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/model/{model}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Describe Model
-         * @description Registry summary: the latest (candidate) version, the blessed version (or null), both metrics, and
-         *     the model's plain-path artifact objects (path/size/mtime under ``models/<model>/<token>/…`` — the
-         *     #17/#92 layout; ``[]`` when none are laid out).
-         *
-         *     Reader-gated (``can_get_metadata``) — a reader may see which version is blessed and compare metrics; only
-         *     a validator may move the pointer.
-         */
-        get: operations["describe_model_v1_model__model__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/model/{model}/promote": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Promote Model
-         * @description Move the ``blessed`` tag to model ``version`` — validator-gated, metrics-gated, lineage-emitting.
-         *
-         *     Authorization is the VALIDATOR rung (``can_promote``), a deliberately higher bar than a plain writer:
-         *     training PUBLISHES candidates (writer), a validator BLESSES one (the model analog of silver→gold). The
-         *     metrics gate runs inside the fail-closed promote op BEFORE the irreversible tag move; the promotion
-         *     RunEvent is best-effort AFTER (a lineage outage never fails a promotion).
-         */
-        post: operations["promote_model_v1_model__model__promote_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1982,261 +2632,6 @@ export interface paths {
          *     stable only over an ordered one.
          */
         get: operations["list_tables_v1_namespace__id__table_list_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/project/{id}/gate/delete": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Delete Gate
-         * @description Stop overriding — the chart's settings govern again. Never writes zeros; see the module note.
-         */
-        post: operations["delete_gate_v1_project__id__gate_delete_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/project/{id}/gate/describe": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Describe Gate
-         * @description This project's declared gate, or ``null`` when the chart's settings still govern.
-         *
-         *     ``null`` rather than a populated default: a caller must be able to tell "nothing is declared" —
-         *     where a `helm upgrade` is still the only lever — from "declared, and these are the values".
-         */
-        post: operations["describe_gate_v1_project__id__gate_describe_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/project/{id}/gate/set": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Set Gate
-         * @description Declare (or re-declare) this project's gate settings — admin-gated; idempotent.
-         */
-        post: operations["set_gate_v1_project__id__gate_set_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/projects": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Projects
-         * @description Enumerate the estate's tenants, derived from the warehouse registry. Estate-observer gated.
-         *
-         *     Fail-closed via FGA on the read: a non-estate-observer gets 403, an OpenFGA outage 503, and the gate
-         *     is a no-op only when FGA is off (parity with every ``require_*`` site). ``admins`` degrades to ``[]``
-         *     when FGA is off or the ``list_users`` lookup is unavailable — the registry facts still serve.
-         */
-        get: operations["list_projects_v1_projects_get"];
-        put?: never;
-        /**
-         * Create Project
-         * @description Mint a tenant: registry record + the creator's ``admin`` tuple, in one operation. Estate-admin gated.
-         *
-         *     The gate is ``can_observe_events`` on the fixed root object — the estate-admin bar every whole-estate
-         *     surface uses. Idempotent: re-POSTing an existing id carries ``created_at``/``created_by``/``protected``
-         *     forward and re-asserts the admin tuple (a duplicate FGA write is a no-op), so a partial-failure retry
-         *     (record written, tuple write failed) converges instead of erroring. The grant is audited and published
-         *     like any other ACL change, only when it was actually written.
-         */
-        post: operations["create_project_v1_projects_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/projects/{project_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Project
-         * @description One derived tenant — the same shape as the list. Estate-observer gated; unknown project → 404.
-         */
-        get: operations["get_project_v1_projects__project_id__get"];
-        put?: never;
-        post?: never;
-        /**
-         * Delete Project
-         * @description Retire a tenant: refuse while it still holds warehouses, else revoke its tuples and drop its record.
-         *
-         *     Gated on ``project:<id>#can_administer`` — the tenant's OWN admin bar, not the estate-observer gate the
-         *     read routes use (module docstring). Order, fail-closed and each step earning the next:
-         *     id shape (400) → existence (404) → authz (403) → deletion protection (409) → emptiness (409) →
-         *     revoke tuples → delete record → audit + event.
-         *
-         *     **Emptiness is bottom-up** (`open_hierarchy_lifecycle.md` Decision 3): a project holding warehouses
-         *     refuses 409 and NAMES them — a refusal that does not say what blocks it just moves the search to the
-         *     user. **There is deliberately no ``cascade`` parameter on this route at all.** A project cascade would
-         *     reach warehouses, and a warehouse's own delete can purge a bucket; one request must never be able to
-         *     destroy a tenant's storage transitively. Emptying goes one rung at a time through
-         *     ``DELETE /v1/warehouses/{id}``, where the purge is its own separate opt-in.
-         *
-         *     ``force=true`` overrides deletion PROTECTION only (Decision 5) — the FGA gate above ran first and runs
-         *     identically with or without it, so forcing cannot delete a project the caller may not administer.
-         */
-        delete: operations["delete_project_v1_projects__project_id__delete"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/projects/{project_id}/members": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Members
-         * @description Who holds which rung directly on this tenant — gated on ``can_read_assignments``.
-         *
-         *     DIRECT grants only. An admin who holds it through ``member from team`` is not listed, because they
-         *     are not revocable here and a remove button that cannot work is worse than no row. The team edge is
-         *     where that access lives and where it is removed.
-         */
-        get: operations["list_members_v1_projects__project_id__members_get"];
-        /**
-         * Grant Member
-         * @description Grant one tenant rung to one subject — gated PER RUNG (``can_grant_admin`` / ``can_grant_member``).
-         *
-         *     Idempotent: re-granting what someone already holds is a no-op. That is not an optimisation — an
-         *     OpenFGA Write is transactional and REJECTS an existing tuple, so without the read this would 400
-         *     on the second call.
-         */
-        put: operations["grant_member_v1_projects__project_id__members_put"];
-        post?: never;
-        /**
-         * Revoke Member
-         * @description Revoke one tenant rung — gated identically to granting it.
-         *
-         *     REFUSES the last ``admin``. Removing it leaves a tenant nobody inside can administer, grant on, or
-         *     delete — recoverable only by estate intervention, which is exactly the state the API exists to
-         *     avoid. Named rather than discovered later.
-         *
-         *     Revoking a rung that is not there is a no-op, not a 404: the caller asked for a state and that
-         *     state already holds.
-         */
-        delete: operations["revoke_member_v1_projects__project_id__members_delete"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/stores": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Every registered object store
-         * @description The whole registry in one response — it is estate config, and the tier view needs all of it.
-         *
-         *     ESTATE-ADMIN GATED, on the same relation and object ``attach_store`` uses. Its docstring already
-         *     states the reason and it applies to the read at least as strongly: a store record names a host
-         *     and a bucket the whole estate would then see, which is estate-wide disclosure — and reading the
-         *     list IS the disclosure, where attaching is only the cause of it. Ungated, any authenticated
-         *     principal (any project member) enumerated every bucket the estate knows, including the
-         *     ``endpoint`` hosts of third-party buckets someone attached.
-         *
-         *     The router-level ``authorize`` cannot cover this: it authorizes ``{id}`` routes under
-         *     ``_RESOURCES`` and lets id-less collection routes through on authentication alone, which is right
-         *     for a listing the endpoint then FILTERS (``/v1/warehouses``, ``/v1/model``) and wrong for one it
-         *     does not. This registry is estate-wide config with no per-item FGA object to filter on, so the
-         *     honest gate is the estate rung rather than a per-store one.
-         */
-        get: operations["list_stores_v1_stores_get"];
-        put?: never;
-        /**
-         * Attach an object store for browsing
-         * @description Attach a bucket so it can be BROWSED. Registers only — reads nothing, ingests nothing.
-         *
-         *     Estate-admin gated on ``can_observe_events`` against the root object: attaching names a host and a
-         *     bucket the whole estate will then see, which is estate-wide disclosure and so takes the estate-wide
-         *     privilege — the same gate ``/v1/projects`` and ``/v1/events`` use.
-         *
-         *     Names are unique across BOTH sources, and a declared store cannot be shadowed. The object browser
-         *     resolves a store by NAME, so a duplicate would make which bucket you get depend on list order — the
-         *     failure would look like the wrong data rather than a bad registration.
-         *
-         *     Attached stores are forced ``read_only``. A bucket someone attached to LOOK at is not a bucket the
-         *     cascade may write to, and nothing here can know whether the caller's credentials should carry write
-         *     authority on another host.
-         */
-        post: operations["attach_store_v1_stores_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/stores/tiers": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Stores grouped by medallion tier
-         * @description The tier -> store view, DERIVED from the registry rather than transcribed.
-         *
-         *     Gated identically to ``list_stores`` — it is the same disclosure in a different shape, and gating
-         *     only the flat view would leave the grouped one as the way around it.
-         *
-         *     Every governed tier appears even when empty: a bronze row with nothing in it says "no store
-         *     backs bronze here", which is a fact worth showing. Roles outside the medallion (raw, derived,
-         *     observability) are grouped under their own names — raw is deliberately not a tier (R23).
-         */
-        get: operations["stores_by_tier_v1_stores_tiers_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2697,10 +3092,9 @@ export interface paths {
          *     are ignored: the caller is the verified bearer token, not a field of the request body.
          *
          *     ``vend_credentials`` (spec 0.9) returns short-lived, table-scoped ``storage_options`` in the response —
-         *     the SPEC'S OWN way for a client to get credentials. We previously ignored the field entirely and offered
-         *     only a bespoke ``POST /{id}/credentials``, which meant a GENERIC Lance client (including medallion-producer in
-         *     REST mode) got no credentials and had no way to discover our endpoint: interop-breaking, and the one
-         *     confirmed reinvention in the 2026-07-14 audit. ``/credentials`` remains as the richer superset (tiers,
+         *     the SPEC'S OWN way for a client to get credentials. A bespoke ``POST /{id}/credentials`` alone would leave a
+         *     GENERIC Lance client with no credentials and no way to discover our endpoint: interop-breaking, and the
+         *     one confirmed reinvention in the 2026-07-14 audit. ``/credentials`` remains as the richer superset (tiers,
          *     web-identity exchange).
          *
          *     READ TIER ONLY, deliberately. The router already gates describe on the reader rung; vending a WRITE
@@ -2927,7 +3321,7 @@ export interface paths {
          *     The ``*_filt`` SQL filters, ``timeout``, ``use_index`` and ``branch`` are spec-0.9 query params.
          *
          *     Training-shaped lineage (optional, catalog stays un-opinionated): ``source`` + ``source_version``
-         *     record the version-pinned upstream this merge DERIVED FROM (a stage runner's merge from ``source@N`` — the
+         *     record the version-pinned upstream this merge DERIVED FROM (a pipeline's merge from ``source@N`` — the
          *     reproducibility pin surfaced on the lineage READ edge), and the ``X-Lance-Run-Facets`` header carries
          *     producer run metadata (e.g. training ``params``) verbatim onto the emitted RunEvent.
          *
@@ -3369,7 +3763,7 @@ export interface paths {
          *     2026-09-13 on a seven-version table: `limit=3` serves three rows and answers `page_token: None`,
          *     and a token it is handed changes nothing. `None` is what a client stops on, so forwarding `limit`
          *     told a caller asking for three of seven that it had seen everything — truncation wearing
-         *     pagination's clothes, the shape `GET /v1/model` already names.
+         *     pagination's clothes, the shape `GET /management/v1/model` already names.
          *
          *     So the native call is made UNPAGINATED — the same rule `catalog.api.pagination` states for the name
          *     listings — and the cursor is this layer's. The full list is what the backend returns unbounded
@@ -3416,401 +3810,6 @@ export interface paths {
          * @description Report the current status of transaction ``id`` — wraps the backend ``describe_transaction`` op.
          */
         post: operations["describe_transaction_v1_transaction__id__describe_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/user-state/dock-layout": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Dock Layout
-         * @description The caller's dock workbench layouts, or ``exists: false`` if they have never saved one.
-         */
-        get: operations["get_dock_layout_v1_user_state_dock_layout_get"];
-        /**
-         * Put Dock Layout
-         * @description Replace the caller's dock layouts wholesale — the client owns which workbenches it keeps.
-         */
-        put: operations["put_dock_layout_v1_user_state_dock_layout_put"];
-        post?: never;
-        /**
-         * Delete Dock Layout
-         * @description Discard the caller's dock layouts — the escape hatch from an unreadable document.
-         */
-        delete: operations["delete_dock_layout_v1_user_state_dock_layout_delete"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/user-state/dock-layout-library": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Dock Layout Library
-         * @description The caller's saved views, or ``exists: false`` if they have never saved one.
-         */
-        get: operations["get_dock_layout_library_v1_user_state_dock_layout_library_get"];
-        /**
-         * Put Dock Layout Library
-         * @description Replace the caller's saved views wholesale — the client owns which views it keeps.
-         */
-        put: operations["put_dock_layout_library_v1_user_state_dock_layout_library_put"];
-        post?: never;
-        /**
-         * Delete Dock Layout Library
-         * @description Discard the caller's saved views — the escape hatch from an unreadable library.
-         */
-        delete: operations["delete_dock_layout_library_v1_user_state_dock_layout_library_delete"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/user-state/saved-views": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Saved Views
-         * @description The caller's named read-plane selections, in the order the client stored them.
-         */
-        get: operations["get_saved_views_v1_user_state_saved_views_get"];
-        /**
-         * Put Saved Views
-         * @description Replace the caller's saved-view list wholesale — the client owns the ordering and the dedupe.
-         */
-        put: operations["put_saved_views_v1_user_state_saved_views_put"];
-        post?: never;
-        /**
-         * Delete Saved Views
-         * @description Discard the caller's saved views.
-         */
-        delete: operations["delete_saved_views_v1_user_state_saved_views_delete"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/user-state/workflow-graph": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Workflow Graph
-         * @description The caller's saved workflow canvas, or ``exists: false`` if they have never saved one.
-         */
-        get: operations["get_workflow_graph_v1_user_state_workflow_graph_get"];
-        /**
-         * Put Workflow Graph
-         * @description Save the caller's workflow canvas, replacing whatever they had.
-         */
-        put: operations["put_workflow_graph_v1_user_state_workflow_graph_put"];
-        post?: never;
-        /**
-         * Delete Workflow Graph
-         * @description Discard the caller's saved canvas.
-         */
-        delete: operations["delete_workflow_graph_v1_user_state_workflow_graph_delete"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/warehouses": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Warehouses
-         * @description Every warehouse the caller can read. Governed like the metadata feeds: with FGA on, filtered to the
-         *     warehouses the caller has ``can_get_metadata`` on (never discloses another tenant's bucket names).
-         */
-        get: operations["list_warehouses_v1_warehouses_get"];
-        put?: never;
-        /**
-         * Create Warehouse
-         * @description Provision a warehouse: create its physical bucket + register it + seed FGA. Admin-gated.
-         *
-         *     Order (fail-closed): the project must EXIST (``require_project_exists`` — 404 naming
-         *     ``POST /v1/projects`` as the fix; existence is the registry's answer, identical for every caller, so
-         *     it runs before authz), THEN authorize ``can_create_warehouse`` on the project, THEN provision the
-         *     bucket (idempotent), write the registry record, and grant the caller ``owner`` on ``warehouse:<id>``
-         *     with its ``project`` edge. A re-run with the same id is idempotent (bucket + record overwrite-safe).
-         *
-         *     The estate-admin bootstrap exception is GONE (Decision 1): tenants are minted explicitly at
-         *     ``POST /v1/projects``, which seeds the project's admin — so by the time this runs the project has
-         *     admins of its own and one door is enough.
-         */
-        post: operations["create_warehouse_v1_warehouses_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/warehouses/-/bindings": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Estate Bindings
-         * @description Every binding the caller may see, from ONE ``list_bindings`` pass (#86).
-         *
-         *     ``/-/`` rather than a bare ``/bindings``: the sibling routes are ``/{warehouse_id}/…`` and
-         *     ``bindings`` is a VALID warehouse id, so a literal segment there would shadow a real tenant's
-         *     warehouse. ``-`` can never be an id (``CONTROL_ID_RE`` requires ≥3 chars with alphanumeric ends),
-         *     which makes the collision impossible rather than merely unlikely. This is the FIRST ``/-/`` route
-         *     in the estate and it is our own convention, borrowed from GitLab — the Lance spec's own root
-         *     placeholder is the delimiter, which is not available here.
-         *
-         *     Governed exactly like the warehouse listing it complements: with FGA on, filtered to the
-         *     warehouses the caller can ``can_get_metadata`` — a binding names a namespace AND the tenant
-         *     bucket it lives in, so leaking one leaks another tenant's shape.
-         */
-        get: operations["list_estate_bindings_v1_warehouses___bindings_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/warehouses/{warehouse_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Warehouse
-         * @description One warehouse record — reader-gated on ``warehouse:<id>`` (fail-closed on an OpenFGA outage).
-         */
-        get: operations["get_warehouse_v1_warehouses__warehouse_id__get"];
-        put?: never;
-        post?: never;
-        /**
-         * Delete Warehouse
-         * @description Delete a warehouse: its bindings, its tuples and its registry record — and its BUCKET only if asked.
-         *
-         *     Gated on ``project#can_administer`` (`open_hierarchy_lifecycle.md` Decision 3), NOT on a relation of the
-         *     warehouse itself: destroying a tenant's storage is a tenant-level act, so it clears the tenant's own
-         *     admin bar rather than a rung someone could hold on this one warehouse.
-         *
-         *     Order, and every step is load-bearing:
-         *
-         *     1. The record must exist (404).
-         *     2. **Authorize first.** The gate runs before the protection and emptiness checks, so an unauthorized
-         *        caller never learns whether the warehouse is protected or what it holds — a 409 listing another
-         *        tenant's namespace names is a disclosure a 403 must beat to.
-         *     3. Deletion protection (Decision 5) refuses 409 unless ``force=true``. ``force`` overrides the
-         *        PROTECTION ONLY — step 2 has already run, identically, with or without it.
-         *     4. Emptiness: a warehouse still holding namespaces refuses 409 **naming them**; a refusal that does not
-         *        say what blocks it just moves the search to the user. ``?cascade=true`` drops exactly those.
-         *     5. The cascade drops each bound namespace through the REAL native path, against the warehouse's OWN
-         *        bucket-rooted connection (so it drops in the right bucket), then revokes its tuples and removes its
-         *        binding — one namespace fully finished before the next, so a mid-cascade failure leaves a consistent
-         *        prefix and a retry converges (every primitive is idempotent). A namespace that still holds TABLES
-         *        refuses on its own rung: the request omits ``behavior``, so the native drop is Restrict and the level
-         *        below is emptied first. Do NOT reach for ``behavior="Cascade"`` here — measured against the directory
-         *        backend, it does not reject the value, it IGNORES it and drops Restrict-style anyway, so the field
-         *        would read as a working cascade while doing nothing.
-         *     6. Tuples on ``warehouse:<id>``, then the registry record.
-         *     7. **Bytes only on ``?purge_bucket=true``.** A catalog entry is recoverable, a customer's bucket is not,
-         *        so the two never share a default; a record-less bucket is reported by the reconciler, not lost. And a
-         *        purge that would take bytes this warehouse does not solely own — a bucket a same-project sibling
-         *        still claims, or reserved platform storage — refuses BEFORE the cascade
-         *        (:func:`_require_bucket_purgeable`).
-         *
-         *     The routing cache is evicted for every dropped namespace: ``_resolve_warehouse_root`` caches bindings
-         *     POSITIVELY and forever (they are immutable while they exist), so a binding deleted here but left in the
-         *     cache would keep routing that namespace into a warehouse that no longer exists.
-         */
-        delete: operations["delete_warehouse_v1_warehouses__warehouse_id__delete"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/warehouses/{warehouse_id}/activate": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Activate Warehouse
-         * @description Reactivate a quarantined warehouse (#3-A lifecycle) — restores routing to its bound namespaces.
-         *     Admin-gated on the warehouse's project. Idempotent.
-         */
-        post: operations["activate_warehouse_v1_warehouses__warehouse_id__activate_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/warehouses/{warehouse_id}/deactivate": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Deactivate Warehouse
-         * @description Quarantine a warehouse (#3-A lifecycle): the resolver then refuses EVERY op on its bound namespaces
-         *     (403), so no new tables are created and existing ones are suspended — the tenant-offboarding first step.
-         *     Admin-gated on the warehouse's project. Idempotent (re-deactivating is a no-op).
-         */
-        post: operations["deactivate_warehouse_v1_warehouses__warehouse_id__deactivate_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/warehouses/{warehouse_id}/namespaces": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Warehouse Namespaces
-         * @description The namespaces bound to this warehouse, read from the REGISTRY — the same source the delete
-         *     door consults. This read exists so no surface has to INFER the answer: the lakehouse warehouse
-         *     page used to derive its namespace list by grouping the table registry, which made an EMPTY
-         *     namespace structurally invisible — the page said "no namespaces" while the delete door refused
-         *     409 naming one (observed live, #66). Reader-gated like the record itself (``can_get_metadata``);
-         *     a missing warehouse is the same 404 as everywhere else.
-         */
-        get: operations["list_warehouse_namespaces_v1_warehouses__warehouse_id__namespaces_get"];
-        put?: never;
-        /**
-         * Create Warehouse Namespace
-         * @description Create a top-level namespace INSIDE this warehouse's bucket and bind it, so all its tables route
-         *     there (#3-A physical isolation). Gated on ``can_create_namespace`` (writer) on ``warehouse:<id>``.
-         *
-         *     The namespace is created via the warehouse's bucket-rooted connection (not the default), the binding is
-         *     persisted + cached (so subsequent table ops resolve without a registry read), and FGA is seeded with the
-         *     namespace's ``parent`` edge pointing at the warehouse — so the owner's grant cascades into the tables.
-         */
-        post: operations["create_warehouse_namespace_v1_warehouses__warehouse_id__namespaces_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/warehouses/{warehouse_id}/namespaces/{top_ns}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        /**
-         * Unbind Warehouse Namespace
-         * @description Detach a top-level namespace from its warehouse WITHOUT dropping either.
-         *
-         *     THE REPAIR A BINDING NEEDS WHEN IT OUTLIVES WHAT IT POINTED AT. A binding is a routing record —
-         *     `top_ns -> warehouse_id -> root_uri` — and until this door existed the only way to remove one was
-         *     `POST /v1/namespace/{id}/drop`, which destroys the namespace and its tables to reach a JSON file.
-         *     Three such records were found stranded on this estate (§ Q15-1), naming warehouses that hold no
-         *     bytes, and the repair was blocked on having no non-destructive door.
-         *
-         *     THE ORDER IS `delete_warehouse`'s, scaled to one binding, and every step carries its reason:
-         *
-         *     1. the warehouse record must exist (404);
-         *     2. **authorize first** on ``project#can_administer`` — detaching a namespace's storage routing is a
-         *        tenant-level act, the same reasoning that put the warehouse delete on the tenant's admin bar
-         *        rather than a rung someone holds on this one warehouse. A denial collapses to the same 404 the
-         *        missing warehouse gets (the NO EXISTENCE ORACLE class rule, audit #4), so nobody probes ids here
-         *        that the louder doors protect;
-         *     3. the binding must name THIS warehouse (404 otherwise) — a tenant may not unbind a namespace
-         *        through a warehouse id that does not hold it;
-         *     4. **emptiness**: a namespace still holding tables refuses 409 NAMING them. Unbinding a live
-         *        namespace does not delete a byte and is still the worst outcome available — every table in it
-         *        becomes unresolvable, because routing no longer knows which bucket holds it. Silent
-         *        unreachability beats a loud refusal for nobody;
-         *     5. remove the record, then broadcast ``warehouse_unbound`` so every replica evicts. The binding
-         *        cache is positive-and-forever, so without the broadcast the registry says unbound while running
-         *        pods keep routing — the repair would report success and change nothing.
-         */
-        delete: operations["unbind_warehouse_namespace_v1_warehouses__warehouse_id__namespaces__top_ns__delete"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/warehouses/{warehouse_id}/validate": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Validate Warehouse Credentials
-         * @description Prove this warehouse's vended credentials are actually SCOPED, by using one.
-         *
-         *     THE CONTROL THIS ASSERTS IS THE WHOLE STORAGE POSTURE. `core/vending.py::build_session_policy`
-         *     restricts every credential to one bucket + prefix, and the goal names STS as the answer for
-         *     storage — so if the object store ACCEPTS the inline session policy and IGNORES it, every credential
-         *     the estate has ever vended reached the whole bucket, every log line reads normal, and no audit
-         *     record could reconstruct which of them over-reached. Nothing asserted it: every vending defect in
-         *     this estate's history was found by a client failing later, never by the catalog.
-         *
-         *     IT WRITES, and that is the point — a policy document can be inspected without learning anything
-         *     about the store that receives it. The probe vends a real credential for `_validate/<uuid4>` under
-         *     the warehouse's own root, writes and reads inside it, then attempts a write to the PARENT prefix
-         *     which MUST be refused, and removes what it made. The failure of that last write is the finding.
-         *
-         *     Admin-gated on the warehouse's own project and collapsing denied → 404, the same
-         *     no-existence-oracle rule the lifecycle doors follow (audit #4): this door writes to a tenant's
-         *     bucket, so its gate is the create/lifecycle rung and not a read one.
-         *
-         *     Reports every check even after one fails (see :func:`summarize_probe`) — an over-permissive store
-         *     and an unreachable one need different answers, and a first-failure exit cannot tell them apart.
-         */
-        post: operations["validate_warehouse_credentials_v1_warehouses__warehouse_id__validate_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -5813,6 +5812,10 @@ export interface components {
             adopt_existing?: boolean;
             /** Namespace */
             namespace: string;
+            /** Properties */
+            properties?: {
+                [key: string]: string;
+            } | null;
         };
         /** CreateWarehouseRequest */
         CreateWarehouseRequest: {
@@ -9434,6 +9437,349 @@ export interface operations {
             };
         };
     };
+    check_access_management_v1_access_check_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-caller-app-id"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AccessCheckBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccessCheckResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    expand_access_management_v1_access_expand_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-caller-app-id"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AccessExpandRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccessExpandResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_access_objects_management_v1_access_list_objects_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-caller-app-id"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AccessListObjectsRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccessListObjectsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_access_users_management_v1_access_list_users_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-caller-app-id"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AccessListUsersRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccessListUsersResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_access_model_management_v1_access_model_get: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-caller-app-id"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccessModelResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    simulate_access_management_v1_access_simulate_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-caller-app-id"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AccessSimulateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccessSimulateResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_access_tuples_management_v1_access_tuples_get: {
+        parameters: {
+            query?: {
+                /** @description scan one whole type (e.g. 'table') */
+                object_type?: string | null;
+                /** @description filter by subject (bare id = user:<id>) */
+                user?: string | null;
+                /** @description filter by one full object ('table:db1$t') */
+                object?: string | null;
+                page_size?: number | null;
+                /** @description the previous page's continuation token */
+                continuation?: string | null;
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-caller-app-id"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccessTuplesPage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    write_access_tuple_management_v1_access_tuples_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-caller-app-id"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AccessTuple"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccessTuple"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_access_tuple_management_v1_access_tuples_delete: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-caller-app-id"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AccessTuple"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccessTuple"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     grant_classification_access_management_v1_classification__id__access_grant_post: {
         parameters: {
             query?: {
@@ -9537,6 +9883,191 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AccessGrantResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    poll_control_events_management_v1_events_get: {
+        parameters: {
+            query?: {
+                /** @description the last cursor the client saw (0 = baseline) */
+                since?: number;
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-caller-app-id"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EventsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_me_management_v1_me_get: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-caller-app-id"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MeResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_models_management_v1_model_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                /** @description Continue after this model name (the previous page's `page_token`). */
+                page_token?: string | null;
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-caller-app-id"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelsListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    describe_model_management_v1_model__model__get: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                model: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelDescribeResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    promote_model_management_v1_model__model__promote_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                authorization?: string | null;
+                "dapr-caller-app-id"?: string | null;
+                "x-lance-originator"?: string | null;
+            };
+            path: {
+                model: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PromoteRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PromoteResponse"];
                 };
             };
             /** @description Validation Error */
@@ -10116,6 +10647,120 @@ export interface operations {
             };
         };
     };
+    delete_gate_management_v1_project__id__gate_delete_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: boolean;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    describe_gate_management_v1_project__id__gate_describe_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GateSpecResponse"] | null;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_gate_management_v1_project__id__gate_set_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GateSpecRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GateSpecResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     delete_project_policy_management_v1_project__id__policy_delete_post: {
         parameters: {
             query?: {
@@ -10228,6 +10873,78 @@ export interface operations {
             };
         };
     };
+    list_projects_management_v1_projects_get: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-caller-app-id"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_project_management_v1_projects_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-caller-app-id"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateProjectRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     my_project_permissions_management_v1_projects__id__access_my_permissions_post: {
         parameters: {
             query?: {
@@ -10287,6 +11004,303 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProjectPoliciesResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_project_management_v1_projects__project_id__get: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_project_management_v1_projects__project_id__delete: {
+        parameters: {
+            query?: {
+                force?: boolean;
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeleteProjectResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_members_management_v1_projects__project_id__members_get: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemberList"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    grant_member_management_v1_projects__project_id__members_put: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GrantRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemberList"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revoke_member_management_v1_projects__project_id__members_delete: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GrantRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemberList"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_stores_management_v1_stores_get: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-caller-app-id"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StoreRegistry"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    attach_store_management_v1_stores_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-caller-app-id"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Store"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StoreRegistry"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    stores_by_tier_management_v1_stores_tiers_get: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-caller-app-id"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: components["schemas"]["Store"][];
+                    };
                 };
             };
             /** @description Validation Error */
@@ -11354,6 +12368,422 @@ export interface operations {
             };
         };
     };
+    get_dock_layout_management_v1_user_state_dock_layout_get: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-caller-app-id"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserStateEnvelope_DockLayouts_"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    put_dock_layout_management_v1_user_state_dock_layout_put: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-caller-app-id"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DockLayouts"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserStateEnvelope_DockLayouts_"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_dock_layout_management_v1_user_state_dock_layout_delete: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-caller-app-id"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_dock_layout_library_management_v1_user_state_dock_layout_library_get: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-caller-app-id"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserStateEnvelope_DockLayoutLibrary_"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    put_dock_layout_library_management_v1_user_state_dock_layout_library_put: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-caller-app-id"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DockLayoutLibrary"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserStateEnvelope_DockLayoutLibrary_"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_dock_layout_library_management_v1_user_state_dock_layout_library_delete: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-caller-app-id"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_saved_views_management_v1_user_state_saved_views_get: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-caller-app-id"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserStateEnvelope_list_SavedView__"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    put_saved_views_management_v1_user_state_saved_views_put: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-caller-app-id"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SavedView"][];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserStateEnvelope_list_SavedView__"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_saved_views_management_v1_user_state_saved_views_delete: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-caller-app-id"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_workflow_graph_management_v1_user_state_workflow_graph_get: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-caller-app-id"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserStateEnvelope_WorkflowGraph_"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    put_workflow_graph_management_v1_user_state_workflow_graph_put: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-caller-app-id"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkflowGraph"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserStateEnvelope_WorkflowGraph_"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_workflow_graph_management_v1_user_state_workflow_graph_delete: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-caller-app-id"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     my_warehouse_permissions_management_v1_warehouse__id__access_my_permissions_post: {
         parameters: {
             query?: {
@@ -11466,6 +12896,408 @@ export interface operations {
             };
         };
     };
+    list_warehouses_management_v1_warehouses_get: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-caller-app-id"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WarehouseResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_warehouse_management_v1_warehouses_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-caller-app-id"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateWarehouseRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WarehouseResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_estate_bindings_management_v1_warehouses___bindings_get: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-caller-app-id"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EstateBindingsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_warehouse_management_v1_warehouses__warehouse_id__get: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                warehouse_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WarehouseResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_warehouse_management_v1_warehouses__warehouse_id__delete: {
+        parameters: {
+            query?: {
+                cascade?: boolean;
+                purge_bucket?: boolean;
+                force?: boolean;
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                warehouse_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeleteWarehouseResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    activate_warehouse_management_v1_warehouses__warehouse_id__activate_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                warehouse_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WarehouseResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    deactivate_warehouse_management_v1_warehouses__warehouse_id__deactivate_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                warehouse_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WarehouseResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_warehouse_namespaces_management_v1_warehouses__warehouse_id__namespaces_get: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                warehouse_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WarehouseNamespacesResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_warehouse_namespace_management_v1_warehouses__warehouse_id__namespaces_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                warehouse_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateWarehouseNamespaceRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreateNamespaceResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    unbind_warehouse_namespace_management_v1_warehouses__warehouse_id__namespaces__top_ns__delete: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                warehouse_id: string;
+                top_ns: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnbindWarehouseNamespaceResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    validate_warehouse_credentials_management_v1_warehouses__warehouse_id__validate_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                warehouse_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProbeReport"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     readyz_readyz_get: {
         parameters: {
             query?: never;
@@ -11482,385 +13314,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Readiness"];
-                };
-            };
-        };
-    };
-    check_access_v1_access_check_post: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["AccessCheckBody"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AccessCheckResult"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    expand_access_v1_access_expand_post: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["AccessExpandRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AccessExpandResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_access_objects_v1_access_list_objects_post: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["AccessListObjectsRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AccessListObjectsResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_access_users_v1_access_list_users_post: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["AccessListUsersRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AccessListUsersResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_access_model_v1_access_model_get: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AccessModelResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    simulate_access_v1_access_simulate_post: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["AccessSimulateRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AccessSimulateResult"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    read_access_tuples_v1_access_tuples_get: {
-        parameters: {
-            query?: {
-                /** @description scan one whole type (e.g. 'table') */
-                object_type?: string | null;
-                /** @description filter by subject (bare id = user:<id>) */
-                user?: string | null;
-                /** @description filter by one full object ('table:db1$t') */
-                object?: string | null;
-                page_size?: number | null;
-                /** @description the previous page's continuation token */
-                continuation?: string | null;
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AccessTuplesPage"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    write_access_tuple_v1_access_tuples_post: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["AccessTuple"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AccessTuple"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    delete_access_tuple_v1_access_tuples_delete: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["AccessTuple"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AccessTuple"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    poll_control_events_v1_events_get: {
-        parameters: {
-            query?: {
-                /** @description the last cursor the client saw (0 = baseline) */
-                since?: number;
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["EventsResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -11936,155 +13389,6 @@ export interface operations {
             };
             /** @description Validation Error */
             400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_me_v1_me_get: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MeResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_models_v1_model_get: {
-        parameters: {
-            query?: {
-                limit?: number;
-                /** @description Continue after this model name (the previous page's `page_token`). */
-                page_token?: string | null;
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ModelsListResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    describe_model_v1_model__model__get: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                model: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ModelDescribeResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    promote_model_v1_model__model__promote_post: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                authorization?: string | null;
-                "dapr-caller-app-id"?: string | null;
-                "x-lance-originator"?: string | null;
-            };
-            path: {
-                model: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["PromoteRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["PromoteResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -12322,489 +13626,6 @@ export interface operations {
             };
             /** @description Validation Error */
             400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    delete_gate_v1_project__id__gate_delete_post: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: boolean;
-                    };
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    describe_gate_v1_project__id__gate_describe_post: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["GateSpecResponse"] | null;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    set_gate_v1_project__id__gate_set_post: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["GateSpecRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["GateSpecResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_projects_v1_projects_get: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ProjectResponse"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    create_project_v1_projects_post: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["CreateProjectRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ProjectResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_project_v1_projects__project_id__get: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                project_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ProjectResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    delete_project_v1_projects__project_id__delete: {
-        parameters: {
-            query?: {
-                force?: boolean;
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                project_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["DeleteProjectResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_members_v1_projects__project_id__members_get: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                project_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MemberList"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    grant_member_v1_projects__project_id__members_put: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                project_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["GrantRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MemberList"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    revoke_member_v1_projects__project_id__members_delete: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                project_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["GrantRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MemberList"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_stores_v1_stores_get: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["StoreRegistry"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    attach_store_v1_stores_post: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["Store"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["StoreRegistry"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    stores_by_tier_v1_stores_tiers_get: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: components["schemas"]["Store"][];
-                    };
-                };
-            };
-            /** @description Validation Error */
-            422: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -14787,824 +15608,6 @@ export interface operations {
             };
             /** @description Validation Error */
             400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_dock_layout_v1_user_state_dock_layout_get: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UserStateEnvelope_DockLayouts_"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    put_dock_layout_v1_user_state_dock_layout_put: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["DockLayouts"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UserStateEnvelope_DockLayouts_"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    delete_dock_layout_v1_user_state_dock_layout_delete: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_dock_layout_library_v1_user_state_dock_layout_library_get: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UserStateEnvelope_DockLayoutLibrary_"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    put_dock_layout_library_v1_user_state_dock_layout_library_put: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["DockLayoutLibrary"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UserStateEnvelope_DockLayoutLibrary_"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    delete_dock_layout_library_v1_user_state_dock_layout_library_delete: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_saved_views_v1_user_state_saved_views_get: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UserStateEnvelope_list_SavedView__"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    put_saved_views_v1_user_state_saved_views_put: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["SavedView"][];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UserStateEnvelope_list_SavedView__"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    delete_saved_views_v1_user_state_saved_views_delete: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_workflow_graph_v1_user_state_workflow_graph_get: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UserStateEnvelope_WorkflowGraph_"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    put_workflow_graph_v1_user_state_workflow_graph_put: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["WorkflowGraph"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UserStateEnvelope_WorkflowGraph_"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    delete_workflow_graph_v1_user_state_workflow_graph_delete: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_warehouses_v1_warehouses_get: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["WarehouseResponse"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    create_warehouse_v1_warehouses_post: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["CreateWarehouseRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["WarehouseResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_estate_bindings_v1_warehouses___bindings_get: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["EstateBindingsResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_warehouse_v1_warehouses__warehouse_id__get: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                warehouse_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["WarehouseResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    delete_warehouse_v1_warehouses__warehouse_id__delete: {
-        parameters: {
-            query?: {
-                cascade?: boolean;
-                purge_bucket?: boolean;
-                force?: boolean;
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                warehouse_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["DeleteWarehouseResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    activate_warehouse_v1_warehouses__warehouse_id__activate_post: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                warehouse_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["WarehouseResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    deactivate_warehouse_v1_warehouses__warehouse_id__deactivate_post: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                warehouse_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["WarehouseResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_warehouse_namespaces_v1_warehouses__warehouse_id__namespaces_get: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                warehouse_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["WarehouseNamespacesResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    create_warehouse_namespace_v1_warehouses__warehouse_id__namespaces_post: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                warehouse_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["CreateWarehouseNamespaceRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CreateNamespaceResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    unbind_warehouse_namespace_v1_warehouses__warehouse_id__namespaces__top_ns__delete: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                warehouse_id: string;
-                top_ns: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnbindWarehouseNamespaceResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    validate_warehouse_credentials_v1_warehouses__warehouse_id__validate_post: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                warehouse_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ProbeReport"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -2,7 +2,7 @@
 
 THE BUCKET SET IS NOT KNOWABLE AT RENDER TIME, which is why neither policy enumerates one.
 `catalog.warehouses.enabled` (on by default) provisions one physically separate bucket per warehouse at
-`POST /v1/warehouses`, with an operator-chosen name, so no value in the chart can name it. The sweep's
+`POST /management/v1/warehouses`, with an operator-chosen name, so no value in the chart can name it. The sweep's
 credential opens those buckets: `sweep.py::_buckets_to_sweep` extends its configured list from the warehouse
 registry itself.
 
@@ -37,7 +37,7 @@ import pytest
 from tests.unit.test_invariants import _helm_template
 
 
-#: A bucket name no static value in the render can possibly contain — the shape `POST /v1/warehouses`
+#: A bucket name no static value in the render can possibly contain — the shape `POST /management/v1/warehouses`
 #: mints. Deliberately NOT `*-wh`: that suffix is a convention, not a rule, and the live estate's
 #: `acme-bucket` is the counterexample that broke the cascade.
 RUNTIME_BUCKET = "acme-bucket"

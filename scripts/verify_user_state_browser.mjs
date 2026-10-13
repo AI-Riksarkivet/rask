@@ -78,7 +78,7 @@ await alice1.screenshot({ path: `${SHOT}/cond5-alice-saved.png` });
 
 // The proof that it left the browser: it is in the SERVER's copy for this subject.
 const served = await alice1.evaluate(async () => {
-	const r = await fetch('/media/capi/v1/user-state/saved-views');
+	const r = await fetch('/media/capi/management/v1/user-state/saved-views');
 	return { status: r.status, body: await r.text() };
 });
 check('the server holds it', served.status === 200 && served.body.includes(VIEW), `HTTP ${served.status}`);

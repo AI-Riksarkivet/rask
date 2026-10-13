@@ -42,7 +42,7 @@ export type { LineagePulse, RunNotice } from '@rask/api/runs-feed';
  *    non-admin gets a real live feed with no backend change and never learns that an event they cannot
  *    see exists. Everything data-shaped (tables, namespaces, datasets, jobs, runs, columns, models, the
  *    lineage DAG, the outbox backlog) hangs off this.
- *  - `controlCursor` — `GET /v1/events?since=` on the catalog control plane, which is **estate-admin
+ *  - `controlCursor` — `GET /management/v1/events?since=` on the catalog control plane, which is **estate-admin
  *    gated** (`can_observe_events` on the FGA root) and reports *governance* mutations: warehouses,
  *    tenants, grants, promotions. Those never touch a dataset, so they never move the lineage cursor;
  *    the admin surfaces that render them use this instead.
@@ -105,7 +105,7 @@ export const controlCursor = query.live(async function* (): AsyncGenerator<numbe
 	for (;;) {
 		let moved = false;
 		try {
-			const res = await fetch(`${CATALOG_API}/v1/events?since=${cursor}`, {
+			const res = await fetch(`${CATALOG_API}/management/v1/events?since=${cursor}`, {
 				headers,
 				signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
 			});

@@ -244,10 +244,10 @@ export MEDIA_CATALOG_TOKEN="$ALICE"
 # the warehouse-scoped door only when it is set. Unset, they took the root door and read a correct
 # refusal as an authorization defect. Left empty when the catalog serves no warehouses, which is what
 # an estate with the feature off looks like.
-# `GET /v1/warehouses` answers a BARE LIST (92 records on this estate), not an envelope — measured
+# `GET /management/v1/warehouses` answers a BARE LIST (92 records on this estate), not an envelope — measured
 # 2026-09-06. Handle the envelope shapes too rather than pinning the bare one: this is discovery, and
 # a runner that dies on a response shape is the failure it exists to prevent.
-WAREHOUSE="$(curl -s -m 15 "http://$CATALOG/v1/warehouses" -H "authorization: Bearer $ALICE" | uv run python -c "
+WAREHOUSE="$(curl -s -m 15 "http://$CATALOG/management/v1/warehouses" -H "authorization: Bearer $ALICE" | uv run python -c "
 import json, os, sys
 try:
     body = json.load(sys.stdin)
@@ -289,7 +289,7 @@ fi
 #
 # A FIXED ID, deliberately, not one per run. This is estate FURNITURE like `acme`, created once and
 # reused: a per-run tenant would leave a project behind on every drive, and a project has no retention
-# to clean it up (§ Q8-15 is what accumulation does to a control). `POST /v1/projects` writes the
+# to clean it up (§ Q8-15 is what accumulation does to a control). `POST /management/v1/projects` writes the
 # record and the creator's admin tuple in one operation. Measured against the deployed catalog: a
 # SECOND create answers 200 and echoes the current admin set rather than 409 — it converges. 409 is
 # accepted below anyway, because which of the two a door gives for "already there" is exactly the kind
@@ -299,7 +299,7 @@ fi
 # skip exactly as they do today. Provisioning a tenant must never be the reason a suite run dies.
 if [ -n "$CATALOG" ] && [ -n "$ALICE" ] && [ -n "$BOB" ]; then
   TENANT_B="${LANCE_E2E_PROJECT_B:-e2etenantb}"
-  B_CODE="$(curl -s -o /dev/null -w '%{http_code}' -m 20 -X POST "http://$CATALOG/v1/projects" \
+  B_CODE="$(curl -s -o /dev/null -w '%{http_code}' -m 20 -X POST "http://$CATALOG/management/v1/projects" \
     -H "authorization: Bearer $ALICE" -H 'content-type: application/json' \
     -d "{\"id\":\"$TENANT_B\"}" 2>/dev/null || true)"
   BOB_SUB="$(TOK="$BOB" uv run python -c "
@@ -309,7 +309,7 @@ print(json.loads(base64.urlsafe_b64decode(b))['sub'])" 2>/dev/null || true)"
   if [ "$B_CODE" = "200" ] || [ "$B_CODE" = "201" ] || [ "$B_CODE" = "409" ]; then
     # Bob administers tenant B while alice administers acme, which is what makes the isolation legs a
     # real cross-tenant test rather than one principal talking to two of its own projects.
-    [ -n "$BOB_SUB" ] && curl -s -o /dev/null -m 20 -X POST "http://$CATALOG/v1/access/tuples" \
+    [ -n "$BOB_SUB" ] && curl -s -o /dev/null -m 20 -X POST "http://$CATALOG/management/v1/access/tuples" \
       -H "authorization: Bearer $ALICE" -H 'content-type: application/json' \
       -d "{\"user\":\"user:$BOB_SUB\",\"relation\":\"admin\",\"object\":\"project:$TENANT_B\"}" 2>/dev/null || true
     export LANCE_E2E_PROJECT_B="$TENANT_B"

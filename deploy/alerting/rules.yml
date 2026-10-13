@@ -344,7 +344,7 @@ groups:
       # NUMBER rather than a ruling: no listing cache exists because listing load is nowhere near
       # interactive. Measured 2026-09-24 against this estate's GreptimeDB over a 1h window —
       # `/v1/namespace/{id}/list` and `/v1/namespace/{id}/table/list` do not appear among the catalog's
-      # top eight routes at all, and `/v1/warehouses` read 0.000627 req/s on 2026-09-20, one request
+      # top eight routes at all, and `/management/v1/warehouses` read 0.000627 req/s on 2026-09-20, one request
       # every 27 minutes and three to four orders below the trigger. A threshold nobody re-reads is a row
       # that sits forever, so the wire trips itself instead of waiting to be re-run by hand.
       #
@@ -359,7 +359,7 @@ groups:
       # traffic alone, and the trigger being asked about is INTERACTIVE frequency.
       - alert: CatalogListingLoadReachedInteractiveFrequency
         expr: >-
-          sum(rate(http_server_duration_milliseconds_count{service_name="catalog", http_target=~"/v1/namespace/.*list|/v1/warehouses"}[30m])) > 1
+          sum(rate(http_server_duration_milliseconds_count{service_name="catalog", http_target=~"/v1/namespace/.*list|/management/v1/warehouses"}[30m])) > 1
         for: 30m
         labels:
           severity: warning

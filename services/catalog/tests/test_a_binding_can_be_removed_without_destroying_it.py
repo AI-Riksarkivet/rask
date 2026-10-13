@@ -1,4 +1,4 @@
-"""`DELETE /v1/warehouses/{id}/namespaces/{ns}` — the unbind door (§ Q15-1).
+"""`DELETE /management/v1/warehouses/{id}/namespaces/{ns}` — the unbind door (§ Q15-1).
 
 A binding is a ROUTING RECORD (`top_ns -> warehouse_id -> root_uri`). Until this door existed the only
 way to remove one was `POST /v1/namespace/{id}/drop`, which destroys the namespace and every table in it

@@ -88,12 +88,12 @@ Three layers, each owned in ONE place:
 
 | Layer | Owner |
 | --- | --- |
-| shape (what can exist) | the guards in `catalog/api/fga_deps.py` — `require_parent` (a table must have a namespace; rename destinations too), `require_warehouse_scoped` (a top-level namespace only via `POST /v1/warehouses/{id}/namespaces`; **no-op when `warehouses_enabled` is off** — single-bucket deployments have no warehouse to demand), `require_project_exists` (a warehouse's project must have a registry record — 404 naming `POST /v1/projects`), `require_not_protected` (deletion protection — the `force` rule is under Lifecycle) |
+| shape (what can exist) | the guards in `catalog/api/fga_deps.py` — `require_parent` (a table must have a namespace; rename destinations too), `require_warehouse_scoped` (a top-level namespace only via `POST /management/v1/warehouses/{id}/namespaces`; **no-op when `warehouses_enabled` is off** — single-bucket deployments have no warehouse to demand), `require_project_exists` (a warehouse's project must have a registry record — 404 naming `POST /management/v1/projects`), `require_not_protected` (deletion protection — the `force` rule is under Lifecycle) |
 | who | the FGA model's `can_*` relations (`service_kit/governed/auth/model.fga`) — the app never invents policy |
 | what is possible NOW | the registries, checked BEFORE the native write: **project records** (`catalog/services/projects.py`, `_projects/<id>.json`), warehouse records + `top_ns → warehouse_id → root_uri` bindings (`catalog/services/warehouses.py`) |
 
 **A tenant EXISTS when its registry record does** — not when a warehouse implies it and not when FGA
-holds tuples for it. `POST /v1/projects` writes the record AND the creator's `project#admin` tuple in
+holds tuples for it. `POST /management/v1/projects` writes the record AND the creator's `project#admin` tuple in
 one operation (estate-admin gated on `can_observe_events` at the root), which is what stops existence
 and permission drifting apart. There is **no bootstrap exception** in warehouse-create any more: one
 door, and a warehouse-owner cannot ride a create into project admin.
@@ -103,12 +103,14 @@ Check order at every create door: **identity (401) → shape (`InvalidInput` 400
 run BEFORE `native.call` — rejecting after leaves a real Lance object with no authz parent.
 
 `project` and `warehouse` are **rask's objects, not spec objects** — their endpoints
-(`/v1/projects`, `/v1/warehouses`, `/v1/project/{id}/gate/*`, …) are ours, and the catalog's registry and
+(`/management/v1/projects`, `/management/v1/warehouses`, `/management/v1/project/{id}/gate/*`, …) are ours, and the catalog's registry and
 FGA are the only project store (there is no controlplane service, ADR 0157). Keep their errors in the
-same problem-body format so one client error path serves the whole API. Some rask-only routes already
-sit under `/management/v1` (protection, policies, access, publish, erasure, `/commit`); ADR 0156 moves
-every rask-only route still under the spec's `/v1` there, with projects on `/management/v1/projects`
-(LH-476, #596).
+same problem-body format so one client error path serves the whole API. **`/v1` holds only spec
+operations** (ADR 0156, LH-476): every rask-only route is served under `/management/v1`, projects on
+`/management/v1/projects`, and a rask route on `/v1` answers 404. The two GET twins of `count_rows` and
+`tags/list` stay on `/v1` because they are spec operations the stock pylance REST client sends as GET.
+`tests/integration/test_spec_conformance.py` walks the served route table for both directions, and the
+read-only maintenance gate (`catalog/api/maintenance_mode.py`) refuses writes on both mounts.
 
 **A table's tier is the `rask.tier` property of the nearest enclosing namespace that declares one** (ADR 0156 C8,
 ADR 0160, LH-470). `catalog/core/tier_policy.py` holds it:
@@ -216,7 +218,7 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
 - **NO EXISTENCE ORACLE on destructive doors (audit #4).** `delete_warehouse`, `delete_project` and
   `_set_warehouse_status` all collapse `PermissionDenied → TableNotFound`, so "not yours" and "does
   not exist" are byte-identical and the door cannot enumerate ids. CREATE doors deliberately do the
-  opposite (`require_project_exists` 404s naming `POST /v1/projects`) because that 404 is a fix the
+  opposite (`require_project_exists` 404s naming `POST /management/v1/projects`) because that 404 is a fix the
   caller needs. Class rule, not a per-endpoint judgement call.
 - **A purge must prove sole ownership first.** One project may back two warehouses with one bucket
   (`projects_claiming_bucket` subtracts the caller's own project on purpose — the work+gold pair),
@@ -413,8 +415,8 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   loses them to the sweep's cleanup.
 - The FGA-only live seed (`fga_seed_demo.py`) writes projects no registry knows — the origin of
   "ghost projects". The replacement SHIPPED: `scripts/seed_estate.py` drives the real doors in
-  hierarchy order — `POST /v1/projects` → `POST /v1/warehouses` → `POST /v1/warehouses/{id}/namespaces`
-  → `/declare` → `POST /v1/access/tuples` LAST — so every guard runs and a state that cannot be
+  hierarchy order — `POST /management/v1/projects` → `POST /management/v1/warehouses` → `POST /management/v1/warehouses/{id}/namespaces`
+  → `/declare` → `POST /management/v1/access/tuples` LAST — so every guard runs and a state that cannot be
   reached through the UI cannot be seeded either. A grant whose create failed is SKIPPED rather than
   written; writing it is exactly how a ghost is made.
 - **The control-event vocabulary is a wire contract in three files.** `ControlAction` /
@@ -500,7 +502,7 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   record and ownership tuples from its first row, and the catalog announces every committed write on
   lineage. Moving rows between tiers runs on the user's own compute and orchestrator; the lakehouse runs
   no stage. The promotion gate today is `POST /management/v1/table/{id}/publish`: the project's quality
-  gate (`/v1/project/{id}/gate/*`) runs against the committed version and only a pass advances the
+  gate (`/management/v1/project/{id}/gate/*`) runs against the committed version and only a pass advances the
   `published` tag. ADR 0156 C1 makes that tag THE gate: readers of a governed tier read `@published`,
   approval moves it (`UpdateTableTag`), rejection restores main to it (`RestoreTable`), and moving it
   notifies the project's watchers (LH-466, #586). The provenance columns `stage`, `lineage` and
@@ -510,7 +512,7 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   **`register_table` is the door for bytes written outside the catalog's own doors.** It turns written
   bytes into a `table:` object, seeds ownership tuples, and every governed path (protection, trash,
   credential vending, the FGA doors) keys off that object. It needs no warehouse, so it works in the
-  RESERVED bucket — while the WAREHOUSE route over that bucket is refused: `POST /v1/warehouses
+  RESERVED bucket — while the WAREHOUSE route over that bucket is refused: `POST /management/v1/warehouses
   {bucket: lance-catalog}` answers **400 "bucket 'lance-catalog' is reserved platform storage …"**
   (`catalog/api/v1/endpoints/warehouses.py`, `settings.reserved_bucket_set`). The reason is the disclosure
   the bind would create: `provision_bucket` is idempotent on an existing bucket, so the claim would
@@ -628,7 +630,7 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   the id's top segment. Deactivation is deliberately absent — warehouse STATUS is read live per
   request. The chart couples the two: `services.catalog.replicas > 1` with `catalog.controlEmit`
   off FAILS the render (`chart/templates/services.yaml`), so an overlay cannot scale into
-  staleness. (`GET /v1/events`' ring buffer stays per-replica by design — the poll endpoint serves
+  staleness. (`GET /management/v1/events`' ring buffer stays per-replica by design — the poll endpoint serves
   each replica's own buffer.)
 - The `\Z`-anchored `CONTROL_ID_RE` (`catalog/core/identifiers.py`) is the ONE id-shape rule. It was
   three copies that had already drifted: Python's `$` also matches before a trailing newline, so

@@ -8,7 +8,7 @@ import { signIn } from '../session';
 //
 // Signed in, because the login-first gate redirects a signed-out page navigation to /auth/login: an
 // anonymous goto would compile the login route instead of the page it was meant to warm. The bearer is
-// unseeded on the mock catalog, so `/v1/me` answers 401 and the pages render their degraded states —
+// unseeded on the mock catalog, so `/management/v1/me` answers 401 and the pages render their degraded states —
 // which is all a warmup needs: `goto` resolving means Vite compiled the route.
 test('warm the auth-ON dev server routes', async ({ context, page }) => {
 	test.setTimeout(180_000);

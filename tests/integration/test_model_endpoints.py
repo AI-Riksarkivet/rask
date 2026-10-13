@@ -101,7 +101,7 @@ def test_promote_checks_can_promote_and_moves_blessed_tag(models_client: tuple[T
     captured: list[dict] = []
     _fake_check(captured, allow=True, monkeypatch=monkeypatch)
 
-    resp = client.post("/v1/model/demo/promote", headers={"Authorization": "Bearer t"}, json={"version": 2})
+    resp = client.post("/management/v1/model/demo/promote", headers={"Authorization": "Bearer t"}, json={"version": 2})
 
     assert resp.status_code == 200, resp.text
     assert resp.json()["blessed_version"] == 2
@@ -114,7 +114,7 @@ def test_promote_denied_to_a_non_validator(models_client: tuple[TestClient, str]
     client, registry = models_client
     _fake_check([], allow=False, monkeypatch=monkeypatch)
 
-    resp = client.post("/v1/model/demo/promote", headers={"Authorization": "Bearer t"}, json={"version": 2})
+    resp = client.post("/management/v1/model/demo/promote", headers={"Authorization": "Bearer t"}, json={"version": 2})
 
     assert resp.status_code == 403
     with pytest.raises(ValueError, match="not found|Ref"):  # tag never created on a denied promote
@@ -123,7 +123,7 @@ def test_promote_denied_to_a_non_validator(models_client: tuple[TestClient, str]
 
 def test_promote_requires_authentication(models_client: tuple[TestClient, str]) -> None:
     client, _ = models_client  # OIDC on, no bearer → 401 before any FGA/registry work
-    resp = client.post("/v1/model/demo/promote", json={"version": 2})
+    resp = client.post("/management/v1/model/demo/promote", json={"version": 2})
     assert resp.status_code == 401
 
 
@@ -133,7 +133,7 @@ def test_metrics_gate_blocks_a_low_version(models_client: tuple[TestClient, str]
     _fake_check([], allow=True, monkeypatch=monkeypatch)
 
     resp = client.post(
-        "/v1/model/demo/promote",
+        "/management/v1/model/demo/promote",
         headers={"Authorization": "Bearer t"},
         json={"version": 1, "min_metrics": {"rows_seen": 8}},
     )
@@ -148,7 +148,7 @@ def test_describe_checks_reader_and_reports_candidate_plus_blessed(models_client
     captured: list[dict] = []
     _fake_check(captured, allow=True, monkeypatch=monkeypatch)
 
-    resp = client.get("/v1/model/demo", headers={"Authorization": "Bearer t"})
+    resp = client.get("/management/v1/model/demo", headers={"Authorization": "Bearer t"})
 
     assert resp.status_code == 200, resp.text
     body = resp.json()
@@ -160,7 +160,7 @@ def test_describe_checks_reader_and_reports_candidate_plus_blessed(models_client
 def test_promote_unknown_model_is_404(models_client: tuple[TestClient, str], monkeypatch: pytest.MonkeyPatch) -> None:
     client, _ = models_client
     _fake_check([], allow=True, monkeypatch=monkeypatch)
-    resp = client.post("/v1/model/ghost/promote", headers={"Authorization": "Bearer t"}, json={"version": 1})
+    resp = client.post("/management/v1/model/ghost/promote", headers={"Authorization": "Bearer t"}, json={"version": 1})
     assert resp.status_code == 404
 
 
@@ -169,7 +169,7 @@ def test_promote_rejects_an_arbitrary_tag(models_client: tuple[TestClient, str],
     client, registry = models_client
     _fake_check([], allow=True, monkeypatch=monkeypatch)
     resp = client.post(
-        "/v1/model/demo/promote",
+        "/management/v1/model/demo/promote",
         headers={"Authorization": "Bearer t"},
         json={"version": 2, "tag": "pwned"},
     )
@@ -198,7 +198,7 @@ def test_list_models_filters_to_readable_and_reports_versions(models_client: tup
     lance.dataset(registry).tags.create("blessed", 1)
     captured = _fake_list_objects(["table:models$demo"], monkeypatch)
 
-    resp = client.get("/v1/model", headers={"Authorization": "Bearer t"})
+    resp = client.get("/management/v1/model", headers={"Authorization": "Bearer t"})
 
     assert resp.status_code == 200, resp.text
     assert resp.json() == {
@@ -216,7 +216,7 @@ def test_list_models_filters_to_readable_and_reports_versions(models_client: tup
 def test_list_models_is_empty_for_a_caller_with_no_grants(models_client: tuple[TestClient, str], monkeypatch: pytest.MonkeyPatch) -> None:
     client, _ = models_client
     _fake_list_objects([], monkeypatch)
-    resp = client.get("/v1/model", headers={"Authorization": "Bearer t"})
+    resp = client.get("/management/v1/model", headers={"Authorization": "Bearer t"})
     assert resp.status_code == 200
     assert resp.json() == {"models": [], "authorization_truncated": False, "page_token": None}
 
@@ -231,7 +231,7 @@ def test_list_models_serializes_null_versions_for_an_unreadable_registry(models_
     pathlib.Path(registry).parent.joinpath("halfborn").mkdir()
     _fake_list_objects(["table:models$demo", "table:models$halfborn"], monkeypatch)
 
-    resp = client.get("/v1/model", headers={"Authorization": "Bearer t"})
+    resp = client.get("/management/v1/model", headers={"Authorization": "Bearer t"})
 
     assert resp.status_code == 200, resp.text
     rows = {m["model"]: m for m in resp.json()["models"]}

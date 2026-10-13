@@ -359,7 +359,7 @@ export function makeZoneHooks(env: Env, opts: { gateway?: boolean; zone?: string
 /**
  * `capi/**` → the CATALOG service. A zone projects no `rask-catalog` token, so the only credential
  * ever attached is the signed-in user's bearer. GET-only: the same confused-deputy stance as
- * rask/apps/web — no blanket write proxy. Serves the frozen `/capi/v1/me` identity pass-through in every
+ * rask/apps/web — no blanket write proxy. Serves the frozen `/capi/management/v1/me` identity pass-through in every
  * zone, plus the catch-all in the zones that read the catalog directly. Anon stays the catalog's honest
  * 401 and the navbar renders signed-out chrome.
  */

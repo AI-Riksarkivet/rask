@@ -152,7 +152,7 @@ def upsert_warehouse(
     values forward:
 
         t0  GitOps re-POST of `acme-wh` reads the record        status=active
-        t1  operator POSTs /v1/warehouses/acme-wh/deactivate    status=deactivated
+        t1  operator POSTs /management/v1/warehouses/acme-wh/deactivate    status=deactivated
         t2  the re-POST's put lands                             status=active
 
     The quarantine is lifted with no `/activate` call and no audit signal. Note that `set_warehouse_status`

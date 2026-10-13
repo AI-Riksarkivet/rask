@@ -285,7 +285,7 @@
                     "type": "object",
                     "properties": {
                         "enabled": {
-                            "description": "Per-warehouse physical multi-tenancy: POST /v1/warehouses provisions a bucket per warehouse and binds top-level namespaces to it. Unbound namespaces use `minio.bucket`.",
+                            "description": "Per-warehouse physical multi-tenancy: POST /management/v1/warehouses provisions a bucket per warehouse and binds top-level namespaces to it. Unbound namespaces use `minio.bucket`.",
                             "type": "boolean"
                         }
                     }

@@ -57,15 +57,15 @@ def _body(request: httpx.Request) -> dict[str, object]:
 
 def _layer(request: httpx.Request) -> str:
     path = request.url.path
-    if path == "/v1/projects":
+    if path == "/management/v1/projects":
         return "project"
-    if path == "/v1/warehouses":
+    if path == "/management/v1/warehouses":
         return "warehouse"
     if path.endswith("/namespaces"):
         return "namespace"
     if path.endswith("/declare"):
         return "table"
-    if path == "/v1/access/tuples":
+    if path == "/management/v1/access/tuples":
         return "grant"
     return "other"
 
@@ -98,7 +98,7 @@ def _fake_catalog(recorded: list[httpx.Request], refuse: Refusal | None = None) 
         if refuse is not None and (canned := refuse(request)) is not None:
             status, body = canned
             return httpx.Response(status, json=body)
-        if request.method == "GET" and request.url.path == "/v1/projects":
+        if request.method == "GET" and request.url.path == "/management/v1/projects":
             return httpx.Response(200, json=_REGISTRY)
         if request.url.path.endswith("/table/list"):
             namespace = request.url.path.removeprefix("/v1/namespace/").removesuffix("/table/list")
@@ -130,8 +130,8 @@ def test_a_project_is_created_before_its_warehouse_before_its_namespace_before_i
     assert ranks == sorted(ranks), [(_layer(r), r.url.path) for r in writes]
     # …and the acme chain specifically, since a globally-sorted run could still mis-order one tenant.
     assert (
-        _index(recorded, lambda r: r.url.path == "/v1/projects" and _body(r).get("id") == "acme")
-        < _index(recorded, lambda r: r.url.path == "/v1/warehouses" and _body(r).get("id") == "acme-bucket")
+        _index(recorded, lambda r: r.url.path == "/management/v1/projects" and _body(r).get("id") == "acme")
+        < _index(recorded, lambda r: r.url.path == "/management/v1/warehouses" and _body(r).get("id") == "acme-bucket")
         < _index(recorded, lambda r: r.url.path.endswith("/namespaces") and _body(r).get("namespace") == "acme-gold")
         < _index(recorded, lambda r: r.url.path == "/v1/table/acme-gold$catalog/declare")
     )
@@ -226,7 +226,7 @@ def test_a_namespace_already_bound_to_another_warehouse_is_a_failure_not_converg
     recorded: list[httpx.Request] = []
     assert _run(recorded, refuse) == 1
 
-    grants = [_body(request) for request in recorded if request.url.path == "/v1/access/tuples"]
+    grants = [_body(request) for request in recorded if request.url.path == "/management/v1/access/tuples"]
     assert not [grant for grant in grants if grant["object"] == "namespace:acme-gold"]
     assert "/v1/table/acme-gold$catalog/declare" not in [request.url.path for request in recorded]
     # The sibling namespace is untouched: one refused bind must not empty the rest of the estate.
@@ -235,7 +235,7 @@ def test_a_namespace_already_bound_to_another_warehouse_is_a_failure_not_converg
 
 def test_grants_are_skipped_not_failed_when_the_stack_runs_authorization_off(capsys: pytest.CaptureFixture[str]) -> None:
     def refuse(request: httpx.Request) -> tuple[int, object] | None:
-        if request.url.path == "/v1/access/tuples":
+        if request.url.path == "/management/v1/access/tuples":
             return 501, _problem("UnsupportedOperationError", "FGA administration requires OpenFGA (this stack runs auth-off)", 0)
         return None
 
@@ -261,7 +261,7 @@ def test_a_grant_is_never_written_against_an_object_whose_create_failed() -> Non
     recorded: list[httpx.Request] = []
     assert _run(recorded, refuse) == 1
 
-    grants = [_body(request) for request in recorded if request.url.path == "/v1/access/tuples"]
+    grants = [_body(request) for request in recorded if request.url.path == "/management/v1/access/tuples"]
     assert not [grant for grant in grants if grant["object"] == "namespace:acme-gold"]
     # Everything the failure does NOT block still lands: one broken branch must not empty the estate.
     assert {"user:dave", "user:carol", "user:gina"} <= {str(grant["user"]) for grant in grants}
@@ -283,7 +283,7 @@ def test_a_failed_create_blocks_only_its_own_descendants() -> None:
 
 def test_an_estate_that_cannot_be_read_back_is_not_reported_as_seeded(capsys: pytest.CaptureFixture[str]) -> None:
     def refuse(request: httpx.Request) -> tuple[int, object] | None:
-        if request.method == "GET" and request.url.path == "/v1/projects":
+        if request.method == "GET" and request.url.path == "/management/v1/projects":
             return 403, _problem("PermissionDeniedError", "can_observe_events required on warehouse:lance_catalog", 15)
         return None
 
@@ -314,7 +314,7 @@ def test_an_estate_the_registry_does_not_hold_is_not_reported_as_seeded(capsys: 
     # hypothetical — it is the exact state the live estate was found in, and a seed whose summary just
     # renders the listing prints an empty estate under the words "every object above exists in the catalog".
     def refuse(request: httpx.Request) -> tuple[int, object] | None:
-        return (200, []) if request.method == "GET" and request.url.path == "/v1/projects" else None
+        return (200, []) if request.method == "GET" and request.url.path == "/management/v1/projects" else None
 
     recorded: list[httpx.Request] = []
     assert _run(recorded, refuse) == 1
@@ -327,7 +327,7 @@ def test_a_warehouse_the_project_does_not_hold_is_not_reported_as_seeded(capsys:
     thin = [dict(record, warehouses=[]) if record["project"] == "acme" else record for record in _REGISTRY]
 
     def refuse(request: httpx.Request) -> tuple[int, object] | None:
-        return (200, thin) if request.method == "GET" and request.url.path == "/v1/projects" else None
+        return (200, thin) if request.method == "GET" and request.url.path == "/management/v1/projects" else None
 
     recorded: list[httpx.Request] = []
     assert _run(recorded, refuse) == 1
@@ -411,7 +411,7 @@ def test_the_demo_estate_grants_the_anonymous_principal_nothing() -> None:
 def test_adopt_existing_asks_the_catalog_to_converge_the_unbound_namespace() -> None:
     """The FOURTH meaning of 409, and the one this script could not converge.
 
-    `POST /v1/warehouses/{id}/namespaces` answers `NamespaceAlreadyExistsError` for four states, not the
+    `POST /management/v1/warehouses/{id}/namespaces` answers `NamespaceAlreadyExistsError` for four states, not the
     three listed beside BINDING_REFUSALS: converged, bound elsewhere, taken in the default root — and
     the namespace whose BYTES are already at THIS warehouse's root while its binding was never written.
     That last one was observed on the live estate 2026-08-23: the acme tiers existed as directories, the

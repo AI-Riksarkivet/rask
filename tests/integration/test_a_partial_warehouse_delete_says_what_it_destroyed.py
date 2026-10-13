@@ -45,7 +45,7 @@ def test_a_delete_that_fails_midway_reports_the_namespaces_it_already_dropped(re
 
     monkeypatch.setattr(warehouses, "delete_warehouse_record", _boom)
 
-    resp = real_ns_client.delete("/v1/warehouses/does-not-exist")
+    resp = real_ns_client.delete("/management/v1/warehouses/does-not-exist")
 
     # The point is the SHAPE the caller receives, not this particular id: a problem body that names a
     # partial outcome whenever one occurred, and an ordinary one when it did not.

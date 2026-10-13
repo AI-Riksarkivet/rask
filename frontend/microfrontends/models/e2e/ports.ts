@@ -17,7 +17,7 @@
  *  mock's per-bearer buckets from racing under `fullyParallel`. */
 export const APP_PORT = 5298;
 /** The seed-driven stand-in for every upstream this zone's remote functions reach SERVER-SIDE, where
- *  `page.route` cannot follow: the catalog (`/v1/model*`), GreptimeDB (`/v1/prometheus/*`) and the
+ *  `page.route` cannot follow: the catalog (`/management/v1/model*`), GreptimeDB (`/v1/prometheus/*`) and the
  *  lineage probe behind the shell's bell. Their paths never collide, so CATALOG_API, GREPTIME_API and
  *  LINEAGE_API all point at this one port — the same reasoning the lakehouse's own combined
  *  observability mock is built on. NOT a zone dev-server port. */

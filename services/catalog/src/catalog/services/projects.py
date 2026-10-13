@@ -3,10 +3,10 @@
 The estate used to keep no project records at all: a project "existed" exactly when a warehouse
 record claimed it, and the FGA store carried tenant tuples independently. The two drifted the first
 time anything wrote one without the other — the live estate held three projects in authz that the
-catalog had never heard of, and the projects surface read empty while `/v1/me` listed memberships.
+catalog had never heard of, and the projects surface read empty while `/management/v1/me` listed memberships.
 
 This registry is the fix (`open_hierarchy_lifecycle.md`, Decision 1): existence lives HERE, one JSON
-record per tenant, and `POST /v1/projects` writes this record and the FGA tuples in one operation so
+record per tenant, and `POST /management/v1/projects` writes this record and the FGA tuples in one operation so
 the two cannot disagree again. Same stateless-over-object-store shape as the warehouse registry —
 `_projects/<id>.json` on the control root, no DB — and the same per-record corruption tolerance:
 one unreadable record is skipped with a warning, never allowed to void the tenant listing.
@@ -59,7 +59,7 @@ def upsert_project(control_root: str, storage_options: StorageOptions, record: d
     landing in between was silently discarded:
 
         t0  a GitOps re-POST of project `acme` reads the record       protected=false
-        t1  an admin POSTs /v1/projects/acme/protection               protected=true
+        t1  an admin POSTs /management/v1/projects/acme/protection               protected=true
         t2  the re-POST's put lands                                   protected=false
 
     Deletion protection is disarmed with no `/protection` call and no audit signal — and `protected`

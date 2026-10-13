@@ -3,7 +3,7 @@
 The gap this closes was the only one in the tenancy audit that blocked real users. ``type project``
 has had ``admin``/``member``/``team`` rungs and a whole cascade built on them since the beginning, and
 exactly two things in the estate could write them: ``seed_project_admin`` at create time, and
-``POST /v1/access/tuples`` — the raw tuple editor, which is estate-admin gated. So the person who
+``POST /management/v1/access/tuples`` — the raw tuple editor, which is estate-admin gated. So the person who
 created a project, and holds ``admin`` on it, could not invite a single colleague into it. Adding a
 second admin, adding a member, or attaching a team was a platform ticket.
 
@@ -46,7 +46,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/v1/projects", tags=["members"])
+router = APIRouter(prefix="/management/v1/projects", tags=["members"])
 
 #: The tenant id shape, matching ``CONTROL_ID_RE`` (``core/identifiers.py``) — DNS-safe, 3–63 chars.
 #: Restated as a ``Path`` pattern so a malformed id is a 422 at the boundary rather than a 404 from a

@@ -85,7 +85,7 @@ test('the grid: one row per item, live annotation state per visible row, canvas 
 			},
 		},
 	});
-	await page.route('**/annotator/capi/v1/me', (route) => json(route, { detail: 'anon' }, 401));
+	await page.route('**/annotator/capi/management/v1/me', (route) => json(route, { detail: 'anon' }, 401));
 	await page.route('**/annotator/api/chunk-frame/**', (route) =>
 		route.fulfill({ status: 200, contentType: 'image/png', body: PNG }),
 	);
@@ -165,7 +165,7 @@ test('accept and inline edit ride the save wire — OCC version echoed, attribut
 			},
 		},
 	});
-	await page.route('**/annotator/capi/v1/me', (route) => json(route, { detail: 'anon' }, 401));
+	await page.route('**/annotator/capi/management/v1/me', (route) => json(route, { detail: 'anon' }, 401));
 	await page.route('**/annotator/api/chunk-frame/**', (route) =>
 		route.fulfill({ status: 200, contentType: 'image/png', body: PNG }),
 	);
@@ -306,7 +306,7 @@ test('act-first ＋column: one action derives the declaration, PATCHes the ontol
 			},
 		},
 	});
-	await page.route('**/annotator/capi/v1/me', (route) => json(route, { detail: 'anon' }, 401));
+	await page.route('**/annotator/capi/management/v1/me', (route) => json(route, { detail: 'anon' }, 401));
 	await page.route('**/annotator/api/chunk-frame/**', (route) =>
 		route.fulfill({ status: 200, contentType: 'image/png', body: PNG }),
 	);
@@ -428,7 +428,7 @@ test('the Bulk TAB + the embedding view: anchor a row, the neighborhood orders a
 			},
 		},
 	});
-	await page.route('**/annotator/capi/v1/me', (route) => json(route, { detail: 'anon' }, 401));
+	await page.route('**/annotator/capi/management/v1/me', (route) => json(route, { detail: 'anon' }, 401));
 	await page.route('**/annotator/api/chunk-frame/**', (route) =>
 		route.fulfill({ status: 200, contentType: 'image/png', body: PNG }),
 	);
@@ -471,7 +471,7 @@ test('without a labeling task, the page says where to come from — no dead chro
 	page,
 }) => {
 	await page.request.post(`${MOCK_ANNOTATOR}/__mock/reset`);
-	await page.route('**/annotator/capi/v1/me', (route) => json(route, { detail: 'anon' }, 401));
+	await page.route('**/annotator/capi/management/v1/me', (route) => json(route, { detail: 'anon' }, 401));
 	await page.goto('/annotator/bulk');
 	await expect(page.getByText('Bulk grid needs a labeling task.')).toBeVisible();
 	await expect(page.getByTestId('bulk-grid')).toHaveCount(0);

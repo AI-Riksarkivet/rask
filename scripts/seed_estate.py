@@ -11,13 +11,13 @@ on the catalog reads that state as corruption.
 
 So this seeds the same estate through the doors a human uses, in the order the hierarchy demands:
 
-    POST /v1/projects                        the estate admin mints the tenant
-    POST /v1/warehouses                      a project admin gives it a bucket
-    POST /v1/warehouses/{id}/namespaces      the ONLY door for a top-level namespace
+    POST /management/v1/projects                        the estate admin mints the tenant
+    POST /management/v1/warehouses                      a project admin gives it a bucket
+    POST /management/v1/warehouses/{id}/namespaces      the ONLY door for a top-level namespace
     POST /v1/table/{ns}${name}/declare       the tables inside those namespaces
-    POST /v1/access/tuples                   the extra grants, LAST
+    POST /management/v1/access/tuples                   the extra grants, LAST
 
-Every guard therefore runs: an unknown tenant 404s at the warehouse door naming ``POST /v1/projects``,
+Every guard therefore runs: an unknown tenant 404s at the warehouse door naming ``POST /management/v1/projects``,
 a top-level namespace has no door that does not name a warehouse, and a table cannot be declared outside
 a namespace. **A state that cannot be reached through the UI cannot be seeded here either** — which is
 the whole point, and the reason the grants go last: a grant whose object is a create that FAILED is
@@ -108,12 +108,12 @@ DEX_SUBS: Mapping[str, str] = MappingProxyType(
 #: A status a step tolerates → (outcome state, the word printed for it).
 #:
 #: ONLY the creates the server does not already make idempotent carry this. A 409 from
-#: ``POST /v1/warehouses`` is a cross-tenant id/bucket collision — the guard's whole purpose — and
+#: ``POST /management/v1/warehouses`` is a cross-tenant id/bucket collision — the guard's whole purpose — and
 #: swallowing it as "already there" would hide exactly the takeover it just refused.
 CONVERGED: Mapping[int, tuple[str, str]] = MappingProxyType({409: ("converged", "already exists")})
 #: Phrases that turn a TOLERATED status back into a failure.
 #:
-#: ``POST /v1/warehouses/{id}/namespaces`` answers 409 for FOUR different things, all of them the SAME
+#: ``POST /management/v1/warehouses/{id}/namespaces`` answers 409 for FOUR different things, all of them the SAME
 #: ``NamespaceAlreadyExistsError`` (spec code 2): the namespace is already here (convergence — the normal
 #: re-run), the name is already bound to ANOTHER warehouse, it already exists unbound in the default
 #: root, or — observed live 2026-08-23 — its BYTES are already at THIS warehouse's root while its binding
@@ -128,7 +128,7 @@ CONVERGED: Mapping[int, tuple[str, str]] = MappingProxyType({409: ("converged", 
 #: class and same code, so the guard's own wording is the only discriminator there is, and a change to
 #: that wording in the catalog has to reach this tuple in the same commit.
 BINDING_REFUSALS: tuple[str, ...] = ("already bound to another warehouse", "already exists in the default root")
-#: ``/v1/access`` answers 501 when the stack runs auth-off: there is no tuple store to seed, which is a
+#: ``/management/v1/access`` answers 501 when the stack runs auth-off: there is no tuple store to seed, which is a
 #: legitimate local configuration, not a failure. Loud, never silent — the estate is then unguarded.
 FGA_OFF: Mapping[int, tuple[str, str]] = MappingProxyType({501: ("skipped", "authorization is off — no tuple store to seed")})
 
@@ -167,7 +167,7 @@ class Project:
 
 @dataclass(frozen=True, slots=True)
 class Grant:
-    """One raw tuple written through ``POST /v1/access/tuples`` after the objects exist.
+    """One raw tuple written through ``POST /management/v1/access/tuples`` after the objects exist.
 
     ``object`` may carry the literal ``{delimiter}`` placeholder, and a grant on a TABLE must: a table's
     id is its PATH (``<namespace>$<name>``), the separator is configurable per run (``--delimiter`` /
@@ -267,7 +267,7 @@ DEMO_ESTATE = Estate(
         # The flag, written as the ONE canonical tuple the catalog stores it as (`_MANAGED_ACCESS_SUBJECT`
         # in the catalog's access endpoints). `user:*` is a TYPE RESTRICTION used as a switch, not a
         # public grant: no rule reads it as "everyone", only `managed_access_inheritance` reads it at
-        # all. It has a real door of its own (`POST /v1/warehouses/{id}/managed-access/set`), but that
+        # all. It has a real door of its own (`POST /management/v1/warehouses/{id}/managed-access/set`), but that
         # door is gated on `can_set_managed_access` HELD ON THE BUCKET, which is a tenant's relation and
         # not a seed's; the raw tuple editor is where every other grant here goes and it accepts the
         # flag as the directly-assignable relation it is.
@@ -360,7 +360,7 @@ def plan(estate: Estate, subs: Mapping[str, str], *, delimiter: str = DELIMITER,
             layer="project",
             label=f"project {project.id}",
             method="POST",
-            path="/v1/projects",
+            path="/management/v1/projects",
             body={"id": project.id},
             key=f"project:{project.id}",
         )
@@ -371,7 +371,7 @@ def plan(estate: Estate, subs: Mapping[str, str], *, delimiter: str = DELIMITER,
             layer="warehouse",
             label=f"warehouse {warehouse.id} (project {project.id})",
             method="POST",
-            path="/v1/warehouses",
+            path="/management/v1/warehouses",
             body=_warehouse_body(project, warehouse),
             key=f"warehouse:{warehouse.id}",
             parent=f"project:{project.id}",
@@ -386,7 +386,7 @@ def plan(estate: Estate, subs: Mapping[str, str], *, delimiter: str = DELIMITER,
             # The warehouse-scoped route is the ONLY door for a top-level namespace:
             # /v1/namespace/{id}/create refuses one outright (it cannot name a warehouse to bind it to),
             # so a namespace created there would have nowhere for its bytes to land.
-            path=f"/v1/warehouses/{warehouse.id}/namespaces",
+            path=f"/management/v1/warehouses/{warehouse.id}/namespaces",
             body={"namespace": namespace.name, **({"adopt_existing": True} if adopt_existing else {})},
             key=f"namespace:{namespace.name}",
             parent=f"warehouse:{warehouse.id}",
@@ -424,7 +424,7 @@ def plan(estate: Estate, subs: Mapping[str, str], *, delimiter: str = DELIMITER,
                 layer="grant",
                 label=f"{obj} #{grant.relation} @ {user}",
                 method="POST",
-                path="/v1/access/tuples",
+                path="/management/v1/access/tuples",
                 body={"user": user, "relation": grant.relation, "object": obj},
                 # No key: a tuple brings nothing into existence, so nothing hangs off it. The parent is
                 # the object it decorates WHEN this run is what creates that object — see Step.parent.
@@ -571,9 +571,9 @@ def summarize(http: httpx.Client, estate: Estate, *, delimiter: str = DELIMITER)
         print(f"  !! {note}", file=sys.stderr)
         problems.append(note)
 
-    payload, note = _read(http, "/v1/projects")
+    payload, note = _read(http, "/management/v1/projects")
     if not isinstance(payload, list):
-        absent(note or f"GET /v1/projects answered {type(payload).__name__}, not a list of projects")
+        absent(note or f"GET /management/v1/projects answered {type(payload).__name__}, not a list of projects")
         return problems
     records = [_as_record(item) for item in payload]
     listed = {str(record["project"]): record for record in records if "project" in record}
@@ -581,7 +581,7 @@ def summarize(http: httpx.Client, estate: Estate, *, delimiter: str = DELIMITER)
     for project in estate.projects:
         record = listed.get(project.id)
         if record is None:
-            absent(f"project {project.id} is absent from GET /v1/projects — the registry never got it")
+            absent(f"project {project.id} is absent from GET /management/v1/projects — the registry never got it")
         else:
             print(f"  project {project.id}")
             held: set[str] = set()

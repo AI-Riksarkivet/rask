@@ -1240,7 +1240,7 @@ def require_warehouse_scoped(segments: list[str], *, delimiter: str, warehouses_
 
     A namespace is logical separation INSIDE a tenant, so it has to live in one:
     ``project > warehouse > namespace > table``. The warehouse-scoped door
-    (``POST /v1/warehouses/{warehouse_id}/namespaces``) binds the new namespace to a real bucket, and
+    (``POST /management/v1/warehouses/{warehouse_id}/namespaces``) binds the new namespace to a real bucket, and
     every table beneath it then lands in that tenant's storage — physically isolated from every other
     tenant's.
 
@@ -1266,7 +1266,7 @@ def require_warehouse_scoped(segments: list[str], *, delimiter: str, warehouses_
         f"top-level namespace '{ident}' must belong to a warehouse. A namespace is logical "
         f"separation inside a tenant (project > warehouse > namespace > table), and an unbound "
         f"namespace resolves to the shared default bucket instead of the tenant's own. "
-        f"Create it through its warehouse — POST /v1/warehouses/{{warehouse_id}}/namespaces with "
+        f"Create it through its warehouse — POST /management/v1/warehouses/{{warehouse_id}}/namespaces with "
         f"name '{ident}' — or nest it under an existing namespace "
         f"('<parent>{delimiter}{ident}')."
     )
@@ -1328,7 +1328,7 @@ async def require_project_exists(settings: Settings, project: str) -> None:
     if record is None:
         raise TableNotFoundError(
             f"project not found: {project}. A warehouse must belong to an existing project "
-            f"(project > warehouse > namespace > table) — create it first: POST /v1/projects "
+            f"(project > warehouse > namespace > table) — create it first: POST /management/v1/projects "
             f'with {{"id": "{project}"}}.'
         )
 
@@ -1343,7 +1343,7 @@ async def seed_project_admin(
     """Grant the creator ``admin`` on the new ``project:<id>`` — the tuple that makes a tenant
     self-sustaining (every later warehouse/namespace/table grant cascades from it).
 
-    Written by ``POST /v1/projects`` in the same operation as the registry record, which is the whole
+    Written by ``POST /management/v1/projects`` in the same operation as the registry record, which is the whole
     point of Decision 1: existence and permission are minted together and cannot drift. Idempotent —
     ``write_tuples`` swallows duplicate writes on a create retry. Returns True when the tuple was
     actually written, so the caller audits a grant that really happened (never one an FGA-off stack
@@ -1551,7 +1551,7 @@ async def require_can_promote(
 
     The gate for #17 model promotion (candidate→blessed): moving the ``blessed`` tag on ``models$<model>`` is
     a promotion, which the FGA model separates from a plain WRITER — ``can_promote`` reduces to ``validator``
-    (a writer is NOT a validator), exactly as a tier promotion is gated. The ``/v1/model/*``
+    (a writer is NOT a validator), exactly as a tier promotion is gated. The ``/management/v1/model/*``
     routes sit under the router-level ``authorize`` (its 401/503 pre-path checks still apply) but match no
     ``_RESOURCES`` prefix, so ``authorize`` makes no per-object decision there — the
     promote endpoint calls this EXPLICITLY. No FGA-model change is needed: ``table.can_promote: validator``
@@ -1575,7 +1575,7 @@ async def require_can_get_metadata(
 
     The read gate for routes whose path matches no ``_RESOURCES`` prefix (so the router-level ``authorize``
     contributes only its 401/503 pre-path checks, no per-object decision) — notably the #17 model describe
-    route (``/v1/model/*``): reading a model's blessed pointer + metrics is a metadata read
+    route (``/management/v1/model/*``): reading a model's blessed pointer + metrics is a metadata read
     (reader rung), so a reader may see it while only a validator may promote. Fail-closed like every other
     gate. No-op when FGA is off / unwired / unauthenticated."""
     if not (settings.fga_enabled and client is not None and token is not None):
@@ -1626,7 +1626,7 @@ async def require_tier_authority(client: OpenFgaClient | None, settings: Setting
     """Raise 403 unless the caller may declare or drop a namespace's ``rask.tier`` (ADR 0160).
 
     That is the namespace's project admin (``can_administer`` on ``project:<project>``), or the estate admin
-    (``can_observe_events`` on the root object, the bar ``POST /v1/projects`` asks) where no project owns
+    (``can_observe_events`` on the root object, the bar ``POST /management/v1/projects`` asks) where no project owns
     the namespace. No-op when FGA is off / unwired / unauthenticated, like every gate here.
     """
     if not (settings.fga_enabled and client is not None and token is not None):
@@ -1655,7 +1655,7 @@ async def require_can_create_warehouse(
     There is deliberately NO bootstrap exception any more. It existed because a not-yet-existing
     project had no tuples, so its first warehouse was uncreatable — the estate admin got a side door
     (``can_observe_events`` on the root). Decision 1 replaced the implicit mint: the estate admin
-    creates the PROJECT explicitly (``POST /v1/projects``, which seeds its admin), and
+    creates the PROJECT explicitly (``POST /management/v1/projects``, which seeds its admin), and
     ``require_project_exists`` refuses a warehouse for an unknown tenant BEFORE this gate runs — so
     by the time we are here, the project exists and has admins, and one door is enough."""
     if not (settings.fga_enabled and client is not None and token is not None):
@@ -1682,7 +1682,7 @@ async def seed_warehouse(
     seed → 503). Idempotent: ``write_tuples`` swallows duplicate-tuple writes on a create retry.
 
     The project-admin bootstrap tuple this used to optionally carry moved to ``seed_project_admin``,
-    written by ``POST /v1/projects`` — a tenant's admin is minted with the tenant, not with its
+    written by ``POST /management/v1/projects`` — a tenant's admin is minted with the tenant, not with its
     first warehouse."""
     if not (settings.fga_enabled and token is not None and client is not None):
         return

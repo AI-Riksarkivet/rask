@@ -185,8 +185,8 @@ ok(
 ok((anonResp?.status() ?? 0) < 400, 'the redirect chain itself is not an error page');
 await shot(anon, 'anonymous-login-gate');
 for (const [path, verb] of [
-	['/lakehouse/capi/v1/access/check', 'POST'],
-	['/lakehouse/capi/v1/access/tuples', 'POST'],
+	['/lakehouse/capi/management/v1/access/check', 'POST'],
+	['/lakehouse/capi/management/v1/access/tuples', 'POST'],
 ]) {
 	const r = await anonCtx.request.fetch(`${ORIGIN}${path}`, {
 		method: verb,

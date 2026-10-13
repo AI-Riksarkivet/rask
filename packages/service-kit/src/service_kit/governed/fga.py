@@ -211,7 +211,7 @@ def is_object_id(obj: str) -> bool:
 def load_model_dsl() -> str:
     """The checked-in authorization model DSL text (``model.fga``) — the human-readable twin of the
     compiled ``model.json`` the app loads (the two are kept in sync; ``model.fga.yaml`` proves the
-    behaviour). Served read-only by the estate-admin ``GET /v1/access/model`` surface."""
+    behaviour). Served read-only by the estate-admin ``GET /management/v1/access/model`` surface."""
     return _MODEL_DSL_PATH.read_text()
 
 
@@ -1868,7 +1868,7 @@ async def read_tuples(
 #: control-plane doors that mint and retire a tenant's authz: an audit row can then say a grant was born
 #: WITH its project rather than added to it later, and a revoke was a deletion rather than an admin's
 #: choice. `warehouse_bootstrap` is gone with the exception it named — a project's first warehouse no
-#: longer mints its admin (that moved to `POST /v1/projects`, `open_hierarchy_lifecycle.md` Decision 1).
+#: longer mints its admin (that moved to `POST /management/v1/projects`, `open_hierarchy_lifecycle.md` Decision 1).
 TupleOrigin = Literal[
     "admin_api",
     "grant_api",

@@ -26,7 +26,7 @@ ARROW = {**AUTH, "content-type": "application/vnd.apache.arrow.stream"}
 DELIMITER = os.environ.get("LANCE_E2E_DELIM", "$")
 
 #: A HYPHEN, not an underscore. With warehouses enabled the top-level namespace has to arrive through
-#: ``POST /v1/warehouses/{id}/namespaces``, which validates the name as bucket-safe
+#: ``POST /management/v1/warehouses/{id}/namespaces``, which validates the name as bucket-safe
 #: (``^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]\Z``); ``e2e_ns`` is refused 400 there.
 NS = "e2e-ns"
 

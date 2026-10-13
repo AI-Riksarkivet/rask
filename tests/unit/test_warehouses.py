@@ -119,7 +119,7 @@ def test_the_ownership_seeds_write_only_relations_the_model_defines(monkeypatch:
     monkeypatch.setattr(fga_module, "write_tuples", rec_write)
     # Drive BOTH seeds: together they are the full tuple surface this feature writes — seed_warehouse
     # (owner + the project edge, from warehouse-create) and seed_project_admin (the tenant's admin,
-    # minted by POST /v1/projects since the bootstrap exception died).
+    # minted by POST /management/v1/projects since the bootstrap exception died).
     asyncio.run(fga_deps.seed_warehouse(MagicMock(), _fga_settings(), _TOKEN, warehouse_id="wh-a", project="acme"))
     granted = asyncio.run(fga_deps.seed_project_admin(MagicMock(), _fga_settings(), _TOKEN, project="acme"))
     assert granted is True  # reported, so create_project only audits a grant that really happened
@@ -143,13 +143,13 @@ def test_the_ownership_seeds_write_only_relations_the_model_defines(monkeypatch:
     written = {(t.object.split(":", 1)[0], t.relation) for t in captured}
     assert ("warehouse", "project") in written  # the parent link uses the warehouse's real pointer relation
     assert ("warehouse", "parent") not in written  # ...never the namespace/table `parent` name (the old bug)
-    assert ("project", "admin") in written  # the tenant's admin grant, minted at POST /v1/projects
+    assert ("project", "admin") in written  # the tenant's admin grant, minted at POST /management/v1/projects
 
 
 def test_seed_warehouse_never_grants_project_admin(monkeypatch: pytest.MonkeyPatch) -> None:
     # The escalation path is closed STRUCTURALLY: a warehouse create writes exactly the owner grant and
     # the project edge — project admin cannot ride a warehouse create at all any more (it moved to
-    # seed_project_admin, behind the estate-gated POST /v1/projects), so a warehouse-owner can never
+    # seed_project_admin, behind the estate-gated POST /management/v1/projects), so a warehouse-owner can never
     # quietly escalate to tenant admin.
     captured: list[Any] = []
 
@@ -165,12 +165,12 @@ def test_seed_warehouse_never_grants_project_admin(monkeypatch: pytest.MonkeyPat
 
 
 # --------------------------------------------------------------------------- #
-# tenant minting (Decision 1) — a tenant is born at POST /v1/projects: the estate door
+# tenant minting (Decision 1) — a tenant is born at POST /management/v1/projects: the estate door
 # writes the registry record + the creator's project#admin tuple in ONE operation, and
 # warehouse-create keeps a single door (the project's own rung, no bootstrap exception).
 # --------------------------------------------------------------------------- #
 
-#: The ESTATE ROOT every estate-admin gate (/v1/events, /v1/access, project creation) checks against.
+#: The ESTATE ROOT every estate-admin gate (/management/v1/events, /management/v1/access, project creation) checks against.
 #: READ FROM THE SETTING rather than spelled out: the fake store below seeds `owner` here and the
 #: endpoints check here, so a literal that falls behind `fga_root_object` turns every one of those
 #: cases into a 403 whose message names an object the fixture never heard of. The default WAREHOUSE is
@@ -264,7 +264,7 @@ def test_gate_has_one_door_only_and_never_probes_the_estate_rung(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The bootstrap exception is GONE (Decision 1): a project admin passes, and the estate root is
-    never even probed — tenants are minted at POST /v1/projects, not through a warehouse side door."""
+    never even probed — tenants are minted at POST /management/v1/projects, not through a warehouse side door."""
     store = _FakeStore()
     store.tuples.add(("user:alice", "admin", "project:acme"))
     monkeypatch.setattr(fga_module, "check", store.check)
@@ -274,7 +274,7 @@ def test_gate_has_one_door_only_and_never_probes_the_estate_rung(
 
 def test_gate_denies_an_ordinary_user_with_no_estate_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
     """Fail-closed, and the denial is FINAL: no second door exists to fall through to. An estate admin
-    who is not this project's admin is denied here too — their path is POST /v1/projects, which seeds
+    who is not this project's admin is denied here too — their path is POST /management/v1/projects, which seeds
     them as admin, after which this gate passes on the project's own rung."""
     store = _FakeStore(estate_admins=("alice",))  # estate rung held — and still irrelevant here
     monkeypatch.setattr(fga_module, "check", store.check)
@@ -285,19 +285,19 @@ def test_gate_denies_an_ordinary_user_with_no_estate_fallback(monkeypatch: pytes
 
 def test_require_project_exists_refuses_an_unknown_tenant(tmp_path: Path) -> None:
     """The guard that REPLACED the bootstrap exception: an unknown project is a 404 (spec code 4,
-    problem body) whose detail names the fix — POST /v1/projects. Existence comes from the registry,
+    problem body) whose detail names the fix — POST /management/v1/projects. Existence comes from the registry,
     identically for every caller, which is why it runs before authz."""
     settings = _fga_settings(control_root=f"file://{tmp_path}")
     with pytest.raises(TableNotFoundError) as exc:
         asyncio.run(fga_deps.require_project_exists(settings, "ghost"))
-    assert "POST /v1/projects" in str(exc.value)
+    assert "POST /management/v1/projects" in str(exc.value)
     # …and an existing record passes untouched.
     proj_svc.put_project(f"file://{tmp_path}", {}, {"id": "acme", "created_at": "t", "created_by": "x", "protected": "false"})
     asyncio.run(fga_deps.require_project_exists(settings, "acme"))
 
 
 def test_estate_admin_creates_a_project_and_the_project_then_governs_itself(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    # Decision 1 end to end: the estate admin mints the TENANT at POST /v1/projects (the estate door,
+    # Decision 1 end to end: the estate admin mints the TENANT at POST /management/v1/projects (the estate door,
     # can_observe_events on the root) — record + her project#admin tuple in one operation — and every
     # warehouse after that passes on the project's OWN rung. The warehouse door never probes the estate.
     from catalog.schemas import CreateWarehouseRequest

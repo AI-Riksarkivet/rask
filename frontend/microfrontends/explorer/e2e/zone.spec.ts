@@ -286,7 +286,7 @@ test.fixme('every mode stays selectable while the encoder is up', async ({ page 
 // whole design of `$lib/user-state` is the difference between the two outcomes below — and until this
 // round nothing exercised either end to end.
 
-const SAVED_VIEWS_DOC = 'GET /v1/user-state/saved-views';
+const SAVED_VIEWS_DOC = 'GET /management/v1/user-state/saved-views';
 
 test('a saved view stored on the catalog reaches the popover', async ({ page }) => {
 	await seed({

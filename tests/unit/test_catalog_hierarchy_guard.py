@@ -80,7 +80,7 @@ def test_the_namespace_refusal_points_at_the_warehouse_route() -> None:
         fga_deps.require_warehouse_scoped(["bronze"], delimiter=DELIM, warehouses_enabled=True)
     detail = str(exc.value)
     assert "bronze" in detail
-    assert "/v1/warehouses/{warehouse_id}/namespaces" in detail
+    assert "/management/v1/warehouses/{warehouse_id}/namespaces" in detail
     assert "project > warehouse > namespace > table" in detail
     # …and the other legal shape: nesting under an existing (already bound) namespace.
     assert f"<parent>{DELIM}bronze" in detail
@@ -117,8 +117,8 @@ def test_every_control_plane_door_shares_ONE_id_pattern() -> None:
     """The three doors validating a project/warehouse id must use the same object, not three copies.
 
     They were three copies of one sentence ("the same DNS-safe shape the warehouse control plane
-    enforces") and they had already drifted on their end anchor — an id refused by ``POST /v1/projects``
-    was accepted by ``POST /v1/warehouses``. Identity (``is``), not equality: two equal-but-separate
+    enforces") and they had already drifted on their end anchor — an id refused by ``POST /management/v1/projects``
+    was accepted by ``POST /management/v1/warehouses``. Identity (``is``), not equality: two equal-but-separate
     compilations would drift again exactly the same way.
     """
     from catalog.api.v1.endpoints import policies, projects, warehouses

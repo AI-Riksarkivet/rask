@@ -57,7 +57,7 @@ if [ -z "$TENANT" ]; then
     curl -sf --max-time 2 "http://localhost:$CAT_PORT/healthz" >/dev/null 2>&1 && break
     sleep 1
   done
-  TENANT="$(curl -s --max-time 15 -H "Authorization: Bearer $TOKEN" "http://localhost:$CAT_PORT/v1/me" \
+  TENANT="$(curl -s --max-time 15 -H "Authorization: Bearer $TOKEN" "http://localhost:$CAT_PORT/management/v1/me" \
     | python3 -c 'import sys,json; d=json.load(sys.stdin); ps=d.get("projects") or []; print(ps[0]["project"] if ps else "")' 2>/dev/null || true)"
   if [ -z "$TENANT" ]; then
     echo "  !! could not resolve the tenant from the catalog — pin it with RASK_SEED_TENANT=<name>" >&2

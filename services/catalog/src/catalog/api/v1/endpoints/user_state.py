@@ -1,4 +1,4 @@
-"""``/v1/user-state/*`` — a signed-in person's own work, stored per subject on the Dapr state store.
+"""``/management/v1/user-state/*`` — a signed-in person's own work, stored per subject on the Dapr state store.
 
 The media zone's workflow canvas and its saved views were ``localStorage``, so the same person on another
 machine (or after clearing site data) found an empty canvas. These routes give those documents — and, since
@@ -16,15 +16,15 @@ forcing reason no longer holds — but the ownership stays, because per-subject 
 beside the verified-token machinery and the BFF that forwards it. The catalog has
 ``api/security.py``'s ``CurrentToken``, the router-wide ``Depends(authorize)`` that 401s an anonymous
 caller, and — the reachability half — a BFF proxy the media zone already uses
-(``routes/capi/v1/me/+server.ts`` → ``makeCatalogProxy``), which forwards the signed-in user's bearer and
+(``routes/capi/management/v1/me/+server.ts`` → ``makeCatalogProxy``), which forwards the signed-in user's bearer and
 nothing else.
 
 **Authenticated-only, and self-scoped by construction.** There is no FGA object here because there is no
 shared resource: the only thing a caller can address is their own document, and *which* document is a
-closed enum baked into the URL path, never an identity. ``/v1/user-state`` matches no resource prefix in
+closed enum baked into the URL path, never an identity. ``/management/v1/user-state`` matches no resource prefix in
 ``fga_deps.authorize`` and carries no ``{id}`` path param, so the router-wide gate contributes exactly its
-401/503 pre-checks — the ``/v1/me`` precedent. The 401 floor is asserted here as well, so it also holds
-with FGA off. Not audited, for the same reason ``/v1/me`` is not: the #41 trail records authorization
+401/503 pre-checks — the ``/management/v1/me`` precedent. The 401 floor is asserted here as well, so it also holds
+with FGA off. Not audited, for the same reason ``/management/v1/me`` is not: the #41 trail records authorization
 DECISIONS, and there is no decision to record when the resource is definitionally the caller's own.
 
 **``response_model_exclude_none`` is load-bearing on the media documents, and deliberately absent on the
@@ -67,7 +67,7 @@ from service_kit.schemas.workflow import SavedView, WorkflowGraph
 
 log = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/v1/user-state", tags=["user-state"])
+router = APIRouter(prefix="/management/v1/user-state", tags=["user-state"])
 
 #: One adapter per document, built at import (they compile a validator — not per-request work).
 _GRAPH = TypeAdapter(WorkflowGraph)

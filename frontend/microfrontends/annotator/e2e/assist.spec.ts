@@ -61,7 +61,7 @@ const LIVE_DINO = { name: 'grounding-dino', configured: true, returns: ['bbox'],
 
 test.beforeEach(async ({ page }) => {
 	await page.request.post(`${MOCK_ANNOTATOR}/__mock/reset`);
-	await page.route('**/annotator/capi/v1/me', (route) => json(route, { detail: 'anon' }, 401));
+	await page.route('**/annotator/capi/management/v1/me', (route) => json(route, { detail: 'anon' }, 401));
 	// Zone-scoped glob on purpose: a bare **/api/** also matches Vite /@fs module URLs and would kill
 	// hydration. Registration order is LIFO — the generic 404 first, the specific mocks after.
 	await page.route('**/annotator/api/**', (route) => json(route, { detail: 'unstubbed' }, 404));

@@ -154,7 +154,7 @@
 	let selected = $state<string | null>(null);
 	let dsl = $state<string | null>(null);
 	let modelTypes = $state<string[]>([]);
-	/** `{condition: {parameter: type}}` served by GET /v1/access/model — the grant dialog renders TYPED
+	/** `{condition: {parameter: type}}` served by GET /management/v1/access/model — the grant dialog renders TYPED
 	 *  inputs from this rather than from a copy that would drift the moment the model gains a parameter. */
 	let modelConditions = $state<Record<string, Record<string, string>>>({});
 	let registry = $state<string[]>([]);

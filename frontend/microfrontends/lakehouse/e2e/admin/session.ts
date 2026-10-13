@@ -7,7 +7,7 @@ import { AUTH_ON } from '../ports';
 // SESSION_SECRET, so the BFF accepts the documented dev-grade UNSEALED base64url session cookie, which we
 // mint here. The signed-out redirect contract itself is pinned by auth.spec.ts.
 /** The bearer each identity signs in with. The estate-admin door now runs SERVER-SIDE
- *  (admin/+layout.server.ts → GET /v1/me on the mock catalog), which page.route cannot intercept — so
+ *  (admin/+layout.server.ts → GET /management/v1/me on the mock catalog), which page.route cannot intercept — so
  *  the identity has to ride in something the server sees. It rides in the token, which is what a bearer
  *  is for, and that keeps it per browser CONTEXT: the suite is fullyParallel and a shared "current
  *  identity" on the mock would race every spec's door. */
@@ -28,8 +28,8 @@ const SESSION = {
 /** The display name the shared nav-user renders for the minted session (auth.spec.ts asserts it). */
 export const SESSION_NAME = SESSION.name;
 
-// The frozen /v1/me shapes the layout door + navbar read (mocked at the browser boundary — the
-// layout fetches me through this zone's /capi/v1/me pass-through, so page.route can intercept it).
+// The frozen /management/v1/me shapes the layout door + navbar read (mocked at the browser boundary — the
+// layout fetches me through this zone's /capi/management/v1/me pass-through, so page.route can intercept it).
 export const ME_ADMIN = {
 	sub: 'user:e2e',
 	name: 'E2E Admin',
@@ -48,9 +48,9 @@ export const ME_MEMBER = {
 	projects: [{ project: 'acme', role: 'member' }],
 };
 
-/** Mock the zone's /capi/v1/me pass-through (default: an estate admin, so panels render). */
+/** Mock the zone's /capi/management/v1/me pass-through (default: an estate admin, so panels render). */
 export async function mockMe(page: Page, me: unknown = ME_ADMIN) {
-	await page.route('**/capi/v1/me', (route) =>
+	await page.route('**/capi/management/v1/me', (route) =>
 		route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(me) }),
 	);
 }

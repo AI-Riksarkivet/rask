@@ -18,11 +18,11 @@ import { MOCK_UPSTREAMS } from './ports';
 // assertions rot silently through two IA changes, and the two catch opposite defects — the names catch a
 // zone silently leaving the bar, the count catches one silently joining it.
 //
-// NO `page.route('**/capi/v1/me')` STAND-IN, unlike the lakehouse original. `me` is resolved SERVER-SIDE
+// NO `page.route('**/capi/management/v1/me')` STAND-IN, unlike the lakehouse original. `me` is resolved SERVER-SIDE
 // now (`makeZoneLayoutLoad` → `fetchMe` against CATALOG_API, #107), so the browser never issues that read
 // and there is nothing for page.route to intercept — the identity is SEEDED on the mock instead, exactly
 // like every other server-side read in this suite. That is also what keeps the admin/anon pair testable
-// here: an unseeded `/v1/me` is `fetchMe`'s honest `null`, which IS the unresolved identity.
+// here: an unseeded `/management/v1/me` is `fetchMe`'s honest `null`, which IS the unresolved identity.
 
 let token: string;
 
@@ -50,7 +50,7 @@ const LINKED = ['Studio'] as const;
 test('the zone bar carries one trigger per zone, and this zone is one of them', async ({
 	page,
 }) => {
-	await seed(page, { 'GET /v1/me': ME_ADMIN });
+	await seed(page, { 'GET /management/v1/me': ME_ADMIN });
 	await page.goto('/models');
 	const nav = page.getByRole('navigation', { name: 'Zones' });
 	// THE IN-PROJECT BAR — one entry per zone, and nothing else. Home, Projects and Settings are the
@@ -126,7 +126,7 @@ test('the lakehouse panel no longer advertises the routes this zone took', async
 });
 
 test('an estate admin earns the Operations COLUMN, not a top-level entry', async ({ page }) => {
-	await seed(page, { 'GET /v1/me': ME_ADMIN });
+	await seed(page, { 'GET /management/v1/me': ME_ADMIN });
 	await page.goto('/models');
 	// Privilege shows up only INSIDE a panel. Operations stays with the lakehouse — running the estate is
 	// an operation ON it — so the split is asserted from both sides: these rows are in that zone's panel
@@ -148,7 +148,7 @@ test('an estate admin earns the Operations COLUMN, not a top-level entry', async
 });
 
 test('an unresolved identity gets no Operations column (fail-closed)', async ({ page }) => {
-	// NOTHING seeded, so the catalog 404s this bearer's `/v1/me` and `fetchMe` degrades to null — the
+	// NOTHING seeded, so the catalog 404s this bearer's `/management/v1/me` and `fetchMe` degrades to null — the
 	// unresolved identity. The bar must look IDENTICAL (same triggers, same count: privilege is never a
 	// top-level entry), and the privileged column must simply be absent.
 	await page.goto('/models');
@@ -193,7 +193,7 @@ test('the project switcher IS the sidebar header — exactly one control, in the
 	// The sidebar header IS the project dropdown (which project you are in, the projects you can move to,
 	// and the way back to the main menu, in one control). The rail's most valuable slot must not spend
 	// itself printing the ZONE name, which the navbar highlight and the breadcrumb already say twice.
-	await seed(page, { 'GET /v1/me': ME_ADMIN });
+	await seed(page, { 'GET /management/v1/me': ME_ADMIN });
 	await page.goto('/models');
 	const switcher = page.getByRole('button', { name: 'Switch project' });
 	await expect(switcher).toBeVisible();

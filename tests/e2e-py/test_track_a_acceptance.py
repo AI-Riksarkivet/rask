@@ -235,13 +235,13 @@ def estate() -> Iterator[Estate]:
     suffix = uuid.uuid4().hex[:8]
     live = Estate(project=f"tracka{suffix}", warehouse=f"tracka{suffix}-wh", namespace=f"trackans{suffix}")
 
-    r = requests.post(f"{CATALOG}/v1/projects", json={"id": live.project}, headers=_auth(), timeout=60)
+    r = requests.post(f"{CATALOG}/management/v1/projects", json={"id": live.project}, headers=_auth(), timeout=60)
     assert r.status_code == 200, f"could not mint a scratch project (is this token a project creator?): {r.text}"
-    r = requests.post(f"{CATALOG}/v1/warehouses", json={"id": live.warehouse, "project": live.project}, headers=_auth(), timeout=120)
+    r = requests.post(f"{CATALOG}/management/v1/warehouses", json={"id": live.warehouse, "project": live.project}, headers=_auth(), timeout=120)
     assert r.status_code == 200, r.text
     # The binding is what makes the namespace resolvable at all: a top-level namespace with no warehouse
     # is refused 400 by the hierarchy guard, so this call is the namespace's creation, not a decoration.
-    r = requests.post(f"{CATALOG}/v1/warehouses/{live.warehouse}/namespaces", json={"namespace": live.namespace}, headers=_auth(), timeout=60)
+    r = requests.post(f"{CATALOG}/management/v1/warehouses/{live.warehouse}/namespaces", json={"namespace": live.namespace}, headers=_auth(), timeout=60)
     assert r.status_code == 200, r.text
 
     try:
@@ -254,12 +254,12 @@ def estate() -> Iterator[Estate]:
         # `purge_bucket` is safe HERE and nowhere else in this file: the bucket was minted by this run's
         # own warehouse a few seconds ago and holds nothing else.
         requests.delete(
-            f"{CATALOG}/v1/warehouses/{live.warehouse}",
+            f"{CATALOG}/management/v1/warehouses/{live.warehouse}",
             params={"cascade": "true", "purge_bucket": "true", "force": "true"},
             headers=_auth(),
             timeout=180,
         )
-        requests.delete(f"{CATALOG}/v1/projects/{live.project}", headers=_auth(), timeout=60)
+        requests.delete(f"{CATALOG}/management/v1/projects/{live.project}", headers=_auth(), timeout=60)
 
 
 # --- 1. the tier contract ----------------------------------------------------------------------

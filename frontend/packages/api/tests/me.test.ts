@@ -1,5 +1,5 @@
 /**
- * Unit tests for `fetchMe` — the single-sourced BFF fetch of the frozen `GET /v1/me` contract. Every
+ * Unit tests for `fetchMe` — the single-sourced BFF fetch of the frozen `GET /management/v1/me` contract. Every
  * zone's navbar identity flows through this one helper, so its degrade-to-null posture (no token, 401,
  * outage, timeout, schema drift) is pinned here rather than re-proven per zone.
  */
@@ -31,11 +31,11 @@ function fakeFetch(status: number, body: unknown) {
 }
 
 describe('fetchMe', () => {
-	test('forwards the bearer to <catalogUrl>/v1/me and parses the frozen shape', async () => {
+	test('forwards the bearer to <catalogUrl>/management/v1/me and parses the frozen shape', async () => {
 		const { fetchFn, calls } = fakeFetch(200, me);
 		const got = await fetchMe({ catalogUrl: 'http://catalog:2333/', accessToken: 'tok', fetchFn });
 		expect(got).toEqual(me);
-		expect(calls[0]?.url).toBe('http://catalog:2333/v1/me');
+		expect(calls[0]?.url).toBe('http://catalog:2333/management/v1/me');
 		expect(calls[0]?.headers['authorization']).toBe('Bearer tok');
 	});
 

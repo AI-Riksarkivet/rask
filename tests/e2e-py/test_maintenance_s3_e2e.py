@@ -36,7 +36,7 @@ its own, sweeps only those, and deletes them. ``LANCE_E2E_S3_BUCKET`` is deliber
 that variable names the shared catalog bucket the CAS suite uses.
 
 **Scope, stated plainly.** The warehouse registry records are written as JSON directly to the control
-root rather than through ``POST /v1/warehouses``. That contradicts seed_estate.py's "drive the real
+root rather than through ``POST /management/v1/warehouses``. That contradicts seed_estate.py's "drive the real
 doors" rule and is a deliberate bound: what is under test is the READER
 (``warehouse_records.list_warehouse_records``) and the two bucket-set unions built on it, not catalog
 provisioning — which ``test_warehouses_e2e.py`` already drives, and which would re-gate this suite

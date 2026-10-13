@@ -1,4 +1,4 @@
-"""Unit tests for ``DELETE /v1/projects/{id}`` (endpoints/projects.py) — retiring a tenant.
+"""Unit tests for ``DELETE /management/v1/projects/{id}`` (endpoints/projects.py) — retiring a tenant.
 
 Drives the handler directly (no TestClient) with fake registry records + settings, the repo's direct-call
 style (``test_projects_endpoint.py``). Pins the lifecycle contract (`open_hierarchy_lifecycle.md`
@@ -57,7 +57,7 @@ def _settings(*, fga_enabled: bool = False) -> Any:
 
 _TOKEN = SimpleNamespace(sub="alice")
 
-#: A live tenant record, as ``POST /v1/projects`` writes it.
+#: A live tenant record, as ``POST /management/v1/projects`` writes it.
 _RECORD: dict[str, str] = {"id": "acme", "created_at": "2026-08-04T00:00:00+00:00", "created_by": "alice", "protected": "false"}
 
 #: One warehouse belonging to ANOTHER tenant — present in every world, so "empty" is proven to mean
@@ -185,7 +185,7 @@ def test_project_holding_warehouses_refuses_409_naming_every_one(monkeypatch: py
     message = str(excinfo.value)
     assert "wh-a" in message and "wh-b" in message
     assert "wh-g" not in message  # another tenant's warehouse neither blocks nor leaks into the refusal
-    assert "DELETE /v1/warehouses/" in message
+    assert "DELETE /management/v1/warehouses/" in message
     assert world.calls == []  # a refusal removes NOTHING — not a tuple, not the record
 
 
@@ -303,7 +303,7 @@ def test_an_unknown_tenant_and_a_forbidden_one_are_indistinguishable(monkeypatch
     Asserted as an equality between the two paths rather than as two separate "raises 404" checks,
     because that is the actual property: any difference at all — status, wording, an id echoed in one
     and not the other — turns this door into a tenant enumerator for every authenticated caller, which
-    is exactly what estate-observer gating `GET /v1/projects` was for.
+    is exactly what estate-observer gating `GET /management/v1/projects` was for.
     """
     _world(monkeypatch, record=None)  # the tenant does not exist
     with pytest.raises(TableNotFoundError) as absent:

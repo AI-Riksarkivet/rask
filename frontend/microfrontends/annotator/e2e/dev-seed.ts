@@ -14,7 +14,7 @@
  * `:8001` — so `dev-zone` points `LINEAGE_API` at this mock and seeds the probe.
  *
  * WHAT THIS CANNOT REACH. Some of this zone's specs mock at the BROWSER boundary with `page.route` —
- * identity rides `capi/v1/me`, a BFF pass-through intercepted there rather than seeded. A human's browser
+ * identity rides `capi/management/v1/me`, a BFF pass-through intercepted there rather than seeded. A human's browser
  * has no such interception, so identity-dependent chrome still renders its unauthenticated state under
  * `dev-zone`. Only the SERVER-side reads below are seedable.
  *

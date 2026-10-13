@@ -8,7 +8,7 @@ import type { LayoutServerLoad } from './$types';
  *
  * The root layout already refuses to render the admin area to a non-admin, but that gate runs in the
  * BROWSER: the server still compiled and shipped every admin route's HTML and JS, and only then did the
- * client fetch `/v1/me` and swap in ForbiddenPage. Nothing was disclosed that the backend would have
+ * client fetch `/management/v1/me` and swap in ForbiddenPage. Nothing was disclosed that the backend would have
  * served — every panel's data comes from the catalog or the lineage plane, which enforce estate-admin
  * in FGA themselves, so a non-admin got an empty shell and a wall of 403s. But "the data layer says no"
  * is one layer, and the admin area is the one place in the estate where it should be three.

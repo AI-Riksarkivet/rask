@@ -32,7 +32,7 @@ test.beforeEach(async ({ context }, testInfo) => {
 test('an estate admin gets Settings in the bar, and the page carries the estate’s configuration', async ({
 	page,
 }) => {
-	await seed(page, { 'GET /v1/me': ME_ADMIN, 'GET /v1/projects': [] });
+	await seed(page, { 'GET /management/v1/me': ME_ADMIN, 'GET /management/v1/projects': [] });
 	const res = await page.goto('/settings');
 	expect(res?.status()).toBe(200);
 	await expect(page.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible();
@@ -77,7 +77,7 @@ test('a non-admin is REFUSED /settings with the reason — the gate is on the SE
 	// navbar names it — while the 404 cost every legitimate user their next step. Reverting means
 	// reverting the ruling, not just this line.
 	await seed(page, {
-		'GET /v1/me': { ...ME_ADMIN, estate_admin: false, projects: [] },
+		'GET /management/v1/me': { ...ME_ADMIN, estate_admin: false, projects: [] },
 	});
 	const res = await page.goto('/settings');
 	expect(res?.status()).toBe(403);
@@ -105,7 +105,7 @@ test('an UNRESOLVED identity is refused for a DIFFERENT reason than a non-admin'
 	// the distinction and the MESSAGE is the only thing that does. That is exactly why this asserts the
 	// wording: drop it and the two failures become indistinguishable to the person reading the screen.
 	await seed(page, {
-		'GET /v1/me': { status: 503, body: { detail: 'catalog unavailable' } },
+		'GET /management/v1/me': { status: 503, body: { detail: 'catalog unavailable' } },
 	});
 	const res = await page.goto('/settings');
 	expect(res?.status()).toBe(403);
@@ -121,7 +121,7 @@ test('an UNRESOLVED identity is refused for a DIFFERENT reason than a non-admin'
 // and if someone un-hoists it, this fails rather than the next incident.
 for (const child of ['/settings/access', '/settings/audit'] as const) {
 	test(`${child} is behind the SAME server-side door as /settings`, async ({ page }) => {
-		await seed(page, { 'GET /v1/me': { ...ME_ADMIN, estate_admin: false, projects: [] } });
+		await seed(page, { 'GET /management/v1/me': { ...ME_ADMIN, estate_admin: false, projects: [] } });
 		expect((await page.goto(child))?.status()).toBe(403);
 		// Inheriting the STATUS is not enough — a child that inherited the door but grew its own
 		// generic message would satisfy a status-only assertion while losing the ruling.
@@ -129,7 +129,7 @@ for (const child of ['/settings/access', '/settings/audit'] as const) {
 	});
 
 	test(`${child} answers 403 for an unresolved identity, like its parent`, async ({ page }) => {
-		await seed(page, { 'GET /v1/me': { status: 503, body: { detail: 'catalog unavailable' } } });
+		await seed(page, { 'GET /management/v1/me': { status: 503, body: { detail: 'catalog unavailable' } } });
 		expect((await page.goto(child))?.status()).toBe(403);
 		await expect(page.getByText('could not be confirmed', { exact: false })).toBeVisible();
 	});

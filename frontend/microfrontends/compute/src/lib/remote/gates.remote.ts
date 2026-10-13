@@ -16,8 +16,8 @@ import { catalogJSON, parsed } from '$lib/server/doors';
 // governed catalog record — admin-gated on `project:<id>#can_administer` and landed on the audit
 // trail — so it rides the same seam.
 //
-// THE PREFIX IS SINGULAR. These three doors are on `project_router` (`/v1/project`), not the plural
-// `/v1/projects` that carries the transform LIST. Using the plural fails asymmetrically — the same
+// THE PREFIX IS SINGULAR. These three doors are on `project_router` (`/management/v1/project`), not the plural
+// `/management/v1/projects` that carries the transform LIST. Using the plural fails asymmetrically — the same
 // mistake cost three turns on the lane surface — so it is stated here rather than rediscovered.
 
 const enc = encodeURIComponent;
@@ -39,7 +39,7 @@ export const getGate = query(async (): Promise<ApiResult<GateDescribe>> => {
 	const project = activeProject();
 	if (project === '') return noProject<GateDescribe>();
 	return parsed(
-		await catalogJSON(`/v1/project/${enc(project)}/gate/describe`, { method: 'POST' }),
+		await catalogJSON(`/management/v1/project/${enc(project)}/gate/describe`, { method: 'POST' }),
 		GateDescribeSchema,
 	);
 });
@@ -49,7 +49,7 @@ export const setGate = command(GateDraftSchema, async (draft): Promise<ApiResult
 	const project = activeProject();
 	if (project === '') return noProject<GateSpec>();
 	const result = parsed(
-		await catalogJSON(`/v1/project/${enc(project)}/gate/set`, {
+		await catalogJSON(`/management/v1/project/${enc(project)}/gate/set`, {
 			method: 'POST',
 			headers: { 'content-type': 'application/json' },
 			body: JSON.stringify(draft),
@@ -70,7 +70,7 @@ export const clearGate = command(
 		const project = activeProject();
 		if (project === '') return noProject<{ removed: boolean }>();
 		const result = parsed(
-			await catalogJSON(`/v1/project/${enc(project)}/gate/delete`, { method: 'POST' }),
+			await catalogJSON(`/management/v1/project/${enc(project)}/gate/delete`, { method: 'POST' }),
 			GateRemovedSchema,
 		);
 		void getGate().refresh();

@@ -72,7 +72,7 @@ test('the New-namespace affordance points at the governed warehouse-bind flow', 
 	page,
 }) => {
 	// Deliberate scope: no bare create surface here — creation goes through POST
-	// /v1/warehouses/{id}/namespaces on the warehouses page (bucket-per-warehouse tenancy).
+	// /management/v1/warehouses/{id}/namespaces on the warehouses page (bucket-per-warehouse tenancy).
 	await page.goto('/lakehouse/catalog/namespaces');
 	await expect(page.getByRole('link', { name: 'New namespace' })).toHaveAttribute(
 		'href',
@@ -163,7 +163,7 @@ test('a failed bindings read says so — it never reads as "no namespaces" (#86)
 	// commit that fixed it. A read that could not answer must degrade LOUDLY.
 	await seed(page, {
 		'GET /v1/table': ALL_TABLES,
-		'GET /v1/warehouses/-/bindings': { status: 503, body: { detail: 'down' } },
+		'GET /management/v1/warehouses/-/bindings': { status: 503, body: { detail: 'down' } },
 	});
 	await page.goto('/lakehouse/catalog/namespaces');
 	await expect(page.getByTestId('bindings-unavailable')).toContainText(

@@ -72,7 +72,7 @@ const KIE_TASK = {
 
 test.beforeEach(async ({ page }) => {
 	await page.request.post(`${MOCK_ANNOTATOR}/__mock/reset`);
-	await page.route('**/annotator/capi/v1/me', (route) =>
+	await page.route('**/annotator/capi/management/v1/me', (route) =>
 		route.fulfill({ status: 401, contentType: 'application/json', body: '{}' }),
 	);
 	await page.route(`**/annotator/api/annotations/${DOC}/**`, (route) =>
@@ -205,7 +205,7 @@ test('the link is DRAWN on the canvas — an edge reaches the engine, not just t
 	// drawing buffer is not preserved after present). What is checked here is the fact that decides
 	// whether anything is drawn at all — that the engine was handed the edge, with the right rows.
 	// UNCAUGHT EXCEPTIONS only. Console `error` entries include resource failures — this stack logs
-	// a 401 for `capi/v1/me` on every anonymous load — and those say nothing about whether the draw
+	// a 401 for `capi/management/v1/me` on every anonymous load — and those say nothing about whether the draw
 	// path ran. A throw inside the engine's `sync()` is what this is looking for, and that surfaces
 	// as a pageerror.
 	const thrown: string[] = [];

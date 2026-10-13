@@ -28,7 +28,7 @@ export type { LineagePulse, RunNotice } from '@rask/api/runs-feed';
  *
  *  - `lineageFeed` — `GET /events?limit=1&summary=true` on the lineage plane, governed per subject.
  *    Everything data-shaped hangs off this.
- *  - `controlCursor` — `GET /v1/events?since=` on the catalog control plane, which is **estate-admin
+ *  - `controlCursor` — `GET /management/v1/events?since=` on the catalog control plane, which is **estate-admin
  *    gated** (`can_observe_events` on the FGA root) and reports *governance* mutations: warehouses,
  *    tenants, grants, promotions. Those never touch a dataset, so they never move the lineage cursor;
  *    `/settings/access` and `/settings/audit` use this instead.
@@ -83,7 +83,7 @@ export const controlCursor = query.live(async function* (): AsyncGenerator<numbe
 	for (;;) {
 		let moved = false;
 		try {
-			const res = await fetch(`${CATALOG_API}/v1/events?since=${cursor}`, {
+			const res = await fetch(`${CATALOG_API}/management/v1/events?since=${cursor}`, {
 				headers,
 				signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
 			});

@@ -24,15 +24,15 @@ import { catalogJSON, parsed } from '$lib/server/doors';
 // fields in and a small JSON record out — a value on both sides.
 //
 // WHY THE BEARER IS LOAD-BEARING. Every one of these four doors checks `can_administer` EXPLICITLY
-// (`/v1/project` is not a router-guarded resource prefix, and `project` defines no reader-tier
+// (`/management/v1/project` is not a router-guarded resource prefix, and `project` defines no reader-tier
 // relation, so even DESCRIBE gates at the admin tier). A remote function runs on the zone server and
 // forwards exactly one credential: the signed-in human's bearer. That is what the door accepts.
 
 const enc = encodeURIComponent;
 
 // THE PREFIX IS SPLIT, AND THE SPLIT IS NOT A TYPO. The catalog mounts these four doors on TWO
-// routers: `project_router` at `/v1/project` (SINGULAR) carries set/describe/delete, while
-// `projects_router` at `/v1/projects` (PLURAL) carries the list. Using the plural for all four is
+// routers: `project_router` at `/management/v1/project` (SINGULAR) carries set/describe/delete, while
+// `projects_router` at `/management/v1/projects` (PLURAL) carries the list. Using the plural for all four is
 // the obvious mistake and it FAILS ASYMMETRICALLY — the list answers 200 and only the writes 404,
 // so the page looks wired until someone tries to save. Verified live 2026-08-23.
 
@@ -58,7 +58,7 @@ function noProject<T>(): ApiResult<T> {
 export const listTransforms = query(async (): Promise<ApiResult<TransformList>> => {
 	const project = activeProject();
 	if (project === '') return noProject<TransformList>();
-	return parsed(await catalogJSON(`/v1/projects/${enc(project)}/transforms`), TransformListSchema);
+	return parsed(await catalogJSON(`/management/v1/projects/${enc(project)}/transforms`), TransformListSchema);
 });
 
 /** What may be named as a transform's `task`.
@@ -70,7 +70,7 @@ export const listTransforms = query(async (): Promise<ApiResult<TransformList>> 
 export const listRegisteredTasks = query(async (): Promise<ApiResult<RegisteredTasks>> => {
 	const project = activeProject();
 	if (project === '') return noProject<RegisteredTasks>();
-	return parsed(await catalogJSON(`/v1/projects/${enc(project)}/tasks`), RegisteredTasksSchema);
+	return parsed(await catalogJSON(`/management/v1/projects/${enc(project)}/tasks`), RegisteredTasksSchema);
 });
 
 /** Declare or replace one transform.
@@ -86,7 +86,7 @@ export const setLane = command(
 		const project = activeProject();
 		if (project === '') return noProject<TransformSpec>();
 		const result = parsed(
-			await catalogJSON(`/v1/project/${enc(project)}/transform/set`, {
+			await catalogJSON(`/management/v1/project/${enc(project)}/transform/set`, {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
 				body: JSON.stringify(draft),
@@ -113,7 +113,7 @@ export const deleteTransform = command(
 		// of the record's own fields come back, so validating it as a spec turned every successful
 		// delete into a shape drift.
 		const result = parsed(
-			await catalogJSON(`/v1/project/${enc(project)}/transform/delete`, {
+			await catalogJSON(`/management/v1/project/${enc(project)}/transform/delete`, {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
 				body: JSON.stringify({ name }),

@@ -235,7 +235,7 @@ class UserStateStore:
             # record is that same hazard arriving through schema drift instead of an outage. Reported as
             # absent, the client seeds a fresh canvas and its next save destroys work the user still has.
             # Proven live before this raised: one field of a real row changed from str to int (a plausible
-            # evolution) and `GET /v1/user-state/saved-views` answered `exists: false` over an intact row.
+            # evolution) and `GET /management/v1/user-state/saved-views` answered `exists: false` over an intact row.
             log.exception("user_state_unreadable", extra={"document": document.value, "key": key})
             raise UserStateUnreadable(document, "the stored record no longer fits its schema") from exc
         if stored.subject != subject:
@@ -274,7 +274,7 @@ class UserStateStore:
         that. Optimistic concurrency with no contender is machinery for a conflict that cannot happen.
 
         **It is wrong for a SHARED document, and one caller has one**. The catalog's
-        `POST /v1/stores` read-modify-writes `ATTACHED_STORES` under `ESTATE_SUBJECT` — an estate-scoped
+        `POST /management/v1/stores` read-modify-writes `ATTACHED_STORES` under `ESTATE_SUBJECT` — an estate-scoped
         key every admin writes — so two concurrent attaches each read N stores and each wrote N+1,
         silently dropping one. The docstring here asserted the opposite ("there is no second writer to
         lose a race with") and that assertion is what made the defect invisible.

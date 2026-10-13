@@ -79,7 +79,7 @@ describe('login-first gate', () => {
 		expect(gated('/auth/login')).toBe(false);
 		expect(gated('/data/_app/immutable/entry.js')).toBe(false);
 		expect(gated('/admin/api/audit')).toBe(false);
-		expect(gated('/data/capi/v1/warehouses')).toBe(false);
+		expect(gated('/data/capi/management/v1/warehouses')).toBe(false);
 		expect(gated('/favicon.png')).toBe(false);
 		expect(gated('/data/tables', { method: 'POST' })).toBe(false);
 		expect(gated('/data/tables', { isDataRequest: true })).toBe(false);

@@ -43,7 +43,7 @@ function annotationsIPC(): Buffer {
 
 test.beforeEach(async ({ page }) => {
 	await page.request.post(`${MOCK_ANNOTATOR}/__mock/reset`);
-	await page.route('**/annotator/capi/v1/me', (route) => json(route, { detail: 'anon' }, 401));
+	await page.route('**/annotator/capi/management/v1/me', (route) => json(route, { detail: 'anon' }, 401));
 	await page.route('**/annotator/api/**', (route) => json(route, { detail: 'unstubbed' }, 404));
 	// Range-aware on purpose: Chromium marks a plain-200 media response unseekable
 	// (`video.seekable` stays empty), and every `currentTime` assignment silently no-ops —

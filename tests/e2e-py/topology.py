@@ -73,7 +73,7 @@ def create_top_level(server: str, name: str, headers: dict[str, str], *, timeout
     """POST the create, through the warehouse door when the estate has one, and REMEMBER it."""
     if WAREHOUSE:
         response = requests.post(
-            f"{server.rstrip('/')}/v1/warehouses/{WAREHOUSE}/namespaces",
+            f"{server.rstrip('/')}/management/v1/warehouses/{WAREHOUSE}/namespaces",
             headers=headers,
             json={"namespace": name, "adopt_existing": True},
             timeout=timeout,
@@ -98,7 +98,7 @@ def unbind_created(*, timeout: float = 15.0) -> list[str]:
     while CREATED:
         server, name, headers = CREATED.pop()
         try:
-            response = requests.delete(f"{server.rstrip('/')}/v1/warehouses/{WAREHOUSE}/namespaces/{name}", headers=headers, timeout=timeout)
+            response = requests.delete(f"{server.rstrip('/')}/management/v1/warehouses/{WAREHOUSE}/namespaces/{name}", headers=headers, timeout=timeout)
         except requests.RequestException as exc:  # noqa: PERF203 — one unreachable catalog must not hide the rest
             left.append(f"{name}: unreachable ({type(exc).__name__})")
             continue

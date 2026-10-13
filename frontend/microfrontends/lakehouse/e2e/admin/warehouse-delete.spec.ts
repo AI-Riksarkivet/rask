@@ -2,7 +2,7 @@ import { test, expect, type Page } from '@playwright/test';
 import { mockMe, signIn, TOKEN } from './session';
 import { MOCK_CATALOG } from '../ports';
 
-// The warehouse DESTROY door (`DELETE /v1/warehouses/{id}`) as the user meets it. What is under test is
+// The warehouse DESTROY door (`DELETE /management/v1/warehouses/{id}`) as the user meets it. What is under test is
 // not "does the button call the API" — it is that each of the three opt-ins costs something DELIBERATE:
 //
 //  * the plain delete goes first and its 409 is shown VERBATIM, because the catalog writes that sentence
@@ -69,7 +69,7 @@ test.beforeEach(async ({ context, page }, testInfo) => {
 	token = `${TOKEN.admin}:${testInfo.testId}:${testInfo.retry}`;
 	await signIn(context, { token });
 	await mockMe(page);
-	await seed(page, { 'GET /v1/warehouses': [WAREHOUSE] });
+	await seed(page, { 'GET /management/v1/warehouses': [WAREHOUSE] });
 });
 
 /** Open the row's delete dialog. */
@@ -87,7 +87,7 @@ test('the plain delete goes first, its 409 is verbatim, and only then is cascade
 	page,
 }) => {
 	await seed(page, {
-		'DELETE /v1/warehouses/acme-wh': { status: 409, body: { detail: BOUND_DETAIL } },
+		'DELETE /management/v1/warehouses/acme-wh': { status: 409, body: { detail: BOUND_DETAIL } },
 	});
 	const dialog = await openDialog(page);
 
@@ -108,15 +108,15 @@ test('the plain delete goes first, its 409 is verbatim, and only then is cascade
 	await expect(dialog.getByTestId('cascade-namespaces')).toHaveText(/silver/);
 
 	// The request carried NO flags — the plain delete really was tried first.
-	expect(await deletePaths(page)).toEqual(['/v1/warehouses/acme-wh']);
+	expect(await deletePaths(page)).toEqual(['/management/v1/warehouses/acme-wh']);
 });
 
 test('the cascade delete sends exactly ?cascade=true and the toast reports the RESPONSE', async ({
 	page,
 }) => {
 	await seed(page, {
-		'DELETE /v1/warehouses/acme-wh': { status: 409, body: { detail: BOUND_DETAIL } },
-		'DELETE /v1/warehouses/acme-wh?cascade=true': {
+		'DELETE /management/v1/warehouses/acme-wh': { status: 409, body: { detail: BOUND_DETAIL } },
+		'DELETE /management/v1/warehouses/acme-wh?cascade=true': {
 			id: 'acme-wh',
 			bucket: 'acme-bucket',
 			namespaces_dropped: ['bronze', 'silver'],
@@ -142,8 +142,8 @@ test('the cascade delete sends exactly ?cascade=true and the toast reports the R
 	).toBeVisible();
 
 	expect(await deletePaths(page)).toEqual([
-		'/v1/warehouses/acme-wh',
-		'/v1/warehouses/acme-wh?cascade=true',
+		'/management/v1/warehouses/acme-wh',
+		'/management/v1/warehouses/acme-wh?cascade=true',
 	]);
 });
 
@@ -151,7 +151,7 @@ test('the purge stays inert until the bucket name is typed, and disarms when it 
 	page,
 }) => {
 	await seed(page, {
-		'DELETE /v1/warehouses/acme-wh?purge_bucket=true': {
+		'DELETE /management/v1/warehouses/acme-wh?purge_bucket=true': {
 			id: 'acme-wh',
 			bucket: 'acme-bucket',
 			namespaces_dropped: [],
@@ -191,15 +191,15 @@ test('the purge stays inert until the bucket name is typed, and disarms when it 
 		),
 	).toBeVisible();
 
-	expect(await deletePaths(page)).toEqual(['/v1/warehouses/acme-wh?purge_bucket=true']);
+	expect(await deletePaths(page)).toEqual(['/management/v1/warehouses/acme-wh?purge_bucket=true']);
 });
 
 test('force is offered only after a protection refusal, and says what it does NOT override', async ({
 	page,
 }) => {
 	await seed(page, {
-		'DELETE /v1/warehouses/acme-wh': { status: 409, body: { detail: PROTECTED_DETAIL } },
-		'DELETE /v1/warehouses/acme-wh?force=true': {
+		'DELETE /management/v1/warehouses/acme-wh': { status: 409, body: { detail: PROTECTED_DETAIL } },
+		'DELETE /management/v1/warehouses/acme-wh?force=true': {
 			id: 'acme-wh',
 			bucket: 'acme-bucket',
 			namespaces_dropped: [],
@@ -231,8 +231,8 @@ test('force is offered only after a protection refusal, and says what it does NO
 	).toBeVisible();
 
 	expect(await deletePaths(page)).toEqual([
-		'/v1/warehouses/acme-wh',
-		'/v1/warehouses/acme-wh?force=true',
+		'/management/v1/warehouses/acme-wh',
+		'/management/v1/warehouses/acme-wh?force=true',
 	]);
 });
 
@@ -243,7 +243,7 @@ test('a DISARMED purge sends no purge_bucket, and the toast still reports the bu
 	// seeded, so a request that carried `purge_bucket=true` would fall through to the mock's own key and
 	// be recorded under a path this expectation rejects.
 	await seed(page, {
-		'DELETE /v1/warehouses/acme-wh': {
+		'DELETE /management/v1/warehouses/acme-wh': {
 			id: 'acme-wh',
 			bucket: 'acme-bucket',
 			namespaces_dropped: [],
@@ -275,14 +275,14 @@ test('a DISARMED purge sends no purge_bucket, and the toast still reports the bu
 			'Deleted warehouse acme-wh: no namespaces dropped; revoked 2 tuples; bucket acme-bucket kept.',
 		),
 	).toBeVisible();
-	expect(await deletePaths(page)).toEqual(['/v1/warehouses/acme-wh']);
+	expect(await deletePaths(page)).toEqual(['/management/v1/warehouses/acme-wh']);
 });
 
 test('a confirmed delete re-reads the registry: the row is gone without a reload', async ({
 	page,
 }) => {
 	await seed(page, {
-		'DELETE /v1/warehouses/acme-wh': {
+		'DELETE /management/v1/warehouses/acme-wh': {
 			id: 'acme-wh',
 			bucket: 'acme-bucket',
 			namespaces_dropped: [],
@@ -295,7 +295,7 @@ test('a confirmed delete re-reads the registry: the row is gone without a reload
 	// From here the registry answers WITHOUT the warehouse. Nothing navigates, nothing reloads and the
 	// control cursor never moves in this test — so the single-flight refresh inside `deleteWarehouse` is
 	// the ONLY thing that can make the page stop showing a warehouse that no longer exists.
-	await seed(page, { 'GET /v1/warehouses': [] });
+	await seed(page, { 'GET /management/v1/warehouses': [] });
 
 	await dialog.getByRole('button', { name: 'Delete warehouse' }).click();
 	await expect(page.getByText('Deleted warehouse acme-wh:')).toBeVisible();
@@ -309,7 +309,7 @@ test('no opt-in survives a close: the next open starts from the plain delete aga
 	page,
 }) => {
 	await seed(page, {
-		'DELETE /v1/warehouses/acme-wh': { status: 409, body: { detail: BOUND_DETAIL } },
+		'DELETE /management/v1/warehouses/acme-wh': { status: 409, body: { detail: BOUND_DETAIL } },
 	});
 	const dialog = await openDialog(page);
 	await dialog.getByRole('button', { name: 'Delete warehouse' }).click();

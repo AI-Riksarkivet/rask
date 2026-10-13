@@ -127,7 +127,7 @@ for (const [name, path, marker] of [
 	await alice.goto(`${ORIGIN}${path}`, { waitUntil: 'domcontentloaded' });
 	await alice.waitForTimeout(6000);
 	alice.off('response', listener);
-	const backend = seen.filter((s) => !s.includes('/v1/me'));
+	const backend = seen.filter((s) => !s.includes('/management/v1/me'));
 	console.log(`   backend requests: ${backend.length ? backend.join(', ') : '(NONE)'}`);
 	ok(backend.length > 0, `/admin/${name} makes a real backend request`);
 	ok(marker.test(await alice.locator('body').innerText()), `/admin/${name} renders its surface`);

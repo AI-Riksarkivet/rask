@@ -45,12 +45,12 @@ def _settings(tmp_path: Any, *, enabled: bool = True, fga: bool = False, reserve
 
 def _mk_projects(client: TestClient, *project_ids: str) -> None:
     """Mint the tenants a test needs, through the REAL door (Decision 1: a warehouse requires an
-    EXISTING project, and POST /v1/projects is the one way to make one). FGA is off in this suite, so
+    EXISTING project, and POST /management/v1/projects is the one way to make one). FGA is off in this suite, so
     the estate gate no-ops and the registry record is the whole effect — which is exactly the layer
     these tests exercise. Attacker tenants (`evil`) are minted too: Mallory legitimately owns her own
     project; what she must NOT be able to do is claim someone else's bucket or warehouse id."""
     for project_id in project_ids:
-        resp = client.post("/v1/projects", json={"id": project_id})
+        resp = client.post("/management/v1/projects", json={"id": project_id})
         assert resp.status_code == 200, f"project {project_id}: {resp.text}"
 
 
@@ -60,17 +60,17 @@ def test_create_list_get_warehouse(client: TestClient, tmp_path: Any, monkeypatc
     client.app.dependency_overrides[get_settings] = lambda: _settings(tmp_path)
     _mk_projects(client, "acme")
 
-    resp = client.post("/v1/warehouses", json={"id": "wh-a", "project": "acme"})
+    resp = client.post("/management/v1/warehouses", json={"id": "wh-a", "project": "acme"})
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["id"] == "wh-a" and body["bucket"] == "wh-a" and body["root_uri"] == "s3://wh-a"
     assert provisioned == ["wh-a"]  # the physical bucket was provisioned at runtime
 
-    listed = client.get("/v1/warehouses")
+    listed = client.get("/management/v1/warehouses")
     assert listed.status_code == 200
     assert "wh-a" in [w["id"] for w in listed.json()]
 
-    got = client.get("/v1/warehouses/wh-a")
+    got = client.get("/management/v1/warehouses/wh-a")
     assert got.status_code == 200 and got.json()["bucket"] == "wh-a"
 
 
@@ -81,10 +81,10 @@ def test_create_warehouse_cross_project_collision_409(client: TestClient, tmp_pa
     monkeypatch.setattr(wh_svc, "provision_bucket", lambda bucket, so: None)
     client.app.dependency_overrides[get_settings] = lambda: _settings(tmp_path)
     _mk_projects(client, "acme", "evil")
-    assert client.post("/v1/warehouses", json={"id": "wh-x", "project": "acme"}).status_code == 200
-    r = client.post("/v1/warehouses", json={"id": "wh-x", "project": "evil"})
+    assert client.post("/management/v1/warehouses", json={"id": "wh-x", "project": "acme"}).status_code == 200
+    r = client.post("/management/v1/warehouses", json={"id": "wh-x", "project": "evil"})
     assert r.status_code == 409, r.text
-    assert client.post("/v1/warehouses", json={"id": "wh-x", "project": "acme"}).status_code == 200
+    assert client.post("/management/v1/warehouses", json={"id": "wh-x", "project": "acme"}).status_code == 200
 
 
 def test_create_warehouse_bucket_claimed_by_another_project_409(client: TestClient, tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -96,10 +96,10 @@ def test_create_warehouse_bucket_claimed_by_another_project_409(client: TestClie
     monkeypatch.setattr(wh_svc, "provision_bucket", lambda bucket, so: None)
     client.app.dependency_overrides[get_settings] = lambda: _settings(tmp_path)
     _mk_projects(client, "acme", "evil")
-    assert client.post("/v1/warehouses", json={"id": "wh-a", "project": "acme", "bucket": "acme-wh"}).status_code == 200
-    r = client.post("/v1/warehouses", json={"id": "wh-evil", "project": "evil", "bucket": "acme-wh"})
+    assert client.post("/management/v1/warehouses", json={"id": "wh-a", "project": "acme", "bucket": "acme-wh"}).status_code == 200
+    r = client.post("/management/v1/warehouses", json={"id": "wh-evil", "project": "evil", "bucket": "acme-wh"})
     assert r.status_code == 409, r.text
-    same = client.post("/v1/warehouses", json={"id": "wh-a2", "project": "acme", "bucket": "acme-wh"})
+    same = client.post("/management/v1/warehouses", json={"id": "wh-a2", "project": "acme", "bucket": "acme-wh"})
     assert same.status_code == 200, same.text
 
 
@@ -112,7 +112,7 @@ def test_create_warehouse_reserved_bucket_refused(client: TestClient, tmp_path: 
     client.app.dependency_overrides[get_settings] = lambda: _settings(tmp_path, reserved="lance-source")
     _mk_projects(client, "evil")
     for bucket in ("lance-catalog", "lance-source"):  # the shared root + a configured zone bucket
-        r = client.post("/v1/warehouses", json={"id": "wh-evil", "project": "evil", "bucket": bucket})
+        r = client.post("/management/v1/warehouses", json={"id": "wh-evil", "project": "evil", "bucket": bucket})
         assert r.status_code == 400, r.text
     assert provisioned == []  # refused before any bucket/registry/FGA side effect
 
@@ -123,10 +123,10 @@ def test_list_warehouses_tolerates_a_corrupt_record(client: TestClient, tmp_path
     monkeypatch.setattr(wh_svc, "provision_bucket", lambda bucket, so: None)
     client.app.dependency_overrides[get_settings] = lambda: _settings(tmp_path)
     _mk_projects(client, "acme")
-    assert client.post("/v1/warehouses", json={"id": "wh-a", "project": "acme"}).status_code == 200
+    assert client.post("/management/v1/warehouses", json={"id": "wh-a", "project": "acme"}).status_code == 200
     (tmp_path / "_warehouses" / "zzz-corrupt.json").write_text("{truncated")
     (tmp_path / "_warehouses" / "zzz-idless.json").write_text('{"bucket": "x"}')
-    listed = client.get("/v1/warehouses")
+    listed = client.get("/management/v1/warehouses")
     assert listed.status_code == 200, listed.text
     assert [w["id"] for w in listed.json()] == ["wh-a"]
 
@@ -139,9 +139,9 @@ def test_namespace_binding_is_write_once_409(client: TestClient, tmp_path: Any, 
     s = _settings(tmp_path)
     client.app.dependency_overrides[get_settings] = lambda: s
     _mk_projects(client, "acme")
-    client.post("/v1/warehouses", json={"id": "wh-b", "project": "acme"})
+    client.post("/management/v1/warehouses", json={"id": "wh-b", "project": "acme"})
     wh_svc.bind_namespace(s.registry_root, s.storage_options(), "shared", "wh-a", "s3://wh-a")
-    r = client.post("/v1/warehouses/wh-b/namespaces", json={"namespace": "shared"})
+    r = client.post("/management/v1/warehouses/wh-b/namespaces", json={"namespace": "shared"})
     assert r.status_code == 409, r.text
 
 
@@ -149,14 +149,14 @@ def test_explicit_bucket_name(client: TestClient, tmp_path: Any, monkeypatch: py
     monkeypatch.setattr(wh_svc, "provision_bucket", lambda bucket, so: None)
     client.app.dependency_overrides[get_settings] = lambda: _settings(tmp_path)
     _mk_projects(client, "acme")
-    resp = client.post("/v1/warehouses", json={"id": "wh-b", "project": "acme", "bucket": "tenant-b-data"})
+    resp = client.post("/management/v1/warehouses", json={"id": "wh-b", "project": "acme", "bucket": "tenant-b-data"})
     assert resp.status_code == 200, resp.text
     assert resp.json()["root_uri"] == "s3://tenant-b-data"
 
 
 def test_get_missing_warehouse_404(client: TestClient, tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     client.app.dependency_overrides[get_settings] = lambda: _settings(tmp_path)
-    assert client.get("/v1/warehouses/nope").status_code == 404
+    assert client.get("/management/v1/warehouses/nope").status_code == 404
 
 
 def test_invalid_id_rejected_400(client: TestClient, tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -164,14 +164,14 @@ def test_invalid_id_rejected_400(client: TestClient, tmp_path: Any, monkeypatch:
     client.app.dependency_overrides[get_settings] = lambda: _settings(tmp_path)
     _mk_projects(client, "acme")
     # Uppercase + underscore is not a DNS-safe bucket fragment → 400 (never a malformed bucket create).
-    assert client.post("/v1/warehouses", json={"id": "Bad_Name", "project": "acme"}).status_code == 400
+    assert client.post("/management/v1/warehouses", json={"id": "Bad_Name", "project": "acme"}).status_code == 400
 
 
 def test_disabled_is_unsupported(client: TestClient, tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     client.app.dependency_overrides[get_settings] = lambda: _settings(tmp_path, enabled=False)
     _mk_projects(client, "acme")
     assert (
-        client.post("/v1/warehouses", json={"id": "wh-x", "project": "acme"}).status_code == 406
+        client.post("/management/v1/warehouses", json={"id": "wh-x", "project": "acme"}).status_code == 406
     )  # 406 since Q3 (2026-09-02): the spec's UnsupportedOperationErrorResponse is 406, and Lance's own reference server maps ErrorCode::Unsupported to NOT_ACCEPTABLE.
 
 
@@ -183,12 +183,12 @@ def test_recreate_does_not_reactivate_a_deactivated_warehouse(client: TestClient
     s = _settings(tmp_path)
     client.app.dependency_overrides[get_settings] = lambda: s
     _mk_projects(client, "acme")
-    created = client.post("/v1/warehouses", json={"id": "wh-a", "project": "acme"})
+    created = client.post("/management/v1/warehouses", json={"id": "wh-a", "project": "acme"})
     assert created.status_code == 200
     created_at = created.json()["created_at"]
-    assert client.post("/v1/warehouses/wh-a/deactivate").json()["status"] == "deactivated"
+    assert client.post("/management/v1/warehouses/wh-a/deactivate").json()["status"] == "deactivated"
 
-    re = client.post("/v1/warehouses", json={"id": "wh-a", "project": "acme"})  # idempotent re-create
+    re = client.post("/management/v1/warehouses", json={"id": "wh-a", "project": "acme"})  # idempotent re-create
     assert re.status_code == 200
     assert re.json()["status"] == "deactivated", "re-create silently REACTIVATED a quarantined warehouse"
     assert re.json()["created_at"] == created_at, "re-create reset created_at"
@@ -202,16 +202,16 @@ def test_namespace_create_refused_on_deactivated_warehouse(client: TestClient, t
     s = _settings(tmp_path)
     client.app.dependency_overrides[get_settings] = lambda: s
     _mk_projects(client, "acme")
-    client.post("/v1/warehouses", json={"id": "wh-a", "project": "acme"})
-    client.post("/v1/warehouses/wh-a/deactivate")
-    r = client.post("/v1/warehouses/wh-a/namespaces", json={"namespace": "newns"})
+    client.post("/management/v1/warehouses", json={"id": "wh-a", "project": "acme"})
+    client.post("/management/v1/warehouses/wh-a/deactivate")
+    r = client.post("/management/v1/warehouses/wh-a/namespaces", json={"namespace": "newns"})
     assert r.status_code == 403, r.text
     assert "deactivated" in r.text.lower()
 
 
 def test_deactivate_missing_warehouse_404(client: TestClient, tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     client.app.dependency_overrides[get_settings] = lambda: _settings(tmp_path)
-    assert client.post("/v1/warehouses/ghost/deactivate").status_code == 404
+    assert client.post("/management/v1/warehouses/ghost/deactivate").status_code == 404
 
 
 def test_deactivate_hides_existence_from_non_admin_404(client: TestClient, tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -221,7 +221,7 @@ def test_deactivate_hides_existence_from_non_admin_404(client: TestClient, tmp_p
     s = _settings(tmp_path, fga=True)
     client.app.dependency_overrides[get_settings] = lambda: s
     # Registry seeded DIRECTLY: this test runs FGA-ON with a deny/mock client, so the estate gate
-    # on POST /v1/projects would interfere — and project existence is not the layer under test.
+    # on POST /management/v1/projects would interfere — and project existence is not the layer under test.
     proj_svc.put_project(f"file://{tmp_path}", {}, {"id": "acme", "created_at": "t", "created_by": "seed", "protected": "false"})
     wh_svc.put_warehouse(
         s.registry_root,
@@ -243,14 +243,14 @@ def test_deactivate_hides_existence_from_non_admin_404(client: TestClient, tmp_p
         return False
 
     monkeypatch.setattr(fga_module, "check", deny)
-    r = client.post("/v1/warehouses/wh-real/deactivate", headers={"authorization": "Bearer t"})
+    r = client.post("/management/v1/warehouses/wh-real/deactivate", headers={"authorization": "Bearer t"})
     assert r.status_code == 404, r.text  # NOT 403 — a non-admin cannot learn wh-real exists
 
 
 def test_create_denied_for_non_admin_403(client: TestClient, tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     client.app.dependency_overrides[get_settings] = lambda: _settings(tmp_path, fga=True)
     # Registry seeded DIRECTLY: this test runs FGA-ON with a deny/mock client, so the estate gate
-    # on POST /v1/projects would interfere — and project existence is not the layer under test.
+    # on POST /management/v1/projects would interfere — and project existence is not the layer under test.
     proj_svc.put_project(f"file://{tmp_path}", {}, {"id": "acme", "created_at": "t", "created_by": "seed", "protected": "false"})
     verifier = MagicMock()
     verifier.verify.return_value = IDToken(iss="i", sub="mallory", aud="lance", exp=1, iat=1)
@@ -263,7 +263,7 @@ def test_create_denied_for_non_admin_403(client: TestClient, tmp_path: Any, monk
         return False
 
     monkeypatch.setattr(fga_module, "check", deny)
-    resp = client.post("/v1/warehouses", json={"id": "wh-a", "project": "acme"}, headers={"authorization": "Bearer t"})
+    resp = client.post("/management/v1/warehouses", json={"id": "wh-a", "project": "acme"}, headers={"authorization": "Bearer t"})
     assert resp.status_code == 403, resp.text
 
 
@@ -280,7 +280,7 @@ def test_create_warehouse_lost_race_cannot_take_over(client: TestClient, tmp_pat
     monkeypatch.setattr(wh_svc, "provision_bucket", lambda bucket, so: None)
     client.app.dependency_overrides[get_settings] = lambda: _settings(tmp_path)
     _mk_projects(client, "acme", "evil")
-    assert client.post("/v1/warehouses", json={"id": "wh-race", "project": "acme"}).status_code == 200
+    assert client.post("/management/v1/warehouses", json={"id": "wh-race", "project": "acme"}).status_code == 200
 
     real_get = wh_svc.get_warehouse
     reads = {"n": 0}
@@ -308,7 +308,7 @@ def test_create_warehouse_lost_race_cannot_take_over(client: TestClient, tmp_pat
     monkeypatch.setattr(rec, "read_json", counting_read_json)
     # evil names a DIFFERENT bucket so the (unblinded) bucket-claim scan cannot catch this — the
     # id-mint conditional create is the only remaining defense, which is the point of the test.
-    r = client.post("/v1/warehouses", json={"id": "wh-race", "project": "evil", "bucket": "evil-bkt"})
+    r = client.post("/management/v1/warehouses", json={"id": "wh-race", "project": "evil", "bucket": "evil-bkt"})
     assert r.status_code == 409, r.text
     assert conditional_reads["n"] >= 1, "the conditional write never re-read — the guard refused, not the store"
     assert reads["n"] == 1, "the guard read more than once; the blinding no longer models the race"
@@ -324,7 +324,7 @@ def test_create_warehouse_lost_race_same_project_converges(client: TestClient, t
     monkeypatch.setattr(wh_svc, "provision_bucket", lambda bucket, so: None)
     client.app.dependency_overrides[get_settings] = lambda: _settings(tmp_path)
     _mk_projects(client, "acme")
-    assert client.post("/v1/warehouses", json={"id": "wh-conv", "project": "acme"}).status_code == 200
+    assert client.post("/management/v1/warehouses", json={"id": "wh-conv", "project": "acme"}).status_code == 200
     root = f"file://{tmp_path}"
     wh_svc.set_warehouse_status(root, {}, "wh-conv", "deactivated")
 
@@ -338,7 +338,7 @@ def test_create_warehouse_lost_race_same_project_converges(client: TestClient, t
         return real_get(rt, so, wid)
 
     monkeypatch.setattr(wh_svc, "get_warehouse", racy_get)
-    r = client.post("/v1/warehouses", json={"id": "wh-conv", "project": "acme"})
+    r = client.post("/management/v1/warehouses", json={"id": "wh-conv", "project": "acme"})
     assert r.status_code == 200, r.text
     monkeypatch.setattr(wh_svc, "get_warehouse", real_get)
     surviving = wh_svc.get_warehouse(root, {}, "wh-conv")
@@ -404,7 +404,7 @@ def _wh_with_fake_backend(client: TestClient, tmp_path: Any, monkeypatch: pytest
     FGA must be ON or there is nothing to fail: `seed_ownership` no-ops when it is off, so the whole
     compensation path is unreachable and the endpoint would answer 200 — which is exactly how the
     first draft of these tests passed while asserting nothing. The registry is seeded DIRECTLY for
-    the same reason the suite's other FGA-ON tests do it: the estate gate on POST /v1/projects would
+    the same reason the suite's other FGA-ON tests do it: the estate gate on POST /management/v1/projects would
     interfere, and project existence is not the layer under test.
     """
     import catalog.api.v1.endpoints.warehouses as wh_ep
@@ -448,7 +448,7 @@ def test_warehouse_namespace_create_converges_after_a_failed_grant(client: TestC
 
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(fga_module, "grant_on_create", _failing_grant)
-        failed = client.post("/v1/warehouses/wh-f3/namespaces", json={"namespace": "f3ns"}, headers=_BEARER)
+        failed = client.post("/management/v1/warehouses/wh-f3/namespaces", json={"namespace": "f3ns"}, headers=_BEARER)
     assert failed.status_code == 503, failed.text
 
     # The compensating drop was ISSUED, and the namespace is gone from the backend.
@@ -459,7 +459,7 @@ def test_warehouse_namespace_create_converges_after_a_failed_grant(client: TestC
     assert wh_svc.binding_for_namespace(f"file://{tmp_path}", {}, "f3ns") is None
 
     # …and the PLAIN retry converges, with no `adopt_existing` anywhere near it.
-    retried = client.post("/v1/warehouses/wh-f3/namespaces", json={"namespace": "f3ns"}, headers=_BEARER)
+    retried = client.post("/management/v1/warehouses/wh-f3/namespaces", json={"namespace": "f3ns"}, headers=_BEARER)
     assert retried.status_code == 200, retried.text
     binding = wh_svc.binding_for_namespace(f"file://{tmp_path}", {}, "f3ns")
     assert binding is not None and binding["warehouse_id"] == "wh-f3"
@@ -478,7 +478,7 @@ def test_adopted_namespace_is_never_compensated_away(client: TestClient, tmp_pat
 
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(fga_module, "grant_on_create", _failing_grant)
-        failed = client.post("/v1/warehouses/wh-adopt/namespaces", json={"namespace": "migrated", "adopt_existing": True}, headers=_BEARER)
+        failed = client.post("/management/v1/warehouses/wh-adopt/namespaces", json={"namespace": "migrated", "adopt_existing": True}, headers=_BEARER)
     assert failed.status_code == 503, failed.text
 
     # NO drop was issued, and the pre-existing namespace survived.

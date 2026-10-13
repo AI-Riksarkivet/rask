@@ -70,7 +70,7 @@ namespace_router = APIRouter(prefix="/management/v1/namespace", tags=["access"])
 # Warehouse is NOT in fga_deps._RESOURCES, so `authorize` returns early for these paths — every route
 # mounted here must gate itself explicitly (see `set_warehouse_managed_access`).
 warehouse_router = APIRouter(prefix="/management/v1/warehouse", tags=["access"])
-# Same rule as the warehouse router above: `/v1/projects/…` is outside `fga_deps._RESOURCES`, so
+# Same rule as the warehouse router above: `/management/v1/projects/…` is outside `fga_deps._RESOURCES`, so
 # `authorize` returns early and every route here gates itself. Its own router rather than a route on
 # the projects module so the access surface stays in one file — the place someone looks when asking
 # "what is gated, and how".
@@ -286,7 +286,7 @@ async def my_warehouse_permissions(id: str, client: FgaClientDep, settings: Sett
 
     GATED EXPLICITLY, unlike its table/namespace siblings. Warehouse is not in `fga_deps._RESOURCES`
     (`namespace`, `table`, `materialized_view`, `transaction`), so the router-level `authorize`
-    returns early for every `/v1/warehouse/…` path and a route mounted here that forgets its own check
+    returns early for every `/management/v1/warehouse/…` path and a route mounted here that forgets its own check
     is simply ungated — the hazard this module's own header comment names.
 
     Reader tier (`can_get_metadata`), matching `_my_permissions`' rule rather than the owner bar its
@@ -300,9 +300,9 @@ async def my_warehouse_permissions(id: str, client: FgaClientDep, settings: Sett
 @project_router.post("/{id}/access/my-permissions")
 async def my_project_permissions(id: str, client: FgaClientDep, settings: SettingsDep, token: CurrentToken) -> MyPermissionsResponse:
     """What the caller may do on this project — same self-view, same explicit gate as the warehouse
-    rung (``/v1/projects/…`` is likewise outside ``_RESOURCES``).
+    rung (``/management/v1/projects/…`` is likewise outside ``_RESOURCES``).
 
-    The project rung is where the estate's most irreversible action lives (`DELETE /v1/projects/{id}`
+    The project rung is where the estate's most irreversible action lives (`DELETE /management/v1/projects/{id}`
     has no cascade at all), so this is the one whose absence forced the UI to show a delete button and
     discover the answer from a 403.
 

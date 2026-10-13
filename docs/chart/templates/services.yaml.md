@@ -31,7 +31,7 @@ above: `--reuse-values` with the key missing must render the default, and the me
 
 ## `- { name: LANCE_WAREHOUSES_ENABLED, value: {{ .Values.catalog.warehouses.enabled | default false | quote }} }`
 
-#3-A per-warehouse physical multi-tenancy (admin control plane). On → POST /v1/warehouses
+#3-A per-warehouse physical multi-tenancy (admin control plane). On → POST /management/v1/warehouses
 provisions a bucket per warehouse + binds namespaces; an unbound namespace still routes to
 LANCE_REST_ROOT (backward-compatible). The warehouse registry lives under LANCE_REST_ROOT
 (control_root defaults to it), so no extra bucket is needed.
@@ -99,7 +99,7 @@ would stage objects nothing ever reads, which looks like durability and is not.
 
 Control-plane change-events (opt-in, best-effort — the governance/metadata stream). ON →
 mutations publish a CatalogControlEvent onto a DEDICATED broadcast pubsub (no queueGroupName)
-under topic catalog.control.v1; every replica buffers every event for GET /v1/events. hasKey+
+under topic catalog.control.v1; every replica buffers every event for GET /management/v1/events. hasKey+
 ternary (NOT `| default`, which treats false as empty) so a key missing under
 `helm upgrade --reuse-values` renders the default, not "" (pydantic bool_parsing crash).
 
@@ -121,7 +121,7 @@ service reads the SAME value, so neither side can believe a worker exists when i
 
 #4 transactional outbox on the CONTROL lane + the cron that RELAYS it. A control event lost
 to a NATS blip (a grant, a `table_published`) reaches nobody — not the notifications control
-lane, not any replica's GET /v1/events buffer — with every pod green. Staged here, re-published by
+lane, not any replica's GET /management/v1/events buffer — with every pod green. Staged here, re-published by
 `catalog/api/control_relay.py` on the schedule in catalog-control-relay-cron.yaml.
 
 A PRIVATE PREFIX, never `_lineage_outbox`: lineage's reconcile cron parses everything in

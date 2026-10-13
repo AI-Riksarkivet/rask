@@ -76,7 +76,7 @@ class FgaSettings:
     fga_token_file: str | None = Field(default=None, alias="RASK_FGA_TOKEN_FILE")
     #: The estate's root FGA object — the one a platform-wide PRIVILEGE is checked against, as
     #: opposed to a per-tenant one. Shared here rather than redeclared per service because it is a
-    #: coordinate every governed service must agree on: the catalog gates `GET /v1/events` on it,
+    #: coordinate every governed service must agree on: the catalog gates `GET /management/v1/events` on it,
     #: lineage gates its whole-estate projection on it, compute gates its routers
     #: on `reader` there, flows on `writer`, and the viewer gates its object browser on it. Three
     #: copies of the same default in three configs is exactly how one of them ends up naming a

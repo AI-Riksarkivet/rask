@@ -77,7 +77,7 @@ const seed = (page: Page, routes: Record<string, unknown>): Promise<void> =>
 test.beforeEach(async ({ context, page }, testInfo) => {
 	token = `${TOKEN.admin}:${testInfo.testId}`;
 	await signIn(context, { token });
-	await seed(page, { 'GET /v1/me': ME_ADMIN, 'GET /v1/projects/acme': DETAIL });
+	await seed(page, { 'GET /management/v1/me': ME_ADMIN, 'GET /management/v1/projects/acme': DETAIL });
 });
 
 test('renders the project record and every record that shadows it', async ({ page }) => {

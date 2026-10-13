@@ -27,7 +27,7 @@
 	// that carries `items`/`groups` renders as a trigger opening a panel of its sub-areas (so the
 	// estate is one hop away from anywhere), and a zone with a single surface stays a plain link.
 	// The Governance/Operations columns appear only for an estate admin (`me.estate_admin`, the
-	// frozen /v1/me contract — fail-closed: no `me`, no admin columns); Access is never a top-level
+	// frozen /management/v1/me contract — fail-closed: no `me`, no admin columns); Access is never a top-level
 	// entry, it is one row of the Governance column. The identity/theme control (the old sidebar
 	// footer nav-user) lives on the right side. Bare flex chrome on purpose: the mount decides the
 	// framing (AppShell sits it on the header's navbar row).
@@ -35,7 +35,7 @@
 	// `me` is the RESOLVED identity (null = signed out / lookup failed); `meLoading` renders the BASE
 	// entry titles as invisible text under skeleton pills instead — the same chrome classes and the
 	// same chevron reservation as the resolved entries, so loading and resolved states have IDENTICAL
-	// dimensions (no layout shift when /v1/me lands) and a zone whose `me` is server-resolved never flashes
+	// dimensions (no layout shift when /management/v1/me lands) and a zone whose `me` is server-resolved never flashes
 	// the non-admin entry set pretending to be the truth.
 	let {
 		pathname = '',
@@ -47,7 +47,7 @@
 		class: className,
 	}: {
 		pathname?: string;
-		/** The frozen /v1/me identity, or null when signed out / unresolved. */
+		/** The frozen /management/v1/me identity, or null when signed out / unresolved. */
 		me?: Me | null;
 		/** True while the zone's fetchMe() is still in flight — renders skeletons. */
 		meLoading?: boolean;
@@ -81,7 +81,7 @@
 				)
 			: topNav(me?.estate_admin ?? false),
 	);
-	// The identity-free base set: what the skeleton reserves space for while /v1/me is in flight
+	// The identity-free base set: what the skeleton reserves space for while /management/v1/me is in flight
 	// (an admin's extra panel columns append on resolve — earned content, not reserved chrome).
 	// Skeletons must reserve the bar you are ACTUALLY about to get, or the main menu flashes eight
 	// placeholder chips and settles into two.
@@ -176,7 +176,7 @@
 				{#each collapsed ? placeholders.slice(0, 1) : placeholders as entry, i (entry.title)}
 					<!-- The tier gap is RESERVED here too, on the same rule as the resolved bar — and under
 					     the same `inMainMenu` guard, or the two states disagree about a 56px hole. It is
-					     chrome, not content: leaving it out made the row 26px narrower while /v1/me was in
+					     chrome, not content: leaving it out made the row 26px narrower while /management/v1/me was in
 					     flight and 26px wider the instant it landed — a layout shift measured by
 					     `the loading skeleton reserves the resolved entry widths`, which is exactly the
 					     regression that test exists to catch. Skeleton and resolved must reserve the SAME
@@ -257,7 +257,7 @@
 					     estate entries is a hole. It was drawn there at DOUBLE width (sm:w-14) to read as
 					     structure and read instead as Settings having fallen off the end of the row — and
 					     the skeleton above reserved the compact gap, so an admin's bar also jumped 32px
-					     when /v1/me landed. Home, Projects and Settings are the three places you can be at
+					     when /management/v1/me landed. Home, Projects and Settings are the three places you can be at
 					     this level, peers by construction: one rhythm, no spacer. -->
 					{#if !inMainMenu && i > 0 && entry.tier !== 'primary' && entries[i - 1]?.tier === 'primary'}
 						<li role="none" class="w-4 shrink-0 sm:w-6" data-slot="navbar-tier-gap"></li>

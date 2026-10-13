@@ -1,10 +1,10 @@
 // A tiny in-memory stand-in for the CATALOG endpoints this zone reaches SERVER-SIDE, where
-// `page.route` cannot reach: `GET /v1/me` (this zone's `+layout.server.ts` calls `fetchMe` against
-// CATALOG_API directly — there is no `/capi/v1/me` browser hop to intercept the way the lakehouse zone
-// had), `GET /v1/projects` (the estate listing, via this zone's own `/capi` pass-through),
-// `GET /v1/projects/<p>` (the overview's `fetchProject` query), `POST /v1/warehouses` (the create that
-// MINTS a project) and `POST /v1/access/tuples` (the initial-admin grant) — plus, since #105, the whole
-// `/v1/access` surface and the control-event feed that the PLATFORM settings pages read
+// `page.route` cannot reach: `GET /management/v1/me` (this zone's `+layout.server.ts` calls `fetchMe` against
+// CATALOG_API directly — there is no `/capi/management/v1/me` browser hop to intercept the way the lakehouse zone
+// had), `GET /management/v1/projects` (the estate listing, via this zone's own `/capi` pass-through),
+// `GET /management/v1/projects/<p>` (the overview's `fetchProject` query), `POST /management/v1/warehouses` (the create that
+// MINTS a project) and `POST /management/v1/access/tuples` (the initial-admin grant) — plus, since #105, the whole
+// `/management/v1/access` surface and the control-event feed that the PLATFORM settings pages read
 // (`/settings/access`, `/settings/audit`). Runs as a second Playwright `webServer`; the auth-ON dev
 // server's CATALOG_API points here.
 //
@@ -92,7 +92,7 @@ const eventsOf = (bearer: string): ControlEvent[] => {
 	}
 	return list;
 };
-/** How many times each bearer's server has polled `/v1/events`. The live-update spec waits for >=1
+/** How many times each bearer's server has polled `/management/v1/events`. The live-update spec waits for >=1
  *  before injecting its event: the control cursor SWALLOWS whatever its first successful probe sees
  *  (that read is the baseline, not a move — feeds.remote.ts), so an event injected before the first
  *  probe lands would be absorbed and the spec would time out flakily instead of testing the tick. */
@@ -184,7 +184,7 @@ Bun.serve({
 		// the signed-in session's bearer, which selects the bucket. The audit trail's estate-admin gate
 		// probes the SAME endpoint with a past-any-head cursor, so an unknown bearer must 403 here or the
 		// gate would default open.
-		if (url.pathname === '/v1/events') {
+		if (url.pathname === '/management/v1/events') {
 			if (!bearer) return json({ detail: 'not authenticated' }, 401);
 			probesByBearer.set(bearer, (probesByBearer.get(bearer) ?? 0) + 1);
 			const since = Number(url.searchParams.get('since') ?? '0');
@@ -192,7 +192,7 @@ Bun.serve({
 			return json({ events: list.slice(since), cursor: list.length, reset: false });
 		}
 
-		// ── the /v1/access surface (the FGA workbench's remote functions land here) ──
+		// ── the /management/v1/access surface (the FGA workbench's remote functions land here) ──
 		// A seed for the same path still wins — it is checked below, and a seeding spec owns its bearer's
 		// world — but these defaults are what let the workbench spec assert a WORKFLOW rather than
 		// re-state the catalog on every test.
@@ -200,12 +200,12 @@ Bun.serve({
 		const isSeeded =
 			seededHere.has(`${req.method} ${url.pathname}${url.search}`) ||
 			seededHere.has(`${req.method} ${url.pathname}`);
-		if (!isSeeded && url.pathname.startsWith('/v1/access/')) {
+		if (!isSeeded && url.pathname.startsWith('/management/v1/access/')) {
 			const state = accessStateOf(bearer);
-			if (url.pathname === '/v1/access/model') {
+			if (url.pathname === '/management/v1/access/model') {
 				return json({ dsl: DSL, authorization_model_id: '01MODEL', conditions: MODEL_CONDITIONS });
 			}
-			if (url.pathname === '/v1/access/tuples') {
+			if (url.pathname === '/management/v1/access/tuples') {
 				if (req.method === 'GET') {
 					const object = url.searchParams.get('object');
 					let tuples = [...TUPLES, ...state.extraTuples].filter(
@@ -220,7 +220,7 @@ Bun.serve({
 				if (req.method === 'DELETE') state.deleted.push(body);
 				return json(body);
 			}
-			if (url.pathname === '/v1/access/check' && req.method === 'POST') {
+			if (url.pathname === '/management/v1/access/check' && req.method === 'POST') {
 				const body = (await req.json()) as Body;
 				const user = String(body.user ?? '');
 				return json({
@@ -232,7 +232,7 @@ Bun.serve({
 					},
 				});
 			}
-			if (url.pathname === '/v1/access/expand' && req.method === 'POST') {
+			if (url.pathname === '/management/v1/access/expand' && req.method === 'POST') {
 				state.expandBody = (await req.json()) as Body;
 				return json({
 					tree: EXPAND_TREE,
@@ -241,7 +241,7 @@ Bun.serve({
 					depth: 3,
 				});
 			}
-			if (url.pathname === '/v1/access/list-users' && req.method === 'POST') {
+			if (url.pathname === '/management/v1/access/list-users' && req.method === 'POST') {
 				state.listUsersBodies.push((await req.json()) as Body);
 				return json({
 					users: ['user:alice', 'user:bob', 'role:validators#assignee'],
@@ -252,7 +252,7 @@ Bun.serve({
 					truncated: false,
 				});
 			}
-			if (url.pathname === '/v1/access/list-objects' && req.method === 'POST') {
+			if (url.pathname === '/management/v1/access/list-objects' && req.method === 'POST') {
 				state.listObjectsBody = (await req.json()) as Body;
 				return json({
 					objects: ['table:db1$t', 'table:db1$u'],
@@ -261,7 +261,7 @@ Bun.serve({
 					type: 'table',
 				});
 			}
-			if (url.pathname === '/v1/access/simulate' && req.method === 'POST') {
+			if (url.pathname === '/management/v1/access/simulate' && req.method === 'POST') {
 				state.simulateBodies.push((await req.json()) as Body);
 				return json({
 					allowed: true,
@@ -291,7 +291,7 @@ Bun.serve({
 		if (hit === undefined) {
 			// An unseeded identity is the catalog's own answer to an unknown bearer, and the zone must
 			// degrade on it (navbar signed-out, gallery told nothing) rather than 500.
-			return url.pathname === '/v1/me'
+			return url.pathname === '/management/v1/me'
 				? json({ detail: 'not authenticated' }, 401)
 				: json({ detail: `unstubbed ${req.method} ${url.pathname}` }, 404);
 		}

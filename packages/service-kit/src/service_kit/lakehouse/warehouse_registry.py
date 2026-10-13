@@ -331,7 +331,8 @@ def project_gold_root(
     """The ACTIVE **gold serving** warehouse ``root_uri`` for ``project``, or ``None`` when it has none.
 
     The mirror of :func:`project_root` matching only records carrying ``"serving": "gold"`` (created via
-    ``POST /v1/warehouses`` with the ``serving`` field — docs/adr/0034-medallion-tiers-hybrid-physical-layout-2026-07-24.md "Medallion tiers — hybrid physical
+    ``POST /management/v1/warehouses`` with the ``serving`` field —
+    docs/adr/0034-medallion-tiers-hybrid-physical-layout-2026-07-24.md "Medallion tiers — hybrid physical
     layout"): a tenant's gold TARGET root.
     Same lowest-id determinism, same positive-only TTL cache (partitioned by serving class, so a cached
     work root never answers a gold lookup). ``None`` means the project has no gold warehouse — the caller

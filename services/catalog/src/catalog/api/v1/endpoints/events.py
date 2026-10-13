@@ -1,4 +1,4 @@
-"""``GET /v1/events`` — the control-plane change-event poll endpoint (P2).
+"""``GET /management/v1/events`` — the control-plane change-event poll endpoint (P2).
 
 Serves this replica's in-memory ring buffer (``core/control_buffer.py``, fed by the broadcast Dapr
 subscription in ``api/dapr.py``) to the admin console: events strictly after the caller's ``since`` cursor,
@@ -13,7 +13,7 @@ project's governance changes (broadcast subscription, no per-tenant partition). 
 object (``settings.fga_root_object`` = ``estate:rask``), an owner-tier action, so **authorization
 scope == data scope** — a mere project admin gets a 403 (the #12 fix; the earlier per-project param let any
 project admin read the whole estate). The root being its OWN TYPE is what makes that structural rather than
-a convention: no tenant can own an ``estate:`` object, so the privilege cannot be reached sideways. ``/v1/events`` matches no resource prefix in ``fga_deps.authorize`` so
+a convention: no tenant can own an ``estate:`` object, so the privilege cannot be reached sideways. ``/management/v1/events`` matches no resource prefix in ``fga_deps.authorize`` so
 the router-wide gate only sets the 401/503 floor; the ``can_observe_events`` decision is made here explicitly
 (mirroring ``models.py``). A *meaningful* poll (events delivered or a reset) is audited
 (``event_stream_opened``) — never an empty tick, so a 5s-polling console doesn't flood the audit trail.
@@ -36,7 +36,7 @@ from service_kit.governed.audit import SUCCESS, audit
 
 log = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/v1/events", tags=["events"])
+router = APIRouter(prefix="/management/v1/events", tags=["events"])
 
 
 @router.get("")

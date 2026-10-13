@@ -3,7 +3,7 @@ import { makeZoneHooks } from '@rask/api/bff';
 import { makeZoneServerErrorHandler } from '@rask/api/observability';
 
 // Per-request session hydration from the sealed OIDC cookie (single-sourced in @rask/api/bff), so the
-// estate navbar's identity + /capi/v1/me pass-through work in this zone too. No gateway handleFetch:
+// estate navbar's identity + /capi/management/v1/me pass-through work in this zone too. No gateway handleFetch:
 // this zone reaches the media services through its OWN BFF routes, not the lineage gateway.
 export const { handle } = makeZoneHooks(env);
 

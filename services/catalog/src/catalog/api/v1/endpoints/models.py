@@ -2,7 +2,7 @@
 
 The model registry is a Lance dataset per model at ``settings.model_uri(model)``, an explicit
 location. These routes ARE under the router-level ``authorize`` dependency — its pre-path
-checks still run here (missing token → 401; FGA enabled but unwired → 503, fail-closed) — but ``/v1/model``
+checks still run here (missing token → 401; FGA enabled but unwired → 503, fail-closed) — but ``/management/v1/model``
 matches no ``_RESOURCES`` prefix, so ``authorize`` makes no per-object decision. The per-object FGA gate is
 therefore explicit per handler: promote → the validator rung ``can_promote``; describe → the reader rung
 ``can_get_metadata``; list → the same reader rung as a ``list_objects`` filter — all on
@@ -43,7 +43,7 @@ from service_kit.governed import fga
 
 log = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/v1/model", tags=["model"])
+router = APIRouter(prefix="/management/v1/model", tags=["model"])
 
 # The FGA namespace the per-model object lives under (``table:<ns>$<model>``). A model name is a
 # table-name-shaped fragment (kept strict so it can't traverse the registry path or forge an FGA object id).

@@ -24,7 +24,7 @@
 </script>
 
 <script lang="ts">
-	// Retiring a tenant — the confirm side of `DELETE /v1/projects/{id}`.
+	// Retiring a tenant — the confirm side of `DELETE /management/v1/projects/{id}`.
 	//
 	// The whole reason this is a dialog and not a one-shot button is the 409: a project that still holds
 	// warehouses refuses, and the catalog's `detail` NAMES them. Those names are the user's next action,

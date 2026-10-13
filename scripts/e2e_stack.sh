@@ -375,11 +375,11 @@ export LINEAGE_DATABASE_URL="postgresql://${PG_USER}:${PG_PASS}@localhost:5433/$
 # grant seeded above), so he stays the 403 leg the other suites need.
 #
 # A FIXED ID, not one per run: a project has no retention to clean it up, so a per-run tenant would
-# leave one behind on every drive. `POST /v1/projects` writes the record and the creator's admin tuple
+# leave one behind on every drive. `POST /management/v1/projects` writes the record and the creator's admin tuple
 # together; a second create converges rather than failing, and 409 is accepted because which of the two
 # a door gives for "already there" is exactly the kind of thing that changes underneath a harness.
 TENANT_B="${LANCE_E2E_PROJECT_B:-e2etenantb}"
-B_CODE="$(curl -s -o /dev/null -w '%{http_code}' -m 20 -X POST http://localhost:2333/v1/projects \
+B_CODE="$(curl -s -o /dev/null -w '%{http_code}' -m 20 -X POST http://localhost:2333/management/v1/projects \
   -H "authorization: Bearer $ALICE" -H 'content-type: application/json' \
   -d "{\"id\":\"$TENANT_B\"}" 2>/dev/null || true)"
 BOB_SUB="$(TOK="$BOB" uv run python -c "

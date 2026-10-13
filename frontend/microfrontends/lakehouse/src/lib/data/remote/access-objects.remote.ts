@@ -99,8 +99,8 @@ export const fetchMyPermissions = query(
 	PermissionTargetSchema,
 	async ({ kind, id }): Promise<ApiResult<MyPermissions>> =>
 		parsed(
-			// PERMISSION_SEGMENT, not `kind`: the catalog mounts warehouse at `/v1/warehouse` and
-			// project at `/v1/projects`, so the identity mapping 404s on project — and a 404 here reads
+			// PERMISSION_SEGMENT, not `kind`: the catalog mounts warehouse at `/management/v1/warehouse` and
+			// project at `/management/v1/projects`, so the identity mapping 404s on project — and a 404 here reads
 			// as "no permissions", which would render every action on the page disabled.
 			await catalogJSON(
 				`/management/v1/${PERMISSION_SEGMENT[kind]}/${enc(id)}/access/my-permissions`,

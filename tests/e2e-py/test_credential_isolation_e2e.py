@@ -77,9 +77,9 @@ def catalog() -> str:
 
 def _provision(catalog: str, token: str, project: str, warehouse: str, ns: str, table: str) -> str:
     """One tenant's warehouse → namespace → table. Returns the table's canonical id."""
-    r = requests.post(f"{catalog}/v1/warehouses", json={"id": warehouse, "project": project}, headers=_auth(token), timeout=30)
+    r = requests.post(f"{catalog}/management/v1/warehouses", json={"id": warehouse, "project": project}, headers=_auth(token), timeout=30)
     assert r.status_code in (200, 409), r.text
-    r = requests.post(f"{catalog}/v1/warehouses/{warehouse}/namespaces", json={"namespace": ns}, headers=_auth(token), timeout=30)
+    r = requests.post(f"{catalog}/management/v1/warehouses/{warehouse}/namespaces", json={"namespace": ns}, headers=_auth(token), timeout=30)
     assert r.status_code in (200, 409), r.text
     ident = f"{ns}{DELIM}{table}"
     r = requests.post(

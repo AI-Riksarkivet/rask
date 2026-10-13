@@ -8,7 +8,7 @@ import { RawJszSchema, type JetStreamOverview } from '../jetstream';
 // VERBATIM (the transport ruling blocked-port #3, unblocked by the mock-observability harness): the NATS
 // HTTP monitor is unauthenticated by design and in-cluster only, so this server-side seam stays the
 // ONLY gate; the raw ~29 KB /jsz payload is trimmed to what the panel renders; and the estate-admin
-// door (the catalog's `can_observe_events`, probed with a side-effect-free past-any-head /v1/events
+// door (the catalog's `can_observe_events`, probed with a side-effect-free past-any-head /management/v1/events
 // read) is enforced BEFORE the monitor is touched. Auth-off dev answers openly, exactly as before.
 
 const NATS_MONITOR_API = env.NATS_MONITOR_API ?? '';
@@ -44,7 +44,7 @@ function serviceLabel(bareStream: string, deliverGroup: string | undefined): str
 }
 
 // Returns null when the caller is an estate admin; otherwise the {status, detail} to answer with. The
-// probe is a side-effect-free `GET /v1/events` with a past-any-head cursor: an estate admin gets an
+// probe is a side-effect-free `GET /management/v1/events` with a past-any-head cursor: an estate admin gets an
 // empty page (an empty poll is never audited, so the probe leaves no trail noise), anyone else the
 // catalog's own 401/403 verdict. We bearer-FORWARD the user's token (never a service token) and only
 // query the NATS monitor if it returns 200. Governed stack but no reachable catalog → fail closed.
@@ -53,7 +53,7 @@ async function estateAdminGate(
 	accessToken: string,
 ): Promise<{ status: number; detail: string } | null> {
 	try {
-		const res = await fetchFn(`${CATALOG_API}/v1/events?since=${Number.MAX_SAFE_INTEGER}`, {
+		const res = await fetchFn(`${CATALOG_API}/management/v1/events?since=${Number.MAX_SAFE_INTEGER}`, {
 			headers: { authorization: `Bearer ${accessToken}` },
 			signal: AbortSignal.timeout(5000),
 		});

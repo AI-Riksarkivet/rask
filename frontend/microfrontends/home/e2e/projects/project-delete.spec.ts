@@ -2,7 +2,7 @@ import { test, expect, type Page } from '@playwright/test';
 import { ME_ADMIN, signIn, TOKEN } from '../session';
 import { calls, seed as seedFor } from '../mock-client';
 
-// Retiring a tenant — `DELETE /v1/projects/{id}` from `/projects/<p>`'s danger zone.
+// Retiring a tenant — `DELETE /management/v1/projects/{id}` from `/projects/<p>`'s danger zone.
 //
 // The read and the write both run on the ZONE SERVER (a remote `query` and a remote `command`), so the
 // catalog is stubbed upstream and seeded per bearer rather than `page.route`d — the same reason every
@@ -28,7 +28,7 @@ const HELD_BY_WAREHOUSES = {
 		status: 409,
 		detail:
 			"project 'acme' still holds 2 warehouse(s): acme-gold, acme-wh. Delete each one first — " +
-			'DELETE /v1/warehouses/{id} (its own bucket purge is a separate opt-in) — then delete the ' +
+			'DELETE /management/v1/warehouses/{id} (its own bucket purge is a separate opt-in) — then delete the ' +
 			'project. There is deliberately no cascade here: retiring a tenant must never be able to ' +
 			'destroy its buckets transitively in one request.',
 	},
@@ -72,14 +72,14 @@ async function openDeleteDialog(page: Page, project: string) {
 test.beforeEach(async ({ context, page }, testInfo) => {
 	token = `${TOKEN.admin}:${testInfo.testId}`;
 	await signIn(context, { token });
-	await seed(page, { 'GET /v1/me': ME_ADMIN });
+	await seed(page, { 'GET /management/v1/me': ME_ADMIN });
 });
 
 test('a 409 names the blocking warehouses and renders each as a cross-zone link', async ({
 	page,
 }) => {
 	await seed(page, {
-		'GET /v1/projects/acme': {
+		'GET /management/v1/projects/acme': {
 			project: 'acme',
 			warehouses: [
 				{ id: 'acme-wh', bucket: 'acme-bucket', status: 'active' },
@@ -87,7 +87,7 @@ test('a 409 names the blocking warehouses and renders each as a cross-zone link'
 			],
 			admins: ['user:alice'],
 		},
-		'DELETE /v1/projects/acme': HELD_BY_WAREHOUSES,
+		'DELETE /management/v1/projects/acme': HELD_BY_WAREHOUSES,
 	});
 	const dialog = await openDeleteDialog(page, 'acme');
 	await dialog.getByRole('button', { name: 'Delete acme' }).click();
@@ -110,17 +110,17 @@ test('a 409 names the blocking warehouses and renders each as a cross-zone link'
 	// Offering it on any 409 would advertise an override for a lock the server never mentioned.
 	await expect(dialog.getByLabel('Override deletion protection')).toHaveCount(0);
 	// A blocked delete is not a partial one: exactly one request went out and it removed nothing.
-	expect(await deletePaths(page)).toEqual(['/v1/projects/acme']);
+	expect(await deletePaths(page)).toEqual(['/management/v1/projects/acme']);
 });
 
 test('a successful delete toasts the response’s tuple count and lands back on the gallery', async ({
 	page,
 }) => {
 	await seed(page, {
-		'GET /v1/projects/acme': EMPTY_PROJECT,
-		'DELETE /v1/projects/acme': { project: 'acme', tuples_revoked: 4 },
+		'GET /management/v1/projects/acme': EMPTY_PROJECT,
+		'DELETE /management/v1/projects/acme': { project: 'acme', tuples_revoked: 4 },
 		// The estate AFTER the retirement — what the navigation's fresh load reads.
-		'GET /v1/projects': [{ project: 'beta', warehouses: [] }],
+		'GET /management/v1/projects': [{ project: 'beta', warehouses: [] }],
 	});
 	const dialog = await openDeleteDialog(page, 'acme');
 	await dialog.getByRole('button', { name: 'Delete acme' }).click();
@@ -140,9 +140,9 @@ test('force is offered ONLY for a protected project, and rides the wire as ?forc
 	// The with-query seed is looked up before the bare one, so the FIRST attempt 409s and the forced
 	// retry succeeds — the two-step the user actually walks.
 	await seed(page, {
-		'GET /v1/projects/acme': EMPTY_PROJECT,
-		'DELETE /v1/projects/acme': PROTECTED,
-		'DELETE /v1/projects/acme?force=true': { project: 'acme', tuples_revoked: 1 },
+		'GET /management/v1/projects/acme': EMPTY_PROJECT,
+		'DELETE /management/v1/projects/acme': PROTECTED,
+		'DELETE /management/v1/projects/acme?force=true': { project: 'acme', tuples_revoked: 1 },
 	});
 	const dialog = await openDeleteDialog(page, 'acme');
 	// Nothing has refused yet, so the override is not on offer — it is not a general-purpose switch.
@@ -161,7 +161,7 @@ test('force is offered ONLY for a protected project, and rides the wire as ?forc
 	await expect(page.getByText('Project acme retired — 1 tuple revoked.')).toBeVisible();
 	// The wire is the assertion: an unchecked box sends no `force` at all (never `force=false`), and the
 	// checked one sends it as a query param on the same path.
-	expect(await deletePaths(page)).toEqual(['/v1/projects/acme', '/v1/projects/acme?force=true']);
+	expect(await deletePaths(page)).toEqual(['/management/v1/projects/acme', '/management/v1/projects/acme?force=true']);
 });
 
 test('a refusal does not outlive the dialog it was made in', async ({ page }) => {
@@ -170,12 +170,12 @@ test('a refusal does not outlive the dialog it was made in', async ({ page }) =>
 	// user's whole path is "be refused → go delete those warehouses → come back", which is exactly the
 	// trip this asserts.
 	await seed(page, {
-		'GET /v1/projects/acme': {
+		'GET /management/v1/projects/acme': {
 			project: 'acme',
 			warehouses: [{ id: 'acme-wh', bucket: 'acme-bucket', status: 'active' }],
 			admins: ['user:alice'],
 		},
-		'DELETE /v1/projects/acme': HELD_BY_WAREHOUSES,
+		'DELETE /management/v1/projects/acme': HELD_BY_WAREHOUSES,
 	});
 	const dialog = await openDeleteDialog(page, 'acme');
 	await dialog.getByRole('button', { name: 'Delete acme' }).click();
@@ -193,9 +193,9 @@ test('a refusal does not outlive the dialog it was made in', async ({ page }) =>
 
 test('a force opt-in does not survive the dialog it was made in', async ({ page }) => {
 	await seed(page, {
-		'GET /v1/projects/acme': EMPTY_PROJECT,
-		'DELETE /v1/projects/acme': PROTECTED,
-		'DELETE /v1/projects/acme?force=true': { project: 'acme', tuples_revoked: 1 },
+		'GET /management/v1/projects/acme': EMPTY_PROJECT,
+		'DELETE /management/v1/projects/acme': PROTECTED,
+		'DELETE /management/v1/projects/acme?force=true': { project: 'acme', tuples_revoked: 1 },
 	});
 	const dialog = await openDeleteDialog(page, 'acme');
 	await dialog.getByRole('button', { name: 'Delete acme' }).click();
@@ -216,7 +216,7 @@ test('a force opt-in does not survive the dialog it was made in', async ({ page 
 	// The wire is the proof: the second attempt is a PLAIN delete, not a forced one.
 	await reopened.getByRole('button', { name: 'Delete acme' }).click();
 	await expect(reopened).toContainText('is protected against deletion');
-	expect(await deletePaths(page)).toEqual(['/v1/projects/acme', '/v1/projects/acme']);
+	expect(await deletePaths(page)).toEqual(['/management/v1/projects/acme', '/management/v1/projects/acme']);
 });
 
 test('a 404 is rendered as the no-oracle refusal it is, not as "deleted"', async ({ page }) => {
@@ -224,8 +224,8 @@ test('a 404 is rendered as the no-oracle refusal it is, not as "deleted"', async
 	// authenticated caller could enumerate the estate's tenants by the 404-vs-403 difference. The UI must
 	// not invent the distinction the API refuses to make, and must not read as a success either.
 	await seed(page, {
-		'GET /v1/projects/acme': EMPTY_PROJECT,
-		'DELETE /v1/projects/acme': { status: 404, body: { detail: 'project not found: acme' } },
+		'GET /management/v1/projects/acme': EMPTY_PROJECT,
+		'DELETE /management/v1/projects/acme': { status: 404, body: { detail: 'project not found: acme' } },
 	});
 	const dialog = await openDeleteDialog(page, 'acme');
 	await dialog.getByRole('button', { name: 'Delete acme' }).click();

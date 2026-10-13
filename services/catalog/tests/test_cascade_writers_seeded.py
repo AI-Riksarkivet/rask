@@ -58,7 +58,7 @@ async def _captured_tuples(fn, monkeypatch) -> list[fga.ClientTuple]:
 async def test_the_backfill_writes_the_SAME_grants_minus_the_caller(monkeypatch) -> None:
     """Repair must not require becoming an owner of what you repair.
 
-    Re-POSTing /v1/warehouses would land these tuples too — and grant whoever ran the repair `owner`
+    Re-POSTing /management/v1/warehouses would land these tuples too — and grant whoever ran the repair `owner`
     on every tenant they touched. That is why the backfill exists as its own door rather than as
     "just run the create again".
     """

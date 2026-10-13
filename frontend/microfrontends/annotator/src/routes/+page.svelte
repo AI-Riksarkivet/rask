@@ -20,7 +20,7 @@
 	import { claimedStream, streamPosition, type StreamTask } from '$lib/viewer/task-stream';
 
 	// `authEnabled` rides the LAYOUT data, which resolves it server-side. The canvas must not
-	// re-derive it from whether a session exists: a 404 on `capi/v1/me` means BOTH "auth is off" and
+	// re-derive it from whether a session exists: a 404 on `capi/management/v1/me` means BOTH "auth is off" and
 	// "the identity lookup failed", and collapsing those two is what made the first cut of the label
 	// stream permanently empty on an ungoverned stack.
 	// `activeProject` rides the same layout data (`zoneLayoutLoad`, #103) the shared shell reads, and

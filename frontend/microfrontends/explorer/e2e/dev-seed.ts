@@ -138,7 +138,7 @@ export const SERVICES_SEED: Record<string, unknown> = {
 	},
 
 	// Saved views live on the catalog's user-state document; a 404 is the real "nothing saved" state.
-	'GET /v1/user-state/saved-views': { status: 404, body: { detail: 'no document' } },
+	'GET /management/v1/user-state/saved-views': { status: 404, body: { detail: 'no document' } },
 };
 
 export const DEV_SEEDS: {

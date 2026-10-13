@@ -22,7 +22,7 @@ export interface UserStateEnvelope {
 export const readUserStateDoc = query(
 	UserStateArg,
 	async ({ document }): Promise<ApiResult<UserStateEnvelope>> => {
-		const res = await catalogJSON(`/v1/user-state/${document}`);
+		const res = await catalogJSON(`/management/v1/user-state/${document}`);
 		return res.ok ? { ok: true, data: res.data as UserStateEnvelope } : res;
 	},
 );
@@ -30,5 +30,5 @@ export const readUserStateDoc = query(
 export const writeUserStateDoc = command(
 	v.object({ ...UserStateArg.entries, value: v.unknown() }),
 	async ({ document, value }): Promise<ApiResult<unknown>> =>
-		catalogJSON(`/v1/user-state/${document}`, { method: 'PUT', body: JSON.stringify(value) }),
+		catalogJSON(`/management/v1/user-state/${document}`, { method: 'PUT', body: JSON.stringify(value) }),
 );

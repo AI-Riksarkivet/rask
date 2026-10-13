@@ -14,7 +14,7 @@ test('warm the settings routes', async ({ context, page }) => {
 	test.setTimeout(180_000);
 	const token = `${TOKEN.admin}:warmup`;
 	await signIn(context, { token });
-	await seed(page, token, { 'GET /v1/me': ME_ADMIN, 'GET /v1/projects': [] });
+	await seed(page, token, { 'GET /management/v1/me': ME_ADMIN, 'GET /management/v1/projects': [] });
 	for (const path of ['/settings', '/settings/access', '/settings/audit']) {
 		await page.goto(path).catch(() => {});
 	}

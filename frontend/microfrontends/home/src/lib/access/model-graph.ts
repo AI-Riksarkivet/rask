@@ -12,7 +12,7 @@
 // namespace → table — so a previewer that omits it draws a model with the spine removed.
 //
 // Parsed from the DSL text rather than the compiled JSON on purpose: the DSL is what a human edits and
-// what `GET /v1/access/model` already serves, so the picture is of the file you would change.
+// what `GET /management/v1/access/model` already serves, so the picture is of the file you would change.
 
 import type { BuiltGraph, GraphEdge, GraphNode } from './graph';
 

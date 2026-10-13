@@ -114,7 +114,7 @@ def governed(real_ns_client: TestClient, tmp_path: Path) -> Iterator[_TupleStore
 
 def _create_top_level(client: TestClient, name: str) -> None:
     """A top-level namespace, through the warehouse door the estate requires for one."""
-    resp = client.post(f"/v1/warehouses/{WAREHOUSE}/namespaces", json={"namespace": name}, headers=AUTH)
+    resp = client.post(f"/management/v1/warehouses/{WAREHOUSE}/namespaces", json={"namespace": name}, headers=AUTH)
     assert resp.status_code == 200, resp.text
 
 

@@ -6,11 +6,10 @@ away from the spec, turns this red. Routes are read from ``app.openapi()`` (NOT 
 served set. The app may serve MORE than the spec (the ``/credentials`` vending extension + health probes) —
 we assert only that the spec is a SUBSET of what's served, on (method, structural-path).
 
-THE OTHER DIRECTION, on the spec's own prefixes ([[LH-021]]): a route mounted under ``/v1/namespace``,
-``/v1/table``, ``/v1/materialized_view`` or ``/v1/transaction`` must be a spec operation, because a spec
-client meets it there. Lakekeeper separates ``/management`` from ``/catalog`` for exactly this reason. The
-spec side of that check is ``service_kit.lakehouse.spec_routes.SPEC_ROUTES``, committed because no image
-carries ``lance_docs/``.
+THE OTHER DIRECTION ([[LH-021]], LH-476): every route under ``/v1`` must be a spec operation, because a
+spec client meets it there; rask's own routes live under ``/management/v1``, the way Lakekeeper separates
+``/management`` from ``/catalog``. The spec side of that check is
+``service_kit.lakehouse.spec_routes.SPEC_ROUTES``, committed because no image carries ``lance_docs/``.
 """
 
 from __future__ import annotations
@@ -50,9 +49,8 @@ def test_every_spec_operation_is_served(client: TestClient) -> None:
     assert not missing, f"spec operations with NO served route: {sorted(missing)}"
 
 
-#: The prefixes the spec owns. Everything mounted under one of these is answerable to the spec;
-#: everything else in the catalog is rask's own surface and this gate says nothing about it.
-_SPEC_PREFIXES = ("/v1/namespace", "/v1/table", "/v1/materialized_view", "/v1/transaction")
+#: The spec owns the whole of ``/v1``. rask's own surface is ``/management/v1``, and the probes sit at the root.
+_SPEC_PREFIX = "/v1/"
 
 #: PERMANENT, JUSTIFIED DEVIATIONS: spec operations reached by the method the shipped client sends.
 #:
@@ -74,11 +72,11 @@ _METHOD_ALIASES_THE_STOCK_CLIENT_SENDS: frozenset[tuple[str, str]] = frozenset(
 
 
 def _on_the_spec_surface(routes: set[tuple[str, str]]) -> set[tuple[str, str]]:
-    return {(method, path) for method, path in routes if path.startswith(_SPEC_PREFIXES)}
+    return {(method, path) for method, path in routes if path.startswith(_SPEC_PREFIX)}
 
 
-def test_no_NEW_rask_route_appears_on_a_spec_prefix(client: TestClient) -> None:
-    """The forward gate: a route added to a spec prefix must be a spec operation.
+def test_the_v1_surface_holds_only_spec_operations(client: TestClient) -> None:
+    """Every route the catalog serves under ``/v1`` is a spec operation; rask-only routes are served only under ``/management/v1``.
 
     `client.app` is typed as the ASGI protocol, which has no `openapi`; the cast says what the fixture
     actually builds rather than silencing the checker.
@@ -87,7 +85,7 @@ def test_no_NEW_rask_route_appears_on_a_spec_prefix(client: TestClient) -> None:
     intruders = _on_the_spec_surface(served) - SPEC_ROUTES - _METHOD_ALIASES_THE_STOCK_CLIENT_SENDS
 
     assert not intruders, (
-        f"{len(intruders)} rask-only operation(s) were added to the SPEC surface, where a spec client "
+        f"{len(intruders)} rask-only operation(s) are served on the SPEC surface, where a spec client "
         f"meets them:\n  " + "\n  ".join(f"{m} {p}" for m, p in sorted(intruders)) + "\n"
         "Mount them on the management prefix instead."
     )

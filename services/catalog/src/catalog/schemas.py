@@ -1099,7 +1099,7 @@ class GateSpecResponse(BaseModel):
 
 
 # --------------------------------------------------------------------------- #
-# Self-describe (`/v1/me`) and tenant membership (`/v1/projects/{id}/members`)
+# Self-describe (`/management/v1/me`) and tenant membership (`/management/v1/projects/{id}/members`)
 # --------------------------------------------------------------------------- #
 
 
@@ -1154,7 +1154,7 @@ class GrantRequest(BaseModel):
 
 
 # --------------------------------------------------------------------------- #
-# Control events (`/v1/events`)
+# Control events (`/management/v1/events`)
 # --------------------------------------------------------------------------- #
 
 
@@ -1168,7 +1168,7 @@ class EventsResponse(BaseModel):
 
 
 # --------------------------------------------------------------------------- #
-# Warehouse registry reads + deletion (`/v1/warehouses`)
+# Warehouse registry reads + deletion (`/management/v1/warehouses`)
 # --------------------------------------------------------------------------- #
 
 
@@ -1231,7 +1231,7 @@ class DeleteWarehouseResponse(BaseModel):
 
 
 # --------------------------------------------------------------------------- #
-# Per-subject user state (`/v1/user-state/*`)
+# Per-subject user state (`/management/v1/user-state/*`)
 # --------------------------------------------------------------------------- #
 
 
@@ -1250,7 +1250,7 @@ class UserStateEnvelope[T](BaseModel):
 
 
 # --------------------------------------------------------------------------- #
-# Tenants (`/v1/projects`)
+# Tenants (`/management/v1/projects`)
 # --------------------------------------------------------------------------- #
 
 

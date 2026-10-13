@@ -13,7 +13,7 @@ import type { LayoutServerLoad } from './$types';
 // The gate is SERVER-SIDE and fail-closed, and it has to be: the navbar hides the Settings entry from
 // a non-admin, but hiding a link is not authorization — anyone can type the URL.
 //
-// The identity comes from the ROOT layout's `me` (the frozen `/v1/me` contract, fetched once per
+// The identity comes from the ROOT layout's `me` (the frozen `/management/v1/me` contract, fetched once per
 // request with the session bearer), so every settings page answers from the same read the rest of the
 // estate trusts rather than a second, drifting one — and reads it exactly once, rather than once per
 // nested load.

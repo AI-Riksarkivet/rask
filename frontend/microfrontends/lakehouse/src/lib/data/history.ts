@@ -199,7 +199,7 @@ export function failedAttempts(
 }
 
 /** How an actor renders. The lineage `author` is whatever the write recorded: an opaque OIDC `sub` for a
- * governed API write, a service name for the cascade. We resolve OUR OWN sub (from `/v1/me`) to our email
+ * governed API write, a service name for the cascade. We resolve OUR OWN sub (from `/management/v1/me`) to our email
  * and never guess at anybody else's — an unresolved sub is shown truncated, in full in the title. */
 export function displayAuthor(
 	author: string,
@@ -210,7 +210,7 @@ export function displayAuthor(
 	// short form and the full value lives in the title.
 	const short = author.length > 24 ? `${author.slice(0, 12)}…` : author;
 	if (me?.sub && author === me.sub) {
-		// `/v1/me` can answer with a null email (a token minted without the `email` scope), and the sub is
+		// `/management/v1/me` can answer with a null email (a token minted without the `email` scope), and the sub is
 		// not a name — fall back to the SHORT sub, never the whole thing.
 		const label = me.email ?? short;
 		return { text: `${label} (you)`, title: `${label} — OIDC subject ${author}`, isMe: true };

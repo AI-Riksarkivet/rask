@@ -10,7 +10,7 @@ namespace is bound to, never in a neighbour's.
 Authorization is DELIBERATELY stronger than the data plane: warehouse-create gates on the project's
 `can_create_warehouse` (= admin) — the model action that until now was defined but never enforced — not the
 writer-tier create-on-parent that guards tables/namespaces. There is exactly ONE door and no exception:
-the project must already EXIST (`require_project_exists`, a 404 naming `POST /v1/projects`), and that
+the project must already EXIST (`require_project_exists`, a 404 naming `POST /management/v1/projects`), and that
 route is where a tenant and its first admin are minted together (`open_hierarchy_lifecycle.md` Decision 1).
 An estate-admin bootstrap exception used to live here, because a not-yet-existing project had no tuples
 and its first warehouse was otherwise uncreatable; it is gone, and with it the path by which creating a
@@ -89,7 +89,7 @@ from storage import s3_client, split_s3_uri
 
 log = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/v1/warehouses", tags=["warehouse"])
+router = APIRouter(prefix="/management/v1/warehouses", tags=["warehouse"])
 
 # A bucket/warehouse id must be a DNS-safe S3 bucket name fragment — validated here so a malformed id
 # can't produce an un-createable bucket or a path-traversing registry key. The pattern is SHARED
@@ -137,13 +137,13 @@ async def create_warehouse(
     """Provision a warehouse: create its physical bucket + register it + seed FGA. Admin-gated.
 
     Order (fail-closed): the project must EXIST (``require_project_exists`` — 404 naming
-    ``POST /v1/projects`` as the fix; existence is the registry's answer, identical for every caller, so
+    ``POST /management/v1/projects`` as the fix; existence is the registry's answer, identical for every caller, so
     it runs before authz), THEN authorize ``can_create_warehouse`` on the project, THEN provision the
     bucket (idempotent), write the registry record, and grant the caller ``owner`` on ``warehouse:<id>``
     with its ``project`` edge. A re-run with the same id is idempotent (bucket + record overwrite-safe).
 
     The estate-admin bootstrap exception is GONE (Decision 1): tenants are minted explicitly at
-    ``POST /v1/projects``, which seeds the project's admin — so by the time this runs the project has
+    ``POST /management/v1/projects``, which seeds the project's admin — so by the time this runs the project has
     admins of its own and one door is enough."""
     _require_enabled(settings)
     warehouse_id = _validate_id(body.id, what="warehouse id")
