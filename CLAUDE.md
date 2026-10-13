@@ -376,6 +376,26 @@ Key facts that aren't obvious from any single file:
 
 GitHub Issues on `AI-Riksarkivet/rask`, one issue per row (`LH-243: …`), ordered by the pinned `Phase 1 map` issue. See `docs/agents/issue-tracker.md`.
 
+### Workflow (the mattpocock skills, plugin `mattpocock-skills`)
+
+Work moves idea → ship along one path, and `/ask-matt` explains any step:
+
+1. `/grill-with-docs` sharpens an idea by interview and records terms in `CONTEXT.md` and decisions as ADRs.
+2. `/to-spec` writes the spec as an issue; `/to-tickets` splits it into rows with native blocking edges.
+3. `/implement <#row>` builds one row: `/tdd` red-green slices at the seams, the type checker and single test
+   files as it goes, the full suite once, then `/code-review` (Standards and Spec reviewers in parallel; one
+   round, HIGH and MEDIUM fixed), then a commit. `/clear` between rows.
+4. `/triage` admits rows nobody on the team wrote; `/diagnosing-bugs` takes a hard bug to a red test first.
+
+**Every row, whoever works it, follows the collaboration rules in `docs/agents/issue-tracker.md`:**
+
+- **Claim first.** `gh issue edit <n> --add-assignee @me` is the first write, before a branch or a test. An
+  assigned row is its assignee's; take the next one from the map's frontier (first unassigned, unblocked row).
+- **One row, one branch, one PR.** Branch from `origin/main` named after the row (`lh-476-management-routes`),
+  merge through a PR. Never commit a row straight to `main`.
+- **`Closes #n` belongs in the PR, not the commit.** A push or merge auto-closes the issue, and a row closes only
+  when its fix is deployed and read back live: leave the row open on merge and close it with the helm revision.
+
 ### Triage labels
 
 The five default roles (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
