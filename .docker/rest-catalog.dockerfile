@@ -20,6 +20,19 @@ ENV UV_LINK_MODE=copy \
 
 WORKDIR /app
 
+# A TOOLCHAIN FOR THE ONE DEPENDENCY WITH NO ARM64 WHEEL. lance-graph (the viewer's graph door) publishes
+# x86_64 wheels only, measured on PyPI 2026-10-13 for 0.5.0 to 0.5.4, so on an arm64 host uv builds it from
+# its sdist. The crates' build scripts need a C/C++ compiler, cmake, protoc with its well-known types and the OpenSSL headers, and the
+# sdist's Cargo.lock pins ethnum 1.5.2, which fails to compile on Rust 1.99 (E0512, measured 2026-10-13), so
+# Rust is pinned rather than left for maturin to fetch at latest. Builder stage only: the final stage copies
+# the venv and carries no toolchain, and the uv cache mount keeps the compiled wheel across builds.
+ARG RUST_TOOLCHAIN=1.90.0
+ENV RUSTUP_HOME=/opt/rustup CARGO_HOME=/opt/cargo PATH=/opt/cargo/bin:$PATH
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl gcc g++ libc6-dev make cmake pkg-config protobuf-compiler libprotobuf-dev libssl-dev \
+    && rm -rf /var/lib/apt/lists/* \
+    && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain "$RUST_TOOLCHAIN"
+
 # Step 1: third-party deps only, from the lockfile (--frozen tolerates the absent workspace
 # source trees; --no-install-workspace skips the members themselves). The union of --package
 # flags covers every service the chart runs from this image — cached until pyproject/uv.lock change.
