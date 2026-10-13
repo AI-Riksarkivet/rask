@@ -22,7 +22,7 @@ Thin entrypoint: lifespan + ``FastAPI()`` + health, with both cron routes regist
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager, suppress
 from typing import Any
 
@@ -116,7 +116,7 @@ def _control_sign(holder: SigningKeyHolder[SigningKey]) -> ControlSign:
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     app.state.startup_complete = False
     app.state.shutting_down = False
     # ARMED ON THE SIGNAL, not on lifespan unwind. The `finally` below flips the same flag, but that

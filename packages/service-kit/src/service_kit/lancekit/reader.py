@@ -33,7 +33,7 @@ that, which is what the parity test exercises.
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Final, Protocol, runtime_checkable
 
@@ -324,7 +324,7 @@ def _epoch_millis(ts: object) -> int | None:
 
 
 @contextmanager
-def translate_catalog_errors() -> Iterator[None]:
+def translate_catalog_errors() -> Generator[None]:
     """Map the generated client's typed HTTP exceptions onto our DomainError
     hierarchy, so a catalog 409/403/404/400/5xx renders as the SAME problem+json
     the direct path produces instead of an opaque 500. The catalog's own problem

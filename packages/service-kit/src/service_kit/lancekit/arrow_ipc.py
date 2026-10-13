@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import struct
 from collections import Counter
+from collections.abc import Generator
 from contextlib import contextmanager
 from typing import TYPE_CHECKING
 
@@ -356,7 +357,7 @@ def _require_bytes(data: object) -> None:
 
 
 @contextmanager
-def _refused_as_arrow_body_error() -> Iterator[None]:
+def _refused_as_arrow_body_error() -> Generator[None]:
     # The block reads a caller's bytes and nothing else, and the body picks what it raises, so every
     # `Exception` in it is a refusal of the body. The door's cap is checked before the block, so a
     # misconfigured one is not blamed on the body, and the header walk's parser bounds-checks every read

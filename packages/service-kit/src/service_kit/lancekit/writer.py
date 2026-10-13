@@ -18,6 +18,7 @@ a delete-by-predicate.
 
 from __future__ import annotations
 
+from collections.abc import Generator
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
@@ -33,8 +34,6 @@ from service_kit.lancekit.reader import translate_catalog_errors
 
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
-
     import pyarrow as pa
 
     from service_kit.media.config import Settings
@@ -52,7 +51,7 @@ class TableWriter(Protocol):
 
 
 @contextmanager
-def translate_commit_conflict() -> Iterator[None]:
+def translate_commit_conflict() -> Generator[None]:
     """Turn a LOST COMMIT RACE on the direct path into the 409 the client already handles.
 
     The version check and the write are two separate steps (the endpoint reads

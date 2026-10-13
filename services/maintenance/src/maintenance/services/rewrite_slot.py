@@ -28,7 +28,7 @@ import logging
 import os
 import signal
 import threading
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -213,7 +213,7 @@ def resident_bytes() -> int:
 
 
 @contextmanager
-def rewrite_slot(size: int) -> Iterator[None]:
+def rewrite_slot(size: int) -> Generator[None]:
     """Hold one of ``size`` rewrite slots for the duration of the block.
 
     BLOCKS rather than refusing. A rewrite that cannot start yet is not a failure — the unit is

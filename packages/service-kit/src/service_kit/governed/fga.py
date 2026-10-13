@@ -604,6 +604,11 @@ class _ProjectedToken(CredentialConfiguration):
     def api_token(self) -> str:
         return read_identity_token(self._token_file)
 
+    @api_token.setter
+    def api_token(self, value: str | None) -> None:
+        """Refused: a token set here would be a copy, which stops authenticating at the first rotation."""
+        raise AttributeError(f"the OpenFGA token is read from {self._token_file} on every request and cannot be set")
+
 
 def client_configuration(
     api_url: str,

@@ -23,7 +23,7 @@ why they cannot be collapsed, and `routes.create_run` is the only caller.
 import asyncio
 import logging
 import os
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncGenerator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 
 import httpx
@@ -58,7 +58,7 @@ PROBE_TIMEOUT_SECONDS = 2.0
 
 def make_lifespan(settings: Settings) -> Callable[[FastAPI], AbstractAsyncContextManager[None]]:
     @asynccontextmanager
-    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         app.state.settings = settings
         app.state.flows_settings = build_flows_settings()
         flows_settings = app.state.flows_settings

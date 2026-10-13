@@ -47,9 +47,12 @@ name = "ty type check"
 # commit in `rask-ingest` failed with `Module service_kit.governed.dapr_auth has no member
 # is_public_caller`, citing `/home/blackwell/Desktop/rask/packages/...` — a symbol that exists in the
 # worktree and not in main. Both failure directions are real: phantom errors for anything added in
-# the worktree, and silence for anything it broke. uv itself warns about the mismatch and ignores the
-# variable; uvx does not, so the gate has to drop it explicitly.
-entry = "env -u VIRTUAL_ENV uvx ty check"
+# the worktree, and silence for anything it broke. uv warns about the mismatch and ignores the
+# variable, so dropping it keeps the warning out of the hook's output.
+# `uv run --frozen`, never `uvx`: the gate runs the ty the root lock pins, the same one `make typecheck`
+# and `dagger call typecheck` run. `uvx ty` resolves the newest release, so a ty release could fail every
+# commit on code nobody had changed, while CI and the lock still answered with another version.
+entry = "env -u VIRTUAL_ENV uv run --frozen ty check"
 language = "system"
 pass_filenames = false
 # WHOLE-PROJECT check, but only when PYTHON is staged. `pass_filenames = false` is required — ty

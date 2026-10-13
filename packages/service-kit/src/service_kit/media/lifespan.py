@@ -22,7 +22,7 @@ reports ready while its task actors are unregistered is a pod answering 503 to e
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from typing import Any, cast
 
@@ -68,7 +68,7 @@ async def media_lifespan(
     closes: MediaCloses,
     setup: MediaSetup | None = None,
     teardown: MediaTeardown | None = None,
-) -> AsyncIterator[AppState]:
+) -> AsyncGenerator[AppState]:
     """Run one media service's whole lifecycle. Yields the ``AppState`` it built.
 
     Startup, in order:
@@ -155,7 +155,7 @@ def make_media_lifespan(
     """
 
     @asynccontextmanager
-    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         async with media_lifespan(app, settings_factory(), service=service, closes=closes, setup=setup, teardown=teardown):
             yield
 

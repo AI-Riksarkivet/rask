@@ -411,7 +411,7 @@ ESLint and Prettier are **deleted**. `toolchain.test.ts` enforces three things a
 
 | Command | Runs |
 |---|---|
-| `make check` | `fmt` (mutating) + `lint` + Python `uvx ty` + `knip` |
+| `make check` | `fmt` (mutating) + `lint` + Python `uv run ty` (locked) + `knip` |
 | `bun --cwd=frontend run check test` | svelte-check + the vitest suites (zone-contract alone is 866, across 16 files) |
 | CI (`.dagger/frontend.go:53`) | `bunx turbo run check check:tsgo test lint fmt:check` |
 

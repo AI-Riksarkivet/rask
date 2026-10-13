@@ -21,7 +21,7 @@ it, so the type checker makes every new lakehouse service answer it.
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
 
 import pytest
@@ -50,7 +50,7 @@ def _fleet_app(*, audit_enabled: bool) -> FastAPI:
 
 def _lakehouse_app(*, audit_enabled: bool) -> FastAPI:
     @asynccontextmanager
-    async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    async def _lifespan(_app: FastAPI) -> AsyncGenerator[None]:
         yield
 
     return build_lance_service_app(

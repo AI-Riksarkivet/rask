@@ -16,7 +16,7 @@ session, and a version that cannot be read whole is judged fragment by fragment.
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator, Iterator
 from contextlib import contextmanager
 from datetime import timedelta
 from pathlib import Path
@@ -615,7 +615,7 @@ class _ResolvesOnce(_Forwarding):
 
 
 @contextmanager
-def _door(namespace: Any, settings: Settings | None = None) -> Iterator[TestClient]:
+def _door(namespace: Any, settings: Settings | None = None) -> Generator[TestClient]:
     settings = settings or Settings(LANCE_S3_ACCESS_KEY_ID="k", LANCE_S3_SECRET_ACCESS_KEY="s")
     application = FastAPI()
     install_problem_handlers(application, logging.getLogger(__name__))

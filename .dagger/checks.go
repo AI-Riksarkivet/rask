@@ -32,14 +32,15 @@ func (m *Rask) Lint(
 		Stdout(ctx)
 }
 
-// Typecheck runs the ty type-checker (the CI type gate).
+// Typecheck runs the ty type-checker (the CI type gate), at the version the root lock pins: the same
+// `uv run --no-sync` reasoning as Lint, so the hook, `make typecheck` and CI judge with one ty.
 func (m *Rask) Typecheck(
 	ctx context.Context,
 	// +defaultPath="/"
 	// +optional
 	src *dagger.Directory,
 ) (string, error) {
-	return m.base(src).WithExec([]string{"uvx", "ty", "check"}).Stdout(ctx)
+	return m.base(src).WithExec([]string{"uv", "run", "--no-sync", "ty", "check"}).Stdout(ctx)
 }
 
 // goImage is the toolchain for the Go plane's own gates, pinned to the `go` directive in

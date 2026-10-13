@@ -24,7 +24,7 @@ state, and the chart runs it from the catalog image with ``uvicorn --factory``.
 from __future__ import annotations
 
 import ssl
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import Annotated, Any, Final
 
@@ -79,7 +79,7 @@ def create_app(settings: IssuerMirrorSettings | None = None) -> FastAPI:
     issuer = resolved.issuer.rstrip("/")
 
     @asynccontextmanager
-    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         verify: ssl.SSLContext | bool = ssl.create_default_context(cafile=resolved.ca_file) if resolved.ca_file else True
         async with httpx.AsyncClient(verify=verify, timeout=resolved.timeout_seconds) as client:
             app.state.upstream = client

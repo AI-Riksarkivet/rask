@@ -11,7 +11,7 @@ for the whole life of the pod, so a readiness gate over it never opens, and ``sh
 flips, so the drain never begins.
 """
 
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncGenerator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 
 from fastapi import APIRouter, FastAPI
@@ -26,7 +26,7 @@ def _bare_lifespan(settings: Settings) -> Callable[[FastAPI], AbstractAsyncConte
     """A lifespan exactly like compute's: it sets `settings` and nothing else."""
 
     @asynccontextmanager
-    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         app.state.settings = settings
         yield
 

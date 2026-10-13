@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import json
 import threading
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -135,7 +135,7 @@ def _handler(stores: list[dict[str, str]], recorded: Recorded, token_file: Path)
 
 
 @contextmanager
-def openfga(stores: list[dict[str, str]], recorded: Recorded, *, token_file: Path) -> Iterator[str]:
+def openfga(stores: list[dict[str, str]], recorded: Recorded, *, token_file: Path) -> Generator[str]:
     """Serve the stub on a free local port for the block, admitting the bearer ``token_file`` holds; yields its base URL."""
     server = ThreadingHTTPServer(("127.0.0.1", 0), _handler(stores, recorded, token_file))
     threading.Thread(target=server.serve_forever, daemon=True).start()

@@ -12,7 +12,7 @@ compared them.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 
 import pytest
@@ -35,7 +35,7 @@ def _catalog_needs_a_key(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @contextmanager
-def _probe_route(app: FastAPI) -> Iterator[None]:
+def _probe_route(app: FastAPI) -> Generator[None]:
     """Add a probe route to a REAL, module-level app and take it away again.
 
     These apps are process-wide singletons — `catalog.main.app` is imported by every test that touches

@@ -23,7 +23,7 @@ import logging
 import re
 import threading
 import uuid
-from collections.abc import Callable, Iterable, Iterator, Sequence
+from collections.abc import Callable, Generator, Iterable, Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager, suppress
 from functools import partial
@@ -1832,7 +1832,7 @@ def _fixed_width(data_type: pa.DataType) -> int | None:
 
 
 @contextmanager
-def caller_sql(action: str) -> Iterator[None]:
+def caller_sql(action: str) -> Generator[None]:
     """Translate Lance's expression-parse failures into a 4xx instead of letting them escape as a 500.
 
     ``updates`` and ``predicate`` are SQL fragments the CALLER wrote, and Lance validates them at execution
@@ -1869,7 +1869,7 @@ _WRITE_SCHEMA_MARKER = "append with different schema:"
 
 
 @contextmanager
-def _write_schema_errors() -> Iterator[None]:
+def _write_schema_errors() -> Generator[None]:
     """Give the in-process write path the schema code the NATIVE path already answers.
 
     `insert_into_table` and `merge_insert_into_table` split on `branch`: without one they delegate to
@@ -1910,7 +1910,7 @@ _LISTS_FIELDS = re.compile(r"valid fields|available fields", re.IGNORECASE)
 
 
 @contextmanager
-def _column_op(action: str, fields: Sequence[str] = ()) -> Iterator[None]:
+def _column_op(action: str, fields: Sequence[str] = ()) -> Generator[None]:
     """Translate a schema-evolution failure the CALLER caused into the spec's 4xx, not a 500.
 
     The sibling of :func:`caller_sql` for the four column ops (add / alter / drop / update_field_metadata).
@@ -2957,7 +2957,7 @@ def _classify_ref_error(exc: Exception, *, kind: str, name: str, invalid_name: s
 
 
 @contextmanager
-def _ref_errors(kind: str, name: str, *, invalid_name: str | None = None) -> Iterator[None]:
+def _ref_errors(kind: str, name: str, *, invalid_name: str | None = None) -> Generator[None]:
     """Translate the tag/branch failures inside the block into their spec-coded errors.
 
     Without this every one of them reaches `install_problem_handlers` as a bare exception and is

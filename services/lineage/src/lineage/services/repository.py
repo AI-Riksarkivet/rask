@@ -23,7 +23,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime, timedelta
 from typing import Any, Final, LiteralString, TypedDict, cast
@@ -1417,7 +1417,7 @@ class LineageRepository:
                         log.warning("age_edge_index_skipped", extra={"label": label, "column": column, "error": str(exc)})
 
     @asynccontextmanager
-    async def reconcile_lock(self) -> AsyncIterator[bool]:
+    async def reconcile_lock(self) -> AsyncGenerator[bool]:
         """Single-flight guard for the reconcile sweep (item 6): yields ``True`` if this caller acquired the
         cluster-wide advisory lock, ``False`` if another sweep already holds it. The cron fires on every
         replica's sidecar independently, so without this two sweeps would back-fill the graph in parallel.

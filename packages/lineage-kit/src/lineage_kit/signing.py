@@ -52,7 +52,7 @@ import json
 import math
 import re
 import string
-from collections.abc import Iterable, Iterator, Mapping, Sequence
+from collections.abc import Generator, Iterable, Mapping, Sequence
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, Literal, Protocol
 
@@ -601,7 +601,7 @@ def _published_raw_key(claim: Signature, source: PublicKeySource) -> bytes:
 
 
 @contextmanager
-def _unexpected_is_a_refusal() -> Iterator[None]:
+def _unexpected_is_a_refusal() -> Generator[None]:
     """Turn whatever the event itself provokes into a refusal.
 
     An exception the verifier did not anticipate must not reach a bus handler as a failure: it would retry, and then
