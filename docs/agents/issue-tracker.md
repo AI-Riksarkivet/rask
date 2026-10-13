@@ -19,6 +19,28 @@ Issues and specs for this repo live as GitHub issues on `AI-Riksarkivet/rask`. U
 - **An issue closes when its fix is deployed and read back live, not when it merges.** Close it with a
   comment that names the helm revision.
 
+## Working a row alongside other people (owner, 2026-10-13)
+
+The assignee field is the only record of who is working on what, so these hold for every row, not only
+wayfinder tickets:
+
+- **Claim before code.** The first write on a row is `gh issue edit <n> --add-assignee @me`, before a
+  branch, a commit or a test. An assigned row belongs to its assignee; nobody else starts it, and a
+  question about it goes on the issue. Unassign (`--remove-assignee @me`) when you stop, so it is free again.
+- **Pick from the map.** The next row is the first one in the pinned map's order that is unassigned and
+  has no open blocker: the frontier query under *Wayfinding operations*, run over the map's rows.
+  Blocking edges are native issue dependencies (same section); a row whose blocker is open waits.
+- **One row, one branch, one PR.** The branch is named after the row (`lh-476-management-routes`), is
+  short-lived and rebased onto `main` daily, and merges through a PR the other people can see, so new
+  work starts from merged code rather than from someone's local branch.
+- **One open row per defect.** A row found to describe the same defect as another is closed with the
+  `duplicate` label and a comment naming the survivor, and its evidence is copied onto the survivor. A
+  row that a spec ticket fixes stays its own row, gets a `blocked_by` edge on that ticket, and the ticket
+  gets a comment naming it, so it closes together and is not built twice.
+- **Triage the rows you did not write.** A row opened by someone else, an audit or a finding enters the
+  map only through `/triage` with the owner's decisions (see `triage-labels.md`); every triage comment
+  starts with the triage disclaimer.
+
 ## Conventions
 
 - **Create an issue**: `gh issue create --title "..." --body "..."`. Use a heredoc for multi-line bodies.
