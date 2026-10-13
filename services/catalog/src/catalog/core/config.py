@@ -403,6 +403,12 @@ class CatalogAuthzSettings(BaseSettings):
     # root that must be seeded to bootstrap. Nested creation always gates on the parent.
     fga_lock_root_create: bool = Field(default=False, alias="LANCE_FGA_LOCK_ROOT_CREATE")
 
+    #: EVERY SUBJECT THE ESTATE'S MACHINE IDENTITIES CARRY (LH-433), rendered by the chart's `lance.machineSubjects`
+    #: from the identity values it already holds: both doors' service-account maps, the signers, the event
+    #: delegator, the zones' identity and the event reader. A project's named admin must be a person, and a
+    #: person's OIDC `sub` has no form of its own to test, so a name is judged against this list.
+    machine_subjects: list[str] = Field(default_factory=list, alias="RASK_MACHINE_SUBJECTS")
+
 
 class Settings(
     GovernedAuthSettings,

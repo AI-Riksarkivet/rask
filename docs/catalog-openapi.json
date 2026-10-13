@@ -3536,8 +3536,19 @@
         "type": "object"
       },
       "CreateProjectRequest": {
-        "description": "The create payload. Just the id \u2014 a tenant is a name, its admins, and what it later holds.",
+        "description": "The create payload: the tenant's id, and who administers it when a machine creates it.",
         "properties": {
+          "admin": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Admin"
+          },
           "id": {
             "title": "Id",
             "type": "string"

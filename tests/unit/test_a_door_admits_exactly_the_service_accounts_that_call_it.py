@@ -83,3 +83,21 @@ def test_an_identity_that_names_no_subject_fails_the_render(identity: str) -> No
         render_text(*DEPLOYED, "--set", f"{identity}=")
 
     assert f"{identity} is blank" in refused.value.stderr, refused.value.stderr
+
+
+def test_the_catalog_knows_every_machine_subject_the_estate_names() -> None:
+    """LH-433: a project's named admin must not be a machine, and the catalog judges that against
+    `RASK_MACHINE_SUBJECTS`. Every subject any door admits, every signer and the delegator must be on it."""
+    docs = render(*DEPLOYED)
+    envs = {
+        doc["metadata"]["name"]: env_of(container)
+        for doc in docs
+        if doc.get("kind") == "Deployment"
+        for container in doc["spec"]["template"]["spec"]["containers"]
+        if "RASK_SA_SUBJECTS" in env_of(container)
+    }
+    named = {subject for env in envs.values() for subject in json.loads(env["RASK_SA_SUBJECTS"]).values()}
+    named |= {env.get("RASK_SIGNING_IDENTITY", "") for env in envs.values()} - {""}
+    known = set(json.loads(envs["rask-catalog"]["RASK_MACHINE_SUBJECTS"]))
+    assert named, "the render names no machine subject at all, so this test checks nothing"
+    assert named <= known, f"machine subjects the catalog would accept as a project admin: {sorted(named - known)}"

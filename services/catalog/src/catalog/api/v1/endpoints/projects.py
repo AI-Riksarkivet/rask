@@ -183,6 +183,7 @@ async def create_project(
     project_id = body.id
     if not _ID_RE.match(project_id):
         raise InvalidInputError(f"invalid project id {project_id!r}: must match {_ID_RE.pattern}")
+    admin = fga_deps.project_admin_for(token, settings, body.admin)
     await fga_deps.require_relation(client, settings, token, relation="can_observe_events", obj=settings.fga_root_object)
     so = settings.storage_options()
     existing = await run_in_threadpool(project_registry.get_project, settings.registry_root, so, project_id)
@@ -208,7 +209,7 @@ async def create_project(
             record = await _converge_project(settings, so, record)
     else:
         record = await _converge_project(settings, so, record)
-    granted = await fga_deps.seed_project_admin(client, settings, token, project=project_id)
+    granted = await fga_deps.seed_project_admin(client, settings, token, project=project_id, admin=admin)
     log.info("project_created", extra={"project": project_id, "existing": existing is not None})
     await emit_control(
         control,
@@ -223,7 +224,7 @@ async def create_project(
             SUCCESS,
             subject=actor,
             resource=f"project:{project_id}",
-            grantee=actor,
+            grantee=f"user:{admin}",
             relation="admin",
             reason="project_created",
         )
@@ -233,7 +234,7 @@ async def create_project(
             object_type="grant",
             object_id=f"project:{project_id}",
             actor=actor,
-            extra={"relation": "admin", "subject": actor, "reason": "project_created"},
+            extra={"relation": "admin", "subject": f"user:{admin}", "reason": "project_created"},
         )
     return ProjectResponse(project=project_id, warehouses=[], admins=await _admins_for(client, settings, project_id))
 

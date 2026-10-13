@@ -121,7 +121,7 @@ def test_the_ownership_seeds_write_only_relations_the_model_defines(monkeypatch:
     # (owner + the project edge, from warehouse-create) and seed_project_admin (the tenant's admin,
     # minted by POST /management/v1/projects since the bootstrap exception died).
     asyncio.run(fga_deps.seed_warehouse(MagicMock(), _fga_settings(), _TOKEN, warehouse_id="wh-a", project="acme"))
-    granted = asyncio.run(fga_deps.seed_project_admin(MagicMock(), _fga_settings(), _TOKEN, project="acme"))
+    granted = asyncio.run(fga_deps.seed_project_admin(MagicMock(), _fga_settings(), _TOKEN, project="acme", admin="alice"))
     assert granted is True  # reported, so create_project only audits a grant that really happened
     assert captured, "the seeds wrote no tuples"
     model = {t["type"]: set(t.get("relations") or {}) for t in fga_module.load_model()["type_definitions"]}
@@ -322,6 +322,41 @@ def test_estate_admin_creates_a_project_and_the_project_then_governs_itself(tmp_
     gold = _create_as(settings, "alice", CreateWarehouseRequest(id="acme-gold", project="acme", serving="gold"))
     assert gold.serving == "gold"
     assert store.checks == [("alice", "can_create_warehouse", "project:acme")]
+
+
+def test_a_machine_that_mints_a_project_names_its_person_admin_and_holds_nothing(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """LH-433: a machine never becomes a tenant's admin. A provisioning identity (ADR 0143's operator) that
+    creates a project must name the person who administers it; it is refused 400 before anything is written
+    when it names nobody or another machine, and when it names a person only that person is seeded."""
+    from catalog.api.v1.endpoints import projects as proj_ep
+    from service_kit.control_emit import NoopControlEmitter
+    from service_kit.governed.machine_identity import ServicePrincipal
+
+    store = _FakeStore(estate_admins=("provisioner",))
+    store.install(monkeypatch)
+    # The chart's shape: this door's map admits only the provisioner, and the estate's other machines are
+    # known only through the whole list (`lance.machineSubjects`).
+    settings = _governed_settings(tmp_path).model_copy(
+        update={
+            "sa_subjects": {"system:serviceaccount:ops:provisioner": "provisioner"},
+            "machine_subjects": ["notifications", "service-catalog", "service-maintenance", "service-web"],
+        }
+    )
+    machine = ServicePrincipal(subject="provisioner", service_account="system:serviceaccount:ops:provisioner")
+
+    def create(admin: str | None) -> Any:
+        body = proj_ep.CreateProjectRequest(id="acme", admin=admin)
+        return asyncio.run(proj_ep.create_project(settings=settings, token=machine, client=MagicMock(), control=NoopControlEmitter(), body=body))
+
+    for unnamed in (None, "service-web", "service-catalog", "provisioner"):
+        with pytest.raises(InvalidInputError):
+            create(unnamed)
+        assert proj_svc.list_projects(settings.registry_root, {}) == [], f"a refused create ({unnamed!r}) wrote the tenant anyway"
+
+    minted = create("alice")
+
+    assert minted.admins == ["user:alice"]
+    assert not any(t[0] == "user:provisioner" and t[2] == "project:acme" for t in store.tuples), "the machine holds a tuple on the tenant it minted"
 
 
 def test_an_ordinary_user_cannot_mint_a_tenant_through_any_door(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:

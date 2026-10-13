@@ -151,6 +151,7 @@ spec:
             {{- include "lance.governedOidcEnv" . | nindent 12 }}
             {{- include "lance.governedFgaEnv" . | nindent 12 }}
             {{- include "lance.saVerifier" (list $root "env" "catalog") | nindent 12 }}
+            - { name: RASK_MACHINE_SUBJECTS, value: {{ include "lance.machineSubjects" $root | quote }} }
 
             {{- $maintainers := list }}
             {{- if and $root.Values.maintenance.enabled $root.Values.maintenance.vendWriteCredentials }}

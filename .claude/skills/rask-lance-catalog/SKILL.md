@@ -93,7 +93,8 @@ Three layers, each owned in ONE place:
 | what is possible NOW | the registries, checked BEFORE the native write: **project records** (`catalog/services/projects.py`, `_projects/<id>.json`), warehouse records + `top_ns → warehouse_id → root_uri` bindings (`catalog/services/warehouses.py`) |
 
 **A tenant EXISTS when its registry record does** — not when a warehouse implies it and not when FGA
-holds tuples for it. `POST /management/v1/projects` writes the record AND the creator's `project#admin` tuple in
+holds tuples for it. `POST /management/v1/projects` writes the record AND the `project#admin` tuple (the creator's; a
+machine identity names the person in `admin` and is never admin itself, LH-433, `fga_deps.project_admin_for`) in
 one operation (estate-admin gated on `can_observe_events` at the root), which is what stops existence
 and permission drifting apart. There is **no bootstrap exception** in warehouse-create any more: one
 door, and a warehouse-owner cannot ride a create into project admin.

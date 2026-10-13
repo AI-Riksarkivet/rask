@@ -1274,9 +1274,12 @@ class ProjectResponse(BaseModel):
 
 
 class CreateProjectRequest(BaseModel):
-    """The create payload. Just the id — a tenant is a name, its admins, and what it later holds."""
+    """The create payload: the tenant's id, and who administers it when a machine creates it."""
 
     id: str
+    #: The person seeded as the project's admin. Required when the caller is a machine identity, which
+    #: never becomes a tenant's admin itself (LH-433); refused from a person, who is the admin.
+    admin: str | None = None
 
 
 class DeleteProjectResponse(BaseModel):

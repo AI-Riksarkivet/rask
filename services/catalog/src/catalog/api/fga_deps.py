@@ -60,6 +60,7 @@ from service_kit.governed import fga
 from service_kit.governed.audit import ALLOW, DENY, FAILURE, audit
 from service_kit.governed.machine_identity import ServicePrincipal
 from service_kit.lakehouse import trash
+from service_kit.lakehouse.subjects import is_person_subject
 
 
 log = logging.getLogger(__name__)
@@ -1333,26 +1334,50 @@ async def require_project_exists(settings: Settings, project: str) -> None:
         )
 
 
+def project_admin_for(token: Principal | None, settings: Settings, named: str | None) -> str | None:
+    """The subject seeded as admin of a project ``token`` creates: the person creating it, or the person
+    a machine names. ``None`` only for an unauthenticated stack, where nothing is seeded.
+
+    A MACHINE NEVER ADMINISTERS A TENANT (LH-433, the 2026-09-10 ruling ``seed_ownership`` applies to
+    tables). A project has no parent to own it transitively, so a machine-created project would be left
+    with no admin; the machine names the person instead (ADR 0143's provisioning operator knows the
+    tenant's owner). The name must be a person: not a userset or wildcard, and not one of the estate's
+    machine subjects (``machine_subjects``, the chart's whole list, plus this door's own map). The caller's
+    own type is judged by how it was proved, never by its name.
+    """
+    if not isinstance(token, ServicePrincipal):
+        if named is not None:
+            raise InvalidInputError("`admin` is named only by a machine creating a project; a person creating one is its admin")
+        return token.sub if token is not None else None
+    if named is None:
+        raise InvalidInputError("a machine creating a project names the person who administers it in `admin`")
+    if not is_person_subject(named) or named in settings.machine_subjects or named in settings.sa_subjects.values():
+        raise InvalidInputError(f"`admin` must name a person; {named!r} is not one")
+    return named
+
+
 async def seed_project_admin(
     client: OpenFgaClient | None,
     settings: Settings,
     token: Principal | None,
     *,
     project: str,
+    admin: str | None,
 ) -> bool:
-    """Grant the creator ``admin`` on the new ``project:<id>`` — the tuple that makes a tenant
-    self-sustaining (every later warehouse/namespace/table grant cascades from it).
+    """Grant ``admin`` (from :func:`project_admin_for`) on the new ``project:<id>`` — the tuple that makes
+    a tenant self-sustaining (every later warehouse/namespace/table grant cascades from it). The caller
+    is recorded as the actor.
 
     Written by ``POST /management/v1/projects`` in the same operation as the registry record, which is the whole
     point of Decision 1: existence and permission are minted together and cannot drift. Idempotent —
     ``write_tuples`` swallows duplicate writes on a create retry. Returns True when the tuple was
     actually written, so the caller audits a grant that really happened (never one an FGA-off stack
     silently skipped)."""
-    if not (settings.fga_enabled and token is not None and client is not None):
+    if not (settings.fga_enabled and token is not None and client is not None and admin is not None):
         return False
     await fga.write_tuples(  # noqa: TID251
         client,
-        [fga.ClientTuple(user=f"user:{token.sub}", relation="admin", object=f"project:{project}")],
+        [fga.ClientTuple(user=f"user:{admin}", relation="admin", object=f"project:{project}")],
         actor=token.sub,
         origin="project_create",
     )

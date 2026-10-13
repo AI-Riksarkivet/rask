@@ -552,6 +552,16 @@ securityContext:
 {{- toJson $m -}}
 {{- end -}}
 
+{{- define "lance.machineSubjects" -}}
+{{- $root := . -}}{{- $v := .Values -}}{{- $ids := list -}}
+{{- range $door := list "catalog" "lineage" }}{{- range $_, $sub := (include "lance.saSubjects" (list $root $door) | fromJson) }}{{- $ids = append $ids $sub }}{{- end }}{{- end -}}
+{{- range (include "lance.signers" $root | fromJsonArray) }}{{- if .id }}{{- $ids = append $ids .id }}{{- end }}{{- end -}}
+{{- $ids = append $ids (include "lance.delegatorIdentities" $root) -}}
+{{- if $v.frontend.enabled }}{{- $ids = append $ids $v.frontend.serviceIdentity }}{{- end -}}
+{{- $ids = append $ids ((get ($v.services.notifications.env | default dict) "RASK_LINEAGE_SERVICE_IDENTITY") | default "notifications") -}}
+{{- toJson ($ids | compact | uniq | sortAlpha) -}}
+{{- end -}}
+
 {{- define "lance.saVerifier" -}}
 {{- $root := index . 0 -}}{{- $part := index . 1 -}}{{- $door := index . 2 -}}
 {{- $subjects := include "lance.saSubjects" (list $root $door) | fromJson -}}

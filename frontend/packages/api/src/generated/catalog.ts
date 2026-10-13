@@ -5382,9 +5382,11 @@ export interface components {
         };
         /**
          * CreateProjectRequest
-         * @description The create payload. Just the id — a tenant is a name, its admins, and what it later holds.
+         * @description The create payload: the tenant's id, and who administers it when a machine creates it.
          */
         CreateProjectRequest: {
+            /** Admin */
+            admin?: string | null;
             /** Id */
             id: string;
         };
