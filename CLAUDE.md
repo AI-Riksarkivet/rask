@@ -393,8 +393,9 @@ Work moves idea → ship along one path, and `/ask-matt` explains any step:
   assigned row is its assignee's; take the next one from the map's frontier (first unassigned, unblocked row).
 - **One row, one branch, one PR.** Branch from `origin/main` named after the row (`lh-476-management-routes`),
   merge through a PR. Never commit a row straight to `main`.
-- **`Closes #n` belongs in the PR, not the commit.** A push or merge auto-closes the issue, and a row closes only
-  when its fix is deployed and read back live: leave the row open on merge and close it with the helm revision.
+- **Reference a row with `Refs #n`, never a closing keyword.** `Closes`/`Fixes` in a commit or a PR body closes the
+  issue on push or merge, and a row closes only when its fix is deployed and read back live: close it by hand
+  with a comment naming the helm revision.
 
 ### Triage labels
 
