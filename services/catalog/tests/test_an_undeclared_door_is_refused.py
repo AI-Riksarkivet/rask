@@ -22,7 +22,8 @@ import asyncio
 import json
 import logging
 import re
-from typing import Any, cast
+from enum import Enum
+from typing import Any, Literal, cast, get_args, get_origin
 
 import pytest
 from fastapi import APIRouter, Depends, FastAPI, Request
@@ -36,6 +37,7 @@ from catalog.api import fga_deps
 from catalog.api.dependencies import get_fga_client
 from catalog.api.security import authenticate
 from catalog.api.v1.router import api_router
+from catalog.core import tier_policy
 from catalog.core.config import Settings, get_settings
 from service_kit.governed.audit import AUDIT_LOGGER, FAILURE
 from service_kit.governed.oidc import IDToken
@@ -67,7 +69,7 @@ def _token() -> IDToken:
     return IDToken(iss="https://idp.example", sub="alice", aud="lance", exp=2_000_000_000, iat=1_000_000_000)
 
 
-def _request(template: str, body: dict[str, object]) -> Request:
+def _request(template: str, body: dict[str, object], query: str = "") -> Request:
     """A real Starlette request for `template` with every path parameter filled in."""
     params = {name: (_ID if name == "id" else f"{name}-1") for name in _PARAM.findall(template)}
     path = _PARAM.sub(lambda match: params[match.group(1)], template)
@@ -76,7 +78,14 @@ def _request(template: str, body: dict[str, object]) -> Request:
     async def receive() -> Message:
         return {"type": "http.request", "body": payload, "more_body": False}
 
-    scope = {"type": "http", "method": "POST", "path": path, "path_params": params, "headers": [(b"content-type", b"application/json")], "query_string": b""}
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": path,
+        "path_params": params,
+        "headers": [(b"content-type", b"application/json")],
+        "query_string": query.encode(),
+    }
     return Request(scope, receive)
 
 
@@ -100,8 +109,8 @@ def asked(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, str]]:
     return recorded
 
 
-def _authorize(template: str, body: dict[str, object] | None = None) -> None:
-    asyncio.run(fga_deps.authorize(_request(template, body or {}), _settings(), _token(), _CLIENT))
+def _authorize(template: str, body: dict[str, object] | None = None, query: str = "") -> None:
+    asyncio.run(fga_deps.authorize(_request(template, body or {}, query), _settings(), _token(), _CLIENT))
 
 
 _UNDECLARED = "a_verb_nobody_declared"
@@ -168,22 +177,33 @@ def test_an_undeclared_door_answers_the_specs_internal_error_on_the_wire(asked: 
     assert ran == [] and asked == []
 
 
-def _guarded_templates() -> list[str]:
-    """Every mounted route path the router guard authorizes by its `{id}`, walked off the composed app.
+def _choices(annotation: object) -> list[str]:
+    """Every value a closed-vocabulary query parameter accepts (a `Literal` or an `Enum`), else none."""
+    if get_origin(annotation) is Literal:
+        return [str(value) for value in get_args(annotation)]
+    if isinstance(annotation, type) and issubclass(annotation, Enum):
+        return [str(member.value) for member in annotation]
+    return []
+
+
+def _guarded_doors() -> list[tuple[str, str]]:
+    """Every mounted route the router guard authorizes by its `{id}`, walked off the composed app, once
+    bare and once per value of each closed-vocabulary query parameter: a value can turn a read into a
+    write (`credentials?tier=write`).
 
     `iter_route_contexts` rather than `api_router.routes`: this FastAPI keeps included routers as
     opaque wrappers, and a walk over them finds nothing and passes by iterating nothing.
     """
     app = FastAPI()
     app.include_router(api_router)
-    templates: set[str] = set()
+    doors: set[tuple[str, str]] = set()
     for context in iter_route_contexts(app.routes):
-        path = context.path
-        if not isinstance(context.original_route, APIRoute) or path is None or "{id}" not in path:
+        path, route = context.path, context.original_route
+        if not isinstance(route, APIRoute) or path is None or "{id}" not in path or fga_deps._resource_for(_PARAM.sub("x", path)) is None:
             continue
-        if fga_deps._resource_for(_PARAM.sub("x", path)) is not None:
-            templates.add(path)
-    return sorted(templates)
+        doors.add((path, ""))
+        doors |= {(path, f"{param.name}={value}") for param in route.dependant.query_params for value in _choices(param.field_info.annotation)}
+    return sorted(doors)
 
 
 def _grant_body(template: str) -> dict[str, object]:
@@ -197,8 +217,54 @@ def _grant_body(template: str) -> dict[str, object]:
     return {"relation": grantable[0].removeprefix("can_grant_"), "user": "bob"}
 
 
-@pytest.mark.parametrize("template", _guarded_templates())
-def test_every_guarded_route_resolves_to_a_declared_rung(asked: list[tuple[str, str]], template: str) -> None:
-    """A mounted route whose suffix no map declares is refused for everyone, so it must fail here first."""
-    _authorize(template, _grant_body(template))
-    assert asked, f"{template} was waved through without a single check"
+@pytest.fixture
+def judged(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Every write the tier judge is handed; it asks the rung it was given, as the real one does."""
+    recorded: list[str] = []
+
+    async def judge(write: tier_policy.Write, *, caller: str | None, check: tier_policy.RungCheck | None, namespace: object) -> tier_policy.Judgement:
+        del caller, namespace
+        recorded.append(write.op)
+        if check is not None and write.rung is not None:
+            await check(write.rung)
+        return tier_policy.Judgement(tier=None)
+
+    monkeypatch.setattr(fga_deps.tier_policy, "judge", judge)
+    return recorded
+
+
+#: The table and view doors that only READ, each with the query that keeps it one. Written out here rather
+#: than derived from the router's maps, so a door those maps misclassify, or a door nobody has listed yet,
+#: must reach the tier judge (ADR 0160): a door is a write until this list says otherwise.
+_READ_DOORS: frozenset[tuple[str, str]] = frozenset(
+    {
+        *((suffix, "") for suffix in ("access/my-permissions", "analyze_plan", "blobs", "branches/list", "changes", "count_rows", "credentials")),
+        *((suffix, "") for suffix in ("describe", "exists", "explain_plan", "history", "index/list", "index/{index_name}/stats", "policy/describe")),
+        *((suffix, "") for suffix in ("query", "stats", "tags/list", "tags/version", "tasks", "version/describe", "version/list")),
+        ("credentials", "tier=read"),
+    }
+)
+
+
+@pytest.mark.parametrize(("template", "query"), _guarded_doors())
+def test_every_guarded_route_resolves_to_a_declared_rung_and_every_write_reaches_the_tier_judge(
+    asked: list[tuple[str, str]], judged: list[str], template: str, query: str
+) -> None:
+    """A mounted route whose suffix no map declares is refused for everyone, so it must fail here first.
+
+    And every table or view door that is not a listed read is decided by the tier judge, with FGA on and
+    with it off, so a new write door cannot skip it. The grant doors are the exception: they write tuples,
+    not the table, and are authorized from the body by the rung being handed out.
+    """
+    _authorize(template, _grant_body(template), query)
+    assert asked, f"{template}?{query} was waved through without a single check"
+
+    suffix = template.split("/{id}/", 1)[1]
+    resource = fga_deps._resource_for(_PARAM.sub("x", template))
+    if resource not in ("table", "materialized_view") or suffix in ("access/grant", "access/revoke") or (suffix, query) in _READ_DOORS:
+        assert judged == [], f"{template}?{query} only reads, yet the tier judge decided it"
+        return
+    assert len(judged) == 1, f"{template}?{query} asks {asked} without the tier judge"
+    judged.clear()
+    asyncio.run(fga_deps.authorize(_request(template, {}, query), _settings().model_copy(update={"fga_enabled": False}), None, None))
+    assert len(judged) == 1, f"{template}?{query} skips the tier judge with FGA off"

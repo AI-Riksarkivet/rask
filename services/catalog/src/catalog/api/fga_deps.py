@@ -52,6 +52,7 @@ from openfga_sdk import OpenFgaClient
 
 from catalog.api.dependencies import FgaClientDep, SettingsDep
 from catalog.api.security import CurrentToken, Principal
+from catalog.core import tier_policy
 from catalog.core.config import Settings
 from catalog.core.identifiers import MAX_NAMESPACE_DEPTH, parse_identifier
 from catalog.services import native
@@ -805,8 +806,99 @@ async def _authorize_batch(request: Request, client: OpenFgaClient, settings: Se
         raise PermissionDeniedError(f"permission denied on {', '.join(sorted(denied))}")
 
 
+#: The rung each WRITING credential tier opens, one rung per tier and never either-of ([[LH-202]]).
+#: `can_write_data` is a LOGICAL writer, whose policy reaches `data/` only; `can_maintain` a PHYSICAL one
+#: (compaction, index optimization, reclamation rewrite and delete files while preserving content), whose
+#: policy reaches the whole prefix, and the model denies a maintainer read, write, drop and promote.
+#: Accepting either rung for either tier would hand a writer the maintainer's policy, which can commit any
+#: transaction around the catalog. The maintainer's whole-prefix credential, scoped to one table for 900 s,
+#: is the owner's ruling of 2026-09-08: the alternative measured before it was 207 of 285 rewrites a tick
+#: signed by the deployment's ROOT key, because a refused vend falls back to the ambient credential.
+VEND_TIER_RUNGS: Final[dict[str, str]] = {"write": "can_write_data", "maintain": "can_maintain"}
+
+#: The resources whose non-read doors write a table's data or its history, and so reach the tier judge.
+_JUDGED_RESOURCES: Final = frozenset({"table", "materialized_view"})
+
+
+async def _rename_destination(request: Request, segments: list[str]) -> tuple[str, ...]:
+    """The table a rename lands in: ``new_namespace_id`` (else the source's namespace) plus ``new_table_name``.
+
+    A body the door would refuse names no destination, so the source stands in; the door answers the 400.
+    """
+    body = await request.json()
+    name = body.get("new_table_name") if isinstance(body, dict) else None
+    if not isinstance(name, str) or not name:
+        return tuple(segments)
+    namespace = body.get("new_namespace_id")
+    parent = namespace if isinstance(namespace, list) and all(isinstance(part, str) for part in namespace) else segments[:-1]
+    return (*parent, name)
+
+
+async def _write_door(request: Request, settings: Settings) -> tier_policy.Write | None:
+    """The write this route is about to make, or ``None`` for a door the tier judge does not decide.
+
+    A write door is every non-read door on a table or materialized view, owner-rung ones included, and every
+    create of one (ADR 0160). The classification is the same one the router's own gate uses, so a door is
+    judged by what its declared rung says it does. ``None`` leaves the request to the rest of ``authorize``:
+    reads, the grant doors (authorized from the body), the root, and a door no map declares, which that path
+    refuses and audits.
+    """
+    path: str = request.scope["path"]
+    object_id = request.path_params.get("id")
+    resource = _resource_for(path)
+    if object_id is None or resource not in _JUDGED_RESOURCES:
+        return None
+    suffix = _suffix(path, resource, object_id)
+    segments = parse_identifier(object_id, settings.delimiter)
+    if not segments or suffix in _GRANT_SUFFIXES:
+        return None
+    obj = _object(_FGA_TYPE[resource], segments, settings.delimiter)
+    if suffix in _CREATE_ON_PARENT_SUFFIXES.get(resource, frozenset()):
+        check = _create_parent_check(resource, segments, settings)
+        rung = tier_policy.Rung(relation=check[1], obj=check[0]) if check is not None else None
+        return tier_policy.Write(op=suffix, obj=obj, rung=rung, table=tuple(segments))
+    if suffix == "credentials":
+        # A vend is a read at its default tier and a WRITE at a writing one: the credential is how a
+        # direct-to-storage writer writes, so it is judged on the rung its tier opens.
+        writing = VEND_TIER_RUNGS.get(request.query_params.get("tier", "read"))
+        return tier_policy.Write(op=suffix, obj=obj, rung=tier_policy.Rung(relation=writing, obj=obj), table=tuple(segments)) if writing else None
+    try:
+        relation = _action_relation(_FGA_TYPE[resource], suffix)
+    except InternalError:
+        return None
+    if relation in _READ_RELATIONS:
+        return None
+    table = await _rename_destination(request, segments) if suffix == "rename" else tuple(segments)
+    return tier_policy.Write(op=suffix, obj=obj, rung=tier_policy.Rung(relation=relation, obj=obj), table=table)
+
+
+async def _judge(request: Request, settings: Settings, token: Principal | None, injected: OpenFgaClient | None, write: tier_policy.Write) -> None:
+    """Hand ``write`` to the tier judge, with the rung asked through :func:`_require` when FGA is on."""
+    check: tier_policy.RungCheck | None = None
+    if settings.fga_enabled:
+        client = require_wired(injected)
+        if token is None:
+            raise UnauthenticatedError("authentication required")
+        user = token.sub
+
+        async def check(rung: tier_policy.Rung) -> None:
+            await _require(client, user=user, relation=rung.relation, obj=rung.obj)
+
+    # Imported HERE rather than at module scope: `dependencies` imports this module for its guards.
+    from catalog.api.dependencies import namespace_for_top_ns
+
+    async def namespace() -> LanceNamespace:
+        return await namespace_for_top_ns(request, settings, write.table[0])
+
+    await tier_policy.judge(write, caller=token.sub if token is not None else None, check=check, namespace=namespace)
+
+
 async def authorize(request: Request, settings: SettingsDep, token: CurrentToken, injected: FgaClientDep) -> None:
-    """Enforce the caller's OpenFGA permission for this route (no-op when FGA is off)."""
+    """Enforce the caller's permission for this route: the tier judge decides every write door, with FGA on
+    or off, and OpenFGA every other door (a no-op when FGA is off)."""
+    if (write := await _write_door(request, settings)) is not None:
+        await _judge(request, settings, token, injected, write)
+        return
     if not settings.fga_enabled:
         return
     # Fail closed: enabled but unwired authz must never silently allow the request. The client is
@@ -1528,6 +1620,21 @@ async def require_relation(
     if not (settings.fga_enabled and client is not None and token is not None):
         return
     await _require(client, user=token.sub, relation=relation, obj=obj)
+
+
+async def require_tier_authority(client: OpenFgaClient | None, settings: Settings, token: Principal | None, *, project: str | None) -> None:
+    """Raise 403 unless the caller may declare or drop a namespace's ``rask.tier`` (ADR 0160).
+
+    That is the namespace's project admin (``can_administer`` on ``project:<project>``), or the estate admin
+    (``can_observe_events`` on the root object, the bar ``POST /v1/projects`` asks) where no project owns
+    the namespace. No-op when FGA is off / unwired / unauthenticated, like every gate here.
+    """
+    if not (settings.fga_enabled and client is not None and token is not None):
+        return
+    if project is not None:
+        await _require(client, user=token.sub, relation="can_administer", obj=f"project:{project}")
+    else:
+        await _require(client, user=token.sub, relation="can_observe_events", obj=settings.fga_root_object)
 
 
 async def require_can_create_warehouse(

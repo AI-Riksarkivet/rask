@@ -34,12 +34,20 @@ _Avoid_: Ray, compute plane, cluster
 ### Governance
 
 **Tier**:
-One of the governed stages of a table's data: bronze, silver or gold. Raw is the external world, never a tier.
+One of the governed stages of a table's data: bronze, silver or gold. Raw is the external world, never a tier. A
+table's tier is the one its nearest enclosing namespace declares, and a namespace declares it once, when it is created,
+by a project admin (the estate admin where no project owns the namespace). A name never says what tier something is.
 _Avoid_: layer, zone, stage
+
+**Tier judge**:
+The one decision every write door in the catalog asks before it writes: may this operation, on this table, by this
+caller, under this run, proceed. It answers allow, refuse or hold, and it owns the caller's write permission as well as
+the tier's rules, so no write door decides on its own.
+_Avoid_: tier guard, write gate
 
 **Tier governance**:
 The rules the catalog applies in its own write path to every write into a tier, so no writer can bypass them: the
-tier's permission, and on silver and gold the writer's run and inputs (ADR 0156; the run-and-inputs rule is LH-225).
+writer's permission on the tier's namespace, and on silver and gold the writer's run and inputs (ADR 0156; the run-and-inputs rule is LH-225).
 _Avoid_: the medallion service, the cascade
 
 **Pipeline**:

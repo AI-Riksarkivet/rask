@@ -62,7 +62,9 @@ from catalog.api.dependencies import (
 )
 from catalog.api.security import CurrentToken, Principal
 from catalog.api.v1.endpoints import namespaces as namespaces_api
+from catalog.core import tier_policy
 from catalog.core.config import Settings
+from catalog.core.formats import reject_unsupported_properties
 from catalog.core.identifiers import parse_identifier
 from catalog.core.store_endpoint import names_the_estate_store, require_estate_store
 from catalog.core.vending import CredentialVendor
@@ -527,10 +529,16 @@ async def create_warehouse_namespace(
     namespace's ``parent`` edge pointing at the warehouse — so the owner's grant cascades into the tables."""
     _require_enabled(settings)
     ns_name = _validate_id(body.namespace, what="namespace name")
+    reject_unsupported_properties(body.properties)
+    declared = tier_policy.declared_tier(body.properties)
+    if body.properties and body.adopt_existing:
+        raise InvalidInputError("adopt_existing keeps the namespace's own properties, so properties cannot be set on the same call")
     await fga_deps.require_relation(client, settings, token, relation="can_create_namespace", obj=f"warehouse:{warehouse_id}")
     record = await run_in_threadpool(warehouses.get_warehouse, settings.registry_root, settings.storage_options(), warehouse_id)
     if record is None:
         raise TableNotFoundError(f"warehouse not found: {warehouse_id}")
+    if declared is not None:
+        await fga_deps.require_tier_authority(client, settings, token, project=record["project"])
     # Deactivation gate (audit #2/#6): this handler resolves the bucket connection DIRECTLY from
     # record["root_uri"] via namespace_for_root — it never routes through get_namespace, so the resolver's
     # deactivation quarantine does NOT cover it. Without this check a principal still holding
@@ -580,7 +588,7 @@ async def create_warehouse_namespace(
     # at the estate's store instead would put it in a different object store from every table
     # later written to it.
     ns_conn = namespace_for_root(request, settings, root_uri, endpoint=record.get("endpoint") or None)
-    req = CreateNamespaceRequest(id=segments)
+    req = CreateNamespaceRequest(id=segments, properties=body.properties)
     adopted = False
     try:
         response: CreateNamespaceResponse = await run_in_threadpool(native.call, ns_conn, "create_namespace", req)
