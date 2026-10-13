@@ -46,9 +46,11 @@ import asyncio
 import http.client
 import logging
 import ssl
+import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Annotated, Any, NamedTuple
+from typing import Annotated, Any, Final, NamedTuple
 from urllib.parse import urlsplit
 
 import httpx
@@ -64,12 +66,20 @@ _DISCOVERY_SUFFIX = "/.well-known/openid-configuration"
 #: Wall-clock ceiling on EVERY outbound fetch this module makes — discovery AND JWKS.
 #:
 #: One constant because the two were asymmetric, and the unstated half was the one that matters more
-#: (SKG-12). Discovery is fetched once per issuer per `cache_ttl`; the JWKS client refetches whenever a
-#: token presents an unknown `kid` — on the REQUEST path, at exactly the moment an IdP is mid-rotation
-#: and least healthy. `PyJWKClient` is not unbounded (PyJWT defaults it to 30s), but it was left to a
+#: (SKG-12). Discovery is fetched once per issuer per `cache_ttl`; the JWKS client refetches when a token
+#: presents an unknown `kid`, at most once per `UNKNOWN_KID_REFRESH_INTERVAL_SECONDS` — on the REQUEST
+#: path, at exactly the moment an IdP is mid-rotation and least healthy. `PyJWKClient` is not unbounded (PyJWT defaults it to 30s), but it was left to a
 #: library default twice this module's own budget and free to drift on an upgrade, so a hung IdP held a
 #: request worker for twice as long as the deployment ever decided it should.
 HTTP_FETCH_TIMEOUT_SECONDS = 15.0
+
+#: The least time between two key-set refetches forced by a token naming a `kid` the cached set does not hold, per
+#: issuer. The `kid` is the caller's own text, unverified, so without a pace every anonymous request naming a novel one
+#: buys a live fetch from the IdP (and, for a service-account issuer, the mirror's two from the API server), each free to
+#: hold a threadpool worker for `HTTP_FETCH_TIMEOUT_SECONDS` ([[LH-431]]). Paced, a flood costs one fetch per interval,
+#: and an honest rotation's first token is found by the first refetch that begins once the interval has passed. The same
+#: interval as `lineage_kit.keys.KEY_REFRESH_INTERVAL_SECONDS`, which paces the same refetch for signed lineage events.
+UNKNOWN_KID_REFRESH_INTERVAL_SECONDS: Final = 30.0
 
 #: Asymmetric signing algorithms we are willing to accept. Symmetric (``HS*``) and
 #: ``none`` are deliberately excluded — accepting them with a public verification key
@@ -180,6 +190,29 @@ class _CredentialedJWKClient(jwt.PyJWKClient):
         return super().fetch_data()
 
 
+class _RefreshPace:
+    """Admits one unknown-kid refetch per `UNKNOWN_KID_REFRESH_INTERVAL_SECONDS` for one issuer.
+
+    The pace is counted from when a refetch BEGAN, and the moment is claimed under the lock before the fetch runs, outside
+    it: a burst arriving while a refetch is in flight is declined at once instead of queueing behind a slow IdP, so it
+    holds no worker for the fetch budget. A refetch that fails counts like one that succeeds, since a hung IdP is exactly
+    when another attempt costs most.
+    """
+
+    def __init__(self, clock: Callable[[], float]) -> None:
+        self._clock = clock
+        self._lock = threading.Lock()
+        self._began: float | None = None
+
+    def admit(self) -> bool:
+        with self._lock:
+            now = self._clock()
+            if self._began is not None and now - self._began < UNKNOWN_KID_REFRESH_INTERVAL_SECONDS:
+                return False
+            self._began = now
+            return True
+
+
 class ProviderUnavailableError(ServiceUnavailableError):
     """The provider could not be used — its documents or this deployment's configuration of it, never the token.
 
@@ -225,6 +258,7 @@ class OIDCVerifier:
         discovery_overrides: dict[str, str] | None = None,
         fetch_token_file: str | None = None,
         ca_file: str | None = None,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         issuers = [issuer] if isinstance(issuer, str) else list(issuer)
         if not issuers:
@@ -236,6 +270,10 @@ class OIDCVerifier:
         self._discovery_overrides = {iss.rstrip("/"): url.rstrip("/") for iss, url in (discovery_overrides or {}).items()}
         self._audience = audience
         self._ttl = cache_ttl
+        self._clock = clock
+        # Keyed by configured issuer, so a pace outlives the provider `_resolve` rebuilds every `cache_ttl`, and is
+        # bounded by the configuration rather than by anything a token says.
+        self._refresh_paces = {iss: _RefreshPace(clock) for iss in self._issuers}
         self._leeway = leeway
         self._allow_insecure = allow_insecure
         self._credential = _FetchCredential(fetch_token_file, ca_file)
@@ -264,7 +302,7 @@ class OIDCVerifier:
 
     def _resolve(self, configured_issuer: str) -> _Provider:
         """Return the cached provider for ``configured_issuer``, refreshing past the TTL."""
-        now = time.monotonic()
+        now = self._clock()
         cached = self._cache.get(configured_issuer)
         if cached is not None and (now - cached[0]) < self._ttl:
             return cached[1]
@@ -432,10 +470,14 @@ class OIDCVerifier:
         # fetch could answer it. (A non-string `kid` never gets here — the header read above refuses it.)
         if not isinstance(kid, str):
             raise UnauthenticatedError("Invalid or expired token")
-        # An unknown kid may be a key the provider rotated in after the cached set: refetch once, as
-        # `PyJWKClient.get_signing_key` does, before refusing the token.
-        for refresh in (False, True):
-            key = provider.jwk_client.match_kid(self._key_set(provider, refresh=refresh), kid)
+        key = provider.jwk_client.match_kid(self._key_set(provider, refresh=False), kid)
+        if key is not None:
+            return key
+        # An unknown kid may be a key the provider rotated in after the cached set, so it earns one refetch, as
+        # `PyJWKClient.get_signing_key` grants — but only at the pace `_RefreshPace` admits, because the kid is the
+        # caller's unverified text. Declined, the token is judged on the set already held.
+        if self._refresh_paces[provider.spec.issuer.rstrip("/")].admit():
+            key = provider.jwk_client.match_kid(self._key_set(provider, refresh=True), kid)
             if key is not None:
                 return key
         raise UnauthenticatedError("Invalid or expired token")

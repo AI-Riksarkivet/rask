@@ -40,7 +40,8 @@ import socket
 import struct
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from enum import StrEnum
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Annotated
@@ -55,7 +56,7 @@ from pydantic import BaseModel
 from service_kit.exceptions import register_handlers
 from service_kit.governed.audit import AUDIT_LOGGER
 from service_kit.governed.deps import make_auth_deps
-from service_kit.governed.oidc import OIDCVerifier
+from service_kit.governed.oidc import UNKNOWN_KID_REFRESH_INTERVAL_SECONDS, OIDCVerifier
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 
@@ -64,6 +65,8 @@ KID = "signing-1"
 DOORS = ["/gated", "/soft"]
 DISCOVERY_PATH = "/.well-known/openid-configuration"
 JWKS_PATH = "/jwks"
+
+SLOW_ANSWER_SECONDS = 0.3
 
 #: What a reverse proxy in front of an IdP answers when its session is gone: a 200 whose body is a page.
 SIGN_IN_PAGE = b"<!doctype html><title>Sign in</title>"
@@ -101,6 +104,9 @@ class _IdP(BaseModel):
     issuer: str
     documents: dict[str, bytes]
     faults: dict[str, _Fault] = {}
+    #: Paths answered after `SLOW_ANSWER_SECONDS`: long enough that every request in a concurrent burst reaches the
+    #: verifier while the first one's fetch is still in flight.
+    slow: set[str] = set()
     #: Requests served, by path.
     fetches: dict[str, int] = {}
 
@@ -144,6 +150,8 @@ def idp(rsa_key: rsa.RSAPrivateKey) -> Iterator[_IdP]:
             served.fetches[self.path] = served.fetches.get(self.path, 0) + 1
             fault = served.faults.get(self.path)
             body = served.documents.get(self.path)
+            if self.path in served.slow:
+                time.sleep(SLOW_ANSWER_SECONDS)
             if fault is _Fault.CLOSED_BEFORE_ANSWERING:
                 self.close_connection = True
                 return
@@ -194,12 +202,20 @@ def _token(idp: _IdP, key: rsa.RSAPrivateKey | ec.EllipticCurvePrivateKey, algor
     return jwt.encode(claims, key, algorithm=algorithm, headers={} if kid is None else {"kid": kid})
 
 
-def _client(idp: _IdP) -> TestClient:
+class _Clock:
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+def _client(idp: _IdP, *, clock: Callable[[], float] = time.monotonic) -> TestClient:
     """A governed app wired as every governed service wires one: BOTH handler installers, one verifier."""
     app = FastAPI()
     register_handlers(app)
     install_problem_handlers(app, logging.getLogger(__name__))
-    app.state.oidc = OIDCVerifier(idp.issuer, AUDIENCE, cache_ttl=300, allow_insecure=True)
+    app.state.oidc = OIDCVerifier(idp.issuer, AUDIENCE, cache_ttl=300, allow_insecure=True, clock=clock)
 
     @app.get("/gated")
     def _gated(subject: _Subject) -> dict[str, str]:
@@ -239,18 +255,43 @@ def test_a_token_the_key_set_signed_is_accepted(door: str, idp: _IdP, rsa_key: r
 
 
 @pytest.mark.parametrize("door", ["/gated"])
-def test_a_key_rotated_in_after_the_cached_set_is_found_by_one_refetch(
-    door: str, idp: _IdP, rsa_key: rsa.RSAPrivateKey, stranger_key: rsa.RSAPrivateKey
-) -> None:
-    """The first request caches the key set; the provider then rotates to a key that set does not hold. Refusing that
-    token from the cache would lock every caller out for the cache lifetime after each rotation."""
+def test_a_burst_of_novel_kids_costs_one_key_set_fetch(door: str, idp: _IdP, rsa_key: rsa.RSAPrivateKey) -> None:
+    """A `kid` is the caller's to write, unverified. Each novel one earns a refetch only while no other began within the
+    interval, so a flood of them, anonymous and concurrent, costs the IdP one fetch rather than one per request, and the
+    requests behind it are refused at once rather than each holding a worker for the fetch budget ([[LH-431]]). The IdP
+    answers slowly so that the whole burst meets the verifier while the first refetch is in flight: a pace claimed only
+    once its fetch returns lets every request in the burst through."""
     client = _client(idp)
     assert _call(idp, door, _token(idp, rsa_key, "RS256"), client=client)[0] == 200
+    idp.slow.add(JWKS_PATH)
+    tokens = [_token(idp, rsa_key, "RS256", kid=f"forged-{n}") for n in range(8)]
 
+    with ThreadPoolExecutor(max_workers=len(tokens)) as pool:
+        statuses = list(pool.map(lambda token: _call(idp, door, token, client=client)[0], tokens))
+
+    assert statuses == [401] * len(tokens)
+    assert idp.fetches[JWKS_PATH] == 2
+
+
+@pytest.mark.parametrize("door", ["/gated"])
+def test_a_key_rotated_in_during_a_flood_is_found_once_the_interval_passes(
+    door: str, idp: _IdP, rsa_key: rsa.RSAPrivateKey, stranger_key: rsa.RSAPrivateKey
+) -> None:
+    """A key the provider rotates in after the cached set is found by a refetch, which a forged kid met first may delay by
+    at most one interval and never lock out: refusing a rotated token from the cache would lock every caller out for
+    the cache lifetime after each rotation. Three fetches in all: the first request's, the forged kid's, and the
+    rotated token's once the interval has passed."""
+    clock = _Clock()
+    client = _client(idp, clock=clock)
+    assert _call(idp, door, _token(idp, rsa_key, "RS256"), client=client)[0] == 200
+    assert _call(idp, door, _token(idp, rsa_key, "RS256", kid="forged"), client=client)[0] == 401
     idp.documents[JWKS_PATH] = _key_set(stranger_key, "signing-2")
+    clock.now += UNKNOWN_KID_REFRESH_INTERVAL_SECONDS
+
     status, body = _call(idp, door, _token(idp, stranger_key, "RS256", kid="signing-2"), client=client)
 
     assert status == 200, body
+    assert idp.fetches[JWKS_PATH] == 3
 
 
 # ── the caller's fault ──────────────────────────────────────────────────────────────────────────────
