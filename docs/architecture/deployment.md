@@ -119,13 +119,14 @@ make e2e              # verify MFE hydration + API round-trip end-to-end (run af
 make k3s-down         # uninstall   |   make k3s-purge  # + delete PVCs
 ```
 
-`k3s-build` builds every image through `scripts/dagger-image.sh`: `gateway`, `compute` and `notifications`, the seven
-zone images (`web-<zone>:dev`), `lance-rest-catalog` (the lakehouse image that serves catalog, lineage, maintenance and
-the media trio), `minio` and the `ray-cluster` image the development engine fixture runs. `k3s-import` side-loads
-them into k3s containerd with `docker save | k3s ctr images import` (Makefile `k3s-import`), which conflicts with the
-house rule that no docker command runs; the Dagger path that avoids it is to publish to the dev registry
-(`make dev-registry`, then `dagger call image --name=<stem> publish --address=172.17.0.1:5000/<stem>:<tag>`), as the
-in-cluster loop in `CLAUDE.md` describes.
+`k3s-build` builds every image through `scripts/dagger-image.sh --out`, as an OCI tarball in `build/k3s-images/`:
+`gateway`, `compute`, `notifications` and `flows`, the seven zone images (`web-<zone>`), `lance-rest-catalog` (the
+lakehouse image that serves catalog, lineage, maintenance and the media trio), `minio` and the `ray-cluster` image the
+development engine fixture runs. `k3s-import` loads each tarball into k3s containerd as `<image>:dev` with
+`sudo k3s ctr images import`; neither step runs docker. The release installs into `RELEASE_NAMESPACE` (default
+`default`, the fixtures' namespace), and `values-live-pins.yaml` files are per-host state from `make k3s-pins`, never
+committed ([[XC-152]]). The dev-registry path (`make dev-registry`, then `dagger call image --name=<stem> publish
+--address=172.17.0.1:5000/<stem>:<tag>`) remains for the in-cluster loop `CLAUDE.md` describes.
 
 ## Container images (`.docker/`)
 

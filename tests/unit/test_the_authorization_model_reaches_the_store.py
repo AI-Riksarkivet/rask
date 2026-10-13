@@ -58,17 +58,24 @@ def _weight(job: dict) -> int:
     return int(job["metadata"]["annotations"]["helm.sh/hook-weight"])
 
 
-def test_bootstrap_admin_runs_AFTER_every_hook_it_waits_on() -> None:
-    """Order is the whole point. `bootstrap-admin` writes `warehouse:...#maintainer`, which the store can only accept once
-    the model defining that relation is in it — that ordering inversion is what CrashLooped and wedged the release. It
-    also waits for the catalog, which on a first install cannot start until `minio-scoped-users` (`post-install` only
-    there) has created its S3 user: at one weight Helm runs the two by name, bootstrap-admin first, and the install times
-    out on it ([[XC-133]], CI run 38217921913)."""
-    jobs = _jobs(_render("--set", "fga.enabled=true"))
+@pytest.mark.parametrize("phase", ["install", "upgrade"])
+def test_bootstrap_admin_runs_AFTER_the_jobs_it_waits_on(phase: str) -> None:
+    """`bootstrap-admin` writes `warehouse:...#maintainer`, which the store accepts only once the model defining that
+    relation is in it, and it waits for the catalog, which cannot start until `minio-scoped-users` has created its S3
+    user. On an INSTALL the scoped-users Job is part of the manifest, never a hook: Helm runs post-install hooks only once
+    every resource passes `--wait`, so a post-install scoped-users left the catalog unable to pass it and a fresh
+    `helm install --wait` deadlocked ([[XC-152]]). On an UPGRADE it stays a hook weighted before bootstrap-admin, so a
+    new identity's user exists before pods that use it roll ([[XC-133]], CI run 38217921913)."""
+    jobs = _jobs(_render("--set", "fga.enabled=true", *(["--is-upgrade"] if phase == "upgrade" else [])))
     bootstrap = next((j for name, j in jobs.items() if "bootstrap-admin" in name), None)
     if bootstrap is None:
         pytest.skip("bootstrap-admin does not render here; the ordering it must beat is not present")
+    [scoped] = [j for name, j in jobs.items() if "-minio-scoped-users" in name]
+    hook = (scoped["metadata"].get("annotations") or {}).get("helm.sh/hook")
+    if phase == "install":
+        assert hook is None, f"on install the scoped-users Job is a {hook!r} hook; the catalog waits on it, so --wait deadlocks"
+        return
+    assert hook is not None and "pre-upgrade" in hook, hook
     before = {name: j for name, j in jobs.items() if ("model" in name and "openfga" in name) or "-minio-scoped-users" in name}
-    assert len(before) == 2, sorted(jobs)
     late = {name: _weight(j) for name, j in before.items() if _weight(j) >= _weight(bootstrap)}
     assert not late, f"these run at or after bootstrap-admin (weight {_weight(bootstrap)}), which waits on them: {late}"

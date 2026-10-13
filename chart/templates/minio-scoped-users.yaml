@@ -9,10 +9,12 @@ kind: Job
 metadata:
   name: {{ include "rask.fullname" . }}-minio-scoped-users-{{ include "rask.bootstrapRev" . }}
   labels: {{- include "lance.labels" . | nindent 4 }}
+  {{- if not .Release.IsInstall }}
   annotations:
-    "helm.sh/hook": post-install,pre-upgrade,post-upgrade
+    "helm.sh/hook": pre-upgrade,post-upgrade
     "helm.sh/hook-weight": "5"
     "helm.sh/hook-delete-policy": before-hook-creation
+  {{- end }}
 spec:
   ttlSecondsAfterFinished: 3600
   {{- include "lance.bootstrapJobDeadline" . | nindent 2 }}

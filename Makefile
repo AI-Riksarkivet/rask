@@ -670,7 +670,7 @@ medallion-demo: ## Live medallion walkthrough — watch the DAG build at http://
 # (`flows` is STILL absent and has been since it landed: `.docker/flows.dockerfile` and a `rask-flows`
 # Deployment both exist, so an in-cluster flows is unverifiable today for the identical reason. Named
 # rather than fixed here — it is another plane's diff.)
-COMPOSE_IMAGES = gateway compute notifications
+COMPOSE_IMAGES = gateway compute notifications flows
 # SvelteKit SSR microfrontend zone images — one web-<zone> image per $(ZONES) entry,
 # all built from the one parametrized .docker/frontend.dockerfile via --build-arg
 # APP=<name>. (R22: the web- prefix keeps the zone image namespace disjoint from the
@@ -681,14 +681,20 @@ KUBECONFIG ?= /etc/rancher/k3s/k3s.yaml
 # Routed through scripts/helm.sh, which sets HELM_DRIVER=sql. NOT bare `helm`: the release lives in
 # Postgres, and against the default Secret backend helm reports it ABSENT and `upgrade --install`
 # re-installs over a live estate WITHOUT erroring. Read-only subcommands pass straight through.
-HELM ?= KUBECONFIG=$(KUBECONFIG) ./scripts/helm.sh
-KUBECTL ?= KUBECONFIG=$(KUBECONFIG) kubectl
+# The release's namespace, stated rather than inherited from the kubeconfig context ([[XC-152]]): the fixtures it reads
+# by name (rask-minio, rask-dex, rask-openbao, rask-nats, compute) install into `default` (each fixture.env), so the
+# release must share it. Helm reads HELM_NAMESPACE; kubectl takes the flag, and a later `-n`/`-A` in a recipe wins.
+RELEASE_NAMESPACE ?= default
+HELM ?= KUBECONFIG=$(KUBECONFIG) HELM_NAMESPACE=$(RELEASE_NAMESPACE) ./scripts/helm.sh
+KUBECTL ?= KUBECONFIG=$(KUBECONFIG) kubectl --namespace $(RELEASE_NAMESPACE)
 # lance-rest-catalog is the ONE lakehouse image (catalog + lineage + maintenance +
 # media trio — chart `image.catalog`); the default render runs 8 containers from it, so the
 # build/import set must carry it or kind/k3s deploys ImagePullBackOff on every lakehouse pod.
 # minio is the object store's server and the `mc` its scoped-users hook runs, compiled from pinned upstream
 # source because the upstream images refuse anonymous pulls ([[XC-075]]).
 K3S_IMAGES = $(COMPOSE_IMAGES) $(ZONES:%=web-%) ray-cluster lance-rest-catalog minio
+# Where k3s-build leaves each image as an OCI tarball and k3s-import reads it: no docker daemon on either side.
+K3S_IMAGE_DIR ?= build/k3s-images
 
 # Subchart repos (Chart.yaml dependencies). An OCI dependency would need no repo add.
 K3S_DEP_REPOS = openfga=https://openfga.github.io/helm-charts
@@ -706,23 +712,23 @@ k3s-deps: ## Add subchart repos + vendor chart dependencies into chart/charts/, 
 	helm dependency build ./chart
 	./scripts/fixtures.sh --vendor
 
-k3s-build: ## Build all fleet + frontend zone + ray-cluster images as :dev (via Dagger)
+k3s-build: ## Build all fleet + frontend zone + ray-cluster images as OCI tarballs in K3S_IMAGE_DIR (via Dagger, no docker)
 	@for s in $(COMPOSE_IMAGES); do \
-	  bash scripts/dagger-image.sh --name $$s --tag $$s:dev || exit 1; \
+	  bash scripts/dagger-image.sh --name $$s --out $(K3S_IMAGE_DIR)/$$s.tar || exit 1; \
 	done
 	@for a in $(ZONES); do \
-	  bash scripts/dagger-image.sh --zone $$a --tag web-$$a:dev || exit 1; \
+	  bash scripts/dagger-image.sh --zone $$a --out $(K3S_IMAGE_DIR)/web-$$a.tar || exit 1; \
 	done
-	bash scripts/dagger-image.sh --name ray-cluster --tag ray-cluster:dev
+	bash scripts/dagger-image.sh --name ray-cluster --out $(K3S_IMAGE_DIR)/ray-cluster.tar
 	# The lakehouse fleet image — dockerfile name (rest-catalog) != image name, so it can't
 	# ride the COMPOSE_IMAGES loop. Same build scripts/e2e_stack.sh does.
-	bash scripts/dagger-image.sh --name rest-catalog --tag lance-rest-catalog:dev
-	bash scripts/dagger-image.sh --name minio --tag minio:dev
+	bash scripts/dagger-image.sh --name rest-catalog --out $(K3S_IMAGE_DIR)/lance-rest-catalog.tar
+	bash scripts/dagger-image.sh --name minio --out $(K3S_IMAGE_DIR)/minio.tar
 
-k3s-import: ## Side-load :dev images into k3s containerd
+k3s-import: ## Side-load the k3s-build tarballs into k3s containerd as <image>:dev (sudo, no docker)
 	@for s in $(K3S_IMAGES); do \
 	  echo ">> importing $$s:dev"; \
-	  docker save $$s:dev | sudo k3s ctr images import - || exit 1; \
+	  sudo k3s ctr -n k8s.io images import --digests --index-name docker.io/library/$$s:dev $(K3S_IMAGE_DIR)/$$s.tar || exit 1; \
 	done
 
 # The MEDIA PLANE is on by default here, and it has to be: `frontend.apps` always includes the
@@ -827,7 +833,7 @@ k3s-up: k3s-crds k3s-fixtures k3s-deps k3s-stem-check ## Apply CRDs, install fix
 	: # Measured 2026-09-09: every `make k3s-up` failed for as long as a non-empty pins file existed,
 	: # which is the state a pin is FOR. Base first (the live release's image settings, else side-loaded),
 	: # pins second, so the tags win and the registry survives.
-	IMGARGS="--set image.localImages=true"; \
+	IMGARGS="--set image.localImages=true --set-string frontend.image.tag=dev"; \
 	LIVE=$$(mktemp); \
 	if $(HELM) get values rask -o yaml >"$$LIVE" 2>/dev/null && grep -q 'repository:' "$$LIVE"; then \
 	  IMGARGS="-f $$LIVE"; \
@@ -867,17 +873,17 @@ k3s-stem-check: ## Refuse an upgrade while any image stem runs more than one tag
 	@# The detection already existed inside `k3s-pins.sh` and was reachable only by asking for a pin file.
 	@# Same script, `--check-only`: one implementation, and it now stands in FRONT of the destructive
 	@# operation instead of beside it.
-	@KUBECONFIG=$(KUBECONFIG) ./scripts/k3s-pins.sh --check-only
+	@KUBECONFIG=$(KUBECONFIG) RELEASE_NAMESPACE=$(RELEASE_NAMESPACE) ./scripts/k3s-pins.sh --check-only
 
 k3s-pins: ## Capture what the cluster is RUNNING into deploy/values-live-pins.yaml (#135)
 	@# KUBECTL is deliberately NOT passed through. `KUBECTL ?= KUBECONFIG=$(KUBECONFIG) kubectl` is a
-	@# THREE-WORD string carrying its own env assignment, so `KUBECTL=$(KUBECTL) ./script` made the shell
+	@# multi-word string carrying its own env assignment, so `KUBECTL=$(KUBECTL) ./script` made the shell
 	@# read `KUBECTL=KUBECONFIG=...` as an assignment and then run `kubectl ./scripts/k3s-pins.sh` —
 	@# `error: unknown command "./scripts/k3s-pins.sh" for "kubectl"`. The script quotes `"$$KUBECTL"`,
 	@# so passing it correctly would fail too: it would exec a binary literally named
 	@# `KUBECONFIG=... kubectl`. KUBECONFIG is already in the environment; the script's own `kubectl`
 	@# default is the right one.
-	@KUBECONFIG=$(KUBECONFIG) ./scripts/k3s-pins.sh deploy/values-live-pins.yaml
+	@KUBECONFIG=$(KUBECONFIG) RELEASE_NAMESPACE=$(RELEASE_NAMESPACE) ./scripts/k3s-pins.sh deploy/values-live-pins.yaml
 	@echo ">> now: make k3s-up   (or ./scripts/helm.sh upgrade rask ./chart -f deploy/values-live-pins.yaml)"
 	@echo ">> NOT bare 'helm upgrade' — every helm call goes through scripts/helm.sh"
 
@@ -923,7 +929,7 @@ k9s: bootstrap ## Browse the k3s cluster in k9s (the chart's NOTES.txt points he
 	@KUBECONFIG=$(KUBECONFIG) $(LOCALBIN)/k9s
 
 k3s-down: ## Uninstall the rask release (keep PVCs)
-	$(HELM) uninstall rask || true
+	$(HELM) uninstall rask --ignore-not-found --wait
 
 k3s-purge: k3s-down ## Uninstall + delete PVCs (clean slate)
 	$(KUBECTL) delete pvc -A -l app.kubernetes.io/instance=rask --ignore-not-found || true
@@ -974,7 +980,12 @@ kind-up: bootstrap ## Create the rask kind cluster (idempotent; deploy/kind/kind
 	@$(KIND) get clusters 2>/dev/null | grep -qx $(KIND_CLUSTER) || \
 	  $(KIND) create cluster --name $(KIND_CLUSTER) --config deploy/kind/kind-config.yaml --wait 150s
 
-kind-images: k3s-build ## Build the full :dev image set (same builds k3s uses — fleet + zones + ray-cluster)
+kind-images: ## Build the full :dev image set into docker's image store, which `kind load docker-image` reads (same builds k3s uses)
+	@for s in $(COMPOSE_IMAGES); do bash scripts/dagger-image.sh --name $$s --tag $$s:dev || exit 1; done
+	@for a in $(ZONES); do bash scripts/dagger-image.sh --zone $$a --tag web-$$a:dev || exit 1; done
+	bash scripts/dagger-image.sh --name ray-cluster --tag ray-cluster:dev
+	bash scripts/dagger-image.sh --name rest-catalog --tag lance-rest-catalog:dev
+	bash scripts/dagger-image.sh --name minio --tag minio:dev
 
 kind-load: ## Side-load the :dev image set into the kind cluster
 	$(KIND) load docker-image $(foreach i,$(KIND_IMAGES),$(i):dev) --name $(KIND_CLUSTER)

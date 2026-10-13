@@ -29,6 +29,7 @@ reading the same tick seconds apart.
 
 from __future__ import annotations
 
+import gc
 import logging
 
 import pytest
@@ -59,9 +60,16 @@ def test_two_readings_move_with_the_heap() -> None:
     `getallocatedblocks()` moved by +149,728 and returned to baseline on release. A reading that stays
     flat reads as "native", a confident wrong answer to the only question this instrument settles.
     """
-    before = summarize([])["python_blocks"]
-    retained = [{"n": i} for i in range(50_000)]
-    after = summarize([])["python_blocks"]
+    # The allocation below triggers collections, which free cyclic garbage earlier tests left and can outweigh the 50,000
+    # dicts between the two readings. Collected first and paused across them, the readings see only what this test holds.
+    gc.collect()
+    gc.disable()
+    try:
+        before = summarize([])["python_blocks"]
+        retained = [{"n": i} for i in range(50_000)]
+        after = summarize([])["python_blocks"]
+    finally:
+        gc.enable()
 
     assert after > before, f"the reading did not move ({before} -> {after}) while 50,000 dicts were held"
     assert len(retained) == 50_000, "keep the reference alive until after the second reading"
