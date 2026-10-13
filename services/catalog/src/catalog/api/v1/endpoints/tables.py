@@ -274,7 +274,7 @@ async def declare_table(
     # possible place to compensate and there was never a reason for it to be the riskiest. Without it a
     # failed seed left a declared-only table that its declarer could not see, could not drop, and could
     # not re-declare (native `AlreadyExists`), reserving the id against everyone, permanently (F3).
-    await fga_deps.seed_ownership_or_compensate(client, settings, token, resource="table", segments=segments, undo=_undo_declare)
+    await fga_deps.seed_ownership_or_compensate(client, settings, token, resource="table", segments=segments, undo=_undo_declare, created=True)
     # Versionless (no data yet): records who declared it + the reserved location, and keys the CREATED edge
     # (declare_table ∈ lineage _CREATE_OPS). Reconcile fills the real version once data lands at the URI.
     await emit_write_event(
@@ -882,7 +882,7 @@ async def register_table(
                 if held:
                     raise
                 await run_in_threadpool(base_registry.claim_bases, context.registry, registered, entries)
-            await fga_deps.seed_ownership(client, settings, token, resource="table", segments=segments, may_grant_owner=False)
+            await fga_deps.seed_ownership(client, settings, token, resource="table", segments=segments, created=False, may_grant_owner=False)
             log.info("register_converged_governance", extra={"table": id, "location": registered})
         raise
 
@@ -937,7 +937,7 @@ async def register_table(
             await run_in_threadpool(base_registry.release_claim, context.registry, verdict.claim)
         await run_in_threadpool(base_registry.release_data_directories, context.registry, verdict.directories, context.holder)
 
-    await fga_deps.seed_ownership_or_compensate(client, settings, token, resource="table", segments=segments, undo=_undo_register)
+    await fga_deps.seed_ownership_or_compensate(client, settings, token, resource="table", segments=segments, undo=_undo_register, created=True)
     # RESOLVED, not echoed — `response.location` is the caller's own relative path and a relative
     # `source_uri` reports this table as storage loss on every sweep tick; the flag judgement above
     # already resolved it.
@@ -1261,14 +1261,14 @@ async def rename_table(
     #
     # Seeding first inverts which half is lost: a failed REVOKE leaves a stale grant on the source id,
     # which no longer names a table. That is a real but narrow risk — it only matters if that exact id
-    # is later reused, and the create path's own `revoke_ownership` already clears stale grants on a
-    # reused id for precisely this reason. Weighed against an object nobody can touch, the estate
+    # is later reused, and a create at a reused id revokes what it finds there before seeding
+    # (`seed_ownership(created=True)`, [[LH-480]]). Weighed against an object nobody can touch, the estate
     # prefers the recoverable state: the table always has a live owner who can finish the cleanup.
     #
     # The revoke is best-effort for the same reason the compensations are: it is an OpenFGA call, and
     # if OpenFGA is what is down, failing the whole rename here would strand the caller after a native
     # mutation that already succeeded. The stale grant is logged, not raised.
-    await fga_deps.seed_ownership(client, settings, token, resource="table", segments=new_segments)
+    await fga_deps.seed_ownership(client, settings, token, resource="table", segments=new_segments, created=True)
     try:
         await fga_deps.revoke_ownership(client, settings, resource="table", segments=segments, token=token)
     except Exception as revoke_exc:

@@ -75,10 +75,11 @@ async def _create(
         resource: str,
         segments: list[str],
         undo: Any,
+        created: bool,
         parent_object: str | None = None,
         may_grant_owner: bool = True,
     ) -> None:
-        del undo, parent_object, may_grant_owner
+        del undo, created, parent_object, may_grant_owner
         seeded.append((resource, *segments))
 
     monkeypatch.setattr(ns_ep.fga_deps, "seed_ownership_or_compensate", _seed)

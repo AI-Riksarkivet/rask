@@ -1894,6 +1894,11 @@ TupleOrigin = Literal[
     # there was nothing left to destroy. It also bounds the row: a `drift_repair` revoke is only ever
     # justified by a drift finding, so it can never be evidence of an access decision.
     "drift_repair",
+    # REVOKING what a previous incarnation left on an id a create is about to seed ([[LH-480]]). A drop revokes after
+    # its irreversible native mutation, so an OpenFGA outage leaves its tuples behind, and the next object at that id
+    # would inherit them. Its own value because the row means something no other origin does: nobody decided this
+    # access was gone just now, a door found it already orphaned by an earlier drop.
+    "stale_on_create",
     "lifecycle_delete",
     "train",
     "annotator",

@@ -366,34 +366,52 @@ def test_existok_on_existing_table_does_not_seize_ownership(client: TestClient, 
     assert [t for t in written if t[1] == "owner"] == [], f"an ExistNo-op seized ownership: {written}"
 
 
-def test_create_table_seeds_owner_and_parent_tuples(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
-    """CONTRACT: a successful create seeds ``owner`` on the table + a ``parent`` link.
+class _TupleStore:
+    """OpenFGA's tuple store at the SDK boundary: `read` by object and `write` of writes or deletes, nothing else.
 
-    Seeding goes through the single write path ``fga.grant_on_create`` AFTER the backend
-    create succeeds. We assert the args it receives (resource/obj_id/parent) — the real
-    ``canonical_object_id`` / ``parent_namespace_id`` helpers run, proving the grant id
-    (``table:db1$users``, parent ``db1``) matches what ``authorize`` would later check.
+    The real `grant_on_create` and `revoke_object_tuples` run against it, so what the test reads back is the
+    tuple state those helpers leave, not the arguments they were called with.
     """
+
+    def __init__(self, tuples: set[tuple[str, str, str]]) -> None:
+        self.tuples = set(tuples)
+        self.close = AsyncMock()
+
+    async def read(self, body: object, options: object = None) -> SimpleNamespace:
+        obj = getattr(body, "object", None)
+        keys = [SimpleNamespace(key=SimpleNamespace(user=u, relation=r, object=o)) for u, r, o in sorted(self.tuples) if o == obj]
+        return SimpleNamespace(tuples=keys, continuation_token="")
+
+    async def write(self, body: object, options: object = None) -> None:
+        for t in getattr(body, "writes", None) or []:
+            self.tuples.add((t.user, t.relation, t.object))
+        for t in getattr(body, "deletes", None) or []:
+            self.tuples.discard((t.user, t.relation, t.object))
+
+
+def test_a_create_at_a_dropped_tables_name_leaves_only_the_creators_grants(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
+    """A hard drop revokes its tuples AFTER the irreversible native drop, so an OpenFGA blip leaves them behind. The next
+    table created at that name must not inherit them: a stale `reader` or `owner` would hand the dropped table's
+    grantees the new table's data, with nobody having granted it (ADR 0146, [[LH-480]])."""
     _stub_create(monkeypatch, response=CreateTableResponse(location="s3://x", version=1))
     _wire(client)
     monkeypatch.setattr(fga_module, "check", _fake_check([], allow=True))
-    grant = AsyncMock()
-    monkeypatch.setattr(fga_module, "grant_on_create", grant)
-
-    resp = client.post(
-        "/v1/table/db1$users/create",
-        content=ARROW_BODY,
-        headers={"Authorization": "Bearer t", **ARROW_STREAM},
+    store = _TupleStore(
+        {
+            ("user:bob", "owner", "table:db1$users"),
+            ("user:carol", "reader", "table:db1$users"),
+            ("namespace:db1", "parent", "table:db1$users"),
+        }
     )
-    assert resp.status_code == 200
-    grant.assert_awaited_once()
-    call = grant.await_args
-    assert call is not None
-    kwargs = call.kwargs
-    assert kwargs["user_sub"] == "alice"
-    assert kwargs["resource"] == "table"
-    assert kwargs["obj_id"] == "db1$users"  # canonical delimited id
-    assert kwargs["parent_object"] == "namespace:db1"  # parent link of db1$users
+    client.app.state.fga = store
+
+    resp = client.post("/v1/table/db1$users/create", content=ARROW_BODY, headers={"Authorization": "Bearer t", **ARROW_STREAM})
+
+    assert resp.status_code == 200, resp.text
+    assert {t for t in store.tuples if t[2] == "table:db1$users"} == {
+        ("user:alice", "owner", "table:db1$users"),
+        ("namespace:db1", "parent", "table:db1$users"),
+    }
 
 
 def test_create_table_does_not_seed_when_backend_fails(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
@@ -437,6 +455,7 @@ def test_create_namespace_seeds_owner_and_parent_link(client: TestClient, fake_n
     monkeypatch.setattr(fga_module, "check", _fake_check(captured, allow=True))
     grant = AsyncMock()
     monkeypatch.setattr(fga_module, "grant_on_create", grant)
+    monkeypatch.setattr(fga_module, "revoke_object_tuples", AsyncMock(return_value=[]))  # no previous incarnation at the id
 
     resp = client.post("/v1/namespace/parent$child/create", json={}, headers={"Authorization": "Bearer t"})
     assert resp.status_code == 200
@@ -459,6 +478,7 @@ def test_create_top_level_namespace_links_to_catalog_root(client: TestClient, fa
     monkeypatch.setattr(fga_module, "check", _fake_check([], allow=True))
     grant = AsyncMock()
     monkeypatch.setattr(fga_module, "grant_on_create", grant)
+    monkeypatch.setattr(fga_module, "revoke_object_tuples", AsyncMock(return_value=[]))  # no previous incarnation at the id
 
     resp = client.post("/v1/namespace/bronze/create", json={}, headers={"Authorization": "Bearer t"})
     assert resp.status_code == 200
@@ -537,7 +557,7 @@ def test_rename_table_seeds_destination_then_revokes_source(client: TestClient, 
     path's own revoke already clears stale grants on a reused id. Weighed against an object nobody can
     touch, the estate takes the recoverable state.
 
-    So this test asserts the ORDER, not merely the set: both orders produce the same two calls, and only
+    So this test asserts the ORDER, not merely the set: both orders produce the same calls, and only
     the sequence distinguishes "recoverable" from "stranded".
     """
     # rename is now an in-process relocate (#5b); stub the dataplane seam so the FGA choreography is exercised
@@ -575,7 +595,8 @@ def test_rename_table_seeds_destination_then_revokes_source(client: TestClient, 
         headers={"Authorization": "Bearer t"},
     )
     assert resp.status_code == 200
-    assert order == ["grant:db1$u2", "revoke:table:db1$users"]
+    # The destination is a fresh id, so whatever an earlier incarnation left there goes first ([[LH-480]]).
+    assert order == ["revoke:table:db1$u2", "grant:db1$u2", "revoke:table:db1$users"]
 
 
 def test_overwrite_by_owner_keeps_every_grant_and_grants_the_overwriter_no_ownership(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:

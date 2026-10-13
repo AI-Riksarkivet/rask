@@ -54,7 +54,7 @@ async def create_materialized_view(
     # strands the view, and routing through the compensating seam rather than bare `seed_ownership`
     # is the point: the day a drop op appears, the fix is one argument here, and until then this line
     # states the gap instead of hiding it behind a call that looks identical to the covered doors.
-    await fga_deps.seed_ownership_or_compensate(client, settings, token, resource="materialized_view", segments=segments, undo=None)
+    await fga_deps.seed_ownership_or_compensate(client, settings, token, resource="materialized_view", segments=segments, undo=None, created=True)
     return response
 
 

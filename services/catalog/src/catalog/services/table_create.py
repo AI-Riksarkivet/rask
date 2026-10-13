@@ -337,12 +337,18 @@ async def create_governed_table(
     # `undo` stays conditional. Compensation undoes what THIS request created, and an ExistOk that kept
     # an existing table created nothing to undo.
     seeding_a_new_table = not pre_existed
+    # `created` asks for PROOF that this request brought the table into being, because it licenses revoking
+    # every tuple already on the id ([[LH-480]]). Only an exclusive Create proves it: native create refuses an
+    # id that exists. `pre_existed` is probed before the write, so under ExistOk or Overwrite a table another
+    # caller created in that window is indistinguishable from a fresh one, and revoking would strip its real
+    # owner. Those modes leave tuples on the id as they found them.
     await fga_deps.seed_ownership_or_compensate(
         client,
         settings,
         token,
         resource="table",
         segments=segments,
+        created=seeding_a_new_table and mode is CreateMode.CREATE,
         may_grant_owner=seeding_a_new_table,
         undo=_undo_create if (seeding_a_new_table and compensation_allowed(mode, overwrote_existing)) else None,
     )
